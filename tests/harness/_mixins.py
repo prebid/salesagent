@@ -14,15 +14,19 @@ from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import MagicMock
 
+from adcp import GetProductsRequest as GetProductsRequestGenerated
+
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
     AdapterPackageDelivery,
     DeliveryTotals,
     GetMediaBuyDeliveryRequest,
     GetMediaBuyDeliveryResponse,
+    GetProductsResponse,
     ReportingPeriod,
 )
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
+from src.core.tools.products import _get_products_impl
 from src.core.webhook_delivery import WebhookDelivery, deliver_webhook_with_retry
 from src.services.webhook_delivery_service import (
     CircuitBreaker,
@@ -277,3 +281,137 @@ class CircuitBreakerMixin:
     def call_impl(self, **kwargs: Any) -> bool:
         """Alias for call_send to satisfy BaseTestEnv interface."""
         return self.call_send(**kwargs)
+
+
+class ProductMixin:
+    """Shared fluent API for _get_products_impl testing.
+
+    Requires concrete class to define EXTERNAL_PATCHES with these keys:
+        "policy_service", "dynamic_variants", "ranking_factory",
+        "dynamic_pricing", "resolve_property_list"
+
+    And ASYNC_PATCHES containing at least:
+        {"dynamic_variants", "resolve_property_list"}
+
+    Fluent API:
+        set_policy_approved()            -- policy check returns approved
+        set_policy_blocked(reason)       -- policy check returns blocked
+        set_dynamic_variants(variants)   -- configure dynamic variant generation
+        set_property_list(ids)           -- configure property list resolver
+        set_ranking_disabled()           -- disable AI ranking
+        call_impl(brief, **kw)           -- call _get_products_impl
+    """
+
+    def set_policy_approved(self) -> None:
+        """Configure PolicyCheckService to approve the brief.
+
+        Note: Policy checks are only invoked when the tenant dict has
+        ``advertising_policy.enabled = True`` AND ``gemini_api_key`` set.
+        By default the harness identity has neither, so this is a no-op
+        unless the test explicitly configures the tenant.
+        """
+        from unittest.mock import AsyncMock
+
+        mock_result = MagicMock(status="approved", reason=None, restrictions=[])
+        mock_instance = MagicMock()
+        mock_instance.check_brief_compliance = AsyncMock(return_value=mock_result)
+        self.mock["policy_service"].return_value = mock_instance  # type: ignore[attr-defined]
+
+    def set_policy_blocked(self, reason: str = "Policy violation") -> None:
+        """Configure PolicyCheckService to block the brief."""
+        from unittest.mock import AsyncMock
+
+        from src.services.policy_check_service import PolicyStatus
+
+        mock_result = MagicMock(status=PolicyStatus.BLOCKED, reason=reason, restrictions=[])
+        mock_instance = MagicMock()
+        mock_instance.check_brief_compliance = AsyncMock(return_value=mock_result)
+        self.mock["policy_service"].return_value = mock_instance  # type: ignore[attr-defined]
+
+    def set_dynamic_variants(self, variants: list[Any] | None = None) -> None:
+        """Configure generate_variants_for_brief to return specific variants.
+
+        Args:
+            variants: List of Product model instances to return. Defaults to [].
+        """
+        self.mock["dynamic_variants"].return_value = variants or []  # type: ignore[attr-defined]
+
+    def set_property_list(self, property_ids: list[str] | None = None) -> None:
+        """Configure resolve_property_list to return specific property IDs.
+
+        Args:
+            property_ids: List of property identifier strings. Defaults to [].
+        """
+        self.mock["resolve_property_list"].return_value = property_ids or []  # type: ignore[attr-defined]
+
+    def set_ranking_disabled(self) -> None:
+        """Disable AI ranking by making the factory report AI as not enabled."""
+        mock_factory = MagicMock()
+        mock_factory.is_ai_enabled.return_value = False
+        self.mock["ranking_factory"].return_value = mock_factory  # type: ignore[attr-defined]
+
+    def _configure_product_mocks(self) -> None:
+        """Wire default happy-path mocks for product testing.
+
+        Call from _configure_mocks() in concrete classes.
+
+        Defaults:
+        - PolicyCheckService: not invoked (no gemini_api_key in tenant dict)
+        - Dynamic variants: returns [] (already AsyncMock via ASYNC_PATCHES)
+        - DynamicPricingService: pass-through in unit mode, real in integration mode
+        - Property list resolver: returns [] (already AsyncMock via ASYNC_PATCHES)
+        - Ranking factory: AI not enabled
+        """
+        # Dynamic variants: returns empty list (AsyncMock from ASYNC_PATCHES)
+        self.mock["dynamic_variants"].return_value = []  # type: ignore[attr-defined]
+
+        # DynamicPricingService: configure pass-through mock in unit mode only.
+        # In integration mode (ProductEnv from product.py), dynamic_pricing is NOT
+        # in EXTERNAL_PATCHES, so self.mock won't have it — runs against real DB.
+        if "dynamic_pricing" in self.mock:  # type: ignore[attr-defined]
+            mock_pricing_instance = MagicMock()
+            mock_pricing_instance.enrich_products_with_pricing.side_effect = lambda products, **kw: products
+            self.mock["dynamic_pricing"].return_value = mock_pricing_instance  # type: ignore[attr-defined]
+
+        # Ranking factory: AI not enabled
+        self.set_ranking_disabled()
+
+        # Property list resolver: returns [] (AsyncMock from ASYNC_PATCHES)
+        self.mock["resolve_property_list"].return_value = []  # type: ignore[attr-defined]
+
+    async def call_impl(  # type: ignore[override]
+        self,
+        brief: str = "test brief",
+        brand: dict[str, Any] | None = None,
+        filters: dict[str, Any] | None = None,
+        property_list: dict[str, Any] | None = None,
+        context: dict[str, Any] | None = None,
+        **extra: Any,
+    ) -> GetProductsResponse:
+        """Call _get_products_impl with the given parameters.
+
+        Args:
+            brief: Search brief text.
+            brand: Brand reference dict (defaults to {"domain": "test.com"}).
+            filters: ProductFilters dict.
+            property_list: PropertyListReference dict.
+            context: ContextObject dict.
+            **extra: Additional kwargs forwarded to request construction.
+
+        Returns:
+            GetProductsResponse from the impl function.
+        """
+        self._commit_factory_data()  # type: ignore[attr-defined]
+
+        if brand is None:
+            brand = {"domain": "test.com"}
+
+        req = GetProductsRequestGenerated(
+            brief=brief,
+            brand=brand,
+            filters=filters,
+            property_list=property_list,
+            context=context,
+            **extra,
+        )
+        return await _get_products_impl(req, self.identity)  # type: ignore[attr-defined]

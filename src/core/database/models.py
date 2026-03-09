@@ -267,7 +267,11 @@ class Product(Base, JSONValidatorMixin):
 
     # Product detail fields (AdCP v1 spec compliance)
     # Type hint: delivery measurement dict with provider (required) and notes (optional)
-    delivery_measurement: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    delivery_measurement: Mapped[dict] = mapped_column(
+        JSONType,
+        nullable=False,
+        server_default=text('\'{"provider": "publisher"}\'::jsonb'),
+    )
     # Type hint: product card dict with format_id and manifest
     product_card: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     # Type hint: detailed product card dict with format_id and manifest
@@ -1941,9 +1945,9 @@ class PushNotificationConfig(Base, JSONValidatorMixin):
             f"session_id='{self.session_id}', "
             f"url='{self.url}', "
             f"authentication_type='{self.authentication_type}', "
-            f"authentication_token='{self.authentication_token}', "
-            f"validation_token='{self.validation_token}', "
-            f"webhook_secret='{self.webhook_secret}', "
+            f"authentication_token='***', "
+            f"validation_token='***', "
+            f"webhook_secret='***', "
             f"is_active={self.is_active}, "
             f"created_at={self.created_at}, "
             f"updated_at={self.updated_at}"

@@ -62,7 +62,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Product selectors require brand (PRE-BIZ4)
 **Obligation ID** UC-001-PRECOND-04
-**Layer** behavioral
+**Layer** schema
 **Given** a Buyer Agent sends a get_products request with `product_selectors` but no `brand`
 **When** the system validates the request
 **Then** the request is rejected with a validation error indicating brand is required when product_selectors is provided
@@ -259,7 +259,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Principal access control -- authorized principal (Step 9)
 **Obligation ID** UC-001-MAIN-20
-**Layer** behavioral
+**Layer** schema
 **Given** a product has `allowed_principal_ids` set to ["principal_A", "principal_B"]
 **And** the request's principal_id is "principal_A"
 **When** the system applies access control
@@ -269,7 +269,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Principal access control -- unauthorized principal (Step 9)
 **Obligation ID** UC-001-MAIN-21
-**Layer** behavioral
+**Layer** schema
 **Given** a product has `allowed_principal_ids` set to ["principal_A"]
 **And** the request's principal_id is "principal_C"
 **When** the system applies access control
@@ -279,7 +279,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Principal access control -- unrestricted product (Step 9)
 **Obligation ID** UC-001-MAIN-22
-**Layer** behavioral
+**Layer** schema
 **Given** a product has no `allowed_principal_ids` (null)
 **When** the system applies access control
 **Then** the product is visible to all authenticated principals
@@ -305,12 +305,35 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 **Then** dynamic product variants are generated with `is_custom: true` and `expires_at`
 **Priority:** P2
 
+#### Scenario: Dynamic variant generation failure -- fail open (Step 11)
+**Obligation ID** UC-001-MAIN-41
+**Layer** behavioral
+**Origin** product decision
+**Given** a brief is provided in the request
+**And** the signals agent service is unavailable (network error, timeout, import error)
+**When** the system attempts dynamic variant generation
+**Then** static products are returned without dynamic variants
+**And** a warning is logged
+**And** programming errors (TypeError, AttributeError) propagate as exceptions
+**Priority:** P1
+
 #### Scenario: Pricing enrichment with price_guidance and forecast (Step 12)
 **Obligation ID** UC-001-MAIN-25
 **Layer** behavioral
 **Given** products have dynamic pricing data available
 **When** the system enriches products
 **Then** each product includes `price_guidance` and/or `forecast` data
+**Priority:** P1
+
+#### Scenario: Pricing enrichment failure -- fail open (Step 12)
+**Obligation ID** UC-001-MAIN-42
+**Layer** behavioral
+**Origin** product decision
+**Given** the dynamic pricing service fails (database error, import error)
+**When** the system attempts pricing enrichment
+**Then** products are returned with their original static pricing options
+**And** a warning is logged
+**And** programming errors (TypeError, AttributeError) propagate as exceptions
 **Priority:** P1
 
 #### Scenario: Pricing enrichment -- forecast field from DB (Step 12, qo8a fix)
@@ -323,7 +346,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: AdCP filter application (Step 13)
 **Obligation ID** UC-001-MAIN-27
-**Layer** behavioral
+**Layer** schema
 **Given** a request includes AdCP `filters`
 **When** the system applies filters
 **Then** only products matching ALL filter dimensions are returned
@@ -339,7 +362,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Min exposures filter (Step 15)
 **Obligation ID** UC-001-MAIN-29
-**Layer** behavioral
+**Layer** schema
 **Given** a request includes `min_exposures` in filters
 **When** the system evaluates the filter
 **Then** guaranteed products with forecast below the threshold are excluded
@@ -395,9 +418,20 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 **Then** the pricing option lookup correctly resolves by pricing option ID (not by string-to-integer comparison mismatch)
 **Priority:** P0
 
+#### Scenario: Adapter support annotation failure -- fail open (Step 17)
+**Obligation ID** UC-001-MAIN-43
+**Layer** behavioral
+**Origin** product decision
+**Given** the adapter cannot be instantiated (missing config, import error, network_code missing)
+**When** the system attempts to annotate pricing options
+**Then** products are returned without `supported`/`unsupported_reason` annotations
+**And** a warning is logged
+**And** programming errors (TypeError, AttributeError) propagate as exceptions
+**Priority:** P1
+
 #### Scenario: Proposal generation (Step 18)
 **Obligation ID** UC-001-MAIN-35
-**Layer** behavioral
+**Layer** schema
 **Given** a brief is provided
 **And** proposal generation is appropriate for this tenant/request
 **When** the system generates proposals
@@ -537,7 +571,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Authentication error response schema compliance
 **Obligation ID** UC-001-EXT-B-04
-**Layer** behavioral
+**Layer** schema
 **Given** the request was rejected due to authentication
 **When** the error response is returned
 **Then** the response conforms to `get-products-response.json` error variant schema
@@ -700,7 +734,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Anonymous -- access control hides restricted products
 **Obligation ID** UC-001-ALT-ANONYMOUS-DISCOVERY-03
-**Layer** behavioral
+**Layer** schema
 **Given** a product has `allowed_principal_ids` set to ["principal_A"]
 **And** the request is anonymous (no principal)
 **When** the system applies access control
@@ -710,7 +744,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Anonymous -- unrestricted products are visible
 **Obligation ID** UC-001-ALT-ANONYMOUS-DISCOVERY-04
-**Layer** behavioral
+**Layer** schema
 **Given** a product has no `allowed_principal_ids` (null)
 **And** the request is anonymous
 **When** the system applies access control
@@ -720,7 +754,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Anonymous -- pricing suppression on all products
 **Obligation ID** UC-001-ALT-ANONYMOUS-DISCOVERY-05
-**Layer** behavioral
+**Layer** schema
 **Given** the request is anonymous
 **When** the system processes the response
 **Then** every product has `pricing_options` set to an empty array `[]`
@@ -730,7 +764,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Authenticated -- pricing retained
 **Obligation ID** UC-001-ALT-ANONYMOUS-DISCOVERY-06
-**Layer** behavioral
+**Layer** schema
 **Given** the request is authenticated
 **When** the system processes the response
 **Then** products retain their full `pricing_options` arrays
@@ -801,7 +835,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Empty results -- all products excluded by access control
 **Obligation ID** UC-001-ALT-EMPTY-RESULTS-03
-**Layer** behavioral
+**Layer** schema
 **Given** all products have `allowed_principal_ids` restrictions
 **And** the authenticated principal is not in any product's allowed list
 **When** the system applies access control
@@ -828,7 +862,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Empty results -- all products excluded by AdCP filters
 **Obligation ID** UC-001-ALT-EMPTY-RESULTS-06
-**Layer** behavioral
+**Layer** schema
 **Given** filters are provided (e.g., `delivery_type: "guaranteed"`)
 **And** no products match the filter criteria
 **When** the system applies filters
@@ -857,7 +891,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Empty results -- all products excluded by min_exposures filter
 **Obligation ID** UC-001-ALT-EMPTY-RESULTS-09
-**Layer** behavioral
+**Layer** schema
 **Given** a `min_exposures` filter is specified
 **And** no products meet the exposure threshold
 **When** the system applies the filter
@@ -870,7 +904,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Filter by delivery_type -- exact match
 **Obligation ID** UC-001-ALT-FILTERED-DISCOVERY-01
-**Layer** behavioral
+**Layer** schema
 **Given** a request includes `filters: { delivery_type: "guaranteed" }`
 **And** the catalog has both guaranteed and auction products
 **When** the system applies the filter
@@ -879,7 +913,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Filter by is_fixed_price -- true
 **Obligation ID** UC-001-ALT-FILTERED-DISCOVERY-02
-**Layer** behavioral
+**Layer** schema
 **Given** a request includes `filters: { is_fixed_price: true }`
 **And** products have a mix of fixed and auction pricing options
 **When** the system applies the filter
@@ -888,7 +922,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Filter by is_fixed_price -- false (auction)
 **Obligation ID** UC-001-ALT-FILTERED-DISCOVERY-03
-**Layer** behavioral
+**Layer** schema
 **Given** a request includes `filters: { is_fixed_price: false }`
 **When** the system applies the filter
 **Then** only products with at least one pricing option having `is_fixed: false` are returned
@@ -896,7 +930,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Filter by is_fixed_price -- product with both fixed and auction options
 **Obligation ID** UC-001-ALT-FILTERED-DISCOVERY-04
-**Layer** behavioral
+**Layer** schema
 **Given** a product has both a fixed-price and an auction pricing option
 **When** filtered by `is_fixed_price: true`
 **Then** the product is included
@@ -906,7 +940,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Filter by format_types -- OR matching
 **Obligation ID** UC-001-ALT-FILTERED-DISCOVERY-05
-**Layer** behavioral
+**Layer** schema
 **Given** a request includes `filters: { format_types: ["video", "display"] }`
 **And** a product supports "video" but not "display"
 **When** the system applies the filter
@@ -915,7 +949,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Filter by format_ids -- OR matching
 **Obligation ID** UC-001-ALT-FILTERED-DISCOVERY-06
-**Layer** behavioral
+**Layer** schema
 **Given** a request includes `filters: { format_ids: ["video_outstream", "display_300x250"] }`
 **And** a product supports "display_300x250" only
 **When** the system applies the filter
@@ -924,7 +958,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Filter by standard_formats_only
 **Obligation ID** UC-001-ALT-FILTERED-DISCOVERY-07
-**Layer** behavioral
+**Layer** schema
 **Given** a request includes `filters: { standard_formats_only: true }`
 **And** a product has a mix of standard and custom format IDs
 **When** the system applies the filter
@@ -933,7 +967,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Filter by countries -- intersection matching
 **Obligation ID** UC-001-ALT-FILTERED-DISCOVERY-08
-**Layer** behavioral
+**Layer** schema
 **Given** a request includes `filters: { countries: ["US", "CA"] }`
 **And** a product is available in ["US", "MX"]
 **When** the system applies the filter
@@ -942,7 +976,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Filter by countries -- product with no country restriction
 **Obligation ID** UC-001-ALT-FILTERED-DISCOVERY-09
-**Layer** behavioral
+**Layer** schema
 **Given** a request includes `filters: { countries: ["US"] }`
 **And** a product has no country restriction (null or empty)
 **When** the system applies the filter
@@ -960,7 +994,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Filter by metros -- system + code intersection
 **Obligation ID** UC-001-ALT-FILTERED-DISCOVERY-11
-**Layer** behavioral
+**Layer** schema
 **Given** a request includes `filters: { metros: [{ system: "nielsen_dma", code: "501" }] }`
 **And** a product covers metro "501" in the "nielsen_dma" system
 **When** the system applies the filter
@@ -969,7 +1003,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Filter by channels -- intersection matching
 **Obligation ID** UC-001-ALT-FILTERED-DISCOVERY-12
-**Layer** behavioral
+**Layer** schema
 **Given** a request includes `filters: { channels: ["display", "video"] }`
 **And** a product has channels ["display"]
 **When** the system applies the filter
@@ -987,7 +1021,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Filter by budget_range
 **Obligation ID** UC-001-ALT-FILTERED-DISCOVERY-14
-**Layer** behavioral
+**Layer** schema
 **Given** a request includes `filters: { budget_range: { min: 1000, max: 5000, currency: "USD" } }`
 **When** the system applies the filter
 **Then** only products with pricing compatible with the budget range are returned
@@ -995,7 +1029,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Filter by start_date and end_date
 **Obligation ID** UC-001-ALT-FILTERED-DISCOVERY-15
-**Layer** behavioral
+**Layer** schema
 **Given** a request includes `filters: { start_date: "2026-03-01", end_date: "2026-03-31" }`
 **When** the system applies the filter
 **Then** only products available within the specified date range are returned
@@ -1003,7 +1037,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Filter by required_axe_integrations
 **Obligation ID** UC-001-ALT-FILTERED-DISCOVERY-16
-**Layer** behavioral
+**Layer** schema
 **Given** a request includes `filters: { required_axe_integrations: ["https://axe.example.com"] }`
 **When** the system applies the filter
 **Then** only products executable through the specified agentic ad exchange URIs are returned
@@ -1011,7 +1045,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Filter by required_features -- only true values filter
 **Obligation ID** UC-001-ALT-FILTERED-DISCOVERY-17
-**Layer** behavioral
+**Layer** schema
 **Given** a request includes `filters: { required_features: { guaranteed_delivery: true, real_time_bidding: false } }`
 **When** the system applies the filter
 **Then** only `guaranteed_delivery: true` is used as a filter (false values are ignored)
@@ -1019,7 +1053,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Filter by required_geo_targeting
 **Obligation ID** UC-001-ALT-FILTERED-DISCOVERY-18
-**Layer** behavioral
+**Layer** schema
 **Given** a request includes `filters: { required_geo_targeting: { country: true, region: true } }`
 **When** the system applies the filter
 **Then** only products whose seller supports country and region geo targeting are returned
@@ -1027,7 +1061,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Filter by signal_targeting (qo8a impact)
 **Obligation ID** UC-001-ALT-FILTERED-DISCOVERY-19
-**Layer** behavioral
+**Layer** schema
 **Given** a request includes `filters: { signal_targeting: { signals: ["purchase_intent"] } }`
 **And** products have `signal_targeting_allowed` and `data_provider_signals` fields populated
 **When** the system applies the filter
@@ -1036,7 +1070,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Filter by signal_targeting -- missing DB fields (pre-qo8a regression)
 **Obligation ID** UC-001-ALT-FILTERED-DISCOVERY-20
-**Layer** behavioral
+**Layer** schema
 **Given** a request includes `filters: { signal_targeting: { signals: ["purchase_intent"] } }`
 **And** products have `signal_targeting_allowed` as null (never populated)
 **When** the system applies the filter
@@ -1046,7 +1080,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Multiple filters combined -- AND logic
 **Obligation ID** UC-001-ALT-FILTERED-DISCOVERY-21
-**Layer** behavioral
+**Layer** schema
 **Given** a request includes `filters: { delivery_type: "guaranteed", countries: ["US"], format_types: ["video"] }`
 **When** the system applies filters
 **Then** ALL filter dimensions must be satisfied (AND across dimensions)
@@ -1055,7 +1089,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Filter by min_exposures -- guaranteed product with forecast
 **Obligation ID** UC-001-ALT-FILTERED-DISCOVERY-22
-**Layer** behavioral
+**Layer** schema
 **Given** a request includes `filters: { min_exposures: 10000 }`
 **And** a guaranteed product has `forecast.impressions: 50000`
 **When** the system applies the filter
@@ -1064,7 +1098,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Filter by min_exposures -- guaranteed product without sufficient forecast
 **Obligation ID** UC-001-ALT-FILTERED-DISCOVERY-23
-**Layer** behavioral
+**Layer** schema
 **Given** a request includes `filters: { min_exposures: 100000 }`
 **And** a guaranteed product has `forecast.impressions: 5000`
 **When** the system applies the filter
@@ -1073,7 +1107,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Filter by min_exposures -- non-guaranteed product with price_guidance
 **Obligation ID** UC-001-ALT-FILTERED-DISCOVERY-24
-**Layer** behavioral
+**Layer** schema
 **Given** a request includes `filters: { min_exposures: 10000 }`
 **And** a non-guaranteed product has `price_guidance` set
 **When** the system applies the filter
@@ -1092,7 +1126,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Filtered results without brief -- catalog order
 **Obligation ID** UC-001-ALT-FILTERED-DISCOVERY-26
-**Layer** behavioral
+**Layer** schema
 **Given** a request includes `filters` but no `brief`
 **When** the system processes the request
 **Then** filters narrow the product set
@@ -1418,7 +1452,7 @@ The new `signal_targeting` filter requires `signal_targeting_allowed` and `data_
 
 #### Scenario: Roundtrip -- DB model to AdCP schema to response preserves all fields
 **Obligation ID** UC-001-PRODUCT-RESPONSE-SCHEMA-04
-**Layer** behavioral
+**Layer** schema
 **Given** a product is created in the database with all 6 new fields populated
 **When** the product goes through: DB model -> product_conversion -> Product schema -> model_dump -> JSON response
 **Then** all field values are preserved exactly through the entire roundtrip

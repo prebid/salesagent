@@ -20,12 +20,13 @@ from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
 
+from src.adapters import get_adapter_default_channels
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import get_principal_object
 from src.core.database.database_session import get_db_session
 from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schema_helpers import create_get_products_request, to_brand_reference
+from src.core.schema_helpers import create_get_products_request
 from src.core.schemas import (
     GetProductsResponse,
     Product,  # Extends library Product
@@ -36,56 +37,6 @@ from src.core.validation_helpers import format_validation_error, safe_parse_json
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
 
 logger = logging.getLogger(__name__)
-
-
-def get_adapter_default_channels(adapter_type: str) -> list[str]:
-    """Get default advertising channels for an adapter type.
-
-    Default channels are defined on each adapter class's default_channels attribute.
-    This function dynamically loads the adapter class to get its defaults.
-
-    Args:
-        adapter_type: Adapter type name (e.g., "google_ad_manager", "mock", "kevel", "triton")
-
-    Returns:
-        List of default channel names for the adapter
-    """
-    # Import adapter classes lazily to avoid circular imports
-    adapter_classes: dict[str, type] = {}
-
-    try:
-        from src.adapters.google_ad_manager import GoogleAdManager
-
-        adapter_classes["google_ad_manager"] = GoogleAdManager
-    except ImportError:
-        pass
-
-    try:
-        from src.adapters.mock_ad_server import MockAdServer
-
-        adapter_classes["mock"] = MockAdServer
-    except ImportError:
-        pass
-
-    try:
-        from src.adapters.kevel import Kevel
-
-        adapter_classes["kevel"] = Kevel
-    except ImportError:
-        pass
-
-    try:
-        from src.adapters.triton_digital import TritonDigital
-
-        adapter_classes["triton"] = TritonDigital
-    except ImportError:
-        pass
-
-    adapter_class = adapter_classes.get(adapter_type)
-    if adapter_class and hasattr(adapter_class, "default_channels"):
-        return adapter_class.default_channels
-
-    return []
 
 
 def get_recommended_cpm(product: Product) -> float | None:
@@ -241,13 +192,12 @@ async def _get_products_impl(
     principal = get_principal_object(principal_id, tenant_id=identity.tenant_id) if principal_id else None
 
     # Extract offering text from brand (adcp 3.6.0: brand replaces brand_manifest).
-    # req.brand is BrandReference | None after Pydantic parsing.
-    # to_brand_reference handles both dict and model (defensive for mock callers).
+    # req.brand is BrandReference | None (Pydantic model with .domain attribute).
     offering = None
-    brand_ref = to_brand_reference(req.brand) if req.brand else None
-    if brand_ref:
-        if brand_ref.domain:
-            offering = f"Brand at {brand_ref.domain}"
+    if req.brand:
+        domain = getattr(req.brand, "domain", None)
+        if domain:
+            offering = f"Brand at {domain}"
 
     # Check brand_manifest_policy from tenant settings
     brand_manifest_policy = tenant.get("brand_manifest_policy", "require_auth")
@@ -392,18 +342,24 @@ async def _get_products_impl(
             details={"error_code": "POLICY_VIOLATION"},
         )
 
-    # Query products via ProductRepository (tenant-scoped, eager-loaded)
-    from src.core.database.repositories.product import ProductRepository
+    # Resolve adapter type for delivery_measurement defaults
+    ad_server_config = tenant.get("ad_server", {})
+    tenant_adapter_type = (
+        ad_server_config.get("adapter", "mock") if isinstance(ad_server_config, dict) else ad_server_config
+    )
 
-    with get_db_session() as db_session:
-        product_repo = ProductRepository(db_session, tenant["tenant_id"])
-        db_products = product_repo.get_all_for_tenant()
+    # Query products via repository (tenant-scoped)
+    from src.core.database.repositories.uow import ProductUoW
+
+    with ProductUoW(tenant["tenant_id"]) as uow:
+        assert uow.products is not None
+        db_products = uow.products.list_all()
 
         # Convert database Product models to AdCP Product schema
         products = []
         for product_obj in db_products:
             try:
-                validated_product = convert_product_model_to_schema(product_obj)
+                validated_product = convert_product_model_to_schema(product_obj, adapter_type=tenant_adapter_type)
                 products.append(validated_product)
                 logger.debug(f"Successfully converted product {product_obj.product_id}")
             except Exception as e:
@@ -486,12 +442,12 @@ async def _get_products_impl(
             for variant_model in dynamic_variants:
                 # Convert database model to schema (returns library Product)
                 # Cast to our extended Product type for mypy compatibility
-                variant_schema = convert_product_model_to_schema(variant_model)
+                variant_schema = convert_product_model_to_schema(variant_model, adapter_type=tenant_adapter_type)
                 # Type: ignore - library Product is compatible with our extended Product at runtime
                 products.append(variant_schema)
 
             logger.info(f"[GET_PRODUCTS] Added {len(dynamic_variants)} dynamic product variants")
-    except Exception as e:
+    except (ImportError, RuntimeError, OSError) as e:
         logger.warning(f"Failed to generate dynamic product variants: {e}. Continuing with static products only.")
 
     logger.info(f"[GET_PRODUCTS] Total products (static + dynamic): {len(products)}")
@@ -510,9 +466,9 @@ async def _get_products_impl(
                 products,
                 tenant_id=tenant["tenant_id"],
                 country_code=country_code,
-                min_exposures=getattr(req, "min_exposures", None),
+                min_exposures=getattr(req.filters, "min_exposures", None) if req.filters else None,
             )
-    except Exception as e:
+    except (ImportError, RuntimeError, OSError) as e:
         logger.warning(f"Failed to enrich products with dynamic pricing: {e}. Using defaults.")
 
     # Apply AdCP filters if provided
@@ -524,12 +480,20 @@ async def _get_products_impl(
                 continue
 
             # Filter by is_fixed_price (check pricing_options)
+            # Spec: true = at least one option with fixed_price,
+            #        false = at least one option without fixed_price.
+            #        Products with both fixed and auction options match both.
             if req.filters.is_fixed_price is not None:
-                # Check if product has any pricing option matching the fixed/auction filter
-                # Use getattr for discriminated union field access
-                has_matching_pricing = any(
-                    getattr(po, "is_fixed", None) == req.filters.is_fixed_price for po in product.pricing_options
-                )
+                # PricingOption is a Pydantic RootModel — unwrap via .root
+                # to access inner variant fields (fixed_price lives on the variant)
+                if req.filters.is_fixed_price:
+                    has_matching_pricing = any(
+                        getattr(po.root, "fixed_price", None) is not None for po in product.pricing_options
+                    )
+                else:
+                    has_matching_pricing = any(
+                        getattr(po.root, "fixed_price", None) is None for po in product.pricing_options
+                    )
                 if not has_matching_pricing:
                     continue
 
@@ -659,6 +623,16 @@ async def _get_products_impl(
                     if adapter_channels and not request_channels.intersection(set(adapter_channels)):
                         continue
 
+            # Filter by device_types (local extension, not in AdCP spec)
+            requested_device_types = getattr(req.filters, "device_types", None)
+            if requested_device_types:
+                product_device_types = getattr(product, "device_types", None)
+                if product_device_types:
+                    # Product declares supported device types — must have intersection
+                    if not set(product_device_types).intersection(set(requested_device_types)):
+                        continue
+                # else: product has no device_types restriction — matches any filter
+
             # Product passed all filters
             filtered_products.append(product)
 
@@ -683,18 +657,22 @@ async def _get_products_impl(
         eligible_products = products
 
     # Apply min_exposures filtering (AdCP PR #79)
-    min_exposures = getattr(req, "min_exposures", None)
+    min_exposures = getattr(req.filters, "min_exposures", None) if req.filters else None
     if min_exposures is not None:
         filtered_products = []
         for product in eligible_products:
             # For guaranteed products, check estimated_exposures
-            if product.delivery_type == "guaranteed":
-                if product.estimated_exposures is not None and product.estimated_exposures >= min_exposures:
+            delivery_type_value = (
+                product.delivery_type.value if hasattr(product.delivery_type, "value") else product.delivery_type
+            )
+            if delivery_type_value == "guaranteed":
+                estimated = getattr(product, "estimated_exposures", None)
+                if estimated is not None and estimated >= min_exposures:
                     filtered_products.append(product)
                 else:
                     logger.info(
                         f"Product {product.product_id} excluded: estimated_exposures "
-                        f"({product.estimated_exposures}) < min_exposures ({min_exposures})"
+                        f"({estimated}) < min_exposures ({min_exposures})"
                     )
             else:
                 # For non-guaranteed, include if recommended CPM is set in price_guidance
@@ -755,7 +733,7 @@ async def _get_products_impl(
                 )
             else:
                 logger.debug("[GET_PRODUCTS] AI ranking configured but AI not enabled (no API key)")
-        except Exception as e:
+        except (ImportError, RuntimeError, OSError) as e:
             logger.warning(f"Failed to apply AI product ranking: {e}. Returning unranked products.")
 
     # Annotate pricing options with adapter support (AdCP PR #88)
@@ -785,7 +763,7 @@ async def _get_products_impl(
                             inner.unsupported_reason = (  # type: ignore[union-attr]
                                 f"Current adapter does not support {str(pricing_model).upper()} pricing"
                             )
-        except Exception as e:
+        except (ImportError, RuntimeError, OSError, ValueError) as e:
             logger.warning(f"Failed to annotate pricing options with adapter support: {e}")
 
     # Filter pricing data for anonymous users
@@ -950,20 +928,20 @@ def get_product_catalog(tenant_id: str | None = None) -> list[Product]:
     Returns:
         List of Product objects with full pricing options
     """
-    from src.core.database.repositories.product import ProductRepository
+    from src.core.database.repositories.uow import ProductUoW
 
     if tenant_id is None:
         from src.core.config_loader import get_current_tenant
 
         tenant_id = get_current_tenant()["tenant_id"]
 
-    with get_db_session() as session:
-        product_repo = ProductRepository(session, tenant_id)
-        db_products = product_repo.get_all_for_tenant()
+    with ProductUoW(tenant_id) as uow:
+        assert uow.products is not None
+        products = uow.products.list_all_with_inventory()
 
         # Use convert_product_model_to_schema for consistency
         loaded_products = []
-        for product in db_products:
+        for product in products:
             loaded_products.append(convert_product_model_to_schema(product))
 
     return loaded_products

@@ -211,7 +211,8 @@ class TestDiscoveryEndpointsAnonymousAccess:
         )
 
         with (
-            patch("src.core.tools.products.get_db_session") as mock_db,
+            patch("src.core.database.repositories.uow.get_db_session") as mock_db,
+            patch("src.core.tools.products.get_db_session") as mock_db2,
             patch("src.core.tools.products.PolicyCheckService") as mock_policy,
         ):
             # Mock database to return empty products
@@ -219,7 +220,9 @@ class TestDiscoveryEndpointsAnonymousAccess:
             mock_session.__enter__ = MagicMock(return_value=mock_session)
             mock_session.__exit__ = MagicMock(return_value=False)
             mock_session.scalars.return_value.all.return_value = []
+            mock_session.execute.return_value.unique.return_value.scalars.return_value.all.return_value = []
             mock_db.return_value = mock_session
+            mock_db2.return_value = mock_session
 
             # Mock policy check service
             mock_policy_instance = MagicMock()
@@ -254,9 +257,11 @@ class TestDiscoveryEndpointsAnonymousAccess:
             mock_reg = MagicMock()
 
             async def mock_list_formats(**kwargs):
-                return []
+                from src.core.creative_agent_registry import FormatFetchResult
 
-            mock_reg.list_all_formats = mock_list_formats
+                return FormatFetchResult(formats=[], errors=[])
+
+            mock_reg.list_all_formats_with_errors = mock_list_formats
             mock_registry.return_value = mock_reg
 
             req = MagicMock()
@@ -270,6 +275,7 @@ class TestDiscoveryEndpointsAnonymousAccess:
             req.min_height = None
             req.max_height = None
             req.context = None
+            req.pagination = None
 
             try:
                 result = _list_creative_formats_impl(req, identity)
@@ -366,13 +372,18 @@ class TestDiscoveryEndpointsInvalidAuth:
             mock_reg = MagicMock()
 
             async def mock_list_formats(**kwargs):
-                return []
+                from src.core.creative_agent_registry import FormatFetchResult
 
-            mock_reg.list_all_formats = mock_list_formats
+                return FormatFetchResult(formats=[], errors=[])
+
+            mock_reg.list_all_formats_with_errors = mock_list_formats
             mock_registry.return_value = mock_reg
 
             try:
-                _list_creative_formats_impl(None, identity)
+                from src.core.schemas import ListCreativeFormatsRequest
+
+                req = ListCreativeFormatsRequest()
+                _list_creative_formats_impl(req, identity)
             except (ToolError, AdCPError):
                 pass  # Business logic errors OK
 

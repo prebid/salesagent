@@ -23,7 +23,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
@@ -1290,6 +1290,8 @@ class TestCreateMediaBuyAdapterInteraction:
         mock_adapter.manual_approval_required = False
         mock_adapter.manual_approval_operations = []
         mock_adapter.__class__.__name__ = "MockAdapter"
+        mock_adapter.get_supported_pricing_models.return_value = {"cpm", "vcpm", "cpc", "flat_rate"}
+        mock_adapter.validate_media_buy_request.return_value = []
 
         # Build mock product catalog matching the request's prod_1
         mock_delivery_type = MagicMock()
@@ -2727,7 +2729,7 @@ class TestUpdateMediaBuyOwnership:
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
 
-            with pytest.raises(PermissionError, match="(?i)does not own"):
+            with pytest.raises(AdCPAuthorizationError, match="(?i)does not own"):
                 _update_media_buy_impl(req=req, identity=identity)
 
 

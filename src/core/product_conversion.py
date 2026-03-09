@@ -251,14 +251,21 @@ def convert_pricing_option_to_adcp(
         )
 
 
-def convert_product_model_to_schema(product_model) -> Product:
+def convert_product_model_to_schema(product_model, adapter_type: str | None = None) -> Product:
     """Convert database Product model to Product schema.
 
     Args:
         product_model: Product database model
+        adapter_type: Adapter type for the tenant (e.g., "google_ad_manager", "mock").
+            Used to determine the default delivery_measurement when the product
+            does not have one configured. If None, falls back to generic "publisher".
 
     Returns:
         Product schema object
+
+    Raises:
+        ValueError: In non-production environments, if delivery_measurement is missing
+            and no adapter_type is provided to determine the default.
     """
     # Map fields from model to schema
     product_data = {}
@@ -289,15 +296,29 @@ def convert_product_model_to_schema(product_model) -> Product:
         )
     product_data["publisher_properties"] = effective_props
 
-    # delivery_measurement: Provide default if missing (required per AdCP spec)
+    # delivery_measurement: REQUIRED per AdCP spec.
+    # Use the product's configured value, or fall back to adapter-specific default.
     if product_model.delivery_measurement:
         product_data["delivery_measurement"] = product_model.delivery_measurement
     else:
-        # Default measurement provider
-        product_data["delivery_measurement"] = {
-            "provider": "publisher",
-            "notes": "Measurement methodology not specified",
-        }
+        from src.adapters import get_adapter_default_delivery_measurement
+        from src.core.config import is_production
+
+        default_dm = get_adapter_default_delivery_measurement(adapter_type or "")
+        if is_production():
+            logger.info(
+                "Product %s missing delivery_measurement, using adapter default: %s",
+                product_model.product_id,
+                default_dm["provider"],
+            )
+        else:
+            logger.warning(
+                "Product %s missing delivery_measurement (REQUIRED per AdCP spec). "
+                "Using adapter default '%s'. Configure delivery_measurement on the product to silence this warning.",
+                product_model.product_id,
+                default_dm["provider"],
+            )
+        product_data["delivery_measurement"] = default_dm
 
     # pricing_options: Convert database PricingOption models to AdCP V3 format
     # Per adcp library spec, pricing_options must have at least 1 item (min_length=1)
@@ -373,6 +394,13 @@ def convert_product_model_to_schema(product_model) -> Product:
 
     # Principal access control (internal field)
     product_data["allowed_principal_ids"] = getattr(product_model, "allowed_principal_ids", None)
+
+    # Device type targeting (from targeting_template.device_targets)
+    targeting_template = getattr(product_model, "targeting_template", None)
+    if targeting_template and isinstance(targeting_template, dict):
+        device_targets = targeting_template.get("device_targets")
+        if isinstance(device_targets, list):
+            product_data["device_types"] = device_targets
 
     return Product(**product_data)
 

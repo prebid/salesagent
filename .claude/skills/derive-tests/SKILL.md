@@ -32,6 +32,12 @@ producing 10-15 line tests instead of 40-50 line tests.
 | Delivery poll | `DeliveryPollEnv` | `test_delivery_poll_behavioral.py` | `_get_media_buy_delivery_impl` |
 | Webhook delivery | `WebhookEnv` | `test_delivery_webhook_behavioral.py` | `deliver_webhook_with_retry` |
 | Circuit breaker | `CircuitBreakerEnv` | `test_delivery_service_behavioral.py` | `WebhookDeliveryService`, `CircuitBreaker` |
+| Creative sync | `CreativeSyncEnv` | `test_creative_sync_behavioral.py` | `_sync_creatives_impl` |
+| Creative list | `CreativeListEnv` | `test_creative_list_behavioral.py` | `_list_creatives_impl` |
+| Creative formats | `CreativeFormatsEnv` | `test_creative_formats_behavioral.py` | `_list_creative_formats_impl` |
+
+**Multi-transport support:** Creative envs support `call_via(transport)` dispatch
+across IMPL, A2A, and REST transports. See [Multi-Transport Pattern](#multi-transport-pattern).
 
 ## Protocol
 
@@ -64,6 +70,9 @@ Map obligation prefix to required harness:
 | UC-004 (delivery poll) | `tests/harness/delivery_poll.py` | `DeliveryPollEnv` |
 | UC-004 (webhook) | `tests/harness/delivery_webhook.py` | `WebhookEnv` |
 | UC-004 (circuit breaker) | `tests/harness/delivery_circuit_breaker.py` | `CircuitBreakerEnv` |
+| UC-006 (creative sync) | `tests/harness/creative_sync.py` | `CreativeSyncEnv` |
+| UC-006 (creative list) | `tests/harness/creative_list.py` | `CreativeListEnv` |
+| UC-006 (creative formats) | `tests/harness/creative_formats.py` | `CreativeFormatsEnv` |
 
 **If harness missing: STOP IMMEDIATELY.** Print:
 ```
@@ -104,15 +113,27 @@ For each obligation:
 
 1. **Read the scenario** from `docs/test-obligations/`:
    ```bash
-   grep -n "{OID}" docs/test-obligations/*.md
+   grep -A 10 "{OID}" docs/test-obligations/*.md
    ```
    Extract: Given/When/Then, business rule, priority, layer.
 
-2. **Find the production code**: Locate the specific lines in the `_impl`
-   function that implement this behavior.
+2. **Translate Given/When/Then directly into the test**:
+   - **Given** → test setup (fixtures, env configuration)
+   - **When** → action (call production function)
+   - **Then** → assertions (expected output/state)
 
-3. **Plan the test**: Identify the KEY ASSERTION — "What assertion would
-   FAIL if production behavior changed?"
+   The BDD spec is the **sole source** of expected behavior. Do NOT derive
+   assertions from what the production code currently does. If the spec says
+   "Then a SyncCreativesSubmitted is returned," assert `isinstance(result,
+   SyncCreativesSubmitted)` — even if the code currently returns something
+   else or doesn't implement the behavior at all.
+
+3. **Check if production code implements it**: Locate the `_impl` function.
+   - **Implemented** → test should PASS. If it doesn't, the code has a bug.
+   - **Not implemented** → test MUST still assert spec behavior, marked with
+     `@pytest.mark.xfail(strict=True, reason="<what's missing>")`.
+     Never write a test that asserts current (wrong) behavior just because
+     the spec behavior doesn't exist yet. That legitimizes the gap.
 
 ### Step 4: Write test
 
@@ -257,6 +278,83 @@ git add tests/unit/test_architecture_obligation_coverage.py  # if changed
 git commit -m "test: add obligation test for {OID}"
 ```
 
+## Multi-Transport Pattern
+
+When an obligation has transport variants in upstream BDD (e.g., both
+`T-UC-006-main-rest` and `T-UC-006-main-mcp`), generate ONE parametrized test
+instead of two separate tests.
+
+**Decision rule:**
+1. Check if upstream BDD duplicates the scenario across REST/MCP transports
+2. If yes → parametrize with `ALL_TRANSPORTS`
+3. If no → use single transport (`Transport.IMPL`)
+
+**Template (multi-transport — creative domains):**
+
+```python
+import pytest
+from tests.factories import TenantFactory, PrincipalFactory
+from tests.harness import CreativeSyncEnv, Transport, assert_envelope
+
+ALL_TRANSPORTS = [Transport.IMPL, Transport.A2A, Transport.REST]
+
+@pytest.mark.requires_db
+class TestObligationName:
+    """Short description.
+
+    Covers: T-UC-006-xxx-rest, T-UC-006-xxx-mcp
+    """
+
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
+    def test_specific_behavior(self, integration_db, transport):
+        """What is verified.
+
+        Covers: T-UC-006-xxx-rest, T-UC-006-xxx-mcp
+        """
+        with CreativeSyncEnv() as env:
+            # SHARED FIXTURE
+            TenantFactory(tenant_id="test_tenant")
+            PrincipalFactory(tenant_id="test_tenant", principal_id="test_principal")
+
+            # TRANSPORT DISPATCH
+            result = env.call_via(transport, creatives=[...])
+
+        # ENVELOPE (transport-specific)
+        if transport == Transport.REST:
+            assert_envelope(result, Transport.REST)
+
+        # PAYLOAD (shared — identical for all transports)
+        assert result.is_success
+        assert result.payload.creatives[0].action == expected_action
+```
+
+**Transport-specific behaviors** (e.g., REST returns 401, MCP raises ToolError)
+get separate non-parametrized tests — don't mix them into the shared test.
+
+### Creative Harness API
+
+```python
+from tests.harness import CreativeSyncEnv, CreativeListEnv, CreativeFormatsEnv, Transport
+
+# Sync creatives (multi-transport)
+with CreativeSyncEnv() as env:
+    env.set_registry_formats([...])
+    result = env.call_via(Transport.REST, creatives=[...], dry_run=True)
+    # result.is_success, result.payload, result.envelope
+
+# List creatives (multi-transport)
+with CreativeListEnv() as env:
+    result = env.call_via(Transport.A2A, media_buy_id="mb_001")
+
+# List formats (multi-transport)
+with CreativeFormatsEnv() as env:
+    env.set_registry_formats([...])
+    result = env.call_via(Transport.IMPL)
+```
+
+All three envs support: `call_via(transport)`, `call_impl()`, `call_a2a()`,
+`build_rest_body()`, `parse_rest_response()`.
+
 ## Test File Selection
 
 | Domain | File |
@@ -266,6 +364,10 @@ git commit -m "test: add obligation test for {OID}"
 | UC-004 service/CB | `test_delivery_service_behavioral.py` |
 | UC-002 | `test_create_media_buy_behavioral.py` |
 | UC-003 | `test_update_media_buy_behavioral.py` |
+| UC-006 sync (multi-transport) | `test_creative_sync_transport.py` |
+| UC-006 sync (impl only) | `test_creative_sync_behavioral.py` |
+| UC-006 list (impl only) | `test_creative_list_behavioral.py` |
+| UC-006 formats (impl only) | `test_creative_formats_behavioral.py` |
 
 New files must be added to `_UNIT_ENTITY_FILES` in
 `tests/unit/test_architecture_obligation_coverage.py`.
@@ -355,10 +457,32 @@ with CircuitBreakerEnv() as env:
 When production code doesn't implement the tested behavior:
 
 ```python
-@pytest.mark.xfail(reason="<what's missing in production code>")
+@pytest.mark.xfail(strict=True, reason="<what's missing> (salesagent-xxxx)")
 def test_name(self):
     """... Covers: {OID} ..."""
+    # Assert the SPEC-DEFINED behavior, not current behavior
 ```
+
+Always use `strict=True` — when someone implements the feature, the xfail
+will break the build and remind them to remove the marker.
+
+## Iron Rule: BDD Spec Is the Sole Source of Assertions
+
+**The Given/When/Then from the obligation spec IS the test.** Period.
+
+- **Given** → test setup
+- **When** → call production function
+- **Then** → assertions
+
+Do NOT adapt assertions to match current implementation. If the spec says
+"Then a SyncCreativesSubmitted is returned" but the code returns
+SyncCreativesResponse, assert SyncCreativesSubmitted and mark xfail.
+A test that asserts current (wrong) behavior is WORSE than no test — it
+legitimizes the gap and makes it invisible.
+
+**The only valid reason to read production code** is to understand HOW to
+set up the test (what parameters to pass, what mocks to configure). The
+production code NEVER determines WHAT to assert — only the spec does.
 
 ## Anti-Patterns
 
@@ -367,6 +491,11 @@ def test_name(self):
 - Don't copy helper functions (_make_buy, _make_adapter_response) — use env methods
 - Don't assert `mock.called` as the primary assertion (Rule 6)
 - Don't drop obligations because "the code doesn't do this" — use xfail
+- **Don't write tests that mirror current behavior instead of spec behavior** —
+  this is the most dangerous anti-pattern. It makes gaps invisible by
+  producing passing tests that verify the system "behaves somehow" rather
+  than "behaves correctly"
+- Don't exclude obligations as "not implemented" — that IS the gap to surface
 
 ## When to Use This vs /obligation-test
 

@@ -11,7 +11,14 @@ from typing import TypeVar
 from adcp import FormatId
 from adcp.types import Format as AdcpFormat
 from adcp.types.generated_poc.core.context import ContextObject
-from adcp.types.generated_poc.core.format import Assets, Assets5
+from adcp.types.generated_poc.core.format import (
+    Assets,
+    Assets5,
+    Assets6,
+    Assets7,
+    Assets9,
+    Assets14,
+)
 from adcp.types.generated_poc.enums.asset_content_type import AssetContentType
 from adcp.types.generated_poc.enums.format_category import FormatCategory
 from adcp.utils.format_assets import get_format_assets
@@ -72,6 +79,31 @@ def _infer_asset_type(asset_id: str) -> str:
         return "text"  # Default to text for headlines, body, captions, etc.
 
 
+# Each adcp Assets variant uses a Literal discriminator for asset_type.
+# Map asset type strings to the correct class.
+_ASSET_TYPE_TO_CLASS: dict[str, type] = {
+    "image": Assets,
+    "video": Assets5,
+    "audio": Assets6,
+    "text": Assets7,
+    "html": Assets9,
+    "url": Assets14,
+}
+
+
+def _make_asset(
+    asset_id: str, asset_type: str, required: bool
+) -> Assets | Assets5 | Assets6 | Assets7 | Assets9 | Assets14:
+    """Build the correct Assets variant for a given asset type string."""
+    cls = _ASSET_TYPE_TO_CLASS.get(asset_type, Assets7)  # default to text
+    return cls(
+        item_type="individual",
+        asset_id=asset_id,
+        asset_type=asset_type,
+        required=required,
+    )
+
+
 def _list_creative_formats_impl(
     req: ListCreativeFormatsRequest | None, identity: ResolvedIdentity | None
 ) -> ListCreativeFormatsResponse:
@@ -97,28 +129,47 @@ def _list_creative_formats_impl(
     # Get formats from all registered creative agents via registry
     import asyncio
 
-    from src.core.creative_agent_registry import get_creative_agent_registry
+    from src.core.creative_agent_registry import FormatFetchResult, get_creative_agent_registry
 
-    registry = get_creative_agent_registry()
-
-    # Run async operation - check if we're already in an async context
+    # Decision: docs/design/error-propagation-in-format-discovery.md
+    # Registry creation failure → return empty formats + errors (FD-ERR-03)
     try:
-        # Check if there's already a running event loop
+        registry = get_creative_agent_registry()
+    except Exception as e:
+        from adcp.types.generated_poc.core.error import Error as AdCPResponseError
+
+        logger.error(f"Failed to create creative agent registry: {e}", exc_info=True)
+        return ListCreativeFormatsResponse(
+            formats=[],
+            errors=[
+                AdCPResponseError(
+                    code="REGISTRY_ERROR",
+                    message=f"Creative agent registry initialization failed: {e}",
+                )
+            ],
+            context=req.context,
+        )
+
+    # Use list_all_formats_with_errors() to get per-agent error reporting (FD-ERR-01, FD-ERR-02)
+    try:
         loop = asyncio.get_running_loop()
-        # We're in an async context, run in thread pool to avoid nested loop error
         import concurrent.futures
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(lambda: asyncio.run(registry.list_all_formats(tenant_id=tenant["tenant_id"])))
-            formats = future.result()
+            future = executor.submit(
+                lambda: asyncio.run(registry.list_all_formats_with_errors(tenant_id=tenant["tenant_id"]))
+            )
+            fetch_result: FormatFetchResult = future.result()
     except RuntimeError:
-        # No running loop, safe to create one
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            formats = loop.run_until_complete(registry.list_all_formats(tenant_id=tenant["tenant_id"]))
+            fetch_result = loop.run_until_complete(registry.list_all_formats_with_errors(tenant_id=tenant["tenant_id"]))
         finally:
             loop.close()
+
+    formats = fetch_result.formats
+    agent_errors = fetch_result.errors
 
     # Get formats from adapter if it provides them (e.g., Broadstreet acting as both sales and creative agent)
     # Check adapter type from tenant config and load formats without instantiating the full adapter
@@ -148,28 +199,14 @@ def _list_creative_formats_impl(
                             agent_url=url(agent_url),
                         )
 
-                        # Build assets list
-                        assets_list: list[Assets | Assets5] = []
+                        # Build assets list using the correct Assets variant per type
+                        assets_list: list[Assets | Assets5 | Assets6 | Assets7 | Assets9 | Assets14] = []
                         for asset_id in template.get("required_assets", []):
                             asset_type = _infer_asset_type(asset_id)
-                            assets_list.append(
-                                Assets(
-                                    item_type="individual",
-                                    asset_id=asset_id,
-                                    asset_type=AssetContentType(asset_type),
-                                    required=True,
-                                )
-                            )
+                            assets_list.append(_make_asset(asset_id, asset_type, required=True))
                         for asset_id in template.get("optional_assets", []):
                             asset_type = _infer_asset_type(asset_id)
-                            assets_list.append(
-                                Assets(
-                                    item_type="individual",
-                                    asset_id=asset_id,
-                                    asset_type=AssetContentType(asset_type),
-                                    required=False,
-                                )
-                            )
+                            assets_list.append(_make_asset(asset_id, asset_type, required=False))
 
                         fmt = Format(
                             format_id=format_id,
@@ -284,6 +321,19 @@ def _list_creative_formats_impl(
     if req.max_height is not None:
         formats = [f for f in formats if any(h and h <= req.max_height for w, h in get_format_dimensions(f))]
 
+    # Filter by wcag_level - hierarchical: A < AA < AAA
+    # Formats must meet at least the requested level; formats without accessibility are excluded
+    if req.wcag_level is not None:
+        from adcp.types.generated_poc.enums.wcag_level import WcagLevel
+
+        _WCAG_ORDER = {WcagLevel.A: 1, WcagLevel.AA: 2, WcagLevel.AAA: 3}
+        min_level = _WCAG_ORDER.get(req.wcag_level, 0)
+        formats = [
+            f
+            for f in formats
+            if f.accessibility is not None and _WCAG_ORDER.get(f.accessibility.wcag_level, 0) >= min_level
+        ]
+
     # Sort formats by type and name for consistent ordering
     # Use .value to convert enum to string for sorting (enums don't support < comparison)
     formats.sort(key=lambda f: (f.type.value if f.type is not None else "", f.name))
@@ -291,6 +341,68 @@ def _list_creative_formats_impl(
     # Ensure backward compatibility: populate both assets and assets_required
     # This allows old clients (using assets_required) and new clients (using assets) to work
     formats = [_ensure_backward_compatible_format(f) for f in formats]
+
+    # Apply cursor-based pagination (AdCP PaginationRequest spec)
+    total_count = len(formats)
+    max_results = 50  # AdCP default
+    start_index = 0
+
+    if req.pagination is not None:
+        if req.pagination.max_results is not None:
+            max_results = req.pagination.max_results
+        if req.pagination.cursor is not None:
+            import base64
+
+            try:
+                start_index = int(base64.b64decode(req.pagination.cursor).decode("utf-8"))
+            except ValueError:
+                start_index = 0
+
+    end_index = start_index + max_results
+    has_more = end_index < total_count
+    page_formats = formats[start_index:end_index]
+
+    # Build pagination response
+    from adcp.types.generated_poc.core.pagination_response import PaginationResponse
+
+    next_cursor = None
+    if has_more:
+        import base64
+
+        next_cursor = base64.b64encode(str(end_index).encode("utf-8")).decode("utf-8")
+
+    pagination_response = PaginationResponse(
+        has_more=has_more,
+        cursor=next_cursor,
+        total_count=total_count,
+    )
+
+    # Build creative_agents referrals from registry (POST-S4)
+    from adcp.types.generated_poc.enums.creative_agent_capability import CreativeAgentCapability
+    from adcp.types.generated_poc.media_buy.list_creative_formats_response import (
+        CreativeAgent as AdcpCreativeAgent,
+    )
+
+    creative_agents_list: list[AdcpCreativeAgent] | None = None
+    try:
+        agents = registry._get_tenant_agents(tenant["tenant_id"])
+        if agents:
+            creative_agents_list = []
+            for agent in agents:
+                creative_agents_list.append(
+                    AdcpCreativeAgent(
+                        agent_url=agent.agent_url,
+                        agent_name=agent.name,
+                        capabilities=[
+                            CreativeAgentCapability.validation,
+                            CreativeAgentCapability.assembly,
+                            CreativeAgentCapability.preview,
+                            CreativeAgentCapability.delivery,
+                        ],
+                    )
+                )
+    except Exception:
+        logger.warning("Failed to build agent referrals for tenant %s", tenant["tenant_id"], exc_info=True)
 
     # Log the operation
     audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
@@ -301,20 +413,22 @@ def _list_creative_formats_impl(
         adapter_id="N/A",
         success=True,
         details={
-            "format_count": len(formats),
-            "standard_formats": len([f for f in formats if f.is_standard]),
-            "custom_formats": len([f for f in formats if not f.is_standard]),
-            "format_types": list({f.type.value for f in formats if f.type is not None}),
+            "format_count": len(page_formats),
+            "total_count": total_count,
+            "standard_formats": len([f for f in page_formats if f.is_standard]),
+            "custom_formats": len([f for f in page_formats if not f.is_standard]),
+            "format_types": list({f.type.value for f in page_formats if f.type is not None}),
         },
     )
 
     # Create response (no message/specification_version - not in adapter schema)
     # Format list from registry is compatible with library Format type
     response = ListCreativeFormatsResponse(
-        formats=formats,
-        creative_agents=None,
-        errors=None,
+        formats=page_formats,
+        creative_agents=creative_agents_list,
+        errors=agent_errors if agent_errors else None,
         context=req.context,
+        pagination=pagination_response,
     )
 
     # Always return Pydantic model - MCP wrapper will handle serialization
@@ -357,10 +471,12 @@ async def list_creative_formats(
         ToolResult with ListCreativeFormatsResponse data
     """
     try:
-        # Convert typed Pydantic models to values for the request
-        # FastMCP already coerced JSON inputs to these types
-        type_str = type.value if type else None
-        asset_types_strs = [at.value for at in asset_types] if asset_types else None
+        # Coerce raw strings to enums at the transport boundary (Pattern #5).
+        # FastMCP normally coerces, but direct callers may pass raw strings.
+        type_str = (type if isinstance(type, FormatCategory) else FormatCategory(type)).value if type else None
+        asset_types_strs = (
+            [at.value if isinstance(at, AssetContentType) else str(at) for at in asset_types] if asset_types else None
+        )
         req = ListCreativeFormatsRequest(
             type=type_str,
             format_ids=format_ids,

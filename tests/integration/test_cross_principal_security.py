@@ -17,6 +17,7 @@ import pytest
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
 from src.core.database.models import MediaBuy, Principal
+from src.core.exceptions import AdCPAuthorizationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import ListCreativesResponse, UpdateMediaBuyRequest
 from tests.utils.database_helpers import create_tenant_with_timestamps
@@ -162,8 +163,8 @@ class TestCrossPrincipalSecurity:
         )
 
         # Principal B tries to update Principal A's media buy
-        # _verify_principal should raise PermissionError
-        with pytest.raises(PermissionError, match="does not own media buy"):
+        # _verify_principal should raise AdCPAuthorizationError
+        with pytest.raises(AdCPAuthorizationError, match="does not own media buy"):
             req = UpdateMediaBuyRequest(
                 media_buy_id="media_buy_a",  # Owned by Principal A!
             )

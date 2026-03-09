@@ -275,6 +275,62 @@ def test_product_without_eager_loading_fails_validation(integration_db):
 
 
 @pytest.mark.requires_db
+def test_delivery_measurement_not_null_at_db_level(integration_db):
+    """DB must reject NULL delivery_measurement — NOT NULL constraint required.
+
+    The migration aa005b733aed adds NOT NULL + server_default. The server_default
+    handles INSERT (omitted column gets default), so we test via UPDATE to NULL
+    which has no default fallback and must be rejected.
+    """
+    from sqlalchemy import text
+    from sqlalchemy.exc import IntegrityError
+
+    from tests.factories import ProductFactory, TenantFactory
+    from tests.harness._base import IntegrationEnv
+
+    with IntegrationEnv() as env:
+        tenant = TenantFactory()
+        product = ProductFactory(tenant=tenant)
+
+        # UPDATE to NULL must fail — no server_default on UPDATE
+        with pytest.raises(IntegrityError):
+            env._session.execute(
+                text("UPDATE products SET delivery_measurement = NULL WHERE product_id = :pid AND tenant_id = :tid"),
+                {"pid": product.product_id, "tid": tenant.tenant_id},
+            )
+            env._session.flush()
+
+
+@pytest.mark.requires_db
+def test_get_product_catalog_raises_on_conversion_error(integration_db):
+    """get_product_catalog must propagate ValueError, not silently skip products.
+
+    Per CLAUDE.md "No Quiet Failures" principle and commit 5444a3fb, conversion
+    errors indicate data integrity issues that must surface — not be swallowed
+    with a warning log. A corrupt product in the DB is a bug, not a normal case.
+    """
+    from tests.factories import PricingOptionFactory, ProductFactory, TenantFactory
+    from tests.harness._base import IntegrationEnv
+
+    with IntegrationEnv() as _env:
+        tenant = TenantFactory()
+        tenant_id = tenant.tenant_id  # capture before session closes
+        product = ProductFactory(tenant=tenant)
+
+        # Fixed CPM with rate=None triggers ValueError in convert_pricing_option
+        PricingOptionFactory(
+            product=product,
+            pricing_model="cpm",
+            rate=None,  # Corruption — fixed CPM requires a rate
+            is_fixed=True,
+        )
+
+    # get_product_catalog should raise ValueError, not silently skip the product
+    with pytest.raises(ValueError, match="requires rate"):
+        get_product_catalog(tenant_id=tenant_id)
+
+
+@pytest.mark.requires_db
 def test_create_media_buy_loads_pricing_options(integration_db):
     """Test that create_media_buy logic loads pricing_options for currency detection."""
     # This tests the second place we fixed in PR #413

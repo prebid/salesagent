@@ -16,24 +16,28 @@ import importlib
 import inspect
 
 
-def _get_schema_source_files() -> list["Path"]:
-    """Return all Python source files in the schemas package."""
+def _get_schemas_source_files() -> list["Path"]:
+    """Get all Python source files in the schemas package.
+
+    Handles both the old single-file layout (src/core/schemas.py) and
+    the new package layout (src/core/schemas/__init__.py + submodules).
+    """
     from pathlib import Path
 
     schemas_path = Path("src/core/schemas")
     if schemas_path.is_dir():
         return sorted(schemas_path.glob("**/*.py"))
-    # Fallback for flat-file layout (pre-extraction)
-    flat = Path("src/core/schemas.py")
-    return [flat] if flat.exists() else []
+    single_file = Path("src/core/schemas.py")
+    if single_file.exists():
+        return [single_file]
+    raise FileNotFoundError("Cannot find src/core/schemas.py or src/core/schemas/ package")
 
 
 def _get_library_type_mapping() -> dict[str, type]:
     """Build mapping of local class names to their expected library base types.
 
-    Scans src.core.schemas (package or flat file) for all imports aliased as
-    Library*. For each such import, the local class with the un-prefixed name
-    should inherit from it.
+    Scans src.core.schemas for all imports aliased as Library*. For each such
+    import, the local class with the un-prefixed name should inherit from it.
 
     Returns dict like: {"Product": <class adcp.types.Product>, ...}
     """
@@ -41,8 +45,8 @@ def _get_library_type_mapping() -> dict[str, type]:
 
     mapping: dict[str, type] = {}
 
-    for source_file in _get_schema_source_files():
-        source = source_file.read_text()
+    for schemas_path in _get_schemas_source_files():
+        source = schemas_path.read_text()
         tree = ast.parse(source)
 
         # Find all "from adcp... import X as LibraryX" statements
@@ -50,7 +54,10 @@ def _get_library_type_mapping() -> dict[str, type]:
             if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("adcp"):
                 for alias in node.names:
                     if alias.asname and alias.asname.startswith("Library"):
+                        # e.g. "from adcp.types import Product as LibraryProduct"
+                        # Local class name = alias.asname without "Library" prefix
                         local_name = alias.asname.removeprefix("Library")
+                        # Import the actual library type
                         try:
                             mod = importlib.import_module(node.module)
                             lib_type = getattr(mod, alias.name, None)
@@ -63,11 +70,11 @@ def _get_library_type_mapping() -> dict[str, type]:
 
 
 def _get_local_schema_classes() -> dict[str, type]:
-    """Get all classes defined in the src.core.schemas package (any submodule)."""
+    """Get all classes defined in src.core.schemas (including submodules)."""
     schemas = importlib.import_module("src.core.schemas")
     classes = {}
     for name, obj in inspect.getmembers(schemas, inspect.isclass):
-        # Include classes defined in the schemas package or any submodule
+        # Include classes defined in the schemas package or its submodules
         if obj.__module__ and obj.__module__.startswith("src.core.schemas"):
             classes[name] = obj
     return classes
@@ -88,8 +95,8 @@ def _get_class_own_field_names(class_name: str) -> set[str]:
     global _CLASS_OWN_FIELDS
     if _CLASS_OWN_FIELDS is None:
         _CLASS_OWN_FIELDS = {}
-        for source_file in _get_schema_source_files():
-            source = source_file.read_text()
+        for schemas_path in _get_schemas_source_files():
+            source = schemas_path.read_text()
             tree = ast.parse(source)
             for node in ast.walk(tree):
                 if isinstance(node, ast.ClassDef):
@@ -170,7 +177,6 @@ class TestSchemaInheritance:
             # Nested serialization overrides (Critical Pattern #4) —
             # Parent models re-declare list fields to use local subclass types
             ("CreateMediaBuyRequest", "packages"),
-            ("GetCreativeDeliveryResponse", "creatives"),
             ("GetMediaBuyDeliveryResponse", "aggregated_totals"),
             ("GetMediaBuyDeliveryResponse", "media_buy_deliveries"),
             ("GetProductsRequest", "pagination"),
@@ -203,6 +209,8 @@ class TestSchemaInheritance:
             ("Creative", "created_date"),
             ("Creative", "updated_date"),
             ("Creative", "assets"),
+            # Nested serialization — creative delivery uses local CreativeDeliveryData
+            ("GetCreativeDeliveryResponse", "creatives"),
             # Request field overrides — tighter validation
             ("GetMediaBuyDeliveryRequest", "account_id"),
         }

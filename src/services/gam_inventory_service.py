@@ -997,7 +997,7 @@ class GAMInventoryService:
         try:
             last_sync = datetime.fromisoformat(last_sync_str)
             return datetime.now(UTC) - last_sync > timedelta(hours=24)
-        except:
+        except Exception:
             return True
 
     def search_inventory(

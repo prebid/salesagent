@@ -605,6 +605,10 @@ finalize:
          e2e, ui) via tox, and tears down. Do NOT substitute with individual pytest
          commands — `./run_all_tests.sh` is the single source of truth.
 
+         JSON results are saved to `test-results/<ddmmyy_HHmm>/`. If terminal
+         output is lost (background process crash, timeout), read the JSON files
+         to review results.
+
       3. **Compare counts**:
          - Passes must be >= baseline (new tests are expected)
          - Failures must be exactly 0
@@ -616,15 +620,24 @@ finalize:
          - make quality: [N] passed, 0 failed (baseline: [N])
          - integration: [N] passed, 0 failed (baseline: [N])
          - integration_v2: [N] passed, 0 failed (baseline: [N])
+         - e2e: [N] passed, [N] skipped, 0 failed
+         - ui: [N] passed, [N] skipped, 0 failed
          - Delta: +[N] new tests, 0 regressions"
          ```
 
-      ## HARD STOP
+      ## HARD STOP — Test Integrity (ZERO TOLERANCE)
 
-      If ANY gate has failures that were not in the baseline:
+      **Read CLAUDE.md "Test Integrity Policy". These rules apply here:**
+
+      If ANY test fails in `./run_all_tests.sh`:
       - Do NOT close this atom.
       - Do NOT commit.
-      - Fix the regressions first, then re-run this atom.
+      - Do NOT use `--ignore`, `-k "not ..."`, or `--deselect` to skip failures.
+      - Do NOT rationalize failures as "pre-existing", "infrastructure issue",
+        "misplaced test", "needs a running server", or "was deselected".
+      - Fix the regressions first, then re-run `./run_all_tests.sh`.
+      - If infrastructure is broken and you cannot fix it, report it as a
+        BLOCKER to the user. Do NOT skip tests and report success.
 
     acceptance: "All three gates pass. Zero regressions vs baseline. Final counts recorded in epic notes."
     depends_on_all_barriers: true

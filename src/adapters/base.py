@@ -176,6 +176,11 @@ class AdServerAdapter(ABC):
     # Subclasses should override with their supported channels
     default_channels: list[str] = []
 
+    # Default delivery measurement provider for products created by this adapter.
+    # Per AdCP spec, delivery_measurement is REQUIRED on all products.
+    # Subclasses should override with their specific measurement provider.
+    default_delivery_measurement: dict[str, str] = {"provider": "publisher"}
+
     # Adapter capabilities - override in subclasses
     capabilities: AdapterCapabilities = AdapterCapabilities()
 
@@ -244,6 +249,43 @@ class AdServerAdapter(ABC):
             TargetingCapabilities describing what targeting is supported
         """
         return TargetingCapabilities(geo_countries=True)
+
+    def validate_media_buy_request(
+        self,
+        request: CreateMediaBuyRequest,
+        packages: list[MediaPackage],
+        start_time: datetime,
+        end_time: datetime,
+        package_pricing_info: dict[str, dict] | None = None,
+    ) -> list[str]:
+        """Pre-validate a media buy request without creating anything.
+
+        Called before adapter execution (including dry_run) to catch
+        adapter-specific constraint violations early. Override in
+        subclasses to add adapter-specific validation.
+
+        Default implementation validates pricing model compatibility.
+        Subclasses can override to add adapter-specific checks (e.g., impressions limits).
+
+        Returns:
+            List of error messages. Empty list means validation passed.
+        """
+        errors: list[str] = []
+        supported = self.get_supported_pricing_models()
+
+        if package_pricing_info:
+            for _pkg_id, pricing in package_pricing_info.items():
+                pricing_model = pricing.get("pricing_model", "")
+                if pricing_model and pricing_model.lower() not in supported:
+                    sorted_supported = ", ".join(sorted(s.upper() for s in supported))
+                    errors.append(
+                        f"Adapter does not support '{pricing_model}' pricing. "
+                        f"Supported pricing models: {sorted_supported}. "
+                        f"The requested pricing model ('{pricing_model}') is not available. "
+                        f"Please choose a product with compatible pricing."
+                    )
+
+        return errors
 
     @abstractmethod
     def create_media_buy(

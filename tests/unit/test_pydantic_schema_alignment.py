@@ -152,8 +152,52 @@ def generate_example_value(field_type: str, field_name: str = "", field_spec: di
             return {"session_id": "test-session"}
         elif "ext" in ref.lower():
             return {"custom_field": "test"}
-        # For unknown refs, return a minimal object
-        return {}
+        # For unknown refs, resolve the schema and generate from its properties
+        try:
+            ref_schema = load_json_schema(ref)
+            ref_type = ref_schema.get("type", "object")
+            if ref_type == "string" and "enum" in ref_schema:
+                return ref_schema["enum"][0]
+            if ref_type != "object":
+                return generate_example_value(ref_type, field_name, ref_schema)
+            # Generate object with required fields from the resolved schema
+            obj = {}
+            required_fields = ref_schema.get("required", [])
+            for prop_name, prop_spec in ref_schema.get("properties", {}).items():
+                if prop_name in required_fields:
+                    prop_type = prop_spec.get("type", "string")
+                    obj[prop_name] = generate_example_value(prop_type, prop_name, prop_spec)
+            return obj if obj else {}
+        except Exception:
+            return {}
+
+    # Handle allOf with $ref (e.g., time_budget: allOf[{$ref: duration.json}])
+    if field_spec and "allOf" in field_spec:
+        for variant in field_spec["allOf"]:
+            if "$ref" in variant:
+                return generate_example_value("object", field_name, variant)
+        # If no $ref in allOf, merge properties from all variants
+        merged_spec = dict(field_spec)
+        del merged_spec["allOf"]
+        for variant in field_spec["allOf"]:
+            merged_spec.update(variant)
+        return generate_example_value(merged_spec.get("type", "object"), field_name, merged_spec)
+
+    # Handle field-level oneOf (e.g., status_filter: oneOf[enum, array-of-enum])
+    # Pick the first variant and recursively generate a value for it.
+    if field_spec and "oneOf" in field_spec:
+        first_variant = field_spec["oneOf"][0]
+        # The variant might be a $ref (e.g., to an enum schema) or inline type
+        if "$ref" in first_variant:
+            ref = first_variant["$ref"]
+            # Load the referenced schema to get enum values or type info
+            ref_schema = load_json_schema(ref)
+            if "enum" in ref_schema:
+                return ref_schema["enum"][0]
+            variant_type = ref_schema.get("type", "string")
+            return generate_example_value(variant_type, field_name, ref_schema)
+        variant_type = first_variant.get("type", "string")
+        return generate_example_value(variant_type, field_name, first_variant)
 
     # Handle field-level oneOf (e.g., status_filter: oneOf[enum, array-of-enum])
     # Pick the first variant and recursively generate a value for it.

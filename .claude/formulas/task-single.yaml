@@ -1,0 +1,237 @@
+name: task-single
+description: >
+  Lightweight formula for executing well-defined beads tasks. Three atoms
+  per task: prep (read and plan), execute (implement and verify), commit.
+  Use instead of task-execute when the task description already contains
+  sufficient context and doesn't need architect review or triage routing.
+
+  Total atoms: 1 (baseline) + 3N (per task) + 1 (verify-final) = 3N + 2.
+  Compare task-execute at 7N + 2.
+
+variables:
+  TASK_IDS:
+    description: "Space-separated beads task IDs to execute (e.g., g8p2 b4y3 quac)"
+    required: true
+
+labels:
+  - "mol:task-single"
+
+# ── Setup (runs once) ────────────────────────────────────────────
+setup:
+  - id: "baseline"
+    title: "Verify clean baseline"
+    description: |
+      Run quality gates BEFORE any code changes to confirm clean state.
+
+      ## Instructions
+
+      1. **Run quality gate**:
+         ```bash
+         make quality 2>&1 | tail -5
+         ```
+         Record the exact pass count (e.g., "3481 passed").
+
+      2. **Start agent DB** (if integration tests are needed):
+         ```bash
+         eval $(.claude/skills/agent-db/agent-db.sh up)
+         ```
+
+      ## Gate — HARD STOP on any failure
+
+      If ANY test fails in the baseline, STOP. Do NOT proceed. Report the
+      exact failures and leave this atom OPEN.
+
+      ## Record Baseline
+
+      ```bash
+      bd update {EPIC_ID} --append-notes "## Baseline
+      - make quality: [N] passed, 0 failed"
+      ```
+
+    acceptance: "make quality passes. Pass count recorded in epic notes."
+    labels: ["atom:baseline"]
+
+# ── Per-task atoms ────────────────────────────────────────────────
+iterate:
+  over: "TASK_IDS"
+  item_var: "TASK_ID"
+  all_var: "ALL_TASKS"
+  count_var: "N"
+  barrier_label: "atom:commit"
+  atoms:
+
+    # ── Atom 1: Prep ──────────────────────────────────────────────
+    - id: "prep-{TASK_ID}"
+      title: "Prep {TASK_ID}"
+      description: |
+        Read the task and all affected code BEFORE making any changes.
+        This atom is READ-ONLY — do not edit any files.
+
+        ## Instructions
+
+        1. **Read the task**:
+           ```bash
+           bd show {TASK_ID}
+           ```
+           Read description, notes, design fields. Understand exactly what
+           needs to change.
+
+        2. **Read every file** listed in the task description.
+           For each test or source file, understand:
+           - What does it currently do?
+           - What should it do after the change?
+           - What existing patterns does it follow?
+
+        3. **Identify dependencies**:
+           - What _impl function(s) will be called?
+           - What transport wrappers exist (MCP tool, A2A raw, REST route)?
+           - What factories or fixtures are available?
+           - What harness environments exist (ProductEnv, DeliveryPollEnv, etc.)?
+
+        4. **Write a brief plan** to the task notes:
+           ```bash
+           bd update {TASK_ID} --append-notes "## Prep
+           - Files to modify: [list]
+           - Production code to call: [_impl functions]
+           - Transport routes: [MCP, A2A, REST identifiers]
+           - Approach: [1-3 sentences]"
+           ```
+
+        ## Anti-Patterns
+        - Do NOT start editing files in this atom
+        - Do NOT skip reading affected files
+        - Do NOT assume you know the code without reading it
+
+      acceptance: "Task read. All affected files read. Plan written to task notes."
+      depends_on: ["baseline"]
+      labels: ["atom:prep"]
+
+    # ── Atom 2: Execute ───────────────────────────────────────────
+    - id: "execute-{TASK_ID}"
+      title: "Execute {TASK_ID}"
+      description: |
+        Implement the changes described in the task and the prep plan.
+
+        ## Instructions
+
+        1. **Re-read the plan** from `bd show {TASK_ID}` (## Prep section).
+
+        2. **Make the changes** following the plan. For each change:
+           - Follow CLAUDE.md critical patterns
+           - Follow existing conventions in the file
+           - Keep changes minimal — do only what the task asks
+
+        3. **Run quality gates**:
+           ```bash
+           make quality
+           ```
+           If it fails, fix the issue and re-run. Do NOT close this atom
+           until make quality passes.
+
+        4. **Run targeted integration tests** (if the task involves DB):
+           ```bash
+           scripts/run-test.sh tests/integration/<relevant>.py -x -v 2>&1 | tail -10
+           ```
+
+        5. **Record results**:
+           ```bash
+           bd update {TASK_ID} --append-notes "## Execution
+           - Changes made: [summary]
+           - make quality: PASS ([N] passed)"
+           ```
+
+        ## When EXISTING Tests Fail
+
+        If your changes break pre-existing tests:
+        1. STOP. Do NOT modify the failing tests to match your code.
+        2. Ask: is my change wrong, or is the test wrong?
+        3. If your change is wrong — revert and try a different approach.
+        4. If the test has a genuine bug — document WHY before modifying it.
+
+        Sacred rule: NEVER adjust tests to match code without justification.
+
+        ## If Blocked
+
+        If you cannot complete the task:
+        ```bash
+        bd update {TASK_ID} --append-notes "## BLOCKED
+        - [describe the blocker]
+        - [what was tried]"
+        ```
+        Leave this atom OPEN for user direction.
+
+      acceptance: "Changes implemented. make quality passes. Results recorded in task notes."
+      depends_on: ["prep-{TASK_ID}"]
+      labels: ["atom:execute"]
+
+    # ── Atom 3: Commit ────────────────────────────────────────────
+    - id: "commit-{TASK_ID}"
+      title: "Commit {TASK_ID}"
+      description: |
+        Stage, commit, and close the task.
+
+        ## Instructions
+
+        1. **Review changes**:
+           ```bash
+           git diff --stat
+           ```
+
+        2. **Stage specific files** (never use `git add .`):
+           ```bash
+           git add <specific-files>
+           ```
+
+        3. **Commit** with conventional commit message:
+           ```bash
+           git commit -m "<type>: <description> ({TASK_ID})"
+           ```
+           Types: feat, fix, refactor, test, chore, docs.
+
+        4. **Close the task**:
+           ```bash
+           bd close {TASK_ID}
+           ```
+
+      acceptance: "Commit exists. Task closed."
+      depends_on: ["execute-{TASK_ID}"]
+      labels: ["atom:commit"]
+
+# ── Finalize (after all tasks) ────────────────────────────────────
+finalize:
+  - id: "verify-final"
+    title: "Final verification"
+    description: |
+      After all {N} tasks, verify zero regressions across all changes.
+
+      ## Instructions
+
+      1. **Run full quality gate**:
+         ```bash
+         make quality 2>&1 | tail -5
+         ```
+
+      2. **Compare against baseline** from `bd show {EPIC_ID}` (## Baseline):
+         - Pass count must be >= baseline (new tests expected)
+         - Zero failures
+
+      3. **Sync beads**:
+         ```bash
+         bd sync
+         ```
+
+      4. **Record final results**:
+         ```bash
+         bd update {EPIC_ID} --append-notes "## Final
+         - make quality: [N] passed, 0 failed (baseline: [N])
+         - Delta: +[N] new/modified tests, 0 regressions"
+         ```
+
+      ## HARD STOP — Test Integrity
+
+      If ANY test fails: fix it. Do NOT close this atom with failures.
+      Do NOT use --ignore, -k "not ...", --deselect, or xfail.
+
+    acceptance: "make quality passes. Zero regressions vs baseline. Beads synced."
+    depends_on_all_barriers: true
+    labels: ["atom:verify"]

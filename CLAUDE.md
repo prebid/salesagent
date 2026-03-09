@@ -47,7 +47,7 @@ PR titles should use one of these prefixes:
 **Without a prefix, commits won't appear in release notes!** The code will still be released, but the change won't be documented in the changelog.
 
 ### Structural Guards (Automated Architecture Enforcement)
-Seven AST-scanning tests enforce architecture invariants on every `make quality` run. New violations fail the build immediately. See [docs/development/structural-guards.md](docs/development/structural-guards.md) for full details.
+Eleven AST-scanning tests enforce architecture invariants on every `make quality` run. New violations fail the build immediately. See [docs/development/structural-guards.md](docs/development/structural-guards.md) for full details.
 
 | Guard | Enforces | Test File |
 |-------|----------|-----------|
@@ -59,6 +59,9 @@ Seven AST-scanning tests enforce architecture invariants on every `make quality`
 | Query type safety | DB queries use types matching column definitions | `test_architecture_query_type_safety.py` |
 | No model_dump in _impl | `_impl` returns model objects, never calls `.model_dump()` | `test_architecture_no_model_dump_in_impl.py` |
 | Repository pattern | No `get_db_session()` in `_impl`; no inline `session.add()` in tests | `test_architecture_repository_pattern.py` |
+| Migration completeness | Every migration has non-empty `upgrade()` and `downgrade()` | `test_architecture_migration_completeness.py` |
+| No raw MediaPackage select | All MediaPackage access goes through repository, not raw `select()` | `test_architecture_no_raw_media_package_select.py` |
+| Obligation coverage | Behavioral obligations in docs have matching test coverage | `test_architecture_obligation_coverage.py` |
 
 **Rules for guards:**
 - Allowlists can only shrink — never add new violations, fix them instead
@@ -217,7 +220,7 @@ Never hardcode `/api/endpoint` - breaks with nginx prefix.
 - **Development/CI**: Default → `extra="forbid"` (strict validation)
 
 ### 8. Test Fixtures: Factory-Based, Not Inline
-**MANDATORY for new integration tests:** Use `polyfactory` factories for test data, not inline `session.add()` boilerplate.
+**MANDATORY for new integration tests:** Use `factory-boy` factories for test data, not inline `session.add()` boilerplate.
 
 ```python
 # CORRECT: factory creates ORM instance with sane defaults
@@ -418,8 +421,35 @@ def test_something():
 - Max 10 mocks per test file (pre-commit enforces)
 - AdCP compliance test for all client-facing models
 - Test YOUR code, not Python built-ins
-- Never skip tests - fix the issue (`skip_ci` for rare exceptions only)
 - Roundtrip test required for any operation using `apply_testing_hooks()`
+
+### Test Integrity Policy — ZERO TOLERANCE
+
+**This is non-negotiable. Every rule below is a HARD STOP.**
+
+1. **NEVER skip, ignore, deselect, or exclude failing tests.** Do not use `--ignore`, `-k "not test_name"`, `--deselect`, `pytest.mark.skip`, or `pytest.mark.xfail` to work around failures.
+2. **NEVER rationalize failures.** Do not classify failures as "pre-existing", "infrastructure issue", "misplaced test", "needs a running server", or "was deselected in the full run". A failing test is a failing test — fix it or report it to the user as a blocker.
+3. **Start the right infrastructure.** If a test needs Docker (integration, e2e, ui), start Docker. The tooling exists — use it. See the infrastructure decision tree below.
+4. **If infrastructure is broken, STOP.** Do not skip tests and report success. Tell the user the infrastructure is broken and either fix it or ask the user to fix it.
+5. **Test results are saved as JSON** in `test-results/<ddmmyy_HHmm>/`. Review these instead of re-running the full suite. Background processes may crash and lose output — the JSON reports are the resilient record.
+
+### Test Infrastructure Decision Tree
+
+**Choose the right tool based on what you're testing:**
+
+| What you need | Command | What it starts |
+|---------------|---------|----------------|
+| Unit tests only | `make quality` | Nothing (no Docker) |
+| One integration test (iterating) | `scripts/run-test.sh tests/integration/test_foo.py -x` | Bare Postgres via agent-db (persists) |
+| Integration DB for a worktree agent | `eval $(.claude/skills/agent-db/agent-db.sh up)` | Bare Postgres (unique port per worktree) |
+| Full suite (all 5 envs) | `./run_all_tests.sh` | Full Docker stack (Postgres + app + nginx), auto-teardown |
+| Full suite, targeted | `./run_all_tests.sh ci tests/integration/test_file.py -k test_name` | Full Docker stack |
+| Quick suite (no e2e/ui) | `./run_all_tests.sh quick` | Nothing (needs pre-existing DATABASE_URL) |
+| Manual Docker lifecycle | `make test-stack-up` → `source .test-stack.env && tox -p` → `make test-stack-down` | Full Docker stack (stays up between runs) |
+
+**Port conflicts are not possible.** Both `test-stack.sh` and `agent-db.sh` scan for free ports in the 50000-60000 range. Multiple instances can run simultaneously.
+
+**When in doubt, use `./run_all_tests.sh`.** It handles everything: Docker up, all suites, Docker down, JSON reports saved.
 
 ### Testing Workflow (Before Commit)
 ```bash

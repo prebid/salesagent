@@ -575,6 +575,8 @@ class TestCreativeUploadFailure:
         mock_adapter.manual_approval_required = False
         mock_adapter.manual_approval_operations = []
         mock_adapter.__class__.__name__ = "MockAdapter"
+        mock_adapter.get_supported_pricing_models.return_value = {"cpm", "vcpm", "cpc", "flat_rate"}
+        mock_adapter.validate_media_buy_request.return_value = []
         mock_adapter.add_creative_assets.side_effect = ConnectionError("Network timeout during GAM upload")
 
         # Mock product catalog for products_in_buy lookup
@@ -718,6 +720,8 @@ class TestInlineCreativesProcessedBeforeApproval:
                 mock_adapter = MagicMock()
                 mock_adapter.manual_approval_required = True
                 mock_adapter.manual_approval_operations = ["create_media_buy"]
+                mock_adapter.get_supported_pricing_models.return_value = {"cpm", "vcpm", "cpc", "flat_rate"}
+                mock_adapter.validate_media_buy_request.return_value = []
 
                 def record_adapter_check(*args, **kwargs):
                     call_order.append("approval_check")
@@ -900,6 +904,8 @@ class TestCreativeIdsNotFound:
         mock_adapter.manual_approval_required = False
         mock_adapter.manual_approval_operations = []
         mock_adapter.__class__.__name__ = "MockAdapter"
+        mock_adapter.get_supported_pricing_models.return_value = {"cpm", "vcpm", "cpc", "flat_rate"}
+        mock_adapter.validate_media_buy_request.return_value = []
 
         # Mock product catalog for products_in_buy lookup
         mock_schema_product = MagicMock()

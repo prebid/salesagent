@@ -59,6 +59,12 @@ class MockAdServer(AdServerAdapter):
     # Mock adapter supports all common channels for testing
     # V3 channel names: display, olv, streaming_audio, social
     default_channels = ["display", "olv", "streaming_audio", "social"]
+
+    # Mock adapter uses simulated measurement for testing
+    default_delivery_measurement = {
+        "provider": "mock",
+        "notes": "Simulated delivery measurement for testing",
+    }
     _media_buys: dict[str, dict[str, Any]] = {}
 
     # Schema and capabilities
@@ -160,6 +166,48 @@ class MockAdServer(AdServerAdapter):
             uk_itl1=True,
             uk_itl2=True,
         )
+
+    def validate_media_buy_request(
+        self,
+        request: CreateMediaBuyRequest,
+        packages: list[MediaPackage],
+        start_time: datetime,
+        end_time: datetime,
+        package_pricing_info: dict[str, dict] | None = None,
+    ) -> list[str]:
+        """Validate media buy request with GAM-like validation rules."""
+        errors = super().validate_media_buy_request(request, packages, start_time, end_time, package_pricing_info)
+
+        # Date validation (like GAM)
+        if start_time >= end_time:
+            errors.append("NotNullError.NULL @ lineItem[0].endDateTime")
+
+        current_time = datetime.now(UTC)
+        if end_time <= current_time:
+            errors.append("InvalidArgumentError @ lineItem[0].endDateTime")
+
+        # Goal validation (like GAM limits)
+        for package in packages:
+            pricing_model = None
+            if package_pricing_info and package.package_id in package_pricing_info:
+                pricing_model = package_pricing_info[package.package_id].get("pricing_model")
+
+            limit = 100000000 if pricing_model in ["cpcv", "cpv", "cpp"] else 1000000
+            if package.impressions > limit:
+                errors.append(
+                    f"ReservationDetailsError.PERCENTAGE_UNITS_BOUGHT_TOO_HIGH "
+                    f"@ lineItem[0].primaryGoal.units; trigger:'{package.impressions}'"
+                )
+
+        # Budget validation (AdCP v2.2.0: sum package budgets)
+        budget_amount = request.get_total_budget()
+        if budget_amount > 0:
+            if budget_amount > 1000000:
+                errors.append("InvalidArgumentError.VALUE_TOO_LARGE @ order.totalBudget")
+        else:
+            errors.append("InvalidArgumentError @ order.totalBudget")
+
+        return errors
 
     def _initialize_hitl_config(self):
         """Initialize Human-in-the-Loop configuration from principal platform_mappings."""
@@ -369,62 +417,6 @@ class MockAdServer(AdServerAdapter):
         except Exception as e:
             self.log(f"⚠️ Webhook failed for {step_id}: {e}")
 
-    def _validate_media_buy_request(
-        self,
-        request: CreateMediaBuyRequest,
-        packages: list[MediaPackage],
-        start_time: datetime,
-        end_time: datetime,
-        package_pricing_info: dict[str, dict] | None = None,
-    ):
-        """Validate media buy request with GAM-like validation rules."""
-        errors = []
-
-        # Date validation (like GAM)
-        if start_time >= end_time:
-            errors.append("NotNullError.NULL @ lineItem[0].endDateTime")
-
-        current_time = datetime.now(UTC)
-        if end_time <= current_time:
-            errors.append("InvalidArgumentError @ lineItem[0].endDateTime")
-
-        # Inventory targeting validation (like GAM requirement)
-        # Note: Mock adapter skips inventory targeting validation
-        # Real adapters like GAM will enforce their own inventory targeting requirements
-        # Mock adapter accepts Run of Site (no specific inventory targeting) for testing flexibility
-        # This allows test scenarios to run without configuring ad unit IDs
-
-        # Goal validation (like GAM limits)
-        # Note: For CPCV/CPV pricing, impressions are calculated as if CPM which inflates the number
-        # Mock adapter allows higher limits for these pricing models
-        for package in packages:
-            # Get pricing model from package_pricing_info if available
-            pricing_model = None
-            if package_pricing_info and package.package_id in package_pricing_info:
-                pricing_model = package_pricing_info[package.package_id].get("pricing_model")
-
-            # Apply higher limit for video-based and non-impression pricing models (CPCV, CPV, CPP)
-            # These models calculate impressions as if CPM which can inflate the number
-            limit = 100000000 if pricing_model in ["cpcv", "cpv", "cpp"] else 1000000
-
-            if package.impressions > limit:  # Mock limit
-                errors.append(
-                    f"ReservationDetailsError.PERCENTAGE_UNITS_BOUGHT_TOO_HIGH @ lineItem[0].primaryGoal.units; trigger:'{package.impressions}'"
-                )
-
-        # Budget validation (AdCP v2.2.0: sum package budgets)
-        budget_amount = request.get_total_budget()
-        if budget_amount > 0:
-            if budget_amount > 1000000:  # Mock limit
-                errors.append("InvalidArgumentError.VALUE_TOO_LARGE @ order.totalBudget")
-        else:
-            errors.append("InvalidArgumentError @ order.totalBudget")
-
-        # If we have errors, format them like GAM does
-        if errors:
-            error_message = "[" + ", ".join(errors) + "]"
-            raise Exception(error_message)
-
     def create_media_buy(
         self,
         request: CreateMediaBuyRequest,
@@ -551,7 +543,12 @@ class MockAdServer(AdServerAdapter):
                     )
 
         # GAM-like validation (based on real GAM behavior)
-        self._validate_media_buy_request(request, packages, start_time, end_time, package_pricing_info)
+        validation_errors = self.validate_media_buy_request(
+            request, packages, start_time, end_time, package_pricing_info
+        )
+        if validation_errors:
+            error_message = "[" + ", ".join(validation_errors) + "]"
+            raise Exception(error_message)
 
         # If no AI scenario or scenario accepts, proceed with normal flow
         # HITL Mode Processing

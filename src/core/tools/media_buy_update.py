@@ -23,7 +23,7 @@ from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
 from sqlalchemy import select
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError, AdCPValidationError
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -94,7 +94,7 @@ def _verify_principal(media_buy_id: str, context: "ResolvedIdentity", repo: Medi
             resource_id=media_buy_id,
             reason=f"Principal does not own media buy (owner: {media_buy.principal_id})",
         )
-        raise PermissionError(f"Principal '{principal_id}' does not own media buy '{media_buy_id}'.")
+        raise AdCPAuthorizationError(f"Principal '{principal_id}' does not own media buy '{media_buy_id}'.")
 
 
 def _update_media_buy_impl(

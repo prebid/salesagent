@@ -54,7 +54,6 @@ Thumbs.db
 # BUT: Allow pre-commit hooks and scripts/ directory
 check_*.py
 !.pre-commit-hooks/check_*.py
-!scripts/check_*.py
 diagnose_*.py
 fix_*.py
 sync_*.py
@@ -113,6 +112,7 @@ conductor_ports.lock
 
 # AdCP Schema Cache (downloaded on demand by E2E tests)
 /schemas/
+tests/e2e/schemas/
 
 # Test response files
 line_item_*_response.json
@@ -133,6 +133,7 @@ test-results/
 .test-stack.env
 
 # Agentic coding — local-only files
+.beads
 .claude/research/
 .claude/settings.local.json
 .claude/agent-memory/

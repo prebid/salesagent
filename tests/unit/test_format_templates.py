@@ -499,9 +499,10 @@ class TestFormatGetPrimaryDimensionsWithFormatId:
     def test_works_with_library_format_id(self):
         """get_primary_dimensions must work when format_id is library FormatId (not our subclass).
 
-        Bug #1067: When formats come from the creative agent, they are deserialized
-        with the library's FormatId which lacks get_dimensions(). This caused a 500
-        error on the New Product page.
+        Bug #1067 / PR #1079: When formats come from the creative agent, they are
+        deserialized with the library's FormatId which lacks get_dimensions(). The old
+        code called format_id.get_dimensions() which only exists on the custom FormatId
+        subclass. This caused a 500 error on the New Product page.
         """
         # Use the library FormatId directly (as happens when deserializing from creative agent)
         fmt = Format(

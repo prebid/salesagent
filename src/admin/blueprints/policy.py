@@ -115,7 +115,7 @@ def index(tenant_id):
                         "advertiser": details.get("promoted_offering", ""),
                     }
                 )
-        except:
+        except Exception:
             # WorkflowStep table might not exist
             pass
 
@@ -239,10 +239,10 @@ def review_task(tenant_id, task_id):
                 # Update status based on action
                 if action == "approve":
                     step.status = "completed"
-                    step.result = json.dumps({"approved": True, "notes": notes})
+                    step.response_data = {"approved": True, "notes": notes}
                 elif action == "reject":
                     step.status = "failed"
-                    step.result = json.dumps({"approved": False, "notes": notes})
+                    step.response_data = {"approved": False, "notes": notes}
 
                 db_session.commit()
 

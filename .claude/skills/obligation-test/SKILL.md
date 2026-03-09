@@ -70,15 +70,24 @@ All research atoms unblock after baseline. For each obligation:
 
 1. **Read the scenario** from `docs/test-obligations/`:
    ```bash
-   grep -n "{OID}" docs/test-obligations/*.md
+   grep -A 10 "{OID}" docs/test-obligations/*.md
    ```
    Extract: Given/When/Then, business rule, priority, layer.
 
-2. **Find the production code**: Locate the `_impl` function and specific
-   lines that implement this behavior.
+2. **Translate Given/When/Then directly into the test**:
+   - **Given** → test setup (fixtures, env configuration)
+   - **When** → action (call production function)
+   - **Then** → assertions (expected output/state)
 
-3. **Plan the test**: Decide unit vs integration, list mocks, identify the
-   KEY ASSERTION — "What assertion would FAIL if production behavior changed?"
+   The BDD spec is the **sole source** of expected behavior. Do NOT derive
+   assertions from what the production code currently does.
+
+3. **Check if production code implements it**: Locate the `_impl` function.
+   - **Implemented** → test should PASS
+   - **Not implemented** → test MUST still assert spec behavior, marked with
+     `@pytest.mark.xfail(strict=True, reason="<what's missing>")`
+   - Never write a test that asserts current (wrong) behavior instead of
+     spec behavior. Never exclude an obligation as "not implemented."
 
 4. **Store findings** in the atom notes via `bd update`.
 
@@ -157,8 +166,15 @@ Place tests in existing behavioral test files when possible:
 | UC-002 | `test_create_media_buy_behavioral.py` |
 | UC-003 | `test_update_media_buy_behavioral.py` |
 | UC-004 | `test_delivery_behavioral.py` |
-| UC-006 | `test_creative_behavioral.py` (create if needed) |
+| UC-006 sync (multi-transport) | `test_creative_sync_transport.py` |
+| UC-006 sync (impl only) | `test_creative_sync_behavioral.py` |
+| UC-006 list | `test_creative_list_behavioral.py` |
+| UC-006 formats | `test_creative_formats_behavioral.py` |
 | Other | `test_{use_case}_behavioral.py` (create if needed) |
+
+**Note:** For UC-006 obligations with transport variants in upstream BDD,
+prefer `/derive-tests` which generates parametrized multi-transport tests
+using the harness. See the multi-transport pattern in `/derive-tests`.
 
 New files must be added to `_UNIT_ENTITY_FILES` in
 `tests/unit/test_architecture_obligation_coverage.py`.

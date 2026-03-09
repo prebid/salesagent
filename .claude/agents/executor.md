@@ -113,6 +113,23 @@ Record the results. This confirms the clean slate. If anything fails here
 Follow the **mol-execute** skill (`.claude/skills/mol-execute/SKILL.md`).
 Read that file for the full protocol: cook the molecule, walk atoms, close.
 
+### Formula Selection
+
+If your spawn prompt specifies a formula, use that. Otherwise, auto-select:
+
+```bash
+bd show <task-id>   # Check type and description
+```
+
+| Condition | Formula | Cook command |
+|-----------|---------|-------------|
+| Type is `bug` | `bug-triage.yaml` | `--formula .claude/formulas/bug-triage.yaml --var "BUG_IDS=<ids>"` |
+| Task is well-defined (test rewrite, allowlist fix, mechanical change) | `task-single.yaml` | `--formula .claude/formulas/task-single.yaml --var "TASK_IDS=<ids>"` |
+| Task needs research or TDD (new feature, refactor with unknowns) | `task-execute.yaml` | `--formula .claude/formulas/task-execute.yaml --var "TASK_IDS=<ids>"` |
+
+**Default to `task-single`** unless the task explicitly needs research or
+architect review. Most beads tasks have sufficient context in their description.
+
 ## Quality Gates (HARD REQUIREMENTS)
 
 You have a Postgres container. You MUST use it. The quality gates below are
@@ -132,8 +149,23 @@ This starts Docker, runs all 5 suites (unit, integration, integration_v2,
 e2e, ui) via tox, and tears down. Do NOT substitute with individual pytest
 commands — `./run_all_tests.sh` is the single source of truth.
 
+JSON results are saved to `test-results/<ddmmyy_HHmm>/`. Use those to
+review results — background processes may crash and lose terminal output.
+
 **If any test fails, your implementation has a bug. Fix it before
 committing.** You started from a clean slate — every failure is yours.
+
+### Test Integrity Policy — ZERO TOLERANCE
+
+**Read and follow CLAUDE.md "Test Integrity Policy" section. Summary:**
+
+- **NEVER** use `--ignore`, `-k "not ..."`, `--deselect`, `pytest.mark.skip`,
+  or `pytest.mark.xfail` to work around failures.
+- **NEVER** rationalize failures as "pre-existing", "infrastructure issue",
+  "misplaced test", "needs a running server", or "was deselected in full run".
+- If a test needs Docker → start Docker (`./run_all_tests.sh` handles this).
+- If infrastructure is broken → STOP and report. Do NOT skip tests and report success.
+- A failing test is a failing test. Fix it or report it as a blocker.
 
 ### What tests to write
 

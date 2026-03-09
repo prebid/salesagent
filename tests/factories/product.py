@@ -26,8 +26,9 @@ class ProductFactory(factory.alchemy.SQLAlchemyModelFactory):
         lambda: [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}]
     )
     targeting_template = factory.LazyFunction(lambda: {"geo": ["US"]})
-    delivery_type = "standard"
+    delivery_type = "guaranteed"
     property_tags = factory.LazyFunction(lambda: ["all_inventory"])
+    delivery_measurement = factory.LazyFunction(lambda: {"provider": "publisher"})
 
 
 class PricingOptionFactory(factory.alchemy.SQLAlchemyModelFactory):

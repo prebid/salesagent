@@ -8,7 +8,7 @@ from unittest.mock import Mock
 
 from adcp.types import ProductFilters
 
-from src.core.tools.products import get_adapter_default_channels
+from src.adapters import get_adapter_default_channels
 
 
 class TestAdapterDefaultChannels:

@@ -4,8 +4,6 @@
 Reads tests/coverage_scopes.yaml, runs pytest with coverage for each scope,
 and reports per-scope coverage against thresholds.
 
-Uses scripts/run-test.sh as the test runner — it handles DB setup automatically.
-
 Usage:
     # Check all scopes
     scripts/check_scoped_coverage.py
@@ -33,7 +31,6 @@ from pathlib import Path
 import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-RUN_TEST_SH = PROJECT_ROOT / "scripts" / "run-test.sh"
 
 
 def load_scopes(scope_filter: str | None = None) -> dict:
@@ -55,11 +52,6 @@ def find_existing_files(file_list: list[str]) -> list[str]:
     return [f for f in file_list if (PROJECT_ROOT / f).exists()]
 
 
-def _needs_db(test_files: list[str]) -> bool:
-    """Check if any test file is an integration test (needs DB)."""
-    return any("integration" in t or "e2e" in t for t in test_files)
-
-
 def run_coverage(scope_name: str, sources: list[str], tests: list[str]) -> dict:
     """Run pytest with coverage for a single scope, return results."""
     existing_tests = find_existing_files(tests)
@@ -77,22 +69,16 @@ def run_coverage(scope_name: str, sources: list[str], tests: list[str]) -> dict:
         cov_flags.extend(["--cov", module])
     cov_flags.extend(["--cov-report", "json:-.json"])
 
-    # Use scripts/run-test.sh — it handles DB setup for integration tests.
-    # run-test.sh checks the FIRST arg for "integration" to decide on DB setup,
-    # so we reorder: integration tests first to trigger DB startup.
-    integration_tests = [t for t in existing_tests if "integration" in t or "e2e" in t]
-    unit_tests = [t for t in existing_tests if t not in integration_tests]
-    ordered_tests = integration_tests + unit_tests
+    run_test_sh = PROJECT_ROOT / "scripts" / "run-test.sh"
+    cmd = [str(run_test_sh), *existing_tests, "-q", "--no-header", "--tb=no", *cov_flags]
 
-    cmd = [str(RUN_TEST_SH), *ordered_tests, "-q", "--no-header", "--tb=no", *cov_flags]
-
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=PROJECT_ROOT)
+    subprocess.run(cmd, capture_output=True, text=True, cwd=PROJECT_ROOT)
 
     # Parse coverage JSON from file
-    cov_json_path = Path(__file__).resolve().parent.parent / "-.json"
+    cov_json_path = PROJECT_ROOT / "-.json"
     if not cov_json_path.exists():
         # Fallback: parse term output for coverage numbers
-        return _parse_term_output(scope_name, sources, existing_tests, existing_sources)
+        return _parse_term_output(scope_name, existing_tests, existing_sources)
 
     try:
         with open(cov_json_path) as f:
@@ -146,7 +132,7 @@ def run_coverage(scope_name: str, sources: list[str], tests: list[str]) -> dict:
     }
 
 
-def _parse_term_output(scope_name: str, sources: list[str], tests: list[str], existing_sources: list[str]) -> dict:
+def _parse_term_output(scope_name: str, tests: list[str], existing_sources: list[str]) -> dict:
     """Fallback: run with term-missing and parse output."""
     cov_flags = []
     for src in existing_sources:
@@ -154,7 +140,8 @@ def _parse_term_output(scope_name: str, sources: list[str], tests: list[str], ex
         cov_flags.extend(["--cov", module])
     cov_flags.extend(["--cov-report", "term-missing"])
 
-    cmd = [str(RUN_TEST_SH), *tests, "-q", "--no-header", "--tb=no", *cov_flags]
+    run_test_sh = PROJECT_ROOT / "scripts" / "run-test.sh"
+    cmd = [str(run_test_sh), *tests, "-q", "--no-header", "--tb=no", *cov_flags]
 
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=PROJECT_ROOT)
 

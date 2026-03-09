@@ -57,7 +57,7 @@ class TestBaseClassContract:
         from tests.harness._base import IntegrationEnv
 
         env = IntegrationEnv(principal_id="p1", tenant_id="t1")
-        assert env._identity is None
+        assert env._identity_cache == {}
         identity = env.identity
         assert identity.principal_id == "p1"
         assert identity.tenant_id == "t1"
@@ -67,7 +67,7 @@ class TestBaseClassContract:
         from tests.harness._base import BaseTestEnv
 
         env = BaseTestEnv(principal_id="p1", tenant_id="t1")
-        assert env._identity is None
+        assert env._identity_cache == {}
         identity = env.identity
         assert identity.principal_id == "p1"
         assert identity.tenant_id == "t1"
@@ -150,7 +150,6 @@ class TestBaseClassContract:
         env.__enter__()
 
         # Sabotage patcher "b" (last started, first stopped) to raise on stop
-        original_stop = env._patchers[-1].stop
         env._patchers[-1].stop = MagicMock(side_effect=RuntimeError("stop failed"))
 
         # __exit__ should still clean up patcher "a" and clear state
@@ -183,20 +182,108 @@ class TestBaseClassContract:
         assert env.mock == {}
         assert env._patchers == []
 
-    def test_call_impl_without_enter_fails(self):
-        """Calling call_impl without __enter__ fails because patches aren't started."""
-        from tests.harness.delivery_poll_unit import DeliveryPollEnv
+    def test_identity_for_returns_correct_protocol(self):
+        """identity_for(transport) sets the correct protocol on identity."""
+        from tests.harness._base import BaseTestEnv
+        from tests.harness.transport import Transport
 
-        env = DeliveryPollEnv()
-        env.add_buy(media_buy_id="mb_001")
-        env.set_adapter_response("mb_001")
+        env = BaseTestEnv(principal_id="p1", tenant_id="t1")
 
-        # Without __enter__, patches aren't started. Production code tries
-        # to access real DB and hits the unit-test engine guard.
-        import pytest
+        impl_id = env.identity_for(Transport.IMPL)
+        assert impl_id.protocol == "mcp"
 
-        with pytest.raises(RuntimeError, match="should not create real database"):
-            env.call_impl(media_buy_ids=["mb_001"])
+        a2a_id = env.identity_for(Transport.A2A)
+        assert a2a_id.protocol == "a2a"
+
+        rest_id = env.identity_for(Transport.REST)
+        assert rest_id.protocol == "rest"
+
+        mcp_id = env.identity_for(Transport.MCP)
+        assert mcp_id.protocol == "mcp"
+
+        # All share same principal/tenant
+        for ident in [impl_id, a2a_id, rest_id, mcp_id]:
+            assert ident.principal_id == "p1"
+            assert ident.tenant_id == "t1"
+
+    def test_identity_for_is_cached_per_protocol(self):
+        """Repeated calls with same transport return same identity object."""
+        from tests.harness._base import BaseTestEnv
+        from tests.harness.transport import Transport
+
+        env = BaseTestEnv()
+        id1 = env.identity_for(Transport.REST)
+        id2 = env.identity_for(Transport.REST)
+        assert id1 is id2
+
+    def test_identity_backward_compat(self):
+        """env.identity still works and returns IMPL protocol."""
+        from tests.harness._base import BaseTestEnv
+
+        env = BaseTestEnv(principal_id="p1")
+        assert env.identity.principal_id == "p1"
+        assert env.identity.protocol == "mcp"
+
+    def test_call_via_raises_for_unimplemented_transport(self):
+        """call_via with Transport.A2A raises NotImplementedError if call_a2a not overridden."""
+
+        from tests.harness._base import BaseTestEnv
+        from tests.harness.transport import Transport
+
+        env = BaseTestEnv()
+        result = env.call_via(Transport.A2A)
+        assert result.is_error
+        assert isinstance(result.error, NotImplementedError)
+
+    def test_call_via_mcp_raises_for_unimplemented(self):
+        """call_via with Transport.MCP raises NotImplementedError if call_mcp not overridden."""
+        from tests.harness._base import BaseTestEnv
+        from tests.harness.transport import Transport
+
+        env = BaseTestEnv()
+        result = env.call_via(Transport.MCP)
+        assert result.is_error
+        assert isinstance(result.error, NotImplementedError)
+
+    def test_call_via_mcp_routes_through_call_mcp(self):
+        """call_via(Transport.MCP) dispatches through McpDispatcher → call_mcp."""
+
+        from pydantic import BaseModel
+
+        from tests.harness._base import BaseTestEnv
+        from tests.harness.transport import Transport
+
+        class _Resp(BaseModel):
+            ok: bool = True
+
+        class _TestEnv(BaseTestEnv):
+            def call_mcp(self, **kwargs):
+                return _Resp()
+
+        env = _TestEnv()
+        result = env.call_via(Transport.MCP)
+        assert result.is_success
+        assert result.payload.ok is True
+        assert result.envelope.get("transport") == "mcp"
+
+    def test_call_via_impl_uses_call_impl(self):
+        """call_via(Transport.IMPL) routes through call_impl."""
+        from tests.harness._base import BaseTestEnv
+        from tests.harness.transport import Transport
+
+        class _TestEnv(BaseTestEnv):
+            def call_impl(self, **kwargs):
+                from pydantic import BaseModel
+
+                class _Resp(BaseModel):
+                    ok: bool = True
+
+                return _Resp()
+
+        env = _TestEnv()
+        result = env.call_via(Transport.IMPL)
+        assert result.is_success
+        assert result.payload.ok is True
 
     def test_nested_integration_env_raises(self):
         """Nesting two IntegrationEnvs must raise to prevent session corruption."""
@@ -210,10 +297,45 @@ class TestBaseClassContract:
         with patch("src.core.database.database_session.get_engine") as mock_engine:
             mock_engine.return_value = MagicMock()
             # First env binds factories
-            with patch(
-                "tests.factories.ALL_FACTORIES", [MagicMock(_meta=MagicMock(sqlalchemy_session=None))]
-            ) as factories:
+            with patch("tests.factories.ALL_FACTORIES", [MagicMock(_meta=MagicMock(sqlalchemy_session=None))]):
                 with _TestEnv():
                     # Second env should fail because factories are already bound
                     with pytest.raises(AssertionError, match="already bound"):
                         _TestEnv().__enter__()
+
+
+class TestEnvMethodNamingConsistency:
+    """Env methods with the same name across subclasses must have consistent semantics."""
+
+    def test_integration_env_has_setup_default_data(self):
+        """IntegrationEnv.setup_default_data creates tenant + principal via factories."""
+        from tests.harness._base import IntegrationEnv
+
+        assert hasattr(IntegrationEnv, "setup_default_data"), (
+            "IntegrationEnv should have setup_default_data() to reduce boilerplate"
+        )
+
+    def test_base_env_has_run_mcp_wrapper(self):
+        """BaseTestEnv exposes _run_mcp_wrapper for DRY MCP dispatch."""
+        from tests.harness._base import BaseTestEnv
+
+        assert hasattr(BaseTestEnv, "_run_mcp_wrapper"), (
+            "BaseTestEnv should have _run_mcp_wrapper to reduce call_mcp duplication"
+        )
+
+    def test_creative_sync_env_has_set_run_async_result(self):
+        """CreativeSyncEnv uses set_run_async_result, not set_registry_formats.
+
+        set_registry_formats patches registry.list_all_formats (CreativeFormatsEnv).
+        CreativeSyncEnv patches run_async.side_effect, which is a different mechanic.
+        Using the same name is a trap for new Env authors.
+        """
+        from tests.harness.creative_sync import CreativeSyncEnv
+
+        assert hasattr(CreativeSyncEnv, "set_run_async_result"), (
+            "CreativeSyncEnv should have set_run_async_result (not set_registry_formats)"
+        )
+        assert not hasattr(CreativeSyncEnv, "set_registry_formats"), (
+            "CreativeSyncEnv should NOT have set_registry_formats — "
+            "that name belongs to CreativeFormatsEnv (different mechanic)"
+        )

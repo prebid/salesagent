@@ -83,8 +83,8 @@ def build_ranking_prompt(
             "name": p.name,
             "description": p.description,
             "format_ids": [str(f) for f in (p.format_ids or [])],
-            "channels": p.channels or [],
-            "delivery_type": p.delivery_type.value if hasattr(p.delivery_type, "value") else str(p.delivery_type),
+            "channels": [c.value for c in (p.channels or [])],
+            "delivery_type": p.delivery_type.value,
         }
         simplified_products.append(simplified)
 
