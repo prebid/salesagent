@@ -2795,47 +2795,193 @@ class TestFormatIdSchema:
 
 
 class TestRESTCreativeRoutes:
-    """REST API routes for creative operations.
+    """REST API routes for creative operations via TestClient.
 
     Spec: UNSPECIFIED (implementation-defined transport layer).
-    Existing: test_rest_api_endpoints.py covers route registration.
-    These verify route existence without hitting the full stack.
+    Each test calls the actual endpoint with mocked backend and verifies HTTP 200.
+
+    MULTI-ROUTE: REST (TestClient), A2A (_raw call), _impl call.
     """
 
     def test_creative_formats_route_exists(self):
-        """POST /creative-formats route is registered on the api_v1 router.
+        """POST /api/v1/creative-formats returns 200 with mocked backend.
 
-        GAP: Needs FastAPI TestClient setup for /creative-formats route test.
-        Verifies route registration via router introspection (no TestClient needed).
         Covers: UC-006-MAIN-REST-01
-        """
-        from src.routes.api_v1 import router
 
-        paths = [route.path for route in router.routes]
-        assert any(p.endswith("/creative-formats") for p in paths)
+        MULTI-ROUTE: REST endpoint, list_creative_formats_raw (A2A), _impl.
+        """
+        from starlette.testclient import TestClient
+
+        from src.app import app
+
+        client = TestClient(app)
+
+        # Route 1: REST endpoint returns 200
+        with patch("src.core.tools.creative_formats.list_creative_formats_raw") as mock_raw:
+            mock_raw.return_value = MagicMock(model_dump=lambda **kw: {"formats": []})
+            response = client.post("/api/v1/creative-formats", json={})
+            assert response.status_code == 200
+            assert "formats" in response.json()
+
+        # Route 2: A2A raw delegates to _impl
+        from src.core.tools.creative_formats import list_creative_formats_raw
+
+        identity = _make_identity()
+        with patch("src.core.tools.creative_formats._list_creative_formats_impl") as mock_impl:
+            mock_impl.return_value = MagicMock()
+            list_creative_formats_raw(identity=identity)
+            mock_impl.assert_called_once()
+
+        # Route 3: _impl accepts identity and returns ListCreativeFormatsResponse
+        from src.core.tools.creative_formats import _list_creative_formats_impl
+
+        with patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter:
+            mock_reg = MagicMock()
+            mock_reg_getter.return_value = mock_reg
+
+            import asyncio
+
+            async def mock_list_all_formats(**kwargs):
+                return []
+
+            mock_reg.list_all_formats = mock_list_all_formats
+
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                result = _list_creative_formats_impl(None, identity)
+            finally:
+                loop.close()
+            assert result is not None
 
     def test_sync_creatives_route_exists(self):
-        """POST /creatives/sync route is registered on the api_v1 router.
+        """POST /api/v1/creatives/sync returns 200 with mocked backend.
 
-        GAP: Needs FastAPI TestClient setup for /creatives/sync route test.
         Covers: UC-006-MAIN-REST-01
-        """
-        from src.routes.api_v1 import router
 
-        paths = [route.path for route in router.routes]
-        assert any(p.endswith("/creatives/sync") for p in paths)
+        MULTI-ROUTE: REST endpoint, sync_creatives_raw (A2A), _impl.
+        """
+        from starlette.testclient import TestClient
+
+        from src.app import app
+        from src.core.resolved_identity import ResolvedIdentity
+
+        client = TestClient(app)
+
+        mock_identity = ResolvedIdentity(
+            principal_id="test-principal",
+            tenant_id="default",
+            tenant={"tenant_id": "default"},
+            auth_token="test-token",
+            protocol="rest",
+        )
+
+        # Route 1: REST endpoint
+        with (
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
+            patch("src.core.tools.creatives.sync_wrappers.sync_creatives_raw") as mock_raw,
+        ):
+            mock_raw.return_value = MagicMock(model_dump=lambda **kw: {"creatives": []})
+            response = client.post(
+                "/api/v1/creatives/sync",
+                json={"creatives": []},
+                headers={"Authorization": "Bearer test-token"},
+            )
+            assert response.status_code == 200
+
+        # Route 2: A2A raw call
+        from src.core.tools.creatives.sync_wrappers import sync_creatives_raw
+
+        identity = _make_identity()
+        with (
+            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
+            patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
+            patch("src.core.tools.creatives._validation.run_async_in_sync_context", return_value=MagicMock()),
+            patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),
+            patch("src.core.tools.creatives._processing._extract_format_info") as mock_fmt,
+            patch("src.core.tools.creatives._sync.log_tool_activity"),
+            patch("src.core.tools.creatives._workflow.get_audit_logger"),
+            patch("src.core.tools.creatives._workflow.get_db_session"),
+        ):
+            mock_run_async.return_value = []
+            mock_reg_getter.return_value = MagicMock()
+            mock_fmt.return_value = {
+                "agent_url": DEFAULT_AGENT_URL,
+                "format_id": "display_300x250_image",
+                "parameters": None,
+            }
+            mock_session = MagicMock()
+            mock_db.return_value.__enter__.return_value = mock_session
+            mock_db.return_value.__exit__.return_value = None
+            mock_session.scalars.return_value.first.return_value = None
+
+            result = sync_creatives_raw(
+                creatives=[_make_creative_asset()],
+                identity=identity,
+            )
+            assert isinstance(result, SyncCreativesResponse)
 
     def test_list_creatives_route_exists(self):
-        """POST /creatives route is registered on the api_v1 router.
+        """POST /api/v1/creatives returns 200 with mocked backend.
 
-        GAP: Needs FastAPI TestClient setup for /creatives route test.
         Covers: UC-006-MAIN-REST-01
-        """
-        from src.routes.api_v1 import router
 
-        paths = [route.path for route in router.routes]
-        # Check for exact /creatives path (not /creatives/sync)
-        assert any(p.endswith("/creatives") for p in paths)
+        MULTI-ROUTE: REST endpoint, list_creatives_raw (A2A), _impl.
+        """
+        from starlette.testclient import TestClient
+
+        from src.app import app
+        from src.core.resolved_identity import ResolvedIdentity
+
+        client = TestClient(app)
+
+        mock_identity = ResolvedIdentity(
+            principal_id="test-principal",
+            tenant_id="default",
+            tenant={"tenant_id": "default"},
+            auth_token="test-token",
+            protocol="rest",
+        )
+
+        # Route 1: REST endpoint
+        with (
+            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
+            patch("src.core.tools.creatives.listing.list_creatives_raw") as mock_raw,
+        ):
+            mock_raw.return_value = MagicMock(model_dump=lambda **kw: {"creatives": []})
+            response = client.post(
+                "/api/v1/creatives",
+                json={},
+                headers={"Authorization": "Bearer test-token"},
+            )
+            assert response.status_code == 200
+
+        # Route 2: A2A raw forwards to _impl
+        from src.core.tools.creatives.listing import list_creatives_raw
+
+        identity = _make_identity()
+        with patch("src.core.tools.creatives.listing._list_creatives_impl") as mock_impl:
+            mock_impl.return_value = MagicMock()
+            list_creatives_raw(identity=identity)
+            mock_impl.assert_called_once()
+
+        # Route 3: _impl with mocked DB
+        from src.core.tools.creatives.listing import _list_creatives_impl
+
+        with (
+            patch("src.core.tools.creatives.listing.get_db_session") as mock_db,
+            patch("src.core.tools.creatives.listing.get_audit_logger"),
+            patch("src.core.tools.creatives.listing.log_tool_activity"),
+        ):
+            mock_session = MagicMock()
+            mock_db.return_value.__enter__.return_value = mock_session
+            mock_db.return_value.__exit__.return_value = None
+            mock_session.scalars.return_value.all.return_value = []
+            mock_session.scalar.return_value = 0
+
+            result = _list_creatives_impl(identity=identity)
+            assert isinstance(result, ListCreativesResponse)
 
 
 # ============================================================================
