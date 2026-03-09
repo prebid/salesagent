@@ -1186,6 +1186,59 @@ Source: BR-UC-006-ext-k.md
 
 ---
 
+### Provenance Validation (EU AI Act Article 50)
+
+Source: salesagent extension (not in AdCP spec). EU AI Act Article 50 requires
+disclosure of AI-generated content. Publishers can require provenance metadata
+on creatives via `creative_policy.provenance_required`.
+
+#### Scenario: Provenance required but missing — warning added
+**Obligation ID** UC-006-PROV-01
+**Layer** behavioral
+
+**Given** the tenant's product has `creative_policy.provenance_required=True`
+**And** the creative does not include provenance metadata
+**When** the system processes the creative via `sync_creatives`
+**Then** the creative is NOT rejected (action != failed)
+**And** the per-creative result includes a warning containing "provenance"
+**And** the warning advises that AI provenance metadata is required by product policy
+**Business Rule** EU AI Act Article 50 — pass-through provenance tracking
+**Priority** P2 — compliance warning
+
+#### Scenario: Provenance present — no warning
+**Obligation ID** UC-006-PROV-02
+**Layer** behavioral
+
+**Given** the tenant's product has `creative_policy.provenance_required=True`
+**And** the creative includes valid provenance metadata (digital_source_type, ai_tool)
+**When** the system processes the creative via `sync_creatives`
+**Then** the creative is processed normally (action != failed)
+**And** no provenance-related warnings are emitted
+**Business Rule** EU AI Act Article 50
+**Priority** P2 — compliance happy path
+
+#### Scenario: No provenance policy — no warning
+**Obligation ID** UC-006-PROV-03
+**Layer** behavioral
+
+**Given** the tenant's product does NOT have a creative_policy with provenance_required
+**When** the system processes a creative without provenance metadata
+**Then** no provenance-related warnings are emitted
+**Business Rule** Provenance is opt-in per product policy
+**Priority** P2 — default behavior
+
+#### Scenario: Provenance explicitly not required — no warning
+**Obligation ID** UC-006-PROV-04
+**Layer** behavioral
+
+**Given** the tenant's product has `creative_policy.provenance_required=False`
+**When** the system processes a creative without provenance metadata
+**Then** no provenance-related warnings are emitted
+**Business Rule** Provenance policy disabled
+**Priority** P2 — explicit opt-out
+
+---
+
 ### Request Constraint Validation
 
 #### Scenario: Request with zero creatives is rejected

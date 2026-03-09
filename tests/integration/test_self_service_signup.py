@@ -32,7 +32,7 @@ class TestSelfServiceSignupFlow:
         assert b"Connect Your Ad Inventory to AI Buyers" in response.data
         assert b"Get Started with Google" in response.data
 
-    def test_root_redirects_to_landing_when_not_authenticated(self, client):
+    def test_root_redirects_to_landing_when_not_authenticated(self, integration_db, client):
         """Test that root URL redirects to landing page for unauthenticated users in multi-tenant mode."""
         # In multi-tenant mode, unauthenticated users at root should redirect to signup
         with patch("src.core.config_loader.is_single_tenant_mode", return_value=False):

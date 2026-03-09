@@ -7,12 +7,11 @@ MIGRATION NOTE: This file migrates tests from tests/integration/test_get_product
 to use the new pricing_options model instead of legacy Product pricing fields.
 """
 
-from unittest.mock import Mock
-
 import pytest
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal
+from tests.factories import PrincipalFactory
 from tests.integration_v2.conftest import (
     add_required_setup_data,
     create_auction_product,
@@ -21,30 +20,6 @@ from tests.integration_v2.conftest import (
 from tests.utils.database_helpers import create_tenant_with_timestamps, get_utc_now
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
-
-
-@pytest.fixture
-def mock_context():
-    """Create mock context with filter_test_token for TestGetProductsFilterBehavior."""
-    context = Mock(spec=["meta"])
-    context.meta = {"headers": {"x-adcp-auth": "filter_test_token"}}
-    return context
-
-
-@pytest.fixture
-def mock_context_filter_logic():
-    """Create mock context with filter_logic_token for TestProductFilterLogic."""
-    context = Mock(spec=["meta"])
-    context.meta = {"headers": {"x-adcp-auth": "filter_logic_token"}}
-    return context
-
-
-@pytest.fixture
-def mock_context_edge_case():
-    """Create mock context with edge_case_token for TestFilterEdgeCases."""
-    context = Mock(spec=["meta"])
-    context.meta = {"headers": {"x-adcp-auth": "edge_case_token"}}
-    return context
 
 
 @pytest.mark.requires_db
@@ -194,15 +169,17 @@ class TestGetProductsFilterBehavior:
         """Test filtering for guaranteed delivery products only."""
         get_products = self._import_get_products_tool()
 
-        # Mock context with authentication
-        context = Mock()
-        context.meta = {"headers": {"x-adcp-auth": "filter_test_token"}}
+        identity = PrincipalFactory.make_identity(
+            tenant_id="filter_test",
+            principal_id="test_principal",
+            protocol="a2a",
+        )
 
         # Call get_products (currently no direct filter param support, will add)
         result = await get_products(
             brand={"domain": "testbrand.com"},
             brief="",
-            ctx=context,
+            identity=identity,
         )
 
         # Verify we got products (baseline test)
@@ -217,16 +194,20 @@ class TestGetProductsFilterBehavior:
         assert non_guaranteed_count >= 2  # programmatic_video, programmatic_display
 
     @pytest.mark.asyncio
-    async def test_no_filter_returns_all_products(self, mock_context):
+    async def test_no_filter_returns_all_products(self):
         """Test that calling without filters returns all products."""
         get_products = self._import_get_products_tool()
 
-        context = mock_context
+        identity = PrincipalFactory.make_identity(
+            tenant_id="filter_test",
+            principal_id="test_principal",
+            protocol="a2a",
+        )
 
         result = await get_products(
             brand={"domain": "testbrand.com"},
             brief="",
-            ctx=context,
+            identity=identity,
         )
 
         # Should return all 5 products created in fixture
@@ -241,16 +222,20 @@ class TestGetProductsFilterBehavior:
         assert "guaranteed_audio" in product_ids
 
     @pytest.mark.asyncio
-    async def test_products_have_correct_structure(self, mock_context):
+    async def test_products_have_correct_structure(self):
         """Test that returned products have all required AdCP fields."""
         get_products = self._import_get_products_tool()
 
-        context = mock_context
+        identity = PrincipalFactory.make_identity(
+            tenant_id="filter_test",
+            principal_id="test_principal",
+            protocol="a2a",
+        )
 
         result = await get_products(
             brand={"domain": "testbrand.com"},
             brief="",
-            ctx=context,
+            identity=identity,
         )
 
         # Check first product has all required fields
@@ -453,14 +438,17 @@ class TestNewGetProductsFilters:
         """Test filtering products by a single country."""
         get_products = self._import_get_products_tool()
 
-        context = Mock()
-        context.meta = {"headers": {"x-adcp-auth": "new_filter_test_token"}}
+        identity = PrincipalFactory.make_identity(
+            tenant_id="new_filter_test",
+            principal_id="new_filter_principal",
+            protocol="a2a",
+        )
 
         result = await get_products(
             brand={"domain": "testbrand.com"},
             brief="",
             filters={"countries": ["US"]},
-            ctx=context,
+            identity=identity,
         )
 
         # Should include: us_display, us_ca_video, global_audio (no restrictions),
@@ -479,14 +467,17 @@ class TestNewGetProductsFilters:
         """Test filtering products by multiple countries."""
         get_products = self._import_get_products_tool()
 
-        context = Mock()
-        context.meta = {"headers": {"x-adcp-auth": "new_filter_test_token"}}
+        identity = PrincipalFactory.make_identity(
+            tenant_id="new_filter_test",
+            principal_id="new_filter_principal",
+            protocol="a2a",
+        )
 
         result = await get_products(
             brand={"domain": "testbrand.com"},
             brief="",
             filters={"countries": ["CA", "GB"]},
-            ctx=context,
+            identity=identity,
         )
 
         # Should include: us_ca_video (has CA), uk_display (has GB), global_audio (no restrictions)
@@ -505,14 +496,17 @@ class TestNewGetProductsFilters:
         """Test filtering products by display channel."""
         get_products = self._import_get_products_tool()
 
-        context = Mock()
-        context.meta = {"headers": {"x-adcp-auth": "new_filter_test_token"}}
+        identity = PrincipalFactory.make_identity(
+            tenant_id="new_filter_test",
+            principal_id="new_filter_principal",
+            protocol="a2a",
+        )
 
         result = await get_products(
             brand={"domain": "testbrand.com"},
             brief="",
             filters={"channels": ["display"]},
-            ctx=context,
+            identity=identity,
         )
 
         # Should include: us_display, uk_display, global_no_channel
@@ -531,14 +525,17 @@ class TestNewGetProductsFilters:
         """Test filtering products by olv (online video) channel."""
         get_products = self._import_get_products_tool()
 
-        context = Mock()
-        context.meta = {"headers": {"x-adcp-auth": "new_filter_test_token"}}
+        identity = PrincipalFactory.make_identity(
+            tenant_id="new_filter_test",
+            principal_id="new_filter_principal",
+            protocol="a2a",
+        )
 
         result = await get_products(
             brand={"domain": "testbrand.com"},
             brief="",
             filters={"channels": ["olv"]},  # V3: "video" → "olv"
-            ctx=context,
+            identity=identity,
         )
 
         # Should include: us_ca_video (has olv), global_no_channel (mock adapter includes olv)
@@ -551,14 +548,17 @@ class TestNewGetProductsFilters:
         """Test filtering products by multiple channels."""
         get_products = self._import_get_products_tool()
 
-        context = Mock()
-        context.meta = {"headers": {"x-adcp-auth": "new_filter_test_token"}}
+        identity = PrincipalFactory.make_identity(
+            tenant_id="new_filter_test",
+            principal_id="new_filter_principal",
+            protocol="a2a",
+        )
 
         result = await get_products(
             brand={"domain": "testbrand.com"},
             brief="",
             filters={"channels": ["streaming_audio", "social"]},  # V3: "audio" → "streaming_audio", "native" → "social"
-            ctx=context,
+            identity=identity,
         )
 
         # Should include: global_audio (streaming_audio), us_native (social), global_no_channel (mock adapter includes all)
@@ -576,14 +576,17 @@ class TestNewGetProductsFilters:
         """
         get_products = self._import_get_products_tool()
 
-        context = Mock()
-        context.meta = {"headers": {"x-adcp-auth": "new_filter_test_token"}}
+        identity = PrincipalFactory.make_identity(
+            tenant_id="new_filter_test",
+            principal_id="new_filter_principal",
+            protocol="a2a",
+        )
 
         result = await get_products(
             brand={"domain": "testbrand.com"},
             brief="",
             filters={"channels": ["retail_media"]},  # V3: "retail" → "retail_media"
-            ctx=context,
+            identity=identity,
         )
 
         # No products have retail_media channel, and mock adapter doesn't default to retail_media
@@ -596,8 +599,11 @@ class TestNewGetProductsFilters:
         """Test combining country and channel filters."""
         get_products = self._import_get_products_tool()
 
-        context = Mock()
-        context.meta = {"headers": {"x-adcp-auth": "new_filter_test_token"}}
+        identity = PrincipalFactory.make_identity(
+            tenant_id="new_filter_test",
+            principal_id="new_filter_principal",
+            protocol="a2a",
+        )
 
         result = await get_products(
             brand={"domain": "testbrand.com"},
@@ -606,7 +612,7 @@ class TestNewGetProductsFilters:
                 "countries": ["US"],
                 "channels": ["display"],
             },
-            ctx=context,
+            identity=identity,
         )
 
         # Should include: us_display, global_no_channel (mock adapter includes display, no country restriction)
@@ -622,8 +628,11 @@ class TestNewGetProductsFilters:
         """Test combining country and channel filters with strict matching."""
         get_products = self._import_get_products_tool()
 
-        context = Mock()
-        context.meta = {"headers": {"x-adcp-auth": "new_filter_test_token"}}
+        identity = PrincipalFactory.make_identity(
+            tenant_id="new_filter_test",
+            principal_id="new_filter_principal",
+            protocol="a2a",
+        )
 
         result = await get_products(
             brand={"domain": "testbrand.com"},
@@ -632,7 +641,7 @@ class TestNewGetProductsFilters:
                 "countries": ["CA"],
                 "channels": ["olv"],  # V3: "video" → "olv"
             },
-            ctx=context,
+            identity=identity,
         )
 
         # Should include: us_ca_video (CA + olv), global_no_channel (no restrictions, mock includes olv)

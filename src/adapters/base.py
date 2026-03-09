@@ -245,6 +245,25 @@ class AdServerAdapter(ABC):
         """
         return TargetingCapabilities(geo_countries=True)
 
+    def validate_media_buy_request(
+        self,
+        request: CreateMediaBuyRequest,
+        packages: list[MediaPackage],
+        start_time: datetime,
+        end_time: datetime,
+        package_pricing_info: dict[str, dict] | None = None,
+    ) -> list[str]:
+        """Pre-validate a media buy request without creating anything.
+
+        Called before adapter execution (including dry_run) to catch
+        adapter-specific constraint violations early. Override in
+        subclasses to add adapter-specific validation.
+
+        Returns:
+            List of error messages (empty if valid).
+        """
+        return []
+
     @abstractmethod
     def create_media_buy(
         self,

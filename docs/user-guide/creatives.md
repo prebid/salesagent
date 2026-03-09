@@ -80,6 +80,8 @@ This assists human reviewers but doesn't replace approval decisions.
 
 ## Creative Groups
 
+> **Not yet implemented.** This section describes future plans. No API, schema, or UI support exists today.
+
 Organize creatives across campaigns:
 
 - Group by advertiser

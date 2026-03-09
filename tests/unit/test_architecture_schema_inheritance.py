@@ -27,8 +27,11 @@ def _get_library_type_mapping() -> dict[str, type]:
     import ast
     from pathlib import Path
 
-    schemas_path = Path("src/core/schemas.py")
-    source = schemas_path.read_text()
+    schemas_dir = Path("src/core/schemas")
+    if schemas_dir.is_dir():
+        source = "\n".join(p.read_text() for p in sorted(schemas_dir.glob("*.py")))
+    else:
+        source = Path("src/core/schemas.py").read_text()
     tree = ast.parse(source)
 
     mapping: dict[str, type] = {}

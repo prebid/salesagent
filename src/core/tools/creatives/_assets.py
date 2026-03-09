@@ -84,4 +84,11 @@ def _build_creative_data(
         data["template_variables"] = template_variables
     if context is not None:
         data["context"] = context
+    # Store AI provenance metadata (EU AI Act Article 50)
+    provenance = getattr(creative, "provenance", None)
+    if provenance is not None:
+        if isinstance(provenance, BaseModel):
+            data["provenance"] = provenance.model_dump(mode="json")
+        elif isinstance(provenance, dict):
+            data["provenance"] = provenance
     return data

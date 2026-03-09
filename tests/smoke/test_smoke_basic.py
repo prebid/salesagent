@@ -129,7 +129,7 @@ class TestProjectStructure:
 
         critical_files = [
             "src/core/main.py",
-            "src/core/schemas.py",
+            "src/core/schemas/__init__.py",
             "src/core/database/models.py",
             "src/core/database/database_session.py",
             "src/core/config_loader.py",
