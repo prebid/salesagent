@@ -12,6 +12,31 @@ scopes:
 
   # --- Active development (100% target) ---
 
+  delivery:
+    description: "Delivery polling, webhook push, circuit breaker, auth blocking"
+    sources:
+      - src/core/tools/media_buy_delivery.py
+      - src/core/webhook_delivery.py
+      - src/services/webhook_delivery_service.py
+      - src/core/schemas/delivery.py
+    tests:
+      - tests/unit/test_delivery_poll_behavioral.py
+      - tests/unit/test_delivery_service_behavioral.py
+      - tests/unit/test_delivery_metrics.py
+      - tests/unit/test_delivery_simulator.py
+      - tests/unit/test_webhook_delivery.py
+      - tests/unit/test_webhook_delivery_service.py
+      - tests/integration/test_delivery_poll_behavioral.py
+      - tests/integration/test_delivery_webhook_behavioral.py
+      - tests/integration/test_delivery_service_behavioral.py
+      - tests/integration/test_delivery_repository.py
+      - tests/integration/test_delivery_v3.py
+      - tests/integration/test_delivery_webhooks.py
+      - tests/integration/test_delivery_webhooks_force.py
+      - tests/integration/test_delivery_webhooks_integration.py
+      - tests/integration/test_delivery_simulator_restart.py
+    threshold: 100
+
   creative:
     description: "Creative management, sync, assignments, formats, repository"
     sources:

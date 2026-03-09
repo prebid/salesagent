@@ -3778,30 +3778,36 @@ class TestDeliveryImplPricingLookup:
     """UC-004 pricing: salesagent-mq3n string-to-integer PK regression."""
 
     def test_pricing_option_lookup_uses_string_field(self):
-        """UC-004-PL01: lookup via string pricing_option_id, not integer PK.
+        """UC-004-PL01: lookup via synthetic ID (model_currency_type), not integer PK.
 
         Spec: CONFIRMED -- cpm-option.json pricing_option_id is type: string
-        https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/pricing-options/cpm-option.json
+        Our implementation constructs synthetic IDs like "cpm_usd_fixed".
         Priority: P0
         Type: unit
         Source: UC-004, salesagent-mq3n
         Covers: UC-002-EXT-N-08
         """
+        from unittest.mock import patch
+
         from src.core.tools.media_buy_delivery import _get_pricing_options
 
-        # _get_pricing_options casts string IDs to int for Integer PK lookup
         mock_po = MagicMock()
         mock_po.id = 42
         mock_po.pricing_model = "cpm"
+        mock_po.currency = "USD"
+        mock_po.is_fixed = True
+        mock_po.tenant_id = "test_tenant"
 
-        mock_session = MagicMock()
-        mock_session.scalars.return_value.all.return_value = [mock_po]
+        with patch("src.core.tools.media_buy_delivery.get_db_session") as mock_db:
+            mock_session = MagicMock()
+            mock_session.scalars.return_value.all.return_value = [mock_po]
+            mock_db.return_value.__enter__ = lambda s: mock_session
+            mock_db.return_value.__exit__ = MagicMock(return_value=False)
 
-        # String ID "42" should be cast to int for PK lookup
-        result = _get_pricing_options(["42"], session=mock_session)
+            result = _get_pricing_options(["cpm_usd_fixed"], tenant_id="test_tenant")
 
-        assert "42" in result
-        assert result["42"] == mock_po
+        assert "cpm_usd_fixed" in result
+        assert result["cpm_usd_fixed"] == mock_po
 
     def test_delivery_spend_with_correct_pricing(self):
         """UC-004-PL02: spend computed from rate and impressions.

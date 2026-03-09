@@ -45,6 +45,9 @@ IMPL_FILES = [
 # These existed before the guard was created. Allowlist shrinks as repositories are introduced.
 # FIXME(salesagent-qo8a): all _impl functions should use repositories instead of get_db_session()
 IMPL_SESSION_ALLOWLIST = {
+    # media_buy_delivery.py — 1 function with get_db_session()
+    # FIXME(salesagent-qo8a): _get_pricing_options should use a repository
+    ("src/core/tools/media_buy_delivery.py", "_get_pricing_options"),
     # products.py — 1 function with get_db_session() (product queries moved to ProductRepository)
     # FIXME(salesagent-qo8a): _get_products_impl still uses get_db_session() for policy review + dynamic pricing
     ("src/core/tools/products.py", "_get_products_impl"),
@@ -145,6 +148,21 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_delivery_simulator_restart.py", "test_restart_finds_media_buys_with_principal_webhook"),
     ("tests/integration/test_delivery_simulator_restart.py", "test_restart_ignores_media_buys_without_webhook"),
     ("tests/integration/test_delivery_simulator_restart.py", "test_restart_join_cardinality"),
+    # tests/integration/test_delivery_poll_behavioral.py
+    ("tests/integration/test_delivery_poll_behavioral.py", "test_get_pricing_options_uses_string_id_not_integer_pk"),
+    (
+        "tests/integration/test_delivery_poll_behavioral.py",
+        "test_non_numeric_pricing_option_id_is_not_silently_discarded",
+    ),
+    ("tests/integration/test_delivery_poll_behavioral.py", "test_pricing_options_keyed_by_string_id_not_integer_pk"),
+    ("tests/integration/test_delivery_poll_behavioral.py", "test_integer_pk_lookup_returns_none"),
+    # tests/integration/test_delivery_repository.py
+    ("tests/integration/test_delivery_repository.py", "tenant_a"),
+    ("tests/integration/test_delivery_repository.py", "tenant_b"),
+    ("tests/integration/test_delivery_repository.py", "principal_a"),
+    ("tests/integration/test_delivery_repository.py", "principal_b"),
+    ("tests/integration/test_delivery_repository.py", "media_buy_a"),
+    ("tests/integration/test_delivery_repository.py", "media_buy_b"),
     # tests/integration/test_delivery_v3.py
     ("tests/integration/test_delivery_v3.py", "_setup_base_state"),
     ("tests/integration/test_delivery_v3.py", "_create_media_buy"),

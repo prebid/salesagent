@@ -3,35 +3,10 @@
 import logging
 from typing import Any
 
-from fastmcp.server.context import Context
-
 from src.core.config_loader import get_current_tenant, get_tenant_by_id, set_current_tenant
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.tool_context import ToolContext
-from src.core.transport_helpers import resolve_identity_from_context
 
 logger = logging.getLogger(__name__)
-
-
-def get_principal_id_from_context(context: Context | ToolContext | None) -> str | None:
-    """Extract principal ID from context.
-
-    Handles both FastMCP Context (from MCP protocol) and ToolContext (from A2A protocol).
-    Uses the unified resolve_identity path shared with A2A and REST.
-
-    Args:
-        context: FastMCP Context or ToolContext
-
-    Returns:
-        Principal ID string, or None if not authenticated
-    """
-    identity = resolve_identity_from_context(context, require_valid_token=True, protocol="mcp")
-    if identity and identity.tenant_id:
-        if identity.tenant and isinstance(identity.tenant, dict):
-            set_current_tenant(identity.tenant)
-        else:
-            set_current_tenant({"tenant_id": identity.tenant_id})
-    return identity.principal_id if identity else None
 
 
 def ensure_tenant_context(identity: ResolvedIdentity | None = None) -> dict[str, Any]:

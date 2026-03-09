@@ -426,3 +426,42 @@ class TestWebhookDelivery:
             assert "duration" in result
             assert isinstance(result["duration"], float)
             assert result["duration"] >= 0
+
+
+class TestDefensiveExceptionHandlers:
+    """Covers: defensive exception handlers in webhook_delivery.py.
+
+    Lines 355, 357: _update_delivery_record absorbs DB exceptions.
+    Lines 383-384: _set_auth_blocked absorbs DB exceptions.
+    """
+
+    def test_update_delivery_record_absorbs_db_exception(self):
+        """_update_delivery_record logs and swallows DB exceptions."""
+        from src.core.webhook_delivery import _update_delivery_record
+
+        with patch(
+            "src.core.webhook_delivery.get_db_session",
+            side_effect=Exception("DB connection refused"),
+        ):
+            # Must not raise — the defensive handler absorbs the error
+            _update_delivery_record(
+                delivery_id="whd_test123",
+                tenant_id="t1",
+                status="delivered",
+                attempts=1,
+                response_code=200,
+            )
+
+    def test_set_auth_blocked_absorbs_db_exception(self):
+        """_set_auth_blocked logs and swallows DB exceptions."""
+        from src.core.webhook_delivery import _set_auth_blocked
+
+        with patch(
+            "src.core.webhook_delivery.get_db_session",
+            side_effect=Exception("DB connection refused"),
+        ):
+            # Must not raise — the defensive handler absorbs the error
+            _set_auth_blocked(
+                tenant_id="t1",
+                webhook_url="https://example.com/hook",
+            )

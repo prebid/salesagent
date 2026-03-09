@@ -28,7 +28,8 @@ from adcp.types import McpWebhookPayload
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.database_session import get_db_session
-from src.core.database.models import PushNotificationConfig, WebhookDeliveryLog
+from src.core.database.models import PushNotificationConfig
+from src.core.database.repositories.delivery import DeliveryRepository
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +136,51 @@ class ProtocolWebhookService:
             url=url, payload=payload_dict, headers=headers, metadata=metadata
         )
 
+    @staticmethod
+    def _write_delivery_log(
+        *,
+        log_id: str,
+        tenant_id: str,
+        principal_id: str,
+        media_buy_id: str,
+        webhook_url: str,
+        task_type: str,
+        status: str,
+        sequence_number: int = 1,
+        notification_type: str | None = None,
+        attempt_count: int = 1,
+        http_status_code: int | None = None,
+        error_message: str | None = None,
+        payload_size_bytes: int | None = None,
+        response_time_ms: int | None = None,
+        completed_at: datetime | None = None,
+        next_retry_at: datetime | None = None,
+    ) -> None:
+        """Write a webhook delivery log entry via the DeliveryRepository."""
+        try:
+            with get_db_session() as session:
+                repo = DeliveryRepository(session, tenant_id)
+                repo.create_log(
+                    log_id=log_id,
+                    principal_id=principal_id,
+                    media_buy_id=media_buy_id,
+                    webhook_url=webhook_url,
+                    task_type=task_type,
+                    status=status,
+                    sequence_number=sequence_number,
+                    notification_type=notification_type,
+                    attempt_count=attempt_count,
+                    http_status_code=http_status_code,
+                    error_message=error_message,
+                    payload_size_bytes=payload_size_bytes,
+                    response_time_ms=response_time_ms,
+                    completed_at=completed_at,
+                    next_retry_at=next_retry_at,
+                )
+                session.commit()
+        except Exception as e:
+            logger.error(f"Failed to write webhook delivery log: {e}")
+
     async def _send_with_retry_and_logging(
         self,
         url: str,
@@ -197,28 +243,22 @@ class ProtocolWebhookService:
                     and tenant_id
                     and principal_id
                 ):
-                    try:
-                        with get_db_session() as session:
-                            log_entry = WebhookDeliveryLog(
-                                id=log_id,
-                                tenant_id=tenant_id,
-                                principal_id=principal_id,
-                                media_buy_id=media_buy_id,
-                                webhook_url=url,
-                                task_type=task_type,
-                                sequence_number=sequence_number,
-                                notification_type=notification_type,
-                                attempt_count=attempt + 1,
-                                status="success",
-                                http_status_code=response.status_code,
-                                payload_size_bytes=payload_size_bytes,
-                                response_time_ms=response_time_ms,
-                                completed_at=datetime.now(UTC),
-                            )
-                            session.merge(log_entry)
-                            session.commit()
-                    except Exception as e:
-                        logger.error(f"Failed to write webhook delivery log: {e}")
+                    self._write_delivery_log(
+                        log_id=log_id,
+                        tenant_id=tenant_id,
+                        principal_id=principal_id,
+                        media_buy_id=media_buy_id,
+                        webhook_url=url,
+                        task_type=task_type,
+                        status="success",
+                        sequence_number=sequence_number,
+                        notification_type=notification_type,
+                        attempt_count=attempt + 1,
+                        http_status_code=response.status_code,
+                        payload_size_bytes=payload_size_bytes,
+                        response_time_ms=response_time_ms,
+                        completed_at=datetime.now(UTC),
+                    )
 
                 # Log to audit system (success)
                 if audit_logger:
@@ -245,29 +285,23 @@ class ProtocolWebhookService:
                         and tenant_id
                         and principal_id
                     ):
-                        try:
-                            with get_db_session() as session:
-                                log_entry = WebhookDeliveryLog(
-                                    id=log_id,
-                                    tenant_id=tenant_id,
-                                    principal_id=principal_id,
-                                    media_buy_id=media_buy_id,
-                                    webhook_url=url,
-                                    task_type=task_type,
-                                    sequence_number=sequence_number,
-                                    notification_type=notification_type,
-                                    attempt_count=attempt + 1,
-                                    status="failed",
-                                    http_status_code=status_code,
-                                    error_message=error_message,
-                                    payload_size_bytes=payload_size_bytes,
-                                    response_time_ms=response_time_ms,
-                                    completed_at=datetime.now(UTC),
-                                )
-                                session.merge(log_entry)
-                                session.commit()
-                        except Exception as e:
-                            logger.error(f"Failed to write webhook delivery log: {e}")
+                        self._write_delivery_log(
+                            log_id=log_id,
+                            tenant_id=tenant_id,
+                            principal_id=principal_id,
+                            media_buy_id=media_buy_id,
+                            webhook_url=url,
+                            task_type=task_type,
+                            status="failed",
+                            sequence_number=sequence_number,
+                            notification_type=notification_type,
+                            attempt_count=attempt + 1,
+                            http_status_code=status_code,
+                            error_message=error_message,
+                            payload_size_bytes=payload_size_bytes,
+                            response_time_ms=response_time_ms,
+                            completed_at=datetime.now(UTC),
+                        )
 
                     # Log to audit system (failure)
                     if audit_logger:
@@ -290,32 +324,25 @@ class ProtocolWebhookService:
                         and tenant_id
                         and principal_id
                     ):
-                        try:
-                            with get_db_session() as session:
-                                next_retry = datetime.now(UTC).replace(microsecond=0)
-                                next_retry = next_retry.replace(second=next_retry.second + int(wait_seconds))
-
-                                log_entry = WebhookDeliveryLog(
-                                    id=log_id,
-                                    tenant_id=tenant_id,
-                                    principal_id=principal_id,
-                                    media_buy_id=media_buy_id,
-                                    webhook_url=url,
-                                    task_type=task_type,
-                                    sequence_number=sequence_number,
-                                    notification_type=notification_type,
-                                    attempt_count=attempt + 1,
-                                    status="retrying",
-                                    http_status_code=status_code,
-                                    error_message=error_message,
-                                    payload_size_bytes=payload_size_bytes,
-                                    response_time_ms=response_time_ms,
-                                    next_retry_at=next_retry,
-                                )
-                                session.merge(log_entry)
-                                session.commit()
-                        except Exception as e:
-                            logger.error(f"Failed to write webhook delivery log: {e}")
+                        next_retry = datetime.now(UTC).replace(microsecond=0)
+                        next_retry = next_retry.replace(second=next_retry.second + int(wait_seconds))
+                        self._write_delivery_log(
+                            log_id=log_id,
+                            tenant_id=tenant_id,
+                            principal_id=principal_id,
+                            media_buy_id=media_buy_id,
+                            webhook_url=url,
+                            task_type=task_type,
+                            status="retrying",
+                            sequence_number=sequence_number,
+                            notification_type=notification_type,
+                            attempt_count=attempt + 1,
+                            http_status_code=status_code,
+                            error_message=error_message,
+                            payload_size_bytes=payload_size_bytes,
+                            response_time_ms=response_time_ms,
+                            next_retry_at=next_retry,
+                        )
 
                     await asyncio.sleep(wait_seconds)
                 else:
@@ -328,29 +355,23 @@ class ProtocolWebhookService:
                         and tenant_id
                         and principal_id
                     ):
-                        try:
-                            with get_db_session() as session:
-                                log_entry = WebhookDeliveryLog(
-                                    id=log_id,
-                                    tenant_id=tenant_id,
-                                    principal_id=principal_id,
-                                    media_buy_id=media_buy_id,
-                                    webhook_url=url,
-                                    task_type=task_type,
-                                    sequence_number=sequence_number,
-                                    notification_type=notification_type,
-                                    attempt_count=max_attempts,
-                                    status="failed",
-                                    http_status_code=status_code,
-                                    error_message=error_message,
-                                    payload_size_bytes=payload_size_bytes,
-                                    response_time_ms=response_time_ms,
-                                    completed_at=datetime.now(UTC),
-                                )
-                                session.merge(log_entry)
-                                session.commit()
-                        except Exception as e:
-                            logger.error(f"Failed to write webhook delivery log: {e}")
+                        self._write_delivery_log(
+                            log_id=log_id,
+                            tenant_id=tenant_id,
+                            principal_id=principal_id,
+                            media_buy_id=media_buy_id,
+                            webhook_url=url,
+                            task_type=task_type,
+                            status="failed",
+                            sequence_number=sequence_number,
+                            notification_type=notification_type,
+                            attempt_count=max_attempts,
+                            http_status_code=status_code,
+                            error_message=error_message,
+                            payload_size_bytes=payload_size_bytes,
+                            response_time_ms=response_time_ms,
+                            completed_at=datetime.now(UTC),
+                        )
 
                     # Log to audit system (failure after all retries)
                     if audit_logger:
@@ -382,28 +403,22 @@ class ProtocolWebhookService:
                         and tenant_id
                         and principal_id
                     ):
-                        try:
-                            with get_db_session() as session:
-                                log_entry = WebhookDeliveryLog(
-                                    id=log_id,
-                                    tenant_id=tenant_id,
-                                    principal_id=principal_id,
-                                    media_buy_id=media_buy_id,
-                                    webhook_url=url,
-                                    task_type=task_type,
-                                    sequence_number=sequence_number,
-                                    notification_type=notification_type,
-                                    attempt_count=max_attempts,
-                                    status="failed",
-                                    error_message=error_message,
-                                    payload_size_bytes=payload_size_bytes,
-                                    response_time_ms=response_time_ms,
-                                    completed_at=datetime.now(UTC),
-                                )
-                                session.merge(log_entry)
-                                session.commit()
-                        except Exception as log_err:
-                            logger.error(f"Failed to write webhook delivery log: {log_err}")
+                        self._write_delivery_log(
+                            log_id=log_id,
+                            tenant_id=tenant_id,
+                            principal_id=principal_id,
+                            media_buy_id=media_buy_id,
+                            webhook_url=url,
+                            task_type=task_type,
+                            status="failed",
+                            sequence_number=sequence_number,
+                            notification_type=notification_type,
+                            attempt_count=max_attempts,
+                            error_message=error_message,
+                            payload_size_bytes=payload_size_bytes,
+                            response_time_ms=response_time_ms,
+                            completed_at=datetime.now(UTC),
+                        )
 
                     # Log to audit system (network failure)
                     if audit_logger:
@@ -421,27 +436,21 @@ class ProtocolWebhookService:
                     and tenant_id
                     and principal_id
                 ):
-                    try:
-                        with get_db_session() as session:
-                            log_entry = WebhookDeliveryLog(
-                                id=log_id,
-                                tenant_id=tenant_id,
-                                principal_id=principal_id,
-                                media_buy_id=media_buy_id,
-                                webhook_url=url,
-                                task_type=task_type,
-                                sequence_number=sequence_number,
-                                notification_type=notification_type,
-                                attempt_count=attempt + 1,
-                                status="failed",
-                                error_message=f"Unexpected error: {str(e)}",
-                                payload_size_bytes=payload_size_bytes,
-                                completed_at=datetime.now(UTC),
-                            )
-                            session.merge(log_entry)
-                            session.commit()
-                    except Exception as log_err:
-                        logger.error(f"Failed to write webhook delivery log: {log_err}")
+                    self._write_delivery_log(
+                        log_id=log_id,
+                        tenant_id=tenant_id,
+                        principal_id=principal_id,
+                        media_buy_id=media_buy_id,
+                        webhook_url=url,
+                        task_type=task_type,
+                        status="failed",
+                        sequence_number=sequence_number,
+                        notification_type=notification_type,
+                        attempt_count=attempt + 1,
+                        error_message=f"Unexpected error: {str(e)}",
+                        payload_size_bytes=payload_size_bytes,
+                        completed_at=datetime.now(UTC),
+                    )
 
                 return False
 

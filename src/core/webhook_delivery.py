@@ -16,7 +16,6 @@ from datetime import UTC, datetime
 from typing import Any
 
 import requests
-from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.webhook_authenticator import WebhookAuthenticator
@@ -78,6 +77,15 @@ def deliver_webhook_with_retry(delivery: WebhookDelivery) -> tuple[bool, dict[st
         - error: Error message (if failed)
     """
     from src.core.metrics import webhook_delivery_attempts, webhook_delivery_duration, webhook_delivery_total
+
+    # Reject delivery for paused media buys
+    if delivery.payload.get("status") == "paused":
+        logger.info("[Webhook Delivery] Rejected: media buy is paused")
+        return False, {
+            "status": "rejected",
+            "error": "Media buy is paused",
+            "attempts": 0,
+        }
 
     # Validate webhook URL for SSRF protection
     is_valid, error_msg = WebhookURLValidator.validate_webhook_url(delivery.webhook_url)
@@ -145,6 +153,7 @@ def deliver_webhook_with_retry(delivery: WebhookDelivery) -> tuple[bool, dict[st
                 if delivery.tenant_id and delivery.event_type:
                     _update_delivery_record(
                         delivery_id=delivery_id,
+                        tenant_id=delivery.tenant_id,
                         status="delivered",
                         attempts=attempts,
                         response_code=response_code,
@@ -176,10 +185,15 @@ def deliver_webhook_with_retry(delivery: WebhookDelivery) -> tuple[bool, dict[st
                 logger.warning(f"[Webhook Delivery] Client error, will NOT retry: {error_msg}")
                 last_error = error_msg
 
+                # Auth failures (401/403): block until credentials reconfigured
+                if response_code in (401, 403) and delivery.tenant_id:
+                    _set_auth_blocked(delivery.tenant_id, delivery.webhook_url)
+
                 # Update database record
                 if delivery.tenant_id and delivery.event_type:
                     _update_delivery_record(
                         delivery_id=delivery_id,
+                        tenant_id=delivery.tenant_id,
                         status="failed",
                         attempts=attempts,
                         response_code=response_code,
@@ -234,6 +248,7 @@ def deliver_webhook_with_retry(delivery: WebhookDelivery) -> tuple[bool, dict[st
     if delivery.tenant_id and delivery.event_type:
         _update_delivery_record(
             delivery_id=delivery_id,
+            tenant_id=delivery.tenant_id,
             status="failed",
             attempts=attempts,
             response_code=response_code,
@@ -278,21 +293,18 @@ def _create_delivery_record(
         object_id: Optional object ID related to webhook
     """
     try:
-        from src.core.database.models import WebhookDeliveryRecord
+        from src.core.database.repositories.delivery import DeliveryRepository
 
         with get_db_session() as session:
-            record = WebhookDeliveryRecord(
+            repo = DeliveryRepository(session, tenant_id)
+            repo.create_record(
                 delivery_id=delivery_id,
-                tenant_id=tenant_id,
                 webhook_url=webhook_url,
                 payload=payload,
                 event_type=event_type,
                 object_id=object_id,
-                status="pending",
-                attempts=0,
                 created_at=datetime.now(UTC),
             )
-            session.add(record)
             session.commit()
             logger.debug(f"[Webhook Delivery] Created delivery record: {delivery_id}")
     except Exception as e:
@@ -302,6 +314,7 @@ def _create_delivery_record(
 
 def _update_delivery_record(
     delivery_id: str,
+    tenant_id: str,
     status: str,
     attempts: int,
     response_code: int | None = None,
@@ -312,6 +325,7 @@ def _update_delivery_record(
 
     Args:
         delivery_id: Delivery identifier
+        tenant_id: Tenant ID for repository scoping
         status: Delivery status ("delivered" or "failed")
         attempts: Number of delivery attempts made
         response_code: HTTP response code (if received)
@@ -319,26 +333,20 @@ def _update_delivery_record(
         delivered_at: Timestamp of successful delivery
     """
     try:
-        from src.core.database.models import WebhookDeliveryRecord
+        from src.core.database.repositories.delivery import DeliveryRepository
 
         with get_db_session() as session:
-            stmt = select(WebhookDeliveryRecord).filter_by(delivery_id=delivery_id)
-            record = session.scalars(stmt).first()
-
-            if record:
-                record.status = status
-                record.attempts = attempts
-                record.last_attempt_at = datetime.now(UTC)
-
-                if response_code is not None:
-                    record.response_code = response_code
-
-                if last_error:
-                    record.last_error = last_error
-
-                if delivered_at:
-                    record.delivered_at = delivered_at
-
+            repo = DeliveryRepository(session, tenant_id)
+            result = repo.update_record(
+                delivery_id,
+                status=status,
+                attempts=attempts,
+                response_code=response_code,
+                last_error=last_error,
+                last_attempt_at=datetime.now(UTC),
+                delivered_at=delivered_at,
+            )
+            if result is not None:
                 session.commit()
                 logger.debug(f"[Webhook Delivery] Updated delivery record: {delivery_id} status={status}")
             else:
@@ -347,3 +355,30 @@ def _update_delivery_record(
     except Exception as e:
         # Don't fail delivery if we can't update tracking record
         logger.error(f"[Webhook Delivery] Failed to update delivery record: {e}", exc_info=True)
+
+
+def _set_auth_blocked(tenant_id: str, webhook_url: str) -> None:
+    """Set auth_blocked_at on PushNotificationConfig for 401/403 auth failures.
+
+    Blocks further delivery attempts until credentials are reconfigured.
+    """
+    try:
+        from sqlalchemy import update
+
+        from src.core.database.models import PushNotificationConfig
+
+        with get_db_session() as session:
+            stmt = (
+                update(PushNotificationConfig)
+                .where(
+                    PushNotificationConfig.tenant_id == tenant_id,
+                    PushNotificationConfig.url == webhook_url,
+                    PushNotificationConfig.auth_blocked_at.is_(None),
+                )
+                .values(auth_blocked_at=datetime.now(UTC))
+            )
+            session.execute(stmt)
+            session.commit()
+            logger.warning(f"[Webhook Delivery] Auth failure blocked endpoint {webhook_url} for tenant {tenant_id}")
+    except Exception as e:
+        logger.error(f"[Webhook Delivery] Failed to set auth block: {e}", exc_info=True)

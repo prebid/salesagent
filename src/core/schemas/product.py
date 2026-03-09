@@ -187,12 +187,6 @@ class Product(LibraryProduct):
         return self.model_dump(**kwargs)
 
 
-class ProductPerformance(SalesAgentBaseModel):
-    product_id: str
-    performance_index: float  # 1.0 = baseline, 1.2 = 20% better, 0.8 = 20% worse
-    confidence_score: float | None = None  # 0.0 to 1.0
-
-
 class ProductFilters(LibraryFilters):
     """Product filters extending library Filters from AdCP spec.
 

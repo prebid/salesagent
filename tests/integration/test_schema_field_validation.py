@@ -36,7 +36,9 @@ class TestSchemaFieldValidation:
                 continue
 
             # Skip files that are allowed to use old field names for API compatibility
-            if any(allowed in str(py_file) for allowed in ["schemas.py", "main.py", "client_mcp.py"]):
+            if any(
+                allowed in str(py_file) for allowed in ["schemas.py", "src/core/schemas/", "main.py", "client_mcp.py"]
+            ):
                 continue
 
             try:

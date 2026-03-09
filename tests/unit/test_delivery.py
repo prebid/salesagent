@@ -101,6 +101,7 @@ def _make_mock_media_buy(
     buy.buyer_ref = buyer_ref
     buy.principal_id = principal_id
     buy.tenant_id = tenant_id
+    buy.is_paused = False
     buy.raw_request = raw_request or {
         "packages": [
             {"package_id": "pkg_001", "product_id": "prod_1"},
@@ -1035,12 +1036,12 @@ class TestDeliveryPricingOptionLookup:
     """
 
     def test_pricing_option_lookup_uses_string_field_not_integer_pk(self):
-        """_get_pricing_options must resolve pricing_option_id through the string field.
+        """_get_pricing_options resolves via synthetic ID (model_currency_type), not integer PK.
 
         Spec: UNSPECIFIED (implementation-defined ID resolution strategy).
 
-        CRITICAL: pricing_option_ids from JSON raw_request are strings (e.g., "42").
-        PricingOption.id is an Integer PK. The query must cast to int before .in_().
+        Our implementation constructs synthetic IDs like "cpm_usd_fixed" from
+        PricingOption fields and matches against requested IDs.
         See salesagent-mq3n.
         Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-01
         """
@@ -1049,16 +1050,22 @@ class TestDeliveryPricingOptionLookup:
         mock_po1 = MagicMock()
         mock_po1.id = 42
         mock_po1.pricing_model = "cpm"
+        mock_po1.currency = "USD"
+        mock_po1.is_fixed = True
         mock_po1.rate = Decimal("5.00")
+        mock_po1.tenant_id = "test_tenant"
 
-        mock_session = MagicMock()
-        mock_session.scalars.return_value.all.return_value = [mock_po1]
+        with patch("src.core.tools.media_buy_delivery.get_db_session") as mock_db:
+            mock_session = MagicMock()
+            mock_session.scalars.return_value.all.return_value = [mock_po1]
+            mock_db.return_value.__enter__ = lambda s: mock_session
+            mock_db.return_value.__exit__ = MagicMock(return_value=False)
 
-        result = _get_pricing_options(["42"], session=mock_session)
+            result = _get_pricing_options(["cpm_usd_fixed"], tenant_id="test_tenant")
 
-        # Must find the pricing option keyed by string "42"
-        assert "42" in result
-        assert result["42"].id == 42
+        # Must find the pricing option keyed by synthetic ID
+        assert "cpm_usd_fixed" in result
+        assert result["cpm_usd_fixed"].id == 42
 
     def test_delivery_spend_correct_with_cpm_pricing(self):
         """CPM pricing: adapter returns correct impressions/spend with CPM pricing.
@@ -1126,7 +1133,7 @@ class TestDeliveryPricingOptionLookup:
 
         mock_po = MagicMock()
         mock_po.id = 2
-        mock_po.pricing_model = PricingModel.cpc
+        mock_po.pricing_model = "cpc"  # DB stores string, not enum
         mock_po.rate = Decimal("0.50")
 
         mock_adapter = MagicMock()

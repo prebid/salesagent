@@ -209,6 +209,8 @@ class TestSchemaInheritance:
             ("Creative", "created_date"),
             ("Creative", "updated_date"),
             ("Creative", "assets"),
+            # Nested serialization — creative delivery uses local CreativeDeliveryData
+            ("GetCreativeDeliveryResponse", "creatives"),
             # Request field overrides — tighter validation
             ("GetMediaBuyDeliveryRequest", "account_id"),
         }

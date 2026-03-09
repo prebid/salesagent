@@ -33,7 +33,12 @@ ALLOWLIST_FILE = Path(__file__).resolve().parent / "obligation_coverage_allowlis
 _UNIT_ENTITY_FILES = [
     "test_media_buy.py",
     "test_creative.py",
+    "test_create_media_buy_behavioral.py",
+    "test_update_media_buy_behavioral.py",
     "test_delivery.py",
+    "test_delivery_poll_behavioral.py",
+    "test_delivery_service_behavioral.py",
+    "test_webhook_delivery_service.py",
     "test_product.py",
     "test_product_schema_obligations.py",
     "test_property_list_schema.py",
@@ -103,6 +108,8 @@ def _get_covered_obligations() -> set[str]:
 
     # Integration tests (v3 behavioral files with formal obligation IDs)
     for tf in INTEGRATION_DIR.glob("test_*_v3.py"):
+        _scan_file(tf)
+    for tf in INTEGRATION_DIR.glob("test_*_behavioral.py"):
         _scan_file(tf)
 
     # Integration behavioral tests (non-v3 files with canonical Covers: tags)
