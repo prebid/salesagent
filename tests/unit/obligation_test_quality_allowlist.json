@@ -1,7 +1,4 @@
 [
   "tests/unit/test_product_schema_obligations.py:TestBrandManifestExtraction.test_brand_name_derives_offering_text",
-  "tests/unit/test_product_schema_obligations.py:TestBrandManifestExtraction.test_brand_url_derives_offering_text",
-  "tests/unit/test_product_schema_obligations.py:TestProductUniquenessSchema.test_duplicate_product_ids_detectable",
-  "tests/unit/test_product_schema_obligations.py:TestRelevanceThresholdSchema.test_threshold_below_excluded",
-  "tests/unit/test_product_schema_obligations.py:TestRelevanceThresholdSchema.test_threshold_boundary_included"
+  "tests/unit/test_product_schema_obligations.py:TestBrandManifestExtraction.test_brand_url_derives_offering_text"
 ]

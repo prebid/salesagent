@@ -1697,19 +1697,21 @@ class TestProductUniquenessSchema:
         product_ids = [p.product_id for p in resp.products]
         assert len(product_ids) == len(set(product_ids)), "Duplicate product IDs found"
 
-    def test_duplicate_product_ids_detectable(self):
+    async def test_duplicate_product_ids_detectable(self):
         """Duplicate product_ids can be detected for validation.
 
         Covers: CONSTR-PRODUCT-UNIQUENESS-01
         """
-        product_ids = ["prod_1", "prod_2", "prod_1"]
-        seen = set()
-        duplicates = set()
-        for pid in product_ids:
-            if pid in seen:
-                duplicates.add(pid)
-            seen.add(pid)
-        assert duplicates == {"prod_1"}
+        with ProductEnv() as env:
+            env.add_product(product_id="prod_A")
+            env.add_product(product_id="prod_B")
+            env.add_product(product_id="prod_C")
+
+            response = await env.call_impl(brief="test")
+
+            product_ids = [p.product_id for p in response.products]
+            assert len(product_ids) == len(set(product_ids)), "All product IDs should be unique"
+            assert len(product_ids) == 3
 
 
 # ---------------------------------------------------------------------------
@@ -1720,23 +1722,78 @@ class TestProductUniquenessSchema:
 class TestRelevanceThresholdSchema:
     """AI ranking threshold filter behavior at schema level."""
 
-    def test_threshold_boundary_included(self):
+    async def test_threshold_boundary_included(self):
         """Score exactly at threshold (0.1) is included.
 
         Covers: CONSTR-RELEVANCE-THRESHOLD-01
         """
-        threshold = 0.1
-        score_at_boundary = 0.1
-        assert score_at_boundary >= threshold
+        from unittest.mock import AsyncMock, MagicMock, patch
 
-    def test_threshold_below_excluded(self):
+        with ProductEnv() as env:
+            env.add_product(product_id="prod_boundary")
+
+            # Enable AI ranking by configuring tenant and factory
+            env.identity.tenant["product_ranking_prompt"] = "rank by relevance"
+            mock_factory = MagicMock()
+            mock_factory.is_ai_enabled.return_value = True
+            mock_factory.create_model.return_value = MagicMock()
+            env.mock["ranking_factory"].return_value = mock_factory
+
+            # Mock ranking to return score exactly at threshold (0.1)
+            mock_result = MagicMock()
+            mock_result.rankings = [MagicMock(product_id="prod_boundary", relevance_score=0.1, reason="ok")]
+
+            with (
+                patch(
+                    "src.services.ai.agents.ranking_agent.rank_products_async",
+                    new_callable=AsyncMock,
+                    return_value=mock_result,
+                ),
+                patch("src.services.ai.agents.ranking_agent.create_ranking_agent"),
+            ):
+                response = await env.call_impl(brief="test")
+
+            product_ids = [p.product_id for p in response.products]
+            assert "prod_boundary" in product_ids, "Score at threshold (0.1) should be included"
+
+    async def test_threshold_below_excluded(self):
         """Score below threshold (0.09) is excluded.
 
         Covers: CONSTR-RELEVANCE-THRESHOLD-01
         """
-        threshold = 0.1
-        score_below = 0.09
-        assert score_below < threshold
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        with ProductEnv() as env:
+            env.add_product(product_id="prod_low")
+            env.add_product(product_id="prod_high")
+
+            # Enable AI ranking
+            env.identity.tenant["product_ranking_prompt"] = "rank by relevance"
+            mock_factory = MagicMock()
+            mock_factory.is_ai_enabled.return_value = True
+            mock_factory.create_model.return_value = MagicMock()
+            env.mock["ranking_factory"].return_value = mock_factory
+
+            # Mock ranking: one below threshold, one above
+            mock_result = MagicMock()
+            mock_result.rankings = [
+                MagicMock(product_id="prod_low", relevance_score=0.09, reason="too low"),
+                MagicMock(product_id="prod_high", relevance_score=0.5, reason="ok"),
+            ]
+
+            with (
+                patch(
+                    "src.services.ai.agents.ranking_agent.rank_products_async",
+                    new_callable=AsyncMock,
+                    return_value=mock_result,
+                ),
+                patch("src.services.ai.agents.ranking_agent.create_ranking_agent"),
+            ):
+                response = await env.call_impl(brief="test")
+
+            product_ids = [p.product_id for p in response.products]
+            assert "prod_high" in product_ids, "Score above threshold included"
+            assert "prod_low" not in product_ids, "Score below threshold (0.09) excluded"
 
     def test_no_ranking_means_no_threshold(self):
         """Without ranking active, all products pass (no threshold applied).
