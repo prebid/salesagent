@@ -174,32 +174,16 @@ class TestProductAccessControl:
 
             assert len(response.products) == 0
 
-    @pytest.mark.skip(
-        reason="FIXME: harness identity override broken — env._identity not used by property (uses _identity_cache)"
-    )
     async def test_anonymous_sees_only_unrestricted(self):
         """Covers: UC-001-ALT-ANONYMOUS-DISCOVERY-04
 
         Anonymous users (no principal) only see unrestricted products.
         Note: brand_manifest_policy must be "public" for anonymous access.
         """
-        with ProductEnv(principal_id=None) as env:  # type: ignore[arg-type]
-            # Override identity to allow anonymous with public policy
-            from src.core.resolved_identity import ResolvedIdentity
-            from src.core.testing_hooks import AdCPTestContext
-
-            env._identity = ResolvedIdentity(
-                principal_id=None,
-                tenant_id="test_tenant",
-                tenant={
-                    "tenant_id": "test_tenant",
-                    "name": "Test Tenant",
-                    "brand_manifest_policy": "public",
-                },
-                protocol="mcp",
-                testing_context=AdCPTestContext(),
-            )
-
+        with ProductEnv(
+            principal_id=None,  # type: ignore[arg-type]
+            brand_manifest_policy="public",
+        ) as env:
             env.add_product(product_id="public", allowed_principal_ids=None)
             env.add_product(product_id="restricted", allowed_principal_ids=["some_p"])
 
@@ -226,32 +210,15 @@ class TestProductPolicyChecks:
             env.mock["policy_service"].assert_not_called()
             assert len(response.products) == 1
 
-    @pytest.mark.skip(
-        reason="FIXME: harness identity override broken — env._identity not used by property (uses _identity_cache)"
-    )
     async def test_policy_blocked_raises_authorization_error(self):
-        """Covers: UC-001-MAIN-05
+        """Covers: UC-001-EXT-A-01
 
         When policy blocks the brief, AdCPAuthorizationError is raised.
         """
-        with ProductEnv() as env:
-            # Configure tenant with policy enabled and gemini key
-            from src.core.resolved_identity import ResolvedIdentity
-            from src.core.testing_hooks import AdCPTestContext
-
-            env._identity = ResolvedIdentity(
-                principal_id="test_principal",
-                tenant_id="test_tenant",
-                tenant={
-                    "tenant_id": "test_tenant",
-                    "name": "Test Tenant",
-                    "advertising_policy": {"enabled": True},
-                    "gemini_api_key": "test_key",
-                },
-                protocol="mcp",
-                testing_context=AdCPTestContext(),
-            )
-
+        with ProductEnv(
+            advertising_policy={"enabled": True},
+            gemini_api_key="test_key",
+        ) as env:
             env.set_policy_blocked(reason="Prohibited content")
             env.add_product(product_id="prod_001")
 

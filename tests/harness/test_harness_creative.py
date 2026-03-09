@@ -21,7 +21,7 @@ class TestCreativeSyncEnvContract:
         """CreativeSyncEnv patches registry, run_async, notifications, audit."""
         from tests.harness.creative_sync import CreativeSyncEnv
 
-        expected_keys = {"registry", "run_async", "send_notifications", "audit_log"}
+        expected_keys = {"registry", "run_async", "send_notifications", "audit_log", "config"}
         assert set(CreativeSyncEnv.EXTERNAL_PATCHES.keys()) == expected_keys
 
     def test_is_integration_env(self):
@@ -43,7 +43,8 @@ class TestCreativeSyncEnvContract:
             assert "run_async" in env.mock
             assert "send_notifications" in env.mock
             assert "audit_log" in env.mock
-            assert len(env.mock) == 4
+            assert "config" in env.mock
+            assert len(env.mock) == 5
 
     def test_identity_defaults(self):
         """Identity has sane defaults."""
