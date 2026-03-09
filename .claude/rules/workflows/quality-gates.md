@@ -44,6 +44,16 @@ tox -e coverage                        # Combine coverage + generate reports
 tox -e integration -- -k test_name     # Pass pytest args after --
 ```
 
+## Test Integrity — HARD STOP Rules
+
+See `.claude/rules/patterns/testing-patterns.md` "Test Integrity" section for the full policy. Summary:
+
+- **NEVER** use `--ignore`, `-k "not ..."`, `--deselect` to skip failing tests
+- **NEVER** rationalize failures as "pre-existing" or "infrastructure issue"
+- If tests need Docker → start Docker (`./run_all_tests.sh` or `make test-stack-up`)
+- If infrastructure is broken → STOP and report to user, do NOT skip tests
+- Test results persist as JSON in `test-results/` — use them instead of re-running
+
 ## Coverage
 
 Coverage is collected per-suite and combined automatically:

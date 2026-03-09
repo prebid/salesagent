@@ -39,23 +39,44 @@ TeamCreate: team_name="<descriptive-name>", description="<what the team does>"
 Analyze the user's prompt and break it into parallel work items. For beads
 task IDs, run `bd show <id>` to read descriptions and verify they're unblocked.
 
+**Grouping strategy:**
+- Group tasks that touch the **same file** into one executor (avoids merge conflicts)
+- Each executor gets one file or a small set of non-overlapping files
+- The allowlist (`obligation_test_quality_allowlist.json`) is a shared resource —
+  coordinate updates or do a reconciliation pass after all executors finish
+
+**Formula selection:**
+- If the user specifies a formula, use it
+- Otherwise, check each task with `bd show <id>`:
+  - Well-defined tasks (test rewrites, allowlist fixes, mechanical changes) → `task-single.yaml`
+  - Tasks needing research or TDD (new features, refactors) → `task-execute.yaml`
+  - Bugs → `bug-triage.yaml`
+
 Each work item becomes:
 - A task in the team's task list (via TaskCreate)
 - An executor teammate spawned to handle it (via Task with team_name)
 
 ### Step 4: Spawn executor teammates
-For each work item, spawn an executor:
+For each work item, spawn an executor with an **explicit formula and cook command**:
 ```
 Task:
   team_name: "<team-name>"
-  name: "executor-<short-id>"
+  name: "executor-<short-label>"
   subagent_type: "executor"
   prompt: |
-    Execute beads task salesagent-<id>.
+    Execute these beads tasks using <formula> formula:
+    salesagent-<id1> salesagent-<id2> salesagent-<id3>
 
-    Run `bd show <id>` for full description and acceptance criteria.
-    Follow the executor protocol: setup DB, cook molecule, walk atoms,
-    quality gates, commit.
+    Cook:
+    python3 .claude/scripts/cook_formula.py \
+      --formula .claude/formulas/<formula>.yaml \
+      --var "TASK_IDS=salesagent-<id1> salesagent-<id2> salesagent-<id3>" \
+      --epic-title "<descriptive title>"
+
+    Then walk atoms: bd ready → bd show <id> → execute → bd close <id> → repeat
+
+    Your files: <list of files this executor owns>
+    Shared resource: <any shared files like allowlists>
 ```
 
 **NOTE: `isolation: "worktree"` is a no-op for team agents.** All executors
@@ -70,9 +91,15 @@ non-overlapping files to avoid conflicts.
 
 ### Step 6: Verify and commit
 After all executors complete:
-1. Run `make quality` on the combined result
-2. Squash or organize commits if needed
-3. Push if the user requests it
+1. Run `./run_all_tests.sh` on the combined result (NOT just `make quality` —
+   the full suite including e2e and ui is mandatory)
+2. Review JSON results in `test-results/<ddmmyy_HHmm>/` if terminal output is lost
+3. Squash or organize commits if needed
+4. Push if the user requests it
+
+**Test Integrity — ZERO TOLERANCE**: If any test fails in the combined result,
+do NOT skip it or rationalize it. See CLAUDE.md "Test Integrity Policy".
+Every failure must be fixed or reported as a blocker.
 
 ## User's Request
 

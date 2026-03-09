@@ -55,8 +55,54 @@ def test_something():
 - Max 10 mocks per test file (pre-commit enforces)
 - AdCP compliance test for all client-facing models
 - Test YOUR code, not Python built-ins
-- Never skip tests - fix the issue (`skip_ci` for rare exceptions only)
 - Roundtrip test required for any operation using `apply_testing_hooks()`
+
+## Test Integrity — ZERO TOLERANCE
+
+**HARD STOP rules. No exceptions. No rationalizations.**
+
+### Prohibited Actions
+- **`--ignore`** — NEVER use to exclude test files
+- **`-k "not test_name"`** — NEVER use to deselect failing tests
+- **`--deselect`** — NEVER use to skip tests
+- **`pytest.mark.skip` / `pytest.mark.xfail`** — NEVER add to bypass failures (stubs for unimplemented work are the only exception, managed by `/surface`)
+
+### Prohibited Rationalizations
+When a test fails, you must NOT say any of the following and continue:
+- "This is a pre-existing failure"
+- "This test needs a running server" (start the server)
+- "This is an e2e test miscategorized in integration" (run it where it lives)
+- "This was deselected in the full run" (irrelevant — it exists, it must pass)
+- "This is an infrastructure issue" (fix the infrastructure or report it as a blocker)
+- "Not a regression from our work" (irrelevant — all tests must pass)
+
+### Required Action When Tests Fail
+1. **Infrastructure missing?** → Start it. Use `./run_all_tests.sh` (starts everything), or `scripts/run-test.sh` (starts DB), or `make test-stack-up` (manual Docker lifecycle).
+2. **Test bug?** → Fix the test (only if the test itself is wrong, not to match broken code).
+3. **Code bug?** → Fix the code.
+4. **Cannot fix?** → STOP. Report the failure to the user as a blocker. Do NOT skip it and report success.
+
+### Test Infrastructure Decision Tree
+
+| What you need | Command | What it starts |
+|---------------|---------|----------------|
+| Unit tests only | `make quality` | Nothing |
+| One integration test | `scripts/run-test.sh tests/integration/test_foo.py -x` | Bare Postgres via agent-db |
+| DB for worktree agent | `eval $(.claude/skills/agent-db/agent-db.sh up)` | Bare Postgres (unique port) |
+| **Full suite (all 5 envs)** | **`./run_all_tests.sh`** | **Full Docker stack (auto-teardown)** |
+| Full suite, targeted | `./run_all_tests.sh ci tests/path -k name` | Full Docker stack |
+| Quick suite (no e2e/ui) | `./run_all_tests.sh quick` | Nothing (needs DATABASE_URL) |
+
+**Port conflicts are impossible** — both `test-stack.sh` and `agent-db.sh` scan for free ports in 50000-60000.
+
+**When in doubt, use `./run_all_tests.sh`.** It starts Docker, runs all suites, saves JSON results, and tears down.
+
+### Test Results Are Persistent
+
+Results are saved as JSON in `test-results/<ddmmyy_HHmm>/`. Always check these after a run — background processes may crash and lose terminal output, but the JSON files persist. Use them to:
+- Verify test counts match expectations
+- Review failures without re-running
+- Compare before/after counts
 
 ## Testing Workflow (Before Commit)
 ```bash

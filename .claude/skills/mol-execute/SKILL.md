@@ -2,12 +2,10 @@
 name: mol-execute
 description: >
   Execute beads tasks through the full lifecycle using molecular workflow.
-  Auto-selects formula based on task type: bug tasks use bug-triage (reproduce
-  → trace similar → review → triage → fix → e2e verify → commit), all other
-  tasks use task-execute (research → review → triage → write-test → implement
-  → commit). Both formulas enforce test-first: bugs require a failing
-  reproduction test before fix, tasks require a failing regression test before
-  implementation. All findings stored in beads (not filesystem).
+  Auto-selects formula based on task type: bug tasks use bug-triage, tasks
+  needing research/design use task-execute, well-defined tasks use task-single.
+  All formulas enforce quality gates and test integrity. Findings stored in
+  beads (not filesystem).
 args: <task-id-1> [task-id-2] [task-id-3] ...
 ---
 
@@ -28,20 +26,33 @@ Multiple tasks execute sequentially.
 
 ## Formula Selection
 
-**Auto-select based on task type** — run `bd show <id>` to check the type:
+**Auto-select based on task type** — run `bd show <id>` to check the type and
+description:
 
-| Task Type | Formula | Atoms |
-|-----------|---------|-------|
-| `bug` | `bug-triage.yaml` | reproduce → trace-similar → review → triage → fix → e2e-verify → commit |
-| All others | `task-execute.yaml` | research → review → triage → **write-test** → implement → commit |
+| Task Type | Formula | Atoms per task | When to use |
+|-----------|---------|---------------|-------------|
+| `bug` | `bug-triage.yaml` | 7 | Bugs that need reproduction and root cause analysis |
+| Complex tasks | `task-execute.yaml` | 7 | Tasks needing research, architect review, or TDD (new features, refactors with unknowns) |
+| Well-defined tasks | `task-single.yaml` | 3 | Tasks with clear descriptions, known code paths, no design decisions (test rewrites, allowlist fixes, mechanical changes) |
 
-**Test-first is enforced in both formulas:**
+**How to choose between task-execute and task-single:**
+- Does the task need **research** (unfamiliar code, unknown APIs)? → `task-execute`
+- Does the task need **architect review** (multiple valid approaches)? → `task-execute`
+- Does the task need **TDD red-green** (new production code)? → `task-execute`
+- Is the task **self-contained** (description says exactly what to do)? → `task-single`
+- Is the task **test-only** (rewriting tests, not production code)? → `task-single`
+- Is the task **mechanical** (remove from allowlist, update imports)? → `task-single`
+
+**Test-first is enforced in task-execute and bug-triage:**
 - Bugs: The `reproduce` atom requires a failing test before the `fix` atom proceeds
-- Tasks: The `write-test` atom requires a failing regression test before `implement` proceeds
+- Tasks (task-execute): The `write-test` atom requires a failing regression test before `implement` proceeds
 - Refactors: `write-test` guards existing behavior with edge case tests before changes begin
 
+**task-single skips TDD** because the work IS the test — there's no separate
+production code to gate on. The execute atom runs `make quality` as the gate.
+
 If a batch contains mixed types, cook separate molecules per formula — don't
-mix bug and non-bug tasks in the same epic.
+mix types in the same epic.
 
 ## Protocol
 
@@ -55,7 +66,15 @@ python3 .claude/scripts/cook_formula.py \
   --epic-title "Bug triage: {all_args}"
 ```
 
-**For tasks/features** (default):
+**For well-defined tasks** (test rewrites, allowlist fixes, mechanical changes):
+```bash
+python3 .claude/scripts/cook_formula.py \
+  --formula .claude/formulas/task-single.yaml \
+  --var "TASK_IDS={all_args}" \
+  --epic-title "Execute: {all_args}"
+```
+
+**For complex tasks** (needs research, design, or TDD):
 ```bash
 python3 .claude/scripts/cook_formula.py \
   --formula .claude/formulas/task-execute.yaml \
@@ -149,6 +168,19 @@ and rethink. Never adjust tests to fit code without documented justification.
 - Don't report "done" if the regression test never produced a FAILED output
 - Don't substitute `make quality` for `scripts/run-test.sh` when iterating — use the targeted runner
 - Don't substitute `scripts/run-test.sh` for `./run_all_tests.sh` in the finalize atom — the full suite is mandatory
+
+## Test Integrity — ZERO TOLERANCE
+
+**Read and follow CLAUDE.md "Test Integrity Policy" and `.claude/rules/patterns/testing-patterns.md` "Test Integrity" sections.**
+
+These rules apply to EVERY atom, not just finalize:
+
+- **NEVER** use `--ignore`, `-k "not ..."`, `--deselect` to skip failing tests
+- **NEVER** rationalize failures as "pre-existing", "infrastructure issue", "misplaced test", "needs a running server", or "was deselected in full run"
+- **NEVER** report success while skipping tests — this is the #1 failure mode
+- If a test needs Docker → `./run_all_tests.sh` starts everything automatically
+- If infrastructure is broken → STOP and report as blocker, do NOT skip
+- Test results persist as JSON in `test-results/<ddmmyy_HHmm>/` — use these to review results instead of re-running
 
 ## See Also
 

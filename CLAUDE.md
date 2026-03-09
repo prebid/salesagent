@@ -421,8 +421,35 @@ def test_something():
 - Max 10 mocks per test file (pre-commit enforces)
 - AdCP compliance test for all client-facing models
 - Test YOUR code, not Python built-ins
-- Never skip tests - fix the issue (`skip_ci` for rare exceptions only)
 - Roundtrip test required for any operation using `apply_testing_hooks()`
+
+### Test Integrity Policy — ZERO TOLERANCE
+
+**This is non-negotiable. Every rule below is a HARD STOP.**
+
+1. **NEVER skip, ignore, deselect, or exclude failing tests.** Do not use `--ignore`, `-k "not test_name"`, `--deselect`, `pytest.mark.skip`, or `pytest.mark.xfail` to work around failures.
+2. **NEVER rationalize failures.** Do not classify failures as "pre-existing", "infrastructure issue", "misplaced test", "needs a running server", or "was deselected in the full run". A failing test is a failing test — fix it or report it to the user as a blocker.
+3. **Start the right infrastructure.** If a test needs Docker (integration, e2e, ui), start Docker. The tooling exists — use it. See the infrastructure decision tree below.
+4. **If infrastructure is broken, STOP.** Do not skip tests and report success. Tell the user the infrastructure is broken and either fix it or ask the user to fix it.
+5. **Test results are saved as JSON** in `test-results/<ddmmyy_HHmm>/`. Review these instead of re-running the full suite. Background processes may crash and lose output — the JSON reports are the resilient record.
+
+### Test Infrastructure Decision Tree
+
+**Choose the right tool based on what you're testing:**
+
+| What you need | Command | What it starts |
+|---------------|---------|----------------|
+| Unit tests only | `make quality` | Nothing (no Docker) |
+| One integration test (iterating) | `scripts/run-test.sh tests/integration/test_foo.py -x` | Bare Postgres via agent-db (persists) |
+| Integration DB for a worktree agent | `eval $(.claude/skills/agent-db/agent-db.sh up)` | Bare Postgres (unique port per worktree) |
+| Full suite (all 5 envs) | `./run_all_tests.sh` | Full Docker stack (Postgres + app + nginx), auto-teardown |
+| Full suite, targeted | `./run_all_tests.sh ci tests/integration/test_file.py -k test_name` | Full Docker stack |
+| Quick suite (no e2e/ui) | `./run_all_tests.sh quick` | Nothing (needs pre-existing DATABASE_URL) |
+| Manual Docker lifecycle | `make test-stack-up` → `source .test-stack.env && tox -p` → `make test-stack-down` | Full Docker stack (stays up between runs) |
+
+**Port conflicts are not possible.** Both `test-stack.sh` and `agent-db.sh` scan for free ports in the 50000-60000 range. Multiple instances can run simultaneously.
+
+**When in doubt, use `./run_all_tests.sh`.** It handles everything: Docker up, all suites, Docker down, JSON reports saved.
 
 ### Testing Workflow (Before Commit)
 ```bash
