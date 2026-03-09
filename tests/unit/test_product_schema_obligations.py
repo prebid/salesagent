@@ -56,6 +56,7 @@ from src.core.schemas import (
 from src.core.schemas import (
     PricingOption as SchemaPricingOption,
 )
+from tests.harness.product_unit import ProductEnv
 from tests.helpers.adcp_factories import (
     create_test_db_product,
     create_test_product,
@@ -722,25 +723,42 @@ class TestFilteredDiscoverySchema:
         assert "display_300x250".startswith(standard_prefixes)
         assert not "custom_widget_1".startswith(standard_prefixes)
 
-    def test_filter_countries_intersection(self):
+    async def test_filter_countries_intersection(self):
         """countries filter uses intersection matching.
 
         Covers: UC-001-ALT-FILTERED-DISCOVERY-08
         """
-        product_countries = {"US", "MX"}
-        filter_countries = {"US", "CA"}
-        assert bool(product_countries & filter_countries)
+        with ProductEnv() as env:
+            env.add_product(product_id="prod_us_mx", countries=["US", "MX"])
+            env.add_product(product_id="prod_de", countries=["DE"])
 
-    def test_filter_countries_no_restriction(self):
+            response = await env.call_impl(
+                brief="test",
+                filters={"countries": ["US", "CA"]},
+            )
+
+            product_ids = [p.product_id for p in response.products]
+            assert "prod_us_mx" in product_ids, "US overlaps — product should match"
+            assert "prod_de" not in product_ids, "DE does not overlap — product excluded"
+
+    async def test_filter_countries_no_restriction(self):
         """Product with no country restriction matches any filter.
 
         Covers: UC-001-ALT-FILTERED-DISCOVERY-09
         """
-        product_countries = None
-        filter_countries = {"US"}
-        # No restriction means matches everything
-        matches = product_countries is None or bool(set(product_countries) & filter_countries)
-        assert matches
+        with ProductEnv() as env:
+            # Product with no countries = available everywhere
+            env.add_product(product_id="prod_global")
+            env.add_product(product_id="prod_de_only", countries=["DE"])
+
+            response = await env.call_impl(
+                brief="test",
+                filters={"countries": ["US"]},
+            )
+
+            product_ids = [p.product_id for p in response.products]
+            assert "prod_global" in product_ids, "No restriction means matches all countries"
+            assert "prod_de_only" not in product_ids, "DE-only excluded when filtering for US"
 
     def test_filter_regions_intersection(self):
         """regions filter uses ISO 3166-2 intersection.
@@ -763,14 +781,23 @@ class TestFilteredDiscoverySchema:
         )
         assert match
 
-    def test_filter_channels_intersection(self):
+    async def test_filter_channels_intersection(self):
         """channels filter uses intersection matching.
 
         Covers: UC-001-ALT-FILTERED-DISCOVERY-12
         """
-        product_channels = {"display"}
-        filter_channels = {"display", "video"}
-        assert bool(product_channels & filter_channels)
+        with ProductEnv() as env:
+            env.add_product(product_id="prod_display", channels=["display"])
+            env.add_product(product_id="prod_radio", channels=["radio"])
+
+            response = await env.call_impl(
+                brief="test",
+                filters={"channels": ["display", "olv"]},
+            )
+
+            product_ids = [p.product_id for p in response.products]
+            assert "prod_display" in product_ids, "display overlaps — product should match"
+            assert "prod_radio" not in product_ids, "radio does not overlap — product excluded"
 
     def test_filter_budget_range(self):
         """budget_range filter schema accepted.
