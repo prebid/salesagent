@@ -84,13 +84,14 @@ class TestInventoryAdapterRestrictions:
         mock_request = MagicMock()
         mock_request.get_total_budget.return_value = 5000.0
 
-        # _validate_media_buy_request should NOT raise — inventory validation is skipped
-        adapter._validate_media_buy_request(
+        # validate_media_buy_request should return no errors — inventory validation is skipped
+        errors = adapter.validate_media_buy_request(
             request=mock_request,
             packages=[package],
             start_time=start_time,
             end_time=end_time,
         )
+        assert errors == [], f"Expected no validation errors, got: {errors}"
 
     def test_inventory_browser_checks_adapter_type(self):
         """Test that inventory_browser function checks adapter type before proceeding."""

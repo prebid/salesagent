@@ -1290,6 +1290,8 @@ class TestCreateMediaBuyAdapterInteraction:
         mock_adapter.manual_approval_required = False
         mock_adapter.manual_approval_operations = []
         mock_adapter.__class__.__name__ = "MockAdapter"
+        mock_adapter.get_supported_pricing_models.return_value = {"cpm", "vcpm", "cpc", "flat_rate"}
+        mock_adapter.validate_media_buy_request.return_value = []
 
         # Build mock product catalog matching the request's prod_1
         mock_delivery_type = MagicMock()

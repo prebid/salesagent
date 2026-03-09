@@ -379,3 +379,79 @@ These verify ListCreativeFormatsRequest/Response roundtrip against adcp 3.6.0 sc
 **Then** format_id is an object with `agent_url` (URL) and `id` (string)
 **And** not a bare string identifier
 **Priority** P1 -- schema structure
+
+---
+
+### Extension C: Error Propagation in Format Discovery
+
+Source: [Product decision: error-propagation-in-format-discovery.md](../design/error-propagation-in-format-discovery.md)
+
+These obligations derive from a product decision (not from the AdCP schema).
+The AdCP `list-creative-formats-response.json` provides an optional `errors[]`
+array; these scenarios mandate its use for infrastructure failures.
+
+#### Scenario: Partial agent failure returns formats from healthy agents plus errors
+**Obligation ID** UC-005-EXT-C-01
+**Layer** behavioral
+
+**Given** the tenant has two registered creative agents
+**And** one agent is healthy and returns formats
+**And** the other agent is unreachable (connection error)
+**When** the Buyer calls `list_creative_formats`
+**Then** the response contains formats from the healthy agent
+**And** the response contains an `errors[]` entry for the failed agent
+**And** the error entry follows AdCP `error.json` schema (code, message at minimum)
+**Business Rule** FD-ERR-01: partial failure returns partial results + errors
+**Decision** [error-propagation-in-format-discovery.md](../design/error-propagation-in-format-discovery.md)
+**Priority** P1 -- error visibility
+
+#### Scenario: All agents fail returns empty formats plus errors
+**Obligation ID** UC-005-EXT-C-02
+**Layer** behavioral
+
+**Given** the tenant has registered creative agents
+**And** all agents are unreachable
+**When** the Buyer calls `list_creative_formats`
+**Then** the response contains an empty `formats` array
+**And** the response contains `errors[]` with one entry per failed agent
+**And** each error entry includes at minimum `code` and `message`
+**Business Rule** FD-ERR-02: total agent failure is distinguishable from empty catalog
+**Decision** [error-propagation-in-format-discovery.md](../design/error-propagation-in-format-discovery.md)
+**Priority** P1 -- error visibility
+
+#### Scenario: Registry creation failure returns empty formats plus errors
+**Obligation ID** UC-005-EXT-C-03
+**Layer** behavioral
+
+**Given** the creative agent registry cannot be initialized (infrastructure failure)
+**When** the Buyer calls `list_creative_formats`
+**Then** the response contains an empty `formats` array
+**And** the response contains `errors[]` describing the infrastructure failure
+**And** the response is NOT a bare empty list (it must include error context)
+**Business Rule** FD-ERR-03: infrastructure failures surfaced, not swallowed
+**Decision** [error-propagation-in-format-discovery.md](../design/error-propagation-in-format-discovery.md)
+**Priority** P1 -- error visibility
+
+#### Scenario: Error entries follow AdCP error schema
+**Obligation ID** UC-005-EXT-C-04
+**Layer** schema
+
+**Given** a `list_creative_formats` response with errors
+**When** the Buyer inspects the `errors[]` array
+**Then** each error has `code` (string) and `message` (string) at minimum
+**And** the structure conforms to `error.json` schema
+**Business Rule** FD-ERR-04
+**Decision** [error-propagation-in-format-discovery.md](../design/error-propagation-in-format-discovery.md)
+**Priority** P1 -- schema compliance
+
+#### Scenario: Successful discovery has no errors
+**Obligation ID** UC-005-EXT-C-05
+**Layer** behavioral
+
+**Given** all registered creative agents are healthy
+**When** the Buyer calls `list_creative_formats`
+**Then** the response contains formats from all agents
+**And** the `errors` field is absent or an empty array
+**Business Rule** FD-ERR-05: no false positives
+**Decision** [error-propagation-in-format-discovery.md](../design/error-propagation-in-format-discovery.md)
+**Priority** P2 -- negative case

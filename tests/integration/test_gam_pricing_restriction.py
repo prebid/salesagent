@@ -6,6 +6,22 @@ NOTE: These tests connect to external creative agents (creative.adcontextprotoco
 for format lookup. If these services are unavailable (HTTP 5xx, connection errors),
 tests will skip rather than fail, since external service availability is outside
 our control.
+
+# --- Test Source-of-Truth Audit ---
+# Audited: 2026-03-08
+#
+# SPEC_BACKED (4/4 tests):
+#   test_gam_rejects_cpcv_pricing_model
+#     — AdCP spec: INVALID_PRICING_MODEL error code; CPCV not in GAM's
+#       PricingCompatibility.ADCP_TO_GAM_COST_TYPE (GAM API: ForecastService.CostType)
+#   test_gam_accepts_cpm_pricing_model
+#     — AdCP spec: CPM is a defined pricing model; GAM supports CPM natively
+#   test_gam_rejects_cpp_from_multi_pricing_product
+#     — AdCP spec: INVALID_PRICING_MODEL error code; CPP not in GAM's
+#       PricingCompatibility.ADCP_TO_GAM_COST_TYPE
+#   test_gam_accepts_cpm_from_multi_pricing_product
+#     — AdCP spec: CPM is a defined pricing model; GAM supports CPM natively
+# ---
 """
 
 from datetime import UTC, datetime, timedelta
@@ -282,13 +298,6 @@ def setup_gam_tenant_with_non_cpm_product(integration_db):
 
 
 @pytest.mark.requires_db
-@pytest.mark.xfail(
-    reason="dry_run=True now skips adapter call entirely (returns simulated success). "
-    "GAM pricing rejection only runs inside the adapter, which is no longer invoked. "
-    "Adapter pricing validation is unit-tested in test_gam_pricing_compatibility.py. "
-    "TODO: move adapter-level pricing validation to pre-adapter business logic.",
-    strict=True,
-)
 async def test_gam_rejects_cpcv_pricing_model(setup_gam_tenant_with_non_cpm_product):
     """Test that GAM adapter rejects CPCV pricing model with clear error."""
     start_time, end_time = _get_future_date_range()
@@ -377,13 +386,6 @@ async def test_gam_accepts_cpm_pricing_model(setup_gam_tenant_with_non_cpm_produ
 
 
 @pytest.mark.requires_db
-@pytest.mark.xfail(
-    reason="dry_run=True now skips adapter call entirely (returns simulated success). "
-    "GAM pricing rejection only runs inside the adapter, which is no longer invoked. "
-    "Adapter pricing validation is unit-tested in test_gam_pricing_compatibility.py. "
-    "TODO: move adapter-level pricing validation to pre-adapter business logic.",
-    strict=True,
-)
 async def test_gam_rejects_cpp_from_multi_pricing_product(setup_gam_tenant_with_non_cpm_product):
     """Test that GAM adapter rejects CPP when buyer chooses it from multi-pricing product."""
     from src.core.tools.media_buy_create import _create_media_buy_impl
