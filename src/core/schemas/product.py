@@ -17,7 +17,7 @@ from adcp.types import PromotedProducts as LibraryPromotedProducts
 from pydantic import ConfigDict, Field, model_validator
 
 from src.core.config import get_pydantic_extra_mode
-from src.core.schemas import (
+from src.core.schemas._base import (
     FormatId,
     NestedModelSerializerMixin,
     SalesAgentBaseModel,

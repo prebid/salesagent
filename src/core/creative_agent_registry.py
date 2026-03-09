@@ -27,10 +27,24 @@ from adcp import ADCPMultiAgentClient, AgentConfig, ListCreativeFormatsRequest, 
 from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPError, ADCPTimeoutError
 from adcp.types import AssetContentType as AssetType
 from adcp.types import FormatCategory as FormatType
+from adcp.types.generated_poc.core.error import Error as AdCPResponseError
 from adcp.types.generated_poc.core.format import Assets
 from yarl import URL
 
 from src.core.schemas import Format, FormatId, url
+
+
+@dataclass
+class FormatFetchResult:
+    """Result from list_all_formats_with_errors() — formats + per-agent errors.
+
+    Decision: docs/design/error-propagation-in-format-discovery.md
+    """
+
+    formats: list[Format]
+    errors: list[AdCPResponseError]
+
+
 from src.core.utils.mcp_client import create_mcp_client  # Keep for custom tools (preview, build)
 
 
@@ -456,33 +470,59 @@ class CreativeAgentRegistry:
     ) -> list[Format]:
         """List all formats from all registered agents.
 
-        Args:
-            tenant_id: Optional tenant ID for tenant-specific agents
-            force_refresh: Skip cache and fetch fresh data
-            max_width: Maximum width in pixels (inclusive)
-            max_height: Maximum height in pixels (inclusive)
-            min_width: Minimum width in pixels (inclusive)
-            min_height: Minimum height in pixels (inclusive)
-            is_responsive: Filter for responsive formats
-            asset_types: Filter by asset types
-            name_search: Search by name
-            type_filter: Filter by format type (display, video, audio)
+        Backward-compatible wrapper — returns only formats, discards errors.
+        For error visibility, use list_all_formats_with_errors() instead.
+        """
+        result = await self.list_all_formats_with_errors(
+            tenant_id=tenant_id,
+            force_refresh=force_refresh,
+            max_width=max_width,
+            max_height=max_height,
+            min_width=min_width,
+            min_height=min_height,
+            is_responsive=is_responsive,
+            asset_types=asset_types,
+            name_search=name_search,
+            type_filter=type_filter,
+        )
+        return result.formats
 
-        Returns:
-            List of all Format objects across all agents
+    async def list_all_formats_with_errors(
+        self,
+        tenant_id: str | None = None,
+        force_refresh: bool = False,
+        max_width: int | None = None,
+        max_height: int | None = None,
+        min_width: int | None = None,
+        min_height: int | None = None,
+        is_responsive: bool | None = None,
+        asset_types: list[str] | None = None,
+        name_search: str | None = None,
+        type_filter: str | None = None,
+    ) -> FormatFetchResult:
+        """List all formats from all registered agents, with per-agent error reporting.
+
+        Decision: docs/design/error-propagation-in-format-discovery.md
+
+        Returns FormatFetchResult with:
+        - formats: Formats from all healthy agents
+        - errors: One AdCP error per failed agent (code + message)
+
+        When all agents succeed, errors is empty.
+        When some agents fail, returns partial results + errors for failed agents.
         """
         import logging
 
         logger = logging.getLogger(__name__)
 
         # In testing mode (ADCP_TESTING=true), return mock formats to avoid external HTTP calls
-        # This prevents timeouts in CI when external creative agents are unreachable
         if os.environ.get("ADCP_TESTING", "").lower() == "true":
             logger.info("list_all_formats: Using mock formats (ADCP_TESTING=true)")
-            return _get_mock_formats()
+            return FormatFetchResult(formats=_get_mock_formats(), errors=[])
 
         agents = self._get_tenant_agents(tenant_id)
-        all_formats = []
+        all_formats: list[Format] = []
+        errors: list[AdCPResponseError] = []
 
         logger.info(f"list_all_formats: Found {len(agents)} agents for tenant {tenant_id}")
 
@@ -534,12 +574,17 @@ class CreativeAgentRegistry:
                 logger.info(f"list_all_formats: Got {len(formats)} formats from {agent.agent_url}")
                 all_formats.extend(formats)
             except Exception as e:
-                # Log error but continue with other agents
                 logger.error(f"Failed to fetch formats from {agent.agent_url}: {e}", exc_info=True)
+                errors.append(
+                    AdCPResponseError(
+                        code="AGENT_UNREACHABLE",
+                        message=f"Creative agent at {agent.agent_url} is unreachable: {e}",
+                    )
+                )
                 continue
 
-        logger.info(f"list_all_formats: Returning {len(all_formats)} total formats")
-        return all_formats
+        logger.info(f"list_all_formats: Returning {len(all_formats)} formats, {len(errors)} errors")
+        return FormatFetchResult(formats=all_formats, errors=errors)
 
     async def search_formats(
         self, query: str, tenant_id: str | None = None, type_filter: str | None = None

@@ -6,11 +6,37 @@ functionality for media buy creation.
 MIGRATED: Uses new pricing_options model instead of legacy Product pricing fields.
 Product.min_spend → PricingOption.min_spend_per_package
 
-📊 BUDGET FORMAT: AdCP v2.2.0 Migration (2025-10-27)
+BUDGET FORMAT: AdCP v2.2.0 Migration (2025-10-27)
 All tests in this file use float budget format per AdCP v2.2.0 spec:
 - Package.budget: float (e.g., 1000.0) - NOT Budget object
 - Currency is determined by PricingOption, not Package
 - Excessive budgets trigger adapter errors (raises ToolError)
+
+# --- Test Source-of-Truth Audit ---
+# Audited: 2026-03-08
+#
+# SPEC_BACKED (4/7 tests):
+#   test_currency_minimum_spend_enforced
+#     — AdCP spec: BUDGET_INSUFFICIENT error code for budget below minimum
+#   test_product_override_enforced
+#     — AdCP spec: BUDGET_INSUFFICIENT + product-level min_spend_per_package
+#   test_minimum_spend_met_success
+#     — AdCP spec: valid budget accepted (no BUDGET_INSUFFICIENT)
+#   test_different_currency_different_minimum
+#     — AdCP spec: BUDGET_INSUFFICIENT per-currency validation
+#
+# DECISION_BACKED (2/7 tests):
+#   test_lower_override_allows_smaller_spend
+#     — Product decision: min_spend_per_package overrides currency limit
+#       (see PricingOption.min_spend_per_package field, media_buy_create.py:1725)
+#   test_no_minimum_when_not_set
+#     — Product decision: null min_package_budget means no minimum enforced
+#
+# CHARACTERIZATION (1/7 tests):
+#   test_unsupported_currency_rejected
+#     — Locks mock adapter budget limit (>$1M → reject). Error codes are
+#       mock-adapter-internal (PERCENTAGE_UNITS_BOUGHT_TOO_HIGH), not AdCP spec.
+# ---
 """
 
 from datetime import UTC, datetime, timedelta
@@ -438,6 +464,7 @@ class TestMinimumSpendValidation:
         assert response.media_buy_id is not None
         assert response.buyer_ref == "minspend_test_4"
 
+    # Characterization: locks mock adapter budget limit behavior (no AdCP spec backing)
     async def test_unsupported_currency_rejected(self, setup_test_data):
         """Test that excessively high budgets are rejected by pre-adapter validation."""
         identity = ResolvedIdentity(

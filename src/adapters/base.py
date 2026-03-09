@@ -250,7 +250,7 @@ class AdServerAdapter(ABC):
         """
         return TargetingCapabilities(geo_countries=True)
 
-    def validate_before_creation(
+    def validate_media_buy_request(
         self,
         request: CreateMediaBuyRequest,
         packages: list[MediaPackage],
@@ -258,10 +258,11 @@ class AdServerAdapter(ABC):
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
     ) -> list[str]:
-        """Pre-adapter validation that runs regardless of dry_run mode.
+        """Pre-validate a media buy request without creating anything.
 
-        Checks constraints that would be caught by the adapter's create_media_buy
-        but need to run even when the adapter call is skipped (dry_run=True).
+        Called before adapter execution (including dry_run) to catch
+        adapter-specific constraint violations early. Override in
+        subclasses to add adapter-specific validation.
 
         Default implementation validates pricing model compatibility.
         Subclasses can override to add adapter-specific checks (e.g., impressions limits).

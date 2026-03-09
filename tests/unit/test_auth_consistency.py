@@ -257,9 +257,11 @@ class TestDiscoveryEndpointsAnonymousAccess:
             mock_reg = MagicMock()
 
             async def mock_list_formats(**kwargs):
-                return []
+                from src.core.creative_agent_registry import FormatFetchResult
 
-            mock_reg.list_all_formats = mock_list_formats
+                return FormatFetchResult(formats=[], errors=[])
+
+            mock_reg.list_all_formats_with_errors = mock_list_formats
             mock_registry.return_value = mock_reg
 
             req = MagicMock()
@@ -273,6 +275,7 @@ class TestDiscoveryEndpointsAnonymousAccess:
             req.min_height = None
             req.max_height = None
             req.context = None
+            req.pagination = None
 
             try:
                 result = _list_creative_formats_impl(req, identity)
@@ -369,13 +372,18 @@ class TestDiscoveryEndpointsInvalidAuth:
             mock_reg = MagicMock()
 
             async def mock_list_formats(**kwargs):
-                return []
+                from src.core.creative_agent_registry import FormatFetchResult
 
-            mock_reg.list_all_formats = mock_list_formats
+                return FormatFetchResult(formats=[], errors=[])
+
+            mock_reg.list_all_formats_with_errors = mock_list_formats
             mock_registry.return_value = mock_reg
 
             try:
-                _list_creative_formats_impl(None, identity)
+                from src.core.schemas import ListCreativeFormatsRequest
+
+                req = ListCreativeFormatsRequest()
+                _list_creative_formats_impl(req, identity)
             except (ToolError, AdCPError):
                 pass  # Business logic errors OK
 

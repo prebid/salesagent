@@ -6,6 +6,22 @@ NOTE: These tests connect to external creative agents (creative.adcontextprotoco
 for format lookup. If these services are unavailable (HTTP 5xx, connection errors),
 tests will skip rather than fail, since external service availability is outside
 our control.
+
+# --- Test Source-of-Truth Audit ---
+# Audited: 2026-03-08
+#
+# SPEC_BACKED (4/4 tests):
+#   test_gam_rejects_cpcv_pricing_model
+#     — AdCP spec: INVALID_PRICING_MODEL error code; CPCV not in GAM's
+#       PricingCompatibility.ADCP_TO_GAM_COST_TYPE (GAM API: ForecastService.CostType)
+#   test_gam_accepts_cpm_pricing_model
+#     — AdCP spec: CPM is a defined pricing model; GAM supports CPM natively
+#   test_gam_rejects_cpp_from_multi_pricing_product
+#     — AdCP spec: INVALID_PRICING_MODEL error code; CPP not in GAM's
+#       PricingCompatibility.ADCP_TO_GAM_COST_TYPE
+#   test_gam_accepts_cpm_from_multi_pricing_product
+#     — AdCP spec: CPM is a defined pricing model; GAM supports CPM natively
+# ---
 """
 
 from datetime import UTC, datetime, timedelta

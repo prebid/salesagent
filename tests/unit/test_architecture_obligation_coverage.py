@@ -6,7 +6,8 @@ must either:
 2. Be listed in the KNOWN_UNCOVERED allowlist (JSON file)
 
 The guard scans:
-- Integration tests: tests/integration/test_*_v3.py
+- Integration tests: tests/integration/test_*_v3.py + behavioral files
+- Integration V2 tests: tests/integration_v2/test_*.py
 - Unit entity tests: tests/unit/test_media_buy.py, test_creative.py, test_delivery.py
 
 The allowlist can only SHRINK — adding new uncovered obligations fails CI.
@@ -38,6 +39,16 @@ _UNIT_ENTITY_FILES = [
     "test_property_list_schema.py",
     "test_quiet_failure_propagation.py",
     "test_get_products_impl_coverage.py",
+    "test_creative_formats_behavioral.py",
+]
+
+# Integration behavioral test files (non-v3) that carry canonical Covers: tags
+_INTEGRATION_BEHAVIORAL_FILES = [
+    "test_creative_repository.py",
+    "test_creative_formats_behavioral.py",
+    "test_creative_sync_behavioral.py",
+    "test_creative_sync_data_preservation.py",
+    "test_creative_sync_transport.py",
 ]
 
 # Obligation ID pattern: PREFIX-SECTION-SEQ (e.g., UC-002-MAIN-01, BR-RULE-006-01)
@@ -86,15 +97,21 @@ def _get_covered_obligations() -> set[str]:
 
     def _scan_file(path: Path) -> None:
         for line in path.read_text().splitlines():
-            m = re.match(r"\s+Covers:\s+([\w-]+)", line)
+            m = re.search(r"Covers:\s+([\w-]+)", line)
             if m and _OBLIGATION_ID_RE.match(m.group(1)):
                 covered.add(m.group(1))
 
-    # Integration tests
+    # Integration tests (v3 behavioral files with formal obligation IDs)
     for tf in INTEGRATION_DIR.glob("test_*_v3.py"):
         _scan_file(tf)
 
-    # Integration V2 tests
+    # Integration behavioral tests (non-v3 files with canonical Covers: tags)
+    for name in _INTEGRATION_BEHAVIORAL_FILES:
+        tf = INTEGRATION_DIR / name
+        if tf.exists():
+            _scan_file(tf)
+
+    # Integration V2 tests (all files use formal obligation IDs)
     for tf in INTEGRATION_V2_DIR.glob("test_*.py"):
         _scan_file(tf)
 

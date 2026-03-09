@@ -220,7 +220,7 @@ Never hardcode `/api/endpoint` - breaks with nginx prefix.
 - **Development/CI**: Default → `extra="forbid"` (strict validation)
 
 ### 8. Test Fixtures: Factory-Based, Not Inline
-**MANDATORY for new integration tests:** Use `polyfactory` factories for test data, not inline `session.add()` boilerplate.
+**MANDATORY for new integration tests:** Use `factory-boy` factories for test data, not inline `session.add()` boilerplate.
 
 ```python
 # CORRECT: factory creates ORM instance with sane defaults

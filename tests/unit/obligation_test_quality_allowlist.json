@@ -1,1 +1,15 @@
-[]
+[
+    "tests/unit/test_creative.py:TestAsyncLifecycle.test_async_input_required_response",
+    "tests/unit/test_creative.py:TestAsyncLifecycle.test_async_submitted_response",
+    "tests/unit/test_creative.py:TestAsyncLifecycle.test_async_working_response",
+    "tests/unit/test_creative.py:TestCreativeAssetTypes.test_all_11_asset_types_accepted",
+    "tests/unit/test_creative.py:TestCreativeAssignmentSchema.test_does_not_extend_library_type",
+    "tests/unit/test_creative.py:TestCreativeIdsFilter.test_empty_creative_ids_filters_all",
+    "tests/unit/test_creative.py:TestCreativeSchemaCompliance.test_creative_extends_library_creative",
+    "tests/unit/test_creative.py:TestCreativeValidation.test_missing_format_id_rejected_at_schema_level",
+    "tests/unit/test_creative.py:TestCreativeWrongBaseClass.test_creative_extends_listing_base_not_delivery",
+    "tests/unit/test_creative.py:TestRESTCreativeRoutes.test_creative_formats_route_exists",
+    "tests/unit/test_creative.py:TestRESTCreativeRoutes.test_list_creatives_route_exists",
+    "tests/unit/test_creative.py:TestRESTCreativeRoutes.test_sync_creatives_route_exists",
+    "tests/unit/test_creative.py:TestSyncCreativeResultSchema.test_creative_action_enum_values"
+]

@@ -1,15 +1,47 @@
-"""Unit tests for format resolver override logic.
+"""Unit tests for format resolver override logic and coverage gaps.
 
 salesagent-c4s: format_resolver uses model_dump() dict roundtrip to merge
 platform_config overrides, but model_dump() drops exclude=True fields
 (like platform_config), causing the base format's platform_config to be
 silently lost during merging.
 
+salesagent-uujr: Cover get_format(), _get_product_format_override() edge cases,
+and list_available_formats() error paths — 67% → 100%.
+
 Note: Must use src.core.schemas.Format (which has exclude=True on platform_config),
 not the adcp library Format (which does not).
+
+# --- Test Source-of-Truth Audit ---
+# Audited: 2026-03-07
+#
+# SPEC_BACKED (2 tests):
+#   test_search_all_agents_no_match_raises_valueerror — AdCP error.json: unknown format_id is an error
+#   test_success_returns_formats — AdCP list-creative-formats-response.json: returns formats array
+#
+# DECISION_BACKED (2 tests):
+#   test_base_platform_config_preserved_during_override — bug fix (salesagent-c4s)
+#   test_override_merges_into_existing_platform — bug fix (salesagent-c4s)
+#
+# CHARACTERIZATION (10 tests):
+#   test_no_platform_config_override_preserves_base — locks: base preserved when no override
+#   test_base_with_none_platform_config — locks: override applies to None base
+#   test_product_override_path — locks: resolution order (override → agent → error)
+#   test_product_override_none_falls_through_to_agent — locks: fallthrough path
+#   test_search_all_agents_no_agent_url — locks: search-all behavior
+#   test_not_found_error_includes_agent_url — locks: error message format
+#   test_not_found_error_no_agent_url_no_tenant — locks: minimal error format
+#   test_no_product_row_returns_none — locks: None for missing DB row
+#   test_format_id_not_in_overrides_returns_none — locks: None for missing format_id
+#   test_no_format_overrides_key_returns_none — locks: None for missing key
+#
+# SUSPECT (3 tests):
+#   test_base_format_lookup_fails_returns_none — salesagent-z4zl: swallows ValueError silently
+#   test_registry_creation_fails_returns_empty — salesagent-z60b: infrastructure error → []
+#   test_format_fetch_fails_returns_empty — salesagent-z60b: connection error → []
+# ---
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -191,12 +223,17 @@ class TestProductFormatOverrideMerge:
         assert result.platform_config == {"gam": {"creative_template_id": 99999}}
 
 
+# ---------------------------------------------------------------------------
+# get_format() — top-level resolution paths
+# ---------------------------------------------------------------------------
+
+
 class TestGetFormat:
-    """Test get_format() top-level resolution paths."""
+    """Tests for get_format() covering product override, all-agents search, and error paths."""
 
     def test_product_override_path(self):
-        """get_format returns product override when product_id and tenant_id provided."""
-        override_format = _make_format("display_300x250", name="Override")
+        """get_format returns product override when product_id and tenant_id are provided."""
+        override_format = _make_format("display_300x250", name="Override Format")
 
         with patch(
             "src.core.format_resolver._get_product_format_override",
@@ -204,116 +241,182 @@ class TestGetFormat:
         ):
             from src.core.format_resolver import get_format
 
-            result = get_format("display_300x250", tenant_id="t1", product_id="p1")
+            result = get_format(
+                "display_300x250",
+                agent_url="https://agent.example.com",
+                tenant_id="t1",
+                product_id="prod_1",
+            )
 
-        assert result.name == "Override"
+        assert result.name == "Override Format"
 
-    def test_search_all_agents_when_no_agent_url(self):
-        """get_format searches all agents when no agent_url provided."""
-        # Use MagicMock because fmt.format_id == format_id compares FormatId to str
-        found_format = MagicMock()
-        found_format.format_id = "display_300x250"
-        found_format.name = "Found"
-
-        mock_registry = MagicMock()
-        mock_registry.list_all_formats = AsyncMock(return_value=[found_format])
+    def test_product_override_none_falls_through_to_agent(self):
+        """get_format falls through to agent when product override returns None."""
+        agent_format = _make_format("display_300x250", name="Agent Format")
 
         with (
-            patch("src.core.creative_agent_registry.get_creative_agent_registry", return_value=mock_registry),
             patch("src.core.format_resolver._get_product_format_override", return_value=None),
+            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg,
+            patch("src.core.format_resolver.run_async_in_sync_context", return_value=agent_format),
         ):
             from src.core.format_resolver import get_format
 
-            result = get_format("display_300x250", tenant_id="t1", product_id="p1")
+            result = get_format(
+                "display_300x250",
+                agent_url="https://agent.example.com",
+                tenant_id="t1",
+                product_id="prod_1",
+            )
 
-        assert result.name == "Found"
+        assert result.name == "Agent Format"
 
-    def test_not_found_raises_valueerror(self):
-        """get_format raises ValueError with context when format not found."""
-        mock_registry = MagicMock()
-        mock_registry.get_format = AsyncMock(return_value=None)
+    def test_search_all_agents_no_agent_url(self):
+        """get_format searches all agents when agent_url is None.
 
-        with patch("src.core.creative_agent_registry.get_creative_agent_registry", return_value=mock_registry):
+        Note: The search loop at L53-56 compares Format.format_id (FormatId)
+        with the string parameter. To match, we use a mock with matching
+        format_id attribute instead of a real Format object.
+        """
+        mock_fmt = MagicMock()
+        mock_fmt.format_id = "display_300x250"  # Plain string to match parameter
+        mock_fmt.name = "Found Format"
+
+        with (
+            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg,
+            patch("src.core.format_resolver.run_async_in_sync_context", return_value=[mock_fmt]),
+        ):
             from src.core.format_resolver import get_format
 
-            with pytest.raises(ValueError, match="Unknown format_id 'nonexistent'.*agent.*tenant"):
-                get_format(
-                    "nonexistent",
-                    agent_url="https://creative.example.com",
-                    tenant_id="t1",
-                )
+            result = get_format("display_300x250", tenant_id="t1")
 
-    def test_not_found_without_context_has_minimal_message(self):
-        """ValueError message omits agent/tenant when not provided."""
-        mock_registry = MagicMock()
-        mock_registry.list_all_formats = AsyncMock(return_value=[])
+        assert result.name == "Found Format"
 
-        with patch("src.core.creative_agent_registry.get_creative_agent_registry", return_value=mock_registry):
+    def test_search_all_agents_no_match_raises_valueerror(self):
+        """get_format raises ValueError when format not found in any agent."""
+        mock_fmt = MagicMock()
+        mock_fmt.format_id = "video_1920x1080"  # Different format — won't match
+
+        with (
+            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg,
+            patch("src.core.format_resolver.run_async_in_sync_context", return_value=[mock_fmt]),
+        ):
             from src.core.format_resolver import get_format
 
-            with pytest.raises(ValueError, match="^Unknown format_id 'missing'$"):
-                get_format("missing")
+            with pytest.raises(ValueError, match="Unknown format_id 'display_300x250'"):
+                get_format("display_300x250", tenant_id="t1")
+
+    def test_not_found_error_includes_agent_url(self):
+        """ValueError message includes agent_url when provided."""
+        with (
+            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg,
+            patch("src.core.format_resolver.run_async_in_sync_context", return_value=None),
+        ):
+            from src.core.format_resolver import get_format
+
+            with pytest.raises(ValueError, match="from agent https://agent.example.com") as exc_info:
+                get_format("display_300x250", agent_url="https://agent.example.com", tenant_id="t1")
+
+            assert "for tenant t1" in str(exc_info.value)
+
+    def test_not_found_error_no_agent_url_no_tenant(self):
+        """ValueError message is minimal without agent_url and tenant_id."""
+        with (
+            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg,
+            patch("src.core.format_resolver.run_async_in_sync_context", return_value=[]),
+        ):
+            from src.core.format_resolver import get_format
+
+            with pytest.raises(ValueError, match="Unknown format_id 'nonexistent'") as exc_info:
+                get_format("nonexistent")
+
+            error_msg = str(exc_info.value)
+            assert "from agent" not in error_msg
+            assert "for tenant" not in error_msg
+
+
+# ---------------------------------------------------------------------------
+# _get_product_format_override() — edge case paths
+# ---------------------------------------------------------------------------
 
 
 class TestProductFormatOverrideEdgeCases:
-    """Test _get_product_format_override edge cases not covered by merge tests."""
+    """Edge cases for _get_product_format_override not covered by merge tests."""
 
-    def test_format_not_in_overrides_returns_none(self):
-        """Returns None when product has overrides but not for requested format_id."""
+    def test_no_product_row_returns_none(self):
+        """Returns None when product doesn't exist in DB."""
         with patch("src.core.format_resolver.get_db_session") as mock_db:
             mock_session = mock_db.return_value.__enter__.return_value
-            mock_result = mock_session.execute.return_value
-            mock_result.fetchone.return_value = ({"format_overrides": {"video_preroll": {"platform_config": {}}}},)
+            mock_session.execute.return_value.fetchone.return_value = None
 
             from src.core.format_resolver import _get_product_format_override
 
-            result = _get_product_format_override("t1", "p1", "display_300x250")
+            result = _get_product_format_override("t1", "nonexistent", "display_300x250")
 
         assert result is None
 
-    def test_no_overrides_key_returns_none(self):
-        """Returns None when implementation_config has no format_overrides key."""
+    def test_format_id_not_in_overrides_returns_none(self):
+        """Returns None when format_id is not in format_overrides."""
         with patch("src.core.format_resolver.get_db_session") as mock_db:
             mock_session = mock_db.return_value.__enter__.return_value
-            mock_result = mock_session.execute.return_value
-            mock_result.fetchone.return_value = ({"some_other_config": True},)
-
-            from src.core.format_resolver import _get_product_format_override
-
-            result = _get_product_format_override("t1", "p1", "display_300x250")
-
-        assert result is None
-
-    def test_base_format_lookup_fails_returns_none(self):
-        """Returns None when base format lookup raises ValueError."""
-        with (
-            patch("src.core.format_resolver.get_db_session") as mock_db,
-            patch(
-                "src.core.format_resolver.get_format",
-                side_effect=ValueError("not found"),
-            ),
-        ):
-            mock_session = mock_db.return_value.__enter__.return_value
-            mock_result = mock_session.execute.return_value
-            mock_result.fetchone.return_value = (
-                {"format_overrides": {"display_300x250": {"platform_config": {"gam": {}}}}},
+            mock_session.execute.return_value.fetchone.return_value = (
+                {"format_overrides": {"other_format": {"platform_config": {}}}},
             )
 
             from src.core.format_resolver import _get_product_format_override
 
-            result = _get_product_format_override("t1", "p1", "display_300x250")
+            result = _get_product_format_override("t1", "prod1", "display_300x250")
+
+        assert result is None
+
+    def test_no_format_overrides_key_returns_none(self):
+        """Returns None when implementation_config has no format_overrides key."""
+        with patch("src.core.format_resolver.get_db_session") as mock_db:
+            mock_session = mock_db.return_value.__enter__.return_value
+            mock_session.execute.return_value.fetchone.return_value = ({"some_other_config": "value"},)
+
+            from src.core.format_resolver import _get_product_format_override
+
+            result = _get_product_format_override("t1", "prod1", "display_300x250")
+
+        assert result is None
+
+    # SUSPECT(salesagent-z4zl): swallows ValueError — should override path propagate?
+    def test_base_format_lookup_fails_returns_none(self):
+        """Returns None when recursive get_format call raises ValueError."""
+        format_overrides = {"display_300x250": {"platform_config": {"gam": {"width": 1}}}}
+
+        with (
+            patch("src.core.format_resolver.get_db_session") as mock_db,
+            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg,
+            patch(
+                "src.core.format_resolver.get_format",
+                side_effect=ValueError("Format not found"),
+            ),
+        ):
+            mock_session = mock_db.return_value.__enter__.return_value
+            mock_session.execute.return_value.fetchone.return_value = ({"format_overrides": format_overrides},)
+
+            from src.core.format_resolver import _get_product_format_override
+
+            result = _get_product_format_override("t1", "prod1", "display_300x250")
 
         assert result is None
 
 
-class TestListAvailableFormats:
-    """Test list_available_formats() error paths."""
+# ---------------------------------------------------------------------------
+# list_available_formats() — error paths
+# ---------------------------------------------------------------------------
 
+
+class TestListAvailableFormats:
+    """Tests for list_available_formats() error and success paths."""
+
+    # SUSPECT(salesagent-z60b): infrastructure error silently returns [] — should it propagate?
     def test_registry_creation_fails_returns_empty(self):
         """Returns empty list when get_creative_agent_registry raises."""
         with patch(
             "src.core.creative_agent_registry.get_creative_agent_registry",
-            side_effect=RuntimeError("registry init failed"),
+            side_effect=RuntimeError("Registry initialization failed"),
         ):
             from src.core.format_resolver import list_available_formats
 
@@ -321,14 +424,37 @@ class TestListAvailableFormats:
 
         assert result == []
 
+    # SUSPECT(salesagent-z60b): connection error silently returns [] — should it propagate?
     def test_format_fetch_fails_returns_empty(self):
-        """Returns empty list when registry.list_all_formats raises."""
-        mock_registry = MagicMock()
-        mock_registry.list_all_formats = AsyncMock(side_effect=RuntimeError("fetch failed"))
-
-        with patch("src.core.creative_agent_registry.get_creative_agent_registry", return_value=mock_registry):
+        """Returns empty list when list_all_formats raises."""
+        with (
+            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg,
+            patch(
+                "src.core.format_resolver.run_async_in_sync_context",
+                side_effect=RuntimeError("Connection failed"),
+            ),
+        ):
             from src.core.format_resolver import list_available_formats
 
             result = list_available_formats(tenant_id="t1")
 
         assert result == []
+
+    def test_success_returns_formats(self):
+        """Returns formats from registry on success."""
+        fmt1 = _make_format("display_300x250", name="Format 1")
+        fmt2 = _make_format("display_728x90", name="Format 2")
+
+        with (
+            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg,
+            patch(
+                "src.core.format_resolver.run_async_in_sync_context",
+                return_value=[fmt1, fmt2],
+            ),
+        ):
+            from src.core.format_resolver import list_available_formats
+
+            result = list_available_formats(tenant_id="t1")
+
+        assert len(result) == 2
+        assert result[0].name == "Format 1"

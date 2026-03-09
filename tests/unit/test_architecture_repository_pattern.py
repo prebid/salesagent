@@ -128,8 +128,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_creative_review_model.py", "test_get_creative_reviews_filters_by_review_type"),
     ("tests/integration/test_creative_review_model.py", "test_get_creative_reviews_tenant_isolation"),
     ("tests/integration/test_creative_review_model.py", "test_get_creative_with_latest_review_tenant_isolation"),
-    # tests/integration/test_creative_sync_data_preservation.py
-    ("tests/integration/test_creative_sync_data_preservation.py", "setup_test_data"),
     # tests/integration/test_creative_v3.py (multiple classes share setup_tenant name)
     ("tests/integration/test_creative_v3.py", "setup_tenant"),
     # tests/integration/test_cross_principal_security.py
@@ -183,8 +181,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_gam_pricing_models_integration.py", "test_gam_auction_cpc_creates_price_priority"),
     # tests/integration/test_gam_pricing_restriction.py
     ("tests/integration/test_gam_pricing_restriction.py", "setup_gam_tenant_with_non_cpm_product"),
-    # tests/integration/test_generative_creatives.py
-    ("tests/integration/test_generative_creatives.py", "setup_test_data"),
     # tests/integration/test_inventory_profile_effective_properties.py
     ("tests/integration/test_inventory_profile_effective_properties.py", "test_tenant"),
     ("tests/integration/test_inventory_profile_effective_properties.py", "test_profile"),
@@ -237,8 +233,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
         "tests/integration/test_list_authorized_properties_integration.py",
         "test_list_authorized_properties_returns_sorted_domains",
     ),
-    # tests/integration/test_list_creatives_auth.py
-    ("tests/integration/test_list_creatives_auth.py", "setup_test_data"),
     # tests/integration/test_media_buy_readiness.py
     ("tests/integration/test_media_buy_readiness.py", "test_tenant"),
     ("tests/integration/test_media_buy_readiness.py", "test_principal"),
@@ -449,6 +443,21 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration_v2/test_session_json_validation.py", "test_workflow_step_comments"),
     # tests/integration_v2/test_tool_result_format.py
     ("tests/integration_v2/test_tool_result_format.py", "setup_test_data"),
+    # tests/integration_v2/test_creative_formats_aggregation.py
+    ("tests/integration_v2/test_creative_formats_aggregation.py", "test_broadstreet_formats_merged_with_agent_formats"),
+    ("tests/integration_v2/test_creative_formats_aggregation.py", "test_broadstreet_formats_are_non_standard"),
+    # tests/integration_v2/test_creative_formats_validation_a.py
+    ("tests/integration_v2/test_creative_formats_validation_a.py", "test_broadstreet_formats_merged_into_response"),
+    ("tests/integration_v2/test_creative_formats_validation_a.py", "test_broadstreet_formats_have_correct_structure"),
+    ("tests/integration_v2/test_creative_formats_validation_a.py", "test_non_broadstreet_adapter_no_extra_formats"),
+    # tests/integration_v2/test_dynamic_products.py
+    ("tests/integration_v2/test_dynamic_products.py", "_ensure_tenant"),
+    ("tests/integration_v2/test_dynamic_products.py", "_create_dynamic_template"),
+    ("tests/integration_v2/test_dynamic_products.py", "test_expired_variants_archived"),
+    ("tests/integration_v2/test_dynamic_products.py", "test_non_expired_variants_untouched"),
+    ("tests/integration_v2/test_dynamic_products.py", "test_already_archived_not_rearchived"),
+    ("tests/integration_v2/test_dynamic_products.py", "test_tenant_filter_scoping"),
+    ("tests/integration_v2/test_dynamic_products.py", "test_no_tenant_archives_all"),
 }
 
 

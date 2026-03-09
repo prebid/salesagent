@@ -21,7 +21,7 @@ from src.core.validation_helpers import format_validation_error, run_async_in_sy
 
 from ._assignments import _process_assignments
 from ._processing import _create_new_creative, _update_existing_creative
-from ._validation import _get_field, _validate_creative_input
+from ._validation import _get_field, _validate_creative_input, check_provenance_required
 from ._workflow import _audit_log_sync, _create_sync_workflow_steps, _send_creative_notifications
 
 logger = logging.getLogger(__name__)
@@ -135,6 +135,27 @@ def _sync_creatives_impl(
     all_formats = run_async_in_sync_context(registry.list_all_formats(tenant_id=tenant["tenant_id"]))
 
     with get_db_session() as session:
+        from src.core.database.repositories.creative import CreativeRepository
+
+        creative_repo = CreativeRepository(session, tenant["tenant_id"])
+
+        # Check if any product in this tenant requires AI provenance metadata
+        from src.core.database.models import Product as DBProduct
+
+        tenant_products = session.scalars(select(DBProduct).filter_by(tenant_id=tenant["tenant_id"])).all()
+        # Collect creative_policy from products that require provenance
+        provenance_policies = [
+            p.creative_policy
+            for p in tenant_products
+            if p.creative_policy and p.creative_policy.get("provenance_required")
+        ]
+        tenant_requires_provenance = len(provenance_policies) > 0
+        if tenant_requires_provenance:
+            logger.info(
+                f"[sync_creatives] Tenant {tenant['tenant_id']} has "
+                f"{len(provenance_policies)} product(s) requiring AI provenance"
+            )
+
         # Process each creative with proper transaction isolation
         for raw_creative in creatives:
             try:
@@ -178,20 +199,19 @@ def _sync_creatives_impl(
                     )
                     continue  # Skip to next creative
 
+                # Check provenance requirement (EU AI Act Article 50)
+                provenance_warning = None
+                if tenant_requires_provenance:
+                    # Use the first matching policy (tenant-wide enforcement)
+                    provenance_warning = check_provenance_required(validated_creative, provenance_policies[0])
+
                 # dry_run: build simulated results without DB writes
                 if dry_run:
                     creative_id = creative.creative_id or "unknown"
                     # Check if creative exists (read-only) to determine would-create vs would-update
                     existing_creative = None
                     if creative.creative_id:
-                        from src.core.database.models import Creative as DBCreative
-
-                        stmt = select(DBCreative).filter_by(
-                            tenant_id=tenant["tenant_id"],
-                            principal_id=principal_id,
-                            creative_id=creative.creative_id,
-                        )
-                        existing_creative = session.scalars(stmt).first()
+                        existing_creative = creative_repo.get_by_id(creative.creative_id, principal_id)
 
                     if existing_creative:
                         updated_count += 1
@@ -228,21 +248,13 @@ def _sync_creatives_impl(
                     # SECURITY: Must filter by principal_id to prevent cross-principal modification
                     existing_creative = None
                     if creative.creative_id:
-                        from src.core.database.models import Creative as DBCreative
-
-                        # Query for existing creative with security filter
-                        stmt = select(DBCreative).filter_by(
-                            tenant_id=tenant["tenant_id"],
-                            principal_id=principal_id,  # SECURITY: Prevent cross-principal modification
-                            creative_id=creative.creative_id,
-                        )
-                        existing_creative = session.scalars(stmt).first()
+                        existing_creative = creative_repo.get_by_id(creative.creative_id, principal_id)
 
                     if existing_creative:
                         update_result, needs_approval = _update_existing_creative(
                             creative=creative,
                             existing_creative=existing_creative,
-                            session=session,
+                            creative_repo=creative_repo,
                             format_value=format_value,
                             approval_mode=approval_mode,
                             tenant=tenant,
@@ -289,13 +301,20 @@ def _sync_creatives_impl(
                                 creative_info["ai_review_reason"] = existing_creative.data["ai_review"].get("reason")
                             creatives_needing_approval.append(creative_info)
 
+                        # Add provenance warning if applicable
+                        if provenance_warning and update_result.action != CreativeAction.failed:
+                            update_result.warnings.append(provenance_warning)
+                            # Flag for review when provenance is missing
+                            existing_creative.status = "pending_review"
+                            needs_approval = True
+
                         results.append(update_result)
 
                     else:
                         # Create new creative
                         create_result, needs_approval = _create_new_creative(
                             creative=creative,
-                            session=session,
+                            creative_repo=creative_repo,
                             format_value=format_value,
                             approval_mode=approval_mode,
                             tenant=tenant,
@@ -335,6 +354,11 @@ def _sync_creatives_impl(
                             # No ai_result available yet in async mode
                             creatives_needing_approval.append(creative_info)
 
+                        # Add provenance warning if applicable
+                        if provenance_warning and create_result.action != CreativeAction.failed:
+                            create_result.warnings.append(provenance_warning)
+                            needs_approval = True
+
                         results.append(create_result)
 
                     # If we reach here, creative processing succeeded
@@ -363,19 +387,13 @@ def _sync_creatives_impl(
 
         # Archive creatives not in the sync payload when delete_missing=True
         if delete_missing:
-            from src.core.database.models import Creative as DBCreative
-
             # Collect all creative IDs from the payload (regardless of success/failure)
             payload_creative_ids = {_get_field(c, "creative_id") for c in creatives}
             payload_creative_ids.discard(None)
 
             # Query for existing creatives belonging to this tenant+principal
             # that are NOT in the payload and NOT already archived
-            stmt = select(DBCreative).filter_by(
-                tenant_id=tenant["tenant_id"],
-                principal_id=principal_id,
-            )
-            existing_creatives = session.scalars(stmt).all()
+            existing_creatives = creative_repo.list_by_principal(principal_id)
 
             for db_creative in existing_creatives:
                 if db_creative.creative_id not in payload_creative_ids and db_creative.status != "archived":
