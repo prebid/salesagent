@@ -1087,14 +1087,24 @@ class TestProposalSchemaObligations:
         assert p.name == "Test Proposal"
         assert len(p.allocations) >= 1
 
-    def test_proposal_allocation_percentages_sum_to_100(self):
+    async def test_proposal_allocation_percentages_sum_to_100(self):
         """Allocation percentages sum to 100.
 
         Covers: UC-001-ALT-DISCOVERY-WITH-PROPOSALS-02
         """
-        proposal = self._make_proposal()
-        total = sum(a["allocation_percentage"] for a in proposal["allocations"])
-        assert total == 100
+        with ProductEnv() as env:
+            env.add_product(product_id="prod_1")
+            env.add_product(product_id="prod_2")
+
+            response = await env.call_impl(brief="test")
+            product_ids = [p.product_id for p in response.products]
+            assert len(product_ids) >= 2
+
+            # Build proposal from impl-returned products, verify allocation sum
+            proposal = self._make_proposal()
+            resp = GetProductsResponse(products=response.products, proposals=[proposal])
+            total = sum(a.allocation_percentage for a in resp.proposals[0].allocations)
+            assert total == 100
 
     def test_proposal_allocation_product_id_valid(self):
         """Allocation product_id references a product in products[].
@@ -1135,29 +1145,53 @@ class TestProposalSchemaObligations:
         resp = GetProductsResponse(products=[product], proposals=[proposal])
         assert resp.proposals[0].expires_at is not None
 
-    def test_allocation_pricing_option_id(self):
+    async def test_allocation_pricing_option_id(self):
         """Allocation includes pricing_option_id recommendation.
 
         Covers: UC-001-ALT-DISCOVERY-WITH-PROPOSALS-08
         """
-        alloc = {
-            "product_id": "prod_1",
-            "allocation_percentage": 100,
-            "pricing_option_id": "cpm_usd_fixed",
-        }
-        assert alloc["pricing_option_id"] == "cpm_usd_fixed"
+        with ProductEnv() as env:
+            env.add_product(product_id="prod_1")
 
-    def test_allocation_sequence(self):
+            response = await env.call_impl(brief="test")
+            assert len(response.products) >= 1
+
+            # Build proposal with pricing_option_id referencing product's pricing
+            proposal = self._make_proposal(
+                allocations=[
+                    {
+                        "product_id": "prod_1",
+                        "allocation_percentage": 100,
+                        "pricing_option_id": "cpm_usd_fixed",
+                    }
+                ]
+            )
+            resp = GetProductsResponse(products=response.products, proposals=[proposal])
+            assert resp.proposals[0].allocations[0].pricing_option_id == "cpm_usd_fixed"
+
+    async def test_allocation_sequence(self):
         """Allocation includes sequence for execution order.
 
         Covers: UC-001-ALT-DISCOVERY-WITH-PROPOSALS-10
         """
-        alloc = {
-            "product_id": "prod_1",
-            "allocation_percentage": 100,
-            "sequence": 1,
-        }
-        assert alloc["sequence"] >= 1
+        with ProductEnv() as env:
+            env.add_product(product_id="prod_1")
+            env.add_product(product_id="prod_2")
+
+            response = await env.call_impl(brief="test")
+            assert len(response.products) >= 2
+
+            # Build proposal with sequenced allocations
+            proposal = self._make_proposal(
+                allocations=[
+                    {"product_id": "prod_1", "allocation_percentage": 60, "sequence": 1},
+                    {"product_id": "prod_2", "allocation_percentage": 40, "sequence": 2},
+                ]
+            )
+            resp = GetProductsResponse(products=response.products, proposals=[proposal])
+            sequences = [a.sequence for a in resp.proposals[0].allocations]
+            assert all(s >= 1 for s in sequences), "All sequences >= 1"
+            assert sequences == sorted(sequences), "Sequences are ordered"
 
 
 # ---------------------------------------------------------------------------
