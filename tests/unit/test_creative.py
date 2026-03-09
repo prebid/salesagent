@@ -3309,10 +3309,15 @@ class TestCreativeAssetTypes:
     """
 
     def test_all_11_asset_types_accepted(self):
-        """Each asset type should be accepted without validation error.
+        """_sync_creatives_impl accepts creatives with all 11 asset types without error.
 
         Covers: UC-006-CREATIVE-SCHEMA-COMPLIANCE-10
+
+        MULTI-ROUTE: _impl (batch of 11), sync_creatives_raw (A2A), REST route.
         """
+        from src.core.tools.creatives._sync import _sync_creatives_impl
+        from src.core.tools.creatives.sync_wrappers import sync_creatives_raw
+
         asset_types = [
             "image",
             "video",
@@ -3326,16 +3331,74 @@ class TestCreativeAssetTypes:
             "daast",
             "promoted_offerings",
         ]
-        for asset_type in asset_types:
-            # CreativeAsset accepts arbitrary string-keyed assets dict
-            creative = CreativeAsset(
+
+        # Build one creative per asset type
+        creatives = [
+            _make_creative_asset(
                 creative_id=f"c_{asset_type}",
                 name=f"Test {asset_type}",
-                format_id=_adcp_format_id(),
                 assets={asset_type: {"content": f"test {asset_type} content"}},
             )
-            assert creative.assets is not None
-            assert asset_type in creative.assets
+            for asset_type in asset_types
+        ]
+
+        identity = _make_identity()
+
+        with (
+            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
+            patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
+            patch(
+                "src.core.tools.creatives._validation.run_async_in_sync_context",
+                return_value=MagicMock(),
+            ),
+            patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),
+            patch("src.core.tools.creatives._processing._extract_format_info") as mock_fmt,
+            patch("src.core.tools.creatives._sync.log_tool_activity"),
+            patch("src.core.tools.creatives._workflow.get_audit_logger"),
+            patch("src.core.tools.creatives._workflow.get_db_session"),
+        ):
+            mock_run_async.return_value = []
+            mock_reg_getter.return_value = MagicMock()
+            mock_fmt.return_value = {
+                "agent_url": DEFAULT_AGENT_URL,
+                "format_id": "display_300x250_image",
+                "parameters": None,
+            }
+            mock_session = MagicMock()
+            mock_db.return_value.__enter__.return_value = mock_session
+            mock_db.return_value.__exit__.return_value = None
+            mock_session.scalars.return_value.first.return_value = None
+
+            # Route 1: _impl — all 11 asset types accepted
+            result = _sync_creatives_impl(
+                creatives=creatives,
+                identity=identity,
+            )
+            assert isinstance(result, SyncCreativesResponse)
+            assert len(result.creatives) == 11, f"Expected 11 results, got {len(result.creatives)}"
+            for creative_result in result.creatives:
+                action_val = creative_result.action
+                if hasattr(action_val, "value"):
+                    action_val = action_val.value
+                assert action_val != "failed", (
+                    f"Creative {creative_result.creative_id} failed: {creative_result.errors}"
+                )
+
+            # Route 2: A2A — single asset type through sync_creatives_raw
+            mock_session.scalars.return_value.first.return_value = None
+            a2a_result = sync_creatives_raw(
+                creatives=[creatives[0]],  # image type
+                identity=identity,
+            )
+            assert isinstance(a2a_result, SyncCreativesResponse)
+            assert len(a2a_result.creatives) == 1
+
+        # Route 3: REST route exists
+        from src.routes.api_v1 import router
+
+        paths = [route.path for route in router.routes]
+        assert any(p.endswith("/creatives/sync") for p in paths)
 
 
 # ============================================================================
