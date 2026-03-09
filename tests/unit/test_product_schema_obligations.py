@@ -845,29 +845,60 @@ class TestFilteredDiscoverySchema:
         assert filters.start_date is not None
         assert filters.end_date is not None
 
-    def test_filter_required_axe_integrations(self):
+    async def test_filter_required_axe_integrations(self):
         """required_axe_integrations filter schema accepted.
 
         Covers: UC-001-ALT-FILTERED-DISCOVERY-16
         """
-        assert "required_axe_integrations" in ProductFilters.model_fields
+        with ProductEnv() as env:
+            env.add_product(product_id="prod_axe")
 
-    def test_filter_required_features_only_true_values(self):
+            response = await env.call_impl(
+                brief="test",
+                filters={"required_axe_integrations": ["https://axe.example.com"]},
+            )
+
+            # Filter accepted by request schema; impl does not filter by axe integrations yet
+            assert len(response.products) >= 1, "required_axe_integrations filter accepted without error"
+
+    async def test_filter_required_features_only_true_values(self):
         """required_features filter: only true values filter.
 
         Covers: UC-001-ALT-FILTERED-DISCOVERY-17
         """
-        features = {"guaranteed_delivery": True, "real_time_bidding": False}
-        active_filters = {k: v for k, v in features.items() if v is True}
-        assert "guaranteed_delivery" in active_filters
-        assert "real_time_bidding" not in active_filters
+        with ProductEnv() as env:
+            env.add_product(product_id="prod_features")
 
-    def test_filter_required_geo_targeting(self):
+            response = await env.call_impl(
+                brief="test",
+                filters={
+                    "required_features": {
+                        "guaranteed_delivery": True,
+                        "real_time_bidding": False,
+                    }
+                },
+            )
+
+            # Filter accepted by request schema; only true values should be used for filtering
+            assert len(response.products) >= 1, "required_features filter accepted without error"
+
+    async def test_filter_required_geo_targeting(self):
         """required_geo_targeting filter schema accepted.
 
         Covers: UC-001-ALT-FILTERED-DISCOVERY-18
         """
-        assert "required_geo_targeting" in ProductFilters.model_fields
+        with ProductEnv() as env:
+            env.add_product(product_id="prod_geo")
+
+            response = await env.call_impl(
+                brief="test",
+                filters={
+                    "required_geo_targeting": [{"level": "country"}],
+                },
+            )
+
+            # Filter accepted by request schema; impl does not filter by geo targeting yet
+            assert len(response.products) >= 1, "required_geo_targeting filter accepted without error"
 
     def test_filter_signal_targeting(self):
         """signal_targeting filter with signal_targeting_allowed field.
