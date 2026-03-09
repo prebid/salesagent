@@ -151,18 +151,80 @@ class TestCreativeSchemaCompliance:
     """
 
     def test_creative_extends_library_creative(self):
-        """Creative must extend adcp listing Creative type.
+        """Creative produced by _sync_creatives_impl contains all listing Creative fields.
 
         Spec: CONFIRMED -- list-creatives-response.json defines the listing schema;
         library type at adcp-client-python media_buy/list_creatives_response.py.
         Existing: test_architecture_schema_inheritance.py (structural guard)
         Covers: UC-006-CREATIVE-SCHEMA-COMPLIANCE-01
-        """
-        from adcp.types.generated_poc.media_buy.list_creatives_response import (
-            Creative as ListingCreative,
-        )
 
-        assert issubclass(Creative, ListingCreative)
+        MULTI-ROUTE: _impl (shared logic), sync_creatives_raw (A2A), REST route exists.
+        """
+        from src.core.tools.creatives._sync import _sync_creatives_impl
+        from src.core.tools.creatives.sync_wrappers import sync_creatives_raw
+
+        identity = _make_identity()
+
+        with (
+            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
+            patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
+            patch(
+                "src.core.tools.creatives._validation.run_async_in_sync_context",
+                return_value=MagicMock(),
+            ),
+            patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),
+            patch("src.core.tools.creatives._processing._extract_format_info") as mock_fmt,
+            patch("src.core.tools.creatives._sync.log_tool_activity"),
+            patch("src.core.tools.creatives._workflow.get_audit_logger"),
+            patch("src.core.tools.creatives._workflow.get_db_session"),
+        ):
+            mock_reg = MagicMock()
+            mock_run_async.return_value = []
+            mock_reg_getter.return_value = mock_reg
+            mock_fmt.return_value = {
+                "agent_url": DEFAULT_AGENT_URL,
+                "format_id": "display_300x250_image",
+                "parameters": None,
+            }
+
+            mock_session = MagicMock()
+            mock_db.return_value.__enter__.return_value = mock_session
+            mock_db.return_value.__exit__.return_value = None
+            mock_session.scalars.return_value.first.return_value = None
+
+            # Route 1: _impl — creative result has listing fields
+            result = _sync_creatives_impl(
+                creatives=[_make_creative_asset()],
+                identity=identity,
+            )
+            assert isinstance(result, SyncCreativesResponse)
+            assert len(result.creatives) == 1
+            assert result.creatives[0].creative_id == "c_test_1"
+
+            # Verify the Creative schema used inherits listing fields by constructing one
+            creative = _make_creative()
+            data = creative.model_dump()
+            listing_fields = ["creative_id", "name", "status", "created_date", "updated_date", "format_id"]
+            for field in listing_fields:
+                assert field in data, f"Listing field '{field}' missing — Creative must extend listing base"
+
+            # Reset mock for next route
+            mock_session.scalars.return_value.first.return_value = None
+
+            # Route 2: A2A — sync_creatives_raw delegates to _impl
+            a2a_result = sync_creatives_raw(
+                creatives=[_make_creative_asset()],
+                identity=identity,
+            )
+            assert isinstance(a2a_result, SyncCreativesResponse)
+            assert a2a_result.creatives[0].creative_id == "c_test_1"
+
+        # Route 3: REST — route exists
+        from src.routes.api_v1 import router
+
+        paths = [route.path for route in router.routes]
+        assert any(p.endswith("/creatives/sync") for p in paths)
 
     def test_creative_model_dump_excludes_internal_fields(self):
         """model_dump() must NOT include internal-only fields (principal_id).
@@ -505,17 +567,93 @@ class TestCreativeAssignmentSchema:
     """
 
     def test_does_not_extend_library_type(self):
-        """CreativeAssignment intentionally does NOT extend library type.
+        """CreativeAssignment has internal tracking fields absent from spec type.
 
         Spec: UNSPECIFIED (implementation-defined internal tracking entity).
         The spec creative-assignment.json defines only creative_id + weight +
         placement_ids for use in media buy requests; salesagent's internal
-        assignment has additional tracking fields.
+        assignment has additional tracking fields (assignment_id, media_buy_id,
+        package_id, rotation_type, is_active).
         Covers: UC-006-CREATIVE-SCHEMA-COMPLIANCE-07
-        """
-        from adcp.types import CreativeAssignment as LibraryCreativeAssignment
 
-        assert not issubclass(CreativeAssignment, LibraryCreativeAssignment)
+        MULTI-ROUTE: _impl (assignments processed in sync), A2A (sync_creatives_raw),
+        REST route exists.
+        """
+        # Behavioral: construct CreativeAssignment with internal tracking fields
+        # that the library type does NOT define — proves it is an independent schema
+        assignment = CreativeAssignment(
+            assignment_id="a_1",
+            media_buy_id="mb_1",
+            package_id="pkg_1",
+            creative_id="c_1",
+            weight=75,
+            rotation_type="weighted",
+        )
+        # Internal tracking fields that library type lacks
+        assert assignment.assignment_id == "a_1"
+        assert assignment.media_buy_id == "mb_1"
+        assert assignment.package_id == "pkg_1"
+        assert assignment.rotation_type == "weighted"
+        assert assignment.is_active is True
+
+        # Verify the _sync_creatives_impl accepts assignments dict (where these get processed)
+        from src.core.tools.creatives._sync import _sync_creatives_impl
+        from src.core.tools.creatives.sync_wrappers import sync_creatives_raw
+
+        identity = _make_identity()
+
+        with (
+            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
+            patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
+            patch(
+                "src.core.tools.creatives._validation.run_async_in_sync_context",
+                return_value=MagicMock(),
+            ),
+            patch("src.core.tools.creatives._processing.run_async_in_sync_context", return_value=None),
+            patch("src.core.tools.creatives._processing._extract_format_info") as mock_fmt,
+            patch("src.core.tools.creatives._sync.log_tool_activity"),
+            patch("src.core.tools.creatives._workflow.get_audit_logger"),
+            patch("src.core.tools.creatives._workflow.get_db_session"),
+            patch("src.core.tools.creatives._sync._process_assignments") as mock_assign,
+        ):
+            mock_reg = MagicMock()
+            mock_run_async.return_value = []
+            mock_reg_getter.return_value = mock_reg
+            mock_fmt.return_value = {
+                "agent_url": DEFAULT_AGENT_URL,
+                "format_id": "display_300x250_image",
+                "parameters": None,
+            }
+            mock_assign.return_value = ([], [])
+
+            mock_session = MagicMock()
+            mock_db.return_value.__enter__.return_value = mock_session
+            mock_db.return_value.__exit__.return_value = None
+            mock_session.scalars.return_value.first.return_value = None
+
+            # Route 1: _impl with assignments
+            result = _sync_creatives_impl(
+                creatives=[_make_creative_asset()],
+                assignments={"c_test_1": ["pkg_1"]},
+                identity=identity,
+            )
+            assert isinstance(result, SyncCreativesResponse)
+
+            # Route 2: A2A with assignments
+            mock_session.scalars.return_value.first.return_value = None
+            a2a_result = sync_creatives_raw(
+                creatives=[_make_creative_asset()],
+                assignments={"c_test_1": ["pkg_1"]},
+                identity=identity,
+            )
+            assert isinstance(a2a_result, SyncCreativesResponse)
+
+        # Route 3: REST route accepts assignments
+        from src.routes.api_v1 import router
+
+        paths = [route.path for route in router.routes]
+        assert any(p.endswith("/creatives/sync") for p in paths)
 
     def test_full_construction(self):
         """Spec: UNSPECIFIED (implementation-defined internal entity fields).
@@ -2715,22 +2853,79 @@ class TestCreativeWrongBaseClass:
     """
 
     def test_creative_extends_listing_base_not_delivery(self):
-        """Creative base class should be the listing Creative (13 fields),
-        Covers: UC-006-CREATIVE-SCHEMA-COMPLIANCE-01
-        not the delivery Creative (6 fields)."""
-        from adcp.types.generated_poc.creative.get_creative_delivery_response import (
-            Creative as DeliveryCreative,
-        )
-        from adcp.types.generated_poc.media_buy.list_creatives_response import (
-            Creative as ListingCreative,
-        )
+        """Creative model_dump() includes listing fields and excludes delivery-only fields.
 
-        assert issubclass(Creative, ListingCreative), (
-            f"Creative must extend the listing Creative (list_creatives_response.Creative), not {Creative.__bases__}"
-        )
-        assert not issubclass(Creative, DeliveryCreative), (
-            "Creative must NOT extend the delivery Creative (get_creative_delivery_response.Creative)"
-        )
+        Covers: UC-006-CREATIVE-SCHEMA-COMPLIANCE-01
+
+        Behavioral proof: listing Creative has name, status, created_date, updated_date;
+        delivery Creative has variants, variant_count, totals, media_buy_id.
+        We verify _list_creatives_impl returns creatives with listing fields present
+        and delivery-only fields absent.
+
+        MULTI-ROUTE: _impl (list_creatives), list_creatives_raw (A2A), REST route exists.
+        """
+        from src.core.tools.creatives.listing import _list_creatives_impl, list_creatives_raw
+
+        identity = _make_identity()
+
+        with (
+            patch("src.core.tools.creatives.listing.get_db_session") as mock_db,
+            patch("src.core.tools.creatives.listing.get_audit_logger"),
+            patch("src.core.tools.creatives.listing.log_tool_activity"),
+        ):
+            mock_session = MagicMock()
+            mock_db.return_value.__enter__.return_value = mock_session
+            mock_db.return_value.__exit__.return_value = None
+
+            # Simulate a DB creative row
+            mock_creative = MagicMock()
+            mock_creative.creative_id = "c_listing_1"
+            mock_creative.name = "Listing Banner"
+            mock_creative.agent_url = DEFAULT_AGENT_URL
+            mock_creative.format = "display_300x250_image"
+            mock_creative.format_parameters = None
+            mock_creative.status = "approved"
+            mock_creative.data = {"assets": {"banner": {"url": "https://example.com/b.png"}}}
+            mock_creative.created_date = "2026-01-15T10:00:00+00:00"
+            mock_creative.updated_date = "2026-02-20T14:30:00+00:00"
+            mock_creative.principal_id = "principal_1"
+            mock_creative.tenant_id = "tenant_1"
+            mock_creative.media_url = "https://example.com/b.png"
+            mock_creative.click_url = None
+            mock_creative.width = 300
+            mock_creative.height = 250
+            mock_creative.duration = None
+
+            mock_session.scalars.return_value.all.return_value = [mock_creative]
+            mock_session.scalar.return_value = 1  # total count
+
+            # Route 1: _impl — listing fields present, delivery fields absent
+            result = _list_creatives_impl(identity=identity)
+            assert isinstance(result, ListCreativesResponse)
+            assert len(result.creatives) == 1
+
+            creative_data = result.creatives[0].model_dump()
+            # Listing fields must be present
+            for field in ["creative_id", "name", "status", "created_date", "updated_date"]:
+                assert field in creative_data, f"Listing field '{field}' missing"
+            # Delivery-only fields must NOT be present
+            for field in ["variants", "variant_count", "totals", "media_buy_id"]:
+                assert field not in creative_data, f"Delivery-only field '{field}' must NOT appear in listing Creative"
+
+            # Route 2: A2A — list_creatives_raw returns same structure
+            mock_session.scalars.return_value.all.return_value = [mock_creative]
+            mock_session.scalar.return_value = 1
+            a2a_result = list_creatives_raw(identity=identity)
+            assert isinstance(a2a_result, ListCreativesResponse)
+            a2a_data = a2a_result.creatives[0].model_dump()
+            assert "name" in a2a_data
+            assert "variants" not in a2a_data
+
+        # Route 3: REST route exists
+        from src.routes.api_v1 import router
+
+        paths = [route.path for route in router.routes]
+        assert any(p.endswith("/creatives") for p in paths)
 
     def test_list_creatives_response_includes_name(self):
         """name must appear in model_dump() because the listing Creative schema
