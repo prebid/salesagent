@@ -149,7 +149,6 @@ class TestCreativeSchemaCompliance:
         Spec: CONFIRMED -- list-creatives-response.json defines the listing schema;
         library type at adcp-client-python media_buy/list_creatives_response.py.
         Existing: test_architecture_schema_inheritance.py (structural guard)
-        Covers: UC-006-CREATIVE-SCHEMA-COMPLIANCE-01
         """
         from adcp.types.generated_poc.media_buy.list_creatives_response import (
             Creative as ListingCreative,
@@ -327,7 +326,6 @@ class TestSyncCreativeResultSchema:
         Spec: CONFIRMED -- creative-action enum defines exactly:
         created, updated, unchanged, failed, deleted.
         https://github.com/adcontextprotocol/adcp-client-python/blob/a08805d6345c96d43ba9369bb0afe0597182871f/src/adcp/types/generated_poc/enums/creative_action.py
-        Covers: UC-006-CREATIVE-SCHEMA-COMPLIANCE-09
         """
         expected = {"created", "updated", "unchanged", "failed", "deleted"}
         actual = {action.value for action in CreativeAction}
@@ -504,7 +502,6 @@ class TestCreativeAssignmentSchema:
         The spec creative-assignment.json defines only creative_id + weight +
         placement_ids for use in media buy requests; salesagent's internal
         assignment has additional tracking fields.
-        Covers: UC-006-CREATIVE-SCHEMA-COMPLIANCE-07
         """
         from adcp.types import CreativeAssignment as LibraryCreativeAssignment
 
@@ -898,7 +895,6 @@ class TestCreativeValidation:
 
         Spec: CONFIRMED -- creative-asset.json lists format_id in required array.
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/creative-asset.json
-        Covers: UC-006-EXT-E-01
         """
         from pydantic import ValidationError as PydanticValidationError
 
@@ -2394,7 +2390,6 @@ class TestCreativeIdsFilter:
         Spec: CONFIRMED -- sync-creatives-request.json specifies minItems:1
         for creative_ids, so empty [] is invalid per schema. Implementation
         treats falsy [] as no-filter (documents actual behavior).
-        Covers: UC-006-CREATIVE-IDS-SCOPE-01
         """
         creatives = [{"creative_id": "c1"}]
         creative_ids: list[str] = []
@@ -2768,7 +2763,6 @@ class TestRESTCreativeRoutes:
 
         GAP: Needs FastAPI TestClient setup for /creative-formats route test.
         Verifies route registration via router introspection (no TestClient needed).
-        Covers: UC-006-MAIN-REST-01
         """
         from src.routes.api_v1 import router
 
@@ -2779,7 +2773,6 @@ class TestRESTCreativeRoutes:
         """POST /creatives/sync route is registered on the api_v1 router.
 
         GAP: Needs FastAPI TestClient setup for /creatives/sync route test.
-        Covers: UC-006-MAIN-REST-01
         """
         from src.routes.api_v1 import router
 
@@ -2790,7 +2783,6 @@ class TestRESTCreativeRoutes:
         """POST /creatives route is registered on the api_v1 router.
 
         GAP: Needs FastAPI TestClient setup for /creatives route test.
-        Covers: UC-006-MAIN-REST-01
         """
         from src.routes.api_v1 import router
 
@@ -2815,7 +2807,6 @@ class TestCreativeWrongBaseClass:
 
     def test_creative_extends_listing_base_not_delivery(self):
         """Creative base class should be the listing Creative (13 fields),
-        Covers: UC-006-CREATIVE-SCHEMA-COMPLIANCE-01
         not the delivery Creative (6 fields)."""
         from adcp.types.generated_poc.creative.get_creative_delivery_response import (
             Creative as DeliveryCreative,
@@ -2909,10 +2900,7 @@ class TestCreativeAssetTypes:
     """
 
     def test_all_11_asset_types_accepted(self):
-        """Each asset type should be accepted without validation error.
-
-        Covers: UC-006-CREATIVE-SCHEMA-COMPLIANCE-10
-        """
+        """Each asset type should be accepted without validation error."""
         asset_types = [
             "image",
             "video",
@@ -4564,10 +4552,7 @@ class TestAsyncLifecycle:
     """
 
     def test_async_submitted_response(self):
-        """Async submitted acknowledgment conforms to adcp 3.6.0 schema.
-
-        Covers: UC-006-ASYNC-LIFECYCLE-01
-        """
+        """Async submitted acknowledgment conforms to adcp 3.6.0 schema."""
         from adcp.types.generated_poc.media_buy.sync_creatives_async_response_submitted import (
             SyncCreativesSubmitted,
         )
@@ -4582,10 +4567,7 @@ class TestAsyncLifecycle:
         assert empty.context is None
 
     def test_async_working_response(self):
-        """Async working response includes progress percentage and counts.
-
-        Covers: UC-006-ASYNC-LIFECYCLE-02
-        """
+        """Async working response includes progress percentage and counts."""
         from adcp.types.generated_poc.media_buy.sync_creatives_async_response_working import (
             SyncCreativesWorking,
         )
@@ -4605,10 +4587,7 @@ class TestAsyncLifecycle:
         assert data["current_step"] == "validating"
 
     def test_async_input_required_response(self):
-        """Async input-required response indicates what input is needed.
-
-        Covers: UC-006-ASYNC-LIFECYCLE-03
-        """
+        """Async input-required response indicates what input is needed."""
         from adcp.types.generated_poc.media_buy.sync_creatives_async_response_input_required import (
             Reason,
             SyncCreativesInputRequired,
