@@ -7,20 +7,21 @@ Obligations covered:
   (missing=LIST_NOT_FOUND), delete blocked by active media buys (LIST_IN_USE)
 - BR-RULE-075-01: Update replacement semantics -- full replacement per field,
   webhook_url only in update (not create), empty string removes webhook
+
+All tests call production _impl functions with real database via factories.
+Tests for unimplemented _impl functions are marked xfail.
 """
+
+from __future__ import annotations
 
 import pytest
 from adcp.types import (
     CreatePropertyListRequest,
-    CreatePropertyListResponse,
-    DeletePropertyListRequest,
-    DeletePropertyListResponse,
-    GetPropertyListRequest,
-    GetPropertyListResponse,
-    PropertyList,
     UpdatePropertyListRequest,
 )
 from pydantic import ValidationError
+
+from tests.factories import PrincipalFactory, TenantFactory
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -29,36 +30,23 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 # Helpers
 # ---------------------------------------------------------------------------
 
-
-def _make_property_list(
-    list_id: str = "pl_001",
-    name: str = "Test List",
-    tenant_id: str = "tenant_a",
-    **kwargs,
-) -> PropertyList:
-    """Build a PropertyList schema object with defaults."""
-    return PropertyList(list_id=list_id, name=name, **kwargs)
+_XFAIL_NO_IMPL = pytest.mark.xfail(
+    reason="Property list CRUD _impl functions not yet implemented",
+    raises=(ImportError, AttributeError, NotImplementedError),
+    strict=False,
+)
 
 
-def _make_create_response(
-    list_id: str = "pl_001",
-    name: str = "Test List",
-    auth_token: str = "tok_secret_abc123",
-    **list_kwargs,
-) -> CreatePropertyListResponse:
-    """Build a CreatePropertyListResponse matching adcp spec."""
-    pl = _make_property_list(list_id=list_id, name=name, **list_kwargs)
-    return CreatePropertyListResponse(list=pl, auth_token=auth_token)
+def _lazy_identity(tenant_id: str, principal_id: str = "p1"):
+    """Build a ResolvedIdentity for the given tenant."""
+    from src.core.resolved_identity import ResolvedIdentity
+    from src.core.tenant_context import LazyTenantContext
 
-
-def _make_get_response(
-    list_id: str = "pl_001",
-    name: str = "Test List",
-    **list_kwargs,
-) -> GetPropertyListResponse:
-    """Build a GetPropertyListResponse matching adcp spec."""
-    pl = _make_property_list(list_id=list_id, name=name, **list_kwargs)
-    return GetPropertyListResponse(list=pl)
+    return ResolvedIdentity(
+        principal_id=principal_id,
+        tenant_id=tenant_id,
+        tenant=LazyTenantContext(tenant_id),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -69,84 +57,104 @@ def _make_get_response(
 class TestTenantIsolationCreateNotVisibleCrossTenant:
     """A property list created in tenant_A must not be visible from tenant_B."""
 
-    def test_property_list_scoped_to_tenant(self, integration_db):
+    @_XFAIL_NO_IMPL
+    @pytest.mark.asyncio
+    async def test_property_list_scoped_to_tenant(self, integration_db):
         """Property list created for tenant_A is not visible from tenant_B lookup.
 
-        The invariant is enforced by scoping every query to the auth-derived
-        tenant_id. We verify here that the PropertyList schema binds list_id
-        to a specific owner and that a cross-tenant lookup would need to match
-        both list_id AND tenant to succeed.
+        The _impl function scopes every query to the auth-derived tenant_id.
+        A cross-tenant lookup returns NOT_FOUND, not the list.
 
         Covers: BR-RULE-071-01
         """
+        from src.core.tools.property_list import (
+            _create_property_list_impl,
+            _get_property_list_impl,
+        )
+
+        tenant_a = TenantFactory(tenant_id="pl-iso-a", subdomain="pl-iso-a")
+        PrincipalFactory(tenant=tenant_a, principal_id="principal-a")
+        tenant_b = TenantFactory(tenant_id="pl-iso-b", subdomain="pl-iso-b")
+        PrincipalFactory(tenant=tenant_b, principal_id="principal-b")
+
         # Tenant A creates a list
-        pl_a = _make_property_list(list_id="pl_tenant_a", name="Tenant A List")
-        assert pl_a.list_id == "pl_tenant_a"
+        create_req = CreatePropertyListRequest(name="Tenant A List")
+        identity_a = _lazy_identity("pl-iso-a", "principal-a")
+        create_resp = await _create_property_list_impl(create_req, identity_a)
+        list_id = create_resp.list.list_id
 
-        # Tenant B creates a different list
-        pl_b = _make_property_list(list_id="pl_tenant_b", name="Tenant B List")
-        assert pl_b.list_id == "pl_tenant_b"
+        # Tenant B tries to get it — should raise NOT_FOUND
+        from src.core.exceptions import AdCPValidationError
 
-        # The two lists have distinct identities -- tenant scoping ensures
-        # tenant_B cannot see tenant_A's list by list_id alone
-        assert pl_a.list_id != pl_b.list_id
+        identity_b = _lazy_identity("pl-iso-b", "principal-b")
+        with pytest.raises(AdCPValidationError, match="NOT_FOUND"):
+            await _get_property_list_impl(list_id, identity_b)
 
 
 class TestTenantIsolationGetReturnsNotFound:
     """Cross-tenant get returns NOT_FOUND, not ACCESS_DENIED."""
 
-    def test_cross_tenant_get_returns_not_found(self, integration_db):
-        """When tenant_B requests tenant_A's list_id, the response must be
-        LIST_NOT_FOUND (never ACCESS_DENIED) to prevent tenant enumeration.
+    @_XFAIL_NO_IMPL
+    @pytest.mark.asyncio
+    async def test_cross_tenant_get_returns_not_found(self, integration_db):
+        """When tenant_B requests tenant_A's list_id, the error code is NOT_FOUND.
 
-        The _impl function must filter by tenant_id from auth context.
-        A list that exists for tenant_A simply does not exist in tenant_B's scope.
+        NOT_FOUND (not ACCESS_DENIED) prevents tenant enumeration attacks.
 
         Covers: BR-RULE-071-01
         """
-        # GetPropertyListRequest takes a list_id -- the _impl function must
-        # filter by (list_id, tenant_id) so cross-tenant returns NOT_FOUND
-        req = GetPropertyListRequest(list_id="pl_belongs_to_tenant_a")
-        assert req.list_id == "pl_belongs_to_tenant_a"
+        from src.core.tools.property_list import _get_property_list_impl
 
-        # The error code for missing lists is LIST_NOT_FOUND, NOT LIST_ACCESS_DENIED
-        # This prevents an attacker from enumerating valid list_ids across tenants
-        # (if ACCESS_DENIED were returned, attacker knows the list_id exists)
+        from src.core.exceptions import AdCPValidationError
+
+        tenant_a = TenantFactory(tenant_id="pl-notfound-a", subdomain="pl-notfound-a")
+        PrincipalFactory(tenant=tenant_a, principal_id="principal-a")
+
+        identity_b = _lazy_identity("pl-notfound-b", "principal-b")
+        with pytest.raises(AdCPValidationError, match="NOT_FOUND"):
+            await _get_property_list_impl("pl_belongs_to_tenant_a", identity_b)
 
 
 class TestTenantIsolationUpdateReturnsNotFound:
     """Cross-tenant update returns NOT_FOUND."""
 
-    def test_cross_tenant_update_returns_not_found(self, integration_db):
-        """Updating a list_id from the wrong tenant returns LIST_NOT_FOUND.
+    @_XFAIL_NO_IMPL
+    @pytest.mark.asyncio
+    async def test_cross_tenant_update_returns_not_found(self, integration_db):
+        """Updating a list_id from the wrong tenant returns NOT_FOUND.
 
         Covers: BR-RULE-071-01
         """
-        # UpdatePropertyListRequest requires list_id
-        req = UpdatePropertyListRequest(
+        from src.core.tools.property_list import _update_property_list_impl
+
+        from src.core.exceptions import AdCPValidationError
+
+        update_req = UpdatePropertyListRequest(
             list_id="pl_belongs_to_tenant_a",
             name="Hijacked Name",
         )
-        assert req.list_id == "pl_belongs_to_tenant_a"
-        assert req.name == "Hijacked Name"
-
-        # The _impl must scope the lookup to (list_id, auth_tenant_id).
-        # If the list belongs to a different tenant, NOT_FOUND is returned.
+        identity_b = _lazy_identity("wrong-tenant", "principal-b")
+        with pytest.raises(AdCPValidationError, match="NOT_FOUND"):
+            await _update_property_list_impl(update_req, identity_b)
 
 
 class TestTenantIsolationDeleteReturnsNotFound:
     """Cross-tenant delete returns NOT_FOUND."""
 
-    def test_cross_tenant_delete_returns_not_found(self, integration_db):
-        """Deleting a list_id from the wrong tenant returns LIST_NOT_FOUND.
+    @_XFAIL_NO_IMPL
+    @pytest.mark.asyncio
+    async def test_cross_tenant_delete_returns_not_found(self, integration_db):
+        """Deleting a list_id from the wrong tenant returns NOT_FOUND.
 
         Covers: BR-RULE-071-01
         """
-        req = DeletePropertyListRequest(list_id="pl_belongs_to_tenant_a")
-        assert req.list_id == "pl_belongs_to_tenant_a"
+        from src.core.tools.property_list import _delete_property_list_impl
 
-        # The _impl must verify (list_id, tenant_id) before deletion.
-        # Cross-tenant = NOT_FOUND, preventing enumeration.
+        from src.core.exceptions import AdCPValidationError
+
+        identity_b = _lazy_identity("wrong-tenant", "principal-b")
+        with pytest.raises(AdCPValidationError, match="NOT_FOUND"):
+            await _delete_property_list_impl("pl_belongs_to_tenant_a", identity_b)
 
 
 # ---------------------------------------------------------------------------
@@ -157,78 +165,103 @@ class TestTenantIsolationDeleteReturnsNotFound:
 class TestReferentialIntegrityGetNonexistent:
     """get_property_list with nonexistent list_id returns LIST_NOT_FOUND."""
 
-    def test_get_nonexistent_list_id_requires_not_found_error(self, integration_db):
+    @_XFAIL_NO_IMPL
+    @pytest.mark.asyncio
+    async def test_get_nonexistent_list_id_requires_not_found_error(self, integration_db):
         """GetPropertyListRequest with a nonexistent list_id must yield LIST_NOT_FOUND.
-
-        The _impl function queries by (list_id, tenant_id). When no row matches,
-        it must raise an error with code LIST_NOT_FOUND including the requested
-        list_id in the message for debuggability.
 
         Covers: BR-RULE-076-01
         """
-        req = GetPropertyListRequest(list_id="pl_does_not_exist")
-        assert req.list_id == "pl_does_not_exist"
+        from src.core.tools.property_list import _get_property_list_impl
 
-        # Expected error from _impl: AdCPValidationError or similar
-        # with error_code="LIST_NOT_FOUND" and list_id="pl_does_not_exist"
+        from src.core.exceptions import AdCPValidationError
+
+        tenant = TenantFactory(tenant_id="pl-ref-get", subdomain="pl-ref-get")
+        PrincipalFactory(tenant=tenant, principal_id="pl-ref-get-p")
+        identity = _lazy_identity("pl-ref-get", "pl-ref-get-p")
+
+        with pytest.raises(AdCPValidationError, match="NOT_FOUND"):
+            await _get_property_list_impl("pl_does_not_exist", identity)
 
 
 class TestReferentialIntegrityUpdateNonexistent:
     """update_property_list with nonexistent list_id returns LIST_NOT_FOUND."""
 
-    def test_update_nonexistent_list_id_requires_not_found_error(self, integration_db):
+    @_XFAIL_NO_IMPL
+    @pytest.mark.asyncio
+    async def test_update_nonexistent_list_id_requires_not_found_error(self, integration_db):
         """UpdatePropertyListRequest targeting a nonexistent list_id must yield LIST_NOT_FOUND.
 
         Covers: BR-RULE-076-01
         """
-        req = UpdatePropertyListRequest(
-            list_id="pl_does_not_exist",
-            name="Updated Name",
-        )
-        assert req.list_id == "pl_does_not_exist"
-        assert req.name == "Updated Name"
+        from src.core.tools.property_list import _update_property_list_impl
+
+        from src.core.exceptions import AdCPValidationError
+
+        tenant = TenantFactory(tenant_id="pl-ref-upd", subdomain="pl-ref-upd")
+        PrincipalFactory(tenant=tenant, principal_id="pl-ref-upd-p")
+        identity = _lazy_identity("pl-ref-upd", "pl-ref-upd-p")
+
+        req = UpdatePropertyListRequest(list_id="pl_does_not_exist", name="Updated Name")
+        with pytest.raises(AdCPValidationError, match="NOT_FOUND"):
+            await _update_property_list_impl(req, identity)
 
 
 class TestReferentialIntegrityDeleteNonexistent:
     """delete_property_list with nonexistent list_id returns LIST_NOT_FOUND."""
 
-    def test_delete_nonexistent_list_id_requires_not_found_error(self, integration_db):
+    @_XFAIL_NO_IMPL
+    @pytest.mark.asyncio
+    async def test_delete_nonexistent_list_id_requires_not_found_error(self, integration_db):
         """DeletePropertyListRequest targeting a nonexistent list_id must yield LIST_NOT_FOUND.
 
         Covers: BR-RULE-076-01
         """
-        req = DeletePropertyListRequest(list_id="pl_does_not_exist")
-        assert req.list_id == "pl_does_not_exist"
+        from src.core.tools.property_list import _delete_property_list_impl
 
-        # Expected: _impl raises LIST_NOT_FOUND (system state unchanged)
+        from src.core.exceptions import AdCPValidationError
+
+        tenant = TenantFactory(tenant_id="pl-ref-del", subdomain="pl-ref-del")
+        PrincipalFactory(tenant=tenant, principal_id="pl-ref-del-p")
+        identity = _lazy_identity("pl-ref-del", "pl-ref-del-p")
+
+        with pytest.raises(AdCPValidationError, match="NOT_FOUND"):
+            await _delete_property_list_impl("pl_does_not_exist", identity)
 
 
 class TestReferentialIntegrityDeleteBlockedByActiveBuys:
     """delete_property_list blocked by active media buys returns LIST_IN_USE."""
 
-    def test_delete_list_with_active_media_buys_blocked(self, integration_db):
+    @_XFAIL_NO_IMPL
+    @pytest.mark.asyncio
+    async def test_delete_list_with_active_media_buys_blocked(self, integration_db):
         """When a property list is referenced by an active media buy,
         delete must return LIST_IN_USE and leave the list intact.
 
-        The _impl function must check if any active media buy references this
-        list_id in its property_list targeting field before allowing deletion.
-
         Covers: BR-RULE-076-01
         """
-        # A property list that is referenced by active media buys
-        pl = _make_property_list(list_id="pl_in_use", name="Active Campaign List")
-        assert pl.list_id == "pl_in_use"
-
-        # DeletePropertyListResponse for a successful delete looks like:
-        successful_delete = DeletePropertyListResponse(
-            deleted=True,
-            list_id="pl_in_use",
+        from src.core.tools.property_list import (
+            _create_property_list_impl,
+            _delete_property_list_impl,
         )
-        assert successful_delete.deleted is True
-        assert successful_delete.list_id == "pl_in_use"
 
-        # But when LIST_IN_USE: the _impl raises an error, list is NOT deleted.
-        # The error message should indicate active media buy references.
+        from src.core.exceptions import AdCPValidationError
+
+        tenant = TenantFactory(tenant_id="pl-inuse", subdomain="pl-inuse")
+        PrincipalFactory(tenant=tenant, principal_id="pl-inuse-p")
+        identity = _lazy_identity("pl-inuse", "pl-inuse-p")
+
+        # Create the list
+        create_req = CreatePropertyListRequest(name="Active Campaign List")
+        create_resp = await _create_property_list_impl(create_req, identity)
+        list_id = create_resp.list.list_id
+
+        # TODO: Create an active media buy that references this list_id
+        # (Requires MediaBuyFactory with property_list targeting)
+
+        # Attempt to delete — should fail with LIST_IN_USE
+        with pytest.raises(AdCPValidationError, match="IN_USE"):
+            await _delete_property_list_impl(list_id, identity)
 
 
 # ---------------------------------------------------------------------------
@@ -239,17 +272,27 @@ class TestReferentialIntegrityDeleteBlockedByActiveBuys:
 class TestUpdateBasePropertiesFullReplacement:
     """Update base_properties replaces the entire previous set."""
 
-    def test_update_base_properties_full_replacement(self, integration_db):
+    @_XFAIL_NO_IMPL
+    @pytest.mark.asyncio
+    async def test_update_base_properties_full_replacement(self, integration_db):
         """When update provides new base_properties, the old set is fully replaced.
 
-        Full replacement semantics means the _impl function does NOT merge
-        the old and new base_properties -- it overwrites completely.
+        Full replacement semantics: _impl does NOT merge old and new — it overwrites.
 
         Covers: BR-RULE-075-01
         """
-        # Original list has publisher_tags source
-        original = _make_property_list(
-            list_id="pl_update",
+        from src.core.tools.property_list import (
+            _create_property_list_impl,
+            _get_property_list_impl,
+            _update_property_list_impl,
+        )
+
+        tenant = TenantFactory(tenant_id="pl-replace", subdomain="pl-replace")
+        PrincipalFactory(tenant=tenant, principal_id="pl-replace-p")
+        identity = _lazy_identity("pl-replace", "pl-replace-p")
+
+        # Create with publisher_tags source
+        create_req = CreatePropertyListRequest(
             name="Original List",
             base_properties=[
                 {
@@ -259,12 +302,12 @@ class TestUpdateBasePropertiesFullReplacement:
                 }
             ],
         )
-        assert original.base_properties is not None
-        assert len(original.base_properties) == 1
+        create_resp = await _create_property_list_impl(create_req, identity)
+        list_id = create_resp.list.list_id
 
-        # Update request replaces with publisher_ids source
+        # Update with publisher_ids source (completely different)
         update_req = UpdatePropertyListRequest(
-            list_id="pl_update",
+            list_id=list_id,
             base_properties=[
                 {
                     "selection_type": "publisher_ids",
@@ -273,140 +316,158 @@ class TestUpdateBasePropertiesFullReplacement:
                 }
             ],
         )
-        assert update_req.base_properties is not None
-        assert len(update_req.base_properties) == 1
-        new_source = update_req.base_properties[0].root
-        assert new_source.selection_type == "publisher_ids"
+        await _update_property_list_impl(update_req, identity)
 
-        # After _impl processes this update, the property list should have
-        # ONLY the new publisher_ids source -- the old publisher_tags are gone.
-        # Verify the updated response:
-        updated = _make_property_list(
-            list_id="pl_update",
-            name="Original List",  # name not in update, stays unchanged
-            base_properties=[
-                {
-                    "selection_type": "publisher_ids",
-                    "publisher_domain": "news.com",
-                    "property_ids": ["prop_001"],
-                }
-            ],
-        )
-        assert len(updated.base_properties) == 1
-        assert updated.base_properties[0].root.selection_type == "publisher_ids"
+        # Verify: old publisher_tags are gone, only publisher_ids remain
+        get_resp = await _get_property_list_impl(list_id, identity)
+        assert len(get_resp.list.base_properties) == 1
+        assert get_resp.list.base_properties[0].root.selection_type == "publisher_ids"
 
 
 class TestUpdateWebhookUrlSet:
     """webhook_url can be set via update."""
 
-    def test_update_sets_webhook_url(self, integration_db):
+    @_XFAIL_NO_IMPL
+    @pytest.mark.asyncio
+    async def test_update_sets_webhook_url(self, integration_db):
         """UpdatePropertyListRequest with a valid webhook_url sets the webhook.
 
         Covers: BR-RULE-075-01
         """
-        req = UpdatePropertyListRequest(
-            list_id="pl_webhook",
-            webhook_url="https://example.com/webhook",
+        from src.core.tools.property_list import (
+            _create_property_list_impl,
+            _get_property_list_impl,
+            _update_property_list_impl,
         )
-        assert req.webhook_url is not None
-        assert str(req.webhook_url) == "https://example.com/webhook"
 
-        # After _impl processes, the PropertyList should have webhook_url set
-        updated = _make_property_list(
-            list_id="pl_webhook",
-            name="Webhook List",
+        tenant = TenantFactory(tenant_id="pl-webhook", subdomain="pl-webhook")
+        PrincipalFactory(tenant=tenant, principal_id="pl-webhook-p")
+        identity = _lazy_identity("pl-webhook", "pl-webhook-p")
+
+        create_req = CreatePropertyListRequest(name="Webhook List")
+        create_resp = await _create_property_list_impl(create_req, identity)
+        list_id = create_resp.list.list_id
+
+        update_req = UpdatePropertyListRequest(
+            list_id=list_id,
             webhook_url="https://example.com/webhook",
         )
-        assert updated.webhook_url is not None
-        assert str(updated.webhook_url) == "https://example.com/webhook"
+        await _update_property_list_impl(update_req, identity)
+
+        get_resp = await _get_property_list_impl(list_id, identity)
+        assert str(get_resp.list.webhook_url) == "https://example.com/webhook"
 
 
 class TestUpdateWebhookUrlRemoveWithEmptyString:
     """Empty string webhook_url removes the webhook."""
 
-    def test_empty_string_webhook_url_removes_webhook(self, integration_db):
+    @_XFAIL_NO_IMPL
+    @pytest.mark.asyncio
+    async def test_empty_string_webhook_url_removes_webhook(self, integration_db):
         """Per BR-RULE-075, empty string webhook_url removes a previously set webhook.
 
-        The adcp library AnyUrl type rejects empty strings at the schema level,
-        so the _impl function must intercept webhook_url='' BEFORE schema
-        validation and translate it to webhook_url=None (removal).
+        The _impl must intercept webhook_url='' BEFORE schema validation and
+        translate it to webhook_url=None (removal).
 
         Covers: BR-RULE-075-01
         """
-        # Schema-level: empty string is not a valid URL
-        with pytest.raises(ValidationError, match="url_parsing"):
-            UpdatePropertyListRequest(
-                list_id="pl_remove_hook",
-                webhook_url="",
-            )
-
-        # The _impl function must accept a raw webhook_url="" and treat it
-        # as "remove webhook" -- setting webhook_url to None on the stored list.
-        # After processing, the PropertyList should have no webhook:
-        after_removal = _make_property_list(
-            list_id="pl_remove_hook",
-            name="No Webhook List",
-            webhook_url=None,
+        from src.core.tools.property_list import (
+            _create_property_list_impl,
+            _get_property_list_impl,
+            _update_property_list_impl,
         )
-        assert after_removal.webhook_url is None
+
+        tenant = TenantFactory(tenant_id="pl-rmhook", subdomain="pl-rmhook")
+        PrincipalFactory(tenant=tenant, principal_id="pl-rmhook-p")
+        identity = _lazy_identity("pl-rmhook", "pl-rmhook-p")
+
+        # Create and set a webhook
+        create_req = CreatePropertyListRequest(name="Remove Hook List")
+        create_resp = await _create_property_list_impl(create_req, identity)
+        list_id = create_resp.list.list_id
+
+        update_req = UpdatePropertyListRequest(
+            list_id=list_id,
+            webhook_url="https://example.com/webhook",
+        )
+        await _update_property_list_impl(update_req, identity)
+
+        # Empty string removes the webhook — _impl handles this before schema validation
+        # (adcp AnyUrl rejects empty string, so _impl intercepts raw input)
+        await _update_property_list_impl(
+            UpdatePropertyListRequest.__construct__(list_id=list_id, webhook_url=""),
+            identity,
+        )
+
+        get_resp = await _get_property_list_impl(list_id, identity)
+        assert get_resp.list.webhook_url is None
 
 
 class TestCreateRejectsWebhookUrl:
     """webhook_url is NOT allowed on create -- only on update."""
 
-    def test_create_with_webhook_url_rejected(self, integration_db):
+    @_XFAIL_NO_IMPL
+    @pytest.mark.asyncio
+    async def test_create_with_webhook_url_rejected(self, integration_db):
         """CreatePropertyListRequest rejects webhook_url (extra field forbidden).
 
-        Per BR-RULE-075, webhook_url is settable only via update_property_list,
-        never at creation time. The schema enforces this with extra="forbid".
+        Per BR-RULE-075, webhook_url is settable only via update_property_list.
+        Schema-level enforcement prevents constructing the request, so _impl
+        never receives webhook_url on create.
 
         Covers: BR-RULE-075-01
         """
+        from src.core.tools.property_list import _create_property_list_impl
+
+        identity = _lazy_identity("pl-no-webhook", "pl-no-webhook-p")
+
+        # Schema-level: webhook_url is forbidden on create
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-            CreatePropertyListRequest(
+            req = CreatePropertyListRequest(
                 name="New List",
                 webhook_url="https://example.com/hook",
             )
+            await _create_property_list_impl(req, identity)
 
 
 class TestUpdateFieldsNotProvidedUnchanged:
     """Fields not included in update remain unchanged."""
 
-    def test_omitted_fields_remain_unchanged(self, integration_db):
+    @_XFAIL_NO_IMPL
+    @pytest.mark.asyncio
+    async def test_omitted_fields_remain_unchanged(self, integration_db):
         """UpdatePropertyListRequest with only name does not affect other fields.
 
-        Full replacement applies per-field: only fields explicitly provided in
-        the update request are replaced. Omitted fields retain their current
-        values. This means UpdatePropertyListRequest.name=None means "do not
-        change name", not "set name to null".
+        Full replacement is per-field: omitted fields retain current values.
 
         Covers: BR-RULE-075-01
         """
-        # Original list with name and description
-        original = _make_property_list(
-            list_id="pl_partial",
+        from src.core.tools.property_list import (
+            _create_property_list_impl,
+            _get_property_list_impl,
+            _update_property_list_impl,
+        )
+
+        tenant = TenantFactory(tenant_id="pl-partial", subdomain="pl-partial")
+        PrincipalFactory(tenant=tenant, principal_id="pl-partial-p")
+        identity = _lazy_identity("pl-partial", "pl-partial-p")
+
+        # Create with name and description
+        create_req = CreatePropertyListRequest(
             name="Original Name",
             description="Original Description",
         )
-        assert original.name == "Original Name"
-        assert original.description == "Original Description"
+        create_resp = await _create_property_list_impl(create_req, identity)
+        list_id = create_resp.list.list_id
 
         # Update only the name
-        update_req = UpdatePropertyListRequest(
-            list_id="pl_partial",
-            name="New Name",
-        )
-        assert update_req.name == "New Name"
-        assert update_req.description is None  # Not provided = keep existing
+        update_req = UpdatePropertyListRequest(list_id=list_id, name="New Name")
+        await _update_property_list_impl(update_req, identity)
 
-        # After _impl: name is changed, description is kept
-        after_update = _make_property_list(
-            list_id="pl_partial",
-            name="New Name",
-            description="Original Description",  # unchanged
-        )
-        assert after_update.name == "New Name"
-        assert after_update.description == "Original Description"
+        # Description should be unchanged
+        get_resp = await _get_property_list_impl(list_id, identity)
+        assert get_resp.list.name == "New Name"
+        assert get_resp.list.description == "Original Description"
 
 
 # ---------------------------------------------------------------------------
@@ -417,35 +478,51 @@ class TestUpdateFieldsNotProvidedUnchanged:
 class TestCreateResponseIncludesAuthToken:
     """CreatePropertyListResponse includes a one-time auth_token."""
 
-    def test_create_response_has_auth_token(self, integration_db):
+    @_XFAIL_NO_IMPL
+    @pytest.mark.asyncio
+    async def test_create_response_has_auth_token(self, integration_db):
         """The create response must include auth_token (one-time secret).
-
-        This is a schema-level guarantee: CreatePropertyListResponse requires
-        auth_token as a mandatory field.
 
         Covers: BR-RULE-076-01
         """
-        resp = _make_create_response(
-            list_id="pl_new",
-            name="Brand New List",
-            auth_token="tok_one_time_secret",
-        )
-        assert resp.auth_token == "tok_one_time_secret"
-        assert resp.list.list_id == "pl_new"
+        from src.core.tools.property_list import _create_property_list_impl
+
+        tenant = TenantFactory(tenant_id="pl-auth", subdomain="pl-auth")
+        PrincipalFactory(tenant=tenant, principal_id="pl-auth-p")
+        identity = _lazy_identity("pl-auth", "pl-auth-p")
+
+        create_req = CreatePropertyListRequest(name="Brand New List")
+        resp = await _create_property_list_impl(create_req, identity)
+
+        assert resp.auth_token is not None
+        assert len(resp.auth_token) > 0
+        assert resp.list.list_id is not None
         assert resp.list.name == "Brand New List"
 
 
 class TestDeleteResponseSchema:
     """DeletePropertyListResponse confirms deletion with list_id echo."""
 
-    def test_delete_response_echoes_list_id(self, integration_db):
+    @_XFAIL_NO_IMPL
+    @pytest.mark.asyncio
+    async def test_delete_response_echoes_list_id(self, integration_db):
         """Successful delete returns deleted=True and the list_id.
 
         Covers: BR-RULE-076-01
         """
-        resp = DeletePropertyListResponse(
-            deleted=True,
-            list_id="pl_to_delete",
+        from src.core.tools.property_list import (
+            _create_property_list_impl,
+            _delete_property_list_impl,
         )
+
+        tenant = TenantFactory(tenant_id="pl-del", subdomain="pl-del")
+        PrincipalFactory(tenant=tenant, principal_id="pl-del-p")
+        identity = _lazy_identity("pl-del", "pl-del-p")
+
+        create_req = CreatePropertyListRequest(name="To Delete")
+        create_resp = await _create_property_list_impl(create_req, identity)
+        list_id = create_resp.list.list_id
+
+        resp = await _delete_property_list_impl(list_id, identity)
         assert resp.deleted is True
-        assert resp.list_id == "pl_to_delete"
+        assert resp.list_id == list_id
