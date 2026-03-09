@@ -4,11 +4,15 @@ Business logic raises these exceptions. Transport layers (A2A, MCP, REST)
 translate them to their protocol's error format via registered handlers.
 
 Exception classes define the error vocabulary — transport layers format them.
+Each exception carries a recovery classification (transient/correctable/terminal)
+to help buyer agents decide whether to retry, fix, or abandon a request.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
+
+RecoveryHint = Literal["transient", "correctable", "terminal"]
 
 
 class AdCPError(Exception):
@@ -18,27 +22,33 @@ class AdCPError(Exception):
         message: Human-readable error description.
         status_code: HTTP status code for REST/FastAPI responses.
         error_code: Machine-readable error code string.
+        recovery: Recovery classification for buyer agents.
         details: Optional structured error details.
     """
 
     status_code: int = 500
     error_code: str = "INTERNAL_ERROR"
+    recovery: RecoveryHint = "terminal"
 
     def __init__(
         self,
         message: str = "",
         *,
         details: dict[str, Any] | None = None,
+        recovery: RecoveryHint | None = None,
     ) -> None:
         super().__init__(message)
         self.message = message
         self.details = details
+        if recovery is not None:
+            self.recovery = recovery
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to response body dict."""
         result: dict[str, Any] = {
             "error_code": self.error_code,
             "message": self.message,
+            "recovery": self.recovery,
         }
         if self.details is not None:
             result["details"] = self.details
@@ -52,6 +62,7 @@ class AdCPValidationError(AdCPError):
 
     status_code = 400
     error_code = "VALIDATION_ERROR"
+    recovery: RecoveryHint = "correctable"
 
 
 class AdCPAuthenticationError(AdCPError):
@@ -75,11 +86,35 @@ class AdCPNotFoundError(AdCPError):
     error_code = "NOT_FOUND"
 
 
+class AdCPConflictError(AdCPError):
+    """Resource conflict, e.g. duplicate idempotency key (409)."""
+
+    status_code = 409
+    error_code = "CONFLICT"
+    recovery: RecoveryHint = "correctable"
+
+
+class AdCPGoneError(AdCPError):
+    """Resource previously existed but is no longer available (410)."""
+
+    status_code = 410
+    error_code = "GONE"
+
+
+class AdCPBudgetExhaustedError(AdCPError):
+    """Budget or spend limit has been reached (422)."""
+
+    status_code = 422
+    error_code = "BUDGET_EXHAUSTED"
+    recovery: RecoveryHint = "correctable"
+
+
 class AdCPRateLimitError(AdCPError):
     """Too many requests (429)."""
 
     status_code = 429
     error_code = "RATE_LIMIT_EXCEEDED"
+    recovery: RecoveryHint = "transient"
 
 
 class AdCPAdapterError(AdCPError):
@@ -87,23 +122,12 @@ class AdCPAdapterError(AdCPError):
 
     status_code = 502
     error_code = "ADAPTER_ERROR"
+    recovery: RecoveryHint = "transient"
 
 
-# ---------------------------------------------------------------------------
-# Transport mapping utilities
-# ---------------------------------------------------------------------------
+class AdCPServiceUnavailableError(AdCPError):
+    """Service or product temporarily unavailable (503)."""
 
-# A2A SDK JSON-RPC error codes
-_A2A_ERROR_CODE_MAP: dict[type[AdCPError], int] = {
-    AdCPValidationError: -32602,  # InvalidParamsError
-    AdCPAuthenticationError: -32600,  # InvalidRequestError
-    AdCPAuthorizationError: -32600,  # InvalidRequestError
-    AdCPNotFoundError: -32001,  # TaskNotFoundError
-    AdCPRateLimitError: -32603,  # InternalError
-    AdCPAdapterError: -32603,  # InternalError
-}
-
-
-def to_a2a_error_code(exc: AdCPError) -> int:
-    """Map an AdCP exception to its A2A SDK JSON-RPC error code."""
-    return _A2A_ERROR_CODE_MAP.get(type(exc), -32603)
+    status_code = 503
+    error_code = "SERVICE_UNAVAILABLE"
+    recovery: RecoveryHint = "transient"

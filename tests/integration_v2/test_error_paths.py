@@ -486,3 +486,98 @@ class TestImportValidation:
 
         assert len(response.errors) == 1
         assert response.errors[0].code == "test"
+
+
+@pytest.mark.integration
+class TestRecoveryFieldInErrorResponses:
+    """Verify recovery field appears in REST error responses via the exception handler.
+
+    The REST boundary uses AdCPError.to_dict() which includes recovery.
+    These tests confirm the full chain: AdCPError raised -> exception handler -> JSON body.
+    """
+
+    def test_rest_validation_error_has_correctable_recovery(self):
+        """REST 400 from AdCPValidationError includes recovery='correctable'."""
+        from unittest.mock import patch
+
+        from starlette.testclient import TestClient
+
+        from src.app import app
+        from src.core.exceptions import AdCPValidationError
+
+        with patch(
+            "src.core.tools.capabilities.get_adcp_capabilities_raw",
+            side_effect=AdCPValidationError("bad input"),
+        ):
+            client = TestClient(app, raise_server_exceptions=False)
+            response = client.get("/api/v1/capabilities")
+            assert response.status_code == 400
+            body = response.json()
+            assert "recovery" in body, "REST error response must include 'recovery' field"
+            assert body["recovery"] == "correctable"
+
+    def test_rest_adapter_error_has_transient_recovery(self):
+        """REST 502 from AdCPAdapterError includes recovery='transient'."""
+        from unittest.mock import patch
+
+        from starlette.testclient import TestClient
+
+        from src.app import app
+        from src.core.exceptions import AdCPAdapterError
+
+        with patch(
+            "src.core.tools.capabilities.get_adcp_capabilities_raw",
+            side_effect=AdCPAdapterError("GAM unavailable"),
+        ):
+            client = TestClient(app, raise_server_exceptions=False)
+            response = client.get("/api/v1/capabilities")
+            assert response.status_code == 502
+            body = response.json()
+            assert "recovery" in body, "REST error response must include 'recovery' field"
+            assert body["recovery"] == "transient"
+
+    def test_rest_custom_recovery_override_preserved(self):
+        """Custom recovery= override is preserved through REST boundary."""
+        from unittest.mock import patch
+
+        from starlette.testclient import TestClient
+
+        from src.app import app
+        from src.core.exceptions import AdCPNotFoundError
+
+        with patch(
+            "src.core.tools.capabilities.get_adcp_capabilities_raw",
+            side_effect=AdCPNotFoundError("temporarily gone", recovery="transient"),
+        ):
+            client = TestClient(app, raise_server_exceptions=False)
+            response = client.get("/api/v1/capabilities")
+            assert response.status_code == 404
+            body = response.json()
+            assert body["recovery"] == "transient", (
+                "Custom recovery='transient' must be preserved, not default 'terminal'"
+            )
+
+    def test_to_dict_serialization_roundtrip(self):
+        """AdCPError.to_dict() -> JSON -> verify recovery is present and correct."""
+        import json
+
+        from src.core.exceptions import (
+            AdCPBudgetExhaustedError,
+            AdCPRateLimitError,
+            AdCPValidationError,
+        )
+
+        cases = [
+            (AdCPValidationError("bad"), "correctable"),
+            (AdCPRateLimitError("slow"), "transient"),
+            (AdCPBudgetExhaustedError("broke"), "correctable"),
+        ]
+
+        for exc, expected_recovery in cases:
+            d = exc.to_dict()
+            # Simulate JSON roundtrip (what happens in real HTTP response)
+            json_str = json.dumps(d)
+            deserialized = json.loads(json_str)
+            assert deserialized["recovery"] == expected_recovery, (
+                f"{type(exc).__name__}: recovery lost in JSON roundtrip"
+            )

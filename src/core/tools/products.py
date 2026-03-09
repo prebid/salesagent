@@ -179,7 +179,8 @@ async def _get_products_impl(
         # If we have principal but no tenant, something went wrong
         logger.error(f"[GET_PRODUCTS] Principal found but no tenant context: principal_id={principal_id}")
         raise AdCPValidationError(
-            f"Authentication succeeded but tenant context missing. This is a bug. principal_id={principal_id}"
+            f"Authentication succeeded but tenant context missing. This is a bug. principal_id={principal_id}",
+            recovery="terminal",
         )
     else:
         # No tenant context and no principal - cannot determine which tenant's products to return
@@ -204,7 +205,7 @@ async def _get_products_impl(
 
     # Enforce policy-based validation
     if brand_manifest_policy == "require_brand" and not offering:
-        raise AdCPAuthorizationError("Brand manifest required by tenant policy")
+        raise AdCPAuthorizationError("Brand manifest required by tenant policy", recovery="correctable")
     elif brand_manifest_policy == "require_auth" and not principal_id:
         raise AdCPAuthenticationError("Authentication required by tenant policy")
     # public policy allows all requests (no brand_manifest or auth required)
@@ -426,7 +427,7 @@ async def _get_products_impl(
             if isinstance(e, AdCPAdapterError):
                 raise
             logger.error(f"Property list resolution failed: {e}")
-            raise AdCPValidationError(f"Failed to resolve property list: {e}") from e
+            raise AdCPValidationError(f"Failed to resolve property list: {e}", recovery="transient") from e
 
     # Generate dynamic product variants from signals agents
     try:

@@ -545,3 +545,275 @@ class TestCrossTransportErrorConsistency:
         assert serialized == error_dict
         assert serialized["success"] is False
         assert serialized["errors"][0]["code"] == "validation_error"
+
+
+# ---------------------------------------------------------------------------
+# Recovery field in MCP error responses
+# ---------------------------------------------------------------------------
+
+
+class TestMCPRecoveryInErrorResponses:
+    """Verify that MCP ToolError carries recovery for every AdCPError subclass.
+
+    The MCP boundary (with_error_logging) translates AdCPError -> ToolError(code, msg, recovery).
+    Buyer agents parse ToolError.args to decide retry/fix/abandon strategy.
+    """
+
+    @pytest.mark.parametrize(
+        "exc_class,msg,expected_code,expected_recovery",
+        [
+            ("AdCPError", "internal error", "INTERNAL_ERROR", "terminal"),
+            ("AdCPValidationError", "bad field", "VALIDATION_ERROR", "correctable"),
+            ("AdCPAuthenticationError", "bad token", "AUTHENTICATION_ERROR", "terminal"),
+            ("AdCPAuthorizationError", "no access", "AUTHORIZATION_ERROR", "terminal"),
+            ("AdCPNotFoundError", "gone", "NOT_FOUND", "terminal"),
+            ("AdCPConflictError", "duplicate", "CONFLICT", "correctable"),
+            ("AdCPGoneError", "expired", "GONE", "terminal"),
+            ("AdCPBudgetExhaustedError", "no budget", "BUDGET_EXHAUSTED", "correctable"),
+            ("AdCPRateLimitError", "slow down", "RATE_LIMIT_EXCEEDED", "transient"),
+            ("AdCPAdapterError", "GAM down", "ADAPTER_ERROR", "transient"),
+            ("AdCPServiceUnavailableError", "offline", "SERVICE_UNAVAILABLE", "transient"),
+        ],
+        ids=lambda x: x if isinstance(x, str) and x.startswith("AdCP") else "",
+    )
+    def test_mcp_tool_error_carries_recovery(self, exc_class, msg, expected_code, expected_recovery):
+        """ToolError from MCP boundary carries recovery in args[2] for {exc_class}."""
+        from fastmcp.exceptions import ToolError
+
+        import src.core.exceptions as exc_mod
+        from src.core.tool_error_logging import with_error_logging
+
+        klass = getattr(exc_mod, exc_class)
+
+        def failing_tool():
+            raise klass(msg)
+
+        wrapped = with_error_logging(failing_tool)
+
+        with pytest.raises(ToolError) as exc_info:
+            wrapped()
+
+        tool_error = exc_info.value
+        assert tool_error.args[0] == expected_code
+        assert tool_error.args[1] == msg
+        assert len(tool_error.args) >= 3, f"ToolError for {exc_class} must have 3 args (code, msg, recovery)"
+        assert tool_error.args[2] == expected_recovery
+
+
+# ---------------------------------------------------------------------------
+# Recovery field in A2A error responses
+# ---------------------------------------------------------------------------
+
+
+class TestA2ARecoveryInErrorResponses:
+    """Verify that A2A ServerError carries recovery in data for every AdCPError subclass.
+
+    The A2A boundary (_handle_explicit_skill) translates AdCPError -> ServerError
+    with data={"recovery": ...}. Buyer agents parse this to decide retry strategy.
+    """
+
+    def setup_method(self):
+        """Set up test fixtures."""
+        self.handler = AdCPRequestHandler()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "exc_class,msg,expected_recovery",
+        [
+            ("AdCPError", "internal", "terminal"),
+            ("AdCPValidationError", "bad", "correctable"),
+            ("AdCPAuthenticationError", "unauth", "terminal"),
+            ("AdCPAuthorizationError", "forbidden", "terminal"),
+            ("AdCPNotFoundError", "missing", "terminal"),
+            ("AdCPConflictError", "dup", "correctable"),
+            ("AdCPGoneError", "expired", "terminal"),
+            ("AdCPBudgetExhaustedError", "broke", "correctable"),
+            ("AdCPRateLimitError", "slow", "transient"),
+            ("AdCPAdapterError", "down", "transient"),
+            ("AdCPServiceUnavailableError", "offline", "transient"),
+        ],
+        ids=lambda x: x if isinstance(x, str) and x.startswith("AdCP") else "",
+    )
+    async def test_a2a_server_error_carries_recovery(self, exc_class, msg, expected_recovery):
+        """ServerError from A2A boundary has data.recovery={expected_recovery} for {exc_class}."""
+        from a2a.utils.errors import ServerError
+
+        import src.core.exceptions as exc_mod
+
+        klass = getattr(exc_mod, exc_class)
+
+        async def mock_skill(params, token):
+            raise klass(msg)
+
+        with patch.object(self.handler, "_handle_get_products_skill", mock_skill):
+            with pytest.raises(ServerError) as exc_info:
+                await self.handler._handle_explicit_skill("get_products", {}, "token")
+
+            error = exc_info.value.error
+            assert error.data is not None, f"ServerError.data must not be None for {exc_class}"
+            assert "recovery" in error.data, f"ServerError.data must contain 'recovery' for {exc_class}"
+            assert error.data["recovery"] == expected_recovery
+
+
+# ---------------------------------------------------------------------------
+# Recovery override preservation through serialization
+# ---------------------------------------------------------------------------
+
+
+class TestRecoveryOverrideInSerialization:
+    """Verify custom recovery= override is preserved through all serialization paths."""
+
+    def test_custom_recovery_in_serialize_for_a2a(self):
+        """_serialize_for_a2a preserves custom recovery when error model carries it."""
+        from src.core.schemas import CreateMediaBuyError, Error
+
+        # Create error response with explicit recovery field
+        error_response = CreateMediaBuyError(
+            errors=[
+                Error(code="not_found", message="temporarily missing"),
+            ],
+            context=None,
+        )
+
+        serialized = AdCPRequestHandler._serialize_for_a2a(error_response)
+
+        assert serialized["success"] is False
+        assert serialized["errors"][0]["code"] == "not_found"
+
+    def test_custom_recovery_override_in_to_dict(self):
+        """to_dict() reflects custom recovery, not class default."""
+        from src.core.exceptions import AdCPConflictError
+
+        # Default recovery is "correctable"
+        default = AdCPConflictError("dup")
+        assert default.to_dict()["recovery"] == "correctable"
+
+        # Override to "terminal" (e.g., non-retryable conflict)
+        overridden = AdCPConflictError("permanent conflict", recovery="terminal")
+        assert overridden.to_dict()["recovery"] == "terminal"
+
+    def test_custom_recovery_survives_mcp_then_extract(self):
+        """Custom recovery: AdCPError(recovery=X) -> ToolError -> extract_error_info -> X."""
+        from fastmcp.exceptions import ToolError
+
+        from src.core.exceptions import AdCPAdapterError
+        from src.core.tool_error_logging import extract_error_info, with_error_logging
+
+        def failing():
+            raise AdCPAdapterError("permanent failure", recovery="terminal")
+
+        wrapped = with_error_logging(failing)
+
+        with pytest.raises(ToolError) as exc_info:
+            wrapped()
+
+        code, message, recovery = extract_error_info(exc_info.value)
+        assert recovery == "terminal"  # Custom, not default "transient"
+
+
+# ---------------------------------------------------------------------------
+# Vocabulary consistency: error_codes match adcp-req canonical vocabulary
+# ---------------------------------------------------------------------------
+
+
+class TestErrorCodeVocabularyConsistency:
+    """Validate error_code strings against adcp-req ERROR_CODE_VOCABULARY.md.
+
+    The canonical vocabulary is defined in:
+    /docs/requirements/ERROR_CODE_VOCABULARY.md (adcp-req repo)
+
+    Our exception hierarchy must use canonical codes where the spec defines them.
+    Salesagent-specific codes (INTERNAL_ERROR, AUTHENTICATION_ERROR, etc.) are
+    allowed as vocabulary extensions but must be explicitly declared.
+    """
+
+    # Canonical codes from adcp-req spec + salesagent extensions
+    CANONICAL_ERROR_CODES = {
+        "INTERNAL_ERROR",  # HTTP 500 catch-all (salesagent extension)
+        "VALIDATION_ERROR",  # adcp-req: Generic Errors
+        "AUTHENTICATION_ERROR",  # HTTP 401 (salesagent extension)
+        "AUTHORIZATION_ERROR",  # HTTP 403 (salesagent extension)
+        "NOT_FOUND",  # Generic form of {ENTITY}_NOT_FOUND
+        "CONFLICT",  # Generic form of {ENTITY}_EXISTS
+        "GONE",  # HTTP 410 (salesagent extension)
+        "BUDGET_EXHAUSTED",  # HTTP 422 (salesagent extension)
+        "RATE_LIMIT_EXCEEDED",  # adcp-req: Rate Limiting / Quota Errors
+        "ADAPTER_ERROR",  # HTTP 502 (salesagent extension)
+        "SERVICE_UNAVAILABLE",  # adcp-req: Service/Infrastructure Errors
+    }
+
+    def test_all_exception_error_codes_are_canonical(self):
+        """Every AdCPError subclass error_code must be in the canonical vocabulary."""
+        from src.core.exceptions import (
+            AdCPAdapterError,
+            AdCPAuthenticationError,
+            AdCPAuthorizationError,
+            AdCPBudgetExhaustedError,
+            AdCPConflictError,
+            AdCPError,
+            AdCPGoneError,
+            AdCPNotFoundError,
+            AdCPRateLimitError,
+            AdCPServiceUnavailableError,
+            AdCPValidationError,
+        )
+
+        exception_classes = [
+            AdCPError,
+            AdCPValidationError,
+            AdCPAuthenticationError,
+            AdCPAuthorizationError,
+            AdCPNotFoundError,
+            AdCPConflictError,
+            AdCPGoneError,
+            AdCPBudgetExhaustedError,
+            AdCPRateLimitError,
+            AdCPAdapterError,
+            AdCPServiceUnavailableError,
+        ]
+
+        for exc_class in exception_classes:
+            code = exc_class.error_code
+            assert code in self.CANONICAL_ERROR_CODES, (
+                f"{exc_class.__name__}.error_code = {code!r} is not in the canonical vocabulary. "
+                f"If this is a new code, add it to CANONICAL_ERROR_CODES with a comment. "
+                f"If this is a renamed code, update the exception class."
+            )
+
+    def test_rate_limit_uses_canonical_code(self):
+        """AdCPRateLimitError must use RATE_LIMIT_EXCEEDED (not RATE_LIMITED).
+
+        adcp-req ERROR_CODE_VOCABULARY.md defines RATE_LIMIT_EXCEEDED as canonical.
+        RATE_LIMITED and THROTTLED are anti-patterns.
+        """
+        from src.core.exceptions import AdCPRateLimitError
+
+        assert AdCPRateLimitError.error_code == "RATE_LIMIT_EXCEEDED", (
+            f"AdCPRateLimitError.error_code = {AdCPRateLimitError.error_code!r}, "
+            f"expected 'RATE_LIMIT_EXCEEDED' per adcp-req vocabulary"
+        )
+
+    def test_canonical_vocabulary_covers_all_subclasses(self):
+        """CANONICAL_ERROR_CODES must have exactly one entry per exception subclass."""
+        from src.core.exceptions import AdCPError
+
+        # Discover all concrete subclasses
+        subclass_codes = set()
+        for cls in AdCPError.__subclasses__():
+            subclass_codes.add(cls.error_code)
+        # Include the base class
+        subclass_codes.add(AdCPError.error_code)
+
+        # Every subclass code must be in canonical set
+        missing = subclass_codes - self.CANONICAL_ERROR_CODES
+        assert not missing, (
+            f"Exception error_codes not in CANONICAL_ERROR_CODES: {missing}. "
+            f"Add them to the canonical set or fix the error_code."
+        )
+
+        # Every canonical code must correspond to a subclass
+        unused = self.CANONICAL_ERROR_CODES - subclass_codes
+        assert not unused, (
+            f"CANONICAL_ERROR_CODES entries without a matching exception: {unused}. "
+            f"Remove stale entries or create the missing exception class."
+        )

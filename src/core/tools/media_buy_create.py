@@ -1051,6 +1051,7 @@ def _validate_pricing_model_selection(
         raise AdCPValidationError(
             f"Product {product.product_id} has no pricing_options configured. This is a data integrity error.",
             details={"error_code": "PRICING_ERROR"},
+            recovery="terminal",
         )
 
     # Determine which pricing option to use
@@ -1138,6 +1139,7 @@ def _validate_pricing_model_selection(
         raise AdCPValidationError(
             f"Product {product.product_id} pricing option has is_fixed=true but no rate specified",
             details={"error_code": "PRICING_ERROR"},
+            recovery="terminal",
         )
 
     # Validate minimum spend per package
@@ -1255,6 +1257,7 @@ async def _validate_and_convert_format_ids(
                     f"agent_url={agent_url}, format_id={format_id!r}. "
                     f"Use list_creative_formats to discover available formats.",
                     details={"error_code": "FORMAT_VALIDATION_ERROR"},
+                    recovery="correctable",
                 )
         except Exception as e:
             if isinstance(e, AdCPError):
@@ -1333,7 +1336,7 @@ async def _create_media_buy_impl(
                 f"Setup incomplete. Please complete the following required tasks:\n\n{task_list}\n\n"
                 f"Visit the setup checklist at /tenant/{tenant['tenant_id']}/setup-checklist for details."
             )
-            raise AdCPValidationError(error_msg)
+            raise AdCPValidationError(error_msg, recovery="terminal")
 
     # Validate principal exists BEFORE creating context (foreign key constraint)
     principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
@@ -3098,7 +3101,11 @@ async def _create_media_buy_impl(
                         error_msg = f"Creative IDs not found: {', '.join(sorted(missing_ids))}"
                         logger.error(error_msg)
                         ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_msg)
-                        raise AdCPNotFoundError(error_msg, details={"error_code": "CREATIVES_NOT_FOUND"})
+                        raise AdCPNotFoundError(
+                            error_msg,
+                            details={"error_code": "CREATIVES_NOT_FOUND"},
+                            recovery="correctable",
+                        )
 
                     # Validate creative formats against product formats BEFORE creating assignments
                     # This ensures creatives match the product's supported formats
