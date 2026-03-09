@@ -143,25 +143,43 @@ class TestPrecondSchemaObligations:
 class TestBrandManifestExtraction:
     """Brand manifest offering text derivation."""
 
-    def test_brand_name_derives_offering_text(self):
-        """Brand reference with name field yields offering text from name.
+    async def test_brand_name_derives_offering_text(self):
+        """Brand domain derives offering text used for product matching.
 
         Covers: UC-001-MAIN-03
+
+        When brand.domain is provided (e.g. "nikerunning.com"), the impl
+        derives offering = "Brand at nikerunning.com" for internal use
+        in policy checks and product matching.  Products are returned.
         """
-        from adcp import BrandManifest
+        with ProductEnv() as env:
+            env.add_product(product_id="prod_brand")
+            response = await env.call_impl(
+                brief="Nike running shoes",
+                brand={"domain": "nikerunning.com"},
+            )
+        assert len(response.products) >= 1, "Brand domain accepted, products returned"
+        ids = [p.product_id for p in response.products]
+        assert "prod_brand" in ids
 
-        brand = BrandManifest(name="Nike Running")
-        assert brand.name == "Nike Running"
-
-    def test_brand_url_derives_offering_text(self):
-        """Brand reference with url but no name yields offering text from url.
+    async def test_brand_url_derives_offering_text(self):
+        """Brand domain from URL-style value yields offering text.
 
         Covers: UC-001-MAIN-04
-        """
-        from adcp import BrandManifest
 
-        brand = BrandManifest(name="", url="https://nike.com")
-        assert brand.url is not None
+        When brand.domain contains a URL-like value (e.g. "nike.com"),
+        the impl derives offering = "Brand at nike.com".  Products are
+        returned without error.
+        """
+        with ProductEnv() as env:
+            env.add_product(product_id="prod_url_brand")
+            response = await env.call_impl(
+                brief="Nike products",
+                brand={"domain": "nike.com"},
+            )
+        assert len(response.products) >= 1, "URL-style brand domain accepted"
+        ids = [p.product_id for p in response.products]
+        assert "prod_url_brand" in ids
 
 
 # ---------------------------------------------------------------------------
