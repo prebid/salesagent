@@ -276,7 +276,7 @@ class AdServerAdapter(ABC):
         if package_pricing_info:
             for _pkg_id, pricing in package_pricing_info.items():
                 pricing_model = pricing.get("pricing_model", "")
-                if pricing_model and pricing_model not in supported:
+                if pricing_model and pricing_model.lower() not in supported:
                     sorted_supported = ", ".join(sorted(s.upper() for s in supported))
                     errors.append(
                         f"Adapter does not support '{pricing_model}' pricing. "
