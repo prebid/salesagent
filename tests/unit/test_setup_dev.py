@@ -331,6 +331,25 @@ class TestEnsureEnv:
         content = setup_dev.load_env_file(env_path)
         assert content["KEY"] == "custom"
 
+    def test_all_commented_template_produces_only_secrets(self, tmp_path: Path):
+        """Real .env.template has all lines commented — ensure_env still works."""
+        template = tmp_path / ".env.template"
+        template.write_text(
+            "# Comment line\n# OAUTH_CLIENT_ID=your-id\n# OAUTH_CLIENT_SECRET=your-secret\n# ENCRYPTION_KEY=\n"
+        )
+        env_path = tmp_path / ".env"
+
+        with (
+            patch.object(setup_dev, "ENV_FILE", env_path),
+            patch.object(setup_dev, "ENV_TEMPLATE", template),
+        ):
+            result = setup_dev.ensure_env()
+
+        assert result.ok is True
+        content = setup_dev.load_env_file(env_path)
+        # Only auto-generated secrets should be present
+        assert set(content.keys()) == {"FLASK_SECRET_KEY", "ENCRYPTION_KEY"}
+
     def test_idempotent_when_no_changes(self, tmp_path: Path):
         template = tmp_path / ".env.template"
         template.write_text("")
