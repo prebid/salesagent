@@ -281,10 +281,10 @@ class TestAdminDeliveryTenantIsolation:
 
         assert func_node is not None, "review_creatives function not found"
 
-        # Verify MediaBuyRepository is instantiated (tenant-scoped by construction)
+        # Verify tenant-scoped media buy access (via MediaBuyRepository or AdminCreativeUoW)
         source_text = ast.get_source_segment(source_path.read_text(), func_node)
-        assert "MediaBuyRepository" in source_text, (
-            "review_creatives() must use MediaBuyRepository for tenant-scoped MediaBuy access"
+        assert "MediaBuyRepository" in source_text or "AdminCreativeUoW" in source_text, (
+            "review_creatives() must use MediaBuyRepository or AdminCreativeUoW for tenant-scoped MediaBuy access"
         )
 
         # Verify no raw select(MediaBuy) calls bypass the repository

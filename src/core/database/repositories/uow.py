@@ -32,7 +32,7 @@ from typing import Any, Self
 from sqlalchemy.orm import Session
 
 from src.core.database.database_session import get_db_session
-from src.core.database.repositories.creative import CreativeRepository
+from src.core.database.repositories.creative import CreativeAssignmentRepository, CreativeRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.product import ProductRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
@@ -205,11 +205,13 @@ class CreativeUoW:
         self._session_cm: Any = None
         self.session: Session | None = None
         self.creatives: CreativeRepository | None = None
+        self.assignments: CreativeAssignmentRepository | None = None
 
     def __enter__(self) -> Self:
         self._session_cm = get_db_session()
         self.session = self._session_cm.__enter__()
         self.creatives = CreativeRepository(self.session, self._tenant_id)
+        self.assignments = CreativeAssignmentRepository(self.session, self._tenant_id)
         return self
 
     def __exit__(
@@ -225,3 +227,52 @@ class CreativeUoW:
         self._session_cm.__exit__(exc_type, exc_val, exc_tb)
         self.session = None
         self.creatives = None
+        self.assignments = None
+
+
+class AdminCreativeUoW:
+    """Unit of Work for admin creative operations.
+
+    Provides CreativeRepository, CreativeAssignmentRepository, and MediaBuyRepository
+    in a single session scope. Used by admin blueprint handlers that need cross-entity
+    queries (e.g. creative + assignments + media buys).
+
+    Auto-commits on clean exit, rolls back on exception.
+
+    Args:
+        tenant_id: Tenant scope for all repository queries.
+
+    beads: salesagent-4tb
+    """
+
+    def __init__(self, tenant_id: str) -> None:
+        self._tenant_id = tenant_id
+        self._session_cm: Any = None
+        self.session: Session | None = None
+        self.creatives: CreativeRepository | None = None
+        self.assignments: CreativeAssignmentRepository | None = None
+        self.media_buys: MediaBuyRepository | None = None
+
+    def __enter__(self) -> Self:
+        self._session_cm = get_db_session()
+        self.session = self._session_cm.__enter__()
+        self.creatives = CreativeRepository(self.session, self._tenant_id)
+        self.assignments = CreativeAssignmentRepository(self.session, self._tenant_id)
+        self.media_buys = MediaBuyRepository(self.session, self._tenant_id)
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        assert self.session is not None
+        assert self._session_cm is not None
+        if exc_type is None:
+            self.session.commit()
+        self._session_cm.__exit__(exc_type, exc_val, exc_tb)
+        self.session = None
+        self.creatives = None
+        self.assignments = None
+        self.media_buys = None
