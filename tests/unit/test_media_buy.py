@@ -3787,8 +3787,6 @@ class TestDeliveryImplPricingLookup:
         Source: UC-004, salesagent-mq3n
         Covers: UC-002-EXT-N-08
         """
-        from unittest.mock import patch
-
         from src.core.tools.media_buy_delivery import _get_pricing_options
 
         mock_po = MagicMock()
@@ -3798,13 +3796,10 @@ class TestDeliveryImplPricingLookup:
         mock_po.is_fixed = True
         mock_po.tenant_id = "test_tenant"
 
-        with patch("src.core.tools.media_buy_delivery.get_db_session") as mock_db:
-            mock_session = MagicMock()
-            mock_session.scalars.return_value.all.return_value = [mock_po]
-            mock_db.return_value.__enter__ = lambda s: mock_session
-            mock_db.return_value.__exit__ = MagicMock(return_value=False)
+        mock_repo = MagicMock()
+        mock_repo.get_all_pricing_options.return_value = [mock_po]
 
-            result = _get_pricing_options(["cpm_usd_fixed"], tenant_id="test_tenant")
+        result = _get_pricing_options(["cpm_usd_fixed"], tenant_id="test_tenant", product_repo=mock_repo)
 
         assert "cpm_usd_fixed" in result
         assert result["cpm_usd_fixed"] == mock_po
