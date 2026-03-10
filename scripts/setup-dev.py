@@ -135,6 +135,10 @@ def ensure_env_secrets(env: dict[str, str]) -> dict[str, str]:
     result = dict(env)
     if not result.get("FLASK_SECRET_KEY"):
         result["FLASK_SECRET_KEY"] = generate_secret_key()
+    if not result.get("ENCRYPTION_KEY"):
+        from cryptography.fernet import Fernet
+
+        result["ENCRYPTION_KEY"] = Fernet.generate_key().decode()
     return result
 
 

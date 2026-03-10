@@ -151,6 +151,25 @@ class TestEnsureEnvSecrets:
         setup_dev.ensure_env_secrets(original)
         assert "FLASK_SECRET_KEY" not in original
 
+    def test_generates_missing_encryption_key(self):
+        """ENCRYPTION_KEY is required by src/core/utils/encryption.py.
+        Without it, any code path using encrypt/decrypt raises ValueError."""
+        result = setup_dev.ensure_env_secrets({})
+        assert "ENCRYPTION_KEY" in result
+        assert len(result["ENCRYPTION_KEY"]) > 0
+
+    def test_preserves_existing_encryption_key(self):
+        result = setup_dev.ensure_env_secrets({"ENCRYPTION_KEY": "existing-key"})
+        assert result["ENCRYPTION_KEY"] == "existing-key"
+
+    def test_generates_valid_fernet_encryption_key(self):
+        """Generated ENCRYPTION_KEY must be a valid Fernet key."""
+        from cryptography.fernet import Fernet
+
+        result = setup_dev.ensure_env_secrets({})
+        # Should not raise — key must be valid base64 Fernet key
+        Fernet(result["ENCRYPTION_KEY"].encode())
+
 
 # ---------------------------------------------------------------------------
 # serialize_env
@@ -292,7 +311,7 @@ class TestEnsureEnv:
         template = tmp_path / ".env.template"
         template.write_text("")
         env_path = tmp_path / ".env"
-        env_path.write_text("FLASK_SECRET_KEY=existing\n")
+        env_path.write_text("ENCRYPTION_KEY=existing-key\nFLASK_SECRET_KEY=existing\n")
 
         with (
             patch.object(setup_dev, "ENV_FILE", env_path),
