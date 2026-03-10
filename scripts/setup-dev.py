@@ -251,7 +251,26 @@ def ensure_env() -> StepResult:
 
 def ensure_pre_commit() -> StepResult:
     """Install pre-commit hooks if not already installed."""
+    # Check both default hooks dir and custom hooksPath (e.g. beads uses .beads/hooks)
     hook_file = ROOT_DIR / ".git" / "hooks" / "pre-commit"
+    try:
+        hooks_path = subprocess.run(
+            ["git", "config", "--get", "core.hooksPath"],
+            capture_output=True,
+            text=True,
+            cwd=ROOT_DIR,
+        )
+        if hooks_path.returncode == 0 and hooks_path.stdout.strip():
+            custom_hook = ROOT_DIR / hooks_path.stdout.strip() / "pre-commit"
+            if custom_hook.exists():
+                return StepResult(
+                    name="pre-commit",
+                    ok=True,
+                    message=f"Pre-commit hooks managed by {hooks_path.stdout.strip()}",
+                    skipped=True,
+                )
+    except OSError:
+        pass
     if hook_file.exists():
         return StepResult(
             name="pre-commit",
@@ -260,7 +279,7 @@ def ensure_pre_commit() -> StepResult:
             skipped=True,
         )
     try:
-        _run(["uv", "run", "pre-commit", "install"])
+        _run(["uvx", "pre-commit", "install"])
         return StepResult(name="pre-commit", ok=True, message="Pre-commit hooks installed")
     except subprocess.CalledProcessError as exc:
         return StepResult(
