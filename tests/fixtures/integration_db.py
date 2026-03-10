@@ -44,35 +44,13 @@ def _parse_postgres_url(url: str) -> _PgConnInfo:
 
 
 def _import_all_models() -> None:
-    """Import all ORM models so Base.metadata knows about every table."""
+    """Import all ORM models so Base.metadata knows about every table.
+
+    The module-level import triggers Python to execute the models module body,
+    which defines all ORM classes and registers them with Base.metadata.
+    No explicit per-model imports needed.
+    """
     import src.core.database.models as _all_models  # noqa: F401
-    from src.core.database.models import (  # noqa: F401
-        AdapterConfig,
-        AuditLog,
-        AuthorizedProperty,
-        Base,
-        Context,
-        Creative,
-        CreativeAssignment,
-        FormatPerformanceMetrics,
-        GAMInventory,
-        GAMLineItem,
-        GAMOrder,
-        MediaBuy,
-        ObjectWorkflowMapping,
-        Principal,
-        Product,
-        ProductInventoryMapping,
-        PropertyTag,
-        PushNotificationConfig,
-        Strategy,
-        StrategyState,
-        SyncJob,
-        Tenant,
-        TenantManagementConfig,
-        User,
-        WorkflowStep,
-    )
 
 
 @contextmanager
@@ -105,6 +83,7 @@ def make_integration_db(
 
     # ── Create unique database ──────────────────────────────────────────
     unique_db_name = f"test_{uuid.uuid4().hex[:8]}"
+    assert re.match(r"^test_[0-9a-f]{8}$", unique_db_name), f"Unexpected db name format: {unique_db_name}"
     conn_params = {
         "host": pg.host,
         "port": pg.port,
@@ -182,15 +161,18 @@ def make_integration_db(
             conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
             cur = conn.cursor()
             cur.execute(
-                f"""
+                """
                 SELECT pg_terminate_backend(pg_stat_activity.pid)
                 FROM pg_stat_activity
-                WHERE pg_stat_activity.datname = '{unique_db_name}'
+                WHERE pg_stat_activity.datname = %s
                 AND pid <> pg_backend_pid()
-                """
+                """,
+                (unique_db_name,),
             )
             cur.execute(f'DROP DATABASE IF EXISTS "{unique_db_name}"')
             cur.close()
             conn.close()
-        except Exception:
-            pass  # Ignore cleanup errors
+        except Exception as exc:
+            import warnings
+
+            warnings.warn(f"Failed to drop test database {unique_db_name}: {exc}", stacklevel=1)
