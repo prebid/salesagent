@@ -151,12 +151,14 @@ class TestExecuteApprovedStatusUpdate:
         mock_uow_1.__enter__ = MagicMock(return_value=mock_uow_1)
         mock_uow_1.__exit__ = MagicMock(return_value=None)
         mock_uow_1.session = mock_session_1
+        mock_uow_1._session = mock_session_1
         mock_uow_1.media_buys = MagicMock()
 
         mock_uow_2 = MagicMock()
         mock_uow_2.__enter__ = MagicMock(return_value=mock_uow_2)
         mock_uow_2.__exit__ = MagicMock(return_value=None)
         mock_uow_2.session = mock_session_2
+        mock_uow_2._session = mock_session_2
         mock_uow_2.media_buys = MagicMock()
 
         # UoW 3 uses update_status on the repository — track it was called
@@ -165,6 +167,7 @@ class TestExecuteApprovedStatusUpdate:
         mock_uow_3.__enter__ = MagicMock(return_value=mock_uow_3)
         mock_uow_3.__exit__ = MagicMock(return_value=None)
         mock_uow_3.session = mock_session_3
+        mock_uow_3._session = mock_session_3
         mock_uow_3.media_buys = mock_repo_3
 
         uow_iter = iter([mock_uow_1, mock_uow_2, mock_uow_3])

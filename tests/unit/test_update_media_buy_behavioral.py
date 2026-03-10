@@ -95,6 +95,7 @@ def standard_mocks():
     # Build a mock UoW that provides session and media_buys repo
     mock_uow = MagicMock()
     mock_uow.session = mock_session
+    mock_uow._session = mock_session
     mock_uow.media_buys = MagicMock()
     mock_uow.__enter__ = Mock(return_value=mock_uow)
     mock_uow.__exit__ = Mock(return_value=False)
@@ -168,6 +169,7 @@ def _setup_db_session(standard_mocks):
     standard_mocks["db_session"] = mock_session
     # Keep UoW session in sync
     standard_mocks["uow_instance"].session = mock_session
+    standard_mocks["uow_instance"]._session = mock_session
     return mock_session
 
 

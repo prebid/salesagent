@@ -416,10 +416,10 @@ class TestMediaBuyUoW:
     def test_uow_commits_on_clean_exit(self, tenant_a, principal_a):
         from src.core.database.repositories import MediaBuyUoW
 
-        # Create a media buy inside UoW
+        # Create a media buy inside UoW via repository
         with MediaBuyUoW(tenant_a) as uow:
             mb = _make_media_buy(tenant_a, principal_a, "mb_uow_test")
-            uow.session.add(mb)
+            uow.media_buys.create(mb)
 
         # Verify it persisted (outside the UoW)
         with get_db_session() as session:
@@ -437,7 +437,7 @@ class TestMediaBuyUoW:
         with pytest.raises(ValueError, match="intentional"):
             with MediaBuyUoW(tenant_a) as uow:
                 mb = _make_media_buy(tenant_a, principal_a, "mb_uow_rollback")
-                uow.session.add(mb)
+                uow.media_buys.create(mb)
                 raise ValueError("intentional")
 
         # Verify it was NOT persisted

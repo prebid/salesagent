@@ -18,6 +18,7 @@ from adcp.webhooks import GeneratedTaskStatus
 from src.core.database.models import (
     PushNotificationConfig as DBPushNotificationConfig,
 )
+from src.core.database.repositories.creative import CreativeRepository
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 # TODO: Missing module - these functions need to be implemented
@@ -112,7 +113,6 @@ async def _call_webhook_for_creative_status(
 
     try:
         with AdminCreativeUoW(tenant_id or "") as uow:
-            assert uow.session is not None
             assert uow.workflows is not None
             assert uow.creatives is not None
             mapping = uow.workflows.get_latest_mapping_for_object("creative", creative_id)
@@ -278,7 +278,6 @@ def index(tenant_id, **kwargs):
 def review_creatives(tenant_id, **kwargs):
     """Unified creative management: view, review, and manage all creatives."""
     with AdminCreativeUoW(tenant_id) as uow:
-        assert uow.session is not None
         assert uow.creatives is not None
         assert uow.assignments is not None
         assert uow.media_buys is not None
@@ -403,7 +402,7 @@ def analyze(tenant_id, **kwargs):
 
 
 def _create_human_review_record(
-    session,
+    creative_repo: CreativeRepository,
     *,
     creative_id: str,
     tenant_id: str,
@@ -413,7 +412,7 @@ def _create_human_review_record(
     is_override: bool,
     final_decision: str,
 ):
-    """Create and add a human CreativeReview record to the session."""
+    """Create and add a human CreativeReview record via the repository."""
     from src.core.database.models import CreativeReview
 
     review_id = f"review_{uuid.uuid4().hex[:12]}"
@@ -433,7 +432,7 @@ def _create_human_review_record(
         human_override=is_override,
         final_decision=final_decision,
     )
-    session.add(human_review)
+    creative_repo.create_review(human_review)
     return human_review
 
 
@@ -510,7 +509,6 @@ def approve_creative(tenant_id, creative_id, **kwargs):
         media_buy_actions: list[dict[str, Any]] = []
 
         with AdminCreativeUoW(tenant_id) as uow:
-            assert uow.session is not None
             assert uow.creatives is not None
             assert uow.assignments is not None
             assert uow.media_buys is not None
@@ -528,7 +526,7 @@ def approve_creative(tenant_id, creative_id, **kwargs):
             is_override = bool(prior_ai_review and prior_ai_review.ai_decision in ["rejected", "reject"])
 
             _create_human_review_record(
-                uow.session,
+                uow.creatives,
                 creative_id=creative_id,
                 tenant_id=tenant_id,
                 principal_id=creative.principal_id,
@@ -667,7 +665,6 @@ def reject_creative(tenant_id, creative_id, **kwargs):
         audit_data: dict[str, Any] = {}
 
         with AdminCreativeUoW(tenant_id) as uow:
-            assert uow.session is not None
             assert uow.creatives is not None
             assert uow.tenant_config is not None
 
@@ -683,7 +680,7 @@ def reject_creative(tenant_id, creative_id, **kwargs):
             is_override = bool(prior_ai_review and prior_ai_review.ai_decision in ["approved", "approve"])
 
             _create_human_review_record(
-                uow.session,
+                uow.creatives,
                 creative_id=creative_id,
                 tenant_id=tenant_id,
                 principal_id=creative.principal_id,
@@ -781,12 +778,11 @@ async def _ai_review_creative_async(
 
     try:
         with AdminCreativeUoW(tenant_id) as uow:
-            assert uow.session is not None
             assert uow.creatives is not None
 
             # Run AI review
             ai_result = _ai_review_creative_impl(
-                tenant_id=tenant_id, creative_id=creative_id, db_session=uow.session, promoted_offering=None
+                tenant_id=tenant_id, creative_id=creative_id, db_session=uow._session, promoted_offering=None
             )
 
             logger.info(f"[AI Review Async] Review completed for {creative_id}: {ai_result['status']}")
@@ -1034,8 +1030,8 @@ def _ai_review_creative_impl_inner(
     cm = AdminCreativeUoW(tenant_id) if db_session is None else contextlib.nullcontext()
     with cm as uow:
         if uow is not None:
-            assert uow.session is not None
-            db_session = uow.session
+            assert uow._session is not None
+            db_session = uow._session
 
         tenant_config_repo = TenantConfigRepository(db_session, tenant_id)
         creative_repo = CreativeRepository(db_session, tenant_id)

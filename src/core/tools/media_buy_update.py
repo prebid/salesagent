@@ -136,8 +136,9 @@ def _update_media_buy_impl(
     # Single UoW for entire update operation — one session, one transaction
     with MediaBuyUoW(tenant["tenant_id"]) as uow:
         assert uow.media_buys is not None
-        assert uow.session is not None
-        session = uow.session
+        # FIXME(salesagent-9f2): raw session usages below should migrate to repository methods
+        assert uow._session is not None
+        session = uow._session
 
         # Resolve media_buy_id from buyer_ref if needed (AdCP oneOf constraint)
         media_buy_id_to_use = req.media_buy_id

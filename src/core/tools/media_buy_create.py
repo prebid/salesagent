@@ -475,8 +475,9 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
     try:
         # Load tenant and set context — single UoW for all reads
         with MediaBuyUoW(tenant_id) as uow:
-            assert uow.session is not None
-            session = uow.session
+            # FIXME(salesagent-9f2): raw session usages below should migrate to repository methods
+            assert uow._session is not None
+            session = uow._session
             stmt_tenant = select(Tenant).filter_by(tenant_id=tenant_id)
             tenant_obj = session.scalars(stmt_tenant).first()
 
@@ -812,8 +813,9 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
         # Upload and associate inline creatives if any exist
         # This handles inline creatives that were uploaded during initial media buy creation
         with MediaBuyUoW(tenant_id) as uow2:
-            assert uow2.session is not None
-            session = uow2.session
+            # FIXME(salesagent-9f2): creative handling should use repository methods
+            assert uow2._session is not None
+            session = uow2._session
             from src.core.database.models import Creative as CreativeModel
             from src.core.database.models import CreativeAssignment
 
@@ -1421,8 +1423,9 @@ async def _create_media_buy_impl(
 
                 # Save to database
                 with MediaBuyUoW(tenant["tenant_id"]) as pnc_uow:
-                    assert pnc_uow.session is not None
-                    db = pnc_uow.session
+                    # FIXME(salesagent-9f2): push notification config should use a repository
+                    assert pnc_uow._session is not None
+                    db = pnc_uow._session
                     # Check if config already exists
                     from sqlalchemy import select
 
@@ -1557,8 +1560,9 @@ async def _create_media_buy_impl(
 
         # Get products first to determine currency from pricing options
         with MediaBuyUoW(tenant["tenant_id"]) as validation_uow:
-            assert validation_uow.session is not None
-            session = validation_uow.session
+            # FIXME(salesagent-9f2): raw session usages below should migrate to repository methods
+            assert validation_uow._session is not None
+            session = validation_uow._session
             # Get products from database
             from sqlalchemy.orm import selectinload
 
@@ -2064,7 +2068,7 @@ async def _create_media_buy_impl(
             # Status is "pending_approval" but the ID is final
             # Repository handles raw_request serialization + package_id injection at the DB boundary
             with MediaBuyUoW(tenant["tenant_id"]) as pending_uow:
-                assert pending_uow.session is not None and pending_uow.media_buys is not None
+                assert pending_uow.media_buys is not None
                 pending_uow.media_buys.create_from_request(
                     media_buy_id=media_buy_id,
                     req=req,
@@ -2121,8 +2125,9 @@ async def _create_media_buy_impl(
             # Create MediaPackage records for structured querying
             # This enables the UI to display packages and creative assignments to work properly
             with MediaBuyUoW(tenant["tenant_id"]) as pkg_uow:
-                assert pkg_uow.session is not None
-                session = pkg_uow.session
+                # FIXME(salesagent-9f2): package creation should use repository methods
+                assert pkg_uow._session is not None
+                session = pkg_uow._session
                 from src.core.database.models import MediaPackage as DBMediaPackage
 
                 for pkg_obj in pending_packages:
@@ -2211,13 +2216,14 @@ async def _create_media_buy_impl(
 
             # Link the workflow step to the media buy so the approval button shows in UI
             with MediaBuyUoW(tenant["tenant_id"]) as wf_uow:
-                assert wf_uow.session is not None
+                # FIXME(salesagent-9f2): workflow mapping should use a repository method
+                assert wf_uow._session is not None
                 from src.core.database.models import ObjectWorkflowMapping
 
                 mapping = ObjectWorkflowMapping(
                     object_type="media_buy", object_id=media_buy_id, step_id=step.step_id, action="create"
                 )
-                wf_uow.session.add(mapping)
+                wf_uow._session.add(mapping)
                 # UoW auto-commits on clean exit
                 logger.info(f"✅ Linked workflow step {step.step_id} to media buy")
 
@@ -2225,8 +2231,9 @@ async def _create_media_buy_impl(
             # This must happen AFTER media packages are created so we have package_ids
             if req.packages:
                 with MediaBuyUoW(tenant["tenant_id"]) as assign_uow:
-                    assert assign_uow.session is not None
-                    session = assign_uow.session
+                    # FIXME(salesagent-9f2): assignment creation should use repository methods
+                    assert assign_uow._session is not None
+                    session = assign_uow._session
                     from src.core.database.models import Creative as DBCreative
                     from src.core.database.models import CreativeAssignment as DBAssignment
 
@@ -2391,9 +2398,10 @@ async def _create_media_buy_impl(
 
                     # Persist the auto-generated config to database
                     with MediaBuyUoW(tenant["tenant_id"]) as gam_uow:
-                        assert gam_uow.session is not None
+                        # FIXME(salesagent-9f2): product update should use ProductRepository
+                        assert gam_uow._session is not None
                         product_stmt = select(ModelProduct).filter_by(product_id=schema_product.product_id)
-                        db_product = gam_uow.session.scalars(product_stmt).first()
+                        db_product = gam_uow._session.scalars(product_stmt).first()
                         if db_product:
                             db_product.implementation_config = schema_product.implementation_config
                             # UoW auto-commits on clean exit
@@ -2821,8 +2829,11 @@ async def _create_media_buy_impl(
         # This prevents GAM order creation when creatives are invalid (all-or-nothing approach)
         try:
             with MediaBuyUoW(tenant["tenant_id"]) as pre_validate_uow:
-                assert pre_validate_uow.session is not None
-                _validate_creatives_before_adapter_call(packages, tenant["tenant_id"], session=pre_validate_uow.session)
+                # FIXME(salesagent-9f2): creative validation should use a repository
+                assert pre_validate_uow._session is not None
+                _validate_creatives_before_adapter_call(
+                    packages, tenant["tenant_id"], session=pre_validate_uow._session
+                )
         except AdCPError:
             # Validation failed - creative validation errors already logged
             # Update workflow step as failed and re-raise (only if step exists - not created in dry_run mode)
@@ -2955,8 +2966,9 @@ async def _create_media_buy_impl(
         # This enables creative_assignments to work properly
         if req.packages or (response.packages and len(response.packages) > 0):
             with MediaBuyUoW(tenant["tenant_id"]) as auto_pkg_uow:
-                assert auto_pkg_uow.session is not None
-                session = auto_pkg_uow.session
+                # FIXME(salesagent-9f2): package creation should use repository methods
+                assert auto_pkg_uow._session is not None
+                session = auto_pkg_uow._session
                 from src.core.database.models import MediaPackage as DBMediaPackage
 
                 # Use response packages if available (has package_ids), otherwise generate from request
@@ -3071,8 +3083,9 @@ async def _create_media_buy_impl(
         # Handle creative_ids in packages if provided (immediate association)
         if req.packages:
             with MediaBuyUoW(tenant["tenant_id"]) as creative_uow:
-                assert creative_uow.session is not None
-                session = creative_uow.session
+                # FIXME(salesagent-9f2): creative assignment should use repository methods
+                assert creative_uow._session is not None
+                session = creative_uow._session
                 from src.core.database.models import Creative as DBCreative
                 from src.core.database.models import CreativeAssignment as DBAssignment
 
@@ -3489,11 +3502,12 @@ async def _create_media_buy_impl(
         try:
             principal_name = "Unknown"
             with MediaBuyUoW(tenant["tenant_id"]) as log_uow:
-                assert log_uow.session is not None
+                # FIXME(salesagent-9f2): principal lookup should use a repository method
+                assert log_uow._session is not None
                 principal_stmt = select(ModelPrincipal).filter_by(
                     principal_id=principal_id, tenant_id=tenant["tenant_id"]
                 )
-                principal_db = log_uow.session.scalars(principal_stmt).first()
+                principal_db = log_uow._session.scalars(principal_stmt).first()
                 if principal_db:
                     principal_name = principal_db.name
 
@@ -3536,11 +3550,12 @@ async def _create_media_buy_impl(
             # Get principal name for notification (reuse from activity logging above)
             principal_name = "Unknown"
             with MediaBuyUoW(tenant["tenant_id"]) as slack_uow:
-                assert slack_uow.session is not None
+                # FIXME(salesagent-9f2): principal lookup should use a repository method
+                assert slack_uow._session is not None
                 principal_stmt2 = select(ModelPrincipal).filter_by(
                     principal_id=principal_id, tenant_id=tenant["tenant_id"]
                 )
-                principal_db = slack_uow.session.scalars(principal_stmt2).first()
+                principal_db = slack_uow._session.scalars(principal_stmt2).first()
                 if principal_db:
                     principal_name = principal_db.name
 

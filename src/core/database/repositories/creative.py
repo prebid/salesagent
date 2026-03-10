@@ -233,6 +233,19 @@ class CreativeRepository:
         """Commit the current transaction."""
         self._session.commit()
 
+    def create_review(self, review: CreativeReview) -> CreativeReview:
+        """Persist a CreativeReview record within this tenant.
+
+        The review.tenant_id must match the repository's tenant_id.
+        Does NOT commit — the caller handles that.
+        """
+        if review.tenant_id != self._tenant_id:
+            raise ValueError(
+                f"Tenant mismatch: review.tenant_id={review.tenant_id!r} != repository tenant_id={self._tenant_id!r}"
+            )
+        self._session.add(review)
+        return review
+
     def get_provenance_policies(self) -> list[dict]:
         """Get creative_policy dicts from products that require AI provenance.
 
