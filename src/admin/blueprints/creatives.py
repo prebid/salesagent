@@ -1135,7 +1135,7 @@ def _ai_review_creative_impl_inner(
                     if packages:
                         product_id = packages[0].get("product_id")
                         if product_id:
-                            stmt = select(Product).filter_by(product_id=product_id)
+                            stmt = select(Product).filter_by(product_id=product_id, tenant_id=tenant_id)
                             product = db_session.scalars(stmt).first()
                             if product:
                                 promoted_offering = product.name
