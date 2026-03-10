@@ -59,13 +59,12 @@ RUN echo 'path-exclude /usr/share/doc/*' > /etc/dpkg/dpkg.cfg.d/01_nodoc && \
     echo 'path-exclude /usr/share/lintian/*' >> /etc/dpkg/dpkg.cfg.d/01_nodoc && \
     echo 'path-exclude /usr/share/linda/*' >> /etc/dpkg/dpkg.cfg.d/01_nodoc
 
-# Install runtime dependencies including nginx
+# Install runtime dependencies including nginx (no gcc/libpq-dev/git — build deps stay in builder)
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     libpq5 \
     curl \
-    git \
     nginx
 
 # Install supercronic for cron jobs (container-friendly cron)
@@ -75,10 +74,6 @@ RUN SUPERCRONIC_ARCH=$(case "${TARGETARCH}" in "arm64") echo "linux-arm64" ;; *)
     -o /usr/local/bin/supercronic && \
     chmod +x /usr/local/bin/supercronic
 
-# Install uv (cacheable)
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --no-cache-dir uv
-
 WORKDIR /app
 
 # Cache bust for COPY layer - change this value to force rebuild
@@ -87,6 +82,9 @@ RUN echo "Cache bust: $CACHE_BUST"
 
 # Copy application code
 COPY . .
+
+# Copy pre-built virtual environment from builder stage (contains all compiled deps)
+COPY --from=builder /app/.venv /app/.venv
 
 # Copy nginx configs - run_all_services.py selects based on ADCP_MULTI_TENANT
 # Default: single-tenant (path-based routing, localhost upstreams)
@@ -99,19 +97,6 @@ COPY config/nginx/nginx-development.conf /etc/nginx/nginx-development.conf
 # Create nginx directories with proper permissions
 RUN mkdir -p /var/log/nginx /var/run && \
     chown -R www-data:www-data /var/log/nginx /var/run
-
-# Set up caching for uv
-ENV UV_CACHE_DIR=/cache/uv
-ENV UV_TOOL_DIR=/cache/uv-tools
-ENV UV_PYTHON_PREFERENCE=only-system
-ENV UV_PYTHON=/usr/local/bin/python3.12
-
-# Create virtual environment and install dependencies
-# This needs to be done as root first, then we'll switch to adcp user
-ENV UV_HTTP_TIMEOUT=300
-RUN --mount=type=cache,target=/cache/uv \
-    --mount=type=cache,target=/root/.cache/pip \
-    uv sync --python=/usr/local/bin/python3.12 --frozen
 
 # Add .venv to PATH and set PYTHONPATH for module imports
 ENV PATH="/app/.venv/bin:$PATH"
