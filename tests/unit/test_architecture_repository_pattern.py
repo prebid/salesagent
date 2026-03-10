@@ -66,10 +66,7 @@ IMPL_SESSION_ALLOWLIST = {
     ("src/core/tools/creatives/_assignments.py", "_process_assignments"),
     ("src/core/tools/creatives/_workflow.py", "_create_sync_workflow_steps"),
     ("src/core/tools/creatives/_workflow.py", "_audit_log_sync"),
-    # task management — 3 functions with get_db_session()
-    ("src/core/tools/task_management.py", "list_tasks"),
-    ("src/core/tools/task_management.py", "get_task"),
-    ("src/core/tools/task_management.py", "complete_task"),
+    # task management — migrated to WorkflowRepository (salesagent-4d4)
     # admin blueprints — 5 functions with get_db_session()
     ("src/admin/blueprints/creatives.py", "review_creatives"),
     ("src/admin/blueprints/creatives.py", "approve_creative"),
