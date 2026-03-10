@@ -100,7 +100,7 @@ elif [ "$infra" = "agent-db" ]; then
 else
     # Unit tests — just need test env vars
     export ADCP_TESTING=true
-    export ENCRYPTION_KEY="${ENCRYPTION_KEY:-PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk=}"
+    export ENCRYPTION_KEY="${ENCRYPTION_KEY:-PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk=}"  # TEST ONLY — never use in production
     export GEMINI_API_KEY="${GEMINI_API_KEY:-test_key}"
 fi
 
