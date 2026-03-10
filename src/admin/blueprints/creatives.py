@@ -364,13 +364,18 @@ def review_creatives(tenant_id, **kwargs):
                 }
             )
 
+        # Extract tenant attributes before UoW closes (avoid DetachedInstanceError)
+        tenant_name = tenant.name
+        has_ai_review = bool(tenant.gemini_api_key and tenant.creative_review_criteria)
+        approval_mode = tenant.approval_mode
+
     return render_template(
         "creative_management.html",
         tenant_id=tenant_id,
-        tenant_name=tenant.name,
+        tenant_name=tenant_name,
         creatives=creative_list,
-        has_ai_review=bool(tenant.gemini_api_key and tenant.creative_review_criteria),
-        approval_mode=tenant.approval_mode,
+        has_ai_review=has_ai_review,
+        approval_mode=approval_mode,
     )
 
 
