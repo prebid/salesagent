@@ -33,6 +33,8 @@ class ProductRepository:
         tenant_id: Tenant scope for all queries.
     """
 
+    _IMMUTABLE_FIELDS: frozenset[str] = frozenset({"tenant_id", "product_id"})
+
     def __init__(self, session: Session, tenant_id: str) -> None:
         self._session = session
         self._tenant_id = tenant_id
@@ -140,8 +142,13 @@ class ProductRepository:
 
         Only updates fields that are valid Product column attributes.
         Returns the updated Product, or None if not found in this tenant.
-        Raises ValueError if any kwarg is not a valid Product attribute.
+        Raises ValueError if any kwarg is not a valid Product attribute or
+        if the caller attempts to update an immutable field (tenant_id,
+        product_id).
         """
+        blocked = self._IMMUTABLE_FIELDS & kwargs.keys()
+        if blocked:
+            raise ValueError(f"Cannot update immutable field(s): {', '.join(sorted(blocked))}")
         product = self.get_by_id(product_id)
         if product is None:
             return None

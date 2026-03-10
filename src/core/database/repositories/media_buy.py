@@ -36,6 +36,9 @@ class MediaBuyRepository:
         tenant_id: Tenant scope for all queries.
     """
 
+    _MEDIA_BUY_IMMUTABLE_FIELDS: frozenset[str] = frozenset({"tenant_id", "media_buy_id", "created_at"})
+    _PACKAGE_IMMUTABLE_FIELDS: frozenset[str] = frozenset({"media_buy_id", "package_id"})
+
     def __init__(self, session: Session, tenant_id: str) -> None:
         self._session = session
         self._tenant_id = tenant_id
@@ -382,8 +385,13 @@ class MediaBuyRepository:
 
         Only updates fields that are valid MediaBuy column attributes.
         Returns the updated MediaBuy, or None if not found in this tenant.
-        Raises ValueError if any kwarg is not a valid MediaBuy attribute.
+        Raises ValueError if any kwarg is not a valid MediaBuy attribute or
+        if the caller attempts to update an immutable field (tenant_id,
+        media_buy_id, created_at).
         """
+        blocked = self._MEDIA_BUY_IMMUTABLE_FIELDS & kwargs.keys()
+        if blocked:
+            raise ValueError(f"Cannot update immutable field(s): {', '.join(sorted(blocked))}")
         media_buy = self.get_by_id(media_buy_id)
         if media_buy is None:
             return None
@@ -455,8 +463,13 @@ class MediaBuyRepository:
 
         Only updates fields that are valid MediaPackage column attributes.
         Returns the updated MediaPackage, or None if not found.
-        Raises ValueError if any kwarg is not a valid MediaPackage attribute.
+        Raises ValueError if any kwarg is not a valid MediaPackage attribute or
+        if the caller attempts to update an immutable field (media_buy_id,
+        package_id).
         """
+        blocked = self._PACKAGE_IMMUTABLE_FIELDS & kwargs.keys()
+        if blocked:
+            raise ValueError(f"Cannot update immutable field(s): {', '.join(sorted(blocked))}")
         package = self.get_package(media_buy_id, package_id)
         if package is None:
             return None

@@ -21,7 +21,7 @@ Usage:
         partners = uow.tenant_config.list_publisher_partners()
         # auto-commits when exiting the `with` block
 
-beads: salesagent-t735 (foundation), salesagent-2lp8 (epic), salesagent-rn59 (ProductUoW), salesagent-4d4 (WorkflowUoW), salesagent-9y0 (TenantConfigUoW), salesagent-q8n (CreativeUoW)
+beads: salesagent-t735 (foundation), salesagent-2lp8 (epic), salesagent-rn59 (ProductUoW), salesagent-4d4 (WorkflowUoW), salesagent-9y0 (TenantConfigUoW), salesagent-q8n (CreativeUoW), salesagent-24c (BaseUoW extraction)
 """
 
 from __future__ import annotations
@@ -39,7 +39,52 @@ from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.database.repositories.workflow import WorkflowRepository
 
 
-class MediaBuyUoW:
+class BaseUoW:
+    """Base Unit of Work — handles session lifecycle.
+
+    Subclasses implement ``_init_repos()`` to create tenant-scoped repositories
+    and ``_clear_repos()`` to reset them on exit.
+
+    Auto-commits on clean exit, rolls back on exception.
+
+    Args:
+        tenant_id: Tenant scope for all repository queries.
+    """
+
+    def __init__(self, tenant_id: str) -> None:
+        self._tenant_id = tenant_id
+        self._session_cm: Any = None
+        self.session: Session | None = None
+
+    def __enter__(self) -> Self:
+        self._session_cm = get_db_session()
+        self.session = self._session_cm.__enter__()
+        self._init_repos()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        assert self.session is not None
+        assert self._session_cm is not None
+        if exc_type is None:
+            self.session.commit()
+        # get_db_session()'s __exit__ handles rollback on exception and cleanup
+        self._session_cm.__exit__(exc_type, exc_val, exc_tb)
+        self.session = None
+        self._clear_repos()
+
+    def _init_repos(self) -> None:
+        raise NotImplementedError
+
+    def _clear_repos(self) -> None:
+        raise NotImplementedError
+
+
+class MediaBuyUoW(BaseUoW):
     """Unit of Work for MediaBuy operations.
 
     Wraps a database session and provides a tenant-scoped MediaBuyRepository.
@@ -49,35 +94,17 @@ class MediaBuyUoW:
         tenant_id: Tenant scope for all repository queries.
     """
 
-    def __init__(self, tenant_id: str) -> None:
-        self._tenant_id = tenant_id
-        self._session_cm: Any = None
-        self.session: Session | None = None
-        self.media_buys: MediaBuyRepository | None = None
+    media_buys: MediaBuyRepository | None
 
-    def __enter__(self) -> Self:
-        self._session_cm = get_db_session()
-        self.session = self._session_cm.__enter__()
-        self.media_buys = MediaBuyRepository(self.session, self._tenant_id)
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> None:
+    def _init_repos(self) -> None:
         assert self.session is not None
-        assert self._session_cm is not None
-        if exc_type is None:
-            self.session.commit()
-        # get_db_session()'s __exit__ handles rollback on exception and cleanup
-        self._session_cm.__exit__(exc_type, exc_val, exc_tb)
-        self.session = None
+        self.media_buys = MediaBuyRepository(self.session, self._tenant_id)
+
+    def _clear_repos(self) -> None:
         self.media_buys = None
 
 
-class ProductUoW:
+class ProductUoW(BaseUoW):
     """Unit of Work for Product operations.
 
     Wraps a database session and provides a tenant-scoped ProductRepository.
@@ -87,35 +114,17 @@ class ProductUoW:
         tenant_id: Tenant scope for all repository queries.
     """
 
-    def __init__(self, tenant_id: str) -> None:
-        self._tenant_id = tenant_id
-        self._session_cm: Any = None
-        self.session: Session | None = None
-        self.products: ProductRepository | None = None
+    products: ProductRepository | None
 
-    def __enter__(self) -> Self:
-        self._session_cm = get_db_session()
-        self.session = self._session_cm.__enter__()
-        self.products = ProductRepository(self.session, self._tenant_id)
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> None:
+    def _init_repos(self) -> None:
         assert self.session is not None
-        assert self._session_cm is not None
-        if exc_type is None:
-            self.session.commit()
-        # get_db_session()'s __exit__ handles rollback on exception and cleanup
-        self._session_cm.__exit__(exc_type, exc_val, exc_tb)
-        self.session = None
+        self.products = ProductRepository(self.session, self._tenant_id)
+
+    def _clear_repos(self) -> None:
         self.products = None
 
 
-class WorkflowUoW:
+class WorkflowUoW(BaseUoW):
     """Unit of Work for Workflow operations.
 
     Wraps a database session and provides a tenant-scoped WorkflowRepository.
@@ -125,35 +134,17 @@ class WorkflowUoW:
         tenant_id: Tenant scope for all repository queries.
     """
 
-    def __init__(self, tenant_id: str) -> None:
-        self._tenant_id = tenant_id
-        self._session_cm: Any = None
-        self.session: Session | None = None
-        self.workflows: WorkflowRepository | None = None
+    workflows: WorkflowRepository | None
 
-    def __enter__(self) -> Self:
-        self._session_cm = get_db_session()
-        self.session = self._session_cm.__enter__()
-        self.workflows = WorkflowRepository(self.session, self._tenant_id)
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> None:
+    def _init_repos(self) -> None:
         assert self.session is not None
-        assert self._session_cm is not None
-        if exc_type is None:
-            self.session.commit()
-        # get_db_session()'s __exit__ handles rollback on exception and cleanup
-        self._session_cm.__exit__(exc_type, exc_val, exc_tb)
-        self.session = None
+        self.workflows = WorkflowRepository(self.session, self._tenant_id)
+
+    def _clear_repos(self) -> None:
         self.workflows = None
 
 
-class TenantConfigUoW:
+class TenantConfigUoW(BaseUoW):
     """Unit of Work for tenant configuration reads.
 
     Wraps a database session and provides a tenant-scoped TenantConfigRepository.
@@ -163,34 +154,17 @@ class TenantConfigUoW:
         tenant_id: Tenant scope for all repository queries.
     """
 
-    def __init__(self, tenant_id: str) -> None:
-        self._tenant_id = tenant_id
-        self._session_cm: Any = None
-        self.session: Session | None = None
-        self.tenant_config: TenantConfigRepository | None = None
+    tenant_config: TenantConfigRepository | None
 
-    def __enter__(self) -> Self:
-        self._session_cm = get_db_session()
-        self.session = self._session_cm.__enter__()
-        self.tenant_config = TenantConfigRepository(self.session, self._tenant_id)
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> None:
+    def _init_repos(self) -> None:
         assert self.session is not None
-        assert self._session_cm is not None
-        if exc_type is None:
-            self.session.commit()
-        self._session_cm.__exit__(exc_type, exc_val, exc_tb)
-        self.session = None
+        self.tenant_config = TenantConfigRepository(self.session, self._tenant_id)
+
+    def _clear_repos(self) -> None:
         self.tenant_config = None
 
 
-class CreativeUoW:
+class CreativeUoW(BaseUoW):
     """Unit of Work for Creative operations.
 
     Wraps a database session and provides a tenant-scoped CreativeRepository.
@@ -200,37 +174,20 @@ class CreativeUoW:
         tenant_id: Tenant scope for all repository queries.
     """
 
-    def __init__(self, tenant_id: str) -> None:
-        self._tenant_id = tenant_id
-        self._session_cm: Any = None
-        self.session: Session | None = None
-        self.creatives: CreativeRepository | None = None
-        self.assignments: CreativeAssignmentRepository | None = None
+    creatives: CreativeRepository | None
+    assignments: CreativeAssignmentRepository | None
 
-    def __enter__(self) -> Self:
-        self._session_cm = get_db_session()
-        self.session = self._session_cm.__enter__()
+    def _init_repos(self) -> None:
+        assert self.session is not None
         self.creatives = CreativeRepository(self.session, self._tenant_id)
         self.assignments = CreativeAssignmentRepository(self.session, self._tenant_id)
-        return self
 
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> None:
-        assert self.session is not None
-        assert self._session_cm is not None
-        if exc_type is None:
-            self.session.commit()
-        self._session_cm.__exit__(exc_type, exc_val, exc_tb)
-        self.session = None
+    def _clear_repos(self) -> None:
         self.creatives = None
         self.assignments = None
 
 
-class AdminCreativeUoW:
+class AdminCreativeUoW(BaseUoW):
     """Unit of Work for admin creative operations.
 
     Provides CreativeRepository, CreativeAssignmentRepository, and MediaBuyRepository
@@ -245,34 +202,17 @@ class AdminCreativeUoW:
     beads: salesagent-4tb
     """
 
-    def __init__(self, tenant_id: str) -> None:
-        self._tenant_id = tenant_id
-        self._session_cm: Any = None
-        self.session: Session | None = None
-        self.creatives: CreativeRepository | None = None
-        self.assignments: CreativeAssignmentRepository | None = None
-        self.media_buys: MediaBuyRepository | None = None
+    creatives: CreativeRepository | None
+    assignments: CreativeAssignmentRepository | None
+    media_buys: MediaBuyRepository | None
 
-    def __enter__(self) -> Self:
-        self._session_cm = get_db_session()
-        self.session = self._session_cm.__enter__()
+    def _init_repos(self) -> None:
+        assert self.session is not None
         self.creatives = CreativeRepository(self.session, self._tenant_id)
         self.assignments = CreativeAssignmentRepository(self.session, self._tenant_id)
         self.media_buys = MediaBuyRepository(self.session, self._tenant_id)
-        return self
 
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> None:
-        assert self.session is not None
-        assert self._session_cm is not None
-        if exc_type is None:
-            self.session.commit()
-        self._session_cm.__exit__(exc_type, exc_val, exc_tb)
-        self.session = None
+    def _clear_repos(self) -> None:
         self.creatives = None
         self.assignments = None
         self.media_buys = None
