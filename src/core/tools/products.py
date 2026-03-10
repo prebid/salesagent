@@ -457,8 +457,8 @@ async def _get_products_impl(
 
         with ProductUoW(tenant["tenant_id"]) as pricing_uow:
             # FIXME(salesagent-9f2): DynamicPricingService needs a repository, not raw session
-            assert pricing_uow._session is not None
-            pricing_service = DynamicPricingService(pricing_uow._session)
+            assert pricing_uow.session is not None
+            pricing_service = DynamicPricingService(pricing_uow.session)
             products = pricing_service.enrich_products_with_pricing(
                 products,
                 tenant_id=tenant["tenant_id"],

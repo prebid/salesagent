@@ -198,8 +198,8 @@ def _get_media_buy_delivery_impl(
                     if pkg_id is not None:
                         pricing_option_ids.append(pkg_id)
         # FIXME(salesagent-9f2): delivery UoW should provide a product repo directly
-        assert uow._session is not None
-        product_repo = ProductRepository(uow._session, tenant["tenant_id"])
+        assert uow.session is not None
+        product_repo = ProductRepository(uow.session, tenant["tenant_id"])
         pricing_options = _get_pricing_options(
             pricing_option_ids, tenant_id=tenant["tenant_id"], product_repo=product_repo
         )
@@ -301,8 +301,8 @@ def _get_media_buy_delivery_impl(
                                 details={"media_buy_id": media_buy_id},
                             )
                             # FIXME(salesagent-9f2): audit logging should use a repository
-                            if uow._session is not None:
-                                uow._session.add(audit_log)
+                            if uow.session is not None:
+                                uow.session.add(audit_log)
                         except Exception as audit_err:
                             logger.error(f"Failed to write adapter failure audit log: {audit_err}")
                         context_val = req.context
@@ -490,8 +490,8 @@ def _get_media_buy_delivery_impl(
         # sequence_number: persistent auto-increment per media buy via WebhookDeliveryLog
         sequence_number = None
         # FIXME(salesagent-9f2): delivery UoW should provide DeliveryRepository directly
-        if deliveries and uow._session is not None:
-            delivery_repo = DeliveryRepository(uow._session, tenant["tenant_id"])
+        if deliveries and uow.session is not None:
+            delivery_repo = DeliveryRepository(uow.session, tenant["tenant_id"])
             # Use the first media buy's sequence as the response-level sequence
             first_mb_id = deliveries[0].media_buy_id
             max_seq = delivery_repo.get_max_sequence_number(first_mb_id, task_type="delivery_poll")

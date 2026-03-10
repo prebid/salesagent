@@ -404,7 +404,6 @@ class TestCreateMediaBuyValidation:
         mock_uow.__enter__ = MagicMock(return_value=mock_uow)
         mock_uow.__exit__ = MagicMock(return_value=None)
         mock_uow.session = session
-        mock_uow._session = session
         mock_media_buys = MagicMock()
         mock_media_buys.get_by_principal.return_value = []
         mock_uow.media_buys = mock_media_buys
@@ -480,7 +479,6 @@ class TestCreateMediaBuyValidation:
         mock_uow.__enter__ = MagicMock(return_value=mock_uow)
         mock_uow.__exit__ = MagicMock(return_value=None)
         mock_uow.session = session
-        mock_uow._session = session
         mock_media_buys = MagicMock()
         mock_media_buys.get_by_principal.return_value = []
         mock_uow.media_buys = mock_media_buys
@@ -642,7 +640,6 @@ class TestCreateMediaBuyValidation:
         mock_uow.__enter__ = MagicMock(return_value=mock_uow)
         mock_uow.__exit__ = MagicMock(return_value=None)
         mock_uow.session = MagicMock()
-        mock_uow._session = MagicMock()
         mock_uow.media_buys = mock_repo
 
         with (
@@ -1395,7 +1392,6 @@ class TestCreateMediaBuyAdapterInteraction:
         mock_uow.__enter__ = MagicMock(return_value=mock_uow)
         mock_uow.__exit__ = MagicMock(return_value=None)
         mock_uow.session = mock_session
-        mock_uow._session = mock_session
         mock_uow.media_buys.get_by_principal.return_value = []
 
         with (
@@ -1611,7 +1607,6 @@ class TestUpdateMediaBuyMainFlow:
         mock_uow = MagicMock()
         mock_session = MagicMock()
         mock_uow.session = mock_session
-        mock_uow._session = mock_session
         mock_uow.media_buys = MagicMock()
         mock_uow.__enter__ = MagicMock(return_value=mock_uow)
         mock_uow.__exit__ = MagicMock(return_value=False)
@@ -1689,7 +1684,6 @@ class TestUpdateMediaBuyMainFlow:
         mock_uow = MagicMock()
         mock_session = MagicMock()
         mock_uow.session = mock_session
-        mock_uow._session = mock_session
         mock_uow.media_buys = MagicMock()
         mock_uow.__enter__ = MagicMock(return_value=mock_uow)
         mock_uow.__exit__ = MagicMock(return_value=False)
@@ -1816,7 +1810,6 @@ class TestUpdateMediaBuyPauseResume:
 
             mock_uow = MagicMock()
             mock_uow.session = MagicMock()
-            mock_uow._session = MagicMock()
             mock_uow.media_buys = MagicMock()
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
@@ -1875,7 +1868,6 @@ class TestUpdateMediaBuyPauseResume:
 
             mock_uow = MagicMock()
             mock_uow.session = MagicMock()
-            mock_uow._session = MagicMock()
             mock_uow.media_buys = MagicMock()
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
@@ -1933,7 +1925,6 @@ class TestUpdateMediaBuyPauseResume:
 
             mock_uow = MagicMock()
             mock_uow.session = MagicMock()
-            mock_uow._session = MagicMock()
             mock_uow.media_buys = MagicMock()
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
@@ -2020,7 +2011,6 @@ class TestUpdateMediaBuyTiming:
             mock_uow = MagicMock()
             mock_uow_session = MagicMock()
             mock_uow.session = mock_uow_session
-            mock_uow._session = mock_uow_session
             mock_uow.media_buys = MagicMock()
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
@@ -2092,7 +2082,6 @@ class TestUpdateMediaBuyTiming:
             mock_uow = MagicMock()
             mock_uow_session = MagicMock()
             mock_uow.session = mock_uow_session
-            mock_uow._session = mock_uow_session
             mock_uow.media_buys = MagicMock()
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
@@ -2249,7 +2238,6 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow = MagicMock()
             uow_session = MagicMock()
             mock_uow.session = uow_session
-            mock_uow._session = uow_session
             mock_uow.media_buys = MagicMock()
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
@@ -2325,7 +2313,6 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow = MagicMock()
             uow_session = MagicMock()
             mock_uow.session = uow_session
-            mock_uow._session = uow_session
             mock_uow.media_buys = MagicMock()
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
@@ -2408,7 +2395,6 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow = MagicMock()
             uow_session = MagicMock()
             mock_uow.session = uow_session
-            mock_uow._session = uow_session
             mock_uow.media_buys = MagicMock()
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
@@ -2492,7 +2478,6 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow = MagicMock()
             uow_session = MagicMock()
             mock_uow.session = uow_session
-            mock_uow._session = uow_session
             mock_uow.media_buys = MagicMock()
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
@@ -2592,7 +2577,6 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow = MagicMock()
             uow_session = MagicMock()
             mock_uow.session = uow_session
-            mock_uow._session = uow_session
             mock_uow.media_buys = MagicMock()
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
@@ -2689,7 +2673,6 @@ class TestUpdateMediaBuyIdentification:
 
             mock_uow = MagicMock()
             mock_uow.session = MagicMock()
-            mock_uow._session = MagicMock()
             mock_uow.media_buys = MagicMock()
             mock_uow.media_buys.get_by_id_or_buyer_ref.return_value = None
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
@@ -2726,7 +2709,6 @@ class TestUpdateMediaBuyIdentification:
 
             mock_uow = MagicMock()
             mock_uow.session = MagicMock()
-            mock_uow._session = MagicMock()
             mock_uow.media_buys = MagicMock()
             mock_uow.media_buys.get_by_buyer_ref.return_value = None
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
@@ -2774,7 +2756,6 @@ class TestUpdateMediaBuyOwnership:
 
             mock_uow = MagicMock()
             mock_uow.session = MagicMock()
-            mock_uow._session = MagicMock()
             mock_uow.media_buys = MagicMock()
             mock_uow.media_buys.get_by_id_or_buyer_ref.return_value = mock_buy
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
@@ -2830,7 +2811,6 @@ class TestUpdateMediaBuyManualApproval:
 
             mock_uow = MagicMock()
             mock_uow.session = MagicMock()
-            mock_uow._session = MagicMock()
             mock_uow.media_buys = MagicMock()
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
@@ -2888,7 +2868,6 @@ class TestUpdateMediaBuyManualApproval:
 
             mock_uow = MagicMock()
             mock_uow.session = MagicMock()
-            mock_uow._session = MagicMock()
             mock_uow.media_buys = MagicMock()
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
@@ -2949,7 +2928,6 @@ class TestUpdateMediaBuyAdapterFailure:
 
             mock_uow = MagicMock()
             mock_uow.session = MagicMock()
-            mock_uow._session = MagicMock()
             mock_uow.media_buys = MagicMock()
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
@@ -3021,7 +2999,6 @@ class TestUpdateMediaBuyAdapterFailure:
             mock_uow = MagicMock()
             uow_session = MagicMock()
             mock_uow.session = uow_session
-            mock_uow._session = uow_session
             mock_uow.media_buys = MagicMock()
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)

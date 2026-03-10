@@ -782,7 +782,7 @@ async def _ai_review_creative_async(
 
             # Run AI review
             ai_result = _ai_review_creative_impl(
-                tenant_id=tenant_id, creative_id=creative_id, db_session=uow._session, promoted_offering=None
+                tenant_id=tenant_id, creative_id=creative_id, db_session=uow.session, promoted_offering=None
             )
 
             logger.info(f"[AI Review Async] Review completed for {creative_id}: {ai_result['status']}")
@@ -1030,8 +1030,8 @@ def _ai_review_creative_impl_inner(
     cm = AdminCreativeUoW(tenant_id) if db_session is None else contextlib.nullcontext()
     with cm as uow:
         if uow is not None:
-            assert uow._session is not None
-            db_session = uow._session
+            assert uow.session is not None
+            db_session = uow.session
 
         tenant_config_repo = TenantConfigRepository(db_session, tenant_id)
         creative_repo = CreativeRepository(db_session, tenant_id)

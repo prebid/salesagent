@@ -118,7 +118,6 @@ class TestUpdateMediaBuyDryRunNoPersistence:
             mock_uow = MagicMock()
             mock_session = MagicMock()
             mock_uow.session = mock_session
-            mock_uow._session = mock_session
             mock_uow.media_buys = MagicMock()
             mock_uow.__enter__ = Mock(return_value=mock_uow)
             mock_uow.__exit__ = Mock(return_value=False)

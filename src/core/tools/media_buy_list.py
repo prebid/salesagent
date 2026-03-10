@@ -123,8 +123,8 @@ def _get_media_buys_impl(
         # Resolve creative approvals for all packages in one batch query
         all_media_buy_ids = [buy.media_buy_id for buy in target_media_buys]
         # FIXME(salesagent-9f2): _fetch_creative_approvals should use a repository method
-        assert uow._session is not None
-        creative_approvals_by_package = _fetch_creative_approvals(all_media_buy_ids, tenant_id, uow._session)
+        assert uow.session is not None
+        creative_approvals_by_package = _fetch_creative_approvals(all_media_buy_ids, tenant_id, uow.session)
 
         # Resolve package configs for all media buys in one batch query
         packages_by_media_buy = _fetch_packages(all_media_buy_ids, uow)
