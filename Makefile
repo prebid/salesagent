@@ -1,5 +1,8 @@
-.PHONY: quality quality-full pre-pr lint-fix lint typecheck test-fast test-full
+.PHONY: setup quality quality-full pre-pr lint-fix lint typecheck test-fast test-full
 .PHONY: test-stack-up test-stack-down test-all test-cov
+
+setup:
+	uv run python scripts/setup-dev.py
 
 quality:
 	uv run ruff format --check .
