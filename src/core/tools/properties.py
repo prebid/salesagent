@@ -76,6 +76,7 @@ def _list_authorized_properties_impl(
 
     try:
         with TenantConfigUoW(tenant_id) as uow:
+            assert uow.tenant_config is not None
             # Query all publisher partners for this tenant (verified or pending)
             # We return all registered publishers because:
             # 1. Verification may be in progress during publisher setup

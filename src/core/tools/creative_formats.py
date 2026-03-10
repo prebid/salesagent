@@ -177,6 +177,7 @@ def _list_creative_formats_impl(
         from src.core.database.repositories.uow import TenantConfigUoW
 
         with TenantConfigUoW(tenant["tenant_id"]) as uow:
+            assert uow.tenant_config is not None
             config_row = uow.tenant_config.get_adapter_config()
             adapter_type = config_row.adapter_type if config_row else None
 

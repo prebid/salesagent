@@ -34,7 +34,11 @@ class TestListPublisherPartners:
             tenant = TenantFactory(tenant_id="tcr_test")
             PublisherPartnerFactory(tenant=tenant, publisher_domain="alpha.com", display_name="Alpha")
             PublisherPartnerFactory(
-                tenant=tenant, publisher_domain="beta.org", display_name="Beta", is_verified=False, sync_status="pending"
+                tenant=tenant,
+                publisher_domain="beta.org",
+                display_name="Beta",
+                is_verified=False,
+                sync_status="pending",
             )
 
             session = env.get_session()

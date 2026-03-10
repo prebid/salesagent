@@ -26,6 +26,7 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
 )
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
+
 from src.core.auth import get_principal_object
 from src.core.database.repositories.uow import TenantConfigUoW
 from src.core.helpers.activity_helpers import log_tool_activity
@@ -121,6 +122,7 @@ def _get_adcp_capabilities_impl(
     publisher_domains: list[PublisherDomain] = []
     try:
         with TenantConfigUoW(tenant_id) as uow:
+            assert uow.tenant_config is not None
             partners = uow.tenant_config.list_publisher_partners()
             for partner in partners:
                 if partner.publisher_domain:

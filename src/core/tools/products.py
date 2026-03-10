@@ -456,6 +456,7 @@ async def _get_products_impl(
         country_code = None  # TODO: Extract from targeting if provided
 
         with ProductUoW(tenant["tenant_id"]) as pricing_uow:
+            assert pricing_uow.session is not None
             pricing_service = DynamicPricingService(pricing_uow.session)
             products = pricing_service.enrich_products_with_pricing(
                 products,

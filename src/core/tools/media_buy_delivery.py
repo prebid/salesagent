@@ -197,6 +197,7 @@ def _get_media_buy_delivery_impl(
                     pkg_id = pkg.get("pricing_option_id")
                     if pkg_id is not None:
                         pricing_option_ids.append(pkg_id)
+        assert uow.session is not None
         product_repo = ProductRepository(uow.session, tenant["tenant_id"])
         pricing_options = _get_pricing_options(
             pricing_option_ids, tenant_id=tenant["tenant_id"], product_repo=product_repo
