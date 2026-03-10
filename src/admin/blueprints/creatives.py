@@ -423,12 +423,112 @@ def analyze(tenant_id, **kwargs):
         return jsonify({"error": str(e)}), 500
 
 
+def _create_human_review_record(
+    session,
+    *,
+    creative_id: str,
+    tenant_id: str,
+    principal_id: str,
+    reviewer_email: str,
+    reason: str,
+    is_override: bool,
+    final_decision: str,
+):
+    """Create and add a human CreativeReview record to the session."""
+    from src.core.database.models import CreativeReview
+
+    review_id = f"review_{uuid.uuid4().hex[:12]}"
+    human_review = CreativeReview(
+        review_id=review_id,
+        creative_id=creative_id,
+        tenant_id=tenant_id,
+        principal_id=principal_id,
+        reviewed_at=datetime.now(UTC),
+        review_type="human",
+        reviewer_email=reviewer_email,
+        ai_decision=None,
+        confidence_score=None,
+        policy_triggered=None,
+        reason=reason,
+        recommendations=None,
+        human_override=is_override,
+        final_decision=final_decision,
+    )
+    session.add(human_review)
+    return human_review
+
+
+def _get_principal_name(session, tenant_id: str, principal_id: str) -> str:
+    """Look up principal name, falling back to principal_id."""
+    from src.core.database.models import Principal
+
+    stmt = select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
+    principal = session.scalars(stmt).first()
+    return principal.name if principal else principal_id
+
+
+def _send_post_commit_side_effects(
+    *,
+    webhook_data: dict[str, Any],
+    slack_data: dict[str, Any],
+    audit_data: dict[str, Any],
+    operation: str,
+    tenant_id: str,
+    actor: str,
+):
+    """Execute post-commit side effects: webhook, Slack notification, audit log.
+
+    All calls are best-effort — failures are logged but do not propagate.
+
+    Args:
+        webhook_data: Dict with creative_id/tenant_id for webhook call.
+        slack_data: Dict with slack_webhook_url and message.
+        audit_data: Dict with details for audit logging.
+        operation: Audit operation name (e.g. "approve_creative").
+        tenant_id: Tenant scope for audit logger.
+        actor: The user who performed the action (for audit principal_name/id).
+    """
+    from src.core.audit_logger import AuditLogger
+
+    # Send webhook
+    if webhook_data:
+        asyncio.run(
+            _call_webhook_for_creative_status(
+                creative_id=webhook_data["creative_id"],
+                tenant_id=webhook_data["tenant_id"],
+            )
+        )
+
+    # Send Slack notification
+    if slack_data:
+        try:
+            from src.services.slack_notifier import get_slack_notifier
+
+            tenant_config = {"features": {"slack_webhook_url": slack_data["slack_webhook_url"]}}
+            notifier = get_slack_notifier(tenant_config)
+            notifier.send_message(slack_data["message"])
+        except Exception as slack_e:
+            logger.warning(f"Failed to send Slack notification: {slack_e}")
+
+    # Log audit trail
+    if audit_data:
+        audit_logger = AuditLogger(adapter_name="AdminUI", tenant_id=tenant_id)
+        audit_logger.log_operation(
+            operation=operation,
+            principal_name=actor,
+            principal_id=actor,
+            adapter_id="admin_ui",
+            success=True,
+            details=audit_data,
+            tenant_id=tenant_id,
+        )
+
+
 @creatives_bp.route("/review/<creative_id>/approve", methods=["POST"])
 @log_admin_action("approve_creative")
 @require_tenant_access()
 def approve_creative(tenant_id, creative_id, **kwargs):
     """Approve a creative."""
-    from src.core.audit_logger import AuditLogger
     from src.core.database.models import CreativeReview
 
     try:
@@ -462,29 +562,18 @@ def approve_creative(tenant_id, creative_id, **kwargs):
             prior_ai_review = uow.session.scalars(stmt).first()
 
             # Check if this is a human override (AI recommended reject, human approved)
-            is_override = False
-            if prior_ai_review and prior_ai_review.ai_decision in ["rejected", "reject"]:
-                is_override = True
+            is_override = bool(prior_ai_review and prior_ai_review.ai_decision in ["rejected", "reject"])
 
-            # Create human review record
-            review_id = f"review_{uuid.uuid4().hex[:12]}"
-            human_review = CreativeReview(
-                review_id=review_id,
+            _create_human_review_record(
+                uow.session,
                 creative_id=creative_id,
                 tenant_id=tenant_id,
                 principal_id=creative.principal_id,
-                reviewed_at=datetime.now(UTC),
-                review_type="human",
                 reviewer_email=approved_by,
-                ai_decision=None,
-                confidence_score=None,
-                policy_triggered=None,
                 reason="Human approval",
-                recommendations=None,
-                human_override=is_override,
+                is_override=is_override,
                 final_decision="approved",
             )
-            uow.session.add(human_review)
 
             # Update creative status
             creative.status = "approved"
@@ -498,11 +587,7 @@ def approve_creative(tenant_id, creative_id, **kwargs):
             stmt_tenant = select(Tenant).filter_by(tenant_id=tenant_id)
             tenant = uow.session.scalars(stmt_tenant).first()
             if tenant and tenant.slack_webhook_url:
-                from src.core.database.models import Principal
-
-                stmt_principal = select(Principal).filter_by(tenant_id=tenant_id, principal_id=creative.principal_id)
-                principal = uow.session.scalars(stmt_principal).first()
-                principal_name = principal.name if principal else creative.principal_id
+                principal_name = _get_principal_name(uow.session, tenant_id, creative.principal_id)
 
                 slack_data = {
                     "slack_webhook_url": tenant.slack_webhook_url,
@@ -516,7 +601,6 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                 "format": creative.format,
                 "principal_id": creative.principal_id,
                 "human_override": is_override,
-                "approved_by": approved_by,
             }
 
             # Check if this creative approval unblocks any media buys
@@ -567,45 +651,14 @@ def approve_creative(tenant_id, creative_id, **kwargs):
             # UoW auto-commits here
 
         # --- Post-commit side effects (outside transaction) ---
-
-        # Send webhook
-        if webhook_data:
-            asyncio.run(
-                _call_webhook_for_creative_status(
-                    creative_id=webhook_data["creative_id"],
-                    tenant_id=webhook_data["tenant_id"],
-                )
-            )
-
-        # Send Slack notification
-        if slack_data:
-            try:
-                from src.services.slack_notifier import get_slack_notifier
-
-                tenant_config = {"features": {"slack_webhook_url": slack_data["slack_webhook_url"]}}
-                notifier = get_slack_notifier(tenant_config)
-                notifier.send_message(slack_data["message"])
-            except Exception as slack_e:
-                logger.warning(f"Failed to send Slack notification: {slack_e}")
-
-        # Log audit trail
-        if audit_data:
-            audit_logger = AuditLogger(adapter_name="AdminUI", tenant_id=tenant_id)
-            audit_logger.log_operation(
-                operation="approve_creative",
-                principal_name=audit_data["approved_by"],
-                principal_id=audit_data["approved_by"],
-                adapter_id="admin_ui",
-                success=True,
-                details={
-                    "creative_id": audit_data["creative_id"],
-                    "creative_name": audit_data["creative_name"],
-                    "format": audit_data["format"],
-                    "principal_id": audit_data["principal_id"],
-                    "human_override": audit_data["human_override"],
-                },
-                tenant_id=tenant_id,
-            )
+        _send_post_commit_side_effects(
+            webhook_data=webhook_data,
+            slack_data=slack_data,
+            audit_data=audit_data,
+            operation="approve_creative",
+            tenant_id=tenant_id,
+            actor=approved_by,
+        )
 
         # Execute adapter creation for unblocked media buys
         for action in media_buy_actions:
@@ -645,7 +698,6 @@ def approve_creative(tenant_id, creative_id, **kwargs):
 @require_tenant_access()
 def reject_creative(tenant_id, creative_id, **kwargs):
     """Reject a creative with comments."""
-    from src.core.audit_logger import AuditLogger
     from src.core.database.models import CreativeReview
 
     try:
@@ -680,29 +732,18 @@ def reject_creative(tenant_id, creative_id, **kwargs):
             prior_ai_review = uow.session.scalars(stmt).first()
 
             # Check if this is a human override (AI recommended approve, human rejected)
-            is_override = False
-            if prior_ai_review and prior_ai_review.ai_decision in ["approved", "approve"]:
-                is_override = True
+            is_override = bool(prior_ai_review and prior_ai_review.ai_decision in ["approved", "approve"])
 
-            # Create human review record
-            review_id = f"review_{uuid.uuid4().hex[:12]}"
-            human_review = CreativeReview(
-                review_id=review_id,
+            _create_human_review_record(
+                uow.session,
                 creative_id=creative_id,
                 tenant_id=tenant_id,
                 principal_id=creative.principal_id,
-                reviewed_at=datetime.now(UTC),
-                review_type="human",
                 reviewer_email=rejected_by,
-                ai_decision=None,
-                confidence_score=None,
-                policy_triggered=None,
                 reason=rejection_reason,
-                recommendations=None,
-                human_override=is_override,
+                is_override=is_override,
                 final_decision="rejected",
             )
-            uow.session.add(human_review)
 
             # Update creative status
             creative.status = "rejected"
@@ -725,11 +766,7 @@ def reject_creative(tenant_id, creative_id, **kwargs):
             stmt_tenant = select(Tenant).filter_by(tenant_id=tenant_id)
             tenant = uow.session.scalars(stmt_tenant).first()
             if tenant and tenant.slack_webhook_url:
-                from src.core.database.models import Principal
-
-                stmt_principal = select(Principal).filter_by(tenant_id=tenant_id, principal_id=creative.principal_id)
-                principal = uow.session.scalars(stmt_principal).first()
-                principal_name = principal.name if principal else creative.principal_id
+                principal_name = _get_principal_name(uow.session, tenant_id, creative.principal_id)
 
                 slack_data = {
                     "slack_webhook_url": tenant.slack_webhook_url,
@@ -744,52 +781,19 @@ def reject_creative(tenant_id, creative_id, **kwargs):
                 "principal_id": creative.principal_id,
                 "rejection_reason": rejection_reason,
                 "human_override": is_override,
-                "rejected_by": rejected_by,
             }
 
             # UoW auto-commits here
 
         # --- Post-commit side effects (outside transaction) ---
-
-        # Send webhook
-        if webhook_data:
-            asyncio.run(
-                _call_webhook_for_creative_status(
-                    creative_id=webhook_data["creative_id"],
-                    tenant_id=webhook_data["tenant_id"],
-                )
-            )
-
-        # Send Slack notification
-        if slack_data:
-            try:
-                from src.services.slack_notifier import get_slack_notifier
-
-                tenant_config = {"features": {"slack_webhook_url": slack_data["slack_webhook_url"]}}
-                notifier = get_slack_notifier(tenant_config)
-                notifier.send_message(slack_data["message"])
-            except Exception as slack_e:
-                logger.warning(f"Failed to send Slack notification: {slack_e}")
-
-        # Log audit trail
-        if audit_data:
-            audit_logger = AuditLogger(adapter_name="AdminUI", tenant_id=tenant_id)
-            audit_logger.log_operation(
-                operation="reject_creative",
-                principal_name=audit_data["rejected_by"],
-                principal_id=audit_data["rejected_by"],
-                adapter_id="admin_ui",
-                success=True,
-                details={
-                    "creative_id": audit_data["creative_id"],
-                    "creative_name": audit_data["creative_name"],
-                    "format": audit_data["format"],
-                    "principal_id": audit_data["principal_id"],
-                    "rejection_reason": audit_data["rejection_reason"],
-                    "human_override": audit_data["human_override"],
-                },
-                tenant_id=tenant_id,
-            )
+        _send_post_commit_side_effects(
+            webhook_data=webhook_data,
+            slack_data=slack_data,
+            audit_data=audit_data,
+            operation="reject_creative",
+            tenant_id=tenant_id,
+            actor=rejected_by,
+        )
 
         return jsonify({"success": True, "status": "rejected"})
 
