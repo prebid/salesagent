@@ -168,6 +168,26 @@ class MediaBuyRepository:
             result.setdefault(pkg.media_buy_id, []).append(pkg)
         return result
 
+    def find_package_with_media_buy(self, package_id: str) -> tuple[MediaPackage, MediaBuy] | None:
+        """Find a package and its parent media buy by package_id within the tenant.
+
+        Useful when you only have a package_id and need to resolve the parent
+        media buy (e.g. during creative-to-package assignment).
+
+        Returns (MediaPackage, MediaBuy) tuple or None if not found.
+        """
+        result = self._session.execute(
+            select(MediaPackage, MediaBuy)
+            .join(MediaBuy, MediaPackage.media_buy_id == MediaBuy.media_buy_id)
+            .where(
+                MediaPackage.package_id == package_id,
+                MediaBuy.tenant_id == self._tenant_id,
+            )
+        ).first()
+        if result is None:
+            return None
+        return result[0], result[1]
+
     # ------------------------------------------------------------------
     # Tenant-wide list queries (for admin/dashboard)
     # ------------------------------------------------------------------

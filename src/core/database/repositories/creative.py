@@ -13,7 +13,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import NamedTuple, cast
 
-from sqlalchemy import func, join, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import InstrumentedAttribute, Session, attributes
 
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy, MediaPackage, Product
@@ -388,17 +388,15 @@ class CreativeAssignmentRepository:
     def find_package_with_media_buy(self, package_id: str) -> tuple[MediaPackage, MediaBuy] | None:
         """Find a package and its parent media buy within the tenant.
 
+        Delegates to MediaBuyRepository — all MediaPackage queries are owned by
+        that repository per the no-raw-MediaPackage-select guard.
+
         Returns (MediaPackage, MediaBuy) tuple or None if not found.
         """
-        result = self._session.execute(
-            select(MediaPackage, MediaBuy)
-            .select_from(join(MediaPackage, MediaBuy, MediaPackage.media_buy_id == MediaBuy.media_buy_id))
-            .where(MediaPackage.package_id == package_id)
-            .where(MediaBuy.tenant_id == self._tenant_id)
-        ).first()
-        if result is None:
-            return None
-        return result[0], result[1]
+        from src.core.database.repositories.media_buy import MediaBuyRepository
+
+        mb_repo = MediaBuyRepository(self._session, self._tenant_id)
+        return mb_repo.find_package_with_media_buy(package_id)
 
     def get_creative_by_id(self, creative_id: str) -> Creative | None:
         """Get a creative by tenant + creative_id (no principal filter)."""

@@ -80,6 +80,15 @@ from tests.factories import PrincipalFactory
 # Shared helpers
 # ---------------------------------------------------------------------------
 
+
+def _mock_creative_repo_create(**kwargs):
+    """Side-effect for creative_repo.create() that returns proper string attributes."""
+    db_creative = MagicMock()
+    db_creative.creative_id = kwargs.get("creative_id", "c_unknown")
+    db_creative.status = kwargs.get("status", "approved")
+    return db_creative
+
+
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
 
 
@@ -695,7 +704,7 @@ class TestCrossPrincipalIsolation:
 
         # Mock everything to trace the DB filter_by call
         with (
-            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._validation.run_async_in_sync_context"),
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
@@ -707,14 +716,16 @@ class TestCrossPrincipalIsolation:
             mock_run_async.return_value = []  # all_formats
             mock_reg_getter.return_value = mock_reg
 
-            # Mock session
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+            mock_uow = MagicMock()
+            mock_creative_repo = MagicMock()
+            mock_creative_repo.get_provenance_policies.return_value = []
+            mock_creative_repo.get_by_id.return_value = None
+            mock_creative_repo.create.side_effect = _mock_creative_repo_create
+            mock_uow.creatives = mock_creative_repo
+            mock_db.return_value.__enter__.return_value = mock_uow
             mock_db.return_value.__exit__.return_value = None
 
             # Make validation fail early to avoid deeper mocking
-
-            mock_session.scalars.return_value.first.return_value = None
 
             # We just need to see that the impl runs with the principal filter
             # The creative will fail validation (no format in registry)
@@ -747,7 +758,7 @@ class TestCrossPrincipalIsolation:
         create_calls = []
 
         with (
-            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch(
@@ -770,12 +781,14 @@ class TestCrossPrincipalIsolation:
                 "parameters": None,
             }
 
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+            mock_uow = MagicMock()
+            mock_creative_repo = MagicMock()
+            mock_creative_repo.get_provenance_policies.return_value = []
+            mock_creative_repo.get_by_id.return_value = None
+            mock_creative_repo.create.side_effect = _mock_creative_repo_create
+            mock_uow.creatives = mock_creative_repo
+            mock_db.return_value.__enter__.return_value = mock_uow
             mock_db.return_value.__exit__.return_value = None
-
-            # DB returns None for both principals (neither has the creative yet)
-            mock_session.scalars.return_value.first.return_value = None
 
             from adcp.types.generated_poc.enums.creative_action import CreativeAction
 
@@ -1325,13 +1338,13 @@ class TestAssignmentProcessing:
         """
         from src.core.tools.creatives._assignments import _process_assignments
 
-        with patch("src.core.tools.creatives._assignments.get_db_session") as mock_db:
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_db:
+            mock_uow = MagicMock()
+            mock_assignment_repo = MagicMock()
+            mock_assignment_repo.find_package_with_media_buy.return_value = None
+            mock_uow.assignments = mock_assignment_repo
+            mock_db.return_value.__enter__.return_value = mock_uow
             mock_db.return_value.__exit__.return_value = None
-
-            # Package not found
-            mock_session.execute.return_value.first.return_value = None
 
             results = [SyncCreativeResult(creative_id="c1", action="created")]
 
@@ -1355,12 +1368,13 @@ class TestAssignmentProcessing:
         """
         from src.core.tools.creatives._assignments import _process_assignments
 
-        with patch("src.core.tools.creatives._assignments.get_db_session") as mock_db:
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_db:
+            mock_uow = MagicMock()
+            mock_assignment_repo = MagicMock()
+            mock_assignment_repo.find_package_with_media_buy.return_value = None
+            mock_uow.assignments = mock_assignment_repo
+            mock_db.return_value.__enter__.return_value = mock_uow
             mock_db.return_value.__exit__.return_value = None
-
-            mock_session.execute.return_value.first.return_value = None
 
             results = [SyncCreativeResult(creative_id="c1", action="created")]
 
@@ -2452,7 +2466,7 @@ class TestDeleteMissing:
         )
 
         with (
-            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch(
@@ -2474,23 +2488,21 @@ class TestDeleteMissing:
                 "parameters": None,
             }
 
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+            mock_uow = MagicMock()
+            mock_creative_repo = MagicMock()
+            mock_creative_repo.get_provenance_policies.return_value = []
+            mock_creative_repo.get_by_id.return_value = None  # c1 is new
+            mock_uow.creatives = mock_creative_repo
+            mock_db.return_value.__enter__.return_value = mock_uow
             mock_db.return_value.__exit__.return_value = None
 
-            # The upsert loop query for existing creative returns None (c1 is new)
             # The delete_missing query returns an orphaned creative (c_orphan)
             orphan_creative = MagicMock()
             orphan_creative.creative_id = "c_orphan"
             orphan_creative.status = "approved"
 
-            # First call: upsert lookup for c1 -> None (new creative)
-            # Second call: delete_missing query -> [c_orphan]
-            mock_scalars = MagicMock()
-            mock_scalars.first.side_effect = [None]  # upsert lookup
-            mock_scalars.all.return_value = [orphan_creative]  # delete_missing query
-
-            mock_session.scalars.return_value = mock_scalars
+            # list_by_principal returns the orphan (not in payload)
+            mock_creative_repo.list_by_principal.return_value = [orphan_creative]
 
             # Sync only c1, with delete_missing=True
             result = _sync_creatives_impl(
@@ -2530,7 +2542,7 @@ class TestDryRun:
         )
 
         with (
-            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch(
@@ -2552,10 +2564,14 @@ class TestDryRun:
                 "parameters": None,
             }
 
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+            mock_uow = MagicMock()
+            mock_creative_repo = MagicMock()
+            mock_creative_repo.get_provenance_policies.return_value = []
+            mock_creative_repo.get_by_id.return_value = None
+            mock_creative_repo.create.side_effect = _mock_creative_repo_create
+            mock_uow.creatives = mock_creative_repo
+            mock_db.return_value.__enter__.return_value = mock_uow
             mock_db.return_value.__exit__.return_value = None
-            mock_session.scalars.return_value.first.return_value = None
 
             result = _sync_creatives_impl(
                 creatives=[_make_creative_asset(creative_id="c1")],
@@ -2564,9 +2580,9 @@ class TestDryRun:
             )
 
             assert result.dry_run is True
-            # dry_run should NOT call session.add or session.commit
-            mock_session.add.assert_not_called()
-            mock_session.commit.assert_not_called()
+            # dry_run should NOT call repo.create or repo.commit
+            mock_creative_repo.create.assert_not_called()
+            mock_creative_repo.commit.assert_not_called()
 
 
 class TestCreativeWebhookDelivery:
@@ -2978,7 +2994,7 @@ class TestValidationModeSemantics:
         )
 
         with (
-            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch("src.core.tools.creatives._validation.run_async_in_sync_context") as mock_val_async,
@@ -2999,10 +3015,14 @@ class TestValidationModeSemantics:
             # c1: format found, c2: format not found (validation fails), c3: format found
             mock_val_async.side_effect = [MagicMock(), None, MagicMock()]
 
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+            mock_uow = MagicMock()
+            mock_creative_repo = MagicMock()
+            mock_creative_repo.get_provenance_policies.return_value = []
+            mock_creative_repo.get_by_id.return_value = None
+            mock_creative_repo.create.side_effect = _mock_creative_repo_create
+            mock_uow.creatives = mock_creative_repo
+            mock_db.return_value.__enter__.return_value = mock_uow
             mock_db.return_value.__exit__.return_value = None
-            mock_session.scalars.return_value.first.return_value = None
 
             c1 = _make_creative_asset(creative_id="c1", name="Valid 1")
             c2 = _make_creative_asset(creative_id="c2", name="Invalid")
@@ -3037,13 +3057,13 @@ class TestValidationModeSemantics:
         from src.core.exceptions import AdCPNotFoundError
         from src.core.tools.creatives._assignments import _process_assignments
 
-        with patch("src.core.tools.creatives._assignments.get_db_session") as mock_db:
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_db:
+            mock_uow = MagicMock()
+            mock_assignment_repo = MagicMock()
+            mock_assignment_repo.find_package_with_media_buy.return_value = None
+            mock_uow.assignments = mock_assignment_repo
+            mock_db.return_value.__enter__.return_value = mock_uow
             mock_db.return_value.__exit__.return_value = None
-
-            # Package not found => strict mode raises, aborting everything
-            mock_session.execute.return_value.first.return_value = None
 
             results = [
                 SyncCreativeResult(creative_id="c1", action="created"),
@@ -3065,12 +3085,14 @@ class TestValidationModeSemantics:
         """
         from src.core.tools.creatives._assignments import _process_assignments
 
-        with patch("src.core.tools.creatives._assignments.get_db_session") as mock_db:
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_db:
+            mock_uow = MagicMock()
+            mock_assignment_repo = MagicMock()
+            mock_uow.assignments = mock_assignment_repo
+            mock_db.return_value.__enter__.return_value = mock_uow
             mock_db.return_value.__exit__.return_value = None
 
-            # First package: not found. Second package: found.
+            # Package found for pkg_ok, not found for missing_pkg
             mock_package = MagicMock()
             mock_package.media_buy_id = "mb_1"
             mock_package.package_id = "pkg_ok"
@@ -3081,18 +3103,22 @@ class TestValidationModeSemantics:
             mock_media_buy.status = "draft"
             mock_media_buy.approved_at = None
 
-            # First call: package not found; second call: package found
-            mock_session.execute.return_value.first.side_effect = [
-                None,  # c1's missing_pkg
-                (mock_package, mock_media_buy),  # c2's pkg_ok
-            ]
+            def find_pkg(package_id):
+                if package_id == "pkg_ok":
+                    return (mock_package, mock_media_buy)
+                return None
 
-            # For c2's creative lookup + assignment existence check
-            creative_result = MagicMock()
-            creative_result.first.return_value = None  # no creative in DB (skip format check)
-            assignment_result = MagicMock()
-            assignment_result.first.return_value = None  # no existing assignment
-            mock_session.scalars.side_effect = [creative_result, assignment_result]
+            mock_assignment_repo.find_package_with_media_buy.side_effect = find_pkg
+            mock_assignment_repo.get_creative_by_id.return_value = None
+            mock_assignment_repo.get_existing.return_value = None
+
+            mock_new_assignment = MagicMock()
+            mock_new_assignment.assignment_id = "asgn_new"
+            mock_new_assignment.media_buy_id = "mb_1"
+            mock_new_assignment.package_id = "pkg_ok"
+            mock_new_assignment.creative_id = "c2"
+            mock_new_assignment.weight = 100
+            mock_assignment_repo.create.return_value = mock_new_assignment
 
             results = [
                 SyncCreativeResult(creative_id="c1", action="created"),
@@ -3160,9 +3186,11 @@ class TestAssignmentPackageValidationGaps:
         # Pre-existing result entry for creative c1
         results = [SyncCreativeResult(creative_id="c1", action="created")]
 
-        with patch("src.core.tools.creatives._assignments.get_db_session") as mock_db:
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_db:
+            mock_uow = MagicMock()
+            mock_assignment_repo = MagicMock()
+            mock_uow.assignments = mock_assignment_repo
+            mock_db.return_value.__enter__.return_value = mock_uow
             mock_db.return_value.__exit__.return_value = None
 
             # Package lookup returns valid package+media_buy
@@ -3173,22 +3201,13 @@ class TestAssignmentPackageValidationGaps:
             mock_media_buy = MagicMock()
             mock_media_buy.status = "approved"
             mock_media_buy.approved_at = None
-            mock_session.execute.return_value.first.return_value = (mock_package, mock_media_buy)
+            mock_assignment_repo.find_package_with_media_buy.return_value = (mock_package, mock_media_buy)
 
-            # Creative lookup (for format validation)
-            mock_creative = MagicMock()
-            mock_creative.agent_url = DEFAULT_AGENT_URL
-            mock_creative.format = "display_300x250_image"
+            # Creative lookup (for format validation) - no creative found, skip format check
+            mock_assignment_repo.get_creative_by_id.return_value = None
 
-            def scalars_side_effect(stmt):
-                result = MagicMock()
-                # First call: creative lookup, second call: existing assignment
-                return result
-
-            mock_session.scalars.return_value.first.side_effect = [
-                mock_creative,  # creative lookup
-                mock_existing_assignment,  # existing assignment lookup
-            ]
+            # Existing assignment found
+            mock_assignment_repo.get_existing.return_value = mock_existing_assignment
 
             _process_assignments(
                 assignments={"c1": ["pkg1"]},
@@ -3199,8 +3218,8 @@ class TestAssignmentPackageValidationGaps:
 
             # Weight should be reset to 100
             assert mock_existing_assignment.weight == 100
-            # No new assignment added (idempotent)
-            mock_session.add.assert_not_called()
+            # No new assignment created (idempotent)
+            mock_assignment_repo.create.assert_not_called()
 
     def test_cross_tenant_package_isolation(self):
         """Package lookup must be scoped by tenant_id.
@@ -3214,13 +3233,13 @@ class TestAssignmentPackageValidationGaps:
 
         results = [SyncCreativeResult(creative_id="c1", action="created")]
 
-        with patch("src.core.tools.creatives._assignments.get_db_session") as mock_db:
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_db:
+            mock_uow = MagicMock()
+            mock_assignment_repo = MagicMock()
+            mock_assignment_repo.find_package_with_media_buy.return_value = None
+            mock_uow.assignments = mock_assignment_repo
+            mock_db.return_value.__enter__.return_value = mock_uow
             mock_db.return_value.__exit__.return_value = None
-
-            # Package lookup returns None (package belongs to different tenant)
-            mock_session.execute.return_value.first.return_value = None
 
             # Should raise AdCPNotFoundError in strict mode
             from src.core.exceptions import AdCPNotFoundError
@@ -3260,17 +3279,14 @@ class TestFormatCompatibility:
         media_buy_approved_at=None,
         existing_assignment=None,
     ):
-        """Shared helper to set up _process_assignments mock DB.
-
-        Uses sequential side_effect for scalars() since the code calls it
-        in a fixed order: (1) creative lookup, (2) product lookup (if product_id),
-        (3) assignment existence check.
-        """
-        mock_session = MagicMock()
-        mock_db.return_value.__enter__.return_value = mock_session
+        """Shared helper to set up _process_assignments mock DB via repository pattern."""
+        mock_uow = MagicMock()
+        mock_assignment_repo = MagicMock()
+        mock_uow.assignments = mock_assignment_repo
+        mock_db.return_value.__enter__.return_value = mock_uow
         mock_db.return_value.__exit__.return_value = None
 
-        # Mock package + media buy join query
+        # Mock package + media buy
         mock_package = MagicMock()
         mock_package.media_buy_id = "mb_1"
         mock_package.package_id = "pkg_1"
@@ -3281,47 +3297,34 @@ class TestFormatCompatibility:
         mock_media_buy.status = media_buy_status
         mock_media_buy.approved_at = media_buy_approved_at
 
-        # Mock creative query result
+        mock_assignment_repo.find_package_with_media_buy.return_value = (mock_package, mock_media_buy)
+
+        # Mock creative lookup
         mock_creative = MagicMock()
         mock_creative.agent_url = creative_agent_url
         mock_creative.format = creative_format
         mock_creative.creative_id = "c1"
+        mock_assignment_repo.get_creative_by_id.return_value = mock_creative
 
-        # Mock product query result
+        # Mock product lookup
         mock_product = MagicMock()
         mock_product.format_ids = product_format_ids
         mock_product.name = product_name
+        mock_assignment_repo.get_product_by_id.return_value = mock_product if package_has_product else None
 
-        # Set up execute (for join query)
-        def execute_side_effect(stmt):
-            result = MagicMock()
-            result.first.return_value = (mock_package, mock_media_buy)
-            return result
+        # Mock assignment existence check
+        mock_assignment_repo.get_existing.return_value = existing_assignment
 
-        mock_session.execute.side_effect = execute_side_effect
+        # Mock create for new assignments
+        mock_new_assignment = MagicMock()
+        mock_new_assignment.assignment_id = "asgn_new"
+        mock_new_assignment.media_buy_id = "mb_1"
+        mock_new_assignment.package_id = "pkg_1"
+        mock_new_assignment.creative_id = "c1"
+        mock_new_assignment.weight = 100
+        mock_assignment_repo.create.return_value = mock_new_assignment
 
-        # Build sequential scalars results in call order:
-        # 1. Creative lookup (line 91-94 of _assignments.py) - always called
-        # 2. Product lookup (line 101-104) - only if package has product_id
-        # 3. Assignment existence check (line 166-172) - always called
-        scalars_results = []
-
-        creative_result = MagicMock()
-        creative_result.first.return_value = mock_creative
-        scalars_results.append(creative_result)
-
-        if package_has_product:
-            product_result = MagicMock()
-            product_result.first.return_value = mock_product
-            scalars_results.append(product_result)
-
-        assignment_result = MagicMock()
-        assignment_result.first.return_value = existing_assignment
-        scalars_results.append(assignment_result)
-
-        mock_session.scalars.side_effect = scalars_results
-
-        return mock_session, mock_media_buy
+        return mock_uow, mock_media_buy
 
     def test_format_match_after_url_normalization(self):
         """agent_url trailing slashes and /mcp stripped before comparison.
@@ -3333,7 +3336,7 @@ class TestFormatCompatibility:
         """
         from src.core.tools.creatives._assignments import _process_assignments
 
-        with patch("src.core.tools.creatives._assignments.get_db_session") as mock_db:
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_db:
             # Creative has URL without trailing slash; product has URL with /mcp suffix
             self._setup_assignment_mocks(
                 mock_db,
@@ -3364,7 +3367,7 @@ class TestFormatCompatibility:
         """
         from src.core.tools.creatives._assignments import _process_assignments
 
-        with patch("src.core.tools.creatives._assignments.get_db_session") as mock_db:
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_db:
             self._setup_assignment_mocks(
                 mock_db,
                 creative_agent_url="https://creative.example.com",
@@ -3392,7 +3395,7 @@ class TestFormatCompatibility:
         """
         from src.core.tools.creatives._assignments import _process_assignments
 
-        with patch("src.core.tools.creatives._assignments.get_db_session") as mock_db:
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_db:
             self._setup_assignment_mocks(
                 mock_db,
                 creative_agent_url="https://creative.example.com",
@@ -3424,7 +3427,7 @@ class TestFormatCompatibility:
         """
         from src.core.tools.creatives._assignments import _process_assignments
 
-        with patch("src.core.tools.creatives._assignments.get_db_session") as mock_db:
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_db:
             self._setup_assignment_mocks(
                 mock_db,
                 creative_agent_url="https://creative.example.com",
@@ -3453,7 +3456,7 @@ class TestFormatCompatibility:
         """
         from src.core.tools.creatives._assignments import _process_assignments
 
-        with patch("src.core.tools.creatives._assignments.get_db_session") as mock_db:
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_db:
             # Use 'format_id' key instead of 'id'
             self._setup_assignment_mocks(
                 mock_db,
@@ -3483,7 +3486,7 @@ class TestFormatCompatibility:
         """
         from src.core.tools.creatives._assignments import _process_assignments
 
-        with patch("src.core.tools.creatives._assignments.get_db_session") as mock_db:
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_db:
             # Package has no product_id
             self._setup_assignment_mocks(
                 mock_db,
@@ -3518,8 +3521,10 @@ class TestMediaBuyStatusTransition:
 
     def _run_assignment_with_media_buy(self, mock_db, *, media_buy_status, approved_at, existing_assignment=None):
         """Run _process_assignments and return the mock media buy for status inspection."""
-        mock_session = MagicMock()
-        mock_db.return_value.__enter__.return_value = mock_session
+        mock_uow = MagicMock()
+        mock_assignment_repo = MagicMock()
+        mock_uow.assignments = mock_assignment_repo
+        mock_db.return_value.__enter__.return_value = mock_uow
         mock_db.return_value.__exit__.return_value = None
 
         mock_package = MagicMock()
@@ -3532,23 +3537,18 @@ class TestMediaBuyStatusTransition:
         mock_media_buy.status = media_buy_status
         mock_media_buy.approved_at = approved_at
 
-        def execute_side_effect(stmt):
-            result = MagicMock()
-            result.first.return_value = (mock_package, mock_media_buy)
-            return result
+        mock_assignment_repo.find_package_with_media_buy.return_value = (mock_package, mock_media_buy)
+        mock_assignment_repo.get_creative_by_id.return_value = None
+        mock_assignment_repo.get_existing.return_value = existing_assignment
 
-        def scalars_side_effect(stmt):
-            result = MagicMock()
-            # Return existing_assignment for assignment lookup, None for creative lookup
-            stmt_str = str(stmt)
-            if "assignment" in stmt_str.lower():
-                result.first.return_value = existing_assignment
-            else:
-                result.first.return_value = None
-            return result
-
-        mock_session.execute.side_effect = execute_side_effect
-        mock_session.scalars.side_effect = scalars_side_effect
+        # Mock create for new assignments
+        mock_new_assignment = MagicMock()
+        mock_new_assignment.assignment_id = "asgn_new"
+        mock_new_assignment.media_buy_id = "mb_1"
+        mock_new_assignment.package_id = "pkg_1"
+        mock_new_assignment.creative_id = "c1"
+        mock_new_assignment.weight = 100
+        mock_assignment_repo.create.return_value = mock_new_assignment
 
         from src.core.tools.creatives._assignments import _process_assignments
 
@@ -3569,7 +3569,7 @@ class TestMediaBuyStatusTransition:
         assignment, it transitions to pending_creatives (line 220-221 of _assignments.py).
         Covers: UC-006-MEDIA-BUY-STATUS-01
         """
-        with patch("src.core.tools.creatives._assignments.get_db_session") as mock_db:
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_db:
             mock_mb = self._run_assignment_with_media_buy(
                 mock_db,
                 media_buy_status="draft",
@@ -3585,7 +3585,7 @@ class TestMediaBuyStatusTransition:
         even when creatives are assigned (line 220: approved_at is not None check).
         Covers: UC-006-MEDIA-BUY-STATUS-02
         """
-        with patch("src.core.tools.creatives._assignments.get_db_session") as mock_db:
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_db:
             mock_mb = self._run_assignment_with_media_buy(
                 mock_db,
                 media_buy_status="draft",
@@ -3600,7 +3600,7 @@ class TestMediaBuyStatusTransition:
         Only draft status triggers the transition check (line 220: if status == 'draft').
         Covers: UC-006-MEDIA-BUY-STATUS-03
         """
-        with patch("src.core.tools.creatives._assignments.get_db_session") as mock_db:
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_db:
             mock_mb = self._run_assignment_with_media_buy(
                 mock_db,
                 media_buy_status="active",
@@ -3624,7 +3624,7 @@ class TestMediaBuyStatusTransition:
         existing_assignment.creative_id = "c1"
         existing_assignment.weight = 50  # Different from 100 to trigger update
 
-        with patch("src.core.tools.creatives._assignments.get_db_session") as mock_db:
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_db:
             mock_mb = self._run_assignment_with_media_buy(
                 mock_db,
                 media_buy_status="draft",
@@ -3660,7 +3660,7 @@ class TestSyncCreativesMainFlowGaps:
         )
 
         with (
-            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch(
@@ -3682,10 +3682,14 @@ class TestSyncCreativesMainFlowGaps:
                 "parameters": None,
             }
 
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+            mock_uow = MagicMock()
+            mock_creative_repo = MagicMock()
+            mock_creative_repo.get_provenance_policies.return_value = []
+            mock_creative_repo.get_by_id.return_value = None
+            mock_creative_repo.create.side_effect = _mock_creative_repo_create
+            mock_uow.creatives = mock_creative_repo
+            mock_db.return_value.__enter__.return_value = mock_uow
             mock_db.return_value.__exit__.return_value = None
-            mock_session.scalars.return_value.first.return_value = None
 
             creatives = [_make_creative_asset(creative_id=f"c_{i}", name=f"Creative {i}") for i in range(5)]
             result = _sync_creatives_impl(
@@ -3710,7 +3714,7 @@ class TestSyncCreativesMainFlowGaps:
         )
 
         with (
-            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch(
@@ -3732,8 +3736,11 @@ class TestSyncCreativesMainFlowGaps:
                 "parameters": None,
             }
 
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+            mock_uow = MagicMock()
+            mock_creative_repo = MagicMock()
+            mock_creative_repo.get_provenance_policies.return_value = []
+            mock_uow.creatives = mock_creative_repo
+            mock_db.return_value.__enter__.return_value = mock_uow
             mock_db.return_value.__exit__.return_value = None
 
             # Simulate existing creative found via triple key
@@ -3745,7 +3752,7 @@ class TestSyncCreativesMainFlowGaps:
             mock_existing.format_parameters = None
             mock_existing.status = "approved"
             mock_existing.data = {}
-            mock_session.scalars.return_value.first.return_value = mock_existing
+            mock_creative_repo.get_by_id.return_value = mock_existing
 
             result = _sync_creatives_impl(
                 creatives=[_make_creative_asset()],
@@ -3826,7 +3833,7 @@ class TestSyncCreativesMainFlowGaps:
         )
 
         with (
-            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch(
@@ -3848,10 +3855,14 @@ class TestSyncCreativesMainFlowGaps:
                 "parameters": None,
             }
 
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+            mock_uow = MagicMock()
+            mock_creative_repo = MagicMock()
+            mock_creative_repo.get_provenance_policies.return_value = []
+            mock_creative_repo.get_by_id.return_value = None
+            mock_creative_repo.create.side_effect = _mock_creative_repo_create
+            mock_uow.creatives = mock_creative_repo
+            mock_db.return_value.__enter__.return_value = mock_uow
             mock_db.return_value.__exit__.return_value = None
-            mock_session.scalars.return_value.first.return_value = None
 
             creatives = [_make_creative_asset(creative_id=f"c_{i}", name=f"Creative {i}") for i in range(3)]
             _sync_creatives_impl(creatives=creatives, identity=identity)
@@ -3872,7 +3883,7 @@ class TestSyncCreativesMainFlowGaps:
         )
 
         with (
-            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch(
@@ -3894,10 +3905,14 @@ class TestSyncCreativesMainFlowGaps:
                 "parameters": None,
             }
 
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+            mock_uow = MagicMock()
+            mock_creative_repo = MagicMock()
+            mock_creative_repo.get_provenance_policies.return_value = []
+            mock_creative_repo.get_by_id.return_value = None
+            mock_creative_repo.create.side_effect = _mock_creative_repo_create
+            mock_uow.creatives = mock_creative_repo
+            mock_db.return_value.__enter__.return_value = mock_uow
             mock_db.return_value.__exit__.return_value = None
-            mock_session.scalars.return_value.first.return_value = None  # new creative
 
             result = _sync_creatives_impl(
                 creatives=[_make_creative_asset()],
@@ -3955,7 +3970,7 @@ class TestExtensionGaps:
         )
 
         with (
-            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch("src.core.tools.creatives._validation.run_async_in_sync_context") as mock_val_async,
@@ -3977,10 +3992,14 @@ class TestExtensionGaps:
             # Second creative: validation succeeds
             mock_val_async.side_effect = [None, MagicMock()]
 
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+            mock_uow = MagicMock()
+            mock_creative_repo = MagicMock()
+            mock_creative_repo.get_provenance_policies.return_value = []
+            mock_creative_repo.get_by_id.return_value = None
+            mock_creative_repo.create.side_effect = _mock_creative_repo_create
+            mock_uow.creatives = mock_creative_repo
+            mock_db.return_value.__enter__.return_value = mock_uow
             mock_db.return_value.__exit__.return_value = None
-            mock_session.scalars.return_value.first.return_value = None
 
             good_creative = _make_creative_asset(creative_id="c_good", name="Good")
             bad_creative = _make_creative_asset(creative_id="c_bad", name="Bad")
@@ -4017,7 +4036,7 @@ class TestExtensionGaps:
         )
 
         with (
-            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch("src.core.tools.creatives._validation.run_async_in_sync_context") as mock_val_async,
@@ -4038,10 +4057,14 @@ class TestExtensionGaps:
             # First creative: validation fails; Second: succeeds
             mock_val_async.side_effect = [None, MagicMock()]
 
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+            mock_uow = MagicMock()
+            mock_creative_repo = MagicMock()
+            mock_creative_repo.get_provenance_policies.return_value = []
+            mock_creative_repo.get_by_id.return_value = None
+            mock_creative_repo.create.side_effect = _mock_creative_repo_create
+            mock_uow.creatives = mock_creative_repo
+            mock_db.return_value.__enter__.return_value = mock_uow
             mock_db.return_value.__exit__.return_value = None
-            mock_session.scalars.return_value.first.return_value = None
 
             bad = _make_creative_asset(creative_id="c_bad", name="Bad")
             good = _make_creative_asset(creative_id="c_good", name="Good")
@@ -4074,7 +4097,7 @@ class TestExtensionGaps:
         )
 
         with (
-            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch("src.core.tools.creatives._sync.log_tool_activity"),
@@ -4085,8 +4108,13 @@ class TestExtensionGaps:
             mock_run_async.return_value = []
             mock_reg_getter.return_value = mock_reg
 
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+            mock_uow = MagicMock()
+            mock_creative_repo = MagicMock()
+            mock_creative_repo.get_provenance_policies.return_value = []
+            mock_creative_repo.get_by_id.return_value = None
+            mock_creative_repo.create.side_effect = _mock_creative_repo_create
+            mock_uow.creatives = mock_creative_repo
+            mock_db.return_value.__enter__.return_value = mock_uow
             mock_db.return_value.__exit__.return_value = None
 
             # Dict input with no 'name' field at all
@@ -4171,7 +4199,7 @@ class TestExtensionGaps:
         )
 
         with (
-            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch("src.core.tools.creatives._validation.run_async_in_sync_context", return_value=None),
@@ -4183,8 +4211,13 @@ class TestExtensionGaps:
             mock_run_async.return_value = []
             mock_reg_getter.return_value = mock_reg
 
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+            mock_uow = MagicMock()
+            mock_creative_repo = MagicMock()
+            mock_creative_repo.get_provenance_policies.return_value = []
+            mock_creative_repo.get_by_id.return_value = None
+            mock_creative_repo.create.side_effect = _mock_creative_repo_create
+            mock_uow.creatives = mock_creative_repo
+            mock_db.return_value.__enter__.return_value = mock_uow
             mock_db.return_value.__exit__.return_value = None
 
             result = _sync_creatives_impl(
@@ -4216,7 +4249,7 @@ class TestExtensionGaps:
         )
 
         with (
-            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch(
@@ -4231,8 +4264,13 @@ class TestExtensionGaps:
             mock_run_async.return_value = []
             mock_reg_getter.return_value = mock_reg
 
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+            mock_uow = MagicMock()
+            mock_creative_repo = MagicMock()
+            mock_creative_repo.get_provenance_policies.return_value = []
+            mock_creative_repo.get_by_id.return_value = None
+            mock_creative_repo.create.side_effect = _mock_creative_repo_create
+            mock_uow.creatives = mock_creative_repo
+            mock_db.return_value.__enter__.return_value = mock_uow
             mock_db.return_value.__exit__.return_value = None
 
             result = _sync_creatives_impl(
@@ -4259,11 +4297,13 @@ class TestExtensionGaps:
         """
         from src.core.tools.creatives._assignments import _process_assignments
 
-        with patch("src.core.tools.creatives._assignments.get_db_session") as mock_db:
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_db:
+            mock_uow = MagicMock()
+            mock_assignment_repo = MagicMock()
+            mock_assignment_repo.find_package_with_media_buy.return_value = None
+            mock_uow.assignments = mock_assignment_repo
+            mock_db.return_value.__enter__.return_value = mock_uow
             mock_db.return_value.__exit__.return_value = None
-            mock_session.execute.return_value.first.return_value = None
 
             results = [SyncCreativeResult(creative_id="c1", action="created")]
             _process_assignments(
@@ -4286,11 +4326,13 @@ class TestExtensionGaps:
         from src.core.exceptions import AdCPNotFoundError
         from src.core.tools.creatives._assignments import _process_assignments
 
-        with patch("src.core.tools.creatives._assignments.get_db_session") as mock_db:
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_db:
+            mock_uow = MagicMock()
+            mock_assignment_repo = MagicMock()
+            mock_assignment_repo.find_package_with_media_buy.return_value = None
+            mock_uow.assignments = mock_assignment_repo
+            mock_db.return_value.__enter__.return_value = mock_uow
             mock_db.return_value.__exit__.return_value = None
-            mock_session.execute.return_value.first.return_value = None
 
             results = [SyncCreativeResult(creative_id="c1", action="created")]
             with pytest.raises(AdCPNotFoundError, match="Package not found.*PKG-GONE"):
@@ -4311,9 +4353,11 @@ class TestExtensionGaps:
         """
         from src.core.tools.creatives._assignments import _process_assignments
 
-        with patch("src.core.tools.creatives._assignments.get_db_session") as mock_db:
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_db:
+            mock_uow = MagicMock()
+            mock_assignment_repo = MagicMock()
+            mock_uow.assignments = mock_assignment_repo
+            mock_db.return_value.__enter__.return_value = mock_uow
             mock_db.return_value.__exit__.return_value = None
 
             mock_package = MagicMock()
@@ -4324,22 +4368,17 @@ class TestExtensionGaps:
             mock_media_buy = MagicMock()
             mock_media_buy.media_buy_id = "mb_1"
 
+            mock_assignment_repo.find_package_with_media_buy.return_value = (mock_package, mock_media_buy)
+
             mock_creative = MagicMock()
             mock_creative.agent_url = "https://agent.example.com"
             mock_creative.format = "video_30s"
+            mock_assignment_repo.get_creative_by_id.return_value = mock_creative
 
             mock_product = MagicMock()
             mock_product.format_ids = [{"agent_url": "https://agent.example.com", "id": "display_300x250"}]
             mock_product.name = "Display Only Product"
-
-            mock_session.execute.return_value.first.return_value = (mock_package, mock_media_buy)
-
-            # Sequential scalars: (1) creative, (2) product -- raises before assignment check
-            creative_result = MagicMock()
-            creative_result.first.return_value = mock_creative
-            product_result = MagicMock()
-            product_result.first.return_value = mock_product
-            mock_session.scalars.side_effect = [creative_result, product_result]
+            mock_assignment_repo.get_product_by_id.return_value = mock_product
 
             results = [SyncCreativeResult(creative_id="c1", action="created")]
             with pytest.raises(AdCPValidationError, match="not supported"):
@@ -4360,9 +4399,11 @@ class TestExtensionGaps:
         """
         from src.core.tools.creatives._assignments import _process_assignments
 
-        with patch("src.core.tools.creatives._assignments.get_db_session") as mock_db:
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_db:
+            mock_uow = MagicMock()
+            mock_assignment_repo = MagicMock()
+            mock_uow.assignments = mock_assignment_repo
+            mock_db.return_value.__enter__.return_value = mock_uow
             mock_db.return_value.__exit__.return_value = None
 
             mock_package = MagicMock()
@@ -4373,22 +4414,17 @@ class TestExtensionGaps:
             mock_media_buy = MagicMock()
             mock_media_buy.media_buy_id = "mb_1"
 
+            mock_assignment_repo.find_package_with_media_buy.return_value = (mock_package, mock_media_buy)
+
             mock_creative = MagicMock()
             mock_creative.agent_url = "https://agent.example.com"
             mock_creative.format = "video_30s"
+            mock_assignment_repo.get_creative_by_id.return_value = mock_creative
 
             mock_product = MagicMock()
             mock_product.format_ids = [{"agent_url": "https://agent.example.com", "id": "display_300x250"}]
             mock_product.name = "Display Only Product"
-
-            mock_session.execute.return_value.first.return_value = (mock_package, mock_media_buy)
-
-            # Sequential scalars: (1) creative, (2) product -- skips in lenient, no assignment check
-            creative_result = MagicMock()
-            creative_result.first.return_value = mock_creative
-            product_result = MagicMock()
-            product_result.first.return_value = mock_product
-            mock_session.scalars.side_effect = [creative_result, product_result]
+            mock_assignment_repo.get_product_by_id.return_value = mock_product
 
             results = [SyncCreativeResult(creative_id="c1", action="created")]
             assignment_list = _process_assignments(
@@ -4428,7 +4464,7 @@ class TestA2ATransportGaps:
         )
 
         with (
-            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch(
@@ -4450,10 +4486,14 @@ class TestA2ATransportGaps:
                 "parameters": None,
             }
 
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+            mock_uow = MagicMock()
+            mock_creative_repo = MagicMock()
+            mock_creative_repo.get_provenance_policies.return_value = []
+            mock_creative_repo.get_by_id.return_value = None
+            mock_creative_repo.create.side_effect = _mock_creative_repo_create
+            mock_uow.creatives = mock_creative_repo
+            mock_db.return_value.__enter__.return_value = mock_uow
             mock_db.return_value.__exit__.return_value = None
-            mock_session.scalars.return_value.first.return_value = None
 
             result = sync_creatives_raw(
                 creatives=[_make_creative_asset()],
@@ -4691,7 +4731,7 @@ class TestDeleteMissingDefault:
         )
 
         with (
-            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch(
@@ -4713,10 +4753,14 @@ class TestDeleteMissingDefault:
                 "parameters": None,
             }
 
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+            mock_uow = MagicMock()
+            mock_creative_repo = MagicMock()
+            mock_creative_repo.get_provenance_policies.return_value = []
+            mock_creative_repo.get_by_id.return_value = None
+            mock_creative_repo.create.side_effect = _mock_creative_repo_create
+            mock_uow.creatives = mock_creative_repo
+            mock_db.return_value.__enter__.return_value = mock_uow
             mock_db.return_value.__exit__.return_value = None
-            mock_session.scalars.return_value.first.return_value = None
 
             # Only sync c1, not c2 (which "exists" in DB but is not in payload)
             result = _sync_creatives_impl(
@@ -4802,7 +4846,7 @@ class TestCreativeIdsScopeFilterGap:
         )
 
         with (
-            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch(
@@ -4824,10 +4868,14 @@ class TestCreativeIdsScopeFilterGap:
                 "parameters": None,
             }
 
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+            mock_uow = MagicMock()
+            mock_creative_repo = MagicMock()
+            mock_creative_repo.get_provenance_policies.return_value = []
+            mock_creative_repo.get_by_id.return_value = None
+            mock_creative_repo.create.side_effect = _mock_creative_repo_create
+            mock_uow.creatives = mock_creative_repo
+            mock_db.return_value.__enter__.return_value = mock_uow
             mock_db.return_value.__exit__.return_value = None
-            mock_session.scalars.return_value.first.return_value = None
 
             creatives = [
                 _make_creative_asset(creative_id="C1"),

@@ -13,6 +13,29 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.tools.creatives import _sync_creatives_impl
 
 
+def _make_mock_uow():
+    """Create a mock CreativeUoW with creative_repo returning sensible defaults."""
+    mock_uow = MagicMock()
+    mock_creative_repo = MagicMock()
+    mock_creative_repo.get_provenance_policies.return_value = []
+    mock_creative_repo.get_by_id.return_value = None
+    mock_creative_repo.begin_nested.return_value.__enter__.return_value = None
+    mock_creative_repo.begin_nested.return_value.__exit__.return_value = None
+
+    # create() must return a mock with proper string attributes (Pydantic validation)
+    def mock_create(**kwargs):
+        db_creative = MagicMock()
+        db_creative.creative_id = kwargs.get("creative_id", "c_unknown")
+        db_creative.status = kwargs.get("status", "approved")
+        return db_creative
+
+    mock_creative_repo.create.side_effect = mock_create
+
+    mock_uow.creatives = mock_creative_repo
+    mock_uow.assignments = MagicMock()
+    return mock_uow, mock_creative_repo
+
+
 class TestSyncCreativesFormatValidation:
     """Test format validation in sync_creatives operation."""
 
@@ -57,15 +80,18 @@ class TestSyncCreativesFormatValidation:
 
     def test_format_validation_success(self, identity, mock_tenant, valid_creative_dict, mock_format_spec):
         """Test that format validation succeeds when format exists."""
+        mock_uow, mock_creative_repo = _make_mock_uow()
+
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
-            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
             patch("src.core.tools.creatives._sync.log_tool_activity"),
         ):
+            mock_uow_cls.return_value.__enter__.return_value = mock_uow
+
             # Setup mock registry
-            # Note: list_all_formats and get_format are async methods
             async def mock_list_all_formats(tenant_id=None):
                 return [mock_format_spec]
 
@@ -77,13 +103,6 @@ class TestSyncCreativesFormatValidation:
             mock_registry.get_format = mock_get_format
             mock_registry_getter.return_value = mock_registry
 
-            # Setup mock database session
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
-
-            # Mock database query to return no existing creative
-            mock_session.scalars.return_value.first.return_value = None
-
             # Execute
             response = _sync_creatives_impl(creatives=[valid_creative_dict], identity=identity)
 
@@ -94,13 +113,17 @@ class TestSyncCreativesFormatValidation:
 
     def test_format_validation_unknown_format(self, identity, mock_tenant, valid_creative_dict):
         """Test that validation fails with clear error when format doesn't exist."""
+        mock_uow, mock_creative_repo = _make_mock_uow()
+
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
-            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
             patch("src.core.tools.creatives._sync.log_tool_activity"),
         ):
+            mock_uow_cls.return_value.__enter__.return_value = mock_uow
+
             # Setup mock registry - format not found
             async def mock_list_all_formats(tenant_id=None):
                 return []
@@ -112,10 +135,6 @@ class TestSyncCreativesFormatValidation:
             mock_registry.list_all_formats = mock_list_all_formats
             mock_registry.get_format = mock_get_format
             mock_registry_getter.return_value = mock_registry
-
-            # Setup mock database session
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
 
             # Execute
             response = _sync_creatives_impl(creatives=[valid_creative_dict], identity=identity)
@@ -133,13 +152,17 @@ class TestSyncCreativesFormatValidation:
 
     def test_format_validation_agent_unreachable(self, identity, mock_tenant, valid_creative_dict):
         """Test that validation fails with clear error when agent is unreachable."""
+        mock_uow, mock_creative_repo = _make_mock_uow()
+
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
-            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
             patch("src.core.tools.creatives._sync.log_tool_activity"),
         ):
+            mock_uow_cls.return_value.__enter__.return_value = mock_uow
+
             # Setup mock registry - agent unreachable
             async def mock_list_all_formats(tenant_id=None):
                 return []
@@ -151,10 +174,6 @@ class TestSyncCreativesFormatValidation:
             mock_registry.list_all_formats = mock_list_all_formats
             mock_registry.get_format = mock_get_format
             mock_registry_getter.return_value = mock_registry
-
-            # Setup mock database session
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
 
             # Execute
             response = _sync_creatives_impl(creatives=[valid_creative_dict], identity=identity)
@@ -180,15 +199,18 @@ class TestSyncCreativesFormatValidation:
             "variants": [],  # Required in adcp 3.6.0
         }
 
+        mock_uow, mock_creative_repo = _make_mock_uow()
+
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
-            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
             patch("src.core.tools.creatives._sync.log_tool_activity"),
         ):
+            mock_uow_cls.return_value.__enter__.return_value = mock_uow
+
             # Setup mock registry
-            # Note: list_all_formats and get_format are async methods
             async def mock_list_all_formats(tenant_id=None):
                 return [mock_format_spec]
 
@@ -199,11 +221,6 @@ class TestSyncCreativesFormatValidation:
             mock_registry.list_all_formats = mock_list_all_formats
             mock_registry.get_format = mock_get_format
             mock_registry_getter.return_value = mock_registry
-
-            # Setup mock database session
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
-            mock_session.scalars.return_value.first.return_value = None
 
             # Execute
             response = _sync_creatives_impl(creatives=[creative_dict], identity=identity)
@@ -241,13 +258,17 @@ class TestSyncCreativesFormatValidation:
             },
         ]
 
+        mock_uow, mock_creative_repo = _make_mock_uow()
+
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
-            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
             patch("src.core.tools.creatives._sync.log_tool_activity"),
         ):
+            mock_uow_cls.return_value.__enter__.return_value = mock_uow
+
             # Setup mock registry
             async def mock_list_all_formats(tenant_id=None):
                 return [mock_format_spec]
@@ -262,11 +283,6 @@ class TestSyncCreativesFormatValidation:
             mock_registry.list_all_formats = mock_list_all_formats
             mock_registry.get_format = mock_get_format
             mock_registry_getter.return_value = mock_registry
-
-            # Setup mock database session
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
-            mock_session.scalars.return_value.first.return_value = None
 
             # Execute
             response = _sync_creatives_impl(creatives=creatives, identity=identity)
@@ -296,15 +312,18 @@ class TestSyncCreativesFormatValidation:
         creative2 = valid_creative_dict.copy()
         creative2["creative_id"] = "creative_2"
 
+        mock_uow, mock_creative_repo = _make_mock_uow()
+
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
-            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
             patch("src.core.tools.creatives._sync.log_tool_activity"),
         ):
+            mock_uow_cls.return_value.__enter__.return_value = mock_uow
+
             # Setup mock registry
-            # Note: list_all_formats and get_format are async methods
             async def mock_list_all_formats(tenant_id=None):
                 return [mock_format_spec]
 
@@ -316,11 +335,6 @@ class TestSyncCreativesFormatValidation:
             mock_registry.get_format = mock_get_format
             mock_registry_getter.return_value = mock_registry
 
-            # Setup mock database session
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
-            mock_session.scalars.return_value.first.return_value = None
-
             # Execute
             response = _sync_creatives_impl(creatives=[creative1, creative2], identity=identity)
 
@@ -328,10 +342,6 @@ class TestSyncCreativesFormatValidation:
             assert len(response.creatives) == 2
             assert response.creatives[0].action == CreativeAction.created
             assert response.creatives[1].action == CreativeAction.created
-
-            # Note: Caching behavior is tested at the registry level
-            # This test verifies that multiple creatives with same format both succeed
-            # Actual cache hit measurement would require integration tests with real registry
 
     def test_format_validation_missing_format_id(self, identity, mock_tenant):
         """Test that validation fails when format_id is missing."""
@@ -342,13 +352,17 @@ class TestSyncCreativesFormatValidation:
             "assets": {"banner_image": {"url": "https://example.com/banner.png"}},
         }
 
+        mock_uow, mock_creative_repo = _make_mock_uow()
+
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
-            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
             patch("src.core.tools.creatives._sync.log_tool_activity"),
         ):
+            mock_uow_cls.return_value.__enter__.return_value = mock_uow
+
             # Setup mock registry (needed for list_all_formats call)
             async def mock_list_all_formats(tenant_id=None):
                 return []
@@ -356,10 +370,6 @@ class TestSyncCreativesFormatValidation:
             mock_registry = Mock()
             mock_registry.list_all_formats = mock_list_all_formats
             mock_registry_getter.return_value = mock_registry
-
-            # Setup mock database session
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
 
             # Execute
             response = _sync_creatives_impl(creatives=[creative_dict], identity=identity)
@@ -388,13 +398,17 @@ class TestSyncCreativesFormatValidation:
             "assets": {"image": {"url": "https://example.com/2.png"}},
         }
 
+        mock_uow, mock_creative_repo = _make_mock_uow()
+
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
-            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
             patch("src.core.tools.creatives._sync.log_tool_activity"),
         ):
+            mock_uow_cls.return_value.__enter__.return_value = mock_uow
+
             # Setup mock registry
             async def mock_list_all_formats(tenant_id=None):
                 return []
@@ -407,10 +421,6 @@ class TestSyncCreativesFormatValidation:
             mock_registry.list_all_formats = mock_list_all_formats
             mock_registry.get_format = mock_get_format
             mock_registry_getter.return_value = mock_registry
-
-            # Setup mock database session
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
 
             # Test unknown format error
             response1 = _sync_creatives_impl(creatives=[creative_unknown_format], identity=identity)
