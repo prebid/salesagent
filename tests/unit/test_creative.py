@@ -758,7 +758,7 @@ class TestCrossPrincipalIsolation:
             patch("src.core.tools.creatives._processing._extract_format_info") as mock_fmt,
             patch("src.core.tools.creatives._sync.log_tool_activity"),
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
-            patch("src.core.tools.creatives._workflow.get_db_session"),
+            patch("src.core.tools.creatives._workflow.WorkflowUoW"),
             patch("src.core.tools.creatives._sync._create_new_creative") as mock_create,
         ):
             mock_reg = MagicMock()
@@ -2257,7 +2257,7 @@ class TestWorkflowStepCreation:
 
         with (
             patch("src.core.context_manager.get_context_manager") as mock_ctx_mgr_getter,
-            patch("src.core.tools.creatives._workflow.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._workflow.WorkflowUoW") as mock_uow_cls,
         ):
             mock_ctx_mgr = MagicMock()
             mock_persistent_ctx = MagicMock()
@@ -2269,9 +2269,9 @@ class TestWorkflowStepCreation:
             mock_ctx_mgr.create_workflow_step.return_value = mock_step
             mock_ctx_mgr_getter.return_value = mock_ctx_mgr
 
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
-            mock_db.return_value.__exit__.return_value = None
+            mock_uow = MagicMock()
+            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
+            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=None)
 
             _create_sync_workflow_steps(
                 creatives_needing_approval=[
@@ -2292,11 +2292,13 @@ class TestWorkflowStepCreation:
             assert create_call[1]["owner"] == "publisher"
             assert create_call[1]["status"] == "requires_approval"
 
-            # Verify ObjectWorkflowMapping created
-            mock_session.add.assert_called_once()
-            mapping = mock_session.add.call_args[0][0]
-            assert mapping.object_type == "creative"
-            assert mapping.object_id == "c1"
+            # Verify ObjectWorkflowMapping created via repository
+            mock_uow.workflows.add_mapping.assert_called_once_with(
+                step_id="step_1",
+                object_type="creative",
+                object_id="c1",
+                action="approval_required",
+            )
 
     def test_workflow_context_failure_recovery_is_transient(self):
         """Failed workflow context creation should be transient — adapter failures are retryable.
@@ -2343,15 +2345,15 @@ class TestAuditLogging:
 
         with (
             patch("src.core.tools.creatives._workflow.get_audit_logger") as mock_audit_getter,
-            patch("src.core.tools.creatives._workflow.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._workflow.WorkflowUoW") as mock_uow_cls,
         ):
             mock_audit = MagicMock()
             mock_audit_getter.return_value = mock_audit
 
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
-            mock_db.return_value.__exit__.return_value = None
-            mock_session.scalars.return_value.first.return_value = None  # No principal
+            mock_uow = MagicMock()
+            mock_uow.workflows.get_principal_name.return_value = None  # No principal
+            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
+            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=None)
 
             _audit_log_sync(
                 tenant={"tenant_id": "t1"},
@@ -2461,7 +2463,7 @@ class TestDeleteMissing:
             patch("src.core.tools.creatives._processing._extract_format_info") as mock_fmt,
             patch("src.core.tools.creatives._sync.log_tool_activity"),
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
-            patch("src.core.tools.creatives._workflow.get_db_session"),
+            patch("src.core.tools.creatives._workflow.WorkflowUoW"),
         ):
             mock_reg = MagicMock()
             mock_run_async.return_value = []
@@ -2539,7 +2541,7 @@ class TestDryRun:
             patch("src.core.tools.creatives._processing._extract_format_info") as mock_fmt,
             patch("src.core.tools.creatives._sync.log_tool_activity"),
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
-            patch("src.core.tools.creatives._workflow.get_db_session"),
+            patch("src.core.tools.creatives._workflow.WorkflowUoW"),
         ):
             mock_reg = MagicMock()
             mock_run_async.return_value = []
@@ -2984,7 +2986,7 @@ class TestValidationModeSemantics:
             patch("src.core.tools.creatives._processing._extract_format_info") as mock_fmt,
             patch("src.core.tools.creatives._sync.log_tool_activity"),
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
-            patch("src.core.tools.creatives._workflow.get_db_session"),
+            patch("src.core.tools.creatives._workflow.WorkflowUoW"),
         ):
             mock_reg = MagicMock()
             mock_run_async.return_value = []
@@ -3669,7 +3671,7 @@ class TestSyncCreativesMainFlowGaps:
             patch("src.core.tools.creatives._processing._extract_format_info") as mock_fmt,
             patch("src.core.tools.creatives._sync.log_tool_activity"),
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
-            patch("src.core.tools.creatives._workflow.get_db_session"),
+            patch("src.core.tools.creatives._workflow.WorkflowUoW"),
         ):
             mock_reg = MagicMock()
             mock_run_async.return_value = []
@@ -3719,7 +3721,7 @@ class TestSyncCreativesMainFlowGaps:
             patch("src.core.tools.creatives._processing._extract_format_info") as mock_fmt,
             patch("src.core.tools.creatives._sync.log_tool_activity"),
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
-            patch("src.core.tools.creatives._workflow.get_db_session"),
+            patch("src.core.tools.creatives._workflow.WorkflowUoW"),
         ):
             mock_reg = MagicMock()
             mock_run_async.return_value = []
@@ -3835,7 +3837,7 @@ class TestSyncCreativesMainFlowGaps:
             patch("src.core.tools.creatives._processing._extract_format_info") as mock_fmt,
             patch("src.core.tools.creatives._sync.log_tool_activity"),
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
-            patch("src.core.tools.creatives._workflow.get_db_session"),
+            patch("src.core.tools.creatives._workflow.WorkflowUoW"),
         ):
             mock_reg = MagicMock()
             mock_run_async.return_value = []
@@ -3881,7 +3883,7 @@ class TestSyncCreativesMainFlowGaps:
             patch("src.core.tools.creatives._processing._extract_format_info") as mock_fmt,
             patch("src.core.tools.creatives._sync.log_tool_activity"),
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
-            patch("src.core.tools.creatives._workflow.get_db_session"),
+            patch("src.core.tools.creatives._workflow.WorkflowUoW"),
         ):
             mock_reg = MagicMock()
             mock_run_async.return_value = []  # all_formats (empty -> skip preview)
@@ -3961,7 +3963,7 @@ class TestExtensionGaps:
             patch("src.core.tools.creatives._processing._extract_format_info") as mock_fmt,
             patch("src.core.tools.creatives._sync.log_tool_activity"),
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
-            patch("src.core.tools.creatives._workflow.get_db_session"),
+            patch("src.core.tools.creatives._workflow.WorkflowUoW"),
         ):
             mock_reg = MagicMock()
             mock_run_async.return_value = []
@@ -4023,7 +4025,7 @@ class TestExtensionGaps:
             patch("src.core.tools.creatives._processing._extract_format_info") as mock_fmt,
             patch("src.core.tools.creatives._sync.log_tool_activity"),
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
-            patch("src.core.tools.creatives._workflow.get_db_session"),
+            patch("src.core.tools.creatives._workflow.WorkflowUoW"),
         ):
             mock_reg = MagicMock()
             mock_run_async.return_value = []
@@ -4077,7 +4079,7 @@ class TestExtensionGaps:
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch("src.core.tools.creatives._sync.log_tool_activity"),
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
-            patch("src.core.tools.creatives._workflow.get_db_session"),
+            patch("src.core.tools.creatives._workflow.WorkflowUoW"),
         ):
             mock_reg = MagicMock()
             mock_run_async.return_value = []
@@ -4175,7 +4177,7 @@ class TestExtensionGaps:
             patch("src.core.tools.creatives._validation.run_async_in_sync_context", return_value=None),
             patch("src.core.tools.creatives._sync.log_tool_activity"),
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
-            patch("src.core.tools.creatives._workflow.get_db_session"),
+            patch("src.core.tools.creatives._workflow.WorkflowUoW"),
         ):
             mock_reg = MagicMock()
             mock_run_async.return_value = []
@@ -4223,7 +4225,7 @@ class TestExtensionGaps:
             ),
             patch("src.core.tools.creatives._sync.log_tool_activity"),
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
-            patch("src.core.tools.creatives._workflow.get_db_session"),
+            patch("src.core.tools.creatives._workflow.WorkflowUoW"),
         ):
             mock_reg = MagicMock()
             mock_run_async.return_value = []
@@ -4437,7 +4439,7 @@ class TestA2ATransportGaps:
             patch("src.core.tools.creatives._processing._extract_format_info") as mock_fmt,
             patch("src.core.tools.creatives._sync.log_tool_activity"),
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
-            patch("src.core.tools.creatives._workflow.get_db_session"),
+            patch("src.core.tools.creatives._workflow.WorkflowUoW"),
         ):
             mock_reg = MagicMock()
             mock_run_async.return_value = []
@@ -4700,7 +4702,7 @@ class TestDeleteMissingDefault:
             patch("src.core.tools.creatives._processing._extract_format_info") as mock_fmt,
             patch("src.core.tools.creatives._sync.log_tool_activity"),
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
-            patch("src.core.tools.creatives._workflow.get_db_session"),
+            patch("src.core.tools.creatives._workflow.WorkflowUoW"),
         ):
             mock_reg = MagicMock()
             mock_run_async.return_value = []
@@ -4811,7 +4813,7 @@ class TestCreativeIdsScopeFilterGap:
             patch("src.core.tools.creatives._processing._extract_format_info") as mock_fmt,
             patch("src.core.tools.creatives._sync.log_tool_activity"),
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
-            patch("src.core.tools.creatives._workflow.get_db_session"),
+            patch("src.core.tools.creatives._workflow.WorkflowUoW"),
         ):
             mock_reg = MagicMock()
             mock_run_async.return_value = []

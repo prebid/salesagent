@@ -76,7 +76,7 @@ def _sync_patches():
             patch("src.core.creative_agent_registry.get_creative_agent_registry", return_value=mock_registry),
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
             patch("src.core.tools.creatives._sync.log_tool_activity"),
-            patch("src.core.tools.creatives._workflow.get_db_session") as mock_wf_db,
+            patch("src.core.tools.creatives._workflow.WorkflowUoW") as mock_wf_uow,
         ):
             mock_session = MagicMock()
             mock_db.return_value.__enter__.return_value = mock_session
@@ -506,10 +506,11 @@ class TestWorkflowStatusBranches:
 
         with (
             patch("src.core.context_manager.get_context_manager", return_value=mock_ctx_manager),
-            patch("src.core.tools.creatives._workflow.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._workflow.WorkflowUoW") as mock_uow_cls,
         ):
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+            mock_uow = MagicMock()
+            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
+            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=None)
 
             _create_sync_workflow_steps(
                 creatives_needing_approval=[
@@ -544,10 +545,11 @@ class TestWorkflowStatusBranches:
 
         with (
             patch("src.core.context_manager.get_context_manager", return_value=mock_ctx_manager),
-            patch("src.core.tools.creatives._workflow.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._workflow.WorkflowUoW") as mock_uow_cls,
         ):
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+            mock_uow = MagicMock()
+            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
+            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=None)
 
             _create_sync_workflow_steps(
                 creatives_needing_approval=[
@@ -582,10 +584,11 @@ class TestWorkflowStatusBranches:
 
         with (
             patch("src.core.context_manager.get_context_manager", return_value=mock_ctx_manager),
-            patch("src.core.tools.creatives._workflow.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._workflow.WorkflowUoW") as mock_uow_cls,
         ):
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+            mock_uow = MagicMock()
+            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
+            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=None)
 
             _create_sync_workflow_steps(
                 creatives_needing_approval=[
@@ -645,11 +648,12 @@ class TestWorkflowStatusBranches:
         mock_audit = MagicMock()
         with (
             patch("src.core.tools.creatives._workflow.get_audit_logger", return_value=mock_audit),
-            patch("src.core.tools.creatives._workflow.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._workflow.WorkflowUoW") as mock_uow_cls,
         ):
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
-            mock_session.scalars.return_value.first.return_value = None
+            mock_uow = MagicMock()
+            mock_uow.workflows.get_principal_name.return_value = None
+            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
+            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=None)
 
             _audit_log_sync(
                 tenant=TENANT,

@@ -17,8 +17,7 @@ from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
 
 from src.core.audit_logger import get_audit_logger
-from src.core.database.database_session import get_db_session
-from src.core.database.repositories.creative import CreativeRepository
+from src.core.database.repositories.uow import CreativeUoW
 from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from src.core.helpers import log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
@@ -202,9 +201,9 @@ def _list_creatives_impl(
     creatives = []
     total_count = 0
 
-    with get_db_session() as session:
-        repo = CreativeRepository(session, tenant["tenant_id"])
-        result = repo.get_by_principal(
+    with CreativeUoW(tenant["tenant_id"]) as uow:
+        assert uow.creatives is not None
+        result = uow.creatives.get_by_principal(
             principal_id,
             status=status,
             format=format,

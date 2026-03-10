@@ -21,7 +21,7 @@ Usage:
         partners = uow.tenant_config.list_publisher_partners()
         # auto-commits when exiting the `with` block
 
-beads: salesagent-t735 (foundation), salesagent-2lp8 (epic), salesagent-rn59 (ProductUoW), salesagent-4d4 (WorkflowUoW), salesagent-9y0 (TenantConfigUoW)
+beads: salesagent-t735 (foundation), salesagent-2lp8 (epic), salesagent-rn59 (ProductUoW), salesagent-4d4 (WorkflowUoW), salesagent-9y0 (TenantConfigUoW), salesagent-q8n (CreativeUoW)
 """
 
 from __future__ import annotations
@@ -32,6 +32,7 @@ from typing import Any, Self
 from sqlalchemy.orm import Session
 
 from src.core.database.database_session import get_db_session
+from src.core.database.repositories.creative import CreativeRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.product import ProductRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
@@ -187,3 +188,40 @@ class TenantConfigUoW:
         self._session_cm.__exit__(exc_type, exc_val, exc_tb)
         self.session = None
         self.tenant_config = None
+
+
+class CreativeUoW:
+    """Unit of Work for Creative operations.
+
+    Wraps a database session and provides a tenant-scoped CreativeRepository.
+    Auto-commits on clean exit, rolls back on exception.
+
+    Args:
+        tenant_id: Tenant scope for all repository queries.
+    """
+
+    def __init__(self, tenant_id: str) -> None:
+        self._tenant_id = tenant_id
+        self._session_cm: Any = None
+        self.session: Session | None = None
+        self.creatives: CreativeRepository | None = None
+
+    def __enter__(self) -> Self:
+        self._session_cm = get_db_session()
+        self.session = self._session_cm.__enter__()
+        self.creatives = CreativeRepository(self.session, self._tenant_id)
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        assert self.session is not None
+        assert self._session_cm is not None
+        if exc_type is None:
+            self.session.commit()
+        self._session_cm.__exit__(exc_type, exc_val, exc_tb)
+        self.session = None
+        self.creatives = None

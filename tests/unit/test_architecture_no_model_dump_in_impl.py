@@ -53,7 +53,7 @@ KNOWN_VIOLATIONS = {
     # _get_products_impl: 1 violation (logging)
     ("products.py", 636),  # req.filters.model_dump() in logger.info
     # _list_creatives_impl: 1 violation (filter dict conversion)
-    ("creatives/listing.py", 151),  # filters.model_dump(exclude_none=True)
+    ("creatives/listing.py", 150),  # filters.model_dump(exclude_none=True)
 }
 
 

@@ -23,7 +23,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import Context as DBContext
-from src.core.database.models import ObjectWorkflowMapping, WorkflowStep
+from src.core.database.models import ObjectWorkflowMapping, Principal, WorkflowStep
 
 
 class WorkflowRepository:
@@ -163,6 +163,48 @@ class WorkflowRepository:
         for mapping in mappings:
             result[mapping.step_id].append(mapping)
         return result
+
+    # ------------------------------------------------------------------
+    # ObjectWorkflowMapping writes
+    # ------------------------------------------------------------------
+
+    def add_mapping(
+        self,
+        *,
+        step_id: str,
+        object_type: str,
+        object_id: str,
+        action: str,
+    ) -> ObjectWorkflowMapping:
+        """Create and add an ObjectWorkflowMapping to the session.
+
+        Does NOT commit — the caller (or UoW) handles that.
+        """
+        mapping = ObjectWorkflowMapping(
+            step_id=step_id,
+            object_type=object_type,
+            object_id=object_id,
+            action=action,
+        )
+        self._session.add(mapping)
+        return mapping
+
+    # ------------------------------------------------------------------
+    # Principal reads (for audit logging)
+    # ------------------------------------------------------------------
+
+    def get_principal_name(self, principal_id: str) -> str | None:
+        """Look up a principal's display name within the tenant.
+
+        Returns the name string, or None if the principal is not found.
+        """
+        principal = self._session.scalars(
+            select(Principal).filter_by(
+                tenant_id=self._tenant_id,
+                principal_id=principal_id,
+            )
+        ).first()
+        return principal.name if principal else None
 
     # ------------------------------------------------------------------
     # WorkflowStep writes

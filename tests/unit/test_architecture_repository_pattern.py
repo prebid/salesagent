@@ -45,12 +45,9 @@ IMPL_FILES = [
 # These existed before the guard was created. Allowlist shrinks as repositories are introduced.
 # FIXME(salesagent-qo8a): all _impl functions should use repositories instead of get_db_session()
 IMPL_SESSION_ALLOWLIST = {
-    # creatives — 5 functions with get_db_session()
-    ("src/core/tools/creatives/listing.py", "_list_creatives_impl"),
+    # creatives — 2 functions with get_db_session()
     ("src/core/tools/creatives/_sync.py", "_sync_creatives_impl"),
     ("src/core/tools/creatives/_assignments.py", "_process_assignments"),
-    ("src/core/tools/creatives/_workflow.py", "_create_sync_workflow_steps"),
-    ("src/core/tools/creatives/_workflow.py", "_audit_log_sync"),
     # task management — migrated to WorkflowRepository (salesagent-4d4)
     # admin blueprints — 5 functions with get_db_session()
     ("src/admin/blueprints/creatives.py", "review_creatives"),
