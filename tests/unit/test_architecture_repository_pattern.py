@@ -45,9 +45,6 @@ IMPL_FILES = [
 # These existed before the guard was created. Allowlist shrinks as repositories are introduced.
 # FIXME(salesagent-qo8a): all _impl functions should use repositories instead of get_db_session()
 IMPL_SESSION_ALLOWLIST = {
-    # products.py — 1 function with get_db_session() (product queries moved to ProductRepository)
-    # FIXME(salesagent-qo8a): _get_products_impl still uses get_db_session() for policy review + dynamic pricing
-    ("src/core/tools/products.py", "_get_products_impl"),
     # creatives — 5 functions with get_db_session()
     ("src/core/tools/creatives/listing.py", "_list_creatives_impl"),
     ("src/core/tools/creatives/_sync.py", "_sync_creatives_impl"),
