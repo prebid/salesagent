@@ -218,20 +218,26 @@ async def _call_webhook_for_creative_status(
                 is_active=True,
             )
 
+            # Extract step attributes before UoW closes (avoid DetachedInstanceError)
+            step_tool_name = step.tool_name
+            step_step_id = step.step_id
+            step_request_data = step.request_data
+            step_context_id = step.context_id
+
         # --- Session closed here; webhook delivery is outside the transaction ---
 
         service = get_protocol_webhook_service()
         try:
-            logger.info(f"tool name: {step.tool_name}")
-            logger.info(f"task id: {step.step_id}")
-            logger.info(f"task type: {step.tool_name}")
+            logger.info(f"tool name: {step_tool_name}")
+            logger.info(f"task id: {step_step_id}")
+            logger.info(f"task type: {step_tool_name}")
             logger.info("status: completed")
             logger.info(f"result: {complete_result}")
             logger.info("error: None")
             logger.info(f"push_notification_config: {push_notification_config}")
 
             # Determine protocol type from workflow step request_data
-            protocol = step.request_data.get("protocol", "mcp")  # Default to MCP for backward compatibility
+            protocol = step_request_data.get("protocol", "mcp")  # Default to MCP for backward compatibility
 
             # Create appropriate webhook payload based on protocol
             # Convert result to dict for webhook payload functions
@@ -240,19 +246,19 @@ async def _call_webhook_for_creative_status(
             payload: Task | TaskStatusUpdateEvent | McpWebhookPayload
             if protocol == "a2a":
                 payload = create_a2a_webhook_payload(
-                    task_id=step.step_id,
+                    task_id=step_step_id,
                     status=GeneratedTaskStatus.completed,
                     result=result_dict,
-                    context_id=step.context_id,
+                    context_id=step_context_id,
                 )
             else:
                 # TODO: Fix in adcp python client - create_mcp_webhook_payload should return
                 # McpWebhookPayload instead of dict[str, Any] for proper type safety
-                mcp_payload_dict = create_mcp_webhook_payload(step.step_id, GeneratedTaskStatus.completed, result_dict)
+                mcp_payload_dict = create_mcp_webhook_payload(step_step_id, GeneratedTaskStatus.completed, result_dict)
                 payload = McpWebhookPayload.model_construct(**mcp_payload_dict)
 
             metadata = {
-                "task_type": step.tool_name
+                "task_type": step_tool_name
                 # TODO: @yusuf - check if we were passing principal_id and tenant to this previously
                 # TODO: @yusuf - check if we want to make metadata typed
             }
@@ -262,7 +268,7 @@ async def _call_webhook_for_creative_status(
             )
 
             logger.info(
-                f"Successfully sent protocol webhook for sync_creatives task {step.step_id} "
+                f"Successfully sent protocol webhook for sync_creatives task {step_step_id} "
                 f"with {len(all_creatives)} reviewed creatives"
             )
 
