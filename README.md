@@ -68,36 +68,13 @@ Configure via the Admin UI:
 
 ## Development Setup
 
-For local development with hot-reload:
-
 ```bash
 git clone https://github.com/prebid/salesagent.git
 cd salesagent
-cp .env.template .env
-
-# Build and start (builds from source with hot-reload)
-docker compose build
-docker compose up -d
-
-# View logs
-docker compose logs -f
+make setup    # One command: installs deps, starts Docker, verifies health
 ```
 
-Access at http://localhost:8000:
-- **Admin UI:** `/admin` - click "Log in to Dashboard" (password: `test123`)
-- **MCP Server:** `/mcp/`
-- **A2A Server:** `/a2a`
-
-Migrations run automatically on startup.
-
-Run tests:
-```bash
-uv run pytest tests/unit/ -x       # Unit tests
-uv run pytest tests/integration/   # Integration tests (requires PostgreSQL)
-uv run pytest tests/e2e/           # E2E tests (uses Docker)
-```
-
-See [Development Guide](docs/development/README.md) for contributing.
+See the [Getting Started guide](docs/development/GETTING_STARTED.md) for prerequisites, manual setup steps, testing workflows, and common operations.
 
 ---
 
