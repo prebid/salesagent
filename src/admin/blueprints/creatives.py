@@ -1005,14 +1005,13 @@ def _create_review_record(
         )
 
         db_session.add(review_record)
-        db_session.commit()
+        db_session.flush()
 
         logger.debug(f"Created review record {review_id} for creative {creative_id}")
 
     except Exception as e:
         logger.error(f"Error creating review record for creative {creative_id}: {e}", exc_info=True)
-        # Don't fail the review if we can't create the record
-        db_session.rollback()
+        # Don't fail the review if we can't create the record — let UoW handle rollback
 
 
 def _ai_review_creative_impl(tenant_id, creative_id, db_session=None, promoted_offering=None):
