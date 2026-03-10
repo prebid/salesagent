@@ -141,6 +141,18 @@ class WorkflowRepository:
     # ObjectWorkflowMapping reads
     # ------------------------------------------------------------------
 
+    def get_latest_mapping_for_object(self, object_type: str, object_id: str) -> ObjectWorkflowMapping | None:
+        """Get the most recent workflow mapping for a specific object."""
+        return self._session.scalars(
+            select(ObjectWorkflowMapping)
+            .filter_by(object_type=object_type, object_id=object_id)
+            .order_by(ObjectWorkflowMapping.created_at.desc())
+        ).first()
+
+    def get_step_by_id(self, step_id: str) -> WorkflowStep | None:
+        """Get a workflow step by its primary key (no tenant filter)."""
+        return self._session.get(WorkflowStep, step_id)
+
     def get_mappings_for_step(self, step_id: str) -> list[ObjectWorkflowMapping]:
         """Get all object mappings for a workflow step."""
         return list(self._session.scalars(select(ObjectWorkflowMapping).filter_by(step_id=step_id)).all())

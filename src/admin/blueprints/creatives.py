@@ -16,10 +16,6 @@ from adcp.types.generated_poc.core.context import ContextObject
 from adcp.webhooks import GeneratedTaskStatus
 
 from src.core.database.models import (
-    ObjectWorkflowMapping,
-    WorkflowStep,
-)
-from src.core.database.models import (
     PushNotificationConfig as DBPushNotificationConfig,
 )
 from src.services.protocol_webhook_service import get_protocol_webhook_service
@@ -40,11 +36,9 @@ def discover_creative_formats_from_url(url):
 
 
 from flask import Blueprint, jsonify, redirect, render_template, request, url_for
-from sqlalchemy import select
 
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
-from src.core.database.models import Tenant
 from src.core.database.repositories.uow import AdminCreativeUoW
 
 # Note: CreativeFormat table was dropped in migration f2addf453200
@@ -119,19 +113,15 @@ async def _call_webhook_for_creative_status(
     try:
         with AdminCreativeUoW(tenant_id or "") as uow:
             assert uow.session is not None
-            db_session = uow.session
-            stmt = (
-                select(ObjectWorkflowMapping)
-                .filter_by(object_type="creative", object_id=creative_id)
-                .order_by(ObjectWorkflowMapping.created_at.desc())
-            )
-            mapping = db_session.scalars(stmt).first()
+            assert uow.workflows is not None
+            assert uow.creatives is not None
+            mapping = uow.workflows.get_latest_mapping_for_object("creative", creative_id)
 
             if not mapping:
                 logger.debug(f"No workflow mapping found for creative {creative_id}; skipping webhook notification")
                 return False
 
-            step = db_session.get(WorkflowStep, mapping.step_id)
+            step = uow.workflows.get_step_by_id(mapping.step_id)
             if not step or not step.request_data:
                 logger.debug(
                     f"Workflow step missing or has no request_data for creative {creative_id}; skipping webhook notification"
@@ -139,22 +129,15 @@ async def _call_webhook_for_creative_status(
                 return False
 
             # Get ALL creatives associated with this workflow step
-            stmt_mappings = select(ObjectWorkflowMapping).filter_by(step_id=step.step_id, object_type="creative")
-            all_mappings = db_session.scalars(stmt_mappings).all()
+            all_mappings = [m for m in uow.workflows.get_mappings_for_step(step.step_id) if m.object_type == "creative"]
 
             if not all_mappings:
                 logger.debug(f"No creative mappings found for workflow step {step.step_id}")
                 return False
 
             # Get creative statuses for all creatives in this task
-            from src.core.database.models import Creative
-
             creative_ids = [m.object_id for m in all_mappings]
-            stmt_creatives = select(Creative).filter(
-                Creative.tenant_id == tenant_id,
-                Creative.creative_id.in_(creative_ids),
-            )
-            all_creatives = db_session.scalars(stmt_creatives).all()
+            all_creatives = uow.creatives.admin_get_by_ids(creative_ids)
 
             # Check if ANY creative is still pending review
             pending_count = sum(1 for c in all_creatives if c.status == CreativeStatusEnum.pending_review.value)
@@ -294,17 +277,16 @@ def index(tenant_id, **kwargs):
 @require_tenant_access()
 def review_creatives(tenant_id, **kwargs):
     """Unified creative management: view, review, and manage all creatives."""
-    from src.core.database.models import Principal, Product
-
     with AdminCreativeUoW(tenant_id) as uow:
         assert uow.session is not None
         assert uow.creatives is not None
         assert uow.assignments is not None
         assert uow.media_buys is not None
+        assert uow.products is not None
+        assert uow.tenant_config is not None
 
         # Get tenant
-        stmt = select(Tenant).filter_by(tenant_id=tenant_id)
-        tenant = uow.session.scalars(stmt).first()
+        tenant = uow.tenant_config.get_tenant()
         if not tenant:
             return "Tenant not found", 404
 
@@ -315,9 +297,7 @@ def review_creatives(tenant_id, **kwargs):
         creative_list = []
         for creative in creatives:
             # Get principal name
-            stmt = select(Principal).filter_by(tenant_id=tenant_id, principal_id=creative.principal_id)
-            principal = uow.session.scalars(stmt).first()
-            principal_name = principal.name if principal else creative.principal_id
+            principal_name = uow.creatives.get_principal_name(creative.principal_id)
 
             # Get all media buy assignments for this creative
             assignments = uow.assignments.get_by_creative(creative.creative_id)
@@ -347,8 +327,7 @@ def review_creatives(tenant_id, **kwargs):
                     if packages:
                         product_id = packages[0].get("product_id")
                         if product_id:
-                            stmt = select(Product).filter_by(product_id=product_id, tenant_id=tenant_id)
-                            product = uow.session.scalars(stmt).first()
+                            product = uow.products.get_by_id(product_id)
                             if product:
                                 promoted_offering = product.name
 
@@ -458,15 +437,6 @@ def _create_human_review_record(
     return human_review
 
 
-def _get_principal_name(session, tenant_id: str, principal_id: str) -> str:
-    """Look up principal name, falling back to principal_id."""
-    from src.core.database.models import Principal
-
-    stmt = select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
-    principal = session.scalars(stmt).first()
-    return principal.name if principal else principal_id
-
-
 def _send_post_commit_side_effects(
     *,
     webhook_data: dict[str, Any],
@@ -529,8 +499,6 @@ def _send_post_commit_side_effects(
 @require_tenant_access()
 def approve_creative(tenant_id, creative_id, **kwargs):
     """Approve a creative."""
-    from src.core.database.models import CreativeReview
-
     try:
         data = request.get_json() or {}
         approved_by = data.get("approved_by", "admin")
@@ -546,6 +514,7 @@ def approve_creative(tenant_id, creative_id, **kwargs):
             assert uow.creatives is not None
             assert uow.assignments is not None
             assert uow.media_buys is not None
+            assert uow.tenant_config is not None
 
             creative = uow.creatives.admin_get_by_id(creative_id)
 
@@ -553,13 +522,7 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                 return jsonify({"error": "Creative not found"}), 404
 
             # Check if there was a prior AI review that disagreed
-            stmt = (
-                select(CreativeReview)
-                .filter_by(creative_id=creative_id, tenant_id=tenant_id, review_type="ai")
-                .order_by(CreativeReview.reviewed_at.desc())
-                .limit(1)
-            )
-            prior_ai_review = uow.session.scalars(stmt).first()
+            prior_ai_review = uow.creatives.get_prior_ai_review(creative_id)
 
             # Check if this is a human override (AI recommended reject, human approved)
             is_override = bool(prior_ai_review and prior_ai_review.ai_decision in ["rejected", "reject"])
@@ -584,10 +547,9 @@ def approve_creative(tenant_id, creative_id, **kwargs):
             webhook_data = {"creative_id": creative_id, "tenant_id": tenant_id}
 
             # Collect Slack data for post-commit
-            stmt_tenant = select(Tenant).filter_by(tenant_id=tenant_id)
-            tenant = uow.session.scalars(stmt_tenant).first()
+            tenant = uow.tenant_config.get_tenant()
             if tenant and tenant.slack_webhook_url:
-                principal_name = _get_principal_name(uow.session, tenant_id, creative.principal_id)
+                principal_name = uow.creatives.get_principal_name(creative.principal_id)
 
                 slack_data = {
                     "slack_webhook_url": tenant.slack_webhook_url,
@@ -621,14 +583,7 @@ def approve_creative(tenant_id, creative_id, **kwargs):
 
                 if media_buy.status in {"pending_creatives", "draft"}:
                     # Get all creative assignments for this media buy
-                    all_mb_assignments = uow.assignments.get_by_creative(media_buy_id)
-                    # Actually need assignments by media_buy_id — use session query
-                    from src.core.database.models import CreativeAssignment
-
-                    stmt_all_assignments = select(CreativeAssignment).filter_by(
-                        media_buy_id=media_buy_id, tenant_id=tenant_id
-                    )
-                    all_assignments = uow.session.scalars(stmt_all_assignments).all()
+                    all_assignments = uow.assignments.get_by_media_buy(media_buy_id)
 
                     creative_ids = [a.creative_id for a in all_assignments]
                     all_creatives = uow.creatives.admin_get_by_ids(creative_ids)
@@ -698,8 +653,6 @@ def approve_creative(tenant_id, creative_id, **kwargs):
 @require_tenant_access()
 def reject_creative(tenant_id, creative_id, **kwargs):
     """Reject a creative with comments."""
-    from src.core.database.models import CreativeReview
-
     try:
         data = request.get_json() or {}
         rejected_by = data.get("rejected_by", "admin")
@@ -716,6 +669,7 @@ def reject_creative(tenant_id, creative_id, **kwargs):
         with AdminCreativeUoW(tenant_id) as uow:
             assert uow.session is not None
             assert uow.creatives is not None
+            assert uow.tenant_config is not None
 
             creative = uow.creatives.admin_get_by_id(creative_id)
 
@@ -723,13 +677,7 @@ def reject_creative(tenant_id, creative_id, **kwargs):
                 return jsonify({"error": "Creative not found"}), 404
 
             # Check if there was a prior AI review that disagreed
-            stmt = (
-                select(CreativeReview)
-                .filter_by(creative_id=creative_id, tenant_id=tenant_id, review_type="ai")
-                .order_by(CreativeReview.reviewed_at.desc())
-                .limit(1)
-            )
-            prior_ai_review = uow.session.scalars(stmt).first()
+            prior_ai_review = uow.creatives.get_prior_ai_review(creative_id)
 
             # Check if this is a human override (AI recommended approve, human rejected)
             is_override = bool(prior_ai_review and prior_ai_review.ai_decision in ["approved", "approve"])
@@ -763,10 +711,9 @@ def reject_creative(tenant_id, creative_id, **kwargs):
             webhook_data = {"creative_id": creative_id, "tenant_id": tenant_id}
 
             # Collect Slack data for post-commit
-            stmt_tenant = select(Tenant).filter_by(tenant_id=tenant_id)
-            tenant = uow.session.scalars(stmt_tenant).first()
+            tenant = uow.tenant_config.get_tenant()
             if tenant and tenant.slack_webhook_url:
-                principal_name = _get_principal_name(uow.session, tenant_id, creative.principal_id)
+                principal_name = uow.creatives.get_principal_name(creative.principal_id)
 
                 slack_data = {
                     "slack_webhook_url": tenant.slack_webhook_url,
@@ -1072,10 +1019,10 @@ def _ai_review_creative_impl_inner(
     When db_session is provided, uses it directly (caller owns lifecycle).
     When db_session is None, creates an AdminCreativeUoW and uses its session.
     """
-    from sqlalchemy import select
-
-    from src.core.database.models import Creative, Product
+    from src.core.database.repositories.creative import CreativeRepository
     from src.core.database.repositories.media_buy import MediaBuyRepository
+    from src.core.database.repositories.product import ProductRepository
+    from src.core.database.repositories.tenant_config import TenantConfigRepository
     from src.core.metrics import ai_review_confidence, ai_review_total
     from src.services.ai import AIServiceFactory
     from src.services.ai.agents.review_agent import (
@@ -1090,8 +1037,12 @@ def _ai_review_creative_impl_inner(
             assert uow.session is not None
             db_session = uow.session
 
-        stmt = select(Tenant).filter_by(tenant_id=tenant_id)
-        tenant = db_session.scalars(stmt).first()
+        tenant_config_repo = TenantConfigRepository(db_session, tenant_id)
+        creative_repo = CreativeRepository(db_session, tenant_id)
+        mb_repo = MediaBuyRepository(db_session, tenant_id)
+        product_repo = ProductRepository(db_session, tenant_id)
+
+        tenant = tenant_config_repo.get_tenant()
         if not tenant:
             return {"status": "pending_review", "error": "Tenant not found", "reason": "Configuration error"}
 
@@ -1122,8 +1073,7 @@ def _ai_review_creative_impl_inner(
                 "reason": "AI review unavailable - requires manual approval",
             }
 
-        stmt = select(Creative).filter_by(tenant_id=tenant_id, creative_id=creative_id)
-        creative = db_session.scalars(stmt).first()
+        creative = creative_repo.admin_get_by_id(creative_id)
 
         if not creative:
             return {"status": "pending_review", "error": "Creative not found", "reason": "Configuration error"}
@@ -1132,15 +1082,13 @@ def _ai_review_creative_impl_inner(
         if promoted_offering is None:
             promoted_offering = "Unknown"
             if creative.data.get("media_buy_id"):
-                ai_repo = MediaBuyRepository(db_session, tenant_id)
-                media_buy = ai_repo.get_by_id(creative.data["media_buy_id"])
+                media_buy = mb_repo.get_by_id(creative.data["media_buy_id"])
                 if media_buy and media_buy.raw_request:
                     packages = media_buy.raw_request.get("packages", [])
                     if packages:
                         product_id = packages[0].get("product_id")
                         if product_id:
-                            stmt = select(Product).filter_by(product_id=product_id, tenant_id=tenant_id)
-                            product = db_session.scalars(stmt).first()
+                            product = product_repo.get_by_id(product_id)
                             if product:
                                 promoted_offering = product.name
 

@@ -190,29 +190,39 @@ class CreativeUoW(BaseUoW):
 class AdminCreativeUoW(BaseUoW):
     """Unit of Work for admin creative operations.
 
-    Provides CreativeRepository, CreativeAssignmentRepository, and MediaBuyRepository
-    in a single session scope. Used by admin blueprint handlers that need cross-entity
-    queries (e.g. creative + assignments + media buys).
+    Provides CreativeRepository, CreativeAssignmentRepository, MediaBuyRepository,
+    ProductRepository, WorkflowRepository, and TenantConfigRepository in a single
+    session scope. Used by admin blueprint handlers that need cross-entity queries
+    (e.g. creative + assignments + media buys + tenant config).
 
     Auto-commits on clean exit, rolls back on exception.
 
     Args:
         tenant_id: Tenant scope for all repository queries.
 
-    beads: salesagent-4tb
+    beads: salesagent-4tb, salesagent-p6i
     """
 
     creatives: CreativeRepository | None
     assignments: CreativeAssignmentRepository | None
     media_buys: MediaBuyRepository | None
+    products: ProductRepository | None
+    workflows: WorkflowRepository | None
+    tenant_config: TenantConfigRepository | None
 
     def _init_repos(self) -> None:
         assert self.session is not None
         self.creatives = CreativeRepository(self.session, self._tenant_id)
         self.assignments = CreativeAssignmentRepository(self.session, self._tenant_id)
         self.media_buys = MediaBuyRepository(self.session, self._tenant_id)
+        self.products = ProductRepository(self.session, self._tenant_id)
+        self.workflows = WorkflowRepository(self.session, self._tenant_id)
+        self.tenant_config = TenantConfigRepository(self.session, self._tenant_id)
 
     def _clear_repos(self) -> None:
         self.creatives = None
         self.assignments = None
         self.media_buys = None
+        self.products = None
+        self.workflows = None
+        self.tenant_config = None

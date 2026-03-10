@@ -16,7 +16,15 @@ from typing import NamedTuple, cast
 from sqlalchemy import func, select
 from sqlalchemy.orm import InstrumentedAttribute, Session, attributes
 
-from src.core.database.models import Creative, CreativeAssignment, MediaBuy, MediaPackage, Product
+from src.core.database.models import (
+    Creative,
+    CreativeAssignment,
+    CreativeReview,
+    MediaBuy,
+    MediaPackage,
+    Principal,
+    Product,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -238,6 +246,29 @@ class CreativeRepository:
         ]
 
     # ------------------------------------------------------------------
+    # Cross-model lookups (shared by admin and _impl)
+    # ------------------------------------------------------------------
+
+    def get_principal_name(self, principal_id: str) -> str:
+        """Look up principal name within the tenant, falling back to principal_id."""
+        principal = self._session.scalars(
+            select(Principal).filter_by(
+                tenant_id=self._tenant_id,
+                principal_id=principal_id,
+            )
+        ).first()
+        return principal.name if principal else principal_id
+
+    def get_prior_ai_review(self, creative_id: str) -> CreativeReview | None:
+        """Get the most recent AI review for a creative within the tenant."""
+        return self._session.scalars(
+            select(CreativeReview)
+            .filter_by(creative_id=creative_id, tenant_id=self._tenant_id, review_type="ai")
+            .order_by(CreativeReview.reviewed_at.desc())
+            .limit(1)
+        ).first()
+
+    # ------------------------------------------------------------------
     # Admin-specific lookups (no principal_id required)
     # Added for admin blueprint migration (salesagent-4tb)
     # ------------------------------------------------------------------
@@ -304,6 +335,17 @@ class CreativeAssignmentRepository:
                 select(CreativeAssignment).where(
                     CreativeAssignment.tenant_id == self._tenant_id,
                     CreativeAssignment.creative_id == creative_id,
+                )
+            ).all()
+        )
+
+    def get_by_media_buy(self, media_buy_id: str) -> list[CreativeAssignment]:
+        """Get all assignments for a media buy within the tenant."""
+        return list(
+            self._session.scalars(
+                select(CreativeAssignment).where(
+                    CreativeAssignment.tenant_id == self._tenant_id,
+                    CreativeAssignment.media_buy_id == media_buy_id,
                 )
             ).all()
         )

@@ -14,7 +14,7 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from src.core.database.models import AdapterConfig, PublisherPartner
+from src.core.database.models import AdapterConfig, PublisherPartner, Tenant
 
 
 class TenantConfigRepository:
@@ -35,6 +35,11 @@ class TenantConfigRepository:
     @property
     def tenant_id(self) -> str:
         return self._tenant_id
+
+    def get_tenant(self) -> Tenant | None:
+        """Get the tenant record."""
+        stmt = select(Tenant).filter_by(tenant_id=self._tenant_id)
+        return self._session.scalars(stmt).first()
 
     def list_publisher_partners(self) -> list[PublisherPartner]:
         """Get all publisher partners for the tenant."""
