@@ -17,6 +17,7 @@ from adcp.types.generated_poc.enums.creative_action import CreativeAction
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tools.creatives import _sync_creatives_impl
 from src.core.validation_helpers import run_async_in_sync_context
+from tests.harness import make_mock_uow
 
 
 class TestRunAsyncInSyncContext:
@@ -56,14 +57,17 @@ class TestRunAsyncInSyncContext:
         assert result3 == "async_result"
 
 
-def _make_mock_uow():
+def _make_creative_uow():
     """Create a mock CreativeUoW with creative_repo returning sensible defaults."""
-    mock_uow = MagicMock()
     mock_creative_repo = MagicMock()
     mock_creative_repo.get_provenance_policies.return_value = []
     mock_creative_repo.get_by_id.return_value = None
-    mock_uow.creatives = mock_creative_repo
-    mock_uow.assignments = MagicMock()
+    _, mock_uow = make_mock_uow(
+        repos={
+            "creatives": mock_creative_repo,
+            "assignments": MagicMock(),
+        }
+    )
     return mock_uow, mock_creative_repo
 
 
@@ -79,7 +83,7 @@ class TestSyncCreativesErrorHandling:
 
         This tests the new creative creation path where validation fails.
         """
-        mock_uow, mock_creative_repo = _make_mock_uow()
+        mock_uow, mock_creative_repo = _make_creative_uow()
 
         # ResolvedIdentity replaces context-based auth
         identity = ResolvedIdentity(
@@ -132,7 +136,7 @@ class TestSyncCreativesErrorHandling:
 
         To test actual failure path, use creative WITHOUT any URL (no assets, no url field).
         """
-        mock_uow, mock_creative_repo = _make_mock_uow()
+        mock_uow, mock_creative_repo = _make_creative_uow()
 
         # Mock begin_nested for savepoint
         mock_creative_repo.begin_nested.return_value.__enter__.return_value = None
@@ -216,7 +220,7 @@ class TestSyncCreativesAsyncScenario:
         - sync_creatives implementation is sync but calls async registry methods
         - Should NOT raise "asyncio.run() cannot be called from a running event loop"
         """
-        mock_uow, mock_creative_repo = _make_mock_uow()
+        mock_uow, mock_creative_repo = _make_creative_uow()
 
         # Mock begin_nested for savepoint
         mock_creative_repo.begin_nested.return_value.__enter__.return_value = None

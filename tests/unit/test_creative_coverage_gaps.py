@@ -19,6 +19,7 @@ from adcp.types.generated_poc.enums.creative_action import CreativeAction
 from pydantic import BaseModel
 
 from tests.factories import PrincipalFactory
+from tests.harness import make_mock_uow
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -55,9 +56,8 @@ def _make_creative_dict(creative_id="c1", name="Test Banner"):
     }
 
 
-def _make_mock_uow():
+def _make_creative_uow():
     """Create a mock CreativeUoW with creative_repo returning sensible defaults."""
-    mock_uow = MagicMock()
     mock_creative_repo = MagicMock()
     mock_creative_repo.get_provenance_policies.return_value = []
     mock_creative_repo.get_by_id.return_value = None
@@ -73,7 +73,7 @@ def _make_mock_uow():
 
     mock_creative_repo.create.side_effect = mock_create
 
-    mock_uow.creatives = mock_creative_repo
+    _, mock_uow = make_mock_uow(repos={"creatives": mock_creative_repo})
     return mock_uow, mock_creative_repo
 
 
@@ -93,7 +93,7 @@ def _sync_patches():
         mock_registry.list_all_formats = mock_list_all_formats
         mock_registry.get_format = mock_get_format
 
-        mock_uow, mock_creative_repo = _make_mock_uow()
+        mock_uow, mock_creative_repo = _make_creative_uow()
 
         with (
             patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls,

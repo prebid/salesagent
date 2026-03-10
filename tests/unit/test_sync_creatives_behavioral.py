@@ -20,6 +20,7 @@ from src.core.exceptions import AdCPNotFoundError, AdCPValidationError
 from src.core.schemas import SyncCreativeResult
 from src.core.tools.creatives._assignments import _process_assignments
 from src.core.tools.creatives._workflow import _send_creative_notifications
+from tests.harness import make_mock_uow
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -62,12 +63,15 @@ def _make_db_package():
     return _factory
 
 
-def _make_mock_uow(assignment_repo=None):
+def _make_creative_uow(assignment_repo=None):
     """Create a mock CreativeUoW for _process_assignments tests."""
-    mock_uow = MagicMock()
     mock_assignment_repo = assignment_repo or MagicMock()
-    mock_uow.assignments = mock_assignment_repo
-    mock_uow.creatives = MagicMock()
+    _, mock_uow = make_mock_uow(
+        repos={
+            "assignments": mock_assignment_repo,
+            "creatives": MagicMock(),
+        }
+    )
     return mock_uow, mock_assignment_repo
 
 
@@ -85,7 +89,7 @@ class TestMediaBuyStatusTransitions:
 
     def _run_assignments(self, assignments, results, tenant, db_package, db_media_buy, db_creative=None):
         """Helper to run _process_assignments with mocked repository lookups."""
-        mock_uow, mock_repo = _make_mock_uow()
+        mock_uow, mock_repo = _make_creative_uow()
 
         # Mock find_package_with_media_buy to return the package+media_buy pair
         mock_repo.find_package_with_media_buy.return_value = (db_package, db_media_buy)
@@ -183,7 +187,7 @@ class TestMediaBuyStatusTransitions:
             SyncCreativeResult(creative_id="c2", action="created"),
         ]
 
-        mock_uow, mock_repo = _make_mock_uow()
+        mock_uow, mock_repo = _make_creative_uow()
         mock_repo.find_package_with_media_buy.return_value = (db_package, db_media_buy)
         mock_repo.get_creative_by_id.return_value = None
         mock_repo.get_existing.return_value = None
@@ -223,7 +227,7 @@ class TestMediaBuyStatusTransitions:
             SyncCreativeResult(creative_id="c2", action="updated", changes=["name"]),
         ]
 
-        mock_uow, mock_repo = _make_mock_uow()
+        mock_uow, mock_repo = _make_creative_uow()
         mock_repo.find_package_with_media_buy.return_value = (db_package, db_media_buy)
         mock_repo.get_creative_by_id.return_value = None
         mock_repo.get_existing.return_value = None
@@ -264,7 +268,7 @@ class TestStrictAssignmentAbort:
         """rule-033-inv2: When validation_mode=strict and package not found, AdCPNotFoundError raised."""
         results = [SyncCreativeResult(creative_id="c1", action="created")]
 
-        mock_uow, mock_repo = _make_mock_uow()
+        mock_uow, mock_repo = _make_creative_uow()
         # Package not found
         mock_repo.find_package_with_media_buy.return_value = None
 
@@ -292,7 +296,7 @@ class TestLenientAssignmentSkip:
         """rule-033-inv3 / rule-038-inv3: lenient mode skips missing package, creative still succeeds."""
         results = [SyncCreativeResult(creative_id="c1", action="created")]
 
-        mock_uow, mock_repo = _make_mock_uow()
+        mock_uow, mock_repo = _make_creative_uow()
         # Package not found
         mock_repo.find_package_with_media_buy.return_value = None
 
@@ -335,7 +339,7 @@ class TestLenientAssignmentSkip:
 
         results = [SyncCreativeResult(creative_id="c1", action="created")]
 
-        mock_uow, mock_repo = _make_mock_uow()
+        mock_uow, mock_repo = _make_creative_uow()
         mock_repo.find_package_with_media_buy.return_value = (db_package, db_media_buy)
         mock_repo.get_creative_by_id.return_value = db_creative
         mock_repo.get_product_by_id.return_value = mock_product
@@ -365,7 +369,7 @@ class TestLenientAssignmentSkip:
 
         results = [SyncCreativeResult(creative_id="c1", action="created")]
 
-        mock_uow, mock_repo = _make_mock_uow()
+        mock_uow, mock_repo = _make_creative_uow()
         # First package: found. Second package: not found.
         mock_repo.find_package_with_media_buy.side_effect = [
             (db_package_valid, db_media_buy),
@@ -426,7 +430,7 @@ class TestStrictModeAdCPErrorPropagation:
         """rule-033-inv4 / rule-038-inv4: AdCPError prevents assignment_errors from reaching result."""
         results = [SyncCreativeResult(creative_id="c1", action="created")]
 
-        mock_uow, mock_repo = _make_mock_uow()
+        mock_uow, mock_repo = _make_creative_uow()
         # Package not found -> triggers AdCPNotFoundError in strict mode
         mock_repo.find_package_with_media_buy.return_value = None
 
@@ -461,7 +465,7 @@ class TestStrictModeAdCPErrorPropagation:
 
         results = [SyncCreativeResult(creative_id="c1", action="created")]
 
-        mock_uow, mock_repo = _make_mock_uow()
+        mock_uow, mock_repo = _make_creative_uow()
         mock_repo.find_package_with_media_buy.return_value = (db_package, db_media_buy)
         mock_repo.get_creative_by_id.return_value = db_creative
         mock_repo.get_product_by_id.return_value = mock_product

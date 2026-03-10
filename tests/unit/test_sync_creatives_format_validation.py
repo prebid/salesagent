@@ -11,11 +11,11 @@ from adcp.types.generated_poc.enums.creative_action import CreativeAction
 
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tools.creatives import _sync_creatives_impl
+from tests.harness import make_mock_uow
 
 
-def _make_mock_uow():
+def _make_creative_uow():
     """Create a mock CreativeUoW with creative_repo returning sensible defaults."""
-    mock_uow = MagicMock()
     mock_creative_repo = MagicMock()
     mock_creative_repo.get_provenance_policies.return_value = []
     mock_creative_repo.get_by_id.return_value = None
@@ -31,8 +31,12 @@ def _make_mock_uow():
 
     mock_creative_repo.create.side_effect = mock_create
 
-    mock_uow.creatives = mock_creative_repo
-    mock_uow.assignments = MagicMock()
+    _, mock_uow = make_mock_uow(
+        repos={
+            "creatives": mock_creative_repo,
+            "assignments": MagicMock(),
+        }
+    )
     return mock_uow, mock_creative_repo
 
 
@@ -80,7 +84,7 @@ class TestSyncCreativesFormatValidation:
 
     def test_format_validation_success(self, identity, mock_tenant, valid_creative_dict, mock_format_spec):
         """Test that format validation succeeds when format exists."""
-        mock_uow, mock_creative_repo = _make_mock_uow()
+        mock_uow, mock_creative_repo = _make_creative_uow()
 
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
@@ -113,7 +117,7 @@ class TestSyncCreativesFormatValidation:
 
     def test_format_validation_unknown_format(self, identity, mock_tenant, valid_creative_dict):
         """Test that validation fails with clear error when format doesn't exist."""
-        mock_uow, mock_creative_repo = _make_mock_uow()
+        mock_uow, mock_creative_repo = _make_creative_uow()
 
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
@@ -152,7 +156,7 @@ class TestSyncCreativesFormatValidation:
 
     def test_format_validation_agent_unreachable(self, identity, mock_tenant, valid_creative_dict):
         """Test that validation fails with clear error when agent is unreachable."""
-        mock_uow, mock_creative_repo = _make_mock_uow()
+        mock_uow, mock_creative_repo = _make_creative_uow()
 
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
@@ -199,7 +203,7 @@ class TestSyncCreativesFormatValidation:
             "variants": [],  # Required in adcp 3.6.0
         }
 
-        mock_uow, mock_creative_repo = _make_mock_uow()
+        mock_uow, mock_creative_repo = _make_creative_uow()
 
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
@@ -258,7 +262,7 @@ class TestSyncCreativesFormatValidation:
             },
         ]
 
-        mock_uow, mock_creative_repo = _make_mock_uow()
+        mock_uow, mock_creative_repo = _make_creative_uow()
 
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
@@ -312,7 +316,7 @@ class TestSyncCreativesFormatValidation:
         creative2 = valid_creative_dict.copy()
         creative2["creative_id"] = "creative_2"
 
-        mock_uow, mock_creative_repo = _make_mock_uow()
+        mock_uow, mock_creative_repo = _make_creative_uow()
 
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
@@ -352,7 +356,7 @@ class TestSyncCreativesFormatValidation:
             "assets": {"banner_image": {"url": "https://example.com/banner.png"}},
         }
 
-        mock_uow, mock_creative_repo = _make_mock_uow()
+        mock_uow, mock_creative_repo = _make_creative_uow()
 
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
@@ -398,7 +402,7 @@ class TestSyncCreativesFormatValidation:
             "assets": {"image": {"url": "https://example.com/2.png"}},
         }
 
-        mock_uow, mock_creative_repo = _make_mock_uow()
+        mock_uow, mock_creative_repo = _make_creative_uow()
 
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
