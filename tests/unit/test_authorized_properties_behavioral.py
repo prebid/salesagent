@@ -72,27 +72,28 @@ def _patch_impl_dependencies(
     Args:
         tenant: The tenant dict (or None to simulate TENANT_ERROR).
         publishers: List of mock PublisherPartner objects.
-        db_side_effect: If set, get_db_session context manager body raises this.
+        db_side_effect: If set, TenantConfigUoW context manager body raises this.
     """
     patches = {
         "audit": patch("src.core.tools.properties.get_audit_logger"),
         "log_activity": patch("src.core.tools.properties.log_tool_activity"),
     }
 
-    # Build mock DB session
-    mock_session = MagicMock()
-    mock_session.__enter__ = MagicMock(return_value=mock_session)
-    mock_session.__exit__ = MagicMock(return_value=False)
-
+    # Build mock TenantConfigUoW
+    mock_repo = MagicMock()
     if db_side_effect:
-        # Make the scalars call raise
-        mock_session.scalars.side_effect = db_side_effect
+        mock_repo.list_publisher_partners.side_effect = db_side_effect
     else:
-        mock_session.scalars.return_value.all.return_value = publishers or []
+        mock_repo.list_publisher_partners.return_value = publishers or []
+
+    mock_uow = MagicMock()
+    mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+    mock_uow.__exit__ = MagicMock(return_value=False)
+    mock_uow.tenant_config = mock_repo
 
     patches["db"] = patch(
-        "src.core.tools.properties.get_db_session",
-        return_value=mock_session,
+        "src.core.tools.properties.TenantConfigUoW",
+        return_value=mock_uow,
     )
 
     return patches
