@@ -95,6 +95,30 @@ class TestLoadEnvFile:
         result = setup_dev.load_env_file(env_file)
         assert result == {"VALID": "yes"}
 
+    def test_strips_double_quotes(self, tmp_path: Path):
+        env_file = tmp_path / ".env"
+        env_file.write_text('FOO="bar"\n')
+        result = setup_dev.load_env_file(env_file)
+        assert result == {"FOO": "bar"}
+
+    def test_strips_single_quotes(self, tmp_path: Path):
+        env_file = tmp_path / ".env"
+        env_file.write_text("FOO='bar'\n")
+        result = setup_dev.load_env_file(env_file)
+        assert result == {"FOO": "bar"}
+
+    def test_preserves_mismatched_quotes(self, tmp_path: Path):
+        env_file = tmp_path / ".env"
+        env_file.write_text("FOO=\"bar'\n")
+        result = setup_dev.load_env_file(env_file)
+        assert result == {"FOO": "\"bar'"}
+
+    def test_preserves_inner_quotes(self, tmp_path: Path):
+        env_file = tmp_path / ".env"
+        env_file.write_text('FOO=bar"baz\n')
+        result = setup_dev.load_env_file(env_file)
+        assert result == {"FOO": 'bar"baz'}
+
 
 # ---------------------------------------------------------------------------
 # merge_env

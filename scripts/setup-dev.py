@@ -100,12 +100,10 @@ def check_version_meets_minimum(version: tuple[int, ...], minimum: tuple[int, ..
     return version >= minimum
 
 
-def load_env_file(path: Path) -> dict[str, str]:
-    """Parse a .env file into a dict, preserving values. Comments/blanks skipped."""
-    if not path.exists():
-        return {}
+def _parse_env_lines(text: str) -> dict[str, str]:
+    """Parse KEY=VALUE lines, skipping comments/blanks. Strips matching outer quotes."""
     entries: dict[str, str] = {}
-    for raw_line in path.read_text().splitlines():
+    for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
@@ -114,8 +112,17 @@ def load_env_file(path: Path) -> dict[str, str]:
             continue
         key = line[:sep].strip()
         value = line[sep + 1 :].strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+            value = value[1:-1]
         entries[key] = value
     return entries
+
+
+def load_env_file(path: Path) -> dict[str, str]:
+    """Parse a .env file into a dict, preserving values. Comments/blanks skipped."""
+    if not path.exists():
+        return {}
+    return _parse_env_lines(path.read_text())
 
 
 def merge_env(existing: dict[str, str], defaults: dict[str, str]) -> dict[str, str]:
@@ -152,18 +159,7 @@ def build_env_from_template(template_path: Path) -> dict[str, str]:
     """Extract uncommented KEY=VALUE pairs from the template as defaults."""
     if not template_path.exists():
         return {}
-    defaults: dict[str, str] = {}
-    for raw_line in template_path.read_text().splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        sep = line.find("=")
-        if sep == -1:
-            continue
-        key = line[:sep].strip()
-        value = line[sep + 1 :].strip()
-        defaults[key] = value
-    return defaults
+    return _parse_env_lines(template_path.read_text())
 
 
 def get_conductor_port(env: dict[str, str]) -> int:
