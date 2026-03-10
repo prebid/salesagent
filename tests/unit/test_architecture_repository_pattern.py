@@ -93,8 +93,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     # tests/integration/test_product_repository.py — repository test legitimately uses session.add()
     ("tests/integration/test_product_repository.py", "_create_test_tenant"),
     ("tests/integration/test_product_repository.py", "_create_test_product"),
-    # tests/integration/test_creative_webhook_detached.py — FIXME(salesagent-dt8) no workflow factories
-    ("tests/integration/test_creative_webhook_detached.py", "_setup_webhook_test_data"),
     # tests/integration/test_creative_review_model.py
     ("tests/integration/test_creative_review_model.py", "_create_test_tenant_with_creative"),
     ("tests/integration/test_creative_review_model.py", "test_get_creative_reviews_query"),
