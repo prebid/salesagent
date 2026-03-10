@@ -1,6 +1,7 @@
 """Creative formats management blueprint for admin UI."""
 
 import asyncio
+import contextlib
 import logging
 import threading
 import uuid
@@ -1079,14 +1080,12 @@ def _ai_review_creative_impl_inner(
         review_creative_async,
     )
 
-    uow_cm = None
-    if db_session is None:
-        uow_cm = AdminCreativeUoW(tenant_id)
-        uow = uow_cm.__enter__()
-        assert uow.session is not None
-        db_session = uow.session
+    cm = AdminCreativeUoW(tenant_id) if db_session is None else contextlib.nullcontext()
+    with cm as uow:
+        if uow is not None:
+            assert uow.session is not None
+            db_session = uow.session
 
-    try:  # noqa: SIM105 — need explicit try/finally for UoW cleanup with early returns
         stmt = select(Tenant).filter_by(tenant_id=tenant_id)
         tenant = db_session.scalars(stmt).first()
         if not tenant:
@@ -1327,17 +1326,6 @@ def _ai_review_creative_impl_inner(
         ai_review_total.labels(tenant_id=tenant_id, decision="pending_review", policy_triggered="uncertain").inc()
         ai_review_confidence.labels(tenant_id=tenant_id, decision="pending_review").observe(confidence_score)
         return result_dict
-
-    except BaseException:
-        if uow_cm is not None:
-            import sys
-
-            uow_cm.__exit__(*sys.exc_info())
-            uow_cm = None  # Prevent double-exit in finally
-        raise
-    finally:
-        if uow_cm is not None:
-            uow_cm.__exit__(None, None, None)
 
 
 @creatives_bp.route("/review/<creative_id>/ai-review", methods=["POST"])
