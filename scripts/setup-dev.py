@@ -162,6 +162,60 @@ def build_env_from_template(template_path: Path) -> dict[str, str]:
     return _parse_env_lines(template_path.read_text())
 
 
+def render_env_from_template(template_path: Path, values: dict[str, str]) -> str:
+    """Render .env content by overlaying values onto the template structure.
+
+    Preserves the template's comments, sections, and key ordering.
+    Uncomments and sets values for keys present in *values*.
+    Appends any extra keys not found in the template at the end.
+    """
+    if not template_path.exists():
+        return serialize_env(values)
+
+    lines = template_path.read_text().splitlines()
+    output: list[str] = []
+    used_keys: set[str] = set()
+
+    for line in lines:
+        stripped = line.strip()
+
+        # Check if this is a commented-out KEY=VALUE line (e.g., "# KEY=value")
+        if stripped.startswith("#"):
+            uncommented = stripped.lstrip("#").strip()
+            sep = uncommented.find("=")
+            if sep != -1:
+                key = uncommented[:sep].strip()
+                if key and key in values:
+                    output.append(f"{key}={values[key]}")
+                    used_keys.add(key)
+                    continue
+
+        # Check if this is an uncommented KEY=VALUE line
+        if stripped and not stripped.startswith("#"):
+            sep = stripped.find("=")
+            if sep != -1:
+                key = stripped[:sep].strip()
+                if key and key in values:
+                    output.append(f"{key}={values[key]}")
+                    used_keys.add(key)
+                    continue
+
+        # Pass through as-is (comments, blank lines, unchanged keys)
+        output.append(line)
+
+    # Append any extra keys not found in the template
+    extra_keys = sorted(k for k in values if k not in used_keys)
+    if extra_keys:
+        output.append("")
+        output.append("# ============================================")
+        output.append("# [AUTO-GENERATED] Additional settings")
+        output.append("# ============================================")
+        for key in extra_keys:
+            output.append(f"{key}={values[key]}")
+
+    return "\n".join(output) + "\n"
+
+
 def get_conductor_port(env: dict[str, str]) -> int:
     """Determine the port from CONDUCTOR_PORT or default."""
     try:
@@ -235,7 +289,7 @@ def ensure_dependencies() -> StepResult:
 
 
 def ensure_env() -> StepResult:
-    """Create or update .env from template, preserving existing values."""
+    """Create or update .env from template, preserving existing values and template structure."""
     existing = load_env_file(ENV_FILE)
     defaults = build_env_from_template(ENV_TEMPLATE)
     merged = merge_env(existing, defaults)
@@ -244,7 +298,7 @@ def ensure_env() -> StepResult:
     if existing == merged:
         return StepResult(name="env", ok=True, message=".env already up to date", skipped=True)
 
-    ENV_FILE.write_text(serialize_env(merged))
+    ENV_FILE.write_text(render_env_from_template(ENV_TEMPLATE, merged))
     verb = "Updated" if existing else "Created"
     return StepResult(name="env", ok=True, message=f"{verb} .env ({len(merged)} keys)")
 

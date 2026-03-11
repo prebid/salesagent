@@ -175,4 +175,9 @@ def make_integration_db(
         except Exception as exc:
             import warnings
 
-            warnings.warn(f"Failed to drop test database {unique_db_name}: {exc}", stacklevel=1)
+            warnings.warn(
+                f"Failed to drop test database {unique_db_name}: {exc.__class__.__name__}: {exc}. "
+                "Orphaned test databases can be cleaned up with: "
+                "SELECT 'DROP DATABASE \"' || datname || '\";' FROM pg_database WHERE datname LIKE 'test_%';",
+                stacklevel=1,
+            )

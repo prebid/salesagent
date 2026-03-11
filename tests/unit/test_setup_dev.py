@@ -226,6 +226,79 @@ class TestBuildEnvFromTemplate:
 
 
 # ---------------------------------------------------------------------------
+# render_env_from_template
+# ---------------------------------------------------------------------------
+
+
+class TestRenderEnvFromTemplate:
+    def test_preserves_comments_and_sections(self, tmp_path: Path):
+        template = tmp_path / ".env.template"
+        template.write_text("# Section Header\n# COMMENTED_KEY=default\n\n# Another section\n# OTHER_KEY=other\n")
+        result = setup_dev.render_env_from_template(template, {"COMMENTED_KEY": "myvalue"})
+        assert "# Section Header" in result
+        assert "COMMENTED_KEY=myvalue" in result
+        assert "# Another section" in result
+        # OTHER_KEY not in values, so stays commented
+        assert "# OTHER_KEY=other" in result
+
+    def test_uncomments_matching_keys(self, tmp_path: Path):
+        template = tmp_path / ".env.template"
+        template.write_text("# FOO=bar\n# BAZ=qux\n")
+        result = setup_dev.render_env_from_template(template, {"FOO": "new_value"})
+        lines = result.strip().splitlines()
+        assert "FOO=new_value" in lines
+        assert "# BAZ=qux" in lines
+
+    def test_appends_extra_keys(self, tmp_path: Path):
+        template = tmp_path / ".env.template"
+        template.write_text("# KNOWN=val\n")
+        result = setup_dev.render_env_from_template(template, {"KNOWN": "x", "EXTRA": "y"})
+        assert "KNOWN=x" in result
+        assert "EXTRA=y" in result
+        assert "Additional settings" in result
+
+    def test_preserves_key_ordering(self, tmp_path: Path):
+        template = tmp_path / ".env.template"
+        template.write_text("# Z_KEY=1\n# A_KEY=2\n")
+        result = setup_dev.render_env_from_template(template, {"Z_KEY": "z", "A_KEY": "a"})
+        lines = [l for l in result.splitlines() if "=" in l and not l.startswith("#")]
+        assert lines == ["Z_KEY=z", "A_KEY=a"]  # template order, not alphabetical
+
+    def test_fallback_when_no_template(self, tmp_path: Path):
+        result = setup_dev.render_env_from_template(tmp_path / "missing", {"A": "1"})
+        assert "A=1" in result
+
+    def test_handles_uncommented_keys_in_template(self, tmp_path: Path):
+        template = tmp_path / ".env.template"
+        template.write_text("ACTIVE=default\n")
+        result = setup_dev.render_env_from_template(template, {"ACTIVE": "override"})
+        assert "ACTIVE=override" in result
+        assert "ACTIVE=default" not in result
+
+    def test_preserves_template_structure_with_real_template(self, tmp_path: Path):
+        """Ensure the real .env.template sections survive rendering."""
+        template = tmp_path / ".env.template"
+        template.write_text(
+            "# ============================================\n"
+            "# [OPTIONAL] Authentication\n"
+            "# ============================================\n"
+            "# ADCP_AUTH_TEST_MODE=false\n"
+            "\n"
+            "# ============================================\n"
+            "# [OPTIONAL] Advanced Settings\n"
+            "# ============================================\n"
+            "# ENVIRONMENT=production\n"
+        )
+        result = setup_dev.render_env_from_template(template, {"FLASK_SECRET_KEY": "abc", "ENCRYPTION_KEY": "xyz"})
+        # Section headers preserved
+        assert "[OPTIONAL] Authentication" in result
+        assert "[OPTIONAL] Advanced Settings" in result
+        # Auto-generated keys appended at the end
+        assert "ENCRYPTION_KEY=xyz" in result
+        assert "FLASK_SECRET_KEY=abc" in result
+
+
+# ---------------------------------------------------------------------------
 # get_conductor_port
 # ---------------------------------------------------------------------------
 
