@@ -4,9 +4,8 @@ These steps populate ``ctx["registry_formats"]`` with specific format objects
 for invariant and edge-case scenarios. They use pytest-bdd data tables where
 the feature file includes ``| col | col |`` rows.
 
-Harness mode: when ``ctx["env"]`` is set, each step also pushes the
-updated registry_formats to the CreativeFormatsEnv harness as real
-Format objects. Stub mode: only updates ctx dicts.
+Each step pushes the updated registry_formats to the CreativeFormatsEnv
+harness as real Format objects via ``_sync_registry(ctx)``.
 """
 
 from __future__ import annotations
@@ -31,12 +30,9 @@ def _datatable_to_dicts(datatable: Sequence[Sequence[object]]) -> list[dict[str,
 def _sync_registry(ctx: dict[str, Any]) -> None:
     """Push ctx['registry_formats'] dicts into the harness as real Format objects.
 
-    Called after any step that modifies ctx["registry_formats"] when harness
-    mode is active. No-op when env is absent (stub mode).
+    Called after any step that modifies ctx["registry_formats"].
     """
-    env = ctx.get("env")
-    if env is None:
-        return
+    env = ctx["env"]
 
     from tests.bdd.steps.domain.uc005_creative_formats import dicts_to_formats
 

@@ -1,13 +1,10 @@
-"""When steps for dispatching requests (A2A, MCP, generic filter requests).
+"""When steps — dispatch requests through the CreativeFormatsEnv harness.
 
-These steps invoke operations and store results (or errors) in ``ctx``.
+Every step calls production code directly. No stub mode.
 
-Harness mode: when ``ctx["env"]`` is set (by the ``creative_formats_env``
-fixture), steps call through the CreativeFormatsEnv harness to exercise
-real production code. Results are normalized back into ctx dicts.
-
-Stub mode: when ``ctx["env"]`` is absent, steps use inline dict logic
-for partition/boundary scenarios that don't need a database.
+Steps store results in ctx:
+    ctx["response"] — ListCreativeFormatsResponse on success
+    ctx["error"] — Exception on failure
 """
 
 from __future__ import annotations
@@ -17,57 +14,53 @@ from typing import Any
 
 from pytest_bdd import parsers, when
 
-# ── Harness dispatch helper ──────────────────────────────────────────
+from src.core.schemas import FormatId, ListCreativeFormatsRequest
+
+DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
 
 
-def _harness_dispatch(ctx: dict[str, Any], transport: str, filters: dict[str, Any]) -> None:
-    """Dispatch a request through the CreativeFormatsEnv harness.
+# ── Helpers ──────────────────────────────────────────────────────────
 
-    Builds a real ListCreativeFormatsRequest from filters, calls the
-    appropriate transport method on the harness, and normalizes the
-    response back into ctx["result"] or ctx["error"].
-    """
-    from tests.bdd.steps.domain.uc005_creative_formats import (
-        build_request_from_filters,
-        normalize_response_to_ctx,
-    )
+
+def _call(ctx: dict, req: ListCreativeFormatsRequest | None = None) -> None:
+    """Call env.call_impl and store response or error in ctx."""
+    env = ctx["env"]
+    try:
+        ctx["response"] = env.call_impl(req=req)
+    except Exception as exc:
+        ctx["error"] = exc
+
+
+def _call_via(ctx: dict, transport: str, req: ListCreativeFormatsRequest | None = None) -> None:
+    """Call env.call_via for transport-specific dispatch."""
     from tests.harness.transport import Transport
 
-    env = ctx["env"]
-    transport_map = {
-        "a2a": Transport.A2A,
-        "mcp": Transport.MCP,
-        "impl": Transport.IMPL,
-        "rest": Transport.REST,
-    }
+    transport_map = {"a2a": Transport.A2A, "mcp": Transport.MCP, "rest": Transport.REST}
     t = transport_map.get(transport, Transport.IMPL)
-
-    try:
-        req = build_request_from_filters(filters)
-    except Exception as exc:
-        # Pydantic validation errors during request construction
-        from tests.bdd.steps.domain.uc005_creative_formats import _exception_to_error_dict
-
-        ctx["error"] = _exception_to_error_dict(exc)
-        return
+    env = ctx["env"]
 
     kwargs: dict[str, Any] = {}
     if req is not None:
         if t == Transport.MCP:
-            # MCP wrapper takes individual params, not req object
-            req_dict = req.model_dump(exclude_none=True)
-            kwargs.update(req_dict)
+            kwargs.update(req.model_dump(exclude_none=True))
         else:
             kwargs["req"] = req
 
-    result = env.call_via(t, **kwargs)
-    ctx["harness_response"] = result
-    normalize_response_to_ctx(ctx)
+    try:
+        result = env.call_via(t, **kwargs)
+        if result.is_error:
+            ctx["error"] = result.error
+        else:
+            ctx["response"] = result.payload
+    except Exception as exc:
+        ctx["error"] = exc
 
 
-def _is_harness_mode(ctx: dict[str, Any]) -> bool:
-    """Check if the harness is available in ctx."""
-    return ctx.get("env") is not None
+def _build_req(**kwargs: Any) -> ListCreativeFormatsRequest | None:
+    """Build a ListCreativeFormatsRequest, returning None if no filters."""
+    if not kwargs:
+        return None
+    return ListCreativeFormatsRequest(**kwargs)
 
 
 # ── A2A transport ────────────────────────────────────────────────────
@@ -75,65 +68,26 @@ def _is_harness_mode(ctx: dict[str, Any]) -> bool:
 
 @when("the Buyer Agent sends a list_creative_formats task via A2A with no filters")
 def when_send_a2a_no_filters(ctx: dict) -> None:
-    """Send list_creative_formats via A2A with no filters."""
-    ctx["transport"] = "a2a"
-    ctx["request_filters"] = {}
-    if _is_harness_mode(ctx):
-        _harness_dispatch(ctx, "a2a", {})
-        return
-    formats = list(ctx.get("registry_formats", []))
-    formats.sort(key=lambda f: (f.get("type", ""), f.get("name", "")))
-    ctx["result"] = {"formats": formats, "status": "completed"}
+    _call_via(ctx, "a2a")
 
 
 @when("the Buyer Agent sends a list_creative_formats task via A2A")
 def when_send_a2a(ctx: dict) -> None:
-    """Send list_creative_formats via A2A (may have no tenant)."""
-    ctx["transport"] = "a2a"
-    ctx["request_filters"] = {}
-    if _is_harness_mode(ctx):
-        _harness_dispatch(ctx, "a2a", {})
-        return
-    if not ctx.get("has_tenant", True) or not ctx.get("has_auth", True):
-        ctx["error"] = {
-            "code": "TENANT_REQUIRED",
-            "message": "Tenant context could not be determined",
-            "suggestion": "Provide authentication credentials or tenant identification",
-        }
-    else:
-        ctx["result"] = {"formats": ctx.get("registry_formats", []), "status": "completed"}
+    _call_via(ctx, "a2a")
 
 
 @when(parsers.parse('the Buyer Agent sends a list_creative_formats task via A2A with type filter "{type_filter}"'))
 def when_send_a2a_type_filter(ctx: dict, type_filter: str) -> None:
-    """Send list_creative_formats via A2A with a type filter."""
-    ctx["transport"] = "a2a"
-    ctx["request_filters"] = {"type": type_filter}
-    if _is_harness_mode(ctx):
-        _harness_dispatch(ctx, "a2a", {"type": type_filter})
-        return
-    formats = [f for f in ctx.get("registry_formats", []) if f.get("type") == type_filter]
-    ctx["result"] = {"formats": formats, "status": "completed"}
+    _call_via(ctx, "a2a", req=ListCreativeFormatsRequest(type=type_filter))
 
 
 @when(parsers.parse('the Buyer Agent sends a list_creative_formats task via A2A with type "{type_value}"'))
 def when_send_a2a_type_value(ctx: dict, type_value: str) -> None:
-    """Send list_creative_formats via A2A with a type parameter (may be invalid)."""
-    ctx["transport"] = "a2a"
-    ctx["request_filters"] = {"type": type_value}
-    if _is_harness_mode(ctx):
-        _harness_dispatch(ctx, "a2a", {"type": type_value})
-        return
-    valid_types = {"display", "video", "audio", "native", "dooh"}
-    if type_value not in valid_types:
-        ctx["error"] = {
-            "code": "VALIDATION_ERROR",
-            "message": f"Invalid parameter: type '{type_value}' is not valid",
-            "suggestion": f"Use one of: {', '.join(sorted(valid_types))}",
-        }
-    else:
-        formats = [f for f in ctx.get("registry_formats", []) if f.get("type") == type_value]
-        ctx["result"] = {"formats": formats, "status": "completed"}
+    try:
+        req = ListCreativeFormatsRequest(type=type_value)
+        _call_via(ctx, "a2a", req=req)
+    except Exception as exc:
+        ctx["error"] = exc
 
 
 # ── MCP transport ────────────────────────────────────────────────────
@@ -141,53 +95,21 @@ def when_send_a2a_type_value(ctx: dict, type_value: str) -> None:
 
 @when("the Buyer Agent calls list_creative_formats MCP tool with no filters")
 def when_call_mcp_no_filters(ctx: dict) -> None:
-    """Call list_creative_formats MCP tool with no filters."""
-    ctx["transport"] = "mcp"
-    ctx["request_filters"] = {}
-    if _is_harness_mode(ctx):
-        _harness_dispatch(ctx, "mcp", {})
-        return
-    formats = list(ctx.get("registry_formats", []))
-    formats.sort(key=lambda f: (f.get("type", ""), f.get("name", "")))
-    ctx["result"] = {"formats": formats, "status": "completed"}
+    _call_via(ctx, "mcp")
 
 
 @when("the Buyer Agent calls list_creative_formats MCP tool")
 def when_call_mcp(ctx: dict) -> None:
-    """Call list_creative_formats MCP tool (may have no tenant)."""
-    ctx["transport"] = "mcp"
-    ctx["request_filters"] = {}
-    if _is_harness_mode(ctx):
-        _harness_dispatch(ctx, "mcp", {})
-        return
-    if not ctx.get("has_tenant", True):
-        ctx["error"] = {
-            "code": "TENANT_REQUIRED",
-            "message": "Tenant context could not be determined",
-            "suggestion": "Provide authentication credentials or tenant identification",
-        }
-    else:
-        ctx["result"] = {"formats": ctx.get("registry_formats", []), "status": "completed"}
+    _call_via(ctx, "mcp")
 
 
 @when(parsers.parse('the Buyer Agent calls list_creative_formats MCP tool with type "{type_value}"'))
 def when_call_mcp_type(ctx: dict, type_value: str) -> None:
-    """Call list_creative_formats MCP tool with a type parameter."""
-    ctx["transport"] = "mcp"
-    ctx["request_filters"] = {"type": type_value}
-    if _is_harness_mode(ctx):
-        _harness_dispatch(ctx, "mcp", {"type": type_value})
-        return
-    valid_types = {"display", "video", "audio", "native", "dooh"}
-    if type_value not in valid_types:
-        ctx["error"] = {
-            "code": "VALIDATION_ERROR",
-            "message": f"Invalid parameter: type '{type_value}' is not valid",
-            "suggestion": f"Use one of: {', '.join(sorted(valid_types))}",
-        }
-    else:
-        formats = [f for f in ctx.get("registry_formats", []) if f.get("type") == type_value]
-        ctx["result"] = {"formats": formats, "status": "completed"}
+    try:
+        req = ListCreativeFormatsRequest(type=type_value)
+        _call_via(ctx, "mcp", req=req)
+    except Exception as exc:
+        ctx["error"] = exc
 
 
 # ── Generic format request (transport-agnostic) ──────────────────────
@@ -195,57 +117,26 @@ def when_call_mcp_type(ctx: dict, type_value: str) -> None:
 
 @when("the Buyer Agent requests the format catalog")
 def when_request_catalog(ctx: dict) -> None:
-    """Request the full format catalog (no filters, transport-agnostic)."""
-    ctx["request_filters"] = {}
-    if _is_harness_mode(ctx):
-        _harness_dispatch(ctx, "impl", {})
-        return
-    formats = list(ctx.get("registry_formats", []))
-    formats.sort(key=lambda f: (f.get("type", ""), f.get("name", "")))
-    ctx["result"] = {"formats": formats, "status": "completed"}
+    _call(ctx)
 
 
 @when("the Buyer Agent requests all formats with no filters")
 def when_request_all_no_filters(ctx: dict) -> None:
-    """Request all formats with no filters."""
-    ctx["request_filters"] = {}
-    if _is_harness_mode(ctx):
-        _harness_dispatch(ctx, "impl", {})
-        return
-    formats = list(ctx.get("registry_formats", []))
-    formats.sort(key=lambda f: (f.get("type", ""), f.get("name", "")))
-    ctx["result"] = {"formats": formats, "status": "completed"}
+    _call(ctx)
 
 
 @when("the Buyer Agent sends a list_creative_formats request")
 def when_send_request_generic(ctx: dict) -> None:
-    """Send a list_creative_formats request (sandbox scenarios)."""
-    ctx["request_filters"] = {}
-    if _is_harness_mode(ctx):
-        _harness_dispatch(ctx, "impl", {})
-        return
-    result: dict = {
-        "formats": ctx.get("registry_formats", []),
-        "status": "completed",
-    }
-    # Only include sandbox flag when explicitly True (production omits it)
-    if ctx.get("sandbox") is True:
-        result["sandbox"] = True
-    ctx["result"] = result
+    _call(ctx)
 
 
 @when("the Buyer Agent sends a list_creative_formats request with invalid dimension filters")
 def when_send_request_invalid_dimensions(ctx: dict) -> None:
-    """Send a list_creative_formats request with invalid dimension filters."""
-    ctx["request_filters"] = {"min_width": -1}
-    if _is_harness_mode(ctx):
-        _harness_dispatch(ctx, "impl", {"min_width": -1})
-        return
-    ctx["error"] = {
-        "code": "VALIDATION_ERROR",
-        "message": "Invalid dimension filter parameters",
-        "suggestion": "Provide positive integer values for dimension filters",
-    }
+    try:
+        req = ListCreativeFormatsRequest(min_width=-1)
+        _call(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
 
 
 # ── Filter: type + asset_types combined ──────────────────────────────
@@ -253,21 +144,12 @@ def when_send_request_invalid_dimensions(ctx: dict) -> None:
 
 @when(parsers.parse('the Buyer Agent requests formats with type "{fmt_type}" and asset_types {asset_types}'))
 def when_request_type_and_asset(ctx: dict, fmt_type: str, asset_types: str) -> None:
-    """Request formats with combined type and asset_types filters."""
     parsed_assets = json.loads(asset_types)
-    ctx["request_filters"] = {"type": fmt_type, "asset_types": parsed_assets}
-    if _is_harness_mode(ctx):
-        _harness_dispatch(ctx, "impl", {"type": fmt_type, "asset_types": parsed_assets})
-        return
-    # Stub: filter registry_formats by both type AND asset type
-    result = []
-    for f in ctx.get("registry_formats", []):
-        if f.get("type") != fmt_type:
-            continue
-        f_asset_types = {a["type"] for a in f.get("assets", [])}
-        if any(at in f_asset_types for at in parsed_assets):
-            result.append(f)
-    ctx["result"] = {"formats": result, "status": "completed"}
+    try:
+        req = ListCreativeFormatsRequest(type=fmt_type, asset_types=parsed_assets)
+        _call(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
 
 
 # ── Filter: type only ────────────────────────────────────────────────
@@ -275,13 +157,11 @@ def when_request_type_and_asset(ctx: dict, fmt_type: str, asset_types: str) -> N
 
 @when(parsers.parse('the Buyer Agent requests formats with type filter "{fmt_type}"'))
 def when_request_type_filter(ctx: dict, fmt_type: str) -> None:
-    """Request formats with type filter."""
-    ctx["request_filters"] = {"type": fmt_type}
-    if _is_harness_mode(ctx):
-        _harness_dispatch(ctx, "impl", {"type": fmt_type})
-        return
-    formats = [f for f in ctx.get("registry_formats", []) if f.get("type") == fmt_type]
-    ctx["result"] = {"formats": formats, "status": "completed"}
+    try:
+        req = ListCreativeFormatsRequest(type=fmt_type)
+        _call(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
 
 
 # ── Filter: format_ids ───────────────────────────────────────────────
@@ -289,18 +169,13 @@ def when_request_type_filter(ctx: dict, fmt_type: str) -> None:
 
 @when(parsers.parse("the Buyer Agent requests formats with format_ids filter {filter_value}"))
 def when_request_format_ids(ctx: dict, filter_value: str) -> None:
-    """Request formats with format_ids filter."""
     parsed = json.loads(filter_value)
-    ctx["request_filters"] = {"format_ids": parsed}
-    if _is_harness_mode(ctx):
-        _harness_dispatch(ctx, "impl", {"format_ids": parsed})
-        return
-    result = []
-    for f in ctx.get("registry_formats", []):
-        fid = f.get("format_id", {})
-        if isinstance(fid, dict) and fid.get("id") in parsed:
-            result.append(f)
-    ctx["result"] = {"formats": result, "status": "completed"}
+    try:
+        format_ids = [FormatId(agent_url=DEFAULT_AGENT_URL, id=fid) for fid in parsed]
+        req = ListCreativeFormatsRequest(format_ids=format_ids)
+        _call(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
 
 
 # ── Filter: asset_types ─────────────────────────────────────────────
@@ -308,22 +183,12 @@ def when_request_format_ids(ctx: dict, filter_value: str) -> None:
 
 @when(parsers.parse("the Buyer Agent requests formats with asset_types filter {filter_value}"))
 def when_request_asset_types(ctx: dict, filter_value: str) -> None:
-    """Request formats with asset_types filter (OR semantics)."""
     parsed = json.loads(filter_value)
-    ctx["request_filters"] = {"asset_types": parsed}
-    if _is_harness_mode(ctx):
-        _harness_dispatch(ctx, "impl", {"asset_types": parsed})
-        return
-    result = []
-    for f in ctx.get("registry_formats", []):
-        f_assets = {a["type"] for a in f.get("assets", [])}
-        group_assets = set()
-        for g in f.get("asset_groups", []):
-            group_assets.update(g.get("types", []))
-        all_assets = f_assets | group_assets
-        if any(at in all_assets for at in parsed):
-            result.append(f)
-    ctx["result"] = {"formats": result, "status": "completed"}
+    try:
+        req = ListCreativeFormatsRequest(asset_types=parsed)
+        _call(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
 
 
 # ── Filter: min_width / max_width ────────────────────────────────────
@@ -331,32 +196,12 @@ def when_request_asset_types(ctx: dict, filter_value: str) -> None:
 
 @when(parsers.parse("the Buyer Agent requests formats with min_width {min_w:d}"))
 def when_request_min_width(ctx: dict, min_w: int) -> None:
-    """Request formats with min_width filter."""
-    ctx["request_filters"] = {"min_width": min_w}
-    if _is_harness_mode(ctx):
-        _harness_dispatch(ctx, "impl", {"min_width": min_w})
-        return
-    result = []
-    for f in ctx.get("registry_formats", []):
-        renders = f.get("renders", [])
-        if any(r.get("width", 0) >= min_w for r in renders):
-            result.append(f)
-    ctx["result"] = {"formats": result, "status": "completed"}
+    _call(ctx, req=ListCreativeFormatsRequest(min_width=min_w))
 
 
 @when(parsers.parse("the Buyer Agent requests formats with min_width {min_w:d} and max_width {max_w:d}"))
 def when_request_min_max_width(ctx: dict, min_w: int, max_w: int) -> None:
-    """Request formats with min_width and max_width filters."""
-    ctx["request_filters"] = {"min_width": min_w, "max_width": max_w}
-    if _is_harness_mode(ctx):
-        _harness_dispatch(ctx, "impl", {"min_width": min_w, "max_width": max_w})
-        return
-    result = []
-    for f in ctx.get("registry_formats", []):
-        renders = f.get("renders", [])
-        if any(min_w <= r.get("width", 0) <= max_w for r in renders):
-            result.append(f)
-    ctx["result"] = {"formats": result, "status": "completed"}
+    _call(ctx, req=ListCreativeFormatsRequest(min_width=min_w, max_width=max_w))
 
 
 # ── Filter: is_responsive ───────────────────────────────────────────
@@ -364,14 +209,7 @@ def when_request_min_max_width(ctx: dict, min_w: int, max_w: int) -> None:
 
 @when(parsers.parse("the Buyer Agent requests formats with is_responsive {value}"))
 def when_request_responsive(ctx: dict, value: str) -> None:
-    """Request formats with is_responsive filter."""
-    is_resp = value.lower() == "true"
-    ctx["request_filters"] = {"is_responsive": is_resp}
-    if _is_harness_mode(ctx):
-        _harness_dispatch(ctx, "impl", {"is_responsive": is_resp})
-        return
-    result = [f for f in ctx.get("registry_formats", []) if f.get("responsive") == is_resp]
-    ctx["result"] = {"formats": result, "status": "completed"}
+    _call(ctx, req=ListCreativeFormatsRequest(is_responsive=value.lower() == "true"))
 
 
 # ── Filter: name_search ─────────────────────────────────────────────
@@ -379,13 +217,7 @@ def when_request_responsive(ctx: dict, value: str) -> None:
 
 @when(parsers.parse('the Buyer Agent requests formats with name_search "{search}"'))
 def when_request_name_search(ctx: dict, search: str) -> None:
-    """Request formats with name_search filter (case-insensitive substring)."""
-    ctx["request_filters"] = {"name_search": search}
-    if _is_harness_mode(ctx):
-        _harness_dispatch(ctx, "impl", {"name_search": search})
-        return
-    result = [f for f in ctx.get("registry_formats", []) if search.lower() in f.get("name", "").lower()]
-    ctx["result"] = {"formats": result, "status": "completed"}
+    _call(ctx, req=ListCreativeFormatsRequest(name_search=search))
 
 
 # ── Filter: disclosure_positions ─────────────────────────────────────
@@ -393,46 +225,12 @@ def when_request_name_search(ctx: dict, search: str) -> None:
 
 @when(parsers.parse("the Buyer Agent requests formats with disclosure_positions filter {filter_value}"))
 def when_request_disclosure_positions(ctx: dict, filter_value: str) -> None:
-    """Request formats with disclosure_positions filter (AND semantics)."""
     parsed = json.loads(filter_value)
-    ctx["request_filters"] = {"disclosure_positions": parsed}
-    if _is_harness_mode(ctx):
-        _harness_dispatch(ctx, "impl", {"disclosure_positions": parsed})
-        return
-
-    # Validate
-    valid_positions = {"prominent", "footer", "overlay", "audio", "corner", "inline", "before", "after"}
-    if not parsed:
-        ctx["error"] = {
-            "code": "DISCLOSURE_POSITIONS_EMPTY",
-            "message": "At least 1 item is required",
-            "suggestion": "Provide at least one position or omit the filter",
-        }
-        return
-    if len(parsed) != len(set(parsed)):
-        ctx["error"] = {
-            "code": "DISCLOSURE_POSITIONS_DUPLICATES",
-            "message": "Duplicate values are not allowed",
-            "suggestion": "Remove duplicate positions",
-        }
-        return
-    for p in parsed:
-        if p not in valid_positions:
-            ctx["error"] = {
-                "code": "DISCLOSURE_POSITIONS_INVALID_VALUE",
-                "message": f"'{p}' is not a valid disclosure position",
-                "suggestion": "Use valid DisclosurePosition enum values",
-            }
-            return
-
-    result = []
-    for f in ctx.get("registry_formats", []):
-        supported = f.get("supported_disclosure_positions")
-        if supported is None:
-            continue
-        if all(p in supported for p in parsed):
-            result.append(f)
-    ctx["result"] = {"formats": result, "status": "completed"}
+    try:
+        req = ListCreativeFormatsRequest(disclosure_positions=parsed)
+        _call(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
 
 
 # ── Filter: output_format_ids ────────────────────────────────────────
@@ -440,40 +238,13 @@ def when_request_disclosure_positions(ctx: dict, filter_value: str) -> None:
 
 @when(parsers.parse("the Buyer Agent requests formats with output_format_ids filter {filter_value}"))
 def when_request_output_format_ids(ctx: dict, filter_value: str) -> None:
-    """Request formats with output_format_ids filter (OR semantics)."""
     parsed = json.loads(filter_value)
-    ctx["request_filters"] = {"output_format_ids": parsed}
-    if _is_harness_mode(ctx):
-        _harness_dispatch(ctx, "impl", {"output_format_ids": parsed})
-        return
-
-    # Validate
-    if not parsed:
-        ctx["error"] = {
-            "code": "OUTPUT_FORMAT_IDS_EMPTY",
-            "message": "At least 1 item is required",
-            "suggestion": "Provide at least one FormatId or omit the filter",
-        }
-        return
-    for fid in parsed:
-        if not isinstance(fid, dict) or "agent_url" not in fid or "id" not in fid:
-            ctx["error"] = {
-                "code": "OUTPUT_FORMAT_IDS_INVALID_STRUCTURE",
-                "message": "FormatId must include agent_url and id",
-                "suggestion": "Include agent_url (URI) and id fields",
-            }
-            return
-
-    result = []
-    for f in ctx.get("registry_formats", []):
-        output_ids = f.get("output_format_ids")
-        if output_ids is None:
-            continue
-        for requested in parsed:
-            if any(o.get("agent_url") == requested["agent_url"] and o.get("id") == requested["id"] for o in output_ids):
-                result.append(f)
-                break
-    ctx["result"] = {"formats": result, "status": "completed"}
+    try:
+        fmt_ids = [FormatId(agent_url=fid["agent_url"], id=fid["id"]) for fid in parsed] if parsed else []
+        req = ListCreativeFormatsRequest(output_format_ids=fmt_ids if fmt_ids else [])
+        _call(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
 
 
 # ── Filter: input_format_ids ────────────────────────────────────────
@@ -481,241 +252,481 @@ def when_request_output_format_ids(ctx: dict, filter_value: str) -> None:
 
 @when(parsers.parse("the Buyer Agent requests formats with input_format_ids filter {filter_value}"))
 def when_request_input_format_ids(ctx: dict, filter_value: str) -> None:
-    """Request formats with input_format_ids filter (OR semantics)."""
     parsed = json.loads(filter_value)
-    ctx["request_filters"] = {"input_format_ids": parsed}
-    if _is_harness_mode(ctx):
-        _harness_dispatch(ctx, "impl", {"input_format_ids": parsed})
+    try:
+        fmt_ids = [FormatId(agent_url=fid["agent_url"], id=fid["id"]) for fid in parsed] if parsed else []
+        req = ListCreativeFormatsRequest(input_format_ids=fmt_ids if fmt_ids else [])
+        _call(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
+
+
+# ── Partition dispatch steps ──────────────────────────────────────────
+# Each partition When step maps the semantic label to an actual filter
+# and calls production code through the harness.
+
+
+def _partition_type(ctx: dict, partition: str) -> None:
+    """Map type partition label to filter and call harness."""
+    if partition == "omitted":
+        _call(ctx)
         return
-
-    # Validate
-    if not parsed:
-        ctx["error"] = {
-            "code": "INPUT_FORMAT_IDS_EMPTY",
-            "message": "At least 1 item is required",
-            "suggestion": "Provide at least one FormatId or omit the filter",
-        }
-        return
-    for fid in parsed:
-        if not isinstance(fid, dict) or "agent_url" not in fid or "id" not in fid:
-            ctx["error"] = {
-                "code": "INPUT_FORMAT_IDS_INVALID_STRUCTURE",
-                "message": "FormatId must include agent_url and id",
-                "suggestion": "Include agent_url (URI) and id fields",
-            }
-            return
-
-    result = []
-    for f in ctx.get("registry_formats", []):
-        input_ids = f.get("input_format_ids")
-        if input_ids is None:
-            continue
-        for requested in parsed:
-            if any(i.get("agent_url") == requested["agent_url"] and i.get("id") == requested["id"] for i in input_ids):
-                result.append(f)
-                break
-    ctx["result"] = {"formats": result, "status": "completed"}
+    try:
+        req = ListCreativeFormatsRequest(type=partition)
+        _call(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
 
 
-# ── Partition / boundary dispatch steps ──────────────────────────────
-# These steps dispatch parameterized partition and boundary scenarios.
-# They store the partition/boundary_point in ctx for the Then step.
-# These remain as stubs — they test the test-design methodology, not production code.
+def _partition_format_ids(ctx: dict, partition: str) -> None:
+    """Map format_ids partition label to filter and call harness."""
+    known_ids = ctx.get("known_format_ids", [])
+    if partition == "omitted":
+        _call(ctx)
+    elif partition == "all_ids_match":
+        req = ListCreativeFormatsRequest(format_ids=known_ids)
+        _call(ctx, req=req)
+    elif partition == "partial_match":
+        req = ListCreativeFormatsRequest(format_ids=known_ids[:1])
+        _call(ctx, req=req)
+    elif partition == "no_match":
+        no_match = [FormatId(agent_url=DEFAULT_AGENT_URL, id="nonexistent")]
+        req = ListCreativeFormatsRequest(format_ids=no_match)
+        _call(ctx, req=req)
+    else:
+        try:
+            req = ListCreativeFormatsRequest(format_ids=[FormatId(agent_url=DEFAULT_AGENT_URL, id=partition)])
+            _call(ctx, req=req)
+        except Exception as exc:
+            ctx["error"] = exc
+
+
+def _partition_asset_types(ctx: dict, partition: str) -> None:
+    """Map asset_types partition label to filter and call harness."""
+    if partition == "omitted":
+        _call(ctx)
+    elif partition == "single_type_match":
+        _call(ctx, req=ListCreativeFormatsRequest(asset_types=["image"]))
+    elif partition == "multiple_types_or":
+        _call(ctx, req=ListCreativeFormatsRequest(asset_types=["image", "video"]))
+    elif partition == "no_matching_formats":
+        _call(ctx, req=ListCreativeFormatsRequest(asset_types=["webhook"]))
+    else:
+        try:
+            _call(ctx, req=ListCreativeFormatsRequest(asset_types=[partition]))
+        except Exception as exc:
+            ctx["error"] = exc
+
+
+def _partition_dimension(ctx: dict, partition: str) -> None:
+    """Map dimension partition label to filter and call harness."""
+    if partition == "omitted":
+        _call(ctx)
+    elif partition == "width_only":
+        _call(ctx, req=ListCreativeFormatsRequest(min_width=300))
+    elif partition == "height_only":
+        _call(ctx, req=ListCreativeFormatsRequest(min_height=50))
+    elif partition == "width_and_height":
+        _call(ctx, req=ListCreativeFormatsRequest(min_width=300, min_height=50))
+    elif partition == "no_render_match":
+        _call(ctx, req=ListCreativeFormatsRequest(min_width=9999))
+    elif partition == "no_dimension_info":
+        _call(ctx, req=ListCreativeFormatsRequest(min_width=1))
+    else:
+        try:
+            _call(ctx, req=ListCreativeFormatsRequest(min_width=int(partition)))
+        except Exception as exc:
+            ctx["error"] = exc
+
+
+def _partition_responsive(ctx: dict, partition: str) -> None:
+    """Map responsive partition label to filter and call harness."""
+    if partition == "omitted":
+        _call(ctx)
+    elif partition == "responsive_true":
+        _call(ctx, req=ListCreativeFormatsRequest(is_responsive=True))
+    elif partition == "responsive_false":
+        _call(ctx, req=ListCreativeFormatsRequest(is_responsive=False))
+    else:
+        try:
+            _call(ctx, req=ListCreativeFormatsRequest(is_responsive=partition.lower() == "true"))
+        except Exception as exc:
+            ctx["error"] = exc
+
+
+def _partition_name_search(ctx: dict, partition: str) -> None:
+    """Map name_search partition label to filter and call harness."""
+    names = ctx.get("named_formats", ["Standard Banner", "Video Interstitial", "Native Card"])
+    if partition == "omitted":
+        _call(ctx)
+    elif partition == "exact_name":
+        _call(ctx, req=ListCreativeFormatsRequest(name_search=names[0]))
+    elif partition == "partial_match":
+        _call(ctx, req=ListCreativeFormatsRequest(name_search="Banner"))
+    elif partition == "case_insensitive":
+        _call(ctx, req=ListCreativeFormatsRequest(name_search="standard banner"))
+    elif partition == "no_match":
+        _call(ctx, req=ListCreativeFormatsRequest(name_search="ZZZZZ_NO_MATCH"))
+    else:
+        _call(ctx, req=ListCreativeFormatsRequest(name_search=partition))
+
+
+def _partition_wcag(ctx: dict, partition: str) -> None:
+    """Map wcag_level partition label to filter and call harness."""
+    from adcp.types.generated_poc.enums.wcag_level import WcagLevel
+
+    wcag_map = {"level_a": WcagLevel.A, "level_aa": WcagLevel.AA, "level_aaa": WcagLevel.AAA}
+    if partition == "not_provided":
+        _call(ctx)
+    elif partition in wcag_map:
+        _call(ctx, req=ListCreativeFormatsRequest(wcag_level=wcag_map[partition]))
+    else:
+        try:
+            _call(ctx, req=ListCreativeFormatsRequest(wcag_level=partition))
+        except Exception as exc:
+            ctx["error"] = exc
+
+
+def _partition_disclosure(ctx: dict, partition: str) -> None:
+    """Map disclosure_positions partition label to filter and call harness."""
+    if partition == "omitted":
+        _call(ctx)
+    elif partition == "single_position":
+        _call(ctx, req=ListCreativeFormatsRequest(disclosure_positions=["prominent"]))
+    elif partition == "multiple_positions_all_match":
+        _call(ctx, req=ListCreativeFormatsRequest(disclosure_positions=["prominent", "footer"]))
+    elif partition == "all_positions":
+        _call(
+            ctx,
+            req=ListCreativeFormatsRequest(
+                disclosure_positions=["prominent", "footer", "overlay", "audio", "corner", "inline", "before", "after"]
+            ),
+        )
+    elif partition == "no_matching_formats":
+        _call(ctx, req=ListCreativeFormatsRequest(disclosure_positions=["corner"]))
+    elif partition == "empty_array":
+        try:
+            _call(ctx, req=ListCreativeFormatsRequest(disclosure_positions=[]))
+        except Exception as exc:
+            ctx["error"] = exc
+    elif partition == "duplicate_positions":
+        try:
+            _call(ctx, req=ListCreativeFormatsRequest(disclosure_positions=["prominent", "prominent"]))
+        except Exception as exc:
+            ctx["error"] = exc
+    else:
+        try:
+            _call(ctx, req=ListCreativeFormatsRequest(disclosure_positions=[partition]))
+        except Exception as exc:
+            ctx["error"] = exc
+
+
+def _partition_output_format_ids(ctx: dict, partition: str) -> None:
+    """Map output_format_ids partition label to filter and call harness."""
+    known = ctx.get("known_output_format_ids", [])
+    if partition == "omitted":
+        _call(ctx)
+    elif partition == "single_format_id":
+        _call(ctx, req=ListCreativeFormatsRequest(output_format_ids=known[:1]))
+    elif partition == "multiple_ids_any_match":
+        extra = FormatId(agent_url=DEFAULT_AGENT_URL, id="nonexistent")
+        _call(ctx, req=ListCreativeFormatsRequest(output_format_ids=known[:1] + [extra]))
+    elif partition == "no_matching_formats":
+        no_match = [FormatId(agent_url=DEFAULT_AGENT_URL, id="nonexistent")]
+        _call(ctx, req=ListCreativeFormatsRequest(output_format_ids=no_match))
+    elif partition == "format_without_output_ids":
+        _call(ctx, req=ListCreativeFormatsRequest(output_format_ids=known[:1]))
+    elif partition == "empty_array":
+        try:
+            _call(ctx, req=ListCreativeFormatsRequest(output_format_ids=[]))
+        except Exception as exc:
+            ctx["error"] = exc
+    elif partition == "invalid_format_id_missing_agent_url":
+        try:
+            _call(
+                ctx,
+                req=ListCreativeFormatsRequest(
+                    output_format_ids=[FormatId(id="some-id")]  # type: ignore[call-arg]
+                ),
+            )
+        except Exception as exc:
+            ctx["error"] = exc
+    elif partition == "invalid_format_id_missing_id":
+        try:
+            _call(
+                ctx,
+                req=ListCreativeFormatsRequest(
+                    output_format_ids=[FormatId(agent_url=DEFAULT_AGENT_URL)]  # type: ignore[call-arg]
+                ),
+            )
+        except Exception as exc:
+            ctx["error"] = exc
+    else:
+        try:
+            _call(
+                ctx,
+                req=ListCreativeFormatsRequest(output_format_ids=[FormatId(agent_url=DEFAULT_AGENT_URL, id=partition)]),
+            )
+        except Exception as exc:
+            ctx["error"] = exc
+
+
+def _partition_input_format_ids(ctx: dict, partition: str) -> None:
+    """Map input_format_ids partition label to filter and call harness."""
+    known = ctx.get("known_input_format_ids", [])
+    if partition == "omitted":
+        _call(ctx)
+    elif partition == "single_format_id":
+        _call(ctx, req=ListCreativeFormatsRequest(input_format_ids=known[:1]))
+    elif partition == "multiple_ids_any_match":
+        extra = FormatId(agent_url=DEFAULT_AGENT_URL, id="nonexistent")
+        _call(ctx, req=ListCreativeFormatsRequest(input_format_ids=known[:1] + [extra]))
+    elif partition == "no_matching_formats":
+        no_match = [FormatId(agent_url=DEFAULT_AGENT_URL, id="nonexistent")]
+        _call(ctx, req=ListCreativeFormatsRequest(input_format_ids=no_match))
+    elif partition == "format_without_input_ids":
+        _call(ctx, req=ListCreativeFormatsRequest(input_format_ids=known[:1]))
+    elif partition == "empty_array":
+        try:
+            _call(ctx, req=ListCreativeFormatsRequest(input_format_ids=[]))
+        except Exception as exc:
+            ctx["error"] = exc
+    elif partition == "invalid_format_id_missing_agent_url":
+        try:
+            _call(
+                ctx,
+                req=ListCreativeFormatsRequest(
+                    input_format_ids=[FormatId(id="some-id")]  # type: ignore[call-arg]
+                ),
+            )
+        except Exception as exc:
+            ctx["error"] = exc
+    elif partition == "invalid_format_id_missing_id":
+        try:
+            _call(
+                ctx,
+                req=ListCreativeFormatsRequest(
+                    input_format_ids=[FormatId(agent_url=DEFAULT_AGENT_URL)]  # type: ignore[call-arg]
+                ),
+            )
+        except Exception as exc:
+            ctx["error"] = exc
+    else:
+        try:
+            _call(
+                ctx,
+                req=ListCreativeFormatsRequest(input_format_ids=[FormatId(agent_url=DEFAULT_AGENT_URL, id=partition)]),
+            )
+        except Exception as exc:
+            ctx["error"] = exc
 
 
 @when(parsers.parse('the Buyer Agent requests creative formats with type filter "{partition}"'))
 def when_partition_type_filter(ctx: dict, partition: str) -> None:
-    """Partition test for type filter."""
-    ctx["partition"] = partition
-    ctx["filter_under_test"] = "type"
-    ctx["result"] = {"status": "completed", "partition_applied": True}
+    _partition_type(ctx, partition)
 
 
 @when(parsers.parse('the Buyer Agent requests creative formats with format_ids "{partition}"'))
 def when_partition_format_ids(ctx: dict, partition: str) -> None:
-    """Partition test for format_ids filter."""
-    ctx["partition"] = partition
-    ctx["filter_under_test"] = "format_ids"
-    ctx["result"] = {"status": "completed", "partition_applied": True}
+    _partition_format_ids(ctx, partition)
 
 
 @when(parsers.parse('the Buyer Agent requests creative formats with asset_types "{partition}"'))
 def when_partition_asset_types(ctx: dict, partition: str) -> None:
-    """Partition test for asset_types filter."""
-    ctx["partition"] = partition
-    ctx["filter_under_test"] = "asset_types"
-    ctx["result"] = {"status": "completed", "partition_applied": True}
+    _partition_asset_types(ctx, partition)
 
 
 @when(parsers.parse('the Buyer Agent requests creative formats with dimension filter "{partition}"'))
 def when_partition_dimension(ctx: dict, partition: str) -> None:
-    """Partition test for dimension filter."""
-    ctx["partition"] = partition
-    ctx["filter_under_test"] = "dimension"
-    ctx["result"] = {"status": "completed", "partition_applied": True}
+    _partition_dimension(ctx, partition)
 
 
 @when(parsers.parse('the Buyer Agent requests creative formats with is_responsive "{partition}"'))
 def when_partition_responsive(ctx: dict, partition: str) -> None:
-    """Partition test for is_responsive filter."""
-    ctx["partition"] = partition
-    ctx["filter_under_test"] = "is_responsive"
-    ctx["result"] = {"status": "completed", "partition_applied": True}
+    _partition_responsive(ctx, partition)
 
 
 @when(parsers.parse('the Buyer Agent requests creative formats with name_search "{partition}"'))
 def when_partition_name_search(ctx: dict, partition: str) -> None:
-    """Partition test for name_search filter."""
-    ctx["partition"] = partition
-    ctx["filter_under_test"] = "name_search"
-    ctx["result"] = {"status": "completed", "partition_applied": True}
+    _partition_name_search(ctx, partition)
 
 
 @when(parsers.parse('the Buyer Agent requests creative formats with wcag_level "{partition}"'))
 def when_partition_wcag(ctx: dict, partition: str) -> None:
-    """Partition test for wcag_level filter."""
-    ctx["partition"] = partition
-    ctx["filter_under_test"] = "wcag_level"
-    ctx["result"] = {"status": "completed", "partition_applied": True}
+    _partition_wcag(ctx, partition)
 
 
 @when(parsers.parse('the Buyer Agent requests creative formats with disclosure_positions "{partition}"'))
 def when_partition_disclosure(ctx: dict, partition: str) -> None:
-    """Partition test for disclosure_positions filter."""
-    ctx["partition"] = partition
-    ctx["filter_under_test"] = "disclosure_positions"
-    ctx["result"] = {"status": "completed", "partition_applied": True}
+    _partition_disclosure(ctx, partition)
 
 
 @when(parsers.parse('the Buyer Agent requests creative formats with output_format_ids "{partition}"'))
 def when_partition_output_ids(ctx: dict, partition: str) -> None:
-    """Partition test for output_format_ids filter."""
-    ctx["partition"] = partition
-    ctx["filter_under_test"] = "output_format_ids"
-    ctx["result"] = {"status": "completed", "partition_applied": True}
+    _partition_output_format_ids(ctx, partition)
 
 
 @when(parsers.parse('the Buyer Agent requests creative formats with input_format_ids "{partition}"'))
 def when_partition_input_ids(ctx: dict, partition: str) -> None:
-    """Partition test for input_format_ids filter."""
-    ctx["partition"] = partition
-    ctx["filter_under_test"] = "input_format_ids"
-    ctx["result"] = {"status": "completed", "partition_applied": True}
+    _partition_input_format_ids(ctx, partition)
 
 
 # ── Boundary dispatch steps ──────────────────────────────────────────
+# Boundary steps reuse the same partition mapping — the boundary_point
+# label is just a more descriptive partition label.
 
 
 @when(parsers.parse('the Buyer Agent requests creative formats at type boundary "{boundary_point}"'))
 def when_boundary_type(ctx: dict, boundary_point: str) -> None:
-    """Boundary test for type filter."""
-    ctx["boundary_point"] = boundary_point
-    ctx["filter_under_test"] = "type"
-    ctx["result"] = {"status": "completed", "boundary_applied": True}
+    # Map human-readable boundary labels to partition labels
+    mapping = {
+        "display (valid enum)": "display",
+        "video (valid enum)": "video",
+        "omitted (no filter)": "omitted",
+        "invalid type (rejected)": "invalid_type",
+    }
+    _partition_type(ctx, mapping.get(boundary_point, boundary_point))
 
 
 @when(parsers.parse('the Buyer Agent requests creative formats at format_ids boundary "{boundary_point}"'))
 def when_boundary_format_ids(ctx: dict, boundary_point: str) -> None:
-    """Boundary test for format_ids filter."""
-    ctx["boundary_point"] = boundary_point
-    ctx["filter_under_test"] = "format_ids"
-    ctx["result"] = {"status": "completed", "boundary_applied": True}
+    mapping = {
+        "all IDs match": "all_ids_match",
+        "partial match (some excluded)": "partial_match",
+        "no IDs match (empty result)": "no_match",
+        "omitted (no filter)": "omitted",
+    }
+    _partition_format_ids(ctx, mapping.get(boundary_point, boundary_point))
 
 
 @when(parsers.parse('the Buyer Agent requests creative formats at asset_types boundary "{boundary_point}"'))
 def when_boundary_asset_types(ctx: dict, boundary_point: str) -> None:
-    """Boundary test for asset_types filter."""
-    ctx["boundary_point"] = boundary_point
-    ctx["filter_under_test"] = "asset_types"
-    ctx["result"] = {"status": "completed", "boundary_applied": True}
+    mapping = {
+        "single asset type match": "single_type_match",
+        "multiple types OR semantics": "multiple_types_or",
+        "omitted (no filter)": "omitted",
+        "brief (new asset type for generative formats)": "brief",
+        "catalog (new asset type for catalog-based formats)": "catalog",
+        "no formats match (empty result)": "no_matching_formats",
+        "Unknown string not in enum": "unknown_asset_type",
+        "promoted_offerings (removed from enum)": "removed_promoted_offerings",
+    }
+    _partition_asset_types(ctx, mapping.get(boundary_point, boundary_point))
 
 
 @when(parsers.parse('the Buyer Agent requests creative formats at dimension boundary "{boundary_point}"'))
 def when_boundary_dimension(ctx: dict, boundary_point: str) -> None:
-    """Boundary test for dimension filter."""
-    ctx["boundary_point"] = boundary_point
-    ctx["filter_under_test"] = "dimension"
-    ctx["result"] = {"status": "completed", "boundary_applied": True}
+    mapping = {
+        "width filter only": "width_only",
+        "height filter only": "height_only",
+        "width and height combined": "width_and_height",
+        "omitted (no dimension filter)": "omitted",
+        "no render matches constraints": "no_render_match",
+    }
+    _partition_dimension(ctx, mapping.get(boundary_point, boundary_point))
 
 
 @when(parsers.parse('the Buyer Agent requests creative formats at responsive boundary "{boundary_point}"'))
 def when_boundary_responsive(ctx: dict, boundary_point: str) -> None:
-    """Boundary test for responsive filter."""
-    ctx["boundary_point"] = boundary_point
-    ctx["filter_under_test"] = "is_responsive"
-    ctx["result"] = {"status": "completed", "boundary_applied": True}
+    mapping = {
+        "is_responsive = true": "responsive_true",
+        "is_responsive = false": "responsive_false",
+        "is_responsive omitted": "omitted",
+    }
+    _partition_responsive(ctx, mapping.get(boundary_point, boundary_point))
 
 
 @when(parsers.parse('the Buyer Agent requests creative formats at name_search boundary "{boundary_point}"'))
 def when_boundary_name_search(ctx: dict, boundary_point: str) -> None:
-    """Boundary test for name_search filter."""
-    ctx["boundary_point"] = boundary_point
-    ctx["filter_under_test"] = "name_search"
-    ctx["result"] = {"status": "completed", "boundary_applied": True}
+    mapping = {
+        "exact name match": "exact_name",
+        "partial substring match": "partial_match",
+        "case-insensitive match": "case_insensitive",
+        "omitted (no filter)": "omitted",
+        "no match (empty result)": "no_match",
+    }
+    _partition_name_search(ctx, mapping.get(boundary_point, boundary_point))
 
 
 @when(parsers.parse('the Buyer Agent requests creative formats at wcag_level boundary "{boundary_point}"'))
 def when_boundary_wcag(ctx: dict, boundary_point: str) -> None:
-    """Boundary test for wcag_level filter."""
-    ctx["boundary_point"] = boundary_point
-    ctx["filter_under_test"] = "wcag_level"
-    ctx["result"] = {"status": "completed", "boundary_applied": True}
+    mapping = {
+        "A (first enum value — minimum conformance)": "level_a",
+        "AAA (last enum value — highest conformance)": "level_aaa",
+        "Not provided (no filter)": "not_provided",
+        "Unknown string not in enum": "unknown_value",
+    }
+    _partition_wcag(ctx, mapping.get(boundary_point, boundary_point))
 
 
 @when(parsers.parse('the Buyer Agent requests creative formats at disclosure boundary "{boundary_point}"'))
 def when_boundary_disclosure(ctx: dict, boundary_point: str) -> None:
-    """Boundary test for disclosure filter."""
-    ctx["boundary_point"] = boundary_point
-    ctx["filter_under_test"] = "disclosure_positions"
-    ctx["result"] = {"status": "completed", "boundary_applied": True}
+    mapping = {
+        "single position ['prominent'] (min array size)": "single_position",
+        "all 8 positions (max meaningful array)": "all_positions",
+        "omitted (no filter)": "omitted",
+        "format has no supported_disclosure_positions (excluded)": "no_matching_formats",
+        "empty array []": "empty_array",
+        "unknown position string 'sidebar'": "sidebar",
+        "duplicate positions ['prominent','prominent']": "duplicate_positions",
+    }
+    _partition_disclosure(ctx, mapping.get(boundary_point, boundary_point))
 
 
 @when(parsers.parse('the Buyer Agent requests creative formats at output_format_ids boundary "{boundary_point}"'))
 def when_boundary_output_ids(ctx: dict, boundary_point: str) -> None:
-    """Boundary test for output_format_ids filter."""
-    ctx["boundary_point"] = boundary_point
-    ctx["filter_under_test"] = "output_format_ids"
-    ctx["result"] = {"status": "completed", "boundary_applied": True}
+    mapping = {
+        "single FormatId (min array size)": "single_format_id",
+        "multiple FormatIds, one matches (ANY semantics)": "multiple_ids_any_match",
+        "omitted (no filter)": "omitted",
+        "format has no output_format_ids (excluded)": "format_without_output_ids",
+        "no formats match requested output IDs": "no_matching_formats",
+        "empty array []": "empty_array",
+        "FormatId missing agent_url": "invalid_format_id_missing_agent_url",
+        "FormatId missing id": "invalid_format_id_missing_id",
+    }
+    _partition_output_format_ids(ctx, mapping.get(boundary_point, boundary_point))
 
 
 @when(parsers.parse('the Buyer Agent requests creative formats at input_format_ids boundary "{boundary_point}"'))
 def when_boundary_input_ids(ctx: dict, boundary_point: str) -> None:
-    """Boundary test for input_format_ids filter."""
-    ctx["boundary_point"] = boundary_point
-    ctx["filter_under_test"] = "input_format_ids"
-    ctx["result"] = {"status": "completed", "boundary_applied": True}
+    mapping = {
+        "single FormatId (min array size)": "single_format_id",
+        "multiple FormatIds, one matches (ANY semantics)": "multiple_ids_any_match",
+        "omitted (no filter)": "omitted",
+        "format has no input_format_ids (excluded)": "format_without_input_ids",
+        "no formats match requested input IDs": "no_matching_formats",
+        "empty array []": "empty_array",
+        "FormatId missing agent_url": "invalid_format_id_missing_agent_url",
+        "FormatId missing id": "invalid_format_id_missing_id",
+    }
+    _partition_input_format_ids(ctx, mapping.get(boundary_point, boundary_point))
 
 
 # ── Creative agent format queries (partition / boundary) ─────────────
+# These test a separate API (creative agent format querying), not
+# list_creative_formats. Marked xfail in conftest.py.
 
 
 @when(parsers.parse('the Buyer Agent queries creative agent formats with type "{partition}"'))
 def when_query_agent_type(ctx: dict, partition: str) -> None:
-    """Partition test for creative agent format type."""
     ctx["partition"] = partition
     ctx["filter_under_test"] = "creative_agent_format_type"
-    ctx["result"] = {"status": "completed", "partition_applied": True}
 
 
 @when(parsers.parse('the Buyer Agent queries creative agent formats with asset_types "{partition}"'))
 def when_query_agent_asset_types(ctx: dict, partition: str) -> None:
-    """Partition test for creative agent asset types."""
     ctx["partition"] = partition
     ctx["filter_under_test"] = "creative_agent_asset_type"
-    ctx["result"] = {"status": "completed", "partition_applied": True}
 
 
 @when(parsers.parse('the Buyer Agent queries creative agent formats at type boundary "{boundary_point}"'))
 def when_boundary_agent_type(ctx: dict, boundary_point: str) -> None:
-    """Boundary test for creative agent format type."""
     ctx["boundary_point"] = boundary_point
     ctx["filter_under_test"] = "creative_agent_format_type"
-    ctx["result"] = {"status": "completed", "boundary_applied": True}
 
 
 @when(parsers.parse('the Buyer Agent queries creative agent formats at asset_types boundary "{boundary_point}"'))
 def when_boundary_agent_asset_types(ctx: dict, boundary_point: str) -> None:
-    """Boundary test for creative agent asset types."""
     ctx["boundary_point"] = boundary_point
     ctx["filter_under_test"] = "creative_agent_asset_type"
-    ctx["result"] = {"status": "completed", "boundary_applied": True}

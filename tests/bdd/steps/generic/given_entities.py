@@ -3,9 +3,8 @@
 These steps establish the pre-conditions for scenarios — a running seller agent,
 registered creative agents, and format catalogs.
 
-Harness mode: when ``ctx["env"]`` is set (by the ``creative_formats_env`` fixture),
-steps also configure the harness registry with real Format objects.
-Stub mode: steps store dicts in ctx for partition/boundary scenarios.
+Steps configure the harness registry with real Format objects via
+``_sync_registry(ctx)``.
 """
 
 from __future__ import annotations
@@ -18,12 +17,9 @@ from pytest_bdd import given, parsers
 def _sync_registry(ctx: dict[str, Any]) -> None:
     """Push ctx['registry_formats'] dicts into the harness as real Format objects.
 
-    Called after any step that modifies ctx["registry_formats"] when harness
-    mode is active. No-op when env is absent (stub mode).
+    Called after any step that modifies ctx["registry_formats"].
     """
-    env = ctx.get("env")
-    if env is None:
-        return
+    env = ctx["env"]
 
     from tests.bdd.steps.domain.uc005_creative_formats import dicts_to_formats
 
@@ -108,9 +104,15 @@ def given_seller_various_types(ctx: dict) -> None:
 @given("a seller with known format IDs in the catalog")
 def given_seller_known_ids(ctx: dict) -> None:
     """Seller has formats with known IDs (partition/boundary)."""
+    from src.core.schemas import FormatId
+
     ctx["registry_formats"] = [
         {"name": "fmt-a", "format_id": {"agent_url": "https://a.example.com", "id": "fmt-001"}},
         {"name": "fmt-b", "format_id": {"agent_url": "https://a.example.com", "id": "fmt-002"}},
+    ]
+    ctx["known_format_ids"] = [
+        FormatId(agent_url="https://a.example.com", id="fmt-001"),
+        FormatId(agent_url="https://a.example.com", id="fmt-002"),
     ]
     _sync_registry(ctx)
 
@@ -154,6 +156,7 @@ def given_seller_named_formats(ctx: dict, name_a: str, name_b: str, name_c: str)
         {"name": name_b},
         {"name": name_c},
     ]
+    ctx["named_formats"] = [name_a, name_b, name_c]
     _sync_registry(ctx)
 
 
@@ -181,9 +184,15 @@ def given_seller_various_disclosure(ctx: dict) -> None:
 @given("a seller with formats that produce various output formats")
 def given_seller_various_output_formats(ctx: dict) -> None:
     """Seller has formats with various output_format_ids (partition/boundary)."""
+    from src.core.schemas import FormatId
+
     ctx["registry_formats"] = [
         {"name": "builder-a", "output_format_ids": [{"agent_url": "https://a.example.com", "id": "fmt-1"}]},
         {"name": "builder-b", "output_format_ids": [{"agent_url": "https://a.example.com", "id": "fmt-2"}]},
+    ]
+    ctx["known_output_format_ids"] = [
+        FormatId(agent_url="https://a.example.com", id="fmt-1"),
+        FormatId(agent_url="https://a.example.com", id="fmt-2"),
     ]
     _sync_registry(ctx)
 
@@ -191,9 +200,15 @@ def given_seller_various_output_formats(ctx: dict) -> None:
 @given("a seller with formats that accept various input formats")
 def given_seller_various_input_formats(ctx: dict) -> None:
     """Seller has formats with various input_format_ids (partition/boundary)."""
+    from src.core.schemas import FormatId
+
     ctx["registry_formats"] = [
         {"name": "resizer", "input_format_ids": [{"agent_url": "https://a.example.com", "id": "fmt-1"}]},
         {"name": "transcoder", "input_format_ids": [{"agent_url": "https://a.example.com", "id": "fmt-2"}]},
+    ]
+    ctx["known_input_format_ids"] = [
+        FormatId(agent_url="https://a.example.com", id="fmt-1"),
+        FormatId(agent_url="https://a.example.com", id="fmt-2"),
     ]
     _sync_registry(ctx)
 

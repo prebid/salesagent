@@ -1,29 +1,17 @@
 """
 BDD test configuration and fixtures.
 
-Harness Bridge Pattern
-----------------------
-Domain step definitions (tests/bdd/steps/domain/) import helper functions
-and fixtures from the shared test harness (tests/harness/). This keeps
-step definitions thin — they translate Gherkin phrases into harness calls —
-while the harness owns the actual setup/teardown logic, factories, and
-assertion helpers. Generic steps (tests/bdd/steps/generic/) are pure
-pytest-bdd and have no domain or harness dependencies.
+Every scenario runs against real production code through the CreativeFormatsEnv
+harness. There is no stub mode — steps call the harness directly and assert on
+real response objects.
 
-Harness Mode
-------------
-When the ``creative_formats_env`` fixture is requested (via ``integration_db``
-marker), the BDD scenario runs against real production code through the
-CreativeFormatsEnv harness. Generic steps detect ``ctx["env"]`` and delegate
-to the harness instead of using stub logic.
-
-When ``creative_formats_env`` is NOT requested (partition/boundary stubs),
-the steps fall back to pure-dict manipulation in ctx — no database needed.
+Scenarios for unimplemented production features are marked ``xfail``.
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Generator
 from typing import TYPE_CHECKING
 
 import pytest
@@ -48,18 +36,10 @@ pytest_plugins = [
 # ---------------------------------------------------------------------------
 # Auto-register BDD tag markers
 # ---------------------------------------------------------------------------
-# Feature files use Gherkin @tags that pytest-bdd converts to pytest markers.
-# With --strict-markers these must be declared. Since tags are auto-generated
-# by compile_bdd.py, we register them dynamically by scanning .feature files
-# rather than maintaining a manual list in pytest.ini.
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    """Register BDD tag markers dynamically.
-
-    Scans all .feature files under tests/bdd/features/ and registers
-    every @tag as a pytest marker so --strict-markers is satisfied.
-    """
+    """Register BDD tag markers dynamically."""
     import pathlib
 
     features_dir = pathlib.Path(__file__).parent / "features"
@@ -76,107 +56,138 @@ def pytest_configure(config: pytest.Config) -> None:
                 config.addinivalue_line("markers", f"{tag}: BDD scenario tag")
 
 
+# ---------------------------------------------------------------------------
+# xfail: scenarios for unimplemented production features
+# ---------------------------------------------------------------------------
+# These tags correspond to features not yet implemented in production code.
+# Each xfail has a FIXME pointing to the work needed.
+
+_XFAIL_TAGS: dict[str, str] = {
+    # FIXME(beads-dul): disclosure_positions filter not implemented in production
+    # Note: violated/nofield pass vacuously (field rejected at schema level)
+    "T-UC-005-inv-049-8-holds": "disclosure_positions filter not implemented",
+    # FIXME(beads-dul): sandbox mode not implemented in harness
+    # Note: sandbox-production passes vacuously (sandbox=None by default)
+    "T-UC-005-sandbox-happy": "sandbox mode not implemented",
+    "T-UC-005-sandbox-validation": "sandbox mode not implemented",
+    # FIXME(beads-dul): creative agent referrals not in harness
+    "T-UC-005-main-referrals": "creative agent referrals not implemented",
+    # FIXME(beads-dul): no-tenant error path requires identity-less harness
+    "T-UC-005-ext-a-rest": "no-tenant error path not implemented in harness",
+    "T-UC-005-ext-a-mcp": "no-tenant error path not implemented in harness",
+    # FIXME(beads-dul): creative agent format querying is a separate API
+    "T-UC-005-partition-agent-type": "creative agent format API not implemented",
+    "T-UC-005-partition-agent-asset": "creative agent format API not implemented",
+    "T-UC-005-boundary-agent-type": "creative agent format API not implemented",
+    "T-UC-005-boundary-agent-asset": "creative agent format API not implemented",
+    # FIXME(beads-dul): suggestion field not in production error model
+    "T-UC-005-ext-b-rest": "suggestion field not implemented in error responses",
+    "T-UC-005-ext-b-mcp": "suggestion field not implemented in error responses",
+    # FIXME(beads-dul): disclosure validation errors not implemented
+    "T-UC-005-ext-b-disclosure-invalid": "disclosure_positions validation not implemented",
+    "T-UC-005-ext-b-disclosure-empty": "disclosure_positions validation not implemented",
+    "T-UC-005-ext-b-disclosure-dupes": "disclosure_positions validation not implemented",
+    # FIXME(beads-dul): specific error codes (OUTPUT_FORMAT_IDS_EMPTY etc.)
+    # not produced by production — Pydantic gives generic VALIDATION_ERROR
+    "T-UC-005-ext-b-output-empty": "specific validation error codes not implemented",
+    "T-UC-005-ext-b-output-invalid": "specific validation error codes not implemented",
+    "T-UC-005-ext-b-output-noid": "specific validation error codes not implemented",
+    "T-UC-005-ext-b-input-empty": "specific validation error codes not implemented",
+    "T-UC-005-ext-b-input-invalid": "specific validation error codes not implemented",
+    "T-UC-005-ext-b-input-noid": "specific validation error codes not implemented",
+}
+
+# FIXME(beads-dul): disclosure_positions not a field on ListCreativeFormatsRequest.
+# Partition/boundary outlines have "omitted" examples that pass (no filter used).
+# Only xfail examples that actually exercise the unimplemented field.
+_DISCLOSURE_PARTITIONS_XFAIL = {
+    "single_position",
+    "multiple_positions_all_match",
+    "all_positions",
+    "no_matching_formats",
+}
+_DISCLOSURE_BOUNDARY_XFAIL = {
+    "single position",
+    "all 8 positions",
+    "format has no",
+}
+
+# FIXME(beads-dul): brief/catalog asset types not yet in adcp enum
+_ASSET_TYPES_BOUNDARY_XFAIL = {"brief", "catalog"}
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Apply xfail markers to scenarios with unimplemented production features."""
+    for item in items:
+        marker_names = {m.name for m in item.iter_markers()}
+
+        # Parametrized disclosure scenarios — selective xfail
+        if "T-UC-005-partition-disclosure" in marker_names:
+            node_id = item.nodeid
+            if any(p in node_id for p in _DISCLOSURE_PARTITIONS_XFAIL):
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="disclosure_positions filter not implemented",
+                        strict=True,
+                    )
+                )
+            continue
+        if "T-UC-005-boundary-disclosure" in marker_names:
+            node_id = item.nodeid
+            if any(p in node_id for p in _DISCLOSURE_BOUNDARY_XFAIL):
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="disclosure_positions filter not implemented",
+                        strict=True,
+                    )
+                )
+            continue
+        if "T-UC-005-boundary-asset-types" in marker_names:
+            node_id = item.nodeid
+            if any(p in node_id for p in _ASSET_TYPES_BOUNDARY_XFAIL):
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="brief/catalog asset types not in adcp enum",
+                        strict=True,
+                    )
+                )
+            continue
+
+        # Tag-based xfail for all other scenarios
+        for tag, reason in _XFAIL_TAGS.items():
+            if tag in marker_names:
+                item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
+                break
+
+
+# ---------------------------------------------------------------------------
+# Core fixtures
+# ---------------------------------------------------------------------------
+
+
 @pytest.fixture()
-def ctx():
+def ctx() -> dict:
     """Per-scenario mutable context shared across Given/When/Then steps.
 
-    Each scenario gets a fresh dict. Steps store intermediate state here
-    (e.g., API responses, created object IDs) so that later steps can
-    make assertions against it.
+    Keys used:
+        env: CreativeFormatsEnv harness instance
+        response: ListCreativeFormatsResponse from production code
+        error: Exception raised by production code
     """
     return {}
 
 
 @pytest.fixture(autouse=True)
-def _maybe_creative_formats_env(request: pytest.FixtureRequest, ctx: dict) -> None:
-    """Conditionally provide CreativeFormatsEnv for harness-backed BDD scenarios.
+def _creative_formats_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, None, None]:
+    """Provide CreativeFormatsEnv for every BDD scenario.
 
-    Activates harness mode when a real PostgreSQL database is available
-    (i.e., the ``integration_db`` fixture can be resolved) AND the scenario
-    is tagged with a category that should use the harness.
-
-    Phase 1 wires these scenario categories:
-      - main-flow (3): full catalog REST/MCP, filtered (referrals excluded)
-      - invariant (17): BR-RULE-031 (3) + BR-RULE-049 INV-1 through INV-7 (14)
-      - edge-case (1): empty-catalog
-      - boundary (1): dim-boundary
-      - extension ext-b (2): invalid params REST/MCP
-
-    Partition and sandbox scenarios stay as stubs (no database needed).
-
-    When active, opens CreativeFormatsEnv, creates default data, and stores
-    it in ``ctx["env"]``. Steps detect this and route through real code.
-
-    When inactive (no DB, or stub scenarios), ctx["env"] remains unset.
+    Every scenario gets a real harness backed by PostgreSQL.
+    No stub mode — if the database isn't available, the test fails.
     """
-    # Scenario-level tags that should use the harness.
-    # Phase 1 wires ~31 scenarios. Tags listed here correspond to
-    # feature file @T-UC-005-* tags converted to pytest markers (with
-    # hyphens converted to hyphens — pytest-bdd preserves them).
-    #
-    # Exclude: partition stubs, ext-a (no-tenant error path),
-    # sandbox, new-filter invariants (inv-049-8/9/10), and
-    # new-filter ext-b validation (disclosure/output/input).
-    _HARNESS_SCENARIO_TAGS = {
-        # Main flow (3 — referrals excluded: mock registry doesn't
-        # configure _get_tenant_agents, so creative_agents would be
-        # empty. Wire when harness gains agent-referral support.)
-        "T-UC-005-main-rest",
-        "T-UC-005-main-mcp",
-        "T-UC-005-main-filtered",
-        # Invariant: BR-RULE-031 (3)
-        "T-UC-005-inv-031-1-holds",
-        "T-UC-005-inv-031-1-violated",
-        "T-UC-005-inv-031-2-holds",
-        # Invariant: BR-RULE-049 INV-1 through INV-7 (14)
-        "T-UC-005-inv-049-1-holds",
-        "T-UC-005-inv-049-1-violated",
-        "T-UC-005-inv-049-2-holds",
-        "T-UC-005-inv-049-2-violated",
-        "T-UC-005-inv-049-3-holds",
-        "T-UC-005-inv-049-3-violated",
-        "T-UC-005-inv-049-3-group",
-        "T-UC-005-inv-049-4-holds",
-        "T-UC-005-inv-049-4-violated",
-        "T-UC-005-inv-049-4-nodim",
-        "T-UC-005-inv-049-5-holds",
-        "T-UC-005-inv-049-6-holds",
-        "T-UC-005-inv-049-7-holds",
-        "T-UC-005-inv-049-7-violated",
-        # Invariant: BR-RULE-049 INV-9 — output_format_ids OR-match (3)
-        "T-UC-005-inv-049-9-holds",
-        "T-UC-005-inv-049-9-violated",
-        "T-UC-005-inv-049-9-nofield",
-        # Invariant: BR-RULE-049 INV-10 — input_format_ids OR-match (3)
-        "T-UC-005-inv-049-10-holds",
-        "T-UC-005-inv-049-10-violated",
-        "T-UC-005-inv-049-10-nofield",
-        # Edge cases (1)
-        "T-UC-005-empty-catalog",
-        # Boundary (1)
-        "T-UC-005-dim-boundary",
-        # Extension B basic (2)
-        "T-UC-005-ext-b-rest",
-        "T-UC-005-ext-b-mcp",
-    }
-
-    marker_names = {m.name for m in request.node.iter_markers()}
-    should_use_harness = bool(marker_names & _HARNESS_SCENARIO_TAGS)
-
-    if not should_use_harness:
-        yield
-        return
-
-    # Try to resolve integration_db; if unavailable, fall back to stub mode
-    try:
-        request.getfixturevalue("integration_db")
-    except pytest.FixtureLookupError:
-        yield
-        return
+    request.getfixturevalue("integration_db")
 
     from tests.harness.creative_formats import CreativeFormatsEnv
 
     with CreativeFormatsEnv() as env:
-        env.setup_default_data()
         ctx["env"] = env
         yield

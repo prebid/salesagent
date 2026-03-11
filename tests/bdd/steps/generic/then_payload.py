@@ -1,25 +1,46 @@
 """Then steps for payload and field assertions.
 
-These steps verify the shape and content of response payloads: format counts,
-field presence, sorting, specific format inclusion/exclusion, and partition/
-boundary test outcomes.
+Every assertion operates on real production response objects:
+    ctx["response"] — ListCreativeFormatsResponse on success
+    ctx["error"] — Exception on failure
 
-Harness mode: assertions validate real production responses normalized into
-ctx["result"]. Phase 0 stubs are replaced with real validation when env is present.
-Stub mode: assertions check the stub data in ctx.
+No stub mode. No dict intermediaries.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
 
 from pytest_bdd import parsers, then
 
+# ── Helpers ────────────────────────────────────────────────────────────
 
-def _is_harness_mode(ctx: dict[str, Any]) -> bool:
-    """Check if the harness is available in ctx."""
-    return ctx.get("env") is not None
+
+def _get_formats(ctx: dict) -> list:
+    """Extract formats list from response, handling both object and dict shapes."""
+    resp = ctx.get("response")
+    if resp is None:
+        return []
+    # Real response object
+    if hasattr(resp, "formats"):
+        formats = resp.formats or []
+        # Convert to dicts for uniform assertion access
+        result = []
+        for f in formats:
+            d = {}
+            d["name"] = f.name if hasattr(f, "name") else None
+            d["type"] = f.type.value if hasattr(f.type, "value") else str(f.type) if f.type else None
+            if hasattr(f, "format_id") and f.format_id is not None:
+                d["format_id"] = {
+                    "agent_url": str(f.format_id.agent_url) if hasattr(f.format_id, "agent_url") else None,
+                    "id": f.format_id.id if hasattr(f.format_id, "id") else None,
+                }
+            if hasattr(f, "assets") and f.assets:
+                d["assets"] = [{"type": getattr(a, "asset_type", getattr(a, "type", "unknown"))} for a in f.assets]
+            result.append(d)
+        return result
+    # Dict fallback (shouldn't happen in new architecture)
+    return resp.get("formats", []) if isinstance(resp, dict) else []
 
 
 # ── Format catalog assertions ────────────────────────────────────────
@@ -27,50 +48,43 @@ def _is_harness_mode(ctx: dict[str, Any]) -> bool:
 
 @then("the response should include all registered formats")
 def then_all_formats(ctx: dict) -> None:
-    """Assert response includes all registered formats."""
-    result = ctx.get("result", {})
+    formats = _get_formats(ctx)
     registered = ctx.get("registry_formats", [])
-    result_formats = result.get("formats", [])
-    assert len(result_formats) == len(registered), f"Expected {len(registered)} formats, got {len(result_formats)}"
+    assert len(formats) == len(registered), f"Expected {len(registered)} formats, got {len(formats)}"
 
 
 @then("the response should include an empty formats array")
 def then_empty_formats(ctx: dict) -> None:
-    """Assert response has an empty formats array."""
-    result = ctx.get("result", {})
-    assert result.get("formats") == [] or result.get("formats") is not None, "Expected empty formats array"
-    assert len(result.get("formats", [])) == 0, f"Expected 0 formats, got {len(result.get('formats', []))}"
+    formats = _get_formats(ctx)
+    assert len(formats) == 0, f"Expected 0 formats, got {len(formats)}"
 
 
 @then("the response should include only display formats")
 def then_only_display(ctx: dict) -> None:
-    """Assert response includes only display-type formats."""
-    result = ctx.get("result", {})
-    for f in result.get("formats", []):
-        assert f.get("type") == "display", f"Expected type 'display', got '{f.get('type')}'"
+    for f in _get_formats(ctx):
+        assert f["type"] == "display", f"Expected type 'display', got '{f['type']}'"
 
 
 @then("no video formats should be present in the results")
 def then_no_video(ctx: dict) -> None:
-    """Assert no video-type formats in results."""
-    result = ctx.get("result", {})
-    for f in result.get("formats", []):
+    for f in _get_formats(ctx):
         assert f.get("type") != "video", f"Unexpected video format: {f.get('name')}"
 
 
 @then("the response should include creative_agents referrals")
 def then_has_referrals(ctx: dict) -> None:
-    """Assert response includes creative agent referrals."""
-    referrals = ctx.get("creative_agent_referrals", [])
-    assert len(referrals) > 0, "Expected creative agent referrals"
+    resp = ctx.get("response")
+    referrals = getattr(resp, "creative_agents", None) or []
+    assert len(referrals) > 0, "Expected creative agent referrals in response"
 
 
 @then("each referral should include the agent URL and supported capabilities")
 def then_referral_fields(ctx: dict) -> None:
-    """Assert each referral has agent_url and capabilities."""
-    for ref in ctx.get("creative_agent_referrals", []):
-        assert "agent_url" in ref, f"Missing agent_url in referral: {ref}"
-        assert "capabilities" in ref, f"Missing capabilities in referral: {ref}"
+    resp = ctx.get("response")
+    referrals = getattr(resp, "creative_agents", None) or []
+    for ref in referrals:
+        assert getattr(ref, "agent_url", None), f"Missing agent_url in referral: {ref}"
+        assert getattr(ref, "capabilities", None), f"Missing capabilities in referral: {ref}"
 
 
 # ── Format field presence ────────────────────────────────────────────
@@ -78,42 +92,24 @@ def then_referral_fields(ctx: dict) -> None:
 
 @then("each format should include a format_id with agent_url and id")
 def then_format_id_fields(ctx: dict) -> None:
-    """Assert each format has format_id with agent_url and id."""
-    if not _is_harness_mode(ctx):
-        return  # Stub mode: skip validation
-    result = ctx.get("result", {})
-    for f in result.get("formats", []):
+    for f in _get_formats(ctx):
         fid = f.get("format_id")
         assert fid is not None, f"Format '{f.get('name')}' missing format_id"
-        assert "agent_url" in fid, f"Format '{f.get('name')}' format_id missing agent_url"
-        assert "id" in fid, f"Format '{f.get('name')}' format_id missing id"
+        assert fid.get("agent_url"), f"Format '{f.get('name')}' format_id missing agent_url"
+        assert fid.get("id"), f"Format '{f.get('name')}' format_id missing id"
 
 
 @then("each format should include a name and type category")
 def then_format_name_type(ctx: dict) -> None:
-    """Assert each format has name and type."""
-    if not _is_harness_mode(ctx):
-        return  # Stub mode: skip validation
-    result = ctx.get("result", {})
-    for f in result.get("formats", []):
+    for f in _get_formats(ctx):
         assert f.get("name"), f"Format missing name: {f}"
         assert f.get("type"), f"Format missing type: {f}"
 
 
 @then("each format should include asset requirements with type and dimensions")
 def then_format_assets(ctx: dict) -> None:
-    """Assert each format has asset requirements.
-
-    In harness mode, checks that formats with assets have type info.
-    Not all formats have assets (e.g., audio companions), so we only
-    validate when assets are present.
-    """
-    if not _is_harness_mode(ctx):
-        return  # Stub mode: skip validation
-    # Harness mode: at least some formats should have assets
-    result = ctx.get("result", {})
-    formats_with_assets = [f for f in result.get("formats", []) if f.get("assets")]
-    # We just verify that the ones with assets have type info
+    formats = _get_formats(ctx)
+    formats_with_assets = [f for f in formats if f.get("assets")]
     for f in formats_with_assets:
         for a in f["assets"]:
             assert "type" in a, f"Asset in format '{f.get('name')}' missing type"
@@ -124,11 +120,7 @@ def then_format_assets(ctx: dict) -> None:
 
 @then("the results should be sorted by format type then name")
 def then_sorted_type_name(ctx: dict) -> None:
-    """Assert results are sorted by type then name."""
-    if not _is_harness_mode(ctx):
-        return  # Stub mode: skip validation
-    result = ctx.get("result", {})
-    formats = result.get("formats", [])
+    formats = _get_formats(ctx)
     if len(formats) <= 1:
         return
     sort_keys = [(f.get("type", ""), f.get("name", "")) for f in formats]
@@ -137,15 +129,10 @@ def then_sorted_type_name(ctx: dict) -> None:
 
 @then("the results should be ordered:")
 def then_results_ordered(ctx: dict, datatable: Sequence[Sequence[object]]) -> None:
-    """Assert results match the exact ordering from a data table.
-
-    Phase 0 stub: validates against stub data.
-    """
-    result = ctx.get("result", {})
-    result_formats = result.get("formats", [])
+    formats = _get_formats(ctx)
     headers = [str(cell) for cell in datatable[0]]
     expected = [{headers[i]: str(cell) for i, cell in enumerate(row)} for row in datatable[1:]]
-    actual = [{"name": f.get("name"), "type": f.get("type")} for f in result_formats]
+    actual = [{"name": f.get("name"), "type": f.get("type")} for f in formats]
     assert actual == expected, f"Expected order {expected}, got {actual}"
 
 
@@ -154,125 +141,120 @@ def then_results_ordered(ctx: dict, datatable: Sequence[Sequence[object]]) -> No
 
 @then("no formats should be returned")
 def then_no_formats(ctx: dict) -> None:
-    """Assert zero formats returned."""
-    result = ctx.get("result", {})
-    assert len(result.get("formats", [])) == 0, f"Expected 0 formats, got {len(result.get('formats', []))}"
+    formats = _get_formats(ctx)
+    assert len(formats) == 0, f"Expected 0 formats, got {len(formats)}"
 
 
 @then(parsers.parse('only "{name}" should be returned'))
 def then_only_named(ctx: dict, name: str) -> None:
-    """Assert only a single named format is returned."""
-    result = ctx.get("result", {})
-    formats = result.get("formats", [])
-    assert len(formats) == 1, f"Expected exactly 1 format, got {len(formats)}"
+    formats = _get_formats(ctx)
+    assert len(formats) == 1, f"Expected exactly 1 format, got {len(formats)}: {[f.get('name') for f in formats]}"
     assert formats[0].get("name") == name, f"Expected format '{name}', got '{formats[0].get('name')}'"
 
 
 @then(parsers.parse('"{name}" should be returned'))
 def then_named_returned(ctx: dict, name: str) -> None:
-    """Assert a named format is among the returned results."""
-    result = ctx.get("result", {})
-    names = [f.get("name") for f in result.get("formats", [])]
+    names = [f.get("name") for f in _get_formats(ctx)]
     assert name in names, f"Expected '{name}' in results, got {names}"
 
 
 @then(parsers.parse('"{name}" should not be returned'))
 def then_named_not_returned(ctx: dict, name: str) -> None:
-    """Assert a named format is NOT in the returned results."""
-    result = ctx.get("result", {})
-    names = [f.get("name") for f in result.get("formats", [])]
+    names = [f.get("name") for f in _get_formats(ctx)]
     assert name not in names, f"Did not expect '{name}' in results, got {names}"
 
 
 @then(parsers.parse('"{a}", "{b}", and "{c}" should all be returned'))
 def then_three_returned(ctx: dict, a: str, b: str, c: str) -> None:
-    """Assert three named formats are all returned."""
-    result = ctx.get("result", {})
-    names = [f.get("name") for f in result.get("formats", [])]
+    names = [f.get("name") for f in _get_formats(ctx)]
     for name in [a, b, c]:
         assert name in names, f"Expected '{name}' in results, got {names}"
 
 
 @then(parsers.parse('the returned format type should be "{fmt_type}"'))
 def then_returned_type(ctx: dict, fmt_type: str) -> None:
-    """Assert the returned format(s) have the expected type."""
-    result = ctx.get("result", {})
-    for f in result.get("formats", []):
+    for f in _get_formats(ctx):
         assert f.get("type") == fmt_type, f"Expected type '{fmt_type}', got '{f.get('type')}'"
 
 
-# ── Partition test outcomes ──────────────────────────────────────────
+# ── Partition/boundary test outcomes ──────────────────────────────────
+# These verify that production code either:
+#   - returned a valid response (expected="valid")
+#   - raised an error (expected="invalid")
+
+
+def _assert_partition_outcome(ctx: dict, expected: str) -> None:
+    """Assert partition/boundary test outcome against real production results.
+
+    "valid" means production code returned successfully (response exists).
+    "invalid" means production code raised an error (error exists).
+    """
+    if expected == "valid":
+        assert "error" not in ctx, f"Expected valid result but got error: {ctx.get('error')}"
+        assert "response" in ctx, "Expected response but none found"
+    elif expected == "invalid":
+        assert "error" in ctx, "Expected error but operation succeeded"
+    else:
+        raise AssertionError(f"Unexpected outcome value: {expected}")
 
 
 @then(parsers.parse("the type filtering should result in {expected}"))
 def then_type_filtering_result(ctx: dict, expected: str) -> None:
-    """Assert type filter partition outcome."""
     _assert_partition_outcome(ctx, expected)
 
 
 @then(parsers.parse("the format_ids filtering should result in {expected}"))
 def then_format_ids_filtering_result(ctx: dict, expected: str) -> None:
-    """Assert format_ids filter partition outcome."""
     _assert_partition_outcome(ctx, expected)
 
 
 @then(parsers.parse("the asset_types filtering should result in {expected}"))
 def then_asset_types_filtering_result(ctx: dict, expected: str) -> None:
-    """Assert asset_types filter partition outcome."""
     _assert_partition_outcome(ctx, expected)
 
 
 @then(parsers.parse("the dimension filtering should result in {expected}"))
 def then_dimension_filtering_result(ctx: dict, expected: str) -> None:
-    """Assert dimension filter partition outcome."""
     _assert_partition_outcome(ctx, expected)
 
 
 @then(parsers.parse("the responsive filtering should result in {expected}"))
 def then_responsive_filtering_result(ctx: dict, expected: str) -> None:
-    """Assert responsive filter partition outcome."""
     _assert_partition_outcome(ctx, expected)
 
 
 @then(parsers.parse("the name search filtering should result in {expected}"))
 def then_name_search_filtering_result(ctx: dict, expected: str) -> None:
-    """Assert name_search filter partition outcome."""
     _assert_partition_outcome(ctx, expected)
 
 
 @then(parsers.parse("the wcag filtering should result in {expected}"))
 def then_wcag_filtering_result(ctx: dict, expected: str) -> None:
-    """Assert wcag filter partition outcome."""
     _assert_partition_outcome(ctx, expected)
 
 
 @then(parsers.parse("the disclosure_positions filtering should result in {expected}"))
 def then_disclosure_filtering_result(ctx: dict, expected: str) -> None:
-    """Assert disclosure_positions filter partition outcome."""
     _assert_partition_outcome(ctx, expected)
 
 
 @then(parsers.parse("the output_format_ids filtering should result in {expected}"))
 def then_output_ids_filtering_result(ctx: dict, expected: str) -> None:
-    """Assert output_format_ids filter partition outcome."""
     _assert_partition_outcome(ctx, expected)
 
 
 @then(parsers.parse("the input_format_ids filtering should result in {expected}"))
 def then_input_ids_filtering_result(ctx: dict, expected: str) -> None:
-    """Assert input_format_ids filter partition outcome."""
     _assert_partition_outcome(ctx, expected)
 
 
 @then(parsers.parse("the creative agent type filtering should result in {expected}"))
 def then_agent_type_filtering_result(ctx: dict, expected: str) -> None:
-    """Assert creative agent type filter partition outcome."""
     _assert_partition_outcome(ctx, expected)
 
 
 @then(parsers.parse("the creative agent asset type filtering should result in {expected}"))
 def then_agent_asset_filtering_result(ctx: dict, expected: str) -> None:
-    """Assert creative agent asset type filter partition outcome."""
     _assert_partition_outcome(ctx, expected)
 
 
@@ -281,85 +263,59 @@ def then_agent_asset_filtering_result(ctx: dict, expected: str) -> None:
 
 @then(parsers.parse("the type handling should be {expected}"))
 def then_type_handling(ctx: dict, expected: str) -> None:
-    """Assert type filter boundary outcome."""
     _assert_partition_outcome(ctx, expected)
 
 
 @then(parsers.parse("the format_ids handling should be {expected}"))
 def then_format_ids_handling(ctx: dict, expected: str) -> None:
-    """Assert format_ids filter boundary outcome."""
     _assert_partition_outcome(ctx, expected)
 
 
 @then(parsers.parse("the asset_types handling should be {expected}"))
 def then_asset_types_handling(ctx: dict, expected: str) -> None:
-    """Assert asset_types filter boundary outcome."""
     _assert_partition_outcome(ctx, expected)
 
 
 @then(parsers.parse("the dimension handling should be {expected}"))
 def then_dimension_handling(ctx: dict, expected: str) -> None:
-    """Assert dimension filter boundary outcome."""
     _assert_partition_outcome(ctx, expected)
 
 
 @then(parsers.parse("the responsive handling should be {expected}"))
 def then_responsive_handling(ctx: dict, expected: str) -> None:
-    """Assert responsive filter boundary outcome."""
     _assert_partition_outcome(ctx, expected)
 
 
 @then(parsers.parse("the name search handling should be {expected}"))
 def then_name_search_handling(ctx: dict, expected: str) -> None:
-    """Assert name_search filter boundary outcome."""
     _assert_partition_outcome(ctx, expected)
 
 
 @then(parsers.parse("the wcag handling should be {expected}"))
 def then_wcag_handling(ctx: dict, expected: str) -> None:
-    """Assert wcag filter boundary outcome."""
     _assert_partition_outcome(ctx, expected)
 
 
 @then(parsers.parse("the disclosure handling should be {expected}"))
 def then_disclosure_handling(ctx: dict, expected: str) -> None:
-    """Assert disclosure filter boundary outcome."""
     _assert_partition_outcome(ctx, expected)
 
 
 @then(parsers.parse("the output_format_ids handling should be {expected}"))
 def then_output_ids_handling(ctx: dict, expected: str) -> None:
-    """Assert output_format_ids filter boundary outcome."""
     _assert_partition_outcome(ctx, expected)
 
 
 @then(parsers.parse("the input_format_ids handling should be {expected}"))
 def then_input_ids_handling(ctx: dict, expected: str) -> None:
-    """Assert input_format_ids filter boundary outcome."""
     _assert_partition_outcome(ctx, expected)
 
 
 @then(parsers.parse("the creative agent type handling should be {expected}"))
 def then_agent_type_handling(ctx: dict, expected: str) -> None:
-    """Assert creative agent type boundary outcome."""
     _assert_partition_outcome(ctx, expected)
 
 
 @then(parsers.parse("the creative agent asset type handling should be {expected}"))
 def then_agent_asset_handling(ctx: dict, expected: str) -> None:
-    """Assert creative agent asset type boundary outcome."""
     _assert_partition_outcome(ctx, expected)
-
-
-# ── Helper ───────────────────────────────────────────────────────────
-
-
-def _assert_partition_outcome(ctx: dict, expected: str) -> None:
-    """Common assertion for partition/boundary test outcomes.
-
-    Phase 0 stub: always passes. The ``expected`` value (``valid`` or
-    ``invalid``) is recorded for future wiring. Epic 1 will actually
-    invoke the production code and validate the outcome.
-    """
-    assert expected in ("valid", "invalid"), f"Unexpected outcome: {expected}"
-    ctx["expected_outcome"] = expected

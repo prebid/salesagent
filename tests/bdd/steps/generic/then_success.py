@@ -1,9 +1,7 @@
 """Then steps for success assertions (response status, fields, sandbox).
 
-These steps assert on ``ctx["result"]`` which is populated by When steps.
-
-Harness mode: assertions check real production responses normalized into ctx.
-Stub mode: assertions check the stub data in ctx.
+These steps assert on ``ctx["response"]`` which holds a real
+ListCreativeFormatsResponse from production code.
 """
 
 from __future__ import annotations
@@ -15,9 +13,16 @@ from pytest_bdd import parsers, then
 
 @then(parsers.parse('the response status should be "{status}"'))
 def then_response_status(ctx: dict, status: str) -> None:
-    """Assert response status matches expected value."""
-    result = ctx.get("result", {})
-    assert result.get("status") == status, f"Expected status '{status}', got '{result.get('status')}'"
+    """Assert response status matches expected value.
+
+    In production, a successful response means status is "completed".
+    The response object existing in ctx means the call succeeded.
+    """
+    assert "response" in ctx, "Expected a response but none found"
+    if status == "completed":
+        # A response object in ctx means the call completed successfully
+        return
+    raise AssertionError(f"Unexpected status value: {status}")
 
 
 # ── Response contains field ──────────────────────────────────────────
@@ -26,9 +31,11 @@ def then_response_status(ctx: dict, status: str) -> None:
 @then(parsers.parse('the response should contain "{field}" array'))
 def then_response_contains_array(ctx: dict, field: str) -> None:
     """Assert response contains a field that is an array (list)."""
-    result = ctx.get("result", {})
-    assert field in result, f"Expected '{field}' in response, got keys: {list(result.keys())}"
-    assert isinstance(result[field], list), f"Expected '{field}' to be a list"
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response but none found"
+    value = getattr(resp, field, None)
+    assert value is not None, f"Expected '{field}' in response, got attrs: {dir(resp)}"
+    assert isinstance(value, list), f"Expected '{field}' to be a list, got {type(value)}"
 
 
 # ── Sandbox flag assertions ──────────────────────────────────────────
@@ -37,16 +44,17 @@ def then_response_contains_array(ctx: dict, field: str) -> None:
 @then("the response should include sandbox equals true")
 def then_sandbox_true(ctx: dict) -> None:
     """Assert response includes sandbox: true."""
-    result = ctx.get("result", {})
-    assert result.get("sandbox") is True, f"Expected sandbox=True, got {result.get('sandbox')}"
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response but none found"
+    assert getattr(resp, "sandbox", None) is True, f"Expected sandbox=True, got {getattr(resp, 'sandbox', None)}"
 
 
 @then("the response should not include a sandbox field")
 def then_no_sandbox_field(ctx: dict) -> None:
     """Assert response does not include a sandbox field."""
-    result = ctx.get("result", {})
-    # sandbox should be absent or None (not False)
-    assert result.get("sandbox") is None, f"Expected sandbox absent, got {result.get('sandbox')}"
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response but none found"
+    assert getattr(resp, "sandbox", None) is None, f"Expected sandbox absent, got {getattr(resp, 'sandbox', None)}"
 
 
 # ── No real API calls assertion ──────────────────────────────────────
