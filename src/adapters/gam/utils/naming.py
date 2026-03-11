@@ -1,22 +1,11 @@
 """GAM-specific naming utilities.
 
 Shared naming functions (template expansion, date formatting, context building)
-live in src.core.utils.naming. This module re-exports them for backward
-compatibility and adds GAM-specific helpers like truncate_name_with_suffix.
+live in src.core.utils.naming. This module contains only GAM-specific helpers.
 """
 
 import logging
 import re
-
-# Re-export shared functions so existing ``from src.adapters.gam.utils.naming
-# import ...`` statements continue to work without changes.
-from src.core.utils.naming import (  # noqa: F401
-    apply_naming_template,
-    build_line_item_name_context,
-    build_order_name_context,
-    format_date_range,
-    format_month_year,
-)
 
 logger = logging.getLogger(__name__)
 

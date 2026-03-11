@@ -14,12 +14,10 @@ from datetime import UTC, datetime
 from adcp.types import CreateMediaBuyRequest as LibraryCreateMediaBuyRequest
 from adcp.types import PackageRequest as LibraryPackageRequest
 
-from src.adapters.gam.utils.naming import (
-    build_order_name_context as gam_build_order_name_context,
-)
 from src.core.utils.naming import (
     _extract_brand_name,
     build_order_name_context,
+    build_order_name_context as gam_build_order_name_context,
 )
 
 
