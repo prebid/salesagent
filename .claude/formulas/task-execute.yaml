@@ -598,23 +598,47 @@ iterate:
              test changes, fix the implementation instead, re-run `make quality`,
              and restart this atom.
 
-        3. Stage relevant files (be specific, don't use `git add .`):
+        3. **Allowlist change review**: Check if any guard allowlists were modified:
+           ```bash
+           git diff --name-only -- 'tests/unit/test_architecture_*.py'
+           ```
+           If ANY architecture guard files were changed:
+           - `git diff -- tests/unit/test_architecture_*.py` to see exactly what changed
+           - For each allowlist change, answer:
+             - Was an entry ADDED? → STOP. Growing the debt is not acceptable.
+               Use the repository/abstraction layer instead.
+             - Was an entry REMOVED? → Good — verify the underlying code now
+               uses the correct abstraction (repository, UoW, etc.)
+             - Was an entry MOVED between models? → Verify the new model's query
+               goes through the appropriate repository.
+
+           Also check if production files in the diff appear in any allowlist:
+           ```bash
+           for f in $(git diff --name-only -- 'src/'); do
+             grep -r "$f" tests/unit/test_architecture_*.py 2>/dev/null | grep -i allowlist
+           done
+           ```
+           If a modified production file is allowlisted: verify your changes
+           use the repository layer, not raw queries. The allowlist is DEBT —
+           your changes must not add more of the same pattern.
+
+        4. Stage relevant files (be specific, don't use `git add .`):
            ```bash
            git add <specific-files>
            ```
 
-        4. Determine commit type from the task:
+        5. Determine commit type from the task:
            - Schema migration → `refactor:`
            - New feature → `feat:`
            - Bug fix → `fix:`
            - Infrastructure → `chore:`
 
-        5. Commit:
+        6. Commit:
            ```bash
            git commit -m "<type>: <description from task title>"
            ```
 
-        6. Verify:
+        7. Verify:
            ```bash
            git log -1 --oneline
            ```

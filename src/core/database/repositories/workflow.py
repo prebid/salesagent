@@ -142,23 +142,46 @@ class WorkflowRepository:
     # ------------------------------------------------------------------
 
     def get_latest_mapping_for_object(self, object_type: str, object_id: str) -> ObjectWorkflowMapping | None:
-        """Get the most recent workflow mapping for a specific object."""
+        """Get the most recent workflow mapping for a specific object within the tenant."""
         return self._session.scalars(
             select(ObjectWorkflowMapping)
-            .filter_by(object_type=object_type, object_id=object_id)
+            .join(WorkflowStep, ObjectWorkflowMapping.step_id == WorkflowStep.step_id)
+            .join(DBContext, WorkflowStep.context_id == DBContext.context_id)
+            .where(
+                ObjectWorkflowMapping.object_type == object_type,
+                ObjectWorkflowMapping.object_id == object_id,
+                DBContext.tenant_id == self._tenant_id,
+            )
             .order_by(ObjectWorkflowMapping.created_at.desc())
         ).first()
 
     def get_step_by_id(self, step_id: str) -> WorkflowStep | None:
-        """Get a workflow step by its primary key (no tenant filter)."""
-        return self._session.get(WorkflowStep, step_id)
+        """Get a workflow step by its primary key within the tenant."""
+        return self._session.scalars(
+            select(WorkflowStep)
+            .join(DBContext)
+            .where(
+                WorkflowStep.step_id == step_id,
+                DBContext.tenant_id == self._tenant_id,
+            )
+        ).first()
 
     def get_mappings_for_step(self, step_id: str) -> list[ObjectWorkflowMapping]:
-        """Get all object mappings for a workflow step."""
-        return list(self._session.scalars(select(ObjectWorkflowMapping).filter_by(step_id=step_id)).all())
+        """Get all object mappings for a workflow step within the tenant."""
+        return list(
+            self._session.scalars(
+                select(ObjectWorkflowMapping)
+                .join(WorkflowStep, ObjectWorkflowMapping.step_id == WorkflowStep.step_id)
+                .join(DBContext, WorkflowStep.context_id == DBContext.context_id)
+                .where(
+                    ObjectWorkflowMapping.step_id == step_id,
+                    DBContext.tenant_id == self._tenant_id,
+                )
+            ).all()
+        )
 
     def get_mappings_for_steps(self, step_ids: list[str]) -> dict[str, list[ObjectWorkflowMapping]]:
-        """Get object mappings for multiple workflow steps.
+        """Get object mappings for multiple workflow steps within the tenant.
 
         Returns a dict mapping step_id -> list of ObjectWorkflowMapping.
         """
@@ -167,7 +190,13 @@ class WorkflowRepository:
 
         mappings = list(
             self._session.scalars(
-                select(ObjectWorkflowMapping).where(ObjectWorkflowMapping.step_id.in_(step_ids))
+                select(ObjectWorkflowMapping)
+                .join(WorkflowStep, ObjectWorkflowMapping.step_id == WorkflowStep.step_id)
+                .join(DBContext, WorkflowStep.context_id == DBContext.context_id)
+                .where(
+                    ObjectWorkflowMapping.step_id.in_(step_ids),
+                    DBContext.tenant_id == self._tenant_id,
+                )
             ).all()
         )
 

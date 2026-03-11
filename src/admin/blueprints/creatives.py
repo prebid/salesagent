@@ -913,12 +913,16 @@ def get_ai_review_status(task_id: str) -> dict:
 
 
 def _create_review_record(
-    db_session, creative_id: str, tenant_id: str, ai_result: dict, principal_id: str | None = None
+    creative_repo: "CreativeRepository",
+    creative_id: str,
+    tenant_id: str,
+    ai_result: dict,
+    principal_id: str | None = None,
 ):
     """Create a CreativeReview record from AI review result.
 
     Args:
-        db_session: Database session
+        creative_repo: CreativeRepository instance (handles DB access)
         creative_id: Creative ID
         tenant_id: Tenant ID
         ai_result: Result dict from AI review with keys:
@@ -952,8 +956,7 @@ def _create_review_record(
             final_decision=ai_result["status"],
         )
 
-        db_session.add(review_record)
-        db_session.flush()
+        creative_repo.create_review(review_record)
 
         logger.debug(f"Created review record {review_id} for creative {creative_id}")
 
@@ -1030,13 +1033,19 @@ def _ai_review_creative_impl_inner(
     cm = AdminCreativeUoW(tenant_id) if db_session is None else contextlib.nullcontext()
     with cm as uow:
         if uow is not None:
+            # Use repos from UoW — don't create duplicates
             assert uow.session is not None
             db_session = uow.session
-
-        tenant_config_repo = TenantConfigRepository(db_session, tenant_id)
-        creative_repo = CreativeRepository(db_session, tenant_id)
-        mb_repo = MediaBuyRepository(db_session, tenant_id)
-        product_repo = ProductRepository(db_session, tenant_id)
+            tenant_config_repo = uow.tenant_config
+            creative_repo = uow.creatives
+            mb_repo = uow.media_buys
+            product_repo = uow.products
+        else:
+            # Caller owns session — create repos manually
+            tenant_config_repo = TenantConfigRepository(db_session, tenant_id)
+            creative_repo = CreativeRepository(db_session, tenant_id)
+            mb_repo = MediaBuyRepository(db_session, tenant_id)
+            product_repo = ProductRepository(db_session, tenant_id)
 
         tenant = tenant_config_repo.get_tenant()
         if not tenant:
@@ -1148,7 +1157,7 @@ def _ai_review_creative_impl_inner(
                 "policy_triggered": "sensitive_category",
             }
             _create_review_record(
-                db_session,
+                creative_repo,
                 creative_id,
                 tenant_id,
                 result_dict,
@@ -1264,7 +1273,7 @@ def _ai_review_creative_impl_inner(
             "ai_reason": review_result.reason,
         }
         _create_review_record(
-            db_session,
+            creative_repo,
             creative_id,
             tenant_id,
             result_dict,

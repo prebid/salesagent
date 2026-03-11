@@ -402,9 +402,7 @@ def _sync_creatives_impl(
                         )
                     )
 
-        # Commit all successful creative operations (skip in dry_run mode)
-        if not dry_run:
-            creative_repo.commit()
+        # CreativeUoW auto-commits on clean exit — no explicit commit needed
 
     # Process assignments (spec-compliant: creative_id → package_ids mapping)
     assignment_list = _process_assignments(

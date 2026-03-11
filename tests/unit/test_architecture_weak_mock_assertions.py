@@ -47,8 +47,6 @@ WEAK_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/unit/test_authorized_properties_behavioral.py", "test_passes_none_identity_when_no_ctx"),
     ("tests/unit/test_authorized_properties_behavioral.py", "test_properties_error_calls_audit_with_failure"),
     ("tests/unit/test_authorized_properties_behavioral.py", "test_resolves_identity_from_context"),
-    ("tests/unit/test_create_media_buy_behavioral.py", "test_seller_notification_sent_on_manual_approval"),
-    ("tests/unit/test_creative.py", "test_creates_workflow_step_for_pending_creative"),
     ("tests/unit/test_creative.py", "test_list_creatives_raw_boundary"),
     ("tests/unit/test_creative.py", "test_raw_forwards_filters_to_impl"),
     ("tests/unit/test_creative.py", "test_raw_forwards_include_assignments"),
@@ -65,9 +63,6 @@ WEAK_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/unit/test_get_media_buys.py", "test_snapshot_requested_calls_adapter"),
     ("tests/unit/test_mcp_auth_middleware.py", "test_auth_required_tool_stores_identity"),
     ("tests/unit/test_mcp_auth_middleware.py", "test_discovery_tool_stores_identity_without_requiring_auth"),
-    ("tests/unit/test_media_buy.py", "test_manual_approval_pending_state"),
-    ("tests/unit/test_media_buy.py", "test_pause_active_media_buy"),
-    ("tests/unit/test_media_buy.py", "test_resume_paused_media_buy"),
     ("tests/unit/test_order_approval_service.py", "test_start_approval_creates_sync_job"),
     ("tests/unit/test_order_approval_service.py", "test_webhook_notification_sent_on_success"),
     ("tests/unit/test_performance_index_behavioral.py", "test_batch_multiple_products"),
@@ -79,7 +74,6 @@ WEAK_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/unit/test_rest_depends_auth.py", "test_passes_auth_token_to_resolve_identity"),
     ("tests/unit/test_sync_creatives_behavioral.py", "test_slack_notification_only_when_webhook_configured"),
     ("tests/unit/test_transport_tenant_resolution.py", "test_ensure_resolved_sets_current_tenant"),
-    ("tests/unit/test_update_media_buy_behavioral.py", "test_principal_not_found_returns_error"),
 }
 
 

@@ -207,22 +207,24 @@ def _mark_approval_complete(
     try:
         with WorkflowUoW(tenant_id) as uow:
             assert uow.workflows is not None
-            uow.workflows.update_step_status(
+            step = uow.workflows.update_status(
                 workflow_step_id,
                 status="completed",
-                transaction_details={
-                    "approval_status": "approved",
-                    "gam_order_status": "APPROVED",
-                    "attempts": attempts,
-                    "elapsed_seconds": int(elapsed_seconds),
-                    "completed_at": datetime.now(UTC).isoformat(),
-                },
+                completed_at=datetime.now(UTC),
                 response_data={
                     "status": "completed",
                     "order_id": order_id,
                     "message": f"Order approved successfully after {attempts} attempts ({int(elapsed_seconds)}s)",
                 },
             )
+            if step:
+                step.transaction_details = {
+                    "approval_status": "approved",
+                    "gam_order_status": "APPROVED",
+                    "attempts": attempts,
+                    "elapsed_seconds": int(elapsed_seconds),
+                    "completed_at": datetime.now(UTC).isoformat(),
+                }
             logger.info(f"Marked workflow step {workflow_step_id} as completed")
     except Exception as e:
         logger.error(f"Failed to mark approval complete: {e}")
@@ -233,13 +235,14 @@ def _mark_approval_failed(tenant_id: str, workflow_step_id: str, error_message: 
     try:
         with WorkflowUoW(tenant_id) as uow:
             assert uow.workflows is not None
-            uow.workflows.update_step_status(
+            step = uow.workflows.update_status(
                 workflow_step_id,
                 status="failed",
                 error_message=error_message,
-                transaction_details={"approval_status": "failed", "failure_reason": error_message},
                 response_data={"status": "failed", "error": error_message},
             )
+            if step:
+                step.transaction_details = {"approval_status": "failed", "failure_reason": error_message}
             logger.info(f"Marked workflow step {workflow_step_id} as failed")
     except Exception as e:
         logger.error(f"Failed to mark approval failed: {e}")

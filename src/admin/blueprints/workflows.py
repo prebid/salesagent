@@ -162,10 +162,9 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
             user_info = session.get("user", {})
             user_email = user_info.get("email", "system") if isinstance(user_info, dict) else str(user_info)
 
-            step = workflow_repo.update_step_status(
+            step = workflow_repo.update_status(
                 step_id,
                 status="approved",
-                add_comment={"user": user_email, "text": "Approved via admin UI"},
             )
 
             if not step:
@@ -277,10 +276,10 @@ def reject_workflow_step(tenant_id, workflow_id, step_id):
             user_info = session.get("user", {})
             user_email = user_info.get("email", "system") if isinstance(user_info, dict) else str(user_info)
 
-            step = workflow_repo.update_step_status(
+            step = workflow_repo.update_status(
                 step_id,
                 status="rejected",
-                add_comment={"user": user_email, "text": f"Rejected: {reason}"},
+                error_message=reason,
             )
 
             if not step:

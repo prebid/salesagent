@@ -96,12 +96,16 @@ class BaseUoW:
     ) -> None:
         assert self._session is not None
         assert self._session_cm is not None
-        if exc_type is None:
-            self._session.commit()
-        # get_db_session()'s __exit__ handles rollback on exception and cleanup
-        self._session_cm.__exit__(exc_type, exc_val, exc_tb)
-        self._session = None
-        self._clear_repos()
+        try:
+            if exc_type is None:
+                self._session.commit()
+        finally:
+            # Always close the session CM and clear references, even if
+            # commit() raises.  Without this, the get_db_session() generator
+            # is left suspended, leaking the session and DB connection.
+            self._session_cm.__exit__(exc_type, exc_val, exc_tb)
+            self._session = None
+            self._clear_repos()
 
     def _init_repos(self) -> None:
         raise NotImplementedError
