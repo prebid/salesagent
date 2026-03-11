@@ -5,10 +5,13 @@ These fixtures are for tests that require database and service integration.
 """
 
 import os
+import uuid
 from datetime import UTC, date, datetime
 
+import psycopg2
 import pytest
-from sqlalchemy import delete, select
+from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+from sqlalchemy import create_engine, delete, select
 
 from src.admin.app import create_app
 
@@ -16,6 +19,7 @@ admin_app = create_app()
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, MediaPackage, Principal, Tenant
 from tests.fixtures import TenantFactory
+from tests.integration.migration_helpers import parse_postgres_url
 
 # ---------------------------------------------------------------------------
 # Shared test helpers for media buy repository tests
@@ -938,3 +942,53 @@ def test_audit_logger(integration_db):
     logger = AuditLogger("test_tenant")
 
     yield logger
+
+
+@pytest.fixture(scope="module")
+def migration_db():
+    """Create an isolated PostgreSQL database for migration testing.
+
+    Yields (engine, db_url) and cleans up the database after the test module.
+    Uses Alembic for schema management -- does NOT use Base.metadata.create_all().
+    """
+    parsed = parse_postgres_url()
+    if not parsed:
+        pytest.skip("Requires PostgreSQL DATABASE_URL")
+
+    user, password, host, port = parsed
+    db_name = f"test_migration_{uuid.uuid4().hex[:8]}"
+
+    conn_params = {
+        "host": host,
+        "port": port,
+        "user": user,
+        "password": password,
+        "database": "postgres",
+    }
+
+    conn = psycopg2.connect(**conn_params)
+    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+    cur = conn.cursor()
+    cur.execute(f'CREATE DATABASE "{db_name}"')
+    cur.close()
+    conn.close()
+
+    db_url = f"postgresql://{user}:{password}@{host}:{port}/{db_name}"
+    engine = create_engine(db_url, echo=False)
+
+    yield engine, db_url
+
+    engine.dispose()
+    try:
+        conn = psycopg2.connect(**conn_params)
+        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+            f"WHERE datname = '{db_name}' AND pid <> pg_backend_pid()"
+        )
+        cur.execute(f'DROP DATABASE IF EXISTS "{db_name}"')
+        cur.close()
+        conn.close()
+    except Exception:
+        pass
