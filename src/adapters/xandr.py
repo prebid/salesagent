@@ -206,9 +206,9 @@ logger = logging.getLogger(__name__)
 class XandrAdapter(AdServerAdapter):
     """Adapter for Microsoft Xandr (formerly AppNexus) platform."""
 
-    def __init__(self, config: dict[str, Any], principal: Principal):
+    def __init__(self, config: dict[str, Any], principal: Principal, tenant_id: str | None = None):
         """Initialize Xandr adapter with configuration and principal."""
-        super().__init__(config, principal)
+        super().__init__(config, principal, tenant_id=tenant_id)
 
         # Extract Xandr-specific config
         self.api_endpoint = config.get("api_endpoint", "https://api.appnexus.com")

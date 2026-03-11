@@ -43,6 +43,7 @@ class TestBroadstreetAdapterInit:
             config=mock_config,
             principal=mock_principal,
             dry_run=True,
+            tenant_id="test_tenant",
         )
 
         assert adapter.adapter_name == "broadstreet"
@@ -56,6 +57,7 @@ class TestBroadstreetAdapterInit:
             config=mock_config,
             principal=mock_principal,
             dry_run=True,
+            tenant_id="test_tenant",
         )
 
         assert adapter.advertiser_id == "adv_456"
@@ -72,6 +74,7 @@ class TestBroadstreetAdapterInit:
             config=mock_config,
             principal=principal,
             dry_run=True,
+            tenant_id="test_tenant",
         )
 
         assert adapter.advertiser_id == "adv_default"
@@ -87,7 +90,7 @@ class TestBroadstreetAdapterInit:
         config = {"network_id": "net_123", "api_key": "test_key"}
 
         with pytest.raises(ValueError) as exc_info:
-            BroadstreetAdapter(config=config, principal=principal, dry_run=False)
+            BroadstreetAdapter(config=config, principal=principal, dry_run=False, tenant_id="test_tenant")
 
         assert "does not have a Broadstreet advertiser ID" in str(exc_info.value)
 
@@ -101,6 +104,7 @@ class TestBroadstreetAdapterCapabilities:
             config=mock_config,
             principal=mock_principal,
             dry_run=True,
+            tenant_id="test_tenant",
         )
 
         models = adapter.get_supported_pricing_models()
@@ -114,6 +118,7 @@ class TestBroadstreetAdapterCapabilities:
             config=mock_config,
             principal=mock_principal,
             dry_run=True,
+            tenant_id="test_tenant",
         )
 
         caps = adapter.get_targeting_capabilities()
@@ -129,6 +134,7 @@ class TestBroadstreetAdapterCapabilities:
             config=mock_config,
             principal=mock_principal,
             dry_run=True,
+            tenant_id="test_tenant",
         )
 
         assert "display" in adapter.default_channels
@@ -143,6 +149,7 @@ class TestBroadstreetAdapterCreateMediaBuy:
             config=mock_config,
             principal=mock_principal,
             dry_run=True,
+            tenant_id="test_tenant",
         )
 
         start_time = datetime.now(UTC)
@@ -185,6 +192,7 @@ class TestBroadstreetAdapterCreateMediaBuy:
             config=mock_config,
             principal=mock_principal,
             dry_run=True,
+            tenant_id="test_tenant",
         )
 
         start_time = datetime.now(UTC)
@@ -228,6 +236,7 @@ class TestBroadstreetAdapterCreatives:
             config=mock_config,
             principal=mock_principal,
             dry_run=True,
+            tenant_id="test_tenant",
         )
 
         assets = [
@@ -260,6 +269,7 @@ class TestBroadstreetAdapterCreatives:
             config=mock_config,
             principal=mock_principal,
             dry_run=True,
+            tenant_id="test_tenant",
         )
 
         results = adapter.associate_creatives(
@@ -413,6 +423,7 @@ class TestBroadstreetAdapterUpdates:
             config=mock_config,
             principal=mock_principal,
             dry_run=True,
+            tenant_id="test_tenant",
         )
 
         result = adapter.update_media_buy(
@@ -435,6 +446,7 @@ class TestBroadstreetAdapterUpdates:
             config=mock_config,
             principal=mock_principal,
             dry_run=True,
+            tenant_id="test_tenant",
         )
 
         result = adapter.check_media_buy_status(
@@ -455,6 +467,7 @@ class TestBroadstreetAdapterDelivery:
             config=mock_config,
             principal=mock_principal,
             dry_run=True,
+            tenant_id="test_tenant",
         )
 
         from src.core.schemas import ReportingPeriod
@@ -486,6 +499,7 @@ class TestBroadstreetAdapterInventory:
             config=mock_config,
             principal=mock_principal,
             dry_run=True,
+            tenant_id="test_tenant",
         )
 
         result = await adapter.get_available_inventory()
@@ -504,6 +518,7 @@ class TestBroadstreetAdapterCreativeFormats:
             config=mock_config,
             principal=mock_principal,
             dry_run=True,
+            tenant_id="test_tenant",
         )
 
         formats = adapter.get_creative_formats()
@@ -528,6 +543,7 @@ class TestBroadstreetAdapterCreativeFormats:
             config=mock_config,
             principal=mock_principal,
             dry_run=True,
+            tenant_id="test_tenant",
         )
 
         formats = adapter.get_creative_formats()
@@ -546,6 +562,7 @@ class TestBroadstreetAdapterCreativeFormats:
             config=mock_config,
             principal=mock_principal,
             dry_run=True,
+            tenant_id="test_tenant",
         )
 
         formats = adapter.get_creative_formats()
