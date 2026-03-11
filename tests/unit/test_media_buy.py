@@ -18,7 +18,7 @@ Coverage: 47/130 obligations implemented, 83 stubs remaining.
 
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
@@ -1819,9 +1819,9 @@ class TestUpdateMediaBuyPauseResume:
 
         assert isinstance(result, UpdateMediaBuySuccess)
         # Adapter should be called with pause action
-        adapter.update_media_buy.assert_called_once()
-        call_kwargs = adapter.update_media_buy.call_args
-        assert call_kwargs[1]["action"] == "pause_media_buy" or call_kwargs.kwargs["action"] == "pause_media_buy"
+        adapter.update_media_buy.assert_called_once_with(
+            media_buy_id=ANY, buyer_ref=ANY, action="pause_media_buy", package_id=ANY, budget=ANY, today=ANY
+        )
 
     def test_resume_paused_media_buy(self):
         """UC-003-PR02: paused=false on paused buy calls adapter with resume action.
@@ -1876,9 +1876,9 @@ class TestUpdateMediaBuyPauseResume:
             result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuySuccess)
-        adapter.update_media_buy.assert_called_once()
-        call_kwargs = adapter.update_media_buy.call_args
-        assert call_kwargs[1]["action"] == "resume_media_buy" or call_kwargs.kwargs["action"] == "resume_media_buy"
+        adapter.update_media_buy.assert_called_once_with(
+            media_buy_id=ANY, buyer_ref=ANY, action="resume_media_buy", package_id=ANY, budget=ANY, today=ANY
+        )
 
     def test_pause_skips_budget_validation(self):
         """UC-003-PR03: pause does not trigger currency/budget validation.
@@ -2820,9 +2820,9 @@ class TestUpdateMediaBuyManualApproval:
 
         # Should return success but workflow step should be marked as requires_approval
         assert isinstance(result, UpdateMediaBuySuccess)
-        ctx_mgr.update_workflow_step.assert_called_once()
-        call_kwargs = ctx_mgr.update_workflow_step.call_args
-        assert call_kwargs[1]["status"] == "requires_approval" or call_kwargs.kwargs["status"] == "requires_approval"
+        ctx_mgr.update_workflow_step.assert_called_once_with(
+            ANY, status="requires_approval", response_data=ANY, add_comment=ANY
+        )
         # Affected packages should be empty (not yet applied)
         assert result.affected_packages == []
 

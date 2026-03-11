@@ -17,7 +17,7 @@ BDD scenario cross-references:
 
 from datetime import UTC, datetime
 from decimal import Decimal
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import ANY, MagicMock, Mock, patch
 
 import pytest
 from pydantic import ValidationError
@@ -193,9 +193,9 @@ def test_principal_not_found_returns_error(standard_mocks):
     assert "principal_test" in result.errors[0].message
 
     # Workflow step should be marked failed
-    standard_mocks["ctx_mgr_instance"].update_workflow_step.assert_called_once()
-    call_kwargs = standard_mocks["ctx_mgr_instance"].update_workflow_step.call_args
-    assert call_kwargs[1]["status"] == "failed" or call_kwargs[0][1] == "failed"
+    standard_mocks["ctx_mgr_instance"].update_workflow_step.assert_called_once_with(
+        ANY, status="failed", response_data=ANY, error_message=ANY
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -258,7 +258,14 @@ def test_combined_campaign_and_package_update(standard_mocks):
     assert "pkg_A" in affected_pkg_ids
     assert "pkg_B" in affected_pkg_ids
     # The adapter should have been called for package budget update
-    standard_mocks["adapter_instance"].update_media_buy.assert_called_once()
+    standard_mocks["adapter_instance"].update_media_buy.assert_called_once_with(
+        media_buy_id="mb_combined",
+        buyer_ref=ANY,
+        action="update_package_budget",
+        package_id="pkg_A",
+        budget=ANY,
+        today=ANY,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1486,7 +1493,11 @@ class TestUC003UploadInlineCreatives:
             result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuySuccess)
-        mock_sync.assert_called_once()
+        mock_sync.assert_called_once_with(
+            creatives=ANY,
+            identity=ANY,
+            assignments=ANY,
+        )
         # affected_packages should track the creative upload
         assert len(result.affected_packages) >= 1
 
@@ -1867,7 +1878,14 @@ class TestUC003ManualApproval:
         assert isinstance(result, UpdateMediaBuySuccess)
         # The workflow step was created (step_id="step_001")
         # and the response allows the buyer to track the status
-        standard_mocks["ctx_mgr_instance"].create_workflow_step.assert_called_once()
+        standard_mocks["ctx_mgr_instance"].create_workflow_step.assert_called_once_with(
+            context_id=ANY,
+            step_type=ANY,
+            owner=ANY,
+            status=ANY,
+            tool_name="update_media_buy",
+            request_data=ANY,
+        )
 
 
 # ---------------------------------------------------------------------------
