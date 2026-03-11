@@ -205,6 +205,21 @@ iterate:
         5. **Specificity**: Is the plan specific enough to implement without guessing?
            Vague plans like "update the code" are HIGH findings.
         6. **Alternatives**: Was an obviously better approach missed?
+        7. **Allowlist debt check** — MANDATORY for every file in the plan:
+           ```bash
+           # Check if any planned file appears in a guard allowlist
+           for f in <files-from-plan>; do
+             grep -r "$f" tests/unit/test_architecture_*.py | grep -i allowlist
+           done
+           ```
+           If a file appears in ANY allowlist, the existing code there is DEBT.
+           The plan MUST NOT pattern-match against it. Instead:
+           - Check what repository/UoW/abstraction methods already exist
+           - Plan to USE those abstractions for new code
+           - If the needed abstraction doesn't exist, plan to CREATE it first
+           - This is a HIGH finding if the plan adds raw queries, session.add(),
+             get_db_session(), or select(Model) to an allowlisted file without
+             going through the proper abstraction layer
 
         ## Rate Each Finding
 
@@ -475,6 +490,20 @@ iterate:
            For each file you plan to modify, ask:
            > "Does this change maintain the invariant?"
            If "no" or "unclear" for any change, STOP and leave this atom open.
+
+        3. **Allowlist debt gate** — HARD STOP before writing ANY code:
+           For each file you will modify, check if it's in a guard allowlist:
+           ```bash
+           grep -r "filename.py" tests/unit/test_architecture_*.py | grep -i allowlist
+           ```
+           If the file is allowlisted: the existing code is DEBT, not a pattern.
+           Before writing ANY database query (`select()`, `session.add()`, etc.):
+           - List what repository/UoW methods already exist for the models involved
+           - Use those methods. NEVER write raw queries in allowlisted files.
+           - If the needed method doesn't exist, add it to the repository FIRST.
+           This applies even if the surrounding code uses raw queries — especially
+           then. The allowlist is a marker of code that needs to be fixed, not
+           code to imitate.
 
         ## Workflow (TDD Green + Refactor)
 

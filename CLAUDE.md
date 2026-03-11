@@ -47,7 +47,7 @@ PR titles should use one of these prefixes:
 **Without a prefix, commits won't appear in release notes!** The code will still be released, but the change won't be documented in the changelog.
 
 ### Structural Guards (Automated Architecture Enforcement)
-Thirteen AST-scanning tests enforce architecture invariants on every `make quality` run. New violations fail the build immediately. See [docs/development/structural-guards.md](docs/development/structural-guards.md) for full details.
+Fourteen AST-scanning tests enforce architecture invariants on every `make quality` run. New violations fail the build immediately. See [docs/development/structural-guards.md](docs/development/structural-guards.md) for full details.
 
 | Guard | Enforces | Test File |
 |-------|----------|-----------|
@@ -61,6 +61,7 @@ Thirteen AST-scanning tests enforce architecture invariants on every `make quali
 | No direct DB access | No `get_db_session()` or `session.add()` anywhere outside repositories/UoW/infrastructure | `test_architecture_repository_pattern.py` |
 | Migration completeness | Every migration has non-empty `upgrade()` and `downgrade()` | `test_architecture_migration_completeness.py` |
 | No raw MediaPackage select | All MediaPackage access goes through repository, not raw `select()` | `test_architecture_no_raw_media_package_select.py` |
+| No raw select outside repos | All ORM model queries go through repositories, not raw `select()` | `test_architecture_no_raw_select.py` |
 | Obligation coverage | Behavioral obligations in docs have matching test coverage | `test_architecture_obligation_coverage.py` |
 | Workflow tenant isolation | WorkflowRepository queries join DBContext for tenant scoping | `test_architecture_workflow_tenant_isolation.py` |
 | No split mock assertions | Tests use `assert_called_once_with()`, not `assert_called_once()` + `call_args` | `test_architecture_weak_mock_assertions.py` |

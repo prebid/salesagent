@@ -321,6 +321,16 @@ iterate:
            fix approach scale to those too?
         6. **Test coverage**: Is the failing test sufficient? Does it need
            additional edge cases?
+        7. **Allowlist debt check** — MANDATORY for every file in the fix:
+           ```bash
+           for f in <files-from-plan>; do
+             grep -r "$f" tests/unit/test_architecture_*.py | grep -i allowlist
+           done
+           ```
+           If a file appears in ANY guard allowlist, the existing code is DEBT.
+           The fix MUST NOT pattern-match against it. Use repository/UoW/abstraction
+           methods instead. If the needed method doesn't exist, create it first.
+           This is a HIGH finding if the fix adds raw queries to an allowlisted file.
 
         ## Rate Each Finding
 
@@ -412,6 +422,22 @@ iterate:
         - **Design**: Root cause, fix approach, files to modify
 
         Read ALL of these before writing any code.
+
+        ## Allowlist Debt Gate — HARD STOP before writing ANY code
+
+        For each file you will modify, check if it's in a guard allowlist:
+        ```bash
+        for f in <files-from-design>; do
+          grep -r "$f" tests/unit/test_architecture_*.py | grep -i allowlist
+        done
+        ```
+        If the file is allowlisted: the existing code is DEBT, not a pattern.
+        Before writing ANY database query (`select()`, `session.add()`, etc.):
+        - List what repository/UoW methods already exist for the models involved
+        - Use those methods. NEVER write raw queries in allowlisted files.
+        - If the needed method doesn't exist, add it to the repository FIRST.
+        This applies even if the surrounding code uses raw queries — especially
+        then. The allowlist marks code that needs fixing, not code to imitate.
 
         ## Workflow
 
