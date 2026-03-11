@@ -97,23 +97,26 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-005-ext-b-input-noid": "specific validation error codes not implemented",
 }
 
-# FIXME(beads-dul): disclosure_positions not a field on ListCreativeFormatsRequest.
-# Partition/boundary outlines have "omitted" examples that pass (no filter used).
-# Only xfail examples that actually exercise the unimplemented field.
-_DISCLOSURE_PARTITIONS_XFAIL = {
-    "single_position",
-    "multiple_positions_all_match",
-    "all_positions",
-    "no_matching_formats",
-}
-_DISCLOSURE_BOUNDARY_XFAIL = {
-    "single position",
-    "all 8 positions",
-    "format has no",
-}
-
-# FIXME(beads-dul): brief/catalog asset types not yet in adcp enum
-_ASSET_TYPES_BOUNDARY_XFAIL = {"brief", "catalog"}
+# FIXME(beads-dul): Selective xfail for parametrized scenarios where only
+# some examples exercise unimplemented features. Each entry: (tag, node_id
+# substrings that should xfail, reason).
+_SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
+    (
+        "T-UC-005-partition-disclosure",
+        {"single_position", "multiple_positions_all_match", "all_positions", "no_matching_formats"},
+        "disclosure_positions filter not implemented",
+    ),
+    (
+        "T-UC-005-boundary-disclosure",
+        {"single position", "all 8 positions", "format has no"},
+        "disclosure_positions filter not implemented",
+    ),
+    (
+        "T-UC-005-boundary-asset-types",
+        {"brief", "catalog"},
+        "brief/catalog asset types not in adcp enum",
+    ),
+]
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -121,37 +124,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     for item in items:
         marker_names = {m.name for m in item.iter_markers()}
 
-        # Parametrized disclosure scenarios — selective xfail
-        if "T-UC-005-partition-disclosure" in marker_names:
-            node_id = item.nodeid
-            if any(p in node_id for p in _DISCLOSURE_PARTITIONS_XFAIL):
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="disclosure_positions filter not implemented",
-                        strict=True,
-                    )
-                )
-            continue
-        if "T-UC-005-boundary-disclosure" in marker_names:
-            node_id = item.nodeid
-            if any(p in node_id for p in _DISCLOSURE_BOUNDARY_XFAIL):
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="disclosure_positions filter not implemented",
-                        strict=True,
-                    )
-                )
-            continue
-        if "T-UC-005-boundary-asset-types" in marker_names:
-            node_id = item.nodeid
-            if any(p in node_id for p in _ASSET_TYPES_BOUNDARY_XFAIL):
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="brief/catalog asset types not in adcp enum",
-                        strict=True,
-                    )
-                )
-            continue
+        # Selective xfail for parametrized scenarios
+        for tag, substrings, reason in _SELECTIVE_XFAIL:
+            if tag in marker_names:
+                if any(s in item.nodeid for s in substrings):
+                    item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
+                break  # tag matched — skip remaining selective entries
 
         # Tag-based xfail for all other scenarios
         for tag, reason in _XFAIL_TAGS.items():
