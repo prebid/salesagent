@@ -143,6 +143,14 @@ def _maybe_creative_formats_env(request: pytest.FixtureRequest, ctx: dict) -> No
         "T-UC-005-inv-049-6-holds",
         "T-UC-005-inv-049-7-holds",
         "T-UC-005-inv-049-7-violated",
+        # Invariant: BR-RULE-049 INV-9 — output_format_ids OR-match (3)
+        "T-UC-005-inv-049-9-holds",
+        "T-UC-005-inv-049-9-violated",
+        "T-UC-005-inv-049-9-nofield",
+        # Invariant: BR-RULE-049 INV-10 — input_format_ids OR-match (3)
+        "T-UC-005-inv-049-10-holds",
+        "T-UC-005-inv-049-10-violated",
+        "T-UC-005-inv-049-10-nofield",
         # Edge cases (1)
         "T-UC-005-empty-catalog",
         # Boundary (1)

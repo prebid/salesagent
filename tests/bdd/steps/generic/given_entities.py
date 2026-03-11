@@ -102,6 +102,7 @@ def given_seller_various_types(ctx: dict) -> None:
         {"name": "video-ad", "type": "video"},
         {"name": "native-card", "type": "native"},
     ]
+    _sync_registry(ctx)
 
 
 @given("a seller with known format IDs in the catalog")
@@ -111,6 +112,7 @@ def given_seller_known_ids(ctx: dict) -> None:
         {"name": "fmt-a", "format_id": {"agent_url": "https://a.example.com", "id": "fmt-001"}},
         {"name": "fmt-b", "format_id": {"agent_url": "https://a.example.com", "id": "fmt-002"}},
     ]
+    _sync_registry(ctx)
 
 
 @given("a seller with formats containing various asset types")
@@ -121,6 +123,7 @@ def given_seller_various_assets(ctx: dict) -> None:
         {"name": "video-ad", "assets": [{"type": "video"}]},
         {"name": "rich-ad", "assets": [{"type": "image"}, {"type": "html"}]},
     ]
+    _sync_registry(ctx)
 
 
 @given("a seller with formats of various render dimensions")
@@ -130,6 +133,7 @@ def given_seller_various_dimensions(ctx: dict) -> None:
         {"name": "banner", "renders": [{"width": 728, "height": 90}]},
         {"name": "skyscraper", "renders": [{"width": 160, "height": 600}]},
     ]
+    _sync_registry(ctx)
 
 
 @given("a seller with both responsive and fixed-dimension formats")
@@ -139,6 +143,7 @@ def given_seller_responsive_and_fixed(ctx: dict) -> None:
         {"name": "responsive-banner", "responsive": True},
         {"name": "fixed-banner", "responsive": False},
     ]
+    _sync_registry(ctx)
 
 
 @given(parsers.parse('a seller with formats named "{name_a}", "{name_b}", "{name_c}"'))
@@ -149,6 +154,7 @@ def given_seller_named_formats(ctx: dict, name_a: str, name_b: str, name_c: str)
         {"name": name_b},
         {"name": name_c},
     ]
+    _sync_registry(ctx)
 
 
 @given("a seller with formats at various accessibility conformance levels")
@@ -159,6 +165,7 @@ def given_seller_various_wcag(ctx: dict) -> None:
         {"name": "level-aa", "wcag_level": "AA"},
         {"name": "level-aaa", "wcag_level": "AAA"},
     ]
+    _sync_registry(ctx)
 
 
 @given("a seller with formats supporting various disclosure positions")
@@ -168,6 +175,7 @@ def given_seller_various_disclosure(ctx: dict) -> None:
         {"name": "prominent-ad", "supported_disclosure_positions": ["prominent"]},
         {"name": "footer-ad", "supported_disclosure_positions": ["footer"]},
     ]
+    _sync_registry(ctx)
 
 
 @given("a seller with formats that produce various output formats")
@@ -177,6 +185,7 @@ def given_seller_various_output_formats(ctx: dict) -> None:
         {"name": "builder-a", "output_format_ids": [{"agent_url": "https://a.example.com", "id": "fmt-1"}]},
         {"name": "builder-b", "output_format_ids": [{"agent_url": "https://a.example.com", "id": "fmt-2"}]},
     ]
+    _sync_registry(ctx)
 
 
 @given("a seller with formats that accept various input formats")
@@ -186,6 +195,7 @@ def given_seller_various_input_formats(ctx: dict) -> None:
         {"name": "resizer", "input_format_ids": [{"agent_url": "https://a.example.com", "id": "fmt-1"}]},
         {"name": "transcoder", "input_format_ids": [{"agent_url": "https://a.example.com", "id": "fmt-2"}]},
     ]
+    _sync_registry(ctx)
 
 
 @given("a seller with creative agent formats of various types")

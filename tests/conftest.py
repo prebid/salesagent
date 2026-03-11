@@ -118,7 +118,7 @@ def test_environment(monkeypatch, request):
     monkeypatch.setenv("ADCP_AUTH_TEST_MODE", "true")  # Enable test mode for auth
 
     # Check if this is a test that needs the database
-    is_integration_test = "integration" in str(request.fspath)
+    is_integration_test = "integration" in str(request.fspath) or "bdd" in str(request.fspath)
     has_requires_db_marker = request.node.get_closest_marker("requires_db") is not None
     database_url = os.environ.get("DATABASE_URL")
 

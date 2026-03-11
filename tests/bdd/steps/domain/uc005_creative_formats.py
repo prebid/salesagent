@@ -17,10 +17,25 @@ from typing import Any
 
 from adcp.types.generated_poc.core.format import (
     Assets,
+    Assets5,
+    Assets6,
+    Assets7,
+    Assets8,
+    Assets9,
     Dimensions,
     Renders,
     Responsive,
 )
+
+# Map asset_type string → concrete Assets subclass
+_ASSET_CLASS_MAP = {
+    "image": Assets,
+    "video": Assets5,
+    "audio": Assets6,
+    "text": Assets7,
+    "markdown": Assets8,
+    "html": Assets9,
+}
 from adcp.types.generated_poc.enums.format_category import FormatCategory
 
 from src.core.schemas import Format, FormatId, ListCreativeFormatsRequest
@@ -78,7 +93,8 @@ def _dict_to_format(d: dict[str, Any], index: int = 0) -> Format:
             if "height" in r:
                 dims_kwargs["height"] = r["height"]
             renders.append(Renders(role="primary", dimensions=Dimensions(**dims_kwargs) if dims_kwargs else None))
-        kwargs["renders"] = renders
+        if renders:  # empty renders_raw [] means "no dimension info" — omit field
+            kwargs["renders"] = renders
     elif d.get("responsive") is True:
         kwargs["renders"] = [
             Renders(
@@ -117,14 +133,8 @@ def _dict_to_format(d: dict[str, Any], index: int = 0) -> Format:
     if all_asset_types:
         assets = []
         for asset_type in all_asset_types:
-            assets.append(
-                Assets(
-                    item_type="individual",
-                    asset_id=f"{asset_type}_asset",
-                    asset_type=asset_type,
-                    required=True,
-                )
-            )
+            cls = _ASSET_CLASS_MAP.get(asset_type, Assets)
+            assets.append(cls(asset_id=f"{asset_type}_asset", required=True))
         kwargs["assets"] = assets
 
     # Supported disclosure positions

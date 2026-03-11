@@ -547,3 +547,52 @@ class TestCreativeFormatsDimensionFilters:
 
         assert len(response.formats) == 1
         assert response.formats[0].format_id.id == "wr1"
+
+
+# ---------------------------------------------------------------------------
+# output_format_ids Filter — Covers: UC-005-MAIN-MCP-18, UC-005-MAIN-MCP-19
+# Regression for beads-xlu: filter NOT implemented yet — this test must FAIL
+# ---------------------------------------------------------------------------
+
+
+class TestFormatsOutputFormatIds:
+    """output_format_ids OR-filter: return formats whose output_format_ids overlaps."""
+
+    def test_output_format_ids_single_match(self, integration_db):
+        """Covers: UC-005-MAIN-MCP-18 — output_format_ids=[X] returns formats that produce X."""
+        out_a = FormatId(agent_url=DEFAULT_AGENT_URL, id="out_a")
+        out_b = FormatId(agent_url=DEFAULT_AGENT_URL, id="out_b")
+        formats = [
+            _make_format("fmt_1", "Multi-output A"),
+            _make_format("fmt_2", "Multi-output B"),
+            _make_format("fmt_3", "No output ids"),
+        ]
+        formats[0].output_format_ids = [out_a]
+        formats[1].output_format_ids = [out_b]
+        with CreativeFormatsEnv() as env:
+            TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats(formats)
+            req = ListCreativeFormatsRequest(output_format_ids=[out_a])
+            response = env.call_impl(req=req)
+        assert len(response.formats) == 1
+        assert response.formats[0].name == "Multi-output A"
+
+    def test_output_format_ids_or_semantics(self, integration_db):
+        """Covers: UC-005-MAIN-MCP-19 — output_format_ids=[X,Y] returns union (OR semantics)."""
+        out_a = FormatId(agent_url=DEFAULT_AGENT_URL, id="out_a")
+        out_b = FormatId(agent_url=DEFAULT_AGENT_URL, id="out_b")
+        formats = [
+            _make_format("fmt_1", "Produces A"),
+            _make_format("fmt_2", "Produces B"),
+            _make_format("fmt_3", "No output ids"),
+        ]
+        formats[0].output_format_ids = [out_a]
+        formats[1].output_format_ids = [out_b]
+        with CreativeFormatsEnv() as env:
+            TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats(formats)
+            req = ListCreativeFormatsRequest(output_format_ids=[out_a, out_b])
+            response = env.call_impl(req=req)
+        assert len(response.formats) == 2
+        names = {f.name for f in response.formats}
+        assert names == {"Produces A", "Produces B"}
