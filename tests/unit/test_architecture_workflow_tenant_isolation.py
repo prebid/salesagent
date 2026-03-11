@@ -45,18 +45,8 @@ _CONTEXT_JOIN_PATTERN = re.compile(r"DBContext|join\(Context\)")
 # Pre-existing violations: method names in WorkflowRepository that are known
 # to lack tenant isolation. Each entry needs a FIXME tracking its fix.
 # Allowlist shrinks as the workflow tenant isolation epic progresses.
-# FIXME(beads-bou.4): all methods below need Context join or migration to repository
-WORKFLOW_ISOLATION_ALLOWLIST: set[str] = {
-    # get_step_by_id: uses session.get() with no tenant filter
-    # FIXME(beads-bou.4): replace with join-based lookup
-    "get_step_by_id",
-    # get_mappings_for_step: queries ObjectWorkflowMapping by step_id only
-    # FIXME(beads-bou.4): add Context join
-    "get_mappings_for_step",
-    # get_mappings_for_steps: bulk ObjectWorkflowMapping query, no tenant filter
-    # FIXME(beads-bou.4): add Context join
-    "get_mappings_for_steps",
-}
+# All methods now properly scoped via Context join (beads-bou.4).
+WORKFLOW_ISOLATION_ALLOWLIST: set[str] = set()
 
 
 def _extract_methods(source: str) -> dict[str, str]:

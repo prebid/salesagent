@@ -354,6 +354,20 @@ iterate:
                `create_test_media_buy_request_dict`, etc.
              - See `tests/helpers/adcp_factories.py` for full list
              - For DB fixtures: use conftest.py fixtures, never inline `session.add()`
+             - **Never call `get_db_session()` in test code.** DB setup belongs in
+               factory fixtures. This is enforced by `test_architecture_repository_pattern.py`.
+             - **DO NOT match existing patterns in the file.** If the file you're editing
+               already has `get_db_session()` or `session.add()` calls, those are pre-existing
+               debt — your new code must use factories regardless of what surrounds it.
+               The guard will catch new violations immediately at `make quality`.
+
+        ## BANNED Test Patterns
+
+        - **`get_db_session()` in test code is BANNED.** Use factory fixtures instead.
+          Pre-existing violations are allowlisted in `test_architecture_repository_pattern.py`
+          — new violations fail `make quality` immediately.
+
+        - **`session.add()` in test bodies is BANNED.** Same enforcement as above.
 
         4. **Factory check**: Verify your test uses factories:
            ```bash

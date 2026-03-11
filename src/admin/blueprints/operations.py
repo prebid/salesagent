@@ -163,16 +163,22 @@ def media_buy_detail(tenant_id, media_buy_id):
                     }
                 )
 
-            # Get workflow steps associated with this media buy
+            # Get workflow steps associated with this media buy (tenant-scoped)
             ctx_manager = ContextManager()
-            workflow_steps = ctx_manager.get_object_lifecycle("media_buy", media_buy_id)
+            workflow_steps = ctx_manager.get_object_lifecycle("media_buy", media_buy_id, tenant_id=tenant_id)
 
             # Find if there's a pending approval step
             pending_approval_step = None
             for step in workflow_steps:
                 if step.get("status") in ["requires_approval", "pending_approval"]:
-                    # Get the full workflow step for approval actions
-                    stmt = select(WorkflowStep).filter_by(step_id=step["step_id"])
+                    # Get the full workflow step for approval actions (tenant-scoped via Context join)
+                    from src.core.database.models import Context as DBContext
+
+                    stmt = (
+                        select(WorkflowStep)
+                        .join(DBContext)
+                        .where(DBContext.tenant_id == tenant_id, WorkflowStep.step_id == step["step_id"])
+                    )
                     pending_approval_step = db_session.scalars(stmt).first()
                     break
 
@@ -288,6 +294,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
     from sqlalchemy.orm import attributes
 
     from src.core.database.database_session import get_db_session
+    from src.core.database.models import Context as DBContext
     from src.core.database.models import ObjectWorkflowMapping, WorkflowStep
 
     try:
@@ -295,11 +302,13 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
         reason = request.form.get("reason", "")
 
         with get_db_session() as db_session:
-            # Find the pending approval workflow step for this media buy
+            # Find the pending approval workflow step for this media buy (tenant-scoped via Context join)
             stmt = (
                 select(WorkflowStep)
                 .join(ObjectWorkflowMapping, WorkflowStep.step_id == ObjectWorkflowMapping.step_id)
+                .join(DBContext)
                 .filter(
+                    DBContext.tenant_id == tenant_id,
                     ObjectWorkflowMapping.object_type == "media_buy",
                     ObjectWorkflowMapping.object_id == media_buy_id,
                     WorkflowStep.status.in_(["requires_approval", "pending_approval"]),

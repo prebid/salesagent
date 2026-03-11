@@ -198,9 +198,20 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
 
             # Check if this is a media buy creation workflow step
             # If so, execute the adapter creation (order/line items in GAM)
+            from src.core.database.models import Context as DBContext
             from src.core.database.models import ObjectWorkflowMapping
 
-            stmt_mapping = select(ObjectWorkflowMapping).filter_by(step_id=step_id, object_type="media_buy")
+            # Tenant-scoped query: join through WorkflowStep → Context for tenant isolation
+            stmt_mapping = (
+                select(ObjectWorkflowMapping)
+                .join(WorkflowStep)
+                .join(DBContext)
+                .where(
+                    DBContext.tenant_id == tenant_id,
+                    ObjectWorkflowMapping.step_id == step_id,
+                    ObjectWorkflowMapping.object_type == "media_buy",
+                )
+            )
             mapping = db.scalars(stmt_mapping).first()
 
             logger.info(
