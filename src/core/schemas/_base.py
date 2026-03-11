@@ -1138,38 +1138,9 @@ class Principal(SalesAgentBaseModel):
 
     def get_adapter_id(self, adapter_name: str) -> str | None:
         """Get the adapter-specific ID for this principal."""
-        # Map adapter short names to platform keys
-        adapter_platform_map = {
-            "gam": "google_ad_manager",
-            "google_ad_manager": "google_ad_manager",
-            "kevel": "kevel",
-            "triton": "triton",
-            "mock": "mock",
-        }
+        from src.adapters.constants import resolve_adapter_id
 
-        platform_key = adapter_platform_map.get(adapter_name)
-        if not platform_key:
-            return None
-
-        platform_data = self.platform_mappings.get(platform_key, {})
-        if isinstance(platform_data, dict):
-            # Try common field names for advertiser ID
-            for field in ["advertiser_id", "id", "company_id"]:
-                if field in platform_data:
-                    return str(platform_data[field]) if platform_data[field] else None
-
-        # Fallback to old format for backwards compatibility
-        old_field_map = {
-            "gam": "gam_advertiser_id",
-            "kevel": "kevel_advertiser_id",
-            "triton": "triton_advertiser_id",
-            "mock": "mock_advertiser_id",
-        }
-        old_field = old_field_map.get(adapter_name)
-        if old_field and old_field in self.platform_mappings:
-            return str(self.platform_mappings[old_field]) if self.platform_mappings[old_field] else None
-
-        return None
+        return resolve_adapter_id(self.platform_mappings, adapter_name)
 
 
 # --- Performance Index ---

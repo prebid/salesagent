@@ -383,60 +383,18 @@ def test_gam_connection():
         # If we got a network, fetch companies and users
         if networks:
             try:
-                # Reinitialize client with network code for subsequent calls
+                from src.admin.gam_utils import fetch_gam_advertisers_and_user
+
                 network_code = networks[0]["networkCode"]
-                logger.info(f"Reinitializing client with network code: {network_code}")
-
-                client = ad_manager.AdManagerClient(oauth2_client, "AdCP-Sales-Agent-Setup", network_code=network_code)
-
-                # Use GoogleAdManager adapter to fetch advertisers (eliminates code duplication)
-                from src.adapters.google_ad_manager import GoogleAdManager
-                from src.core.schemas import Principal
-
-                # Create mock principal for adapter initialization (not used for get_advertisers)
-                mock_principal = Principal(
-                    principal_id="system",
-                    name="System",
-                    platform_mappings={
-                        "google_ad_manager": {
-                            "advertiser_id": "system_temp",
-                            "advertiser_name": "System (temp)",
-                        }
-                    },
-                )
-
-                # Build GAM config from OAuth credentials
-                gam_config = {
-                    "oauth_credentials": {
-                        "client_id": oauth_client_id,
-                        "client_secret": oauth_client_secret,
-                        "refresh_token": refresh_token,
-                    }
-                }
-
-                # Initialize adapter
-                adapter = GoogleAdManager(
-                    config=gam_config,
-                    principal=mock_principal,
+                fetch_gam_advertisers_and_user(
+                    oauth2_client=oauth2_client,
                     network_code=network_code,
-                    advertiser_id=None,
-                    trafficker_id=None,
-                    dry_run=False,
+                    oauth_client_id=client_id,
+                    oauth_client_secret=client_secret,
+                    refresh_token=refresh_token,
                     tenant_id=tenant_id,
+                    result=result,
                 )
-
-                # Fetch ALL advertisers using shared implementation (with pagination)
-                companies = adapter.get_advertisers(fetch_all=True)
-                result["companies"] = companies
-
-                # Get current user info
-                user_service = client.GetService("UserService")
-                current_user = user_service.getCurrentUser()
-                result["current_user"] = {
-                    "id": current_user.id,
-                    "name": current_user.name,
-                    "email": current_user.email,
-                }
 
             except Exception as e:
                 # It's okay if we can't fetch companies/users
