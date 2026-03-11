@@ -13,16 +13,23 @@ from pytest_bdd import parsers, then
 
 @then(parsers.parse('the response status should be "{status}"'))
 def then_response_status(ctx: dict, status: str) -> None:
-    """Assert response status matches expected value.
+    """Assert the operation completed with expected status.
 
-    In production, a successful response means status is "completed".
-    The response object existing in ctx means the call succeeded.
+    ListCreativeFormatsResponse has no ``status`` field — a successful call
+    that returns a valid response object with the required ``formats`` field
+    means the operation completed.
     """
-    assert "response" in ctx, "Expected a response but none found"
+    from src.core.schemas import ListCreativeFormatsResponse
+
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response but none found"
     if status == "completed":
-        # A response object in ctx means the call completed successfully
+        assert isinstance(resp, ListCreativeFormatsResponse), (
+            f"Expected ListCreativeFormatsResponse, got {type(resp).__name__}"
+        )
+        assert hasattr(resp, "formats"), "Response missing required 'formats' field"
         return
-    raise AssertionError(f"Unexpected status value: {status}")
+    raise AssertionError(f"Unknown status '{status}' — ListCreativeFormatsResponse has no status field")
 
 
 # ── Response contains field ──────────────────────────────────────────
@@ -51,10 +58,18 @@ def then_sandbox_true(ctx: dict) -> None:
 
 @then("the response should not include a sandbox field")
 def then_no_sandbox_field(ctx: dict) -> None:
-    """Assert response does not include a sandbox field."""
+    """Assert serialized response does not contain a sandbox field.
+
+    Checks model_dump() (what API consumers see), not the Python attribute.
+    A field present with value None still serializes as ``{"sandbox": null}``
+    which counts as "including a sandbox field".
+    """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response but none found"
-    assert getattr(resp, "sandbox", None) is None, f"Expected sandbox absent, got {getattr(resp, 'sandbox', None)}"
+    dumped = resp.model_dump()
+    assert "sandbox" not in dumped, (
+        f"Expected no sandbox field in serialized response, got sandbox={dumped.get('sandbox')}"
+    )
 
 
 # ── No real API calls assertion ──────────────────────────────────────
@@ -62,9 +77,20 @@ def then_no_sandbox_field(ctx: dict) -> None:
 
 @then("no real ad platform API calls should have been made")
 def then_no_real_api_calls(ctx: dict) -> None:
-    """Assert no real ad platform API calls were made (sandbox path).
+    """Assert no real ad platform API calls were made.
 
-    In harness mode the registry is mocked, so no real API calls are made.
-    Always passes.
+    Verifies the mock registry was used instead of real HTTP calls.
+    The harness patches ``get_creative_agent_registry`` — if production
+    code called it, it got the mock and no real API calls occurred.
     """
-    pass
+    env = ctx.get("env")
+    assert env is not None, "Expected harness env in ctx — without the harness, real API calls could occur"
+    registry_mock = env.mock.get("registry")
+    assert registry_mock is not None, "Registry mock not configured in harness"
+    # If a response exists, production ran the impl — verify it used the mock
+    if "response" in ctx:
+        mock_registry = registry_mock.return_value
+        formats_called = mock_registry.list_all_formats.called or mock_registry.list_all_formats_with_errors.called
+        assert formats_called, (
+            "Production code returned a response but did not call the mock registry — real API calls may have been made"
+        )

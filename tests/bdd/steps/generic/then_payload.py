@@ -73,9 +73,13 @@ def then_no_video(ctx: dict) -> None:
 
 @then("the response should include creative_agents referrals")
 def then_has_referrals(ctx: dict) -> None:
+    """Assert response contains creative_agents with well-formed referral entries."""
     resp = ctx.get("response")
     referrals = getattr(resp, "creative_agents", None) or []
     assert len(referrals) > 0, "Expected creative agent referrals in response"
+    # Verify referrals have expected structure (not just arbitrary non-empty list)
+    for ref in referrals:
+        assert getattr(ref, "agent_url", None), f"Referral missing agent_url: {ref}"
 
 
 @then("each referral should include the agent URL and supported capabilities")
@@ -108,11 +112,13 @@ def then_format_name_type(ctx: dict) -> None:
 
 @then("each format should include asset requirements with type and dimensions")
 def then_format_assets(ctx: dict) -> None:
+    """Assert each format's assets have both type AND dimensions fields."""
     formats = _get_formats(ctx)
     formats_with_assets = [f for f in formats if f.get("assets")]
     for f in formats_with_assets:
         for a in f["assets"]:
             assert "type" in a, f"Asset in format '{f.get('name')}' missing type"
+            assert "dimensions" in a, f"Asset in format '{f.get('name')}' missing dimensions"
 
 
 # ── Sorting assertions ──────────────────────────────────────────────

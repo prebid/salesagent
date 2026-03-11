@@ -90,11 +90,21 @@ def then_error_tenant_context(ctx: dict) -> None:
 
 @then("the error message should indicate which parameters are invalid")
 def then_error_invalid_params(ctx: dict) -> None:
-    """Assert error message mentions invalid parameters."""
+    """Assert error message indicates which specific parameters are invalid."""
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
+    # Pydantic ValidationError: has per-field error details with field paths
+    if hasattr(error, "errors"):
+        field_errors = error.errors()
+        assert field_errors, "ValidationError has no field-level error details"
+        assert all("loc" in e for e in field_errors), f"Expected field locations in error details: {field_errors}"
+        return
+    # AdCPError: message must reference parameter/field specifics
     msg = _get_error_message(error)
-    assert msg, "Expected a non-empty error message"
+    msg_lower = msg.lower()
+    assert any(kw in msg_lower for kw in ("parameter", "field", "invalid", "format_id", "agent_url")), (
+        f"Expected error to indicate which parameters are invalid, got: {msg}"
+    )
 
 
 @then(parsers.parse('the error message should indicate "{value}" is not a valid disclosure position'))
@@ -128,11 +138,19 @@ def then_error_duplicates(ctx: dict) -> None:
 
 @then("the error message should indicate FormatId must include agent_url and id")
 def then_error_format_id_structure(ctx: dict) -> None:
-    """Assert error message mentions FormatId structure requirements."""
+    """Assert error message mentions both agent_url AND id as required FormatId fields."""
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
+    # Pydantic ValidationError: check field paths directly
+    if hasattr(error, "errors"):
+        error_fields = {str(loc) for e in error.errors() for loc in e.get("loc", ())}
+        assert "agent_url" in error_fields, f"Expected 'agent_url' in validation error fields: {error_fields}"
+        assert "id" in error_fields, f"Expected 'id' in validation error fields: {error_fields}"
+        return
+    # AdCPError: message must reference both fields
     msg = _get_error_message(error).lower()
-    assert "agent_url" in msg or "formatid" in msg, f"Expected FormatId structure message: {_get_error_message(error)}"
+    assert "agent_url" in msg, f"Expected 'agent_url' in error: {_get_error_message(error)}"
+    assert "id" in msg, f"Expected 'id' in FormatId error: {_get_error_message(error)}"
 
 
 # ── Suggestion field ─────────────────────────────────────────────────
@@ -150,12 +168,24 @@ def then_error_has_suggestion(ctx: dict) -> None:
 
 @then("the error should include a suggestion for how to fix the issue")
 def then_error_has_fix_suggestion(ctx: dict) -> None:
-    """Assert error includes a suggestion for fixing the issue."""
+    """Assert error includes an actionable suggestion for fixing the issue.
+
+    Unlike then_error_has_suggestion (structural check), this step verifies
+    the suggestion contains actionable language (use/try/check/provide/etc.)
+    that tells the caller how to correct the problem.
+    """
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
     d = _get_error_dict(error)
     assert "suggestion" in d, f"Expected 'suggestion' in error: {d}"
-    assert d["suggestion"], "Expected non-empty suggestion"
+    suggestion = d["suggestion"]
+    assert suggestion, "Expected non-empty suggestion"
+    # A fix suggestion must contain actionable guidance
+    suggestion_lower = suggestion.lower()
+    action_words = ("use", "try", "check", "provide", "include", "ensure", "remove", "specify", "set", "omit")
+    assert any(word in suggestion_lower for word in action_words), (
+        f"Expected actionable fix suggestion (use/try/check/provide/...), got: {suggestion}"
+    )
 
 
 # ── Suggestion content ───────────────────────────────────────────────
@@ -171,9 +201,14 @@ def then_suggestion_auth(ctx: dict) -> None:
 
 @then("the suggestion should provide valid parameter values")
 def then_suggestion_valid_values(ctx: dict) -> None:
-    """Assert suggestion mentions valid parameter values."""
+    """Assert suggestion references valid parameter values, not just generic text."""
     d = _get_error_dict(ctx.get("error"))
-    assert d.get("suggestion"), "Expected non-empty suggestion"
+    suggestion = d.get("suggestion", "")
+    assert suggestion, "Expected non-empty suggestion"
+    suggestion_lower = suggestion.lower()
+    assert any(kw in suggestion_lower for kw in ("valid", "allowed", "values", "accepted", "supported")), (
+        f"Expected suggestion to reference valid parameter values, got: {suggestion}"
+    )
 
 
 @then("the suggestion should advise using valid DisclosurePosition enum values")
@@ -214,10 +249,15 @@ def then_suggestion_format_id_or_omit(ctx: dict) -> None:
 
 @then("the suggestion should advise including agent_url (URI) and id fields")
 def then_suggestion_agent_url_id(ctx: dict) -> None:
-    """Assert suggestion advises including agent_url and id."""
+    """Assert suggestion advises including both agent_url AND id fields."""
     d = _get_error_dict(ctx.get("error"))
-    suggestion = (d.get("suggestion") or "").lower()
-    assert "agent_url" in suggestion or "uri" in suggestion, f"Expected agent_url/URI suggestion: {d.get('suggestion')}"
+    suggestion = d.get("suggestion", "")
+    assert suggestion, "Expected non-empty suggestion"
+    suggestion_lower = suggestion.lower()
+    assert "agent_url" in suggestion_lower or "uri" in suggestion_lower, (
+        f"Expected agent_url/URI in suggestion: {suggestion}"
+    )
+    assert "id" in suggestion_lower, f"Expected 'id' field reference in suggestion: {suggestion}"
 
 
 # ── No error raised ─────────────────────────────────────────────────
@@ -248,5 +288,17 @@ def then_validation_error(ctx: dict) -> None:
 
 @then("the error should be a real validation error, not simulated")
 def then_real_validation_error(ctx: dict) -> None:
-    """Assert the error is a real validation error (not simulated/sandbox)."""
-    assert "error" in ctx, "Expected an error"
+    """Assert the error is a real Pydantic validation error, not a simulated one.
+
+    A real validation error is a pydantic.ValidationError raised by schema
+    validation, with per-field error details. This distinguishes it from
+    AdCPValidationError (our wrapper) or sandbox-simulated errors.
+    """
+    error = ctx.get("error")
+    assert error is not None, "Expected an error"
+    from pydantic import ValidationError
+
+    assert isinstance(error, ValidationError), (
+        f"Expected a real pydantic.ValidationError, got {type(error).__name__}: {error}"
+    )
+    assert error.errors(), "Expected ValidationError with field-level error details"
