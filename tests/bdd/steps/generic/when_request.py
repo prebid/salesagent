@@ -115,18 +115,15 @@ def when_call_mcp_type(ctx: dict, type_value: str) -> None:
 # ── Generic format request (transport-agnostic) ──────────────────────
 
 
-@when("the Buyer Agent requests the format catalog")
-def when_request_catalog(ctx: dict) -> None:
-    _call(ctx)
-
-
-@when("the Buyer Agent requests all formats with no filters")
-def when_request_all_no_filters(ctx: dict) -> None:
-    _call(ctx)
-
-
-@when("the Buyer Agent sends a list_creative_formats request")
-def when_send_request_generic(ctx: dict) -> None:
+@when(
+    parsers.re(
+        r"the Buyer Agent (?:requests the format catalog"
+        r"|requests all formats with no filters"
+        r"|sends a list_creative_formats request)"
+    )
+)
+def when_request_unfiltered(ctx: dict) -> None:
+    """Any phrasing of 'make an unfiltered format request'."""
     _call(ctx)
 
 
