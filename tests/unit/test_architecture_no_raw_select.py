@@ -237,10 +237,9 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/users.py", "remove_domain"),
     ("src/admin/blueprints/users.py", "toggle_user"),
     ("src/admin/blueprints/users.py", "update_role"),
-    ("src/admin/blueprints/workflows.py", "approve_workflow_step"),
-    ("src/admin/blueprints/workflows.py", "list_workflows"),
-    ("src/admin/blueprints/workflows.py", "reject_workflow_step"),
-    ("src/admin/blueprints/workflows.py", "review_workflow_step"),
+    ("src/admin/blueprints/workflows.py", "approve_workflow_step"),  # select(CreativeAssignment) — no creative repo yet
+    ("src/admin/blueprints/workflows.py", "list_workflows"),  # select(Tenant) — no tenant repo yet
+    ("src/admin/blueprints/workflows.py", "review_workflow_step"),  # select(Context) — context lookup
     # ── Admin services / utils ──
     ("src/admin/domain_access.py", "add_authorized_domain"),
     ("src/admin/domain_access.py", "add_authorized_email"),

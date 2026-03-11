@@ -414,7 +414,10 @@ class ContextManager(DatabaseManager):
             stmt = (
                 select(ObjectWorkflowMapping)
                 .join(WorkflowStep)
-                .filter_by(object_type=object_type, object_id=object_id)
+                .where(
+                    ObjectWorkflowMapping.object_type == object_type,
+                    ObjectWorkflowMapping.object_id == object_id,
+                )
                 .order_by(ObjectWorkflowMapping.created_at)
             )
             if tenant_id:

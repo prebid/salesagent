@@ -176,6 +176,18 @@ class WorkflowRepository:
             result[mapping.step_id].append(mapping)
         return result
 
+    def get_all_steps(self, *, limit: int | None = None) -> list[WorkflowStep]:
+        """Get all workflow steps for this tenant, newest first."""
+        stmt = (
+            select(WorkflowStep)
+            .join(DBContext)
+            .where(DBContext.tenant_id == self._tenant_id)
+            .order_by(WorkflowStep.created_at.desc())
+        )
+        if limit:
+            stmt = stmt.limit(limit)
+        return list(self._session.scalars(stmt).all())
+
     # ------------------------------------------------------------------
     # ObjectWorkflowMapping writes
     # ------------------------------------------------------------------
