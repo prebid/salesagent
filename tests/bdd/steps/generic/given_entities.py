@@ -1,13 +1,36 @@
 """Given steps for entity setup (seller agent, creative agents, registries).
 
 These steps establish the pre-conditions for scenarios — a running seller agent,
-registered creative agents, and format catalogs. Phase 0 implementations are
-stubs that set up ``ctx`` state without calling production code.
+registered creative agents, and format catalogs.
+
+Harness mode: when ``ctx["env"]`` is set (by the ``creative_formats_env`` fixture),
+steps also configure the harness registry with real Format objects.
+Stub mode: steps store dicts in ctx for partition/boundary scenarios.
 """
 
 from __future__ import annotations
 
+from typing import Any
+
 from pytest_bdd import given, parsers
+
+
+def _sync_registry(ctx: dict[str, Any]) -> None:
+    """Push ctx['registry_formats'] dicts into the harness as real Format objects.
+
+    Called after any step that modifies ctx["registry_formats"] when harness
+    mode is active. No-op when env is absent (stub mode).
+    """
+    env = ctx.get("env")
+    if env is None:
+        return
+
+    from tests.bdd.steps.domain.uc005_creative_formats import dicts_to_formats
+
+    raw = ctx.get("registry_formats", [])
+    formats = dicts_to_formats(raw)
+    env.set_registry_formats(formats)
+
 
 # ── Background steps (apply to every scenario) ──────────────────────
 
@@ -36,6 +59,7 @@ def given_registry_multi_categories(ctx: dict) -> None:
         {"name": "pre-roll", "type": "video"},
         {"name": "audio-spot", "type": "audio"},
     ]
+    _sync_registry(ctx)
 
 
 @given(parsers.parse('the creative agent registry has formats of types "{type_a}" and "{type_b}"'))
@@ -45,6 +69,7 @@ def given_registry_two_types(ctx: dict, type_a: str, type_b: str) -> None:
         {"name": f"{type_a}-format", "type": type_a},
         {"name": f"{type_b}-format", "type": type_b},
     ]
+    _sync_registry(ctx)
 
 
 @given("the seller has additional creative agents beyond the default")
@@ -63,6 +88,7 @@ def given_no_formats(ctx: dict) -> None:
     """No creative agents have any formats registered."""
     ctx["registry_formats"] = []
     ctx["creative_agents_registered"] = False
+    _sync_registry(ctx)
 
 
 # ── Partition / boundary: seller-with-various-X stubs ────────────────

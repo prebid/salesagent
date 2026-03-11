@@ -4,13 +4,16 @@ These steps populate ``ctx["registry_formats"]`` with specific format objects
 for invariant and edge-case scenarios. They use pytest-bdd data tables where
 the feature file includes ``| col | col |`` rows.
 
-Phase 0: steps are stubs that store config in ctx without calling production code.
+Harness mode: when ``ctx["env"]`` is set, each step also pushes the
+updated registry_formats to the CreativeFormatsEnv harness as real
+Format objects. Stub mode: only updates ctx dicts.
 """
 
 from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from typing import Any
 
 from pytest_bdd import given, parsers
 
@@ -25,6 +28,23 @@ def _datatable_to_dicts(datatable: Sequence[Sequence[object]]) -> list[dict[str,
     return [{headers[i]: str(cell) for i, cell in enumerate(row)} for row in datatable[1:]]
 
 
+def _sync_registry(ctx: dict[str, Any]) -> None:
+    """Push ctx['registry_formats'] dicts into the harness as real Format objects.
+
+    Called after any step that modifies ctx["registry_formats"] when harness
+    mode is active. No-op when env is absent (stub mode).
+    """
+    env = ctx.get("env")
+    if env is None:
+        return
+
+    from tests.bdd.steps.domain.uc005_creative_formats import dicts_to_formats
+
+    raw = ctx.get("registry_formats", [])
+    formats = dicts_to_formats(raw)
+    env.set_registry_formats(formats)
+
+
 # ── Format by type + asset type ──────────────────────────────────────
 
 
@@ -32,6 +52,7 @@ def _datatable_to_dicts(datatable: Sequence[Sequence[object]]) -> list[dict[str,
 def given_registry_format_typed(ctx: dict, name: str, fmt_type: str, asset_type: str) -> None:
     """Register a single format with explicit type and asset type."""
     ctx.setdefault("registry_formats", []).append({"name": name, "type": fmt_type, "assets": [{"type": asset_type}]})
+    _sync_registry(ctx)
 
 
 # ── Format with format_id ───────────────────────────────────────────
@@ -46,6 +67,7 @@ def given_registry_format_with_id(ctx: dict, name: str, fmt_id: str) -> None:
             "format_id": {"agent_url": "https://creatives.adcontextprotocol.org", "id": fmt_id},
         }
     )
+    _sync_registry(ctx)
 
 
 # ── Format with asset type(s) ───────────────────────────────────────
@@ -55,12 +77,14 @@ def given_registry_format_with_id(ctx: dict, name: str, fmt_id: str) -> None:
 def given_registry_format_with_asset(ctx: dict, name: str, asset_type: str) -> None:
     """Register a format with a single asset type."""
     ctx.setdefault("registry_formats", []).append({"name": name, "assets": [{"type": asset_type}]})
+    _sync_registry(ctx)
 
 
 @given(parsers.parse('the registry has format "{name}" with assets of types "{type_a}" and "{type_b}"'))
 def given_registry_format_with_two_assets(ctx: dict, name: str, type_a: str, type_b: str) -> None:
     """Register a format with two asset types."""
     ctx.setdefault("registry_formats", []).append({"name": name, "assets": [{"type": type_a}, {"type": type_b}]})
+    _sync_registry(ctx)
 
 
 @given(
@@ -74,6 +98,7 @@ def given_registry_format_with_asset_group(ctx: dict, name: str, type_a: str, ty
             "asset_groups": [{"types": [type_a, type_b], "repeatable": True}],
         }
     )
+    _sync_registry(ctx)
 
 
 # ── Format with render dimensions ────────────────────────────────────
@@ -85,24 +110,28 @@ def given_registry_format_with_renders(ctx: dict, name: str, datatable: Sequence
     rows = _datatable_to_dicts(datatable)
     renders = [{"width": int(row["width"]), "height": int(row["height"])} for row in rows]
     ctx.setdefault("registry_formats", []).append({"name": name, "renders": renders})
+    _sync_registry(ctx)
 
 
 @given(parsers.parse('the registry has format "{name}" with render width {width:d} and height {height:d}'))
 def given_registry_format_exact_dimensions(ctx: dict, name: str, width: int, height: int) -> None:
     """Register a format with exact render dimensions."""
     ctx.setdefault("registry_formats", []).append({"name": name, "renders": [{"width": width, "height": height}]})
+    _sync_registry(ctx)
 
 
 @given(parsers.parse('the registry has format "{name}" with no render dimensions'))
 def given_registry_format_no_dimensions(ctx: dict, name: str) -> None:
     """Register a format with no render dimension information."""
     ctx.setdefault("registry_formats", []).append({"name": name, "renders": []})
+    _sync_registry(ctx)
 
 
 @given(parsers.parse('the registry has format "{name}" with responsive render dimensions'))
 def given_registry_format_responsive(ctx: dict, name: str) -> None:
     """Register a format with responsive render dimensions."""
     ctx.setdefault("registry_formats", []).append({"name": name, "responsive": True})
+    _sync_registry(ctx)
 
 
 @given(parsers.parse('the registry has format "{name}" with non-responsive render dimensions'))
@@ -111,6 +140,7 @@ def given_registry_format_non_responsive(ctx: dict, name: str) -> None:
     ctx.setdefault("registry_formats", []).append(
         {"name": name, "responsive": False, "renders": [{"width": 728, "height": 90}]}
     )
+    _sync_registry(ctx)
 
 
 # ── Format with name ────────────────────────────────────────────────
@@ -120,6 +150,7 @@ def given_registry_format_non_responsive(ctx: dict, name: str) -> None:
 def given_registry_format_named(ctx: dict, name: str) -> None:
     """Register a format with just a name."""
     ctx.setdefault("registry_formats", []).append({"name": name})
+    _sync_registry(ctx)
 
 
 # ── Format with disclosure positions ─────────────────────────────────
@@ -133,12 +164,14 @@ def given_registry_format_disclosure(ctx: dict, name: str, positions: str) -> No
     """
     parsed = json.loads(positions)
     ctx.setdefault("registry_formats", []).append({"name": name, "supported_disclosure_positions": parsed})
+    _sync_registry(ctx)
 
 
 @given(parsers.parse('the registry has format "{name}" with no supported_disclosure_positions field'))
 def given_registry_format_no_disclosure(ctx: dict, name: str) -> None:
     """Register a format without a supported_disclosure_positions field."""
     ctx.setdefault("registry_formats", []).append({"name": name, "supported_disclosure_positions": None})
+    _sync_registry(ctx)
 
 
 # ── Format with output_format_ids / input_format_ids (data table) ────
@@ -150,12 +183,14 @@ def given_registry_format_output_ids(ctx: dict, name: str, datatable: Sequence[S
     rows = _datatable_to_dicts(datatable)
     ids = [{"agent_url": row["agent_url"], "id": row["id"]} for row in rows]
     ctx.setdefault("registry_formats", []).append({"name": name, "output_format_ids": ids})
+    _sync_registry(ctx)
 
 
 @given(parsers.parse('the registry has format "{name}" with no output_format_ids field'))
 def given_registry_format_no_output_ids(ctx: dict, name: str) -> None:
     """Register a format without output_format_ids."""
     ctx.setdefault("registry_formats", []).append({"name": name, "output_format_ids": None})
+    _sync_registry(ctx)
 
 
 @given(parsers.parse('the registry has format "{name}" with input_format_ids:'))
@@ -164,12 +199,14 @@ def given_registry_format_input_ids(ctx: dict, name: str, datatable: Sequence[Se
     rows = _datatable_to_dicts(datatable)
     ids = [{"agent_url": row["agent_url"], "id": row["id"]} for row in rows]
     ctx.setdefault("registry_formats", []).append({"name": name, "input_format_ids": ids})
+    _sync_registry(ctx)
 
 
 @given(parsers.parse('the registry has format "{name}" with no input_format_ids field'))
 def given_registry_format_no_input_ids(ctx: dict, name: str) -> None:
     """Register a format without input_format_ids."""
     ctx.setdefault("registry_formats", []).append({"name": name, "input_format_ids": None})
+    _sync_registry(ctx)
 
 
 # ── Formats from data table ─────────────────────────────────────────
@@ -181,6 +218,7 @@ def given_registry_formats_table(ctx: dict, datatable: Sequence[Sequence[object]
     rows = _datatable_to_dicts(datatable)
     formats = [{"name": row["name"], "type": row["type"]} for row in rows]
     ctx.setdefault("registry_formats", []).extend(formats)
+    _sync_registry(ctx)
 
 
 # ── Formats from inline list ────────────────────────────────────────
@@ -198,6 +236,7 @@ def given_registry_three_formats_inline(
             {"name": name_c, "type": type_c},
         ]
     )
+    _sync_registry(ctx)
 
 
 @given(parsers.parse('the registry has formats: "{name_a}" ({type_a}), "{name_b}" ({type_b})'))
@@ -209,3 +248,4 @@ def given_registry_two_formats_inline(ctx: dict, name_a: str, type_a: str, name_
             {"name": name_b, "type": type_b},
         ]
     )
+    _sync_registry(ctx)

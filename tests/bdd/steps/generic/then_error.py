@@ -1,7 +1,9 @@
 """Then steps for error assertions (failure, error codes, messages, suggestions).
 
 These steps assert on ``ctx["error"]`` which is populated by When steps when
-an operation fails. The error pattern is common across all use cases.
+an operation fails. In harness mode, errors come from the production code
+via ``normalize_response_to_ctx``. In stub mode, errors are set directly
+by the When step logic.
 """
 
 from __future__ import annotations

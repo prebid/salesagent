@@ -3,13 +3,24 @@
 These steps verify the shape and content of response payloads: format counts,
 field presence, sorting, specific format inclusion/exclusion, and partition/
 boundary test outcomes.
+
+Harness mode: assertions validate real production responses normalized into
+ctx["result"]. Phase 0 stubs are replaced with real validation when env is present.
+Stub mode: assertions check the stub data in ctx.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any
 
 from pytest_bdd import parsers, then
+
+
+def _is_harness_mode(ctx: dict[str, Any]) -> bool:
+    """Check if the harness is available in ctx."""
+    return ctx.get("env") is not None
+
 
 # ── Format catalog assertions ────────────────────────────────────────
 
@@ -67,32 +78,45 @@ def then_referral_fields(ctx: dict) -> None:
 
 @then("each format should include a format_id with agent_url and id")
 def then_format_id_fields(ctx: dict) -> None:
-    """Assert each format has format_id with agent_url and id.
-
-    Phase 0 stub: passes since stub formats may not have full structure.
-    """
-    # Phase 0: stub passes — real validation in Epic 1
-    pass
+    """Assert each format has format_id with agent_url and id."""
+    if not _is_harness_mode(ctx):
+        return  # Stub mode: skip validation
+    result = ctx.get("result", {})
+    for f in result.get("formats", []):
+        fid = f.get("format_id")
+        assert fid is not None, f"Format '{f.get('name')}' missing format_id"
+        assert "agent_url" in fid, f"Format '{f.get('name')}' format_id missing agent_url"
+        assert "id" in fid, f"Format '{f.get('name')}' format_id missing id"
 
 
 @then("each format should include a name and type category")
 def then_format_name_type(ctx: dict) -> None:
-    """Assert each format has name and type.
-
-    Phase 0 stub: passes since stub formats may not have full structure.
-    """
-    # Phase 0: stub passes — real validation in Epic 1
-    pass
+    """Assert each format has name and type."""
+    if not _is_harness_mode(ctx):
+        return  # Stub mode: skip validation
+    result = ctx.get("result", {})
+    for f in result.get("formats", []):
+        assert f.get("name"), f"Format missing name: {f}"
+        assert f.get("type"), f"Format missing type: {f}"
 
 
 @then("each format should include asset requirements with type and dimensions")
 def then_format_assets(ctx: dict) -> None:
     """Assert each format has asset requirements.
 
-    Phase 0 stub: passes since stub formats may not have full structure.
+    In harness mode, checks that formats with assets have type info.
+    Not all formats have assets (e.g., audio companions), so we only
+    validate when assets are present.
     """
-    # Phase 0: stub passes — real validation in Epic 1
-    pass
+    if not _is_harness_mode(ctx):
+        return  # Stub mode: skip validation
+    # Harness mode: at least some formats should have assets
+    result = ctx.get("result", {})
+    formats_with_assets = [f for f in result.get("formats", []) if f.get("assets")]
+    # We just verify that the ones with assets have type info
+    for f in formats_with_assets:
+        for a in f["assets"]:
+            assert "type" in a, f"Asset in format '{f.get('name')}' missing type"
 
 
 # ── Sorting assertions ──────────────────────────────────────────────
@@ -100,12 +124,15 @@ def then_format_assets(ctx: dict) -> None:
 
 @then("the results should be sorted by format type then name")
 def then_sorted_type_name(ctx: dict) -> None:
-    """Assert results are sorted by type then name.
-
-    Phase 0 stub: passes since stub data may already be sorted.
-    """
-    # Phase 0: stub passes — real validation in Epic 1
-    pass
+    """Assert results are sorted by type then name."""
+    if not _is_harness_mode(ctx):
+        return  # Stub mode: skip validation
+    result = ctx.get("result", {})
+    formats = result.get("formats", [])
+    if len(formats) <= 1:
+        return
+    sort_keys = [(f.get("type", ""), f.get("name", "")) for f in formats]
+    assert sort_keys == sorted(sort_keys), f"Formats not sorted by type then name: {sort_keys}"
 
 
 @then("the results should be ordered:")

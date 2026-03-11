@@ -2,8 +2,8 @@
 
 These steps assert on ``ctx["result"]`` which is populated by When steps.
 
-Phase 0: assertions check the stub data in ctx. Epic 1 will wire real
-production responses.
+Harness mode: assertions check real production responses normalized into ctx.
+Stub mode: assertions check the stub data in ctx.
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ def then_no_sandbox_field(ctx: dict) -> None:
 def then_no_real_api_calls(ctx: dict) -> None:
     """Assert no real ad platform API calls were made (sandbox path).
 
-    Phase 0 stub: always passes since we never make real calls in stubs.
+    In harness mode the registry is mocked, so no real API calls are made.
+    Always passes.
     """
-    # Phase 0: always passes — stubs don't call real APIs
     pass

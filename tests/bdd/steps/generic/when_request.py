@@ -2,15 +2,73 @@
 
 These steps invoke operations and store results (or errors) in ``ctx``.
 
-Phase 0: stubs that record the request intent in ctx without calling
-production code. Epic 1 will wire these to the test harness.
+Harness mode: when ``ctx["env"]`` is set (by the ``creative_formats_env``
+fixture), steps call through the CreativeFormatsEnv harness to exercise
+real production code. Results are normalized back into ctx dicts.
+
+Stub mode: when ``ctx["env"]`` is absent, steps use inline dict logic
+for partition/boundary scenarios that don't need a database.
 """
 
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from pytest_bdd import parsers, when
+
+# ── Harness dispatch helper ──────────────────────────────────────────
+
+
+def _harness_dispatch(ctx: dict[str, Any], transport: str, filters: dict[str, Any]) -> None:
+    """Dispatch a request through the CreativeFormatsEnv harness.
+
+    Builds a real ListCreativeFormatsRequest from filters, calls the
+    appropriate transport method on the harness, and normalizes the
+    response back into ctx["result"] or ctx["error"].
+    """
+    from tests.bdd.steps.domain.uc005_creative_formats import (
+        build_request_from_filters,
+        normalize_response_to_ctx,
+    )
+    from tests.harness.transport import Transport
+
+    env = ctx["env"]
+    transport_map = {
+        "a2a": Transport.A2A,
+        "mcp": Transport.MCP,
+        "impl": Transport.IMPL,
+        "rest": Transport.REST,
+    }
+    t = transport_map.get(transport, Transport.IMPL)
+
+    try:
+        req = build_request_from_filters(filters)
+    except Exception as exc:
+        # Pydantic validation errors during request construction
+        from tests.bdd.steps.domain.uc005_creative_formats import _exception_to_error_dict
+
+        ctx["error"] = _exception_to_error_dict(exc)
+        return
+
+    kwargs: dict[str, Any] = {}
+    if req is not None:
+        if t == Transport.MCP:
+            # MCP wrapper takes individual params, not req object
+            req_dict = req.model_dump(exclude_none=True)
+            kwargs.update(req_dict)
+        else:
+            kwargs["req"] = req
+
+    result = env.call_via(t, **kwargs)
+    ctx["harness_response"] = result
+    normalize_response_to_ctx(ctx)
+
+
+def _is_harness_mode(ctx: dict[str, Any]) -> bool:
+    """Check if the harness is available in ctx."""
+    return ctx.get("env") is not None
+
 
 # ── A2A transport ────────────────────────────────────────────────────
 
@@ -20,6 +78,9 @@ def when_send_a2a_no_filters(ctx: dict) -> None:
     """Send list_creative_formats via A2A with no filters."""
     ctx["transport"] = "a2a"
     ctx["request_filters"] = {}
+    if _is_harness_mode(ctx):
+        _harness_dispatch(ctx, "a2a", {})
+        return
     formats = list(ctx.get("registry_formats", []))
     formats.sort(key=lambda f: (f.get("type", ""), f.get("name", "")))
     ctx["result"] = {"formats": formats, "status": "completed"}
@@ -30,6 +91,9 @@ def when_send_a2a(ctx: dict) -> None:
     """Send list_creative_formats via A2A (may have no tenant)."""
     ctx["transport"] = "a2a"
     ctx["request_filters"] = {}
+    if _is_harness_mode(ctx):
+        _harness_dispatch(ctx, "a2a", {})
+        return
     if not ctx.get("has_tenant", True) or not ctx.get("has_auth", True):
         ctx["error"] = {
             "code": "TENANT_REQUIRED",
@@ -45,6 +109,9 @@ def when_send_a2a_type_filter(ctx: dict, type_filter: str) -> None:
     """Send list_creative_formats via A2A with a type filter."""
     ctx["transport"] = "a2a"
     ctx["request_filters"] = {"type": type_filter}
+    if _is_harness_mode(ctx):
+        _harness_dispatch(ctx, "a2a", {"type": type_filter})
+        return
     formats = [f for f in ctx.get("registry_formats", []) if f.get("type") == type_filter]
     ctx["result"] = {"formats": formats, "status": "completed"}
 
@@ -54,6 +121,9 @@ def when_send_a2a_type_value(ctx: dict, type_value: str) -> None:
     """Send list_creative_formats via A2A with a type parameter (may be invalid)."""
     ctx["transport"] = "a2a"
     ctx["request_filters"] = {"type": type_value}
+    if _is_harness_mode(ctx):
+        _harness_dispatch(ctx, "a2a", {"type": type_value})
+        return
     valid_types = {"display", "video", "audio", "native", "dooh"}
     if type_value not in valid_types:
         ctx["error"] = {
@@ -74,6 +144,9 @@ def when_call_mcp_no_filters(ctx: dict) -> None:
     """Call list_creative_formats MCP tool with no filters."""
     ctx["transport"] = "mcp"
     ctx["request_filters"] = {}
+    if _is_harness_mode(ctx):
+        _harness_dispatch(ctx, "mcp", {})
+        return
     formats = list(ctx.get("registry_formats", []))
     formats.sort(key=lambda f: (f.get("type", ""), f.get("name", "")))
     ctx["result"] = {"formats": formats, "status": "completed"}
@@ -84,6 +157,9 @@ def when_call_mcp(ctx: dict) -> None:
     """Call list_creative_formats MCP tool (may have no tenant)."""
     ctx["transport"] = "mcp"
     ctx["request_filters"] = {}
+    if _is_harness_mode(ctx):
+        _harness_dispatch(ctx, "mcp", {})
+        return
     if not ctx.get("has_tenant", True):
         ctx["error"] = {
             "code": "TENANT_REQUIRED",
@@ -99,6 +175,9 @@ def when_call_mcp_type(ctx: dict, type_value: str) -> None:
     """Call list_creative_formats MCP tool with a type parameter."""
     ctx["transport"] = "mcp"
     ctx["request_filters"] = {"type": type_value}
+    if _is_harness_mode(ctx):
+        _harness_dispatch(ctx, "mcp", {"type": type_value})
+        return
     valid_types = {"display", "video", "audio", "native", "dooh"}
     if type_value not in valid_types:
         ctx["error"] = {
@@ -118,6 +197,9 @@ def when_call_mcp_type(ctx: dict, type_value: str) -> None:
 def when_request_catalog(ctx: dict) -> None:
     """Request the full format catalog (no filters, transport-agnostic)."""
     ctx["request_filters"] = {}
+    if _is_harness_mode(ctx):
+        _harness_dispatch(ctx, "impl", {})
+        return
     formats = list(ctx.get("registry_formats", []))
     formats.sort(key=lambda f: (f.get("type", ""), f.get("name", "")))
     ctx["result"] = {"formats": formats, "status": "completed"}
@@ -127,6 +209,9 @@ def when_request_catalog(ctx: dict) -> None:
 def when_request_all_no_filters(ctx: dict) -> None:
     """Request all formats with no filters."""
     ctx["request_filters"] = {}
+    if _is_harness_mode(ctx):
+        _harness_dispatch(ctx, "impl", {})
+        return
     formats = list(ctx.get("registry_formats", []))
     formats.sort(key=lambda f: (f.get("type", ""), f.get("name", "")))
     ctx["result"] = {"formats": formats, "status": "completed"}
@@ -136,6 +221,9 @@ def when_request_all_no_filters(ctx: dict) -> None:
 def when_send_request_generic(ctx: dict) -> None:
     """Send a list_creative_formats request (sandbox scenarios)."""
     ctx["request_filters"] = {}
+    if _is_harness_mode(ctx):
+        _harness_dispatch(ctx, "impl", {})
+        return
     result: dict = {
         "formats": ctx.get("registry_formats", []),
         "status": "completed",
@@ -150,6 +238,9 @@ def when_send_request_generic(ctx: dict) -> None:
 def when_send_request_invalid_dimensions(ctx: dict) -> None:
     """Send a list_creative_formats request with invalid dimension filters."""
     ctx["request_filters"] = {"min_width": -1}
+    if _is_harness_mode(ctx):
+        _harness_dispatch(ctx, "impl", {"min_width": -1})
+        return
     ctx["error"] = {
         "code": "VALIDATION_ERROR",
         "message": "Invalid dimension filter parameters",
@@ -165,6 +256,9 @@ def when_request_type_and_asset(ctx: dict, fmt_type: str, asset_types: str) -> N
     """Request formats with combined type and asset_types filters."""
     parsed_assets = json.loads(asset_types)
     ctx["request_filters"] = {"type": fmt_type, "asset_types": parsed_assets}
+    if _is_harness_mode(ctx):
+        _harness_dispatch(ctx, "impl", {"type": fmt_type, "asset_types": parsed_assets})
+        return
     # Stub: filter registry_formats by both type AND asset type
     result = []
     for f in ctx.get("registry_formats", []):
@@ -183,6 +277,9 @@ def when_request_type_and_asset(ctx: dict, fmt_type: str, asset_types: str) -> N
 def when_request_type_filter(ctx: dict, fmt_type: str) -> None:
     """Request formats with type filter."""
     ctx["request_filters"] = {"type": fmt_type}
+    if _is_harness_mode(ctx):
+        _harness_dispatch(ctx, "impl", {"type": fmt_type})
+        return
     formats = [f for f in ctx.get("registry_formats", []) if f.get("type") == fmt_type]
     ctx["result"] = {"formats": formats, "status": "completed"}
 
@@ -195,6 +292,9 @@ def when_request_format_ids(ctx: dict, filter_value: str) -> None:
     """Request formats with format_ids filter."""
     parsed = json.loads(filter_value)
     ctx["request_filters"] = {"format_ids": parsed}
+    if _is_harness_mode(ctx):
+        _harness_dispatch(ctx, "impl", {"format_ids": parsed})
+        return
     result = []
     for f in ctx.get("registry_formats", []):
         fid = f.get("format_id", {})
@@ -211,6 +311,9 @@ def when_request_asset_types(ctx: dict, filter_value: str) -> None:
     """Request formats with asset_types filter (OR semantics)."""
     parsed = json.loads(filter_value)
     ctx["request_filters"] = {"asset_types": parsed}
+    if _is_harness_mode(ctx):
+        _harness_dispatch(ctx, "impl", {"asset_types": parsed})
+        return
     result = []
     for f in ctx.get("registry_formats", []):
         f_assets = {a["type"] for a in f.get("assets", [])}
@@ -230,6 +333,9 @@ def when_request_asset_types(ctx: dict, filter_value: str) -> None:
 def when_request_min_width(ctx: dict, min_w: int) -> None:
     """Request formats with min_width filter."""
     ctx["request_filters"] = {"min_width": min_w}
+    if _is_harness_mode(ctx):
+        _harness_dispatch(ctx, "impl", {"min_width": min_w})
+        return
     result = []
     for f in ctx.get("registry_formats", []):
         renders = f.get("renders", [])
@@ -242,6 +348,9 @@ def when_request_min_width(ctx: dict, min_w: int) -> None:
 def when_request_min_max_width(ctx: dict, min_w: int, max_w: int) -> None:
     """Request formats with min_width and max_width filters."""
     ctx["request_filters"] = {"min_width": min_w, "max_width": max_w}
+    if _is_harness_mode(ctx):
+        _harness_dispatch(ctx, "impl", {"min_width": min_w, "max_width": max_w})
+        return
     result = []
     for f in ctx.get("registry_formats", []):
         renders = f.get("renders", [])
@@ -258,6 +367,9 @@ def when_request_responsive(ctx: dict, value: str) -> None:
     """Request formats with is_responsive filter."""
     is_resp = value.lower() == "true"
     ctx["request_filters"] = {"is_responsive": is_resp}
+    if _is_harness_mode(ctx):
+        _harness_dispatch(ctx, "impl", {"is_responsive": is_resp})
+        return
     result = [f for f in ctx.get("registry_formats", []) if f.get("responsive") == is_resp]
     ctx["result"] = {"formats": result, "status": "completed"}
 
@@ -269,6 +381,9 @@ def when_request_responsive(ctx: dict, value: str) -> None:
 def when_request_name_search(ctx: dict, search: str) -> None:
     """Request formats with name_search filter (case-insensitive substring)."""
     ctx["request_filters"] = {"name_search": search}
+    if _is_harness_mode(ctx):
+        _harness_dispatch(ctx, "impl", {"name_search": search})
+        return
     result = [f for f in ctx.get("registry_formats", []) if search.lower() in f.get("name", "").lower()]
     ctx["result"] = {"formats": result, "status": "completed"}
 
@@ -281,6 +396,9 @@ def when_request_disclosure_positions(ctx: dict, filter_value: str) -> None:
     """Request formats with disclosure_positions filter (AND semantics)."""
     parsed = json.loads(filter_value)
     ctx["request_filters"] = {"disclosure_positions": parsed}
+    if _is_harness_mode(ctx):
+        _harness_dispatch(ctx, "impl", {"disclosure_positions": parsed})
+        return
 
     # Validate
     valid_positions = {"prominent", "footer", "overlay", "audio", "corner", "inline", "before", "after"}
@@ -325,6 +443,9 @@ def when_request_output_format_ids(ctx: dict, filter_value: str) -> None:
     """Request formats with output_format_ids filter (OR semantics)."""
     parsed = json.loads(filter_value)
     ctx["request_filters"] = {"output_format_ids": parsed}
+    if _is_harness_mode(ctx):
+        _harness_dispatch(ctx, "impl", {"output_format_ids": parsed})
+        return
 
     # Validate
     if not parsed:
@@ -363,6 +484,9 @@ def when_request_input_format_ids(ctx: dict, filter_value: str) -> None:
     """Request formats with input_format_ids filter (OR semantics)."""
     parsed = json.loads(filter_value)
     ctx["request_filters"] = {"input_format_ids": parsed}
+    if _is_harness_mode(ctx):
+        _harness_dispatch(ctx, "impl", {"input_format_ids": parsed})
+        return
 
     # Validate
     if not parsed:
@@ -396,6 +520,7 @@ def when_request_input_format_ids(ctx: dict, filter_value: str) -> None:
 # ── Partition / boundary dispatch steps ──────────────────────────────
 # These steps dispatch parameterized partition and boundary scenarios.
 # They store the partition/boundary_point in ctx for the Then step.
+# These remain as stubs — they test the test-design methodology, not production code.
 
 
 @when(parsers.parse('the Buyer Agent requests creative formats with type filter "{partition}"'))
