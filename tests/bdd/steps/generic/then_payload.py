@@ -187,6 +187,11 @@ def then_returned_type(ctx: dict, fmt_type: str) -> None:
 # These verify that production code either:
 #   - returned a valid response (expected="valid")
 #   - raised an error (expected="invalid")
+#
+# Two regex steps cover all partition ("filtering should result in") and
+# boundary ("handling should be") scenarios. The captured field name is
+# unused — the When step already applied the filter; the Then step only
+# checks accept/reject outcome.
 
 
 def _assert_partition_outcome(ctx: dict, expected: str) -> None:
@@ -204,124 +209,13 @@ def _assert_partition_outcome(ctx: dict, expected: str) -> None:
         raise AssertionError(f"Unexpected outcome value: {expected}")
 
 
-@then(parsers.parse("the type filtering should result in {expected}"))
-def then_type_filtering_result(ctx: dict, expected: str) -> None:
+@then(parsers.re(r"the (?P<field>.+) filtering should result in (?P<expected>\w+)"))
+def then_partition_filtering_result(ctx: dict, field: str, expected: str) -> None:
+    """Generic partition test: any '<field> filtering should result in <expected>'."""
     _assert_partition_outcome(ctx, expected)
 
 
-@then(parsers.parse("the format_ids filtering should result in {expected}"))
-def then_format_ids_filtering_result(ctx: dict, expected: str) -> None:
-    _assert_partition_outcome(ctx, expected)
-
-
-@then(parsers.parse("the asset_types filtering should result in {expected}"))
-def then_asset_types_filtering_result(ctx: dict, expected: str) -> None:
-    _assert_partition_outcome(ctx, expected)
-
-
-@then(parsers.parse("the dimension filtering should result in {expected}"))
-def then_dimension_filtering_result(ctx: dict, expected: str) -> None:
-    _assert_partition_outcome(ctx, expected)
-
-
-@then(parsers.parse("the responsive filtering should result in {expected}"))
-def then_responsive_filtering_result(ctx: dict, expected: str) -> None:
-    _assert_partition_outcome(ctx, expected)
-
-
-@then(parsers.parse("the name search filtering should result in {expected}"))
-def then_name_search_filtering_result(ctx: dict, expected: str) -> None:
-    _assert_partition_outcome(ctx, expected)
-
-
-@then(parsers.parse("the wcag filtering should result in {expected}"))
-def then_wcag_filtering_result(ctx: dict, expected: str) -> None:
-    _assert_partition_outcome(ctx, expected)
-
-
-@then(parsers.parse("the disclosure_positions filtering should result in {expected}"))
-def then_disclosure_filtering_result(ctx: dict, expected: str) -> None:
-    _assert_partition_outcome(ctx, expected)
-
-
-@then(parsers.parse("the output_format_ids filtering should result in {expected}"))
-def then_output_ids_filtering_result(ctx: dict, expected: str) -> None:
-    _assert_partition_outcome(ctx, expected)
-
-
-@then(parsers.parse("the input_format_ids filtering should result in {expected}"))
-def then_input_ids_filtering_result(ctx: dict, expected: str) -> None:
-    _assert_partition_outcome(ctx, expected)
-
-
-@then(parsers.parse("the creative agent type filtering should result in {expected}"))
-def then_agent_type_filtering_result(ctx: dict, expected: str) -> None:
-    _assert_partition_outcome(ctx, expected)
-
-
-@then(parsers.parse("the creative agent asset type filtering should result in {expected}"))
-def then_agent_asset_filtering_result(ctx: dict, expected: str) -> None:
-    _assert_partition_outcome(ctx, expected)
-
-
-# ── Boundary test outcomes ───────────────────────────────────────────
-
-
-@then(parsers.parse("the type handling should be {expected}"))
-def then_type_handling(ctx: dict, expected: str) -> None:
-    _assert_partition_outcome(ctx, expected)
-
-
-@then(parsers.parse("the format_ids handling should be {expected}"))
-def then_format_ids_handling(ctx: dict, expected: str) -> None:
-    _assert_partition_outcome(ctx, expected)
-
-
-@then(parsers.parse("the asset_types handling should be {expected}"))
-def then_asset_types_handling(ctx: dict, expected: str) -> None:
-    _assert_partition_outcome(ctx, expected)
-
-
-@then(parsers.parse("the dimension handling should be {expected}"))
-def then_dimension_handling(ctx: dict, expected: str) -> None:
-    _assert_partition_outcome(ctx, expected)
-
-
-@then(parsers.parse("the responsive handling should be {expected}"))
-def then_responsive_handling(ctx: dict, expected: str) -> None:
-    _assert_partition_outcome(ctx, expected)
-
-
-@then(parsers.parse("the name search handling should be {expected}"))
-def then_name_search_handling(ctx: dict, expected: str) -> None:
-    _assert_partition_outcome(ctx, expected)
-
-
-@then(parsers.parse("the wcag handling should be {expected}"))
-def then_wcag_handling(ctx: dict, expected: str) -> None:
-    _assert_partition_outcome(ctx, expected)
-
-
-@then(parsers.parse("the disclosure handling should be {expected}"))
-def then_disclosure_handling(ctx: dict, expected: str) -> None:
-    _assert_partition_outcome(ctx, expected)
-
-
-@then(parsers.parse("the output_format_ids handling should be {expected}"))
-def then_output_ids_handling(ctx: dict, expected: str) -> None:
-    _assert_partition_outcome(ctx, expected)
-
-
-@then(parsers.parse("the input_format_ids handling should be {expected}"))
-def then_input_ids_handling(ctx: dict, expected: str) -> None:
-    _assert_partition_outcome(ctx, expected)
-
-
-@then(parsers.parse("the creative agent type handling should be {expected}"))
-def then_agent_type_handling(ctx: dict, expected: str) -> None:
-    _assert_partition_outcome(ctx, expected)
-
-
-@then(parsers.parse("the creative agent asset type handling should be {expected}"))
-def then_agent_asset_handling(ctx: dict, expected: str) -> None:
+@then(parsers.re(r"the (?P<field>.+) handling should be (?P<expected>\w+)"))
+def then_boundary_handling_result(ctx: dict, field: str, expected: str) -> None:
+    """Generic boundary test: any '<field> handling should be <expected>'."""
     _assert_partition_outcome(ctx, expected)

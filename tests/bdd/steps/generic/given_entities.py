@@ -9,24 +9,9 @@ Steps configure the harness registry with real Format objects via
 
 from __future__ import annotations
 
-from typing import Any
-
 from pytest_bdd import given, parsers
 
-
-def _sync_registry(ctx: dict[str, Any]) -> None:
-    """Push ctx['registry_formats'] dicts into the harness as real Format objects.
-
-    Called after any step that modifies ctx["registry_formats"].
-    """
-    env = ctx["env"]
-
-    from tests.bdd.steps.domain.uc005_creative_formats import dicts_to_formats
-
-    raw = ctx.get("registry_formats", [])
-    formats = dicts_to_formats(raw)
-    env.set_registry_formats(formats)
-
+from tests.bdd.steps.generic._registry import sync_registry as _sync_registry
 
 # ── Background steps (apply to every scenario) ──────────────────────
 

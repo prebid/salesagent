@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from typing import Any
 
 from pytest_bdd import given, parsers
+
+from tests.bdd.steps.generic._registry import sync_registry as _sync_registry
 
 
 def _datatable_to_dicts(datatable: Sequence[Sequence[object]]) -> list[dict[str, str]]:
@@ -25,20 +26,6 @@ def _datatable_to_dicts(datatable: Sequence[Sequence[object]]) -> list[dict[str,
     """
     headers = [str(cell) for cell in datatable[0]]
     return [{headers[i]: str(cell) for i, cell in enumerate(row)} for row in datatable[1:]]
-
-
-def _sync_registry(ctx: dict[str, Any]) -> None:
-    """Push ctx['registry_formats'] dicts into the harness as real Format objects.
-
-    Called after any step that modifies ctx["registry_formats"].
-    """
-    env = ctx["env"]
-
-    from tests.bdd.steps.domain.uc005_creative_formats import dicts_to_formats
-
-    raw = ctx.get("registry_formats", [])
-    formats = dicts_to_formats(raw)
-    env.set_registry_formats(formats)
 
 
 # ── Format by type + asset type ──────────────────────────────────────
