@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastmcp.utilities.lifespan import combine_lifespans
 
 from src.core.main import mcp
@@ -22,9 +22,33 @@ from src.core.main import mcp
 logger = logging.getLogger(__name__)
 
 
+def _install_admin_mounts() -> None:
+    """Ensure Flask admin mounts are the final routes in the FastAPI app.
+
+    The root fallback mount must stay last so dynamically-added FastAPI test
+    routes (and any later app routes) are matched before Flask catches all
+    remaining paths.
+    """
+
+    from a2wsgi import WSGIMiddleware
+    from starlette.routing import Mount
+
+    filtered_routes = []
+    for route in app.router.routes:
+        # Remove any prior compatibility mounts so we can re-add them at the end.
+        if isinstance(route, Mount) and isinstance(route.app, WSGIMiddleware) and route.path in {"/admin", ""}:
+            continue
+        filtered_routes.append(route)
+
+    app.router.routes = filtered_routes
+    app.mount("/admin", admin_wsgi)  # type: ignore[arg-type]
+    app.mount("/", admin_wsgi)  # type: ignore[arg-type]
+
+
 @asynccontextmanager
 async def app_lifespan(app: FastAPI):
     """FastAPI application lifespan — startup and shutdown hooks."""
+    _install_admin_mounts()
     logger.info("FastAPI application starting up")
     yield
     logger.info("FastAPI application shutting down")
@@ -98,6 +122,17 @@ a2a_app.add_routes_to_app(
     extended_agent_card_url="/agent.json",
 )
 logger.info("A2A routes added: /a2a, /.well-known/agent-card.json, /agent.json")
+
+
+@app.api_route("/a2a/", methods=["GET", "POST", "OPTIONS"])
+async def a2a_trailing_slash_redirect():
+    """Preserve historical /a2a/ compatibility.
+
+    The admin root fallback mount would otherwise catch `/a2a/` and hand it to
+    Flask, which returns 404. Redirecting here keeps A2A owned by FastAPI.
+    """
+
+    return RedirectResponse(url="/a2a", status_code=307)
 
 
 # ---------------------------------------------------------------------------
@@ -265,16 +300,6 @@ from src.admin.app import create_app  # noqa: E402
 
 flask_admin_app = create_app()
 admin_wsgi = WSGIMiddleware(flask_admin_app)
-
-# Mount Flask admin at all paths it handles.
-# Order matters: specific routes before catch-all.
-_ADMIN_PATHS = ["/admin", "/static", "/auth", "/api", "/callback", "/logout", "/login", "/signup", "/test"]
-
-for _path in _ADMIN_PATHS:
-    app.mount(_path, admin_wsgi)  # type: ignore[arg-type]  # WSGIMiddleware is a valid ASGI app; starlette/a2wsgi typing mismatch
-
-# Tenant-specific admin: /tenant/{tenant_id}/admin/...
-app.mount("/tenant", admin_wsgi)  # type: ignore[arg-type]  # WSGIMiddleware is a valid ASGI app; starlette/a2wsgi typing mismatch
 
 
 # ---------------------------------------------------------------------------

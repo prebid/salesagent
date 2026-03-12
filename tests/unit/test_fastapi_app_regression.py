@@ -323,3 +323,80 @@ class TestFormatResolverNoEventLoopCreation:
             result = get_format("test_format", agent_url="http://example.com/agent")
 
         assert result == mock_format
+
+
+class TestAdminCompatibilityMount:
+    """Admin UI should be reachable through both /admin and the root fallback mount."""
+
+    def test_fastapi_mounts_admin_at_admin_and_root(self):
+        from starlette.routing import Mount
+
+        from src.app import _install_admin_mounts, app
+
+        _install_admin_mounts()
+        admin_mounts = [
+            route.path
+            for route in app.routes
+            if isinstance(route, Mount) and route.app.__class__.__name__ == "WSGIMiddleware"
+        ]
+
+        assert "/admin" in admin_mounts
+        assert "" in admin_mounts
+        assert "/tenant" not in admin_mounts
+        assert "/auth" not in admin_mounts
+        assert "/login" not in admin_mounts
+        assert "/logout" not in admin_mounts
+        assert "/signup" not in admin_mounts
+        assert "/test" not in admin_mounts
+
+    def test_root_login_path_is_exposed_by_root_fallback_mount(self):
+        from starlette.testclient import TestClient
+
+        from src.app import _install_admin_mounts, app
+
+        _install_admin_mounts()
+        client = TestClient(app)
+        response = client.get("/login", follow_redirects=False)
+        assert response.status_code != 404
+
+    def test_admin_login_path_remains_available(self):
+        from starlette.testclient import TestClient
+
+        from src.app import _install_admin_mounts, app
+
+        _install_admin_mounts()
+        client = TestClient(app)
+        response = client.get("/admin/login", follow_redirects=False)
+        assert response.status_code != 404
+
+
+class TestOidcCallbackCompatibility:
+    """OIDC config should keep the legacy public callback path."""
+
+    def test_get_tenant_redirect_uri_uses_root_auth_callback(self):
+        from src.services.auth_config_service import get_tenant_redirect_uri
+
+        tenant = MagicMock()
+        tenant.virtual_host = None
+        tenant.subdomain = None
+
+        with patch.dict(os.environ, {"ADCP_SALES_PORT": "8080"}, clear=False):
+            redirect_uri = get_tenant_redirect_uri(tenant)
+
+        assert redirect_uri.endswith("/auth/oidc/callback")
+
+
+class TestA2ATrailingSlashCompatibility:
+    """A2A trailing-slash requests should stay on the FastAPI surface."""
+
+    def test_a2a_trailing_slash_redirects_to_canonical_path(self):
+        from starlette.testclient import TestClient
+
+        from src.app import _install_admin_mounts, app
+
+        _install_admin_mounts()
+        client = TestClient(app)
+        response = client.post("/a2a/", json={"test": "data"}, follow_redirects=False)
+
+        assert response.status_code == 307
+        assert response.headers["location"] == "/a2a"
