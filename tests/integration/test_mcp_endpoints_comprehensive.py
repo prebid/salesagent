@@ -13,7 +13,7 @@ from fastmcp.client.transports import StreamableHttpTransport
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal
 from tests.helpers.adcp_factories import create_test_package_request_dict
-from tests.integration_v2.conftest import create_test_product_with_pricing
+from tests.integration.conftest import create_test_product_with_pricing
 from tests.utils.database_helpers import create_tenant_with_timestamps, get_utc_now
 
 
@@ -38,7 +38,7 @@ class TestMCPEndpointsComprehensive:
 
         This runs BEFORE mcp_server starts (due to autouse=True and fixture ordering).
         """
-        from tests.integration_v2.conftest import add_required_setup_data
+        from tests.integration.conftest import add_required_setup_data
 
         # Write test data to the database
         with get_db_session() as session:

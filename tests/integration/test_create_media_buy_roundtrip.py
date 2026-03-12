@@ -28,7 +28,7 @@ from src.core.database.models import Product as ModelProduct
 from src.core.database.models import Tenant as ModelTenant
 from src.core.schemas import CreateMediaBuySuccess
 from src.core.testing_hooks import TestingContext, TestingHooksResult, apply_testing_hooks
-from tests.integration_v2.conftest import create_test_product_with_pricing
+from tests.integration.conftest import create_test_product_with_pricing
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 

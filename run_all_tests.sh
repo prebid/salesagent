@@ -42,7 +42,7 @@ from src.core.tools.media_buy_create import _create_media_buy_impl
 
 collect_reports() {
     # Copy JSON reports from .tox/ to results dir
-    for name in unit integration integration_v2 e2e ui; do
+    for name in unit integration e2e admin bdd; do
         [ -f ".tox/${name}.json" ] && cp ".tox/${name}.json" "$RESULTS_DIR/"
     done
 }

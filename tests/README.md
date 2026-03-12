@@ -28,10 +28,10 @@ Complete workflow tests that simulate real user journeys.
 **Mocking:** None - uses real services in test mode
 **Runtime:** < 30 seconds per test
 
-### 4. UI Tests (`tests/ui/`)
+### 4. Admin UI Tests (`tests/admin/`)
 Tests for the Admin UI web interface.
 
-**Run:** `pytest tests/ui/ -v`
+**Run:** `pytest tests/admin/ -v`
 **Purpose:** Test page rendering, forms, and user interactions
 **Mocking:** Backend services when appropriate
 **Runtime:** < 10 seconds per test

@@ -37,7 +37,7 @@ from src.core.schemas import CreateMediaBuyError, Error
 from src.core.tools import create_media_buy_raw, list_creatives_raw, sync_creatives_raw
 from tests.factories import PrincipalFactory
 from tests.helpers.adcp_factories import create_test_package_request_dict
-from tests.integration_v2.conftest import add_required_setup_data, create_test_product_with_pricing
+from tests.integration.conftest import add_required_setup_data, create_test_product_with_pricing
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 

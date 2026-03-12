@@ -32,7 +32,7 @@ class TestProductsDataValidation:
         Bug caught: https://github.com/your-org/repo/issues/XXX
         """
         from src.core.database.database_session import get_db_session
-        from tests.integration_v2.conftest import create_test_product_with_pricing
+        from tests.integration.conftest import create_test_product_with_pricing
 
         tenant_id = test_tenant_with_data["tenant_id"]
 
@@ -99,7 +99,7 @@ class TestProductsDataValidation:
     def test_products_list_shows_all_products(self, authenticated_admin_session, test_tenant_with_data, integration_db):
         """Test that products list shows all tenant's products exactly once."""
         from src.core.database.database_session import get_db_session
-        from tests.integration_v2.conftest import create_test_product_with_pricing
+        from tests.integration.conftest import create_test_product_with_pricing
 
         tenant_id = test_tenant_with_data["tenant_id"]
 
@@ -148,7 +148,7 @@ class TestProductsDataValidation:
     ):
         """Test that products with a single pricing option render correctly."""
         from src.core.database.database_session import get_db_session
-        from tests.integration_v2.conftest import create_test_product_with_pricing
+        from tests.integration.conftest import create_test_product_with_pricing
 
         tenant_id = test_tenant_with_data["tenant_id"]
 

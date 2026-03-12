@@ -231,6 +231,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
                 break
 
+        # --- Entity marker auto-application based on BDD tags ---
+        # BDD tests don't have entity keywords in filenames; instead they
+        # use tags like T-UC-004-* (delivery) and T-UC-005-* (creative).
+        if any(t.startswith("T-UC-004") for t in marker_names):
+            item.add_marker(pytest.mark.delivery)
+        if any(t.startswith("T-UC-005") for t in marker_names):
+            item.add_marker(pytest.mark.creative)
+
 
 # ---------------------------------------------------------------------------
 # Core fixtures

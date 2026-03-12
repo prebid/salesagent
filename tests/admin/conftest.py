@@ -1,7 +1,7 @@
 """
-UI test specific fixtures.
+Admin UI test specific fixtures.
 
-These fixtures are for testing the web interface.
+These fixtures are for testing the admin web interface.
 """
 
 import os

@@ -1,5 +1,5 @@
 .PHONY: quality quality-full pre-pr lint-fix lint typecheck test-fast test-full
-.PHONY: test-stack-up test-stack-down test-all test-cov
+.PHONY: test-stack-up test-stack-down test-all test-cov test-entity
 
 quality:
 	uv run ruff format --check .
@@ -47,3 +47,10 @@ test-all: test-stack-up
 test-cov:
 	@echo "Opening coverage report..."
 	@open htmlcov/index.html 2>/dev/null || xdg-open htmlcov/index.html 2>/dev/null || echo "Open htmlcov/index.html in your browser"
+
+# ─── Entity-scoped test runs ────────────────────────────────────
+# Usage: make test-entity ENTITY=delivery
+#        make test-entity ENTITY="creative and unit"
+ENTITY ?= ""
+test-entity:
+	uv run pytest tests/unit/ tests/integration/ tests/e2e/ tests/admin/ -m "$(ENTITY)" -x -v

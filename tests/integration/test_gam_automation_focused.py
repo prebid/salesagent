@@ -16,7 +16,7 @@ from src.adapters.google_ad_manager import GUARANTEED_LINE_ITEM_TYPES, NON_GUARA
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Product, Tenant
 from src.core.schemas import FormatId, MediaPackage, Principal
-from tests.integration_v2.conftest import create_test_product_with_pricing
+from tests.integration.conftest import create_test_product_with_pricing
 
 # Default agent URL for creating FormatId objects
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"

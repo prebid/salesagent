@@ -62,7 +62,7 @@ from src.core.schemas import CreateMediaBuyRequest
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from tests.helpers.adcp_factories import create_test_package_request
-from tests.integration_v2.conftest import create_test_product_with_pricing, get_pricing_option_id
+from tests.integration.conftest import create_test_product_with_pricing, get_pricing_option_id
 
 
 @pytest.mark.integration

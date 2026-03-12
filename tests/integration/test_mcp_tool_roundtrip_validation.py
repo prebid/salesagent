@@ -63,7 +63,7 @@ class TestMCPToolRoundtripValidation:
     @pytest.fixture
     def real_products_in_db(self, test_tenant_id) -> list[ProductModel]:
         """Create real Product objects in database to test actual conversion paths."""
-        from tests.integration_v2.conftest import create_test_product_with_pricing
+        from tests.integration.conftest import create_test_product_with_pricing
 
         created_products = []
         with get_db_session() as session:

@@ -15,7 +15,7 @@ from src.core.json_validators import (
     ensure_json_array,
     ensure_json_object,
 )
-from tests.integration_v2.conftest import (
+from tests.integration.conftest import (
     add_required_setup_data,
     create_test_product_with_pricing,
 )

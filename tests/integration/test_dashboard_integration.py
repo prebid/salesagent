@@ -184,7 +184,7 @@ def test_db(integration_db):
 
     # Insert test products using ORM + helper function (NEW: uses pricing_options)
     from src.core.database.database_session import get_db_session
-    from tests.integration_v2.conftest import create_test_product_with_pricing
+    from tests.integration.conftest import create_test_product_with_pricing
 
     with get_db_session() as session:
         create_test_product_with_pricing(

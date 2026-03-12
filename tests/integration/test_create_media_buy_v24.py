@@ -25,7 +25,7 @@ from src.core.database.database_session import get_db_session
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest, PackageRequest, Targeting
 from src.core.testing_hooks import AdCPTestContext
-from tests.integration_v2.conftest import add_required_setup_data, create_test_product_with_pricing
+from tests.integration.conftest import add_required_setup_data, create_test_product_with_pricing
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db, pytest.mark.asyncio]
 

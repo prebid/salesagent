@@ -8,7 +8,7 @@ from src.admin.app import create_app
 app = create_app()
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PricingOption, Product, Tenant
-from tests.integration_v2.conftest import (
+from tests.integration.conftest import (
     add_required_setup_data,
     create_test_product_with_pricing,
 )

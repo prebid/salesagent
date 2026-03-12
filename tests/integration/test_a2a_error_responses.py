@@ -29,7 +29,7 @@ from src.core.resolved_identity import ResolvedIdentity
 
 # fmt: on
 from tests.helpers.adcp_factories import create_test_package_request_dict
-from tests.integration_v2.conftest import (
+from tests.integration.conftest import (
     add_required_setup_data,
     create_test_product_with_pricing,
 )

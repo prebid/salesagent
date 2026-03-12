@@ -11,7 +11,7 @@ from fastmcp.client.transports import StreamableHttpTransport
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal
-from tests.integration_v2.conftest import add_required_setup_data
+from tests.integration.conftest import add_required_setup_data
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
 

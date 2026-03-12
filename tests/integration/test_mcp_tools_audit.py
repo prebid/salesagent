@@ -39,7 +39,7 @@ from src.core.schemas import (
     PackageDelivery,
 )
 from src.core.testing_hooks import TestingContext, apply_testing_hooks
-from tests.integration_v2.conftest import add_required_setup_data, create_test_product_with_pricing
+from tests.integration.conftest import add_required_setup_data, create_test_product_with_pricing
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
 
