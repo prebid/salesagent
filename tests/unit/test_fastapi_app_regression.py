@@ -331,8 +331,9 @@ class TestAdminCompatibilityMount:
     def test_fastapi_mounts_admin_at_admin_and_root(self):
         from starlette.routing import Mount
 
-        from src.app import app
+        from src.app import _install_admin_mounts, app
 
+        _install_admin_mounts()
         admin_mounts = [
             route.path
             for route in app.routes
@@ -351,20 +352,20 @@ class TestAdminCompatibilityMount:
     def test_root_login_path_is_exposed_by_root_fallback_mount(self):
         from starlette.testclient import TestClient
 
-        from src.app import app
+        from src.app import _install_admin_mounts, app
 
+        _install_admin_mounts()
         client = TestClient(app)
-
         response = client.get("/login", follow_redirects=False)
         assert response.status_code != 404
 
     def test_admin_login_path_remains_available(self):
         from starlette.testclient import TestClient
 
-        from src.app import app
+        from src.app import _install_admin_mounts, app
 
+        _install_admin_mounts()
         client = TestClient(app)
-
         response = client.get("/admin/login", follow_redirects=False)
         assert response.status_code != 404
 
@@ -383,3 +384,19 @@ class TestOidcCallbackCompatibility:
             redirect_uri = get_tenant_redirect_uri(tenant)
 
         assert redirect_uri.endswith("/auth/oidc/callback")
+
+
+class TestA2ATrailingSlashCompatibility:
+    """A2A trailing-slash requests should stay on the FastAPI surface."""
+
+    def test_a2a_trailing_slash_redirects_to_canonical_path(self):
+        from starlette.testclient import TestClient
+
+        from src.app import _install_admin_mounts, app
+
+        _install_admin_mounts()
+        client = TestClient(app)
+        response = client.post("/a2a/", json={"test": "data"}, follow_redirects=False)
+
+        assert response.status_code == 307
+        assert response.headers["location"] == "/a2a"
