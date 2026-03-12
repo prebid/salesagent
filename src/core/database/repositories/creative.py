@@ -16,7 +16,15 @@ from typing import NamedTuple, cast
 from sqlalchemy import func, select
 from sqlalchemy.orm import InstrumentedAttribute, Session, attributes
 
-from src.core.database.models import Creative, CreativeAssignment, MediaBuy
+from src.core.database.models import (
+    Creative,
+    CreativeAssignment,
+    CreativeReview,
+    MediaBuy,
+    MediaPackage,
+    Principal,
+    Product,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -217,6 +225,99 @@ class CreativeRepository:
         """Flush pending changes to the database without committing."""
         self._session.flush()
 
+    def begin_nested(self):
+        """Start a savepoint (nested transaction) for partial-success patterns."""
+        return self._session.begin_nested()
+
+    def commit(self) -> None:
+        """Commit the current transaction."""
+        self._session.commit()
+
+    def create_review(self, review: CreativeReview) -> CreativeReview:
+        """Persist a CreativeReview record within this tenant.
+
+        The review.tenant_id must match the repository's tenant_id.
+        Does NOT commit — the caller handles that.
+        """
+        if review.tenant_id != self._tenant_id:
+            raise ValueError(
+                f"Tenant mismatch: review.tenant_id={review.tenant_id!r} != repository tenant_id={self._tenant_id!r}"
+            )
+        self._session.add(review)
+        return review
+
+    def get_provenance_policies(self) -> list[dict]:
+        """Get creative_policy dicts from products that require AI provenance.
+
+        Returns list of creative_policy dicts where provenance_required is True.
+        """
+        tenant_products = self._session.scalars(select(Product).filter_by(tenant_id=self._tenant_id)).all()
+        return [
+            p.creative_policy
+            for p in tenant_products
+            if p.creative_policy and p.creative_policy.get("provenance_required")
+        ]
+
+    # ------------------------------------------------------------------
+    # Cross-model lookups (shared by admin and _impl)
+    # ------------------------------------------------------------------
+
+    def get_principal_name(self, principal_id: str) -> str:
+        """Look up principal name within the tenant, falling back to principal_id."""
+        principal = self._session.scalars(
+            select(Principal).filter_by(
+                tenant_id=self._tenant_id,
+                principal_id=principal_id,
+            )
+        ).first()
+        return principal.name if principal else principal_id
+
+    def get_prior_ai_review(self, creative_id: str) -> CreativeReview | None:
+        """Get the most recent AI review for a creative within the tenant."""
+        return self._session.scalars(
+            select(CreativeReview)
+            .filter_by(creative_id=creative_id, tenant_id=self._tenant_id, review_type="ai")
+            .order_by(CreativeReview.reviewed_at.desc())
+            .limit(1)
+        ).first()
+
+    # ------------------------------------------------------------------
+    # Admin-specific lookups (no principal_id required)
+    # Added for admin blueprint migration (salesagent-4tb)
+    # ------------------------------------------------------------------
+
+    def admin_get_by_id(self, creative_id: str) -> Creative | None:
+        """Get a creative by its ID within the tenant (admin use — no principal filter)."""
+        return self._session.scalars(
+            select(Creative).where(
+                Creative.tenant_id == self._tenant_id,
+                Creative.creative_id == creative_id,
+            )
+        ).first()
+
+    def admin_list_all(self) -> list[Creative]:
+        """Get all creatives for the tenant ordered by status then date (admin use)."""
+        return list(
+            self._session.scalars(
+                select(Creative)
+                .filter_by(tenant_id=self._tenant_id)
+                .order_by(Creative.status, Creative.created_at.desc())
+            ).all()
+        )
+
+    def admin_get_by_ids(self, creative_ids: list[str]) -> list[Creative]:
+        """Get multiple creatives by their IDs within the tenant (admin use)."""
+        if not creative_ids:
+            return []
+        return list(
+            self._session.scalars(
+                select(Creative).where(
+                    Creative.tenant_id == self._tenant_id,
+                    Creative.creative_id.in_(creative_ids),
+                )
+            ).all()
+        )
+
 
 class CreativeAssignmentRepository:
     """Tenant-scoped data access for CreativeAssignment.
@@ -247,6 +348,17 @@ class CreativeAssignmentRepository:
                 select(CreativeAssignment).where(
                     CreativeAssignment.tenant_id == self._tenant_id,
                     CreativeAssignment.creative_id == creative_id,
+                )
+            ).all()
+        )
+
+    def get_by_media_buy(self, media_buy_id: str) -> list[CreativeAssignment]:
+        """Get all assignments for a media buy within the tenant."""
+        return list(
+            self._session.scalars(
+                select(CreativeAssignment).where(
+                    CreativeAssignment.tenant_id == self._tenant_id,
+                    CreativeAssignment.media_buy_id == media_buy_id,
                 )
             ).all()
         )
@@ -323,3 +435,42 @@ class CreativeAssignmentRepository:
             return False
         self._session.delete(assignment)
         return True
+
+    # ------------------------------------------------------------------
+    # Cross-model lookups (for assignment workflow)
+    # ------------------------------------------------------------------
+
+    def find_package_with_media_buy(self, package_id: str) -> tuple[MediaPackage, MediaBuy] | None:
+        """Find a package and its parent media buy within the tenant.
+
+        Delegates to MediaBuyRepository — all MediaPackage queries are owned by
+        that repository per the no-raw-MediaPackage-select guard.
+
+        Returns (MediaPackage, MediaBuy) tuple or None if not found.
+        """
+        from src.core.database.repositories.media_buy import MediaBuyRepository
+
+        mb_repo = MediaBuyRepository(self._session, self._tenant_id)
+        return mb_repo.find_package_with_media_buy(package_id)
+
+    def get_creative_by_id(self, creative_id: str) -> Creative | None:
+        """Get a creative by tenant + creative_id (no principal filter)."""
+        return self._session.scalars(
+            select(Creative).where(
+                Creative.tenant_id == self._tenant_id,
+                Creative.creative_id == creative_id,
+            )
+        ).first()
+
+    def get_product_by_id(self, product_id: str) -> Product | None:
+        """Get a product by tenant + product_id."""
+        return self._session.scalars(
+            select(Product).where(
+                Product.tenant_id == self._tenant_id,
+                Product.product_id == product_id,
+            )
+        ).first()
+
+    def commit(self) -> None:
+        """Commit the current transaction."""
+        self._session.commit()

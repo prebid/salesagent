@@ -91,10 +91,11 @@ def _standard_patches(mock_uow, principal=None, convert_fn=None):
             new_callable=AsyncMock,
             return_value=[],
         ),
-        patch("src.services.dynamic_pricing_service.DynamicPricingService"),
         patch(
-            "src.core.tools.products.get_db_session",
-            side_effect=RuntimeError("no DB in unit test"),
+            "src.services.dynamic_pricing_service.DynamicPricingService",
+            **{
+                "return_value.enrich_products_with_pricing.side_effect": lambda products, **kw: products,
+            },
         ),
     ]
 

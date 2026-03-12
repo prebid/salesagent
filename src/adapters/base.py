@@ -198,6 +198,10 @@ class AdServerAdapter(ABC):
         creative_engine: CreativeEngineAdapter | None = None,
         tenant_id: str | None = None,
     ):
+        if not tenant_id:
+            raise ValueError(
+                "tenant_id is required for adapter initialization. All tenant-scoped operations need a valid tenant_id."
+            )
         self.config = config
         self.principal = principal
         self.principal_id = principal.principal_id  # For backward compatibility

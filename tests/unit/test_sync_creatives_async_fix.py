@@ -17,6 +17,7 @@ from adcp.types.generated_poc.enums.creative_action import CreativeAction
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tools.creatives import _sync_creatives_impl
 from src.core.validation_helpers import run_async_in_sync_context
+from tests.harness import make_mock_uow
 
 
 class TestRunAsyncInSyncContext:
@@ -56,6 +57,20 @@ class TestRunAsyncInSyncContext:
         assert result3 == "async_result"
 
 
+def _make_creative_uow():
+    """Create a mock CreativeUoW with creative_repo returning sensible defaults."""
+    mock_creative_repo = MagicMock()
+    mock_creative_repo.get_provenance_policies.return_value = []
+    mock_creative_repo.get_by_id.return_value = None
+    _, mock_uow = make_mock_uow(
+        repos={
+            "creatives": mock_creative_repo,
+            "assignments": MagicMock(),
+        }
+    )
+    return mock_uow, mock_creative_repo
+
+
 class TestSyncCreativesErrorHandling:
     """Test sync_creatives error handling paths that use creative_id."""
 
@@ -68,8 +83,7 @@ class TestSyncCreativesErrorHandling:
 
         This tests the new creative creation path where validation fails.
         """
-        # Mock the database session
-        mock_session = MagicMock()
+        mock_uow, mock_creative_repo = _make_creative_uow()
 
         # ResolvedIdentity replaces context-based auth
         identity = ResolvedIdentity(
@@ -79,23 +93,16 @@ class TestSyncCreativesErrorHandling:
             protocol="mcp",
         )
 
-        # Mock tenant context
-        mock_tenant = {
-            "tenant_id": "test_tenant",
-            "approval_mode": "auto-approve",
-        }
-
         # Create a creative that will fail validation (missing required fields)
         invalid_creative = {
             "creative_id": "test_creative_123",
             # Missing required fields like name, format_id
         }
 
-        with patch("src.core.tools.creatives._sync.get_db_session") as mock_get_db:
-            mock_get_db.return_value.__enter__.return_value = mock_session
-            mock_get_db.return_value.__exit__.return_value = None
+        with patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls:
+            mock_uow_cls.return_value.__enter__.return_value = mock_uow
 
-            with patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant):
+            with patch("src.core.helpers.context_helpers.ensure_tenant_context"):
                 # Mock the Creative schema to raise ValidationError
                 with patch("src.core.schemas.Creative") as mock_creative_class:
                     from pydantic import ValidationError
@@ -129,7 +136,11 @@ class TestSyncCreativesErrorHandling:
 
         To test actual failure path, use creative WITHOUT any URL (no assets, no url field).
         """
-        mock_session = MagicMock()
+        mock_uow, mock_creative_repo = _make_creative_uow()
+
+        # Mock begin_nested for savepoint
+        mock_creative_repo.begin_nested.return_value.__enter__.return_value = None
+        mock_creative_repo.begin_nested.return_value.__exit__.return_value = None
 
         identity = ResolvedIdentity(
             principal_id="test_principal",
@@ -137,11 +148,6 @@ class TestSyncCreativesErrorHandling:
             tenant={"tenant_id": "test_tenant", "approval_mode": "auto-approve"},
             protocol="mcp",
         )
-
-        mock_tenant = {
-            "tenant_id": "test_tenant",
-            "approval_mode": "auto-approve",
-        }
 
         # Creative WITHOUT URL - this should fail when preview returns no previews
         creative = {
@@ -151,11 +157,10 @@ class TestSyncCreativesErrorHandling:
             # NO assets, NO url - preview is required
         }
 
-        with patch("src.core.tools.creatives._sync.get_db_session") as mock_get_db:
-            mock_get_db.return_value.__enter__.return_value = mock_session
-            mock_get_db.return_value.__exit__.return_value = None
+        with patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls:
+            mock_uow_cls.return_value.__enter__.return_value = mock_uow
 
-            with patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant):
+            with patch("src.core.helpers.context_helpers.ensure_tenant_context"):
                 # Mock the creative agent registry to return no previews
                 with patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry:
                     mock_reg_instance = MagicMock()
@@ -189,9 +194,6 @@ class TestSyncCreativesErrorHandling:
 
                     mock_reg_instance.preview_creative = mock_preview
 
-                    # Mock session.scalars().first() to return None (new creative)
-                    mock_session.scalars.return_value.first.return_value = None
-
                     # This should handle the error gracefully with creative_id available
                     result = _sync_creatives_impl(
                         creatives=[creative],
@@ -218,7 +220,11 @@ class TestSyncCreativesAsyncScenario:
         - sync_creatives implementation is sync but calls async registry methods
         - Should NOT raise "asyncio.run() cannot be called from a running event loop"
         """
-        mock_session = MagicMock()
+        mock_uow, mock_creative_repo = _make_creative_uow()
+
+        # Mock begin_nested for savepoint
+        mock_creative_repo.begin_nested.return_value.__enter__.return_value = None
+        mock_creative_repo.begin_nested.return_value.__exit__.return_value = None
 
         identity = ResolvedIdentity(
             principal_id="test_principal",
@@ -227,11 +233,6 @@ class TestSyncCreativesAsyncScenario:
             protocol="mcp",
         )
 
-        mock_tenant = {
-            "tenant_id": "test_tenant",
-            "approval_mode": "auto-approve",
-        }
-
         creative = {
             "creative_id": "test_creative_789",
             "name": "Test Creative",
@@ -239,11 +240,10 @@ class TestSyncCreativesAsyncScenario:
             "assets": {"banner_image": {"url": "https://example.com/image.png"}},
         }
 
-        with patch("src.core.tools.creatives._sync.get_db_session") as mock_get_db:
-            mock_get_db.return_value.__enter__.return_value = mock_session
-            mock_get_db.return_value.__exit__.return_value = None
+        with patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls:
+            mock_uow_cls.return_value.__enter__.return_value = mock_uow
 
-            with patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant):
+            with patch("src.core.helpers.context_helpers.ensure_tenant_context"):
                 with patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry:
                     mock_reg_instance = MagicMock()
                     mock_registry.return_value = mock_reg_instance
@@ -287,11 +287,6 @@ class TestSyncCreativesAsyncScenario:
                     mock_reg_instance.get_format = mock_get_format
                     mock_reg_instance.list_all_formats = mock_list_formats
                     mock_reg_instance.preview_creative = mock_preview
-                    mock_session.scalars.return_value.first.return_value = None
-
-                    # Mock session.begin_nested for savepoint
-                    mock_session.begin_nested.return_value.__enter__.return_value = None
-                    mock_session.begin_nested.return_value.__exit__.return_value = None
 
                     # This is the critical test: calling from async context should work
                     # Before the fix, this would raise RuntimeError about asyncio.run()

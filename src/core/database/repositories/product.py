@@ -14,7 +14,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from src.core.database.models import Product
+from src.core.database.models import PricingOption, Product
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,8 @@ class ProductRepository:
         session: SQLAlchemy session (caller manages lifecycle).
         tenant_id: Tenant scope for all queries.
     """
+
+    _IMMUTABLE_FIELDS: frozenset[str] = frozenset({"tenant_id", "product_id"})
 
     def __init__(self, session: Session, tenant_id: str) -> None:
         self._session = session
@@ -140,8 +142,13 @@ class ProductRepository:
 
         Only updates fields that are valid Product column attributes.
         Returns the updated Product, or None if not found in this tenant.
-        Raises ValueError if any kwarg is not a valid Product attribute.
+        Raises ValueError if any kwarg is not a valid Product attribute or
+        if the caller attempts to update an immutable field (tenant_id,
+        product_id).
         """
+        blocked = self._IMMUTABLE_FIELDS & kwargs.keys()
+        if blocked:
+            raise ValueError(f"Cannot update immutable field(s): {', '.join(sorted(blocked))}")
         product = self.get_by_id(product_id)
         if product is None:
             return None
@@ -151,3 +158,17 @@ class ProductRepository:
             setattr(product, key, value)
         self._session.flush()
         return product
+
+    # ------------------------------------------------------------------
+    # PricingOption queries
+    # ------------------------------------------------------------------
+
+    def get_all_pricing_options(self) -> list[PricingOption]:
+        """Get all pricing options for the tenant."""
+        return list(
+            self._session.scalars(
+                select(PricingOption).where(
+                    PricingOption.tenant_id == self._tenant_id,
+                )
+            ).all()
+        )

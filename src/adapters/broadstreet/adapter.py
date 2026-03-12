@@ -152,7 +152,7 @@ class BroadstreetAdapter(AdServerAdapter):
             log_func=self.log,
         )
         self.workflow_manager = BroadstreetWorkflowManager(
-            tenant_id=self.tenant_id or "",
+            tenant_id=self.tenant_id,
             principal=self.principal,
             audit_logger=self.audit_logger,
             log_func=self.log,

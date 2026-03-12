@@ -48,8 +48,8 @@ def mock_adapter(integration_db):
             principal=principal,
             config=config,
             dry_run=False,
+            tenant_id=tenant.tenant_id,
         )
-        adapter.tenant_id = tenant.tenant_id
 
         yield adapter
 

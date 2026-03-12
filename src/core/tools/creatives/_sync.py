@@ -10,9 +10,8 @@ from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.core.creative_asset import CreativeAsset
 from adcp.types.generated_poc.enums.creative_action import CreativeAction
 from pydantic import BaseModel
-from sqlalchemy import select
 
-from src.core.database.database_session import get_db_session
+from src.core.database.repositories.uow import CreativeUoW
 from src.core.exceptions import AdCPAuthenticationError
 from src.core.helpers import log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
@@ -134,21 +133,12 @@ def _sync_creatives_impl(
     registry = get_creative_agent_registry()
     all_formats = run_async_in_sync_context(registry.list_all_formats(tenant_id=tenant["tenant_id"]))
 
-    with get_db_session() as session:
-        from src.core.database.repositories.creative import CreativeRepository
-
-        creative_repo = CreativeRepository(session, tenant["tenant_id"])
+    with CreativeUoW(tenant["tenant_id"]) as uow:
+        assert uow.creatives is not None
+        creative_repo = uow.creatives
 
         # Check if any product in this tenant requires AI provenance metadata
-        from src.core.database.models import Product as DBProduct
-
-        tenant_products = session.scalars(select(DBProduct).filter_by(tenant_id=tenant["tenant_id"])).all()
-        # Collect creative_policy from products that require provenance
-        provenance_policies = [
-            p.creative_policy
-            for p in tenant_products
-            if p.creative_policy and p.creative_policy.get("provenance_required")
-        ]
+        provenance_policies = creative_repo.get_provenance_policies()
         tenant_requires_provenance = len(provenance_policies) > 0
         if tenant_requires_provenance:
             logger.info(
@@ -243,7 +233,7 @@ def _sync_creatives_impl(
                     continue
 
                 # Use savepoint for individual creative transaction isolation
-                with session.begin_nested():
+                with creative_repo.begin_nested():
                     # Check if creative already exists (always check for upsert/patch behavior)
                     # SECURITY: Must filter by principal_id to prevent cross-principal modification
                     existing_creative = None
@@ -412,9 +402,7 @@ def _sync_creatives_impl(
                         )
                     )
 
-        # Commit all successful creative operations (skip in dry_run mode)
-        if not dry_run:
-            session.commit()
+        # CreativeUoW auto-commits on clean exit — no explicit commit needed
 
     # Process assignments (spec-compliant: creative_id → package_ids mapping)
     assignment_list = _process_assignments(

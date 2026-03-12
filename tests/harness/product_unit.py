@@ -2,8 +2,7 @@
 
 Patches: ProductUoW, get_principal_object, convert_product_model_to_schema,
          PolicyCheckService, generate_variants_for_brief, DynamicPricingService,
-         get_factory (ranking), resolve_property_list, get_db_session,
-         get_adapter.
+         get_factory (ranking), resolve_property_list, get_adapter.
 
 Usage::
 
@@ -22,7 +21,6 @@ Available mocks via env.mock:
     "ranking_factory"      -- get_factory mock (AI ranking)
     "dynamic_pricing"      -- DynamicPricingService class mock
     "resolve_property_list" -- resolve_property_list AsyncMock
-    "db_session"           -- get_db_session mock (for pricing session)
     "get_adapter"          -- get_adapter mock (for adapter support annotation)
 """
 
@@ -108,7 +106,6 @@ class ProductEnv(ProductMixin, BaseTestEnv):
         "ranking_factory": "src.services.ai.factory.get_factory",
         "dynamic_pricing": "src.services.dynamic_pricing_service.DynamicPricingService",
         "resolve_property_list": "src.core.property_list_resolver.resolve_property_list",
-        "db_session": f"{MODULE}.get_db_session",
         "get_adapter": "src.core.helpers.adapter_helpers.get_adapter",
     }
 
@@ -137,11 +134,6 @@ class ProductEnv(ProductMixin, BaseTestEnv):
 
         # Convert: identity function (return product as-is)
         self.mock["convert"].side_effect = lambda product_obj, **kw: product_obj
-
-        # DB session: no-op context manager (used by pricing block)
-        mock_session = MagicMock()
-        self.mock["db_session"].return_value.__enter__ = MagicMock(return_value=mock_session)
-        self.mock["db_session"].return_value.__exit__ = MagicMock(return_value=False)
 
         # Adapter: mock with supported pricing models
         mock_adapter = MagicMock()

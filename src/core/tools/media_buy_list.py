@@ -117,13 +117,13 @@ def _get_media_buys_impl(
     # dataclasses inside the UoW scope so nothing is accessed after session close.
     with MediaBuyUoW(tenant_id) as uow:
         assert uow.media_buys is not None
-        assert uow.session is not None
-
         # Resolve which media buys to return
         target_media_buys = _fetch_target_media_buys(req, principal_id, uow, today)
 
         # Resolve creative approvals for all packages in one batch query
         all_media_buy_ids = [buy.media_buy_id for buy in target_media_buys]
+        # FIXME(salesagent-9f2): _fetch_creative_approvals should use a repository method
+        assert uow.session is not None
         creative_approvals_by_package = _fetch_creative_approvals(all_media_buy_ids, tenant_id, uow.session)
 
         # Resolve package configs for all media buys in one batch query

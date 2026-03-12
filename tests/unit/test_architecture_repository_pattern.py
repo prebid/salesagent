@@ -44,39 +44,7 @@ IMPL_FILES = [
 # Pre-existing violations: (file_path, function_name)
 # These existed before the guard was created. Allowlist shrinks as repositories are introduced.
 # FIXME(salesagent-qo8a): all _impl functions should use repositories instead of get_db_session()
-IMPL_SESSION_ALLOWLIST = {
-    # media_buy_delivery.py — 1 function with get_db_session()
-    # FIXME(salesagent-qo8a): _get_pricing_options should use a repository
-    ("src/core/tools/media_buy_delivery.py", "_get_pricing_options"),
-    # products.py — 1 function with get_db_session() (product queries moved to ProductRepository)
-    # FIXME(salesagent-qo8a): _get_products_impl still uses get_db_session() for policy review + dynamic pricing
-    ("src/core/tools/products.py", "_get_products_impl"),
-    # capabilities.py — 1 function with get_db_session()
-    # FIXME(salesagent-qo8a): _get_adcp_capabilities_impl should use a repository
-    ("src/core/tools/capabilities.py", "_get_adcp_capabilities_impl"),
-    # creative_formats.py — 1 function with get_db_session()
-    # FIXME(salesagent-qo8a): _list_creative_formats_impl should use a repository
-    ("src/core/tools/creative_formats.py", "_list_creative_formats_impl"),
-    # properties.py — 1 function with get_db_session()
-    # FIXME(salesagent-qo8a): _list_authorized_properties_impl should use a repository
-    ("src/core/tools/properties.py", "_list_authorized_properties_impl"),
-    # creatives — 5 functions with get_db_session()
-    ("src/core/tools/creatives/listing.py", "_list_creatives_impl"),
-    ("src/core/tools/creatives/_sync.py", "_sync_creatives_impl"),
-    ("src/core/tools/creatives/_assignments.py", "_process_assignments"),
-    ("src/core/tools/creatives/_workflow.py", "_create_sync_workflow_steps"),
-    ("src/core/tools/creatives/_workflow.py", "_audit_log_sync"),
-    # task management — 3 functions with get_db_session()
-    ("src/core/tools/task_management.py", "list_tasks"),
-    ("src/core/tools/task_management.py", "get_task"),
-    ("src/core/tools/task_management.py", "complete_task"),
-    # admin blueprints — 5 functions with get_db_session()
-    ("src/admin/blueprints/creatives.py", "review_creatives"),
-    ("src/admin/blueprints/creatives.py", "approve_creative"),
-    ("src/admin/blueprints/creatives.py", "reject_creative"),
-    ("src/admin/blueprints/creatives.py", "_ai_review_creative_async"),
-    ("src/admin/blueprints/creatives.py", "_ai_review_creative_impl"),
-}
+IMPL_SESSION_ALLOWLIST: set[tuple[str, str]] = set()
 
 # ---------------------------------------------------------------------------
 # Invariant 2: No session.add() in integration test bodies

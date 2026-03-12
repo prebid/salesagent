@@ -50,7 +50,7 @@ def test_mock_ad_server_create_media_buy(sample_packages, mocker):
     # Mock get_current_tenant to avoid database access in unit test
     mocker.patch("src.core.config_loader.get_current_tenant", return_value={"tenant_id": "test_tenant"})
 
-    adapter = MockAdServer({}, principal)
+    adapter = MockAdServer({}, principal, tenant_id="test_tenant")
     start_time = datetime.now(UTC)
     end_time = start_time + timedelta(days=30)
 

@@ -1,0 +1,16 @@
+#!/bin/sh
+# Block pushes to the original prebid/salesagent repository.
+# Only KonstantinMirin/prebid-salesagent (the fork) is allowed.
+
+REMOTE="$1"
+URL="$2"
+
+if echo "$URL" | grep -qE "(github\.com[:/])prebid/salesagent(\.git)?$"; then
+    echo ""
+    echo "  BLOCKED: pushing to prebid/salesagent (the original repo) is not allowed."
+    echo "  Use 'git push fork' to push to your fork instead."
+    echo ""
+    exit 1
+fi
+
+exit 0

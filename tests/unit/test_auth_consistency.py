@@ -212,7 +212,6 @@ class TestDiscoveryEndpointsAnonymousAccess:
 
         with (
             patch("src.core.database.repositories.uow.get_db_session") as mock_db,
-            patch("src.core.tools.products.get_db_session") as mock_db2,
             patch("src.core.tools.products.PolicyCheckService") as mock_policy,
         ):
             # Mock database to return empty products
@@ -222,7 +221,6 @@ class TestDiscoveryEndpointsAnonymousAccess:
             mock_session.scalars.return_value.all.return_value = []
             mock_session.execute.return_value.unique.return_value.scalars.return_value.all.return_value = []
             mock_db.return_value = mock_session
-            mock_db2.return_value = mock_session
 
             # Mock policy check service
             mock_policy_instance = MagicMock()
@@ -291,15 +289,14 @@ class TestDiscoveryEndpointsAnonymousAccess:
         mock_tenant = {"tenant_id": "test-tenant", "name": "Test"}
         identity = _make_identity(principal_id=None, tenant=mock_tenant)
 
-        with (
-            patch("src.core.tools.properties.get_db_session") as mock_db,
-        ):
-            mock_session = MagicMock()
-            mock_session.__enter__ = MagicMock(return_value=mock_session)
-            mock_session.__exit__ = MagicMock(return_value=False)
-            mock_session.scalars.return_value.all.return_value = []
-            mock_db.return_value = mock_session
+        mock_repo = MagicMock()
+        mock_repo.list_publisher_partners.return_value = []
+        mock_uow = MagicMock()
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow.tenant_config = mock_repo
 
+        with patch("src.core.tools.properties.TenantConfigUoW", return_value=mock_uow):
             try:
                 result = _list_authorized_properties_impl(req=None, identity=identity)
                 assert result is not None
@@ -335,12 +332,13 @@ class TestDiscoveryEndpointsInvalidAuth:
         )
 
         with (
-            patch("src.core.tools.products.get_db_session") as mock_db,
+            patch("src.core.database.repositories.uow.get_db_session") as mock_db,
         ):
             mock_session = MagicMock()
             mock_session.__enter__ = MagicMock(return_value=mock_session)
             mock_session.__exit__ = MagicMock(return_value=False)
             mock_session.scalars.return_value.all.return_value = []
+            mock_session.execute.return_value.unique.return_value.scalars.return_value.all.return_value = []
             mock_db.return_value = mock_session
 
             req = MagicMock()
@@ -397,15 +395,14 @@ class TestDiscoveryEndpointsInvalidAuth:
         mock_tenant = {"tenant_id": "test-tenant"}
         identity = _make_identity(principal_id=None, tenant=mock_tenant)
 
-        with (
-            patch("src.core.tools.properties.get_db_session") as mock_db,
-        ):
-            mock_session = MagicMock()
-            mock_session.__enter__ = MagicMock(return_value=mock_session)
-            mock_session.__exit__ = MagicMock(return_value=False)
-            mock_session.scalars.return_value.all.return_value = []
-            mock_db.return_value = mock_session
+        mock_repo = MagicMock()
+        mock_repo.list_publisher_partners.return_value = []
+        mock_uow = MagicMock()
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow.tenant_config = mock_repo
 
+        with patch("src.core.tools.properties.TenantConfigUoW", return_value=mock_uow):
             try:
                 _list_authorized_properties_impl(req=None, identity=identity)
             except (ToolError, AdCPError):

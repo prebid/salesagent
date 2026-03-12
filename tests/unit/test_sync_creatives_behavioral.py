@@ -20,6 +20,7 @@ from src.core.exceptions import AdCPNotFoundError, AdCPValidationError
 from src.core.schemas import SyncCreativeResult
 from src.core.tools.creatives._assignments import _process_assignments
 from src.core.tools.creatives._workflow import _send_creative_notifications
+from tests.harness import make_mock_uow
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -62,6 +63,18 @@ def _make_db_package():
     return _factory
 
 
+def _make_creative_uow(assignment_repo=None):
+    """Create a mock CreativeUoW for _process_assignments tests."""
+    mock_assignment_repo = assignment_repo or MagicMock()
+    _, mock_uow = make_mock_uow(
+        repos={
+            "assignments": mock_assignment_repo,
+            "creatives": MagicMock(),
+        }
+    )
+    return mock_uow, mock_assignment_repo
+
+
 # ========================================================================
 # BR-RULE-040: Media buy status transitions (Priority 1)
 # ========================================================================
@@ -75,23 +88,32 @@ class TestMediaBuyStatusTransitions:
     """
 
     def _run_assignments(self, assignments, results, tenant, db_package, db_media_buy, db_creative=None):
-        """Helper to run _process_assignments with mocked DB lookups."""
-        with patch("src.core.tools.creatives._assignments.get_db_session") as mock_db:
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+        """Helper to run _process_assignments with mocked repository lookups."""
+        mock_uow, mock_repo = _make_creative_uow()
 
-            # Mock execute for package+media_buy join query
-            mock_row = Mock()
-            mock_row.__iter__ = Mock(return_value=iter([db_package, db_media_buy]))
-            mock_row.__getitem__ = lambda self, i: [db_package, db_media_buy][i]
-            mock_session.execute.return_value.first.return_value = mock_row
+        # Mock find_package_with_media_buy to return the package+media_buy pair
+        mock_repo.find_package_with_media_buy.return_value = (db_package, db_media_buy)
 
-            # Mock scalars for creative lookup and assignment lookup
-            # First call: existing assignment check, Second call: creative lookup
-            if db_creative:
-                mock_session.scalars.return_value.first.side_effect = [db_creative, None]
-            else:
-                mock_session.scalars.return_value.first.return_value = None
+        # Mock get_creative_by_id: return db_creative if provided, else None
+        mock_repo.get_creative_by_id.return_value = db_creative
+
+        # Mock get_existing: no existing assignment
+        mock_repo.get_existing.return_value = None
+
+        # Mock create to return a mock assignment
+        def _create_assignment(**kwargs):
+            assignment = Mock()
+            assignment.assignment_id = "asgn_1"
+            assignment.media_buy_id = kwargs.get("media_buy_id")
+            assignment.package_id = kwargs.get("package_id")
+            assignment.creative_id = kwargs.get("creative_id")
+            assignment.weight = kwargs.get("weight", 100)
+            return assignment
+
+        mock_repo.create.side_effect = _create_assignment
+
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_uow_cls:
+            mock_uow_cls.return_value.__enter__.return_value = mock_uow
 
             return _process_assignments(
                 assignments=assignments,
@@ -165,22 +187,24 @@ class TestMediaBuyStatusTransitions:
             SyncCreativeResult(creative_id="c2", action="created"),
         ]
 
-        with patch("src.core.tools.creatives._assignments.get_db_session") as mock_db:
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+        mock_uow, mock_repo = _make_creative_uow()
+        mock_repo.find_package_with_media_buy.return_value = (db_package, db_media_buy)
+        mock_repo.get_creative_by_id.return_value = None
+        mock_repo.get_existing.return_value = None
 
-            # Both creatives assigned to same package -> same media buy
-            # Use a factory so __iter__ produces a fresh iterator each call
-            def make_mock_row():
-                row = Mock()
-                row.__iter__ = lambda s: iter([db_package, db_media_buy])
-                row.__getitem__ = lambda s, i: [db_package, db_media_buy][i]
-                return row
+        def _create_assignment(**kwargs):
+            assignment = Mock()
+            assignment.assignment_id = f"asgn_{kwargs.get('creative_id')}"
+            assignment.media_buy_id = kwargs.get("media_buy_id")
+            assignment.package_id = kwargs.get("package_id")
+            assignment.creative_id = kwargs.get("creative_id")
+            assignment.weight = kwargs.get("weight", 100)
+            return assignment
 
-            mock_session.execute.return_value.first.side_effect = lambda: make_mock_row()
+        mock_repo.create.side_effect = _create_assignment
 
-            # No existing assignment, no creative found for format check
-            mock_session.scalars.return_value.first.return_value = None
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_uow_cls:
+            mock_uow_cls.return_value.__enter__.return_value = mock_uow
 
             _process_assignments(
                 assignments={"c1": ["pkg_1"], "c2": ["pkg_1"]},
@@ -203,19 +227,24 @@ class TestMediaBuyStatusTransitions:
             SyncCreativeResult(creative_id="c2", action="updated", changes=["name"]),
         ]
 
-        with patch("src.core.tools.creatives._assignments.get_db_session") as mock_db:
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+        mock_uow, mock_repo = _make_creative_uow()
+        mock_repo.find_package_with_media_buy.return_value = (db_package, db_media_buy)
+        mock_repo.get_creative_by_id.return_value = None
+        mock_repo.get_existing.return_value = None
 
-            def make_mock_row():
-                row = Mock()
-                row.__iter__ = lambda s: iter([db_package, db_media_buy])
-                row.__getitem__ = lambda s, i: [db_package, db_media_buy][i]
-                return row
+        def _create_assignment(**kwargs):
+            assignment = Mock()
+            assignment.assignment_id = f"asgn_{kwargs.get('creative_id')}"
+            assignment.media_buy_id = kwargs.get("media_buy_id")
+            assignment.package_id = kwargs.get("package_id")
+            assignment.creative_id = kwargs.get("creative_id")
+            assignment.weight = kwargs.get("weight", 100)
+            return assignment
 
-            mock_session.execute.return_value.first.side_effect = lambda: make_mock_row()
+        mock_repo.create.side_effect = _create_assignment
 
-            mock_session.scalars.return_value.first.return_value = None
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_uow_cls:
+            mock_uow_cls.return_value.__enter__.return_value = mock_uow
 
             _process_assignments(
                 assignments={"c1": ["pkg_1"], "c2": ["pkg_1"]},
@@ -239,12 +268,12 @@ class TestStrictAssignmentAbort:
         """rule-033-inv2: When validation_mode=strict and package not found, AdCPNotFoundError raised."""
         results = [SyncCreativeResult(creative_id="c1", action="created")]
 
-        with patch("src.core.tools.creatives._assignments.get_db_session") as mock_db:
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+        mock_uow, mock_repo = _make_creative_uow()
+        # Package not found
+        mock_repo.find_package_with_media_buy.return_value = None
 
-            # Package not found
-            mock_session.execute.return_value.first.return_value = None
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_uow_cls:
+            mock_uow_cls.return_value.__enter__.return_value = mock_uow
 
             with pytest.raises(AdCPNotFoundError, match="Package not found"):
                 _process_assignments(
@@ -267,12 +296,12 @@ class TestLenientAssignmentSkip:
         """rule-033-inv3 / rule-038-inv3: lenient mode skips missing package, creative still succeeds."""
         results = [SyncCreativeResult(creative_id="c1", action="created")]
 
-        with patch("src.core.tools.creatives._assignments.get_db_session") as mock_db:
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+        mock_uow, mock_repo = _make_creative_uow()
+        # Package not found
+        mock_repo.find_package_with_media_buy.return_value = None
 
-            # Package not found
-            mock_session.execute.return_value.first.return_value = None
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_uow_cls:
+            mock_uow_cls.return_value.__enter__.return_value = mock_uow
 
             assignment_list = _process_assignments(
                 assignments={"c1": ["nonexistent_pkg"]},
@@ -310,18 +339,13 @@ class TestLenientAssignmentSkip:
 
         results = [SyncCreativeResult(creative_id="c1", action="created")]
 
-        with patch("src.core.tools.creatives._assignments.get_db_session") as mock_db:
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+        mock_uow, mock_repo = _make_creative_uow()
+        mock_repo.find_package_with_media_buy.return_value = (db_package, db_media_buy)
+        mock_repo.get_creative_by_id.return_value = db_creative
+        mock_repo.get_product_by_id.return_value = mock_product
 
-            # Package found
-            mock_row = Mock()
-            mock_row.__iter__ = Mock(return_value=iter([db_package, db_media_buy]))
-            mock_row.__getitem__ = lambda self, i: [db_package, db_media_buy][i]
-            mock_session.execute.return_value.first.return_value = mock_row
-
-            # First scalars call: creative lookup, second: assignment lookup
-            mock_session.scalars.return_value.first.side_effect = [db_creative, mock_product]
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_uow_cls:
+            mock_uow_cls.return_value.__enter__.return_value = mock_uow
 
             assignment_list = _process_assignments(
                 assignments={"c1": ["pkg_1"]},
@@ -345,20 +369,28 @@ class TestLenientAssignmentSkip:
 
         results = [SyncCreativeResult(creative_id="c1", action="created")]
 
-        with patch("src.core.tools.creatives._assignments.get_db_session") as mock_db:
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+        mock_uow, mock_repo = _make_creative_uow()
+        # First package: found. Second package: not found.
+        mock_repo.find_package_with_media_buy.side_effect = [
+            (db_package_valid, db_media_buy),
+            None,
+        ]
+        mock_repo.get_creative_by_id.return_value = None
+        mock_repo.get_existing.return_value = None
 
-            # First package: found. Second package: not found.
-            mock_row_valid = Mock()
-            mock_row_valid.__iter__ = Mock(return_value=iter([db_package_valid, db_media_buy]))
-            mock_row_valid.__getitem__ = lambda self, i: [db_package_valid, db_media_buy][i]
+        def _create_assignment(**kwargs):
+            assignment = Mock()
+            assignment.assignment_id = "asgn_1"
+            assignment.media_buy_id = kwargs.get("media_buy_id")
+            assignment.package_id = kwargs.get("package_id")
+            assignment.creative_id = kwargs.get("creative_id")
+            assignment.weight = kwargs.get("weight", 100)
+            return assignment
 
-            # Return valid result first, then None for missing package
-            mock_session.execute.return_value.first.side_effect = [mock_row_valid, None]
+        mock_repo.create.side_effect = _create_assignment
 
-            # No existing assignment, no creative for format check
-            mock_session.scalars.return_value.first.return_value = None
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_uow_cls:
+            mock_uow_cls.return_value.__enter__.return_value = mock_uow
 
             assignment_list = _process_assignments(
                 assignments={"c1": ["pkg_valid", "pkg_invalid"]},
@@ -390,21 +422,20 @@ class TestStrictModeAdCPErrorPropagation:
     In strict mode, when a package is not found, the error IS recorded in the
     local assignment_errors_by_creative dict *before* AdCPError is raised.
     However, the AdCPError propagates out of _process_assignments before the
-    post-processing loop (lines 226-236) that writes assignment_errors to
-    SyncCreativeResult. The BDD claim 'errors always recorded in response'
-    does NOT hold in strict mode.
+    post-processing loop that writes assignment_errors to SyncCreativeResult.
+    The BDD claim 'errors always recorded in response' does NOT hold in strict mode.
     """
 
     def test_strict_mode_error_not_written_to_result_on_toolerror(self, tenant):
         """rule-033-inv4 / rule-038-inv4: AdCPError prevents assignment_errors from reaching result."""
         results = [SyncCreativeResult(creative_id="c1", action="created")]
 
-        with patch("src.core.tools.creatives._assignments.get_db_session") as mock_db:
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+        mock_uow, mock_repo = _make_creative_uow()
+        # Package not found -> triggers AdCPNotFoundError in strict mode
+        mock_repo.find_package_with_media_buy.return_value = None
 
-            # Package not found -> triggers AdCPNotFoundError in strict mode
-            mock_session.execute.return_value.first.return_value = None
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_uow_cls:
+            mock_uow_cls.return_value.__enter__.return_value = mock_uow
 
             with pytest.raises(AdCPNotFoundError):
                 _process_assignments(
@@ -434,17 +465,13 @@ class TestStrictModeAdCPErrorPropagation:
 
         results = [SyncCreativeResult(creative_id="c1", action="created")]
 
-        with patch("src.core.tools.creatives._assignments.get_db_session") as mock_db:
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+        mock_uow, mock_repo = _make_creative_uow()
+        mock_repo.find_package_with_media_buy.return_value = (db_package, db_media_buy)
+        mock_repo.get_creative_by_id.return_value = db_creative
+        mock_repo.get_product_by_id.return_value = mock_product
 
-            mock_row = Mock()
-            mock_row.__iter__ = Mock(return_value=iter([db_package, db_media_buy]))
-            mock_row.__getitem__ = lambda self, i: [db_package, db_media_buy][i]
-            mock_session.execute.return_value.first.return_value = mock_row
-
-            # creative lookup, then product lookup
-            mock_session.scalars.return_value.first.side_effect = [db_creative, mock_product]
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_uow_cls:
+            mock_uow_cls.return_value.__enter__.return_value = mock_uow
 
             with pytest.raises(AdCPValidationError, match="is not supported by product"):
                 _process_assignments(

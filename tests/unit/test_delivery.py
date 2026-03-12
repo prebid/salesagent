@@ -1055,13 +1055,10 @@ class TestDeliveryPricingOptionLookup:
         mock_po1.rate = Decimal("5.00")
         mock_po1.tenant_id = "test_tenant"
 
-        with patch("src.core.tools.media_buy_delivery.get_db_session") as mock_db:
-            mock_session = MagicMock()
-            mock_session.scalars.return_value.all.return_value = [mock_po1]
-            mock_db.return_value.__enter__ = lambda s: mock_session
-            mock_db.return_value.__exit__ = MagicMock(return_value=False)
+        mock_repo = MagicMock()
+        mock_repo.get_all_pricing_options.return_value = [mock_po1]
 
-            result = _get_pricing_options(["cpm_usd_fixed"], tenant_id="test_tenant")
+        result = _get_pricing_options(["cpm_usd_fixed"], tenant_id="test_tenant", product_repo=mock_repo)
 
         # Must find the pricing option keyed by synthetic ID
         assert "cpm_usd_fixed" in result

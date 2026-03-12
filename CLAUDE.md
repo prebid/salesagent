@@ -47,7 +47,7 @@ PR titles should use one of these prefixes:
 **Without a prefix, commits won't appear in release notes!** The code will still be released, but the change won't be documented in the changelog.
 
 ### Structural Guards (Automated Architecture Enforcement)
-Eleven AST-scanning tests enforce architecture invariants on every `make quality` run. New violations fail the build immediately. See [docs/development/structural-guards.md](docs/development/structural-guards.md) for full details.
+Fourteen AST-scanning tests enforce architecture invariants on every `make quality` run. New violations fail the build immediately. See [docs/development/structural-guards.md](docs/development/structural-guards.md) for full details.
 
 | Guard | Enforces | Test File |
 |-------|----------|-----------|
@@ -58,10 +58,13 @@ Eleven AST-scanning tests enforce architecture invariants on every `make quality
 | Boundary completeness | MCP/A2A wrappers pass all _impl parameters | `test_architecture_boundary_completeness.py` |
 | Query type safety | DB queries use types matching column definitions | `test_architecture_query_type_safety.py` |
 | No model_dump in _impl | `_impl` returns model objects, never calls `.model_dump()` | `test_architecture_no_model_dump_in_impl.py` |
-| Repository pattern | No `get_db_session()` in `_impl`; no inline `session.add()` in tests | `test_architecture_repository_pattern.py` |
+| No direct DB access | No `get_db_session()` or `session.add()` anywhere outside repositories/UoW/infrastructure | `test_architecture_repository_pattern.py` |
 | Migration completeness | Every migration has non-empty `upgrade()` and `downgrade()` | `test_architecture_migration_completeness.py` |
 | No raw MediaPackage select | All MediaPackage access goes through repository, not raw `select()` | `test_architecture_no_raw_media_package_select.py` |
+| No raw select outside repos | All ORM model queries go through repositories, not raw `select()` | `test_architecture_no_raw_select.py` |
 | Obligation coverage | Behavioral obligations in docs have matching test coverage | `test_architecture_obligation_coverage.py` |
+| Workflow tenant isolation | WorkflowRepository queries join DBContext for tenant scoping | `test_architecture_workflow_tenant_isolation.py` |
+| No split mock assertions | Tests use `assert_called_once_with()`, not `assert_called_once()` + `call_args` | `test_architecture_weak_mock_assertions.py` |
 
 **Rules for guards:**
 - Allowlists can only shrink — never add new violations, fix them instead
@@ -255,6 +258,12 @@ with get_db_session() as session:
 - Test-specific data uses factory overrides, not copy-pasted setup blocks
 - Factories live in `tests/factories/` — ORM factories and Pydantic schema factories
 - Never `session.add()` in test bodies — use factories or fixtures that use factories
+- Never call `get_db_session()` in test bodies — test data setup belongs in factory fixtures
+- **DO NOT match pre-existing broken patterns.** If the test file you're adding to already uses
+  `get_db_session()` or `session.add()`, those are pre-existing debt in the allowlist. Your new
+  code must use factories regardless. The structural guard (`test_architecture_repository_pattern.py`)
+  will catch new violations immediately at `make quality`. Pre-existing violations are allowlisted
+  and tracked with FIXME comments — they shrink over time, never grow.
 
 ---
 

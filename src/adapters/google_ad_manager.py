@@ -109,6 +109,7 @@ class GoogleAdManager(AdServerAdapter):
             tenant_id: Tenant identifier
         """
         super().__init__(config, principal, dry_run, None, tenant_id)
+        assert self.tenant_id is not None  # Guaranteed by base class validation
 
         self.network_code = network_code
         self.advertiser_id = advertiser_id
@@ -164,7 +165,7 @@ class GoogleAdManager(AdServerAdapter):
             self._placement_targeting_map: dict[str, str] = {}
 
             # Initialize manager components
-            self.targeting_manager = GAMTargetingManager(tenant_id or "", gam_client=self.client)
+            self.targeting_manager = GAMTargetingManager(self.tenant_id, gam_client=self.client)
 
             # Initialize orders manager (advertiser_id/trafficker_id optional for query operations)
             self.orders_manager = GAMOrdersManager(self.client_manager, self.advertiser_id, self.trafficker_id, dry_run)
@@ -179,13 +180,13 @@ class GoogleAdManager(AdServerAdapter):
                 self.creatives_manager = None  # type: ignore[assignment]
 
             # Inventory manager doesn't need advertiser_id
-            self.inventory_manager = GAMInventoryManager(self.client_manager, tenant_id or "", dry_run)
+            self.inventory_manager = GAMInventoryManager(self.client_manager, self.tenant_id, dry_run)
 
             # Sync manager only needs inventory manager for inventory sync
             self.sync_manager = GAMSyncManager(
-                self.client_manager, self.inventory_manager, self.orders_manager, tenant_id or "", dry_run
+                self.client_manager, self.inventory_manager, self.orders_manager, self.tenant_id, dry_run
             )
-            self.workflow_manager = GAMWorkflowManager(tenant_id or "", principal, audit_logger, self.log)
+            self.workflow_manager = GAMWorkflowManager(self.tenant_id, principal, audit_logger, self.log)
         else:
             self.client_manager = None  # type: ignore[assignment]
             self.client = None
@@ -195,7 +196,7 @@ class GoogleAdManager(AdServerAdapter):
             self._placement_targeting_map = {}
 
             # Initialize managers for dry-run mode (they can work without real client)
-            self.targeting_manager = GAMTargetingManager(tenant_id or "")
+            self.targeting_manager = GAMTargetingManager(self.tenant_id)
 
             # Initialize orders manager in dry-run mode
             self.orders_manager = GAMOrdersManager(None, self.advertiser_id, self.trafficker_id, dry_run=True)
@@ -214,19 +215,19 @@ class GoogleAdManager(AdServerAdapter):
                 self.creatives_manager = None  # type: ignore[assignment]
 
             # Initialize inventory manager in dry-run mode
-            self.inventory_manager = GAMInventoryManager(None, tenant_id or "", dry_run=True)  # type: ignore[arg-type]
+            self.inventory_manager = GAMInventoryManager(None, self.tenant_id, dry_run=True)  # type: ignore[arg-type]
 
             # Initialize sync manager in dry-run mode
             self.sync_manager = GAMSyncManager(
                 None,  # type: ignore[arg-type]
                 self.inventory_manager,
                 self.orders_manager,
-                tenant_id or "",
+                self.tenant_id,
                 dry_run=True,
             )
 
             # Initialize workflow manager (doesn't need client)
-            self.workflow_manager = GAMWorkflowManager(tenant_id or "", principal, audit_logger, self.log)
+            self.workflow_manager = GAMWorkflowManager(self.tenant_id, principal, audit_logger, self.log)
 
         # Initialize legacy validator for backward compatibility
         from .gam.utils.validation import GAMValidator
@@ -754,7 +755,7 @@ class GoogleAdManager(AdServerAdapter):
                         approval_id = start_order_approval_background(
                             order_id=order_id,
                             media_buy_id=order_id,  # In automatic mode, media_buy_id = order_id
-                            tenant_id=self.tenant_id or "",
+                            tenant_id=self.tenant_id,
                             principal_id=principal_id,
                             webhook_url=webhook_url,
                             max_attempts=12,  # 2 minutes with 10 second intervals

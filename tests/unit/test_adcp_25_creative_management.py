@@ -58,8 +58,8 @@ class TestSyncCreativesCreativeIdsFilter:
         assert "patch" in str(exc_info.value).lower() or "extra" in str(exc_info.value).lower()
 
     @patch("src.core.helpers.context_helpers.ensure_tenant_context")
-    @patch("src.core.tools.creatives._sync.get_db_session")
-    def test_sync_creatives_filters_by_creative_ids(self, mock_db_session, mock_tenant):
+    @patch("src.core.tools.creatives._sync.CreativeUoW")
+    def test_sync_creatives_filters_by_creative_ids(self, mock_uow_cls, mock_tenant):
         """Test _sync_creatives_impl filters creatives by creative_ids."""
         from src.core.resolved_identity import ResolvedIdentity
         from src.core.tools.creatives import _sync_creatives_impl
@@ -72,11 +72,14 @@ class TestSyncCreativesCreativeIdsFilter:
         )
         mock_tenant.return_value = {"tenant_id": "tenant_1", "adapter_type": "mock"}
 
-        # Mock database session
-        mock_session = MagicMock()
-        mock_db_session.return_value.__enter__ = MagicMock(return_value=mock_session)
-        mock_db_session.return_value.__exit__ = MagicMock(return_value=None)
-        mock_session.scalars.return_value.first.return_value = None  # No existing creatives
+        # Mock UoW with creative repo
+        mock_uow = MagicMock()
+        mock_creative_repo = MagicMock()
+        mock_creative_repo.get_provenance_policies.return_value = []
+        mock_creative_repo.get_by_id.return_value = None  # No existing creatives
+        mock_uow.creatives = mock_creative_repo
+        mock_uow_cls.return_value.__enter__.return_value = mock_uow
+        mock_uow_cls.return_value.__exit__.return_value = None
 
         # Create multiple creatives
         creatives = [

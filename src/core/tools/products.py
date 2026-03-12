@@ -7,7 +7,6 @@ shared implementation pattern from CLAUDE.md.
 import logging
 import os
 import time
-from datetime import UTC, datetime
 from typing import Any, cast
 
 from adcp import FormatId, ProductFilters
@@ -23,7 +22,6 @@ from pydantic import ValidationError
 from src.adapters import get_adapter_default_channels
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import get_principal_object
-from src.core.database.database_session import get_db_session
 from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import create_get_products_request
@@ -314,27 +312,23 @@ async def _get_products_impl(
         and policy_result.status == PolicyStatus.RESTRICTED
         and advertising_policy.get("require_manual_review", False)
     ):
-        # Create a manual review task
-        with get_db_session() as session:
-            task_id = f"policy_review_{tenant['tenant_id']}_{int(datetime.now(UTC).timestamp())}"
-
-            # Log policy violation for audit trail and compliance
-            audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
-            principal_name = principal_id if principal_id else "anonymous"
-            audit_logger.log_operation(
-                operation="get_products_policy_violation",
-                principal_name=principal_name,
-                principal_id=principal_name,
-                adapter_id="policy_engine",
-                success=False,
-                details={
-                    "brief": req.brief,
-                    "brand_name": offering,
-                    "policy_status": policy_result.status,
-                    "restrictions": policy_result.restrictions,
-                    "reason": policy_result.reason,
-                },
-            )
+        # Log policy violation for audit trail and compliance
+        audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
+        principal_name = principal_id if principal_id else "anonymous"
+        audit_logger.log_operation(
+            operation="get_products_policy_violation",
+            principal_name=principal_name,
+            principal_id=principal_name,
+            adapter_id="policy_engine",
+            success=False,
+            details={
+                "brief": req.brief,
+                "brand_name": offering,
+                "policy_status": policy_result.status,
+                "restrictions": policy_result.restrictions,
+                "reason": policy_result.reason,
+            },
+        )
 
         # Raise error for policy violations - explicit failure, not silent return
         restrictions_list = policy_result.restrictions if policy_result.restrictions else []
@@ -461,8 +455,10 @@ async def _get_products_impl(
         # Extract country from request if available (future enhancement: parse from targeting)
         country_code = None  # TODO: Extract from targeting if provided
 
-        with get_db_session() as pricing_session:
-            pricing_service = DynamicPricingService(pricing_session)
+        with ProductUoW(tenant["tenant_id"]) as pricing_uow:
+            # FIXME(salesagent-9f2): DynamicPricingService needs a repository, not raw session
+            assert pricing_uow.session is not None
+            pricing_service = DynamicPricingService(pricing_uow.session)
             products = pricing_service.enrich_products_with_pricing(
                 products,
                 tenant_id=tenant["tenant_id"],

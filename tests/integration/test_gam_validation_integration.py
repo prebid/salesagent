@@ -45,6 +45,7 @@ class TestGAMValidationIntegration:
                 advertiser_id=self.principal.platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=self.config["trafficker_id"],
                 dry_run=True,
+                tenant_id="test_tenant",
             )
 
             # Validator should be initialized
@@ -61,6 +62,7 @@ class TestGAMValidationIntegration:
                 advertiser_id=self.principal.platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=self.config["trafficker_id"],
                 dry_run=True,
+                tenant_id="test_tenant",
             )
 
         # Mock the validation method to return validation errors
@@ -96,6 +98,7 @@ class TestGAMValidationIntegration:
                 advertiser_id=self.principal.platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=self.config["trafficker_id"],
                 dry_run=True,
+                tenant_id="test_tenant",
             )
 
         # Mock the validation method to return no errors
@@ -141,6 +144,7 @@ class TestGAMValidationIntegration:
                 advertiser_id=self.principal.platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=self.config["trafficker_id"],
                 dry_run=True,
+                tenant_id="test_tenant",
             )
 
         # Test with invalid asset
@@ -180,6 +184,7 @@ class TestGAMValidationIntegration:
                 advertiser_id=self.principal.platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=self.config["trafficker_id"],
                 dry_run=True,
+                tenant_id="test_tenant",
             )
 
         # Test HTML5 creative detection by file extension
@@ -216,6 +221,7 @@ class TestGAMValidationIntegration:
                 advertiser_id=self.principal.platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=self.config["trafficker_id"],
                 dry_run=True,
+                tenant_id="test_tenant",
             )
 
         zip_asset = {
@@ -252,6 +258,7 @@ class TestGAMValidationIntegration:
                 advertiser_id=self.principal.platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=self.config["trafficker_id"],
                 dry_run=True,
+                tenant_id="test_tenant",
             )
 
         # Test third-party tag validation
@@ -297,6 +304,7 @@ class TestGAMValidationIntegration:
                     advertiser_id=self.principal.platform_mappings["google_ad_manager"]["advertiser_id"],
                     trafficker_id=self.config["trafficker_id"],
                     dry_run=True,
+                    tenant_id="test_tenant",
                 )
 
                 result = adapter.add_creative_assets("123", [invalid_asset], None)
@@ -340,6 +348,7 @@ class TestGAMValidationPerformance:
                 advertiser_id=self.principal.platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=self.config["trafficker_id"],
                 dry_run=True,
+                tenant_id="test_tenant",
             )
 
         # Create many assets for validation
@@ -384,6 +393,7 @@ class TestGAMValidationPerformance:
                 advertiser_id=self.principal.platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=self.config["trafficker_id"],
                 dry_run=True,
+                tenant_id="test_tenant",
             )
 
         # Mix of valid and invalid assets

@@ -15,6 +15,7 @@ from sqlalchemy import select
 
 from src.core.database.database_session import DatabaseManager
 from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
+from src.core.database.models import Context as DBContext
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
@@ -242,6 +243,7 @@ class ContextManager(DatabaseManager):
         error_message: str | None = None,
         transaction_details: dict[str, Any] | None = None,
         add_comment: dict[str, str] | None = None,
+        tenant_id: str | None = None,
     ) -> None:
         """Update a workflow step's status and data.
 
@@ -252,10 +254,14 @@ class ContextManager(DatabaseManager):
             error_message: Error message if failed
             transaction_details: Actual API calls made
             add_comment: Optional comment to add {user, comment}
+            tenant_id: Tenant scope — joins through Context for isolation.
+                If provided, the step must belong to this tenant or no update occurs.
         """
         session = self.session
         try:
             stmt = select(WorkflowStep).filter_by(step_id=step_id)
+            if tenant_id:
+                stmt = stmt.join(DBContext).where(DBContext.tenant_id == tenant_id)
 
             step = session.scalars(stmt).first()
             if step:
@@ -346,7 +352,12 @@ class ContextManager(DatabaseManager):
             initial_comment=reason,
         )
 
-    def get_pending_steps(self, owner: str | None = None, assigned_to: str | None = None) -> list[WorkflowStep]:
+    def get_pending_steps(
+        self,
+        owner: str | None = None,
+        assigned_to: str | None = None,
+        tenant_id: str | None = None,
+    ) -> list[WorkflowStep]:
         """Get pending workflow steps from the work queue.
 
         The owner field tells us who needs to act:
@@ -357,6 +368,8 @@ class ContextManager(DatabaseManager):
         Args:
             owner: Filter by owner (principal, publisher, system)
             assigned_to: Filter by specific assignee
+            tenant_id: Tenant scope — joins through Context for isolation.
+                If provided, only steps belonging to this tenant are returned.
 
         Returns:
             List of pending WorkflowStep objects
@@ -364,6 +377,9 @@ class ContextManager(DatabaseManager):
         session = self.session
         try:
             stmt = select(WorkflowStep).where(WorkflowStep.status.in_(["pending", "requires_approval"]))
+
+            if tenant_id:
+                stmt = stmt.join(DBContext).where(DBContext.tenant_id == tenant_id)
 
             if owner:
                 stmt = stmt.where(WorkflowStep.owner == owner)
@@ -378,31 +394,40 @@ class ContextManager(DatabaseManager):
         finally:
             session.close()
 
-    def get_object_lifecycle(self, object_type: str, object_id: str) -> list[dict[str, Any]]:
+    def get_object_lifecycle(
+        self, object_type: str, object_id: str, tenant_id: str | None = None
+    ) -> list[dict[str, Any]]:
         """Get all workflow steps for an object's lifecycle.
 
         Args:
             object_type: Type of object (media_buy, creative, product, etc.)
             object_id: The object's ID
+            tenant_id: Tenant scope — joins through Context for isolation.
+                If provided, only mappings belonging to this tenant are returned.
 
         Returns:
             List of workflow steps with their details
         """
         session = self.session
         try:
-            # Query object mappings to find all related steps
+            # Query object mappings to find all related steps, scoped to tenant via Context join
             stmt = (
                 select(ObjectWorkflowMapping)
-                .filter_by(object_type=object_type, object_id=object_id)
+                .join(WorkflowStep)
+                .where(
+                    ObjectWorkflowMapping.object_type == object_type,
+                    ObjectWorkflowMapping.object_id == object_id,
+                )
                 .order_by(ObjectWorkflowMapping.created_at)
             )
+            if tenant_id:
+                stmt = stmt.join(DBContext).where(DBContext.tenant_id == tenant_id)
+
             mappings = session.scalars(stmt).all()
 
             lifecycle = []
             for mapping in mappings:
-                step_stmt = select(WorkflowStep).filter_by(step_id=mapping.step_id)
-
-                step = session.scalars(step_stmt).first()
+                step = mapping.workflow_step
                 if step:
                     lifecycle.append(
                         {
@@ -540,6 +565,7 @@ class ContextManager(DatabaseManager):
         object_type: str,
         object_id: str,
         action: str | None = None,
+        tenant_id: str | None = None,
     ) -> None:
         """Link a workflow step to an object after the step is created.
 
@@ -551,11 +577,15 @@ class ContextManager(DatabaseManager):
             object_type: Type of object (media_buy, creative, product, etc.)
             object_id: The object's ID
             action: Optional action being performed (defaults to step_type)
+            tenant_id: Tenant scope — joins through Context for isolation.
+                If provided, the step must belong to this tenant or no link is created.
         """
         session = self.session
         try:
             # Get the step to use its step_type as default action
             stmt = select(WorkflowStep).filter_by(step_id=step_id)
+            if tenant_id:
+                stmt = stmt.join(DBContext).where(DBContext.tenant_id == tenant_id)
             step = session.scalars(stmt).first()
 
             if not step:

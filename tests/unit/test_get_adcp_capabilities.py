@@ -190,13 +190,15 @@ class TestGetAdcpCapabilitiesWithTenant:
         current_tenant.set(mock_tenant)
 
         try:
-            # Mock the database session to avoid actual DB calls
-            with patch("src.core.tools.capabilities.get_db_session") as mock_db:
-                mock_session = MagicMock()
-                mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
-                mock_db.return_value.__exit__ = MagicMock(return_value=False)
-                mock_session.scalars.return_value.all.return_value = []
+            # Mock TenantConfigUoW to avoid actual DB calls
+            mock_repo = MagicMock()
+            mock_repo.list_publisher_partners.return_value = []
+            mock_uow = MagicMock()
+            mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+            mock_uow.__exit__ = MagicMock(return_value=False)
+            mock_uow.tenant_config = mock_repo
 
+            with patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow):
                 # Pass identity with tenant info directly (no auth extraction in _impl)
                 from src.core.resolved_identity import ResolvedIdentity
 
@@ -253,12 +255,14 @@ class TestGetAdcpCapabilitiesWithTenant:
                 us_zip=True,
             )
 
-            with patch("src.core.tools.capabilities.get_db_session") as mock_db:
-                mock_session = MagicMock()
-                mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
-                mock_db.return_value.__exit__ = MagicMock(return_value=False)
-                mock_session.scalars.return_value.all.return_value = []
+            mock_repo = MagicMock()
+            mock_repo.list_publisher_partners.return_value = []
+            mock_uow = MagicMock()
+            mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+            mock_uow.__exit__ = MagicMock(return_value=False)
+            mock_uow.tenant_config = mock_repo
 
+            with patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow):
                 from src.core.resolved_identity import ResolvedIdentity
 
                 identity = ResolvedIdentity(
@@ -351,13 +355,14 @@ def _patch_capabilities_deps(
 
     stack = ExitStack()
 
-    # Mock database session
-    mock_session = MagicMock()
-    mock_session.scalars.return_value.all.return_value = db_partners or []
-    mock_db = MagicMock()
-    mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
-    mock_db.return_value.__exit__ = MagicMock(return_value=False)
-    stack.enter_context(patch("src.core.tools.capabilities.get_db_session", mock_db))
+    # Mock TenantConfigUoW — the repository pattern replacement for get_db_session
+    mock_repo = MagicMock()
+    mock_repo.list_publisher_partners.return_value = db_partners or []
+    mock_uow = MagicMock()
+    mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+    mock_uow.__exit__ = MagicMock(return_value=False)
+    mock_uow.tenant_config = mock_repo
+    stack.enter_context(patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow))
 
     # Mock log_tool_activity (no-op)
     stack.enter_context(patch("src.core.tools.capabilities.log_tool_activity"))
@@ -464,17 +469,19 @@ class TestGracefulDegradation:
 
         identity = _make_capabilities_identity()
 
+        mock_repo = MagicMock()
+        mock_repo.list_publisher_partners.return_value = []
+        mock_uow = MagicMock()
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow.tenant_config = mock_repo
+
         with (
-            patch("src.core.tools.capabilities.get_db_session") as mock_db,
+            patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow),
             patch("src.core.tools.capabilities.log_tool_activity"),
             patch("src.core.tools.capabilities.get_principal_object", return_value=MagicMock()),
             patch("src.core.tools.capabilities.get_adapter", side_effect=Exception("Adapter init failed")),
         ):
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
-            mock_db.return_value.__exit__ = MagicMock(return_value=False)
-            mock_session.scalars.return_value.all.return_value = []
-
             response = _get_adcp_capabilities_impl(None, identity)
 
         # Should still succeed with display as default
@@ -490,7 +497,7 @@ class TestGracefulDegradation:
         )
 
         with (
-            patch("src.core.tools.capabilities.get_db_session", side_effect=Exception("DB down")),
+            patch("src.core.tools.capabilities.TenantConfigUoW", side_effect=Exception("DB down")),
             patch("src.core.tools.capabilities.log_tool_activity"),
             patch("src.core.tools.capabilities.get_principal_object", return_value=None),
         ):

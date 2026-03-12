@@ -33,7 +33,7 @@ OBLIGATION COVERAGE:
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
@@ -1269,7 +1269,7 @@ class TestMainFlowObligations:
 
         # Auto-approval: adapter was called (not manual path)
         assert isinstance(result.response, CreateMediaBuySuccess)
-        mock_exec.assert_called_once()
+        mock_exec.assert_called_once_with(req, ANY, ANY, ANY, ANY, ANY, ANY, tenant=ANY)
 
     @pytest.mark.asyncio
     async def test_format_id_validation(self):
@@ -1559,9 +1559,15 @@ class TestManualApprovalObligations:
                 result = await _create_media_buy_impl(req=req, identity=pc.identity)
 
         assert result.status == "submitted"
-        mock_notifier.notify_media_buy_event.assert_called_once()
-        call_kwargs = mock_notifier.notify_media_buy_event.call_args
-        assert call_kwargs[1]["event_type"] == "approval_required" or call_kwargs[0][0] == "approval_required"
+        mock_notifier.notify_media_buy_event.assert_called_once_with(
+            event_type="approval_required",
+            media_buy_id=ANY,
+            principal_name=ANY,
+            details=ANY,
+            tenant_name=ANY,
+            tenant_id=ANY,
+            success=True,
+        )
 
     @pytest.mark.asyncio
     async def test_response_envelope_status_is_submitted(self):
@@ -1748,7 +1754,7 @@ class TestInlineCreativeObligations:
                     except Exception:
                         pass
 
-        mock_upload.assert_called_once()
+        mock_upload.assert_called_once_with(packages=ANY, context=ANY, testing_ctx=ANY)
 
     @pytest.mark.asyncio
     async def test_inline_creative_format_validation(self):
