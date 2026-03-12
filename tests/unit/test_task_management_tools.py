@@ -5,7 +5,7 @@ Issue #816 revealed that list_tasks was broken but had no test coverage.
 """
 
 from datetime import UTC, datetime
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import ANY, MagicMock, Mock, patch
 
 import pytest
 
@@ -268,7 +268,12 @@ class TestCompleteTaskTool:
 
         assert result["status"] == "completed"
         assert result["task_id"] == "step_123"
-        mock_workflow_repo.update_status.assert_called_once()
+        mock_workflow_repo.update_status.assert_called_once_with(
+            "step_123",
+            status="completed",
+            completed_at=ANY,
+            response_data={"manually_completed": True, "completed_by": "principal_123"},
+        )
 
     async def test_complete_task_rejects_invalid_status(self, mock_uow, mock_workflow_repo, sample_tenant):
         """Test that complete_task rejects invalid status values.
