@@ -119,10 +119,100 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
 ]
 
 
+# MCP selective xfails: the MCP wrapper doesn't accept wcag_level,
+# output_format_ids, or input_format_ids params. Only xfail examples
+# that actually SEND the param — "omitted"/"not_provided" variants
+# send no param and pass fine.
+# (tag, example_substrings, reason, strict)
+# strict=True  → must fail (genuine xfail)
+# strict=False → may pass vacuously (MCP errors → empty list → exclusion assertions pass)
+_MCP_SELECTIVE_XFAIL: list[tuple[str, set[str], str, bool]] = [
+    ("T-UC-005-partition-wcag", {"level_a", "level_aa", "level_aaa"}, "MCP wrapper does not accept wcag_level", True),
+    ("T-UC-005-boundary-wcag", {"first enum value", "last enum value"}, "MCP wrapper does not accept wcag_level", True),
+    (
+        "T-UC-005-partition-output-fmtids",
+        {"single_format_id", "multiple_ids_any_match", "no_matching_formats", "format_without_output_ids"},
+        "MCP wrapper does not accept output_format_ids",
+        True,
+    ),
+    (
+        "T-UC-005-boundary-output-fmtids",
+        {"single FormatId", "multiple FormatIds", "format has no output", "no formats match requested output"},
+        "MCP wrapper does not accept output_format_ids",
+        True,
+    ),
+    (
+        "T-UC-005-partition-input-fmtids",
+        {"single_format_id", "multiple_ids_any_match", "no_matching_formats", "format_without_input_ids"},
+        "MCP wrapper does not accept input_format_ids",
+        True,
+    ),
+    (
+        "T-UC-005-boundary-input-fmtids",
+        {"single FormatId", "multiple FormatIds", "format has no input", "no formats match requested input"},
+        "MCP wrapper does not accept input_format_ids",
+        True,
+    ),
+    # Invariant scenarios — "holds" genuinely fails (asserts presence);
+    # "violated"/"nofield" pass vacuously (asserts absence → empty list satisfies)
+    ("T-UC-005-inv-049-9-holds", set(), "MCP wrapper does not accept output_format_ids", True),
+    ("T-UC-005-inv-049-9-violated", set(), "MCP wrapper does not accept output_format_ids (vacuous pass)", False),
+    ("T-UC-005-inv-049-9-nofield", set(), "MCP wrapper does not accept output_format_ids (vacuous pass)", False),
+    ("T-UC-005-inv-049-10-holds", set(), "MCP wrapper does not accept input_format_ids", True),
+    ("T-UC-005-inv-049-10-violated", set(), "MCP wrapper does not accept input_format_ids (vacuous pass)", False),
+    ("T-UC-005-inv-049-10-nofield", set(), "MCP wrapper does not accept input_format_ids (vacuous pass)", False),
+]
+
+# REST xfails: REST endpoint drops all filter params (build_rest_body returns {}).
+# Only xfail scenarios that genuinely fail — many invariant "holds" scenarios
+# pass coincidentally because unfiltered results include the expected format.
+_REST_XFAIL_TAGS: set[str] = {
+    # Invariant filter scenarios where REST unfiltered results break assertions
+    "T-UC-005-inv-049-1-holds",  # type filter
+    "T-UC-005-inv-049-1-violated",
+    "T-UC-005-inv-049-2-holds",  # format_ids filter
+    "T-UC-005-inv-049-3-violated",  # asset_types filter
+    "T-UC-005-inv-049-4-violated",  # dimension filter
+    "T-UC-005-inv-049-4-nodim",  # dimension filter (no dimensions)
+    "T-UC-005-inv-049-5-holds",  # responsive=true filter
+    "T-UC-005-inv-049-6-holds",  # responsive=false filter
+    "T-UC-005-inv-049-7-holds",  # name_search filter
+    "T-UC-005-inv-049-7-violated",
+    "T-UC-005-inv-049-9-holds",  # output_format_ids filter
+    "T-UC-005-inv-049-9-violated",
+    "T-UC-005-inv-049-9-nofield",
+    "T-UC-005-inv-049-10-holds",  # input_format_ids filter
+    "T-UC-005-inv-049-10-violated",
+    "T-UC-005-inv-049-10-nofield",
+    "T-UC-005-inv-031-1-holds",  # multi-filter AND combination
+    "T-UC-005-inv-031-1-violated",
+}
+
+
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     """Apply xfail markers to scenarios with unimplemented production features."""
     for item in items:
         marker_names = {m.name for m in item.iter_markers()}
+        nodeid = item.nodeid
+
+        # Detect transport from parametrized nodeid: [mcp], [mcp-...], [rest], [rest-...]
+        is_mcp = "[mcp]" in nodeid or "[mcp-" in nodeid
+        is_rest = "[rest]" in nodeid or "[rest-" in nodeid
+
+        # Transport-specific xfails: MCP wrappers don't accept certain filter params
+        if is_mcp:
+            for tag, substrings, reason, strict in _MCP_SELECTIVE_XFAIL:
+                if tag in marker_names:
+                    if not substrings or any(s in nodeid for s in substrings):
+                        item.add_marker(pytest.mark.xfail(reason=reason, strict=strict))
+                    break
+
+        # Transport-specific xfails: REST drops all filter params
+        if is_rest:
+            for tag in _REST_XFAIL_TAGS:
+                if tag in marker_names:
+                    item.add_marker(pytest.mark.xfail(reason="REST endpoint drops filter params", strict=True))
+                    break
 
         # Selective xfail for parametrized scenarios
         for tag, substrings, reason in _SELECTIVE_XFAIL:
@@ -143,16 +233,55 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Multi-transport dispatch
+# ---------------------------------------------------------------------------
+# Tags that indicate a scenario already dispatches through a specific transport.
+# These scenarios must NOT be multiplied — they have explicit When steps.
+_TRANSPORT_SPECIFIC_TAGS = {"rest", "mcp", "a2a"}
+
+
+def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
+    """Parametrize BDD scenarios across all 4 transports.
+
+    Scenarios tagged with @rest, @mcp, or @a2a are transport-specific
+    and skip parametrization — they already dispatch through their
+    explicit transport in the When step.
+
+    Uses ``ctx`` as the parametrize target (indirect) so every scenario
+    gets a fresh dict with ``ctx["transport"]`` set to the Transport enum.
+    """
+    if "ctx" not in metafunc.fixturenames:
+        return
+
+    from tests.harness.transport import Transport
+
+    marker_names = {m.name for m in metafunc.definition.iter_markers()}
+    if marker_names & _TRANSPORT_SPECIFIC_TAGS:
+        # Transport-specific scenario — don't multiply
+        return
+
+    metafunc.parametrize(
+        "ctx",
+        [Transport.IMPL, Transport.A2A, Transport.MCP, Transport.REST],
+        ids=["impl", "a2a", "mcp", "rest"],
+        indirect=True,
+    )
+
+
 @pytest.fixture()
-def ctx() -> dict:
+def ctx(request: pytest.FixtureRequest) -> dict:
     """Per-scenario mutable context shared across Given/When/Then steps.
 
-    Keys used:
-        env: CreativeFormatsEnv harness instance
-        response: ListCreativeFormatsResponse from production code
-        error: Exception raised by production code
+    When parametrized by pytest_generate_tests, ``request.param`` is a
+    Transport enum injected as ctx["transport"]. Transport-specific
+    scenarios (tagged @rest/@mcp/@a2a) are NOT parametrized and get
+    an empty ctx (When steps handle dispatch explicitly).
     """
-    return {}
+    d: dict = {}
+    if hasattr(request, "param"):
+        d["transport"] = request.param
+    return d
 
 
 @pytest.fixture(autouse=True)

@@ -15,6 +15,7 @@ from typing import Any
 from pytest_bdd import parsers, when
 
 from src.core.schemas import FormatId, ListCreativeFormatsRequest
+from tests.harness.transport import Transport
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
 
@@ -23,20 +24,25 @@ DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
 
 
 def _call(ctx: dict, req: ListCreativeFormatsRequest | None = None) -> None:
-    """Call env.call_impl and store response or error in ctx."""
-    env = ctx["env"]
-    try:
-        ctx["response"] = env.call_impl(req=req)
-    except Exception as exc:
-        ctx["error"] = exc
+    """Dispatch through ctx['transport'] (defaults to IMPL for backward compat)."""
+    transport = ctx.get("transport")
+    if transport is not None:
+        _call_via(ctx, transport, req=req)
+    else:
+        env = ctx["env"]
+        try:
+            ctx["response"] = env.call_impl(req=req)
+        except Exception as exc:
+            ctx["error"] = exc
 
 
-def _call_via(ctx: dict, transport: str, req: ListCreativeFormatsRequest | None = None) -> None:
+def _call_via(ctx: dict, transport: str | Transport, req: ListCreativeFormatsRequest | None = None) -> None:
     """Call env.call_via for transport-specific dispatch."""
-    from tests.harness.transport import Transport
-
-    transport_map = {"a2a": Transport.A2A, "mcp": Transport.MCP, "rest": Transport.REST}
-    t = transport_map.get(transport, Transport.IMPL)
+    if isinstance(transport, Transport):
+        t = transport
+    else:
+        transport_map = {"a2a": Transport.A2A, "mcp": Transport.MCP, "rest": Transport.REST}
+        t = transport_map.get(transport, Transport.IMPL)
     env = ctx["env"]
 
     kwargs: dict[str, Any] = {}
