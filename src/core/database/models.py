@@ -606,7 +606,7 @@ class Principal(Base, JSONValidatorMixin):
         Delegates to the shared resolve_adapter_id() so ORM and Pydantic
         Principal objects use identical lookup logic.
         """
-        from src.adapters.constants import resolve_adapter_id
+        from src.core.platform_mappings import resolve_adapter_id
 
         return resolve_adapter_id(self.platform_mappings, adapter_name)
 
