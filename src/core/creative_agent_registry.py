@@ -173,7 +173,7 @@ class CreativeAgentRegistry:
         yarl handles: scheme/host lowercase, default port removal, percent-encoding.
         We additionally strip trailing slash so `/` and empty path are equivalent.
         """
-        return str(URL(agent_url)).rstrip("/")
+        return str(URL(str(agent_url))).rstrip("/")
 
     def _build_adcp_client(self, agents: list[CreativeAgent]) -> ADCPMultiAgentClient:
         """Build AdCP client from creative agent configs.
