@@ -305,6 +305,7 @@ def sample_tenant(integration_db):
         return {
             "tenant_id": tenant.tenant_id,
             "name": tenant.name,
+            "subdomain": tenant.subdomain,
             "admin_token": tenant.admin_token,
         }
 
