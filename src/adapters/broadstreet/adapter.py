@@ -14,10 +14,8 @@ Entity Mapping:
 """
 
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
-
-from adcp.types.aliases import Package as ResponsePackage
 
 from src.adapters.base import (
     AdapterCapabilities,
@@ -44,7 +42,6 @@ from src.core.schemas import (
     CreateMediaBuyError,
     CreateMediaBuyRequest,
     CreateMediaBuyResponse,
-    CreateMediaBuySuccess,
     DeliveryTotals,
     Error,
     MediaPackage,
@@ -393,25 +390,11 @@ class BroadstreetAdapter(AdServerAdapter):
                 media_buy_id=media_buy_id,
             )
 
-            # Build package responses
-            package_responses: list[ResponsePackage] = []
-            for pkg in packages:
-                package_responses.append(
-                    ResponsePackage(
-                        buyer_ref=pkg.buyer_ref or "unknown",
-                        package_id=pkg.package_id,
-                        paused=True,  # Paused until manual creation
-                    )
-                )
-
-            # Calculate creative deadline (2 days from now)
-            creative_deadline = datetime.now(UTC) + timedelta(days=2)
-
-            return CreateMediaBuySuccess(
-                buyer_ref=request.buyer_ref or "unknown",
-                media_buy_id=media_buy_id,
-                creative_deadline=creative_deadline,
-                packages=package_responses,
+            return self._build_create_success(
+                request,
+                media_buy_id,
+                packages,
+                paused=True,
                 workflow_step_id=workflow_step_id,
             )
 
@@ -445,20 +428,6 @@ class BroadstreetAdapter(AdServerAdapter):
                 impl_config=products_map.get(pkg.product_id or "", {}).get("implementation_config"),
             )
 
-        # Build package responses
-        package_responses = []
-        for pkg in packages:
-            package_responses.append(
-                ResponsePackage(
-                    buyer_ref=pkg.buyer_ref or "unknown",
-                    package_id=pkg.package_id,
-                    paused=False,
-                )
-            )
-
-        # Calculate creative deadline (2 days from now)
-        creative_deadline = datetime.now(UTC) + timedelta(days=2)
-
         # Handle confirmation_required mode - create campaign but require activation approval
         workflow_step_id = None
         if automation_mode == "confirmation_required":
@@ -468,11 +437,10 @@ class BroadstreetAdapter(AdServerAdapter):
                 packages=packages,
             )
 
-        response = CreateMediaBuySuccess(
-            buyer_ref=request.buyer_ref or "unknown",
-            media_buy_id=media_buy_id,
-            creative_deadline=creative_deadline,
-            packages=package_responses,
+        response = self._build_create_success(
+            request,
+            media_buy_id,
+            packages,
             workflow_step_id=workflow_step_id,
         )
 
