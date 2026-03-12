@@ -98,7 +98,7 @@ def _compute_media_buy_status_from_flight_dates(media_buy) -> str:
 
 async def _call_webhook_for_creative_status(
     creative_id,
-    tenant_id: str | None = None,
+    tenant_id: str,
 ):
     """Send protocol-level push notification for creative status update.
 
@@ -109,10 +109,13 @@ async def _call_webhook_for_creative_status(
     Returns:
         bool: True if webhook delivered successfully, False otherwise (or if no config found)
     """
+    if not tenant_id:
+        raise ValueError("tenant_id is required for _call_webhook_for_creative_status")
+
     from src.core.schemas import CreativeStatusEnum
 
     try:
-        with AdminCreativeUoW(tenant_id or "") as uow:
+        with AdminCreativeUoW(tenant_id) as uow:
             assert uow.workflows is not None
             assert uow.creatives is not None
             mapping = uow.workflows.get_latest_mapping_for_object("creative", creative_id)

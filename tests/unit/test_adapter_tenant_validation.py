@@ -1,9 +1,13 @@
-"""Regression tests for adapter tenant_id validation.
+"""Regression tests for tenant_id validation at system boundaries.
 
 beads-yz1: Adapters using `tenant_id or ""` silently coerce None to empty
 string, causing all tenant-scoped queries to return empty results instead of
 raising an error.  The fix is to validate tenant_id at the adapter boundary
 and raise ValueError for None or empty string.
+
+beads-7zn: Same pattern in admin blueprint _call_webhook_for_creative_status —
+`tenant_id or ""` coerces None to empty string, causing AdminCreativeUoW to
+silently return empty results.
 """
 
 from __future__ import annotations
@@ -96,3 +100,23 @@ class TestAdapterTenantIdValidation:
             tenant_id="valid_tenant",
         )
         assert adapter.tenant_id == "valid_tenant"
+
+
+class TestBlueprintTenantIdValidation:
+    """Admin blueprint functions must reject None/empty tenant_id explicitly."""
+
+    @pytest.mark.asyncio
+    async def test_call_webhook_rejects_none_tenant_id(self):
+        """_call_webhook_for_creative_status with tenant_id=None must raise, not use ''."""
+        from src.admin.blueprints.creatives import _call_webhook_for_creative_status
+
+        with pytest.raises(ValueError, match="tenant_id"):
+            await _call_webhook_for_creative_status(creative_id="cr_123", tenant_id=None)
+
+    @pytest.mark.asyncio
+    async def test_call_webhook_rejects_empty_tenant_id(self):
+        """_call_webhook_for_creative_status with tenant_id='' must raise, not proceed."""
+        from src.admin.blueprints.creatives import _call_webhook_for_creative_status
+
+        with pytest.raises(ValueError, match="tenant_id"):
+            await _call_webhook_for_creative_status(creative_id="cr_123", tenant_id="")
