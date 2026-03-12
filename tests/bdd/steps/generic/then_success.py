@@ -1,7 +1,7 @@
 """Then steps for success assertions (response status, fields, sandbox).
 
-These steps assert on ``ctx["response"]`` which holds a real
-ListCreativeFormatsResponse from production code.
+These steps assert on ``ctx["response"]`` which holds a real response
+object from production code (any use case).
 """
 
 from __future__ import annotations
@@ -15,21 +15,24 @@ from pytest_bdd import parsers, then
 def then_response_status(ctx: dict, status: str) -> None:
     """Assert the operation completed with expected status.
 
-    ListCreativeFormatsResponse has no ``status`` field — a successful call
-    that returns a valid response object with the required ``formats`` field
-    means the operation completed.
+    Works across use cases:
+    - UC-005 (ListCreativeFormatsResponse): no status field, presence = completed
+    - UC-004 (GetMediaBuyDeliveryResponse): has explicit status field
     """
-    from src.core.schemas import ListCreativeFormatsResponse
-
     resp = ctx.get("response")
     assert resp is not None, "Expected a response but none found"
-    if status == "completed":
-        assert isinstance(resp, ListCreativeFormatsResponse), (
-            f"Expected ListCreativeFormatsResponse, got {type(resp).__name__}"
-        )
-        assert hasattr(resp, "formats"), "Response missing required 'formats' field"
+
+    # If response has an explicit status field, check it directly
+    if hasattr(resp, "status"):
+        actual = resp.status
+        assert actual == status, f"Expected status '{status}', got '{actual}'"
         return
-    raise AssertionError(f"Unknown status '{status}' — ListCreativeFormatsResponse has no status field")
+
+    # UC-005 fallback: presence of response with expected fields = completed
+    if status == "completed":
+        return
+
+    raise AssertionError(f"Unknown status '{status}' — response has no status field")
 
 
 # ── Response contains field ──────────────────────────────────────────

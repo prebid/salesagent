@@ -31,6 +31,38 @@ def given_seller_operational(ctx: dict) -> None:
     ctx["seller_operational"] = True
 
 
+@given("a tenant has completed setup checklist")
+def given_tenant_setup_complete(ctx: dict) -> None:
+    """Tenant has completed all setup steps (Background)."""
+    ctx["tenant_setup_complete"] = True
+    ctx.setdefault("tenant_id", "test_tenant")
+
+
+@given(parsers.parse('an authenticated Buyer with principal_id "{principal_id}"'))
+def given_authenticated_buyer(ctx: dict, principal_id: str) -> None:
+    """Buyer is authenticated with the given principal_id (Background)."""
+    ctx["principal_id"] = principal_id
+    ctx["has_auth"] = True
+
+
+@given(parsers.parse('the principal "{principal_id}" exists in the tenant database'))
+def given_principal_exists(ctx: dict, principal_id: str) -> None:
+    """Principal exists in the tenant database (Background).
+
+    Actual DB record creation happens in the harness autouse fixture.
+    This step records the principal_id for later use.
+    """
+    ctx.setdefault("principal_id", principal_id)
+    ctx["principal_exists"] = True
+
+
+@given(parsers.parse('an authenticated request with principal_id "{principal_id}"'))
+def given_authenticated_request(ctx: dict, principal_id: str) -> None:
+    """An authenticated request with a specific principal_id."""
+    ctx["principal_id"] = principal_id
+    ctx["has_auth"] = True
+
+
 @given("at least one creative agent is registered with format definitions")
 def given_creative_agent_registered(ctx: dict) -> None:
     """At least one creative agent has format definitions (Background)."""

@@ -1,8 +1,11 @@
 """
 BDD test configuration and fixtures.
 
-Every scenario runs against real production code through the CreativeFormatsEnv
-harness. There is no stub mode — steps call the harness directly and assert on
+Every scenario runs against real production code through harness environments:
+  - UC-005 (Creative Formats): CreativeFormatsEnv
+  - UC-004 (Delivery Metrics): DeliveryPollEnv / WebhookEnv / CircuitBreakerEnv
+
+There is no stub mode — steps call the harness directly and assert on
 real response objects.
 
 Scenarios for unimplemented production features are marked ``xfail``.
@@ -31,6 +34,7 @@ pytest_plugins = [
     "tests.bdd.steps.generic.then_success",
     "tests.bdd.steps.generic.then_error",
     "tests.bdd.steps.generic.then_payload",
+    "tests.bdd.steps.domain.uc004_delivery",
 ]
 
 # ---------------------------------------------------------------------------
@@ -284,17 +288,69 @@ def ctx(request: pytest.FixtureRequest) -> dict:
     return d
 
 
+def _detect_uc(request: pytest.FixtureRequest) -> str | None:
+    """Detect which use case a BDD scenario belongs to via its tags."""
+    marker_names = {m.name for m in request.node.iter_markers()}
+    if any(t.startswith("T-UC-005") for t in marker_names):
+        return "UC-005"
+    if any(t.startswith("T-UC-004") for t in marker_names):
+        return "UC-004"
+    return None
+
+
+def _detect_delivery_harness(request: pytest.FixtureRequest) -> str:
+    """Detect which delivery harness a UC-004 scenario needs."""
+    marker_names = {m.name for m in request.node.iter_markers()}
+    if "webhook-reliability" in marker_names:
+        return "circuit-breaker"
+    if "webhook" in marker_names:
+        return "webhook"
+    return "poll"
+
+
 @pytest.fixture(autouse=True)
-def _creative_formats_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, None, None]:
-    """Provide CreativeFormatsEnv for every BDD scenario.
+def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, None, None]:
+    """Provide the appropriate harness for each BDD scenario.
 
-    Every scenario gets a real harness backed by PostgreSQL.
-    No stub mode — if the database isn't available, the test fails.
+    - UC-005 → CreativeFormatsEnv
+    - UC-004 @polling → DeliveryPollEnv
+    - UC-004 @webhook → WebhookEnv (unit variant, no DB needed)
+    - UC-004 @webhook-reliability → CircuitBreakerEnv (unit variant)
+    - Unknown UC → no harness (yields immediately)
     """
-    request.getfixturevalue("integration_db")
+    uc = _detect_uc(request)
 
-    from tests.harness.creative_formats import CreativeFormatsEnv
+    if uc == "UC-005":
+        request.getfixturevalue("integration_db")
+        from tests.harness.creative_formats import CreativeFormatsEnv
 
-    with CreativeFormatsEnv() as env:
-        ctx["env"] = env
+        with CreativeFormatsEnv() as env:
+            ctx["env"] = env
+            yield
+
+    elif uc == "UC-004":
+        harness_type = _detect_delivery_harness(request)
+
+        if harness_type == "poll":
+            request.getfixturevalue("integration_db")
+            from tests.harness.delivery_poll import DeliveryPollEnv
+
+            with DeliveryPollEnv() as env:
+                ctx["env"] = env
+                yield
+        elif harness_type == "webhook":
+            from tests.harness.delivery_webhook import WebhookEnv
+
+            with WebhookEnv() as env:
+                ctx["env"] = env
+                yield
+        elif harness_type == "circuit-breaker":
+            from tests.harness.delivery_circuit_breaker import CircuitBreakerEnv
+
+            with CircuitBreakerEnv() as env:
+                ctx["env"] = env
+                yield
+        else:
+            yield
+    else:
         yield

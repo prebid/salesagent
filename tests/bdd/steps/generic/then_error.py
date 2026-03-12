@@ -76,7 +76,29 @@ def then_error_code(ctx: dict, code: str) -> None:
     assert actual == code, f"Expected error code '{code}', got '{actual}'"
 
 
-# ── Error message content ───────────────────────────────────────────
+# ── Error message content (generic) ───────────────────────────────────
+
+
+@then(parsers.parse('the error message should contain "{text}"'))
+def then_error_message_contains(ctx: dict, text: str) -> None:
+    """Assert error message contains the given text (case-insensitive)."""
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    msg = _get_error_message(error).lower()
+    assert text.lower() in msg, f"Expected '{text}' in error message: {_get_error_message(error)}"
+
+
+@then(parsers.parse('the suggestion should contain "{text}"'))
+def then_suggestion_contains(ctx: dict, text: str) -> None:
+    """Assert error suggestion contains the given text (case-insensitive)."""
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    d = _get_error_dict(error)
+    suggestion = (d.get("suggestion") or "").lower()
+    assert text.lower() in suggestion, f"Expected '{text}' in suggestion: {d.get('suggestion')}"
+
+
+# ── Error message content (specific) ───────────────────────────────────
 
 
 @then("the error message should indicate tenant context could not be determined")
@@ -266,6 +288,12 @@ def then_suggestion_agent_url_id(ctx: dict) -> None:
 @then("no error should be raised")
 def then_no_error(ctx: dict) -> None:
     """Assert no error was recorded."""
+    assert "error" not in ctx, f"Expected no error but got: {ctx.get('error')}"
+
+
+@then("no error should be returned")
+def then_no_error_returned(ctx: dict) -> None:
+    """Assert no error was returned (synonym for no error raised)."""
     assert "error" not in ctx, f"Expected no error but got: {ctx.get('error')}"
 
 
