@@ -3,8 +3,8 @@
 These steps establish the pre-conditions for scenarios — a running seller agent,
 registered creative agents, and format catalogs.
 
-Steps configure the harness registry with real Format objects via
-``_sync_registry(ctx)``.
+Steps construct real Format objects via FormatFactory and push them
+to the harness via ``_sync_registry(ctx)``.
 """
 
 from __future__ import annotations
@@ -12,6 +12,15 @@ from __future__ import annotations
 from pytest_bdd import given, parsers
 
 from tests.bdd.steps.generic._registry import sync_registry as _sync_registry
+from tests.factories.format import (
+    CATEGORY_MAP,
+    FormatFactory,
+    FormatIdFactory,
+    make_asset,
+    make_fixed_renders,
+    make_renders,
+    make_responsive_renders,
+)
 
 # ── Background steps (apply to every scenario) ──────────────────────
 
@@ -36,9 +45,9 @@ def given_creative_agent_registered(ctx: dict) -> None:
 def given_registry_multi_categories(ctx: dict) -> None:
     """Registry has formats spanning multiple categories (display, video, etc.)."""
     ctx["registry_formats"] = [
-        {"name": "banner", "type": "display"},
-        {"name": "pre-roll", "type": "video"},
-        {"name": "audio-spot", "type": "audio"},
+        FormatFactory.build(name="banner", type=CATEGORY_MAP["display"]),
+        FormatFactory.build(name="pre-roll", type=CATEGORY_MAP["video"]),
+        FormatFactory.build(name="audio-spot", type=CATEGORY_MAP["audio"]),
     ]
     _sync_registry(ctx)
 
@@ -47,8 +56,8 @@ def given_registry_multi_categories(ctx: dict) -> None:
 def given_registry_two_types(ctx: dict, type_a: str, type_b: str) -> None:
     """Registry has formats of exactly two specified types."""
     ctx["registry_formats"] = [
-        {"name": f"{type_a}-format", "type": type_a},
-        {"name": f"{type_b}-format", "type": type_b},
+        FormatFactory.build(name=f"{type_a}-format", type=CATEGORY_MAP.get(type_a)),
+        FormatFactory.build(name=f"{type_b}-format", type=CATEGORY_MAP.get(type_b)),
     ]
     _sync_registry(ctx)
 
@@ -79,9 +88,9 @@ def given_no_formats(ctx: dict) -> None:
 def given_seller_various_types(ctx: dict) -> None:
     """Seller has formats across various type categories (partition/boundary)."""
     ctx["registry_formats"] = [
-        {"name": "display-ad", "type": "display"},
-        {"name": "video-ad", "type": "video"},
-        {"name": "native-card", "type": "native"},
+        FormatFactory.build(name="display-ad", type=CATEGORY_MAP["display"]),
+        FormatFactory.build(name="video-ad", type=CATEGORY_MAP["video"]),
+        FormatFactory.build(name="native-card", type=CATEGORY_MAP["native"]),
     ]
     _sync_registry(ctx)
 
@@ -91,9 +100,11 @@ def given_seller_known_ids(ctx: dict) -> None:
     """Seller has formats with known IDs (partition/boundary)."""
     from src.core.schemas import FormatId
 
+    fid_1 = FormatIdFactory.build(agent_url="https://a.example.com", id="fmt-001")
+    fid_2 = FormatIdFactory.build(agent_url="https://a.example.com", id="fmt-002")
     ctx["registry_formats"] = [
-        {"name": "fmt-a", "format_id": {"agent_url": "https://a.example.com", "id": "fmt-001"}},
-        {"name": "fmt-b", "format_id": {"agent_url": "https://a.example.com", "id": "fmt-002"}},
+        FormatFactory.build(name="fmt-a", format_id=fid_1),
+        FormatFactory.build(name="fmt-b", format_id=fid_2),
     ]
     ctx["known_format_ids"] = [
         FormatId(agent_url="https://a.example.com", id="fmt-001"),
@@ -106,9 +117,9 @@ def given_seller_known_ids(ctx: dict) -> None:
 def given_seller_various_assets(ctx: dict) -> None:
     """Seller has formats with various asset types (partition/boundary)."""
     ctx["registry_formats"] = [
-        {"name": "image-ad", "assets": [{"type": "image"}]},
-        {"name": "video-ad", "assets": [{"type": "video"}]},
-        {"name": "rich-ad", "assets": [{"type": "image"}, {"type": "html"}]},
+        FormatFactory.build(name="image-ad", assets=[make_asset("image")]),
+        FormatFactory.build(name="video-ad", assets=[make_asset("video")]),
+        FormatFactory.build(name="rich-ad", assets=[make_asset("image"), make_asset("html")]),
     ]
     _sync_registry(ctx)
 
@@ -117,8 +128,8 @@ def given_seller_various_assets(ctx: dict) -> None:
 def given_seller_various_dimensions(ctx: dict) -> None:
     """Seller has formats with various render dimensions (partition/boundary)."""
     ctx["registry_formats"] = [
-        {"name": "banner", "renders": [{"width": 728, "height": 90}]},
-        {"name": "skyscraper", "renders": [{"width": 160, "height": 600}]},
+        FormatFactory.build(name="banner", renders=[make_renders(width=728, height=90)]),
+        FormatFactory.build(name="skyscraper", renders=[make_renders(width=160, height=600)]),
     ]
     _sync_registry(ctx)
 
@@ -127,8 +138,8 @@ def given_seller_various_dimensions(ctx: dict) -> None:
 def given_seller_responsive_and_fixed(ctx: dict) -> None:
     """Seller has both responsive and fixed-dimension formats (partition/boundary)."""
     ctx["registry_formats"] = [
-        {"name": "responsive-banner", "responsive": True},
-        {"name": "fixed-banner", "responsive": False},
+        FormatFactory.build(name="responsive-banner", renders=[make_responsive_renders()]),
+        FormatFactory.build(name="fixed-banner", renders=[make_fixed_renders()]),
     ]
     _sync_registry(ctx)
 
@@ -137,9 +148,9 @@ def given_seller_responsive_and_fixed(ctx: dict) -> None:
 def given_seller_named_formats(ctx: dict, name_a: str, name_b: str, name_c: str) -> None:
     """Seller has formats with specific names (partition/boundary)."""
     ctx["registry_formats"] = [
-        {"name": name_a},
-        {"name": name_b},
-        {"name": name_c},
+        FormatFactory.build(name=name_a),
+        FormatFactory.build(name=name_b),
+        FormatFactory.build(name=name_c),
     ]
     ctx["named_formats"] = [name_a, name_b, name_c]
     _sync_registry(ctx)
@@ -149,9 +160,9 @@ def given_seller_named_formats(ctx: dict, name_a: str, name_b: str, name_c: str)
 def given_seller_various_wcag(ctx: dict) -> None:
     """Seller has formats at various WCAG accessibility levels (partition/boundary)."""
     ctx["registry_formats"] = [
-        {"name": "level-a", "wcag_level": "A"},
-        {"name": "level-aa", "wcag_level": "AA"},
-        {"name": "level-aaa", "wcag_level": "AAA"},
+        FormatFactory.build(name="level-a", wcag_level="A"),
+        FormatFactory.build(name="level-aa", wcag_level="AA"),
+        FormatFactory.build(name="level-aaa", wcag_level="AAA"),
     ]
     _sync_registry(ctx)
 
@@ -160,8 +171,8 @@ def given_seller_various_wcag(ctx: dict) -> None:
 def given_seller_various_disclosure(ctx: dict) -> None:
     """Seller has formats with various disclosure positions (partition/boundary)."""
     ctx["registry_formats"] = [
-        {"name": "prominent-ad", "supported_disclosure_positions": ["prominent"]},
-        {"name": "footer-ad", "supported_disclosure_positions": ["footer"]},
+        FormatFactory.build(name="prominent-ad", supported_disclosure_positions=["prominent"]),
+        FormatFactory.build(name="footer-ad", supported_disclosure_positions=["footer"]),
     ]
     _sync_registry(ctx)
 
@@ -171,9 +182,11 @@ def given_seller_various_output_formats(ctx: dict) -> None:
     """Seller has formats with various output_format_ids (partition/boundary)."""
     from src.core.schemas import FormatId
 
+    out_1 = FormatIdFactory.build(agent_url="https://a.example.com", id="fmt-1")
+    out_2 = FormatIdFactory.build(agent_url="https://a.example.com", id="fmt-2")
     ctx["registry_formats"] = [
-        {"name": "builder-a", "output_format_ids": [{"agent_url": "https://a.example.com", "id": "fmt-1"}]},
-        {"name": "builder-b", "output_format_ids": [{"agent_url": "https://a.example.com", "id": "fmt-2"}]},
+        FormatFactory.build(name="builder-a", output_format_ids=[out_1]),
+        FormatFactory.build(name="builder-b", output_format_ids=[out_2]),
     ]
     ctx["known_output_format_ids"] = [
         FormatId(agent_url="https://a.example.com", id="fmt-1"),
@@ -187,9 +200,11 @@ def given_seller_various_input_formats(ctx: dict) -> None:
     """Seller has formats with various input_format_ids (partition/boundary)."""
     from src.core.schemas import FormatId
 
+    in_1 = FormatIdFactory.build(agent_url="https://a.example.com", id="fmt-1")
+    in_2 = FormatIdFactory.build(agent_url="https://a.example.com", id="fmt-2")
     ctx["registry_formats"] = [
-        {"name": "resizer", "input_format_ids": [{"agent_url": "https://a.example.com", "id": "fmt-1"}]},
-        {"name": "transcoder", "input_format_ids": [{"agent_url": "https://a.example.com", "id": "fmt-2"}]},
+        FormatFactory.build(name="resizer", input_format_ids=[in_1]),
+        FormatFactory.build(name="transcoder", input_format_ids=[in_2]),
     ]
     ctx["known_input_format_ids"] = [
         FormatId(agent_url="https://a.example.com", id="fmt-1"),

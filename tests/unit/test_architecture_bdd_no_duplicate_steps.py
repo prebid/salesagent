@@ -21,6 +21,17 @@ _BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 # Threshold: flag when N or more functions share the same body
 _DUPLICATE_THRESHOLD = 3
 
+# Functions that legitimately share a body because "no X field" means
+# "bare format" — the *absence* of a kwarg is the tested behavior.
+# Each step text carries distinct semantic meaning despite identical code.
+_ALLOWED_DUPLICATES: set[str] = {
+    "given_registry_format_no_dimensions",
+    "given_registry_format_named",
+    "given_registry_format_no_disclosure",
+    "given_registry_format_no_output_ids",
+    "given_registry_format_no_input_ids",
+}
+
 
 def _is_step_decorated(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     """Check if function is decorated with @given, @when, or @then."""
@@ -79,6 +90,8 @@ def _scan_bdd_steps() -> list[tuple[str, list[str]]]:
             if not _is_step_decorated(node):
                 continue
 
+            if node.name in _ALLOWED_DUPLICATES:
+                continue
             body_key = _normalize_body(node)
             loc = f"{relative}:{node.lineno} {node.name}"
             body_to_funcs.setdefault(body_key, []).append(loc)
