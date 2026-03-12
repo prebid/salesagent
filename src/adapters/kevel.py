@@ -359,7 +359,6 @@ class Kevel(AdServerAdapter):
 
                 flight_response = requests.post(f"{self.base_url}/flight", headers=self.headers, json=flight_payload)
                 flight_response.raise_for_status()
-                flight_response.json()
 
             # Use the actual campaign ID from Kevel
             media_buy_id = f"kevel_{campaign_id}"

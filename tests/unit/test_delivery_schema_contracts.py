@@ -295,9 +295,8 @@ class TestGetMediaBuyDeliveryResponseMethods:
     def test_model_dump_omits_next_expected_at_when_no_notification_type(self):
         resp = _make_delivery_response()
         dumped = resp.model_dump()
-        # Without notification_type, next_expected_at may or may not be present
-        # but if present it should be None (base model behavior)
         assert resp.notification_type is None
+        assert "next_expected_at" not in dumped
 
     def test_webhook_payload_excludes_aggregated_totals(self):
         resp = _make_delivery_response()

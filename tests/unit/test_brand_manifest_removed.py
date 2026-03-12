@@ -18,9 +18,6 @@ from src.core.utils.naming import (
     _extract_brand_name,
     build_order_name_context,
 )
-from src.core.utils.naming import (
-    build_order_name_context as gam_build_order_name_context,
-)
 
 
 def _make_request(domain: str = "nike.com", brand_id: str | None = None):
@@ -123,7 +120,7 @@ class TestGamBuildOrderNameContextFromAdcp360:
         start_time = datetime(2025, 6, 1, tzinfo=UTC)
         end_time = datetime(2025, 6, 30, tzinfo=UTC)
 
-        context = gam_build_order_name_context(
+        context = build_order_name_context(
             request=request,
             packages=request.packages,
             start_time=start_time,
