@@ -17,6 +17,8 @@ from adcp.types import PackageRequest as LibraryPackageRequest
 from src.core.utils.naming import (
     _extract_brand_name,
     build_order_name_context,
+)
+from src.core.utils.naming import (
     build_order_name_context as gam_build_order_name_context,
 )
 
