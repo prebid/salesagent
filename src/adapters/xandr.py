@@ -16,7 +16,6 @@ from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
     CreateMediaBuyRequest,
     CreateMediaBuyResponse,
-    CreateMediaBuySuccess,
     MediaPackage,
     Principal,
     Product,
@@ -479,42 +478,17 @@ class XandrAdapter(AdServerAdapter):
         package_pricing_info: dict[str, dict] | None = None,
     ) -> CreateMediaBuyResponse:
         """Create insertion order and line items in Xandr."""
-        from adcp.types import Package as AdCPPackage
-
         if self._requires_manual_approval("create_media_buy"):
             task_id = self._create_human_task(
                 "create_media_buy",
                 {"request": request.dict(), "principal": self.principal.name, "advertiser_id": self.advertiser_id},
             )
 
-            # Build package responses - Per AdCP spec, CreateMediaBuyResponse.Package only contains:
-            # - buyer_ref (required)
-            # - package_id (required)
-            package_responses = []
-            for idx, package in enumerate(packages):
-                # Get matching request package for buyer_ref
-                matching_req_package = None
-                if request.packages and idx < len(request.packages):
-                    matching_req_package = request.packages[idx]
-
-                buyer_ref = "unknown"  # Default fallback
-                if matching_req_package and hasattr(matching_req_package, "buyer_ref"):
-                    buyer_ref = matching_req_package.buyer_ref or buyer_ref
-
-                # Create minimal AdCP-compliant Package response
-                package_responses.append(
-                    AdCPPackage(
-                        buyer_ref=buyer_ref,
-                        package_id=package.package_id,
-                        paused=False,
-                    )
-                )
-
-            return CreateMediaBuySuccess(
-                buyer_ref=request.buyer_ref or "",
-                media_buy_id=f"xandr_pending_{task_id}",
-                packages=package_responses,
-                creative_deadline=None,
+            return self._build_create_success(
+                request,
+                f"xandr_pending_{task_id}",
+                packages,
+                creative_deadline_days=None,
             )
 
         try:
@@ -561,8 +535,6 @@ class XandrAdapter(AdServerAdapter):
             io_response = self._make_request("POST", "/insertion-order", io_data)
             io_id = io_response["response"]["insertion-order"]["id"]
 
-            package_responses = []
-
             # Create line items for each package
             for _idx, package in enumerate(packages):
                 if not self.advertiser_id:
@@ -598,27 +570,9 @@ class XandrAdapter(AdServerAdapter):
                 if package.targeting_overlay:
                     li_data["line-item"]["profile_id"] = self._create_targeting_profile(package.targeting_overlay)
 
-                li_response = self._make_request("POST", "/line-item", li_data)
-                li_id = li_response["response"]["line-item"]["id"]
+                self._make_request("POST", "/line-item", li_data)
 
-                # Build package response - Per AdCP spec, CreateMediaBuyResponse.Package only contains:
-                # - buyer_ref (required)
-                # - package_id (required)
-                # MediaPackage has buyer_ref populated from request
-                package_responses.append(
-                    AdCPPackage(
-                        buyer_ref=package.buyer_ref or "unknown",
-                        package_id=package.package_id,
-                        paused=False,
-                    )
-                )
-
-            return CreateMediaBuySuccess(
-                buyer_ref=request.buyer_ref or "",
-                media_buy_id=f"xandr_io_{io_id}",
-                creative_deadline=datetime.now(UTC) + timedelta(days=2),
-                packages=package_responses,
-            )
+            return self._build_create_success(request, f"xandr_io_{io_id}", packages)
 
         except Exception as e:
             logger.error(f"Failed to create Xandr media buy: {e}")
