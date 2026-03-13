@@ -1,0 +1,7 @@
+{
+  "last_failure": "2026-03-10T10:59:50.086187+01:00",
+  "failure_count": 3,
+  "backoff_until": "2026-03-10T11:01:50.086187+01:00",
+  "needs_manual_sync": true,
+  "failure_reason": "git pull failed: exit status 1\nfatal: couldn't find remote ref refactor/1094-repository-pattern-adoption\n"
+}

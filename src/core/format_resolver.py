@@ -44,8 +44,9 @@ def get_format(
     registry = get_creative_agent_registry()
 
     # If agent_url provided, get format directly from that agent
+    # Coerce to str: FormatId.agent_url is Pydantic AnyUrl (not a str subclass)
     if agent_url:
-        fmt = run_async_in_sync_context(registry.get_format(agent_url, format_id))
+        fmt = run_async_in_sync_context(registry.get_format(str(agent_url), format_id))
         if fmt:
             return fmt
     else:

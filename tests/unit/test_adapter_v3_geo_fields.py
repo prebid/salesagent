@@ -28,7 +28,7 @@ class TestKevelV3GeoFields:
 
         principal = _make_principal("kevel")
         config = {"network_id": "1", "api_key": "test"}
-        return Kevel(config, principal, dry_run=True)
+        return Kevel(config, principal, dry_run=True, tenant_id="test_tenant")
 
     def test_build_targeting_v3_geo_countries(self):
         kevel = self._make_kevel()
@@ -89,7 +89,7 @@ class TestTritonV3GeoFields:
 
         principal = _make_principal("triton")
         config = {"auth_token": "test"}
-        return TritonDigital(config, principal, dry_run=True)
+        return TritonDigital(config, principal, dry_run=True, tenant_id="test_tenant")
 
     def test_build_targeting_v3_geo_countries(self):
         triton = self._make_triton()

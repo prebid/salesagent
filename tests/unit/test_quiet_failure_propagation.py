@@ -53,10 +53,6 @@ def _base_patches(mock_uow, convert_fn=None):
         patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
         patch("src.core.tools.products.get_principal_object", return_value=None),
         patch("src.core.tools.products.convert_product_model_to_schema", side_effect=convert_fn),
-        patch(
-            "src.core.tools.products.get_db_session",
-            side_effect=RuntimeError("no DB in unit test"),
-        ),
     ]
 
 
@@ -83,7 +79,12 @@ class TestDynamicVariantsExceptionPropagation:
                 new_callable=AsyncMock,
                 side_effect=TypeError("NoneType has no attribute 'product_id'"),
             ),
-            patch("src.services.dynamic_pricing_service.DynamicPricingService"),
+            patch(
+                "src.services.dynamic_pricing_service.DynamicPricingService",
+                **{
+                    "return_value.enrich_products_with_pricing.side_effect": lambda products, **kw: products,
+                },
+            ),
         ]
 
         import contextlib
@@ -113,7 +114,12 @@ class TestDynamicVariantsExceptionPropagation:
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("Connection refused"),
             ),
-            patch("src.services.dynamic_pricing_service.DynamicPricingService"),
+            patch(
+                "src.services.dynamic_pricing_service.DynamicPricingService",
+                **{
+                    "return_value.enrich_products_with_pricing.side_effect": lambda products, **kw: products,
+                },
+            ),
         ]
 
         import contextlib
@@ -150,17 +156,10 @@ class TestDynamicPricingExceptionPropagation:
             "'NoneType' object is not subscriptable"
         )
 
-        # Must let get_db_session succeed so the TypeError from the pricing service fires
-        mock_session = MagicMock()
-        mock_db = MagicMock()
-        mock_db.__enter__ = MagicMock(return_value=mock_session)
-        mock_db.__exit__ = MagicMock(return_value=False)
-
         patches = [
             patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
             patch("src.core.tools.products.get_principal_object", return_value=None),
             patch("src.core.tools.products.convert_product_model_to_schema", side_effect=lambda p, **kw: p),
-            patch("src.core.tools.products.get_db_session", return_value=mock_db),
             patch(
                 "src.services.dynamic_products.generate_variants_for_brief",
                 new_callable=AsyncMock,
@@ -271,10 +270,6 @@ class TestAdapterAnnotationExceptionPropagation:
             patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
             patch("src.core.tools.products.get_principal_object", return_value=mock_principal),
             patch("src.core.tools.products.convert_product_model_to_schema", side_effect=lambda p, **kw: p),
-            patch(
-                "src.core.tools.products.get_db_session",
-                side_effect=RuntimeError("no DB in unit test"),
-            ),
             patch(
                 "src.services.dynamic_products.generate_variants_for_brief",
                 new_callable=AsyncMock,

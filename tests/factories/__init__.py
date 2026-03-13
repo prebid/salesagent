@@ -12,7 +12,13 @@ Usage::
     buy = MediaBuyFactory(tenant=tenant, principal__tenant=tenant)
 """
 
-from tests.factories.core import CurrencyLimitFactory, PropertyTagFactory, PublisherPartnerFactory, TenantFactory
+from tests.factories.core import (
+    AdapterConfigFactory,
+    CurrencyLimitFactory,
+    PropertyTagFactory,
+    PublisherPartnerFactory,
+    TenantFactory,
+)
 from tests.factories.creative import CreativeAssignmentFactory, CreativeFactory
 from tests.factories.media_buy import MediaBuyFactory, MediaPackageFactory
 from tests.factories.metrics import FormatPerformanceMetricsFactory
@@ -22,6 +28,7 @@ from tests.factories.webhook import PushNotificationConfigFactory
 
 ALL_FACTORIES = [
     TenantFactory,
+    AdapterConfigFactory,
     CurrencyLimitFactory,
     PropertyTagFactory,
     PublisherPartnerFactory,
@@ -38,6 +45,7 @@ ALL_FACTORIES = [
 
 __all__ = [
     "ALL_FACTORIES",
+    "AdapterConfigFactory",
     "CreativeAssignmentFactory",
     "CreativeFactory",
     "CurrencyLimitFactory",

@@ -205,6 +205,21 @@ iterate:
         5. **Specificity**: Is the plan specific enough to implement without guessing?
            Vague plans like "update the code" are HIGH findings.
         6. **Alternatives**: Was an obviously better approach missed?
+        7. **Allowlist debt check** — MANDATORY for every file in the plan:
+           ```bash
+           # Check if any planned file appears in a guard allowlist
+           for f in <files-from-plan>; do
+             grep -r "$f" tests/unit/test_architecture_*.py | grep -i allowlist
+           done
+           ```
+           If a file appears in ANY allowlist, the existing code there is DEBT.
+           The plan MUST NOT pattern-match against it. Instead:
+           - Check what repository/UoW/abstraction methods already exist
+           - Plan to USE those abstractions for new code
+           - If the needed abstraction doesn't exist, plan to CREATE it first
+           - This is a HIGH finding if the plan adds raw queries, session.add(),
+             get_db_session(), or select(Model) to an allowlisted file without
+             going through the proper abstraction layer
 
         ## Rate Each Finding
 
@@ -354,6 +369,20 @@ iterate:
                `create_test_media_buy_request_dict`, etc.
              - See `tests/helpers/adcp_factories.py` for full list
              - For DB fixtures: use conftest.py fixtures, never inline `session.add()`
+             - **Never call `get_db_session()` in test code.** DB setup belongs in
+               factory fixtures. This is enforced by `test_architecture_repository_pattern.py`.
+             - **DO NOT match existing patterns in the file.** If the file you're editing
+               already has `get_db_session()` or `session.add()` calls, those are pre-existing
+               debt — your new code must use factories regardless of what surrounds it.
+               The guard will catch new violations immediately at `make quality`.
+
+        ## BANNED Test Patterns
+
+        - **`get_db_session()` in test code is BANNED.** Use factory fixtures instead.
+          Pre-existing violations are allowlisted in `test_architecture_repository_pattern.py`
+          — new violations fail `make quality` immediately.
+
+        - **`session.add()` in test bodies is BANNED.** Same enforcement as above.
 
         4. **Factory check**: Verify your test uses factories:
            ```bash
@@ -462,6 +491,20 @@ iterate:
            > "Does this change maintain the invariant?"
            If "no" or "unclear" for any change, STOP and leave this atom open.
 
+        3. **Allowlist debt gate** — HARD STOP before writing ANY code:
+           For each file you will modify, check if it's in a guard allowlist:
+           ```bash
+           grep -r "filename.py" tests/unit/test_architecture_*.py | grep -i allowlist
+           ```
+           If the file is allowlisted: the existing code is DEBT, not a pattern.
+           Before writing ANY database query (`select()`, `session.add()`, etc.):
+           - List what repository/UoW methods already exist for the models involved
+           - Use those methods. NEVER write raw queries in allowlisted files.
+           - If the needed method doesn't exist, add it to the repository FIRST.
+           This applies even if the surrounding code uses raw queries — especially
+           then. The allowlist is a marker of code that needs to be fixed, not
+           code to imitate.
+
         ## Workflow (TDD Green + Refactor)
 
         1. **Green**: Write minimum code to make the failing test pass
@@ -555,23 +598,47 @@ iterate:
              test changes, fix the implementation instead, re-run `make quality`,
              and restart this atom.
 
-        3. Stage relevant files (be specific, don't use `git add .`):
+        3. **Allowlist change review**: Check if any guard allowlists were modified:
+           ```bash
+           git diff --name-only -- 'tests/unit/test_architecture_*.py'
+           ```
+           If ANY architecture guard files were changed:
+           - `git diff -- tests/unit/test_architecture_*.py` to see exactly what changed
+           - For each allowlist change, answer:
+             - Was an entry ADDED? → STOP. Growing the debt is not acceptable.
+               Use the repository/abstraction layer instead.
+             - Was an entry REMOVED? → Good — verify the underlying code now
+               uses the correct abstraction (repository, UoW, etc.)
+             - Was an entry MOVED between models? → Verify the new model's query
+               goes through the appropriate repository.
+
+           Also check if production files in the diff appear in any allowlist:
+           ```bash
+           for f in $(git diff --name-only -- 'src/'); do
+             grep -r "$f" tests/unit/test_architecture_*.py 2>/dev/null | grep -i allowlist
+           done
+           ```
+           If a modified production file is allowlisted: verify your changes
+           use the repository layer, not raw queries. The allowlist is DEBT —
+           your changes must not add more of the same pattern.
+
+        4. Stage relevant files (be specific, don't use `git add .`):
            ```bash
            git add <specific-files>
            ```
 
-        4. Determine commit type from the task:
+        5. Determine commit type from the task:
            - Schema migration → `refactor:`
            - New feature → `feat:`
            - Bug fix → `fix:`
            - Infrastructure → `chore:`
 
-        5. Commit:
+        6. Commit:
            ```bash
            git commit -m "<type>: <description from task title>"
            ```
 
-        6. Verify:
+        7. Verify:
            ```bash
            git log -1 --oneline
            ```

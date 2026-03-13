@@ -6,13 +6,14 @@ from datetime import UTC, datetime
 
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, session, url_for
 from sqlalchemy import select
-from sqlalchemy.orm import attributes
 
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Context, WorkflowStep
+from src.core.database.models import Context
 from src.core.database.models import Principal as ModelPrincipal
+from src.core.database.repositories import MediaBuyRepository
+from src.core.database.repositories.workflow import WorkflowRepository
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,6 @@ workflows_bp = Blueprint("workflows", __name__)
 def list_workflows(tenant_id, **kwargs):
     """List all workflows and pending approvals."""
     from src.core.database.models import AuditLog, Tenant
-    from src.core.database.repositories import MediaBuyRepository
 
     with get_db_session() as db:
         # Get tenant
@@ -32,21 +32,16 @@ def list_workflows(tenant_id, **kwargs):
         if not tenant:
             return "Tenant not found", 404
 
-        # Get all workflow steps (not just pending approval)
-        stmt = (
-            select(WorkflowStep)
-            .join(Context, WorkflowStep.context_id == Context.context_id)
-            .filter(Context.tenant_id == tenant_id)
-            .order_by(WorkflowStep.created_at.desc())
-        )
-        all_steps = db.scalars(stmt).all()
+        # Get all workflow steps via repository (tenant-scoped)
+        workflow_repo = WorkflowRepository(db, tenant_id)
+        all_steps = workflow_repo.get_all_steps()
 
         # Separate pending approval steps for summary
         pending_steps = [s for s in all_steps if s.status == "pending_approval"]
 
         # Get media buys for context
-        repo = MediaBuyRepository(db, tenant_id)
-        media_buys = repo.list_all_ordered_by_created()
+        media_buy_repo = MediaBuyRepository(db, tenant_id)
+        media_buys = media_buy_repo.list_all_ordered_by_created()
 
         # Build summary stats
         summary = {
@@ -69,9 +64,9 @@ def list_workflows(tenant_id, **kwargs):
             workflows_list.append(
                 {
                     "step_id": step.step_id,
-                    "context_id": step.context_id,  # Use context_id instead of workflow_id
+                    "context_id": step.context_id,
                     "step_type": step.step_type,
-                    "tool_name": step.tool_name,  # Use tool_name instead of step_name
+                    "tool_name": step.tool_name,
                     "status": step.status,
                     "created_at": step.created_at,
                     "completed_at": step.completed_at,
@@ -82,12 +77,10 @@ def list_workflows(tenant_id, **kwargs):
                 }
             )
 
-        # Get recent audit logs with enriched context
-        # Get raw audit logs for the template (it expects AuditLog objects)
+        # Get recent audit logs
         stmt = select(AuditLog).filter(AuditLog.tenant_id == tenant_id).order_by(AuditLog.timestamp.desc()).limit(100)
         audit_logs = db.scalars(stmt).all()
 
-        # Debug logging to understand why audit logs might be empty
         logger.info(f"[workflows] Querying audit logs for tenant_id={tenant_id}")
         logger.info(f"[workflows] Found {len(audit_logs)} audit logs")
         if audit_logs:
@@ -95,7 +88,6 @@ def list_workflows(tenant_id, **kwargs):
                 f"[workflows] Latest audit log: operation={audit_logs[0].operation}, success={audit_logs[0].success}, timestamp={audit_logs[0].timestamp}"
             )
         else:
-            # Check if there are ANY audit logs in the database
             all_logs_stmt = select(AuditLog).order_by(AuditLog.timestamp.desc()).limit(5)
             all_logs = db.scalars(all_logs_stmt).all()
             logger.warning(
@@ -111,7 +103,7 @@ def list_workflows(tenant_id, **kwargs):
             summary=summary,
             workflows=workflows_list,
             media_buys=media_buys,
-            tasks=workflows_list,  # Using workflow_steps as tasks
+            tasks=workflows_list,
             audit_logs=audit_logs,
         )
 
@@ -121,13 +113,9 @@ def list_workflows(tenant_id, **kwargs):
 def review_workflow_step(tenant_id, workflow_id, step_id):
     """Show detailed review page for a workflow step requiring approval."""
     with get_db_session() as db:
-        # Get the workflow step with context
-        stmt = (
-            select(WorkflowStep)
-            .join(Context, WorkflowStep.context_id == Context.context_id)
-            .filter(WorkflowStep.step_id == step_id, Context.tenant_id == tenant_id)
-        )
-        step = db.scalars(stmt).first()
+        # Get the workflow step via repository (tenant-scoped)
+        workflow_repo = WorkflowRepository(db, tenant_id)
+        step = workflow_repo.get_step_by_id(step_id)
 
         if not step:
             flash("Workflow step not found", "error")
@@ -168,40 +156,25 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
     """Approve a workflow step."""
     try:
         with get_db_session() as db:
-            # Get the workflow step
-            stmt = (
-                select(WorkflowStep)
-                .join(Context, WorkflowStep.context_id == Context.context_id)
-                .filter(WorkflowStep.step_id == step_id, Context.tenant_id == tenant_id)
+            # Get and update the workflow step via repository (tenant-scoped)
+            workflow_repo = WorkflowRepository(db, tenant_id)
+
+            user_info = session.get("user", {})
+            user_email = user_info.get("email", "system") if isinstance(user_info, dict) else str(user_info)
+
+            step = workflow_repo.update_status(
+                step_id,
+                status="approved",
             )
-            step = db.scalars(stmt).first()
 
             if not step:
                 return jsonify({"error": "Workflow step not found"}), 404
 
-            # Update status
-            step.status = "approved"
-            step.updated_at = datetime.now(UTC)
-
-            # Add approval comment with authenticated user
-            user_info = session.get("user", {})
-            user_email = user_info.get("email", "system") if isinstance(user_info, dict) else str(user_info)
-
-            if not step.comments:
-                step.comments = []
-            step.comments.append(
-                {"user": user_email, "timestamp": datetime.now(UTC).isoformat(), "comment": "Approved via admin UI"}
-            )
-            attributes.flag_modified(step, "comments")
-
             db.commit()
 
             # Check if this is a media buy creation workflow step
-            # If so, execute the adapter creation (order/line items in GAM)
-            from src.core.database.models import ObjectWorkflowMapping
-
-            stmt_mapping = select(ObjectWorkflowMapping).filter_by(step_id=step_id, object_type="media_buy")
-            mapping = db.scalars(stmt_mapping).first()
+            mappings = workflow_repo.get_mappings_for_step(step_id)
+            mapping = next((m for m in mappings if m.object_type == "media_buy"), None)
 
             logger.info(
                 f"[APPROVAL] Checking for ObjectWorkflowMapping: step_id={step_id}, found={mapping is not None}"
@@ -216,8 +189,8 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                 logger.info(f"[APPROVAL] Workflow step {step_id} approved for media buy {media_buy_id}")
 
                 # Get the media buy
-                approval_repo = MediaBuyRepository(db, tenant_id)
-                media_buy = approval_repo.get_by_id(media_buy_id)
+                media_buy_repo = MediaBuyRepository(db, tenant_id)
+                media_buy = media_buy_repo.get_by_id(media_buy_id)
 
                 logger.info(
                     f"[APPROVAL] Media buy lookup: found={media_buy is not None}, status={media_buy.status if media_buy else 'N/A'}"
@@ -232,12 +205,10 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                     assignments = db.scalars(stmt_assignments).all()
 
                     if assignments:
-                        # Get all creative IDs for this media buy
                         creative_ids = [a.creative_id for a in assignments]
                         stmt_creatives = select(CreativeModel).filter(CreativeModel.creative_id.in_(creative_ids))
                         creatives = db.scalars(stmt_creatives).all()
 
-                        # Check if any required creatives are not approved
                         unapproved_creatives = [
                             c.creative_id for c in creatives if c.status not in ["approved", "active"]
                         ]
@@ -251,7 +222,6 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                                 f"Media buy approved! Waiting for {len(unapproved_creatives)} creative(s) to be approved before creating in GAM.",
                                 "info",
                             )
-                            # Update status to show it's waiting for creatives
                             media_buy.status = "pending_creatives"
                             db.commit()
                             return jsonify({"success": True}), 200
@@ -300,31 +270,20 @@ def reject_workflow_step(tenant_id, workflow_id, step_id):
         reason = data.get("reason", "No reason provided")
 
         with get_db_session() as db:
-            # Get the workflow step
-            stmt = (
-                select(WorkflowStep)
-                .join(Context, WorkflowStep.context_id == Context.context_id)
-                .filter(WorkflowStep.step_id == step_id, Context.tenant_id == tenant_id)
-            )
-            step = db.scalars(stmt).first()
+            # Get and update the workflow step via repository (tenant-scoped)
+            workflow_repo = WorkflowRepository(db, tenant_id)
 
-            if not step:
-                return jsonify({"error": "Workflow step not found"}), 404
-
-            # Update status
-            step.status = "rejected"
-            step.updated_at = datetime.now(UTC)
-
-            # Add rejection comment with authenticated user
             user_info = session.get("user", {})
             user_email = user_info.get("email", "system") if isinstance(user_info, dict) else str(user_info)
 
-            if not step.comments:
-                step.comments = []
-            step.comments.append(
-                {"user": user_email, "timestamp": datetime.now(UTC).isoformat(), "comment": f"Rejected: {reason}"}
+            step = workflow_repo.update_status(
+                step_id,
+                status="rejected",
+                error_message=reason,
             )
-            attributes.flag_modified(step, "comments")
+
+            if not step:
+                return jsonify({"error": "Workflow step not found"}), 404
 
             db.commit()
 
