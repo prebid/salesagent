@@ -17,7 +17,6 @@ from adcp.types import PackageRequest as LibraryPackageRequest
 from src.core.utils.naming import (
     _extract_brand_name,
     build_order_name_context,
-    build_order_name_context as gam_build_order_name_context,
 )
 
 
@@ -121,7 +120,7 @@ class TestGamBuildOrderNameContextFromAdcp360:
         start_time = datetime(2025, 6, 1, tzinfo=UTC)
         end_time = datetime(2025, 6, 30, tzinfo=UTC)
 
-        context = gam_build_order_name_context(
+        context = build_order_name_context(
             request=request,
             packages=request.packages,
             start_time=start_time,
