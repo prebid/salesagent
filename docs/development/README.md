@@ -4,24 +4,13 @@ Documentation for contributors to the Prebid Sales Agent codebase, maintained un
 
 ## Getting Started
 
-1. Clone the repository
-2. Copy `.env.template` to `.env` (optional - defaults work for development)
-3. Build and start the development environment:
-   ```bash
-   docker compose build
-   docker compose up -d
-   ```
-4. Access Admin UI at http://localhost:8000
-   - Click "Log in to Dashboard" button (password: `test123`)
+```bash
+git clone https://github.com/prebid/salesagent.git
+cd salesagent
+make setup
+```
 
-Migrations run automatically on startup. A demo tenant with sample data is created by default.
-
-**Why `docker compose`?** It builds from local source code (not pre-built images), enabling:
-- Hot-reload for code changes
-- All dependencies including newly added packages
-- Source code mounted for live development
-
-See [Contributing](contributing.md) for detailed development workflows.
+See [Getting Started](GETTING_STARTED.md) for prerequisites, manual setup, testing, and common operations.
 
 ## Documentation
 
@@ -66,7 +55,7 @@ Migrations run automatically on startup. To run manually:
 
 ```bash
 # Inside Docker
-docker compose exec admin-ui python scripts/ops/migrate.py
+docker compose exec adcp-server python scripts/ops/migrate.py
 
 # Or locally with uv
 uv run python scripts/ops/migrate.py
