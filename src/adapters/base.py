@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:
     from src.core.schemas import Snapshot, Targeting
 
+from adcp.types.aliases import Package as ResponsePackage
 from pydantic import BaseModel, ConfigDict, Field
 from rich.console import Console
 
@@ -18,6 +19,7 @@ from src.core.schemas import (
     CheckMediaBuyStatusResponse,
     CreateMediaBuyRequest,
     CreateMediaBuyResponse,
+    CreateMediaBuySuccess,
     MediaPackage,
     PackagePerformance,
     Principal,
@@ -232,6 +234,64 @@ class AdServerAdapter(ABC):
             self.console.print(f"[dim](dry-run)[/dim] {message}")
         else:
             self.console.print(message)
+
+    def _build_package_responses(self, packages: list[MediaPackage], *, paused: bool = False) -> list[ResponsePackage]:
+        """Build AdCP-compliant package responses from MediaPackage list.
+
+        Per AdCP spec, CreateMediaBuyResponse.Package requires package_id
+        and buyer_ref. This builds the list consistently across adapters.
+
+        Args:
+            packages: List of MediaPackage objects from the request.
+            paused: Whether packages should be marked as paused (e.g. for HITL).
+
+        Returns:
+            List of ResponsePackage objects ready for CreateMediaBuySuccess.
+        """
+        return [
+            ResponsePackage(
+                buyer_ref=package.buyer_ref or "unknown",
+                package_id=package.package_id,
+                paused=paused,
+            )
+            for package in packages
+        ]
+
+    def _build_create_success(
+        self,
+        request: CreateMediaBuyRequest,
+        media_buy_id: str,
+        packages: list[MediaPackage],
+        *,
+        paused: bool = False,
+        creative_deadline_days: int = 2,
+        package_responses: list[ResponsePackage] | None = None,
+    ) -> CreateMediaBuySuccess:
+        """Build a CreateMediaBuySuccess response with standard fields.
+
+        Constructs the response with buyer_ref, media_buy_id, creative_deadline,
+        and package responses. If package_responses is not provided, builds them
+        from the packages list.
+
+        Args:
+            request: The original create media buy request.
+            media_buy_id: The generated media buy ID.
+            packages: List of MediaPackage objects from the request.
+            paused: Whether packages should be marked as paused.
+            creative_deadline_days: Days from now for creative deadline.
+            package_responses: Pre-built package responses (overrides packages).
+
+        Returns:
+            CreateMediaBuySuccess response.
+        """
+        if package_responses is None:
+            package_responses = self._build_package_responses(packages, paused=paused)
+        return CreateMediaBuySuccess(
+            buyer_ref=request.buyer_ref or "unknown",
+            media_buy_id=media_buy_id,
+            creative_deadline=datetime.now(UTC) + timedelta(days=creative_deadline_days),
+            packages=package_responses,
+        )
 
     def get_supported_pricing_models(self) -> set[str]:
         """Return set of pricing models this adapter supports (AdCP PR #88).

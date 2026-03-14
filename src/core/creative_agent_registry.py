@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from adcp import ADCPMultiAgentClient, AgentConfig, ListCreativeFormatsRequest, Protocol
+from adcp import ADCPMultiAgentClient, ListCreativeFormatsRequest
 from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPError, ADCPTimeoutError
 from adcp.types import AssetContentType as AssetType
 from adcp.types import FormatCategory as FormatType
@@ -176,35 +176,10 @@ class CreativeAgentRegistry:
         return str(URL(str(agent_url))).rstrip("/")
 
     def _build_adcp_client(self, agents: list[CreativeAgent]) -> ADCPMultiAgentClient:
-        """Build AdCP client from creative agent configs.
+        """Build AdCP client from creative agent configs."""
+        from src.core.helpers.adapter_helpers import build_agent_config
 
-        Args:
-            agents: List of CreativeAgent instances
-
-        Returns:
-            ADCPMultiAgentClient configured with all agents
-        """
-        agent_configs = []
-        for agent in agents:
-            # Extract auth configuration
-            auth_type = "token"
-            auth_token = None
-            if agent.auth:
-                auth_type = agent.auth.get("type", "token")
-                auth_token = agent.auth.get("credentials")
-
-            config = AgentConfig(
-                id=agent.name,
-                agent_uri=str(agent.agent_url),  # Convert AnyUrl to string for adcp 2.5.0
-                protocol=Protocol.MCP,
-                auth_token=auth_token,
-                auth_type=auth_type,
-                auth_header=agent.auth_header or "x-adcp-auth",
-                timeout=30.0,
-            )
-            agent_configs.append(config)
-
-        return ADCPMultiAgentClient(agents=agent_configs)
+        return ADCPMultiAgentClient(agents=[build_agent_config(agent) for agent in agents])
 
     def _get_tenant_agents(self, tenant_id: str | None) -> list[CreativeAgent]:
         """Get list of creative agents for a tenant.
