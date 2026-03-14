@@ -306,7 +306,7 @@ admin_wsgi = WSGIMiddleware(flask_admin_app)
 # Landing page routes
 # ---------------------------------------------------------------------------
 
-from fastapi.responses import HTMLResponse, RedirectResponse  # noqa: E402
+from fastapi.responses import HTMLResponse  # noqa: E402
 
 from src.core.domain_routing import route_landing_page  # noqa: E402
 from src.landing import generate_tenant_landing_page  # noqa: E402

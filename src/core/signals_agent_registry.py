@@ -31,7 +31,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from adcp import ADCPMultiAgentClient, AgentConfig, GetSignalsRequest, PlatformDestination, Protocol
+from adcp import ADCPMultiAgentClient, GetSignalsRequest, PlatformDestination
 from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPError, ADCPTimeoutError
 from adcp.types import DeliverTo
 from adcp.types.generated_poc.signals.get_signals_request import GetSignalsRequest1
@@ -118,38 +118,10 @@ class SignalsAgentRegistry:
         return [a for a in agents if a.enabled]
 
     def _build_adcp_client(self, agents: list[SignalsAgent]) -> ADCPMultiAgentClient:
-        """Build AdCP client from signals agent configs.
+        """Build AdCP client from signals agent configs."""
+        from src.core.helpers.adapter_helpers import build_agent_config
 
-        Args:
-            agents: List of SignalsAgent instances
-
-        Returns:
-            Configured ADCPMultiAgentClient
-        """
-        agent_configs = []
-
-        for agent in agents:
-            # Determine auth type and token
-            auth_type = "token"  # Default
-            auth_token = None
-
-            if agent.auth:
-                auth_type = agent.auth.get("type", "token")
-                auth_token = agent.auth.get("credentials")
-
-            # Map to AgentConfig
-            config = AgentConfig(
-                id=agent.name,  # Use name as ID for readability
-                agent_uri=str(agent.agent_url),  # Convert AnyUrl to string for adcp 2.5.0
-                protocol=Protocol.MCP,  # Signals agents use MCP protocol
-                auth_token=auth_token,
-                auth_type=auth_type,
-                auth_header=agent.auth_header or "x-adcp-auth",
-                timeout=float(agent.timeout),
-            )
-            agent_configs.append(config)
-
-        return ADCPMultiAgentClient(agents=agent_configs)
+        return ADCPMultiAgentClient(agents=[build_agent_config(agent) for agent in agents])
 
     async def _get_signals_from_agent(
         self,

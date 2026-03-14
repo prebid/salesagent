@@ -7,111 +7,15 @@ Tests the two-phase migration:
 Verifies upgrade, data transformation, downgrade, and roundtrip on a real DB.
 """
 
-import os
-import re
-import uuid
-
-import psycopg2
 import pytest
-from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
+
+from tests.integration.migration_helpers import run_alembic_downgrade, run_alembic_upgrade
 
 # Migration revisions under test
 BACKFILL_REV = "6aee724a2d1d"
 NOT_NULL_REV = "aa005b733aed"
 PRE_BACKFILL_REV = "b4aa81561fea"  # revision before backfill
-
-
-def _parse_postgres_url():
-    """Parse DATABASE_URL into connection components."""
-    postgres_url = os.environ.get("DATABASE_URL", "")
-    match = re.match(r"postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)", postgres_url)
-    if not match:
-        return None
-    user, password, host, port_str, _ = match.groups()
-    return user, password, host, int(port_str)
-
-
-def _run_alembic(db_url, target_revision):
-    """Run Alembic upgrade to a specific revision."""
-    from alembic.config import Config
-
-    from alembic import command
-
-    old_url = os.environ.get("DATABASE_URL")
-    os.environ["DATABASE_URL"] = db_url
-    try:
-        alembic_cfg = Config("alembic.ini")
-        command.upgrade(alembic_cfg, target_revision)
-    finally:
-        if old_url:
-            os.environ["DATABASE_URL"] = old_url
-        elif "DATABASE_URL" in os.environ:
-            del os.environ["DATABASE_URL"]
-
-
-def _run_alembic_downgrade(db_url, target_revision):
-    """Run Alembic downgrade to a specific revision."""
-    from alembic.config import Config
-
-    from alembic import command
-
-    old_url = os.environ.get("DATABASE_URL")
-    os.environ["DATABASE_URL"] = db_url
-    try:
-        alembic_cfg = Config("alembic.ini")
-        command.downgrade(alembic_cfg, target_revision)
-    finally:
-        if old_url:
-            os.environ["DATABASE_URL"] = old_url
-        elif "DATABASE_URL" in os.environ:
-            del os.environ["DATABASE_URL"]
-
-
-@pytest.fixture(scope="module")
-def migration_db():
-    """Create an isolated PostgreSQL database for migration testing."""
-    parsed = _parse_postgres_url()
-    if not parsed:
-        pytest.skip("Requires PostgreSQL DATABASE_URL")
-
-    user, password, host, port = parsed
-    db_name = f"test_dm_migration_{uuid.uuid4().hex[:8]}"
-
-    conn_params = {
-        "host": host,
-        "port": port,
-        "user": user,
-        "password": password,
-        "database": "postgres",
-    }
-
-    conn = psycopg2.connect(**conn_params)
-    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-    cur = conn.cursor()
-    cur.execute(f'CREATE DATABASE "{db_name}"')
-    cur.close()
-    conn.close()
-
-    db_url = f"postgresql://{user}:{password}@{host}:{port}/{db_name}"
-    engine = create_engine(db_url, echo=False)
-
-    yield engine, db_url
-
-    engine.dispose()
-    try:
-        conn = psycopg2.connect(**conn_params)
-        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-        cur = conn.cursor()
-        cur.execute(
-            f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-            f"WHERE datname = '{db_name}' AND pid <> pg_backend_pid()"
-        )
-        cur.execute(f'DROP DATABASE IF EXISTS "{db_name}"')
-        cur.close()
-        conn.close()
-    except Exception:
-        pass
 
 
 def _seed_test_data(engine):
@@ -219,14 +123,14 @@ class TestDeliveryMeasurementBackfillMigration:
         engine, db_url = migration_db
 
         # Migrate to pre-backfill state and seed test data
-        _run_alembic(db_url, PRE_BACKFILL_REV)
+        run_alembic_upgrade(db_url, PRE_BACKFILL_REV)
         _seed_test_data(engine)
 
         # Verify NULLs exist before backfill
         assert _get_delivery_measurement(engine, "prod_gam") is None
 
         # Run backfill migration
-        _run_alembic(db_url, BACKFILL_REV)
+        run_alembic_upgrade(db_url, BACKFILL_REV)
 
         dm = _get_delivery_measurement(engine, "prod_gam")
         assert dm["provider"] == "google_ad_manager"
@@ -263,7 +167,7 @@ class TestDeliveryMeasurementBackfillMigration:
         """Downgrade sets matching defaults back to NULL."""
         engine, db_url = migration_db
 
-        _run_alembic_downgrade(db_url, PRE_BACKFILL_REV)
+        run_alembic_downgrade(db_url, PRE_BACKFILL_REV)
 
         # Backfilled products should be NULL again
         assert _get_delivery_measurement(engine, "prod_gam") is None
@@ -286,7 +190,7 @@ class TestDeliveryMeasurementNotNullMigration:
         engine, db_url = migration_db
 
         # Re-upgrade through both migrations
-        _run_alembic(db_url, NOT_NULL_REV)
+        run_alembic_upgrade(db_url, NOT_NULL_REV)
 
         info = _get_column_info(engine)
         assert info is not None
@@ -329,7 +233,7 @@ class TestDeliveryMeasurementNotNullMigration:
         """Downgrade reverts to nullable with no server_default."""
         engine, db_url = migration_db
 
-        _run_alembic_downgrade(db_url, BACKFILL_REV)
+        run_alembic_downgrade(db_url, BACKFILL_REV)
 
         info = _get_column_info(engine)
         assert info is not None
@@ -341,14 +245,14 @@ class TestDeliveryMeasurementNotNullMigration:
         engine, db_url = migration_db
 
         # Downgrade past backfill
-        _run_alembic_downgrade(db_url, PRE_BACKFILL_REV)
+        run_alembic_downgrade(db_url, PRE_BACKFILL_REV)
 
         # Custom value should survive all downgrades
         dm = _get_delivery_measurement(engine, "prod_custom")
         assert dm["provider"] == "moat"
 
         # Re-upgrade through both migrations
-        _run_alembic(db_url, NOT_NULL_REV)
+        run_alembic_upgrade(db_url, NOT_NULL_REV)
 
         # All products should have non-NULL values
         with engine.connect() as conn:

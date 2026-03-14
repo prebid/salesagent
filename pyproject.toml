@@ -44,6 +44,7 @@ dependencies = [
     "logfire>=4.16.0",
     "pydantic-ai>=0.3.0",
     # Security patches for transitive dependencies
+    "pyjwt>=2.12.0",  # GHSA-752w-5fwx-jx9f
     "filelock>=3.20.3",  # GHSA-qmgc-5h2g-mvrw
     "urllib3>=2.6.3",  # GHSA-38jv-5279-wg99
     "werkzeug>=3.1.6",  # GHSA-87hc-h4r5-73f7 + GHSA-29vq-49wr-vm6x
@@ -101,6 +102,9 @@ dev = [
     "types-pytz>=2025.2.0.20250809",
     "types-waitress>=3.0.1.20250801",
     "pytest-json-report>=1.5.0",
+    "pylint>=4.0.5",
+    # Security patches for transitive dev dependencies
+    "black>=26.3.1",  # GHSA-3936-cmfr-pm3m
 ]
 
 [tool.black]
@@ -214,3 +218,17 @@ directory = "htmlcov"
 [tool.coverage.json]
 output = "coverage.json"
 pretty_print = true
+
+# ─── Pylint configuration (used ONLY for R0801 duplicate-code detection) ──────
+# General linting uses ruff. Pylint is invoked solely for its similarities
+# checker, which has no equivalent in ruff.
+[tool.pylint."messages control"]
+disable = "all"
+enable = "R0801"
+
+[tool.pylint.similarities]
+min-similarity-lines = 6
+ignore-imports = true
+ignore-docstrings = true
+ignore-comments = true
+ignore-signatures = true

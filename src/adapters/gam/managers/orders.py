@@ -732,11 +732,8 @@ class GAMOrdersManager:
 
             # Apply line item naming template
             from src.adapters.gam.utils.constants import GAM_NAME_LIMITS
-            from src.adapters.gam.utils.naming import (
-                apply_naming_template,
-                build_line_item_name_context,
-                truncate_name_with_suffix,
-            )
+            from src.adapters.gam.utils.naming import truncate_name_with_suffix
+            from src.core.utils.naming import apply_naming_template, build_line_item_name_context
 
             # Get product name from database for template
             product_name = product.get("product_id", package.name) if product else package.name

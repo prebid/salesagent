@@ -9,13 +9,12 @@ Tests the repository pattern with real PostgreSQL to verify:
 beads: salesagent-t735
 """
 
-from datetime import date
-
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import delete
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import MediaBuy, MediaPackage, Principal, Tenant
+from src.core.database.models import MediaBuy, Principal, Tenant
+from tests.integration.conftest import cleanup_tenant, make_media_buy, make_package
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -23,19 +22,6 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-
-
-def _cleanup_tenant(tenant_id: str) -> None:
-    """Delete tenant and all dependent data (correct FK order)."""
-    with get_db_session() as session:
-        # Delete children first (FK order: packages → media_buys → principals → tenant)
-        mb_ids = session.scalars(select(MediaBuy.media_buy_id).where(MediaBuy.tenant_id == tenant_id)).all()
-        if mb_ids:
-            session.execute(delete(MediaPackage).where(MediaPackage.media_buy_id.in_(mb_ids)))
-        session.execute(delete(MediaBuy).where(MediaBuy.tenant_id == tenant_id))
-        session.execute(delete(Principal).where(Principal.tenant_id == tenant_id))
-        session.execute(delete(Tenant).where(Tenant.tenant_id == tenant_id))
-        session.commit()
 
 
 @pytest.fixture
@@ -47,7 +33,7 @@ def tenant_a(integration_db):
         session.add(tenant)
         session.commit()
     yield tenant_id
-    _cleanup_tenant(tenant_id)
+    cleanup_tenant(tenant_id)
 
 
 @pytest.fixture
@@ -59,7 +45,7 @@ def tenant_b(integration_db):
         session.add(tenant)
         session.commit()
     yield tenant_id
-    _cleanup_tenant(tenant_id)
+    cleanup_tenant(tenant_id)
 
 
 @pytest.fixture
@@ -96,38 +82,6 @@ def principal_b(tenant_b):
     yield principal_id
 
 
-def _make_media_buy(tenant_id: str, principal_id: str, media_buy_id: str, **kwargs) -> MediaBuy:
-    """Helper to construct a MediaBuy ORM object with required fields."""
-    defaults = {
-        "order_name": f"Order {media_buy_id}",
-        "advertiser_name": "Test Advertiser",
-        "start_date": date(2026, 1, 1),
-        "end_date": date(2026, 12, 31),
-        "status": "draft",
-        "raw_request": {"test": True},
-    }
-    defaults.update(kwargs)
-    return MediaBuy(
-        media_buy_id=media_buy_id,
-        tenant_id=tenant_id,
-        principal_id=principal_id,
-        **defaults,
-    )
-
-
-def _make_package(media_buy_id: str, package_id: str, **kwargs) -> MediaPackage:
-    """Helper to construct a MediaPackage ORM object."""
-    defaults = {
-        "package_config": {"name": f"Package {package_id}", "test": True},
-    }
-    defaults.update(kwargs)
-    return MediaPackage(
-        media_buy_id=media_buy_id,
-        package_id=package_id,
-        **defaults,
-    )
-
-
 @pytest.fixture
 def seed_data(tenant_a, tenant_b, principal_a, principal_b):
     """Seed two tenants with media buys and packages for isolation testing.
@@ -137,23 +91,23 @@ def seed_data(tenant_a, tenant_b, principal_a, principal_b):
     """
     with get_db_session() as session:
         # Tenant A media buys
-        mb_a1 = _make_media_buy(tenant_a, principal_a, "mb_a1", buyer_ref="ref_a1", status="draft")
-        mb_a2 = _make_media_buy(tenant_a, principal_a, "mb_a2", status="active")
+        mb_a1 = make_media_buy(tenant_a, principal_a, "mb_a1", buyer_ref="ref_a1", status="draft")
+        mb_a2 = make_media_buy(tenant_a, principal_a, "mb_a2", status="active")
         session.add_all([mb_a1, mb_a2])
         session.flush()
 
         # Tenant A packages (for mb_a1)
-        pkg_a1_1 = _make_package("mb_a1", "pkg_a1_1")
-        pkg_a1_2 = _make_package("mb_a1", "pkg_a1_2")
+        pkg_a1_1 = make_package("mb_a1", "pkg_a1_1")
+        pkg_a1_2 = make_package("mb_a1", "pkg_a1_2")
         session.add_all([pkg_a1_1, pkg_a1_2])
 
         # Tenant B media buys
-        mb_b1 = _make_media_buy(tenant_b, principal_b, "mb_b1", buyer_ref="ref_b1", status="draft")
+        mb_b1 = make_media_buy(tenant_b, principal_b, "mb_b1", buyer_ref="ref_b1", status="draft")
         session.add(mb_b1)
         session.flush()
 
         # Tenant B packages
-        pkg_b1_1 = _make_package("mb_b1", "pkg_b1_1")
+        pkg_b1_1 = make_package("mb_b1", "pkg_b1_1")
         session.add(pkg_b1_1)
 
         session.commit()
@@ -418,7 +372,7 @@ class TestMediaBuyUoW:
 
         # Create a media buy inside UoW via repository
         with MediaBuyUoW(tenant_a) as uow:
-            mb = _make_media_buy(tenant_a, principal_a, "mb_uow_test")
+            mb = make_media_buy(tenant_a, principal_a, "mb_uow_test")
             uow.media_buys.create(mb)
 
         # Verify it persisted (outside the UoW)
@@ -436,7 +390,7 @@ class TestMediaBuyUoW:
 
         with pytest.raises(ValueError, match="intentional"):
             with MediaBuyUoW(tenant_a) as uow:
-                mb = _make_media_buy(tenant_a, principal_a, "mb_uow_rollback")
+                mb = make_media_buy(tenant_a, principal_a, "mb_uow_rollback")
                 uow.media_buys.create(mb)
                 raise ValueError("intentional")
 

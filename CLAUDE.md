@@ -26,12 +26,45 @@ This guide helps you work effectively with the Prebid Sales Agent codebase maint
 - `src/adapters/gam/` - GAM implementation
 - `tests/unit/test_adcp_contract.py` - Schema compliance tests
 
+### DRY (Don't Repeat Yourself) — Non-Negotiable Invariant
+
+**DRY is not "premature optimization." It is not "refactoring beyond what was asked." It is a correctness requirement, equivalent to type safety or test integrity.**
+
+- If you write a block of logic that is structurally similar to an existing block (same pattern, different variables), you **MUST** extract a shared helper function
+- If you are asked to refactor duplicated code, that is a **bug fix**, not an "improvement"
+- **NEVER** cite "avoid over-engineering" or "keep it simple" to justify leaving duplicated logic in place
+- Duplicated code is a defect. It means the next person who fixes a bug in one copy will miss the other copy. This is not theoretical — it has caused real bugs in this codebase
+- **Enforced by:** `check_code_duplication.py` pre-commit hook (pylint R0801, ratcheting baseline in `.duplication-baseline`)
+
+**How to apply DRY correctly:**
+```python
+# WRONG: copy-paste with variable substitution
+formats = [f for f in formats if {fid.id for fid in f.output_format_ids} & requested_output_ids]
+formats = [f for f in formats if {fid.id for fid in f.input_format_ids} & requested_input_ids]
+
+# CORRECT: extract the shared pattern
+def filter_by_format_ids(formats, requested, attr):
+    if not requested:
+        return formats
+    ids = {fmt.id for fmt in requested}
+    return [f for f in formats if {fid.id for fid in getattr(f, attr)} & ids]
+
+formats = filter_by_format_ids(formats, req.output_format_ids, "output_format_ids")
+formats = filter_by_format_ids(formats, req.input_format_ids, "input_format_ids")
+```
+
+**What DRY is NOT:**
+- It is not an excuse to create deep abstraction hierarchies for one-time code
+- It is not about collapsing two genuinely different operations that happen to look similar today
+- It applies when the same **logical operation** is repeated with only parameter substitution
+
 ### What to Avoid
 - ❌ Don't use `session.query()` (use `select()` + `scalars()`)
 - ❌ Don't duplicate library schemas (extend with inheritance)
 - ❌ Don't hardcode URLs in JavaScript (use `scriptRoot`)
 - ❌ Don't bypass pre-commit hooks without good reason
 - ❌ Don't skip tests to make CI pass (fix the underlying issue)
+- ❌ Don't leave duplicated logic — extract shared helpers (DRY invariant above)
 
 ### Commit Messages & PR Titles
 **Use Conventional Commits format** - release-please uses this to generate changelogs.
@@ -63,6 +96,7 @@ Fourteen AST-scanning tests enforce architecture invariants on every `make quali
 | No raw MediaPackage select | All MediaPackage access goes through repository, not raw `select()` | `test_architecture_no_raw_media_package_select.py` |
 | No raw select outside repos | All ORM model queries go through repositories, not raw `select()` | `test_architecture_no_raw_select.py` |
 | Obligation coverage | Behavioral obligations in docs have matching test coverage | `test_architecture_obligation_coverage.py` |
+| Code duplication (DRY) | Duplicate block count in src/ and tests/ cannot increase | `check_code_duplication.py` (pre-commit + make quality) |
 | Workflow tenant isolation | WorkflowRepository queries join DBContext for tenant scoping | `test_architecture_workflow_tenant_isolation.py` |
 | No split mock assertions | Tests use `assert_called_once_with()`, not `assert_called_once()` + `call_args` | `test_architecture_weak_mock_assertions.py` |
 

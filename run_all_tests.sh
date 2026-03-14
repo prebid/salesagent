@@ -52,8 +52,10 @@ if [ "$MODE" = "quick" ]; then
     validate_imports
     echo -e "${BLUE}Running unit + integration + integration_v2 via tox...${NC}"
     set +e
-    tox -e unit,integration,integration_v2 -p 2>&1 | tee "$RESULTS_DIR/tox.log"
-    TOX_RC=${PIPESTATUS[0]}
+    # Redirect to file + stdout via process substitution to avoid tox-uv fd leak
+    # that causes pipes (| tee) to hang after tox exits.
+    tox -e unit,integration,integration_v2 -p > >(tee "$RESULTS_DIR/tox.log") 2>&1
+    TOX_RC=$?
     set -e
     collect_reports
     [ "$TOX_RC" -ne 0 ] && FAILURES="tox"
@@ -77,18 +79,24 @@ elif [ "$MODE" = "ci" ]; then
         uv run pytest "$PYTEST_TARGET" \
             -m "not requires_server and not skip_ci" \
             --json-report --json-report-file="$RESULTS_DIR/targeted.json" --json-report-indent=2 \
-            -q --tb=line $PYTEST_ARGS 2>&1 | tee "$RESULTS_DIR/targeted.log"
-        TOX_RC=${PIPESTATUS[0]}
+            -q --tb=line $PYTEST_ARGS > >(tee "$RESULTS_DIR/targeted.log") 2>&1
+        TOX_RC=$?
         set -e
         [ "$TOX_RC" -ne 0 ] && FAILURES="targeted"
     else
         echo -e "${BLUE}Running all 5 suites in parallel via tox...${NC}"
         set +e
-        tox -p -o 2>&1 | tee "$RESULTS_DIR/tox.log"
-        TOX_RC=${PIPESTATUS[0]}
+        tox -p -o > >(tee "$RESULTS_DIR/tox.log") 2>&1
+        TOX_RC=$?
         set -e
         collect_reports
         [ "$TOX_RC" -ne 0 ] && FAILURES="tox"
+
+        # Coverage combine runs separately — tox -p hangs when the coverage
+        # env fails (e.g. missing .coverage.e2e from HTTP-only e2e tests).
+        # Coverage combine — run separately, non-fatal
+        echo -e "${BLUE}Combining coverage...${NC}"
+        tox -e coverage || echo -e "${BLUE}Coverage combine failed (non-fatal)${NC}"
     fi
 else
     echo "Usage: ./run_all_tests.sh [quick|ci]"
