@@ -174,15 +174,11 @@ def _list_creative_formats_impl(
     # Get formats from adapter if it provides them (e.g., Broadstreet acting as both sales and creative agent)
     # Check adapter type from tenant config and load formats without instantiating the full adapter
     try:
-        from sqlalchemy import select
+        from src.core.database.repositories.uow import TenantConfigUoW
 
-        from src.core.database.database_session import get_db_session
-        from src.core.database.models import AdapterConfig
-
-        with get_db_session() as session:
-            stmt = select(AdapterConfig).filter_by(tenant_id=tenant["tenant_id"])
-            config_row = session.scalars(stmt).first()
-
+        with TenantConfigUoW(tenant["tenant_id"]) as uow:
+            assert uow.tenant_config is not None
+            config_row = uow.tenant_config.get_adapter_config()
             adapter_type = config_row.adapter_type if config_row else None
 
             if adapter_type == "broadstreet":

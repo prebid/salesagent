@@ -135,9 +135,13 @@ test-results/
 # Agentic coding — local-only files
 .beads
 .claude/research/
+.claude/code-review/
 .claude/settings.local.json
 .claude/agent-memory/
 .claude/agents/review-*.md
 .claude/commands/code-review.md
 .claude/skills/code-review/
 .perles/
+
+# One-off presentation drafts
+docs/TRANSFORMATION_PRESENTATION.md
