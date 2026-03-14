@@ -18,9 +18,8 @@ from src.core.utils.naming import (
     _extract_brand_name,
     build_order_name_context,
 )
-from src.core.utils.naming import (
-    build_order_name_context as gam_build_order_name_context,
-)
+
+gam_build_order_name_context = build_order_name_context
 
 
 def _make_request(domain: str = "nike.com", brand_id: str | None = None):

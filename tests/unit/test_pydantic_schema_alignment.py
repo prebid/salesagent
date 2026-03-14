@@ -60,6 +60,7 @@ KNOWN_SCHEMA_LIBRARY_MISMATCHES: dict[str, set[str]] = {
     "/schemas/latest/media-buy/get-products-request.json": {
         "fields",  # Schema defines field selection, library doesn't have it yet
         "refine",  # Schema defines refinement array, library doesn't have it yet
+        "required_policies",  # Schema defines policy IDs, library doesn't have it yet
         "time_budget",  # Schema defines time budget, library doesn't have it yet
     },
     "/schemas/latest/media-buy/update-media-buy-request.json": {

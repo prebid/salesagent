@@ -27,8 +27,6 @@ ALLOWLIST = {
     # media_buy_create.py — 2 raw selects missed by UoW migration (salesagent-0w1w)
     ("src/core/tools/media_buy_create.py", "execute_approved_media_buy"),
     ("src/core/tools/media_buy_create.py", "_create_media_buy_impl"),
-    # creatives/_assignments.py — raw select with join for package lookup
-    ("src/core/tools/creatives/_assignments.py", "_process_assignments"),
 }
 
 EXPECTED_VIOLATION_COUNT = len(ALLOWLIST)

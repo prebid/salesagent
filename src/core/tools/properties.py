@@ -14,11 +14,9 @@ from typing import Any, cast
 from adcp.types.generated_poc.core.context import ContextObject
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
-from sqlalchemy import select
 
 from src.core.audit_logger import get_audit_logger
-from src.core.database.database_session import get_db_session
-from src.core.database.models import PublisherPartner
+from src.core.database.repositories.uow import TenantConfigUoW
 from src.core.exceptions import AdCPAdapterError, AdCPAuthenticationError
 from src.core.helpers import log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
@@ -77,14 +75,14 @@ def _list_authorized_properties_impl(
         log_tool_activity(identity, "list_authorized_properties", start_time)
 
     try:
-        with get_db_session() as session:
+        with TenantConfigUoW(tenant_id) as uow:
+            assert uow.tenant_config is not None
             # Query all publisher partners for this tenant (verified or pending)
             # We return all registered publishers because:
             # 1. Verification may be in progress during publisher setup
             # 2. The sales agent is claiming to represent these publishers
             # 3. Buyers should see the full portfolio even if some are pending verification
-            stmt = select(PublisherPartner).where(PublisherPartner.tenant_id == tenant_id)
-            all_publishers = session.scalars(stmt).all()
+            all_publishers = uow.tenant_config.list_publisher_partners()
 
             # Extract publisher domains (all registered, regardless of verification status)
             publisher_domains = sorted([p.publisher_domain for p in all_publishers])
