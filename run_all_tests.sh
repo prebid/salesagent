@@ -89,6 +89,11 @@ elif [ "$MODE" = "ci" ]; then
         set -e
         collect_reports
         [ "$TOX_RC" -ne 0 ] && FAILURES="tox"
+
+        # Coverage combine runs separately — tox -p hangs when the coverage
+        # env fails (e.g. missing .coverage.e2e from HTTP-only e2e tests).
+        echo -e "${BLUE}Combining coverage...${NC}"
+        tox -e coverage 2>&1 | tail -5 || echo -e "${BLUE}Coverage combine failed (non-fatal)${NC}"
     fi
 else
     echo "Usage: ./run_all_tests.sh [quick|ci]"
