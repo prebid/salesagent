@@ -9,7 +9,7 @@ from adcp import CreativeFilters
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.core.pagination_request import PaginationRequest
 from adcp.types.generated_poc.media_buy.list_creatives_request import (
-    FieldModel,
+    Field1 as FieldModel,
     Sort,
 )
 from fastmcp.server.context import Context

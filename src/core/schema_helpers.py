@@ -12,7 +12,8 @@ Philosophy:
 
 from typing import Any
 
-from adcp import GetProductsRequest, GetProductsResponse, Product
+from adcp import GetProductsResponse, Product
+from src.core.schemas.product import GetProductsRequest
 from adcp.types import PropertyListReference
 from adcp.types.generated_poc.core.brand_ref import BrandReference
 from adcp.types.generated_poc.core.context import ContextObject

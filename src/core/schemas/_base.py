@@ -44,10 +44,8 @@ from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
 
 # Import types from stable API (per adcp 2.9.0+ - all types now in stable)
 # Note: AffectedPackage was removed in 2.9.0, use Package instead
-from adcp.types.generated_poc.media_buy.package_update import PackageUpdate1 as LibraryPackageUpdate1
-from adcp.types.generated_poc.media_buy.update_media_buy_request import (
-    UpdateMediaBuyRequest1 as LibraryUpdateMediaBuyRequest1,
-)
+from adcp.types import PackageUpdate as LibraryPackageUpdate
+from adcp.types import UpdateMediaBuyRequest as LibraryUpdateMediaBuyRequest
 
 from src.core.config import get_pydantic_extra_mode
 
@@ -1585,40 +1583,37 @@ class UpdatePackageRequest(SalesAgentBaseModel):
 
 
 # AdCP-compliant supporting models for update-media-buy-request
-class AdCPPackageUpdate(LibraryPackageUpdate1):
+class AdCPPackageUpdate(LibraryPackageUpdate):
     """Package-specific update extending library type.
 
     Inherits all fields from library (budget, paused, targeting_overlay,
-    creative_assignments, creatives, bid_price, ext, impressions, pacing).
+    creative_assignments, creatives, bid_price, ext, impressions, pacing,
+    package_id).
 
     Adds creative_ids — spec-mandated field missing from library codegen.
     TODO(adcp-library): Remove creative_ids once upstream codegen adds it.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
-    # Override package_id to be optional (library variant1 has it required for oneOf)
-    package_id: str | None = None  # type: ignore[assignment]
     # Spec field missing from library codegen (adcp#208)
     creative_ids: list[str] | None = None
 
 
-class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest1):
+class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
     """Update media buy request extending library type.
 
     Inherits all AdCP fields from library (paused, start_time, end_time,
     packages, push_notification_config, context, reporting_webhook, ext).
+    In adcp 3.9 all fields are optional (consolidated from oneOf variants).
 
     Overrides:
-    - media_buy_id: optional (library variant1 requires it; oneOf handled at app level)
-    - start_time/end_time: accept raw datetime/str (backward compat with A2A path)
+    - start_time: accept Literal["asap"] (backward compat with A2A path)
     - packages: use our AdCPPackageUpdate (adds creative_ids)
     - budget: campaign-level budget (not in library — convenience field)
     - today: internal testing field
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
-    # Override media_buy_id to be optional (library variant1 has it required for oneOf)
-    media_buy_id: str | None = None  # type: ignore[assignment]
     # Override datetime fields to accept raw strings (A2A path sends ISO strings)
     start_time: datetime | Literal["asap"] | None = None  # type: ignore[assignment]
     end_time: datetime | None = None

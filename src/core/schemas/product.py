@@ -6,7 +6,7 @@ All classes are re-exported from src.core.schemas for backward compatibility.
 
 from typing import Any
 
-from adcp.types import GetProductsRequest as LibraryGetProductsRequest
+from adcp.types import GetProductsWholesaleRequest as LibraryGetProductsRequest
 from adcp.types import GetProductsResponse as LibraryGetProductsResponse
 from adcp.types import Placement as LibraryPlacement
 from adcp.types import Product as LibraryProduct
@@ -222,29 +222,23 @@ class ProductFilters(LibraryFilters):
 
 
 class GetProductsRequest(LibraryGetProductsRequest):
-    """Extends library GetProductsRequest with spec and internal fields.
+    """Extends library GetProductsWholesaleRequest (adcp 3.9: GetProductsRequest is a union alias).
 
-    Library provides: account_id, brand, brief, buyer_campaign_ref, catalog,
-    context, ext, filters, pagination, property_list — all inherited from AdCP 3.6.
+    Base class: GetProductsWholesaleRequest (brief optional, buying_mode='wholesale').
+    We widen buying_mode to str|None so callers aren't forced into a single mode.
 
-    Local extensions: buying_mode, account.
+    Library provides: account, brand, brief, buyer_campaign_ref, catalog,
+    context, ext, fields, filters, pagination, property_list, refine.
 
     Internal-only: product_selectors (excluded from external serialization).
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # brand is inherited from library as BrandReference | None.
-    # BrandReference has .domain (required str) and .brand_id (optional BrandId).
-
-    # Local extensions not yet in adcp library
-    buying_mode: str | None = Field(
+    # Widen buying_mode from Literal['wholesale'] to str|None (we accept any mode or none)
+    buying_mode: str | None = Field(  # type: ignore[assignment]
         None,
         description="Buyer intent: 'brief' (publisher curates) or 'wholesale' (buyer applies own audiences)",
-    )
-    account: dict[str, Any] | None = Field(
-        None,
-        description="Account for product lookup. Returns products with pricing specific to this account's rate card (spec: account-ref.json)",
     )
 
     # Internal-only fields (not in AdCP spec)

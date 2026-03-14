@@ -440,49 +440,16 @@ class AssignmentResult(SalesAgentBaseModel):
     )
 
 
-class SyncCreativesResponse(LibrarySyncCreativesResponse):
-    """Extends library SyncCreativesResponse RootModel with flat attribute access.
+class SyncCreativesResponse(LibrarySyncCreativesSuccess):
+    """Extends library SyncCreativesResponse success variant.
 
-    Library uses RootModel[SuccessVariant | ErrorVariant] discriminated union.
-    This proxy subclass provides @property accessors for backward-compatible
-    flat attribute access (self.creatives, self.dry_run, self.errors, self.context)
-    while preserving isinstance compatibility with the library type.
+    adcp 3.9: SyncCreativesResponse is now a union TypeAlias (not RootModel).
+    Since the error variant is never constructed (ToolError handles failures),
+    we subclass the success variant directly. Fields (creatives, dry_run,
+    context, ext, sandbox) are inherited.
 
-    Construction auto-wraps: SyncCreativesResponse(creatives=[...]) works without
-    explicitly creating the variant. Field(exclude=True) on nested SyncCreativeResult
-    is handled natively by Pydantic serialization.
-
-    Design decision (salesagent-g3c): KEEP proxy pattern over union type alias.
-    The error variant is never constructed (ToolError handles operation failures),
-    so the union pattern would add ~30 consumer-site changes for no functional
-    benefit. The only cost is one type:ignore[call-arg] at construction.
+    Design decision (salesagent-g3c): error variant never constructed.
     """
-
-    @property
-    def creatives(self) -> list:
-        """Access creatives from success variant (empty list for error variant)."""
-        if isinstance(self.root, LibrarySyncCreativesSuccess):
-            return self.root.creatives
-        return []
-
-    @property
-    def dry_run(self) -> bool | None:
-        """Access dry_run from success variant."""
-        if isinstance(self.root, LibrarySyncCreativesSuccess):
-            return self.root.dry_run
-        return None
-
-    @property
-    def errors(self) -> list | None:
-        """Access errors from error variant (None for success variant)."""
-        if isinstance(self.root, LibrarySyncCreativesError):
-            return self.root.errors
-        return None
-
-    @property
-    def context(self):
-        """Access context from whichever variant is active."""
-        return self.root.context
 
     def model_dump(self, **kwargs) -> dict[str, Any]:
         """Override to default exclude_none=True per AdCP convention."""
@@ -491,9 +458,6 @@ class SyncCreativesResponse(LibrarySyncCreativesResponse):
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""
-        if isinstance(self.root, LibrarySyncCreativesError):
-            return f"Creative sync failed with {len(self.root.errors)} error(s)."
-
         # Count actions from creatives list
         created = sum(1 for c in self.creatives if c.action == CreativeAction.created)
         updated = sum(1 for c in self.creatives if c.action == CreativeAction.updated)

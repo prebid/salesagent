@@ -34,7 +34,6 @@ from typing import Any
 from adcp import ADCPMultiAgentClient, GetSignalsRequest, PlatformDestination
 from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPError, ADCPTimeoutError
 from adcp.types import DeliverTo
-from adcp.types.generated_poc.signals.get_signals_request import GetSignalsRequest1
 
 logger = logging.getLogger(__name__)
 
@@ -169,12 +168,9 @@ class SignalsAgentRegistry:
                 ],
             )
 
-            # Create typed request (adcp 3.6.0: GetSignalsRequest is RootModel[...], wrap inner)
+            # Create typed request (adcp 3.9: GetSignalsRequest is a plain BaseModel)
             request = GetSignalsRequest(
-                root=GetSignalsRequest1(
-                    signal_spec=signal_spec,
-                    deliver_to=deliver_to,
-                )
+                signal_spec=signal_spec,
             )
 
             logger.info(f"[TIMING] Calling agent {agent.name} for tenant {tenant_id}, brief: {brief[:50]}...")
