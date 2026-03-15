@@ -21,7 +21,7 @@ with real database products.
 from __future__ import annotations
 
 from decimal import Decimal
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from adcp.types.generated_poc.core.property_id import PropertyId
@@ -172,9 +172,16 @@ class TestCapabilitiesPropertyListFiltering:
             },
         )
 
+        mock_repo = MagicMock()
+        mock_repo.list_publisher_partners.return_value = []
+        mock_uow = MagicMock()
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow.tenant_config = mock_repo
+
         with (
             patch("src.core.tools.capabilities.get_principal_object", return_value=None),
-            patch("src.core.tools.capabilities.get_db_session"),
+            patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow),
         ):
             response = _get_adcp_capabilities_impl(None, identity)
 

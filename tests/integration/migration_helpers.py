@@ -30,45 +30,35 @@ def parse_postgres_url() -> tuple[str, str, str, int] | None:
     return user, password, host, int(port_str)
 
 
-def run_alembic_upgrade(db_url: str, target_revision: str) -> None:
-    """Run Alembic upgrade to a specific revision.
+def _run_alembic_command(db_url: str, command_fn, target_revision: str) -> None:
+    """Run an Alembic command with temporary DATABASE_URL override.
 
     Temporarily sets DATABASE_URL for alembic/env.py which reads from
     DatabaseConfig.get_connection_string().
     """
     from alembic.config import Config
 
-    from alembic import command
-
     old_url = os.environ.get("DATABASE_URL")
     os.environ["DATABASE_URL"] = db_url
     try:
         alembic_cfg = Config("alembic.ini")
-        command.upgrade(alembic_cfg, target_revision)
+        command_fn(alembic_cfg, target_revision)
     finally:
         if old_url:
             os.environ["DATABASE_URL"] = old_url
         elif "DATABASE_URL" in os.environ:
             del os.environ["DATABASE_URL"]
+
+
+def run_alembic_upgrade(db_url: str, target_revision: str) -> None:
+    """Run Alembic upgrade to a specific revision."""
+    from alembic import command
+
+    _run_alembic_command(db_url, command.upgrade, target_revision)
 
 
 def run_alembic_downgrade(db_url: str, target_revision: str) -> None:
-    """Run Alembic downgrade to a specific revision.
-
-    Temporarily sets DATABASE_URL for alembic/env.py which reads from
-    DatabaseConfig.get_connection_string().
-    """
-    from alembic.config import Config
-
+    """Run Alembic downgrade to a specific revision."""
     from alembic import command
 
-    old_url = os.environ.get("DATABASE_URL")
-    os.environ["DATABASE_URL"] = db_url
-    try:
-        alembic_cfg = Config("alembic.ini")
-        command.downgrade(alembic_cfg, target_revision)
-    finally:
-        if old_url:
-            os.environ["DATABASE_URL"] = old_url
-        elif "DATABASE_URL" in os.environ:
-            del os.environ["DATABASE_URL"]
+    _run_alembic_command(db_url, command.downgrade, target_revision)

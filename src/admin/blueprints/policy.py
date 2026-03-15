@@ -96,27 +96,35 @@ def index(tenant_id):
 
         # Get pending policy review tasks
         # Query workflow steps instead of tasks (tasks table was removed)
+        # WorkflowStep has no tenant_id column — must join through Context for tenant isolation
+        from src.core.database.models import Context as DBContext
+
         pending_reviews = []
         try:
             stmt = (
                 select(WorkflowStep)
-                .filter_by(tenant_id=tenant_id, step_type="policy_review", status="pending")
+                .join(DBContext)
+                .where(
+                    DBContext.tenant_id == tenant_id,
+                    WorkflowStep.step_type == "policy_review",
+                    WorkflowStep.status == "pending",
+                )
                 .order_by(WorkflowStep.created_at.desc())
             )
-            workflow_steps = session.scalars(stmt).all()
+            workflow_steps = db_session.scalars(stmt).all()
 
             for step in workflow_steps:
-                details = json.loads(step.data) if step.data else {}
+                request_data = step.request_data or {}
                 pending_reviews.append(
                     {
                         "task_id": step.step_id,
                         "created_at": step.created_at,
-                        "brief": details.get("brief", ""),
-                        "advertiser": details.get("promoted_offering", ""),
+                        "brief": request_data.get("brief", ""),
+                        "advertiser": request_data.get("promoted_offering", ""),
                     }
                 )
         except Exception:
-            # WorkflowStep table might not exist
+            # WorkflowStep table might not exist in fresh databases
             pass
 
     return render_template(
@@ -225,13 +233,13 @@ def review_task(tenant_id, task_id):
             notes = request.form.get("notes", "")
 
             try:
-                # Get the workflow step
+                # Get the workflow step (tenant-scoped via Context join)
                 stmt = (
                     select(WorkflowStep)
                     .join(Context, WorkflowStep.context_id == Context.context_id)
                     .filter(Context.tenant_id == tenant_id, WorkflowStep.step_id == task_id)
                 )
-                step = session.scalars(stmt).first()
+                step = db_session.scalars(stmt).first()
 
                 if not step:
                     return "Task not found", 404
@@ -269,18 +277,18 @@ def review_task(tenant_id, task_id):
                 .join(Context, WorkflowStep.context_id == Context.context_id)
                 .filter(Context.tenant_id == tenant_id, WorkflowStep.step_id == task_id)
             )
-            step = session.scalars(stmt).first()
+            step = db_session.scalars(stmt).first()
 
             if not step:
                 return "Task not found", 404
 
-            details = json.loads(step.data) if step.data else {}
+            request_data = step.request_data or {}
 
             return render_template(
                 "policy_review.html",
                 tenant_id=tenant_id,
                 task_id=task_id,
-                task_details=details,
+                task_details=request_data,
                 created_at=step.created_at,
             )
 

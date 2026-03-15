@@ -232,35 +232,58 @@ class TestAdminDeliveryTenantIsolation:
     """salesagent-gcjx: admin blueprints + delivery queries missing tenant_id."""
 
     def test_webhook_creative_query_scopes_by_tenant(self):
-        """_call_webhook_for_creative_status Creative query must include tenant_id."""
+        """_call_webhook_for_creative_status Creative access must be tenant-scoped.
+
+        Creative access was migrated to CreativeRepository (salesagent-p6i),
+        which enforces tenant_id on every query by construction.
+        Verify the repository is used rather than raw select() calls.
+        """
+        source_path = ROOT / "src/admin/blueprints/creatives.py"
+        tree = ast.parse(source_path.read_text())
+
+        func_node = None
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == "_call_webhook_for_creative_status"
+            ):
+                func_node = node
+                break
+
+        assert func_node is not None
+        source_text = ast.get_source_segment(source_path.read_text(), func_node)
+        assert "AdminCreativeUoW" in source_text, (
+            "_call_webhook_for_creative_status must use AdminCreativeUoW for tenant-scoped access"
+        )
+
+        # Verify no raw select(Creative) calls bypass the repository
         selects = _extract_select_calls(
             "src/admin/blueprints/creatives.py",
             "_call_webhook_for_creative_status",
         )
-
         creative_selects = [s for s in selects if s["model"] in ("Creative", "CreativeModel")]
-        assert creative_selects, "Expected at least one Creative select() call"
-
-        for s in creative_selects:
-            assert s["has_tenant_filter"], (
-                f"Creative query at creatives.py:{s['lineno']} is missing tenant_id filter. (salesagent-gcjx)"
-            )
+        assert not creative_selects, (
+            f"_call_webhook_for_creative_status should use CreativeRepository, not raw select(Creative). "
+            f"Found {len(creative_selects)} raw query(ies)."
+        )
 
     def test_approve_creative_creative_query_scopes_by_tenant(self):
-        """approve_creative() Creative queries (for assignment checks) must include tenant_id."""
+        """approve_creative() Creative access must be tenant-scoped.
+
+        Creative access was migrated to CreativeRepository (salesagent-p6i),
+        which enforces tenant_id on every query by construction.
+        Verify no raw select(Creative) calls bypass the repository.
+        """
         selects = _extract_select_calls(
             "src/admin/blueprints/creatives.py",
             "approve_creative",
         )
 
         creative_selects = [s for s in selects if s["model"] in ("Creative", "CreativeModel")]
-        # The filter_by(tenant_id=..., creative_id=...) calls are correct;
-        # only flag the ones without tenant_id
-        violations = [s for s in creative_selects if not s["has_tenant_filter"]]
-        for s in violations:
-            assert s["has_tenant_filter"], (
-                f"Creative query at creatives.py:{s['lineno']} is missing tenant_id filter. (salesagent-gcjx)"
-            )
+        assert not creative_selects, (
+            f"approve_creative() should use CreativeRepository, not raw select(Creative). "
+            f"Found {len(creative_selects)} raw query(ies)."
+        )
 
     def test_review_creatives_mediabuy_queries_scope_by_tenant(self):
         """review_creatives() MediaBuy queries must be tenant-scoped.
@@ -281,10 +304,10 @@ class TestAdminDeliveryTenantIsolation:
 
         assert func_node is not None, "review_creatives function not found"
 
-        # Verify MediaBuyRepository is instantiated (tenant-scoped by construction)
+        # Verify tenant-scoped media buy access (via MediaBuyRepository or AdminCreativeUoW)
         source_text = ast.get_source_segment(source_path.read_text(), func_node)
-        assert "MediaBuyRepository" in source_text, (
-            "review_creatives() must use MediaBuyRepository for tenant-scoped MediaBuy access"
+        assert "MediaBuyRepository" in source_text or "AdminCreativeUoW" in source_text, (
+            "review_creatives() must use MediaBuyRepository or AdminCreativeUoW for tenant-scoped MediaBuy access"
         )
 
         # Verify no raw select(MediaBuy) calls bypass the repository
@@ -299,58 +322,67 @@ class TestAdminDeliveryTenantIsolation:
         )
 
     def test_review_creatives_product_query_scopes_by_tenant(self):
-        """review_creatives() Product query must include tenant_id."""
+        """review_creatives() Product access must be tenant-scoped.
+
+        Product access was migrated to ProductRepository (salesagent-p6i),
+        which enforces tenant_id on every query by construction.
+        Verify no raw select(Product) calls bypass the repository.
+        """
         selects = _extract_select_calls(
             "src/admin/blueprints/creatives.py",
             "review_creatives",
         )
 
         product_selects = [s for s in selects if s["model"] == "Product"]
-        assert product_selects, "Expected at least one Product select() call"
-
-        for s in product_selects:
-            assert s["has_tenant_filter"], (
-                f"Product query at creatives.py:{s['lineno']} is missing tenant_id filter. (salesagent-gcjx)"
-            )
+        assert not product_selects, (
+            f"review_creatives() should use ProductRepository, not raw select(Product). "
+            f"Found {len(product_selects)} raw query(ies)."
+        )
 
     def test_approve_creative_review_query_scopes_by_tenant(self):
-        """approve_creative() CreativeReview query must include tenant_id."""
+        """approve_creative() CreativeReview access must be tenant-scoped.
+
+        CreativeReview access was migrated to CreativeRepository.get_prior_ai_review()
+        (salesagent-p6i), which enforces tenant_id by construction.
+        Verify no raw select(CreativeReview) calls bypass the repository.
+        """
         selects = _extract_select_calls(
             "src/admin/blueprints/creatives.py",
             "approve_creative",
         )
 
         review_selects = [s for s in selects if s["model"] == "CreativeReview"]
-        assert review_selects, "Expected at least one CreativeReview select() call"
-
-        for s in review_selects:
-            assert s["has_tenant_filter"], (
-                f"CreativeReview query at creatives.py:{s['lineno']} is missing tenant_id filter. (salesagent-gcjx)"
-            )
+        assert not review_selects, (
+            f"approve_creative() should use CreativeRepository.get_prior_ai_review(), not raw select(CreativeReview). "
+            f"Found {len(review_selects)} raw query(ies)."
+        )
 
     def test_reject_creative_review_query_scopes_by_tenant(self):
-        """reject_creative() CreativeReview query must include tenant_id."""
+        """reject_creative() CreativeReview access must be tenant-scoped.
+
+        CreativeReview access was migrated to CreativeRepository.get_prior_ai_review()
+        (salesagent-p6i), which enforces tenant_id by construction.
+        Verify no raw select(CreativeReview) calls bypass the repository.
+        """
         selects = _extract_select_calls(
             "src/admin/blueprints/creatives.py",
             "reject_creative",
         )
 
         review_selects = [s for s in selects if s["model"] == "CreativeReview"]
-        assert review_selects, "Expected at least one CreativeReview select() call"
-
-        for s in review_selects:
-            assert s["has_tenant_filter"], (
-                f"CreativeReview query at creatives.py:{s['lineno']} is missing tenant_id filter. (salesagent-gcjx)"
-            )
+        assert not review_selects, (
+            f"reject_creative() should use CreativeRepository.get_prior_ai_review(), not raw select(CreativeReview). "
+            f"Found {len(review_selects)} raw query(ies)."
+        )
 
     # NOTE: _get_media_buy_delivery_impl MediaPackage query is NOT tested here because
     # MediaPackage has no tenant_id column. Tenant isolation via media_buy_id FK is sufficient.
 
     def test_get_pricing_options_scopes_by_tenant(self):
-        """_get_pricing_options PricingOption query must include tenant_id."""
+        """ProductRepository.get_all_pricing_options PricingOption query must include tenant_id."""
         selects = _extract_select_calls(
-            "src/core/tools/media_buy_delivery.py",
-            "_get_pricing_options",
+            "src/core/database/repositories/product.py",
+            "get_all_pricing_options",
         )
 
         pricing_selects = [s for s in selects if s["model"] == "PricingOption"]
@@ -358,6 +390,5 @@ class TestAdminDeliveryTenantIsolation:
 
         for s in pricing_selects:
             assert s["has_tenant_filter"], (
-                f"PricingOption query at media_buy_delivery.py:{s['lineno']} is missing tenant_id filter. "
-                f"(salesagent-gcjx)"
+                f"PricingOption query at product.py:{s['lineno']} is missing tenant_id filter. (salesagent-gcjx)"
             )
