@@ -985,7 +985,8 @@ class TestFilteredDiscoverySchema:
             forecast=low_forecast,
         )
         # mid impressions = 2000 which is below 100000 threshold
-        assert product.forecast.points[0].metrics["impressions"].mid < 100000
+        # adcp 3.9: Metrics is a Pydantic model, use attribute access instead of subscript
+        assert product.forecast.points[0].metrics.impressions.mid < 100000
 
     def test_filter_min_exposures_non_guaranteed_with_price_guidance(self):
         """Non-guaranteed product with price_guidance passes min_exposures.

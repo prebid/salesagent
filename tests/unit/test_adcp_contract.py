@@ -78,9 +78,6 @@ class TestSchemaMatchesLibrary:
         from adcp import (
             GetMediaBuyDeliveryRequest as LibGetMediaBuyDeliveryRequest,
         )
-        from adcp.types import (
-            GetProductsWholesaleRequest as LibGetProductsRequest,
-        )
         from adcp import (
             GetSignalsRequest as LibGetSignalsRequest,
         )
@@ -95,6 +92,9 @@ class TestSchemaMatchesLibrary:
         )
         from adcp import (
             SyncCreativesRequest as LibSyncCreativesRequest,
+        )
+        from adcp.types import (
+            GetProductsWholesaleRequest as LibGetProductsRequest,
         )
 
         from src.core.schemas import (
@@ -160,15 +160,10 @@ class TestSchemaMatchesLibrary:
         # NOTE: ListAuthorizedPropertiesRequest comparison skipped - type removed from adcp 3.2.0
         # We define it locally in src/core/schemas.py with fields: context, ext, property_tags, publisher_domains
 
-        # GetSignalsRequest - local extends library with spec fields not yet in library
+        # GetSignalsRequest - adcp 3.9 now includes signal_ids and pagination
         lib_fields = set(LibGetSignalsRequest.model_fields.keys())
         local_fields = set(LocalGetSignalsRequest.model_fields.keys())
-        # TODO(adcp-lib): Remove allowlist when adcp library adds signal_ids and pagination
-        # signal_ids, pagination — AdCP spec fields not yet in adcp library v3.2.0
-        local_extensions = {"signal_ids", "pagination"}
-        assert lib_fields == local_fields - local_extensions, (
-            f"GetSignalsRequest drift: lib={lib_fields}, local={local_fields}"
-        )
+        assert lib_fields == local_fields, f"GetSignalsRequest drift: lib={lib_fields}, local={local_fields}"
 
         # SyncCreativesRequest - now has ext field, should match
         lib_fields = set(LibSyncCreativesRequest.model_fields.keys())
@@ -929,7 +924,8 @@ class TestAdCPContract:
             estimated_activation_duration_minutes=0,
         )
 
-        pricing = SignalPricing(cpm=2.50, currency="USD")
+        # adcp 3.9: Pricing is now an empty base model; pricing details moved to pricing_options
+        pricing = SignalPricing()
 
         signal = Signal(
             signal_agent_segment_id="signal_auto_intenders_q1_2025",
@@ -940,6 +936,9 @@ class TestAdCPContract:
             coverage_percentage=85.5,
             deployments=[deployment],
             pricing=pricing,
+            pricing_options=[
+                {"pricing_option_id": "cpm_usd", "cpm": 2.50, "currency": "USD", "model": "cpm"},
+            ],
             tenant_id="test_tenant",
             created_at=datetime.now(),
             updated_at=datetime.now(),
@@ -983,10 +982,13 @@ class TestAdCPContract:
         # scope is an internal field (exclude=True), should not appear in AdCP response
         assert "scope" not in deployment_obj, "Internal field 'scope' exposed in AdCP response"
 
-        # Verify pricing structure
+        # Verify pricing structure (adcp 3.9: pricing is now an empty base model)
         assert isinstance(adcp_response["pricing"], dict), "pricing must be object"
-        assert "currency" in adcp_response["pricing"], "pricing must have currency field"
-        assert len(adcp_response["pricing"]["currency"]) == 3, "currency must be 3-letter code"
+
+        # Verify pricing_options structure (adcp 3.9: pricing details moved here)
+        assert "pricing_options" in adcp_response, "pricing_options must be present"
+        assert isinstance(adcp_response["pricing_options"], list), "pricing_options must be array"
+        assert len(adcp_response["pricing_options"]) >= 1, "pricing_options must have at least one entry"
 
         # Verify the primary ID field works correctly
         # adcp 3.6.0: signal_id is now a separate field in the library (optional, distinct from signal_agent_segment_id)
@@ -1252,7 +1254,10 @@ class TestAdCPContract:
     def test_measurement_adcp_compliance(self):
         """Test that Measurement model complies with AdCP measurement schema."""
         measurement = Measurement(
-            type="incremental_sales_lift", attribution="deterministic_purchase", window="30_days", reporting="daily"
+            type="incremental_sales_lift",
+            attribution="deterministic_purchase",
+            window={"interval": 30, "unit": "days"},
+            reporting="daily",
         )
 
         # Test model_dump (Measurement doesn't have internal fields)
@@ -2343,23 +2348,21 @@ class TestAdCPContract:
 
     def test_get_signals_request_adcp_compliance(self):
         """Test that GetSignalsRequest model complies with AdCP get-signals-request schema."""
-        # ✅ FIXED: Implementation now matches AdCP spec
-        # AdCP spec requires: signal_spec, deliver_to, optional filters/max_results
+        # adcp 3.9: GetSignalsRequest is a regular model (not RootModel).
+        # deliver_to replaced with top-level destinations + countries fields.
 
-        from adcp.types import DeliverTo, PlatformDestination
+        from adcp.types.generated_poc.core.destination import Destination1
 
         from src.core.schemas import GetSignalsRequest, SignalFilters
 
-        # Test AdCP-compliant request with all required fields
+        # Test AdCP-compliant request with all fields
         adcp_request = GetSignalsRequest(
             signal_spec="Sports enthusiasts in automotive market",
-            deliver_to=DeliverTo(
-                deployments=[
-                    PlatformDestination(platform="google_ad_manager", type="platform", account="123456"),
-                    PlatformDestination(platform="the_trade_desk", type="platform", account="ttd789"),
-                ],
-                countries=["US", "CA"],
-            ),
+            destinations=[
+                Destination1(platform="google_ad_manager", type="platform", account="123456"),
+                Destination1(platform="the_trade_desk", type="platform", account="ttd789"),
+            ],
+            countries=["US", "CA"],
             filters=SignalFilters(
                 catalog_types=["marketplace", "custom"],
                 data_providers=["Acme Data Solutions"],
@@ -2369,68 +2372,51 @@ class TestAdCPContract:
             max_results=50,
         )
 
-        adcp_response = adcp_request.model_dump(mode="json")
+        adcp_response = adcp_request.model_dump(mode="json", exclude_none=True)
 
-        # ✅ VERIFY ADCP COMPLIANCE: Required fields present
-        required_fields = ["signal_spec", "deliver_to"]
-        for field in required_fields:
-            assert field in adcp_response, f"Required AdCP field '{field}' missing from response"
-            assert adcp_response[field] is not None, f"Required AdCP field '{field}' is None"
+        # Verify signal_spec present
+        assert "signal_spec" in adcp_response, "signal_spec missing from response"
+        assert adcp_response["signal_spec"] is not None
 
-        # ✅ VERIFY ADCP COMPLIANCE: Optional fields present when provided
-        optional_fields = ["filters", "max_results"]
-        for field in optional_fields:
+        # Verify optional fields present when provided
+        for field in ["destinations", "countries", "filters", "max_results"]:
             assert field in adcp_response, f"Optional AdCP field '{field}' missing from response"
 
-        # ✅ VERIFY deliver_to structure (library DeliverTo uses deployments + countries)
-        deliver_to = adcp_response["deliver_to"]
-        assert "deployments" in deliver_to, "deliver_to must have deployments field"
-        assert "countries" in deliver_to, "deliver_to must have countries field"
-        assert isinstance(deliver_to["deployments"], list), "deployments must be array"
-        assert len(deliver_to["deployments"]) >= 1, "deployments must have at least one entry"
-        assert isinstance(deliver_to["countries"], list), "countries must be array"
+        # Verify destinations structure
+        destinations = adcp_response["destinations"]
+        assert isinstance(destinations, list), "destinations must be array"
+        assert len(destinations) >= 1, "destinations must have at least one entry"
 
-        # Verify country codes are 2-letter ISO
-        for country in deliver_to["countries"]:
+        # Verify countries are 2-letter ISO codes
+        for country in adcp_response["countries"]:
             assert len(country) == 2, f"Country code '{country}' must be 2-letter ISO code"
             assert country.isupper(), f"Country code '{country}' must be uppercase"
 
-        # ✅ VERIFY filters structure when present
+        # Verify filters structure when present
         filters = adcp_response["filters"]
         if filters.get("catalog_types"):
             valid_catalog_types = ["marketplace", "custom", "owned"]
             for catalog_type in filters["catalog_types"]:
                 assert catalog_type in valid_catalog_types, f"Invalid catalog_type: {catalog_type}"
 
-        if filters.get("max_cpm") is not None:
-            pass  # Legacy pricing field, no longer validated
-
         if filters.get("min_coverage_percentage") is not None:
             assert 0 <= filters["min_coverage_percentage"] <= 100, "min_coverage_percentage must be 0-100"
 
-        # ✅ VERIFY max_results constraint
+        # Verify max_results constraint
         if adcp_response.get("max_results") is not None:
             assert adcp_response["max_results"] >= 1, "max_results must be positive"
 
-        # Test minimal request (only required fields)
+        # Test minimal request (only signal_spec)
         minimal_request = GetSignalsRequest(
             signal_spec="Automotive intenders",
-            deliver_to=DeliverTo(
-                deployments=[PlatformDestination(platform="google_ad_manager", type="platform")],
-                countries=["US"],
-            ),
         )
-        minimal_response = minimal_request.model_dump()
-        assert "deployments" in minimal_response["deliver_to"]
+        minimal_response = minimal_request.model_dump(exclude_none=True)
+        assert "signal_spec" in minimal_response
 
-        # adcp 3.6.0: GetSignalsRequest is now a RootModel (discriminated union)
-        # Access fields via .root.field_name
-        assert adcp_request.root.signal_spec == "Sports enthusiasts in automotive market", (
-            "signal_spec should be accessible via .root.signal_spec"
-        )
+        # adcp 3.9: direct attribute access (no longer RootModel)
+        assert adcp_request.signal_spec == "Sports enthusiasts in automotive market"
 
-        # Verify field count (at minimum: signal_spec, deliver_to, filters, max_results)
-        # RootModel serializes the inner object's fields
+        # Verify field count
         assert len(adcp_response) >= 2, f"AdCP request should have at least 2 fields, got {len(adcp_response)}"
 
     def test_update_media_buy_request_adcp_compliance(self):
@@ -2844,7 +2830,10 @@ class TestAdCPContract:
             "data_provider": "Acme Data",
             "coverage_percentage": 85.5,
             "deployments": [{"platform": "GAM", "is_live": True, "type": "platform"}],
-            "pricing": {"cpm": 2.50, "currency": "USD"},
+            "pricing": {},
+            "pricing_options": [
+                {"pricing_option_id": "cpm_usd", "cpm": 2.50, "currency": "USD", "model": "cpm"},
+            ],
         }
         # Test with optional errors field
         full_response = GetSignalsResponse(signals=[signal_data], errors=None)
