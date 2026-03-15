@@ -19,28 +19,33 @@ import sys
 from pathlib import Path
 
 BASELINE_FILE = ".duplication-baseline"
-MIN_SIMILARITY_LINES = 6
 
 
 def count_duplications(directory: str) -> int:
     """Run pylint similarities on a directory and count R0801 violations."""
+    # Similarity tuning (min-similarity-lines, ignore-imports, etc.) lives in
+    # pyproject.toml [tool.pylint.similarities] — single source of truth.
     cmd = [
         sys.executable,
         "-m",
         "pylint",
         "--disable=all",
         "--enable=R0801",
-        f"--min-similarity-lines={MIN_SIMILARITY_LINES}",
-        "--ignore-imports=yes",
-        "--ignore-docstrings=yes",
-        "--ignore-comments=yes",
-        "--ignore-signatures=yes",
         directory,
     ]
 
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=Path(__file__).parent.parent)
-    # Count R0801 occurrences in output
-    return result.stdout.count("R0801")
+    count = result.stdout.count("R0801")
+
+    # pylint exit code bitmask: bit 0 = fatal error, bit 5 = usage error.
+    # If pylint crashed (non-zero with fatal/usage bits) and found 0 violations,
+    # the count is untrustworthy — abort to prevent auto-ratchet from zeroing baseline.
+    if result.returncode & 33 and count == 0:
+        print(f"ERROR: pylint crashed on {directory} (exit code {result.returncode}):", file=sys.stderr)
+        print(result.stderr[:500], file=sys.stderr)
+        sys.exit(2)
+
+    return count
 
 
 def read_baseline(baseline_file: Path) -> dict[str, int] | None:
@@ -115,11 +120,11 @@ def main() -> int:
         print("", file=sys.stderr)
         print("To inspect violations:", file=sys.stderr)
         print(
-            f"  uv run pylint --disable=all --enable=R0801 --min-similarity-lines={MIN_SIMILARITY_LINES} src/",
+            "  uv run pylint --disable=all --enable=R0801 src/",
             file=sys.stderr,
         )
         print(
-            f"  uv run pylint --disable=all --enable=R0801 --min-similarity-lines={MIN_SIMILARITY_LINES} tests/",
+            "  uv run pylint --disable=all --enable=R0801 tests/",
             file=sys.stderr,
         )
         return 1

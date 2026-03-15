@@ -98,23 +98,15 @@ def integration_db():
     unique_db_name = f"test_{uuid.uuid4().hex[:8]}"
 
     # Create the test database
-    # Parse port from postgres_url (set by run_all_tests.sh or environment)
-    import re
-
     import psycopg2
     from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
-    pattern = r"postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)"
-    match = re.match(pattern, postgres_url)
-    if match:
-        user, password, host, port_str, _ = match.groups()
-        postgres_port = int(port_str)
-    else:
-        # Fallback to defaults if URL parsing fails
+    parsed = parse_postgres_url()
+    if not parsed:
         pytest.fail(
             f"Failed to parse DATABASE_URL: {postgres_url}\nExpected format: postgresql://user:pass@host:port/dbname"
         )
-        user, password, host, postgres_port = "adcp_user", "test_password", "localhost", 5432
+    user, password, host, postgres_port = parsed
 
     conn_params = {
         "host": host,
@@ -742,16 +734,11 @@ def mcp_server(integration_db):
     if not postgres_url or not postgres_url.startswith("postgresql://"):
         raise RuntimeError("mcp_server fixture requires PostgreSQL DATABASE_URL")
 
-    import re
-
-    pattern = r"postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)"
-    match = re.match(pattern, postgres_url)
-    if match:
-        user, password, host, port_str, _ = match.groups()
-        postgres_port = int(port_str)
-        server_db_url = f"postgresql://{user}:{password}@{host}:{postgres_port}/{db_name}"
-    else:
+    parsed = parse_postgres_url()
+    if not parsed:
         raise RuntimeError(f"Failed to parse DATABASE_URL: {postgres_url}")
+    user, password, host, postgres_port = parsed
+    server_db_url = f"postgresql://{user}:{password}@{host}:{postgres_port}/{db_name}"
 
     env = os.environ.copy()
     env["ADCP_SALES_PORT"] = str(port)
