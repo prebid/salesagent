@@ -21,7 +21,7 @@ def mock_api_key_auth(integration_db):
     This fixture bypasses the require_tenant_management_api_key decorator
     by creating a valid API key in the database that all tests can use.
 
-    We keep separate tests for authentication itself (test_init_api_key).
+    API key is provisioned via TENANT_MANAGEMENT_API_KEY env var in production.
     """
     from datetime import UTC, datetime
 
@@ -102,16 +102,10 @@ def test_tenant(integration_db):
 class TestTenantManagementAPIIntegration:
     """Integration tests for Tenant Management API."""
 
-    def test_init_api_key(self, client):
-        """Test API key initialization."""
+    def test_init_api_key_endpoint_removed(self, client):
+        """Verify the unauthenticated init-api-key endpoint no longer exists."""
         response = client.post("/api/v1/tenant-management/init-api-key")
-        # May be 201 (created) or 409 (already exists)
-        assert response.status_code in [201, 409]
-
-        if response.status_code == 201:
-            data = response.json
-            assert "api_key" in data
-            assert data["api_key"].startswith("sk-")
+        assert response.status_code == 404  # Route removed entirely
 
     def test_health_check(self, client, mock_api_key_auth):
         """Test health check endpoint."""

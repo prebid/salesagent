@@ -7,8 +7,10 @@ Provides tenant management API endpoints for:
 - Getting sync history
 """
 
+import hmac
 import json
 import logging
+import os
 import secrets
 from datetime import UTC, datetime
 from functools import wraps
@@ -32,7 +34,14 @@ db_session = gam_db_session
 
 
 def get_tenant_management_api_key() -> str | None:
-    """Get tenant management API key from database."""
+    """Get sync API key from env var or database.
+
+    Priority: SYNC_API_KEY env var > database config.
+    """
+    env_key = os.environ.get("SYNC_API_KEY")
+    if env_key:
+        return env_key
+
     with get_db_session() as db_session:
         stmt = select(TenantManagementConfig).filter_by(config_key="api_key")
         config = db_session.scalars(stmt).first()
@@ -43,7 +52,7 @@ def get_tenant_management_api_key() -> str | None:
 
 
 def require_tenant_management_api_key(f: Any) -> Any:
-    """Decorator to require tenant management API key authentication."""
+    """Decorator to require sync API key authentication."""
 
     @wraps(f)
     def decorated_function(*args: Any, **kwargs: Any) -> Any:
@@ -53,7 +62,10 @@ def require_tenant_management_api_key(f: Any) -> Any:
             return jsonify({"error": "API key required"}), 401
 
         valid_key = get_tenant_management_api_key()
-        if not valid_key or api_key != valid_key:
+        if not valid_key:
+            return jsonify({"error": "API not configured. Set SYNC_API_KEY environment variable."}), 503
+
+        if not hmac.compare_digest(api_key, valid_key):
             return jsonify({"error": "Invalid API key"}), 401
 
         return f(*args, **kwargs)
@@ -726,5 +738,5 @@ def initialize_tenant_management_api_key() -> str:
         session.add(new_config)
         session.commit()
 
-        logger.info(f"Generated new tenant management API key: {api_key[:10]}...")
+        logger.info("Generated new sync API key")
         return api_key
