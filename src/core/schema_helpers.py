@@ -13,12 +13,13 @@ Philosophy:
 from typing import Any
 
 from adcp import GetProductsResponse, Product
-from src.core.schemas.product import GetProductsRequest
 from adcp.types import PropertyListReference
 from adcp.types.generated_poc.core.brand_ref import BrandReference
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.core.product_filters import ProductFilters
 from adcp.types.generated_poc.core.reporting_webhook import ReportingWebhook
+
+from src.core.schemas.product import GetProductsRequest
 
 
 def to_context_object(context: dict[str, Any] | ContextObject | None) -> ContextObject | None:

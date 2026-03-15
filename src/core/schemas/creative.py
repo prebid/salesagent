@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import Any, Literal
 
+from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import (
     CreativeStatus,
 )
@@ -34,9 +35,6 @@ from adcp.types import (
 from adcp.types import (
     SyncCreativesRequest as LibrarySyncCreativesRequest,
 )
-from adcp.types import (
-    SyncCreativesResponse as LibrarySyncCreativesResponse,
-)
 from adcp.types.generated_poc.core.pagination_response import PaginationResponse as LibraryResponsePagination
 from adcp.types.generated_poc.enums.creative_action import CreativeAction
 from adcp.types.generated_poc.media_buy.list_creatives_response import (
@@ -44,9 +42,6 @@ from adcp.types.generated_poc.media_buy.list_creatives_response import (
 )
 from adcp.types.generated_poc.media_buy.sync_creatives_response import (
     SyncCreativesResponse1 as LibrarySyncCreativesSuccess,
-)
-from adcp.types.generated_poc.media_buy.sync_creatives_response import (
-    SyncCreativesResponse2 as LibrarySyncCreativesError,
 )
 from pydantic import (
     ConfigDict,
@@ -323,6 +318,10 @@ class SyncCreativesRequest(LibrarySyncCreativesRequest):
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    # adcp 3.9 makes account required. Our impl resolves identity at the transport
+    # layer (ResolvedIdentity), not from the request payload, so account is optional here.
+    account: LibraryAccountReference | None = None  # type: ignore[assignment]
 
     creatives: list[Creative] = Field(
         ..., min_length=1, max_length=100, description="Array of creative assets to sync (create or update)"

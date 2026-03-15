@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from src.core.schemas.creative import Creative, CreativeApproval
 
 from adcp import Error
+from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import CreateMediaBuyRequest as LibraryCreateMediaBuyRequest
 
 # Import main request/response types from stable API
@@ -21,10 +22,15 @@ from adcp.types import (
 # Import types from stable API (per adcp 2.7.0+)
 from adcp.types import FormatId as LibraryFormatId
 from adcp.types import PackageRequest as LibraryPackageRequest
+
+# Import types from stable API (per adcp 2.9.0+ - all types now in stable)
+# Note: AffectedPackage was removed in 2.9.0, use Package instead
+from adcp.types import PackageUpdate as LibraryPackageUpdate
 from adcp.types import (
     PriceGuidance,  # Replaces local PriceGuidance class
     PricingModel,  # Replaces local PricingModel enum (lowercase members: .cpm, .cpc, etc.)
 )
+from adcp.types import UpdateMediaBuyRequest as LibraryUpdateMediaBuyRequest
 from adcp.types.aliases import (
     CreateMediaBuyErrorResponse as AdCPCreateMediaBuyError,
 )
@@ -41,11 +47,6 @@ from adcp.types.aliases import (
 from adcp.types.base import AdCPBaseModel as LibraryAdCPBaseModel
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
-
-# Import types from stable API (per adcp 2.9.0+ - all types now in stable)
-# Note: AffectedPackage was removed in 2.9.0, use Package instead
-from adcp.types import PackageUpdate as LibraryPackageUpdate
-from adcp.types import UpdateMediaBuyRequest as LibraryUpdateMediaBuyRequest
 
 from src.core.config import get_pydantic_extra_mode
 
@@ -1431,6 +1432,10 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    # adcp 3.9 makes account required. Our impl resolves identity at the transport
+    # layer (ResolvedIdentity), not from the request payload, so account is optional here.
+    account: LibraryAccountReference | None = None  # type: ignore[assignment]
 
     # Override packages to use our PackageRequest (which overrides targeting_overlay
     # to Targeting instead of library TargetingOverlay, enabling the legacy normalizer).

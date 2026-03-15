@@ -6,8 +6,8 @@ All classes are re-exported from src.core.schemas for backward compatibility.
 
 from typing import Any
 
-from adcp.types import GetProductsWholesaleRequest as LibraryGetProductsRequest
 from adcp.types import GetProductsResponse as LibraryGetProductsResponse
+from adcp.types import GetProductsWholesaleRequest as LibraryGetProductsRequest
 from adcp.types import Placement as LibraryPlacement
 from adcp.types import Product as LibraryProduct
 from adcp.types import ProductCard as LibraryProductCard
