@@ -363,7 +363,9 @@ class TestSyncCreativesResponseSchema:
         assert len(response.creatives) == 1
         assert response.creatives[0].creative_id == "c_1"
         assert response.dry_run is False
-        assert response.errors is None
+        # adcp 3.9: SyncCreativesResponse subclasses success variant only;
+        # error variant is a separate type (handled by ToolError), no .errors attr
+        assert not hasattr(response, "errors")
 
     def test_str_method_summary(self):
         """__str__ returns human-readable summary.
@@ -483,19 +485,27 @@ class TestSyncCreativesRequestSchema:
         )
         assert req.creative_ids == ["c_test_1"]
 
-    def test_accepts_assignments_dict(self):
-        """assignments parameter (creative_id -> package_ids) accepted.
+    def test_accepts_assignments_list(self):
+        """assignments parameter (list of Assignment objects) accepted.
 
-        Spec: CONFIRMED -- sync-creatives-request.json defines assignments
-        as optional object with pattern-keyed string arrays.
+        Spec: CONFIRMED -- adcp 3.9: sync-creatives-request.json defines
+        assignments as optional list of Assignment objects (creative_id + package_id).
         Covers: UC-006-ASSIGNMENT-PACKAGE-VALIDATION-01
         """
+        from adcp.types.generated_poc.media_buy.sync_creatives_request import Assignment
+
         creative = _make_creative()
         req = SyncCreativesRequest(
             creatives=[creative],
-            assignments={"c_test_1": ["pkg_1", "pkg_2"]},
+            assignments=[
+                Assignment(creative_id="c_test_1", package_id="pkg_1"),
+                Assignment(creative_id="c_test_1", package_id="pkg_2"),
+            ],
         )
-        assert req.assignments == {"c_test_1": ["pkg_1", "pkg_2"]}
+        assert len(req.assignments) == 2
+        assert req.assignments[0].creative_id == "c_test_1"
+        assert req.assignments[0].package_id == "pkg_1"
+        assert req.assignments[1].package_id == "pkg_2"
 
 
 class TestCreativeAssignmentSchema:

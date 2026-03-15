@@ -1495,14 +1495,14 @@ class TestGetProductsRequestSchema:
         req = GetProductsRequest(
             brief="video ads for sports fans",
             brand={"domain": "nike.com"},
-            account_id="acct_001",
+            account={"account_id": "acct_001"},
             buyer_campaign_ref="camp_ref_001",
             filters={"delivery_type": "guaranteed"},
             pagination={"max_results": 10},
         )
         assert req.brief == "video ads for sports fans"
         assert req.brand is not None
-        assert req.account_id == "acct_001"
+        assert req.account is not None
         assert req.buyer_campaign_ref == "camp_ref_001"
         assert req.filters is not None
         assert req.pagination is not None

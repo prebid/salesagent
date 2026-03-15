@@ -1416,10 +1416,15 @@ class TestAdCPContract:
             updated_date=datetime.now(),
         )
 
-        # Test with spec-compliant fields only (AdCP 2.5)
+        # Test with spec-compliant fields only (adcp 3.9)
+        from adcp.types.generated_poc.media_buy.sync_creatives_request import Assignment
+
         request = SyncCreativesRequest(
             creatives=[creative],
-            assignments={"creative_123": ["pkg_1", "pkg_2"]},
+            assignments=[
+                Assignment(creative_id="creative_123", package_id="pkg_1"),
+                Assignment(creative_id="creative_123", package_id="pkg_2"),
+            ],
             # creative_ids: AdCP 2.5 replaces the deprecated patch parameter
             delete_missing=False,
             dry_run=False,
@@ -1471,11 +1476,12 @@ class TestAdCPContract:
         # Internal fields should NOT be in the response
         assert "principal_id" not in creative_obj, "Internal field 'principal_id' exposed in response"
 
-        # Verify assignments structure (dict of creative_id → package_ids)
+        # Verify assignments structure (adcp 3.9: list of Assignment objects)
         if adcp_response.get("assignments"):
-            assert isinstance(adcp_response["assignments"], dict), "Assignments must be a dict"
-            for creative_id, package_ids in adcp_response["assignments"].items():
-                assert isinstance(package_ids, list), f"Package IDs for {creative_id} must be a list"
+            assert isinstance(adcp_response["assignments"], list), "Assignments must be a list"
+            for assignment in adcp_response["assignments"]:
+                assert "creative_id" in assignment, "Assignment must have creative_id"
+                assert "package_id" in assignment, "Assignment must have package_id"
 
         # Verify field count (flexible due to optional fields)
         assert len(adcp_response) >= 1, f"SyncCreativesRequest should have at least 1 field, got {len(adcp_response)}"
