@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.1](https://github.com/prebid/salesagent/compare/v1.5.0...v1.5.1) (2026-03-15)
+
+
+### Bug Fixes
+
+* coerce AnyUrl to str before passing to yarl.URL() ([#1106](https://github.com/prebid/salesagent/issues/1106)) ([#1118](https://github.com/prebid/salesagent/issues/1118)) ([641ee9e](https://github.com/prebid/salesagent/commit/641ee9e10b529bf1cfcdf6e571fe1d68b48aa2fa))
+* normalize admin UI to canonical /admin routes ([0283124](https://github.com/prebid/salesagent/commit/02831240a2f286b33ca86e5def8771cfdbb617e4))
+* restore pre-[#1066](https://github.com/prebid/salesagent/issues/1066) admin routes via flask fallback mount ([4b919f3](https://github.com/prebid/salesagent/commit/4b919f3b95e4cf2757f8f5e92ddf822fcb506e5e))
+
+
+### Code Refactoring
+
+* complete delivery schema extraction from _base.py ([#1121](https://github.com/prebid/salesagent/issues/1121)) ([46624e9](https://github.com/prebid/salesagent/commit/46624e99508b377bc3b9f33b3181c8b3f272c5d3))
+* Eliminate get_db_session() from business logic — complete repository pattern adoption ([#1097](https://github.com/prebid/salesagent/issues/1097)) ([1965f1d](https://github.com/prebid/salesagent/commit/1965f1df3b0ce4719845db6ee2c40d17b6358ddc))
+
 ## [1.5.0](https://github.com/prebid/salesagent/compare/v1.4.0...v1.5.0) (2026-03-09)
 
 
