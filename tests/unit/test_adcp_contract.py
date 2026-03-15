@@ -78,8 +78,8 @@ class TestSchemaMatchesLibrary:
         from adcp import (
             GetMediaBuyDeliveryRequest as LibGetMediaBuyDeliveryRequest,
         )
-        from adcp import (
-            GetProductsRequest as LibGetProductsRequest,
+        from adcp.types import (
+            GetProductsWholesaleRequest as LibGetProductsRequest,
         )
         from adcp import (
             GetSignalsRequest as LibGetSignalsRequest,
@@ -118,15 +118,13 @@ class TestSchemaMatchesLibrary:
             SyncCreativesRequest as LocalSyncCreativesRequest,
         )
 
-        # GetProductsRequest - local extends library with spec fields not yet in library
+        # GetProductsRequest - local extends library with internal-only fields
         lib_fields = set(LibGetProductsRequest.model_fields.keys())
         local_fields = set(GetProductsRequest.model_fields.keys())
-        # TODO(adcp-lib): Remove allowlist when adcp library adds these fields
-        # product_selectors — internal-only field
-        # buying_mode — local extension for buying mode selection
-        # account — local extension for account-based product lookup (library has account_id)
-        # adcp 3.6.0: brand, catalog, buyer_campaign_ref, pagination are now in the library
-        local_extensions = {"product_selectors", "buying_mode", "account"}
+        # product_selectors — internal-only field (not in AdCP spec)
+        # buying_mode and account are now in the library (adcp 3.9) but overridden locally
+        # (buying_mode widened to str|None, account made optional)
+        local_extensions = {"product_selectors"}
         assert lib_fields == local_fields - local_extensions, (
             f"GetProductsRequest drift: lib={lib_fields}, local={local_fields}"
         )
@@ -134,10 +132,8 @@ class TestSchemaMatchesLibrary:
         # GetMediaBuyDeliveryRequest - local extends library with spec fields
         lib_fields = set(LibGetMediaBuyDeliveryRequest.model_fields.keys())
         local_fields = set(LocalGetMediaBuyDeliveryRequest.model_fields.keys())
-        # TODO(adcp-lib): Remove allowlist when adcp library adds these fields
-        # account, reporting_dimensions, include_package_daily_breakdown, attribution_window —
-        # spec fields added from online schema, not yet in adcp library 3.6.0
-        local_extensions = {"account", "reporting_dimensions", "include_package_daily_breakdown", "attribution_window"}
+        # adcp 3.9: all fields now in library — no local extensions remaining
+        local_extensions: set[str] = set()
         assert lib_fields == local_fields - local_extensions, (
             f"GetMediaBuyDeliveryRequest drift: lib={lib_fields}, local={local_fields}"
         )
@@ -186,26 +182,26 @@ class TestSchemaMatchesLibrary:
         This test catches accidental regressions where we make fields required.
         In adcp 3.6.0, brand_manifest is replaced by brand (BrandReference with domain).
         """
-        from adcp import GetProductsRequest as LibraryGetProductsRequest
+        from adcp.types import GetProductsWholesaleRequest as LibraryGetProductsRequest
 
-        # Verify library allows empty request (all fields optional)
-        lib_req = LibraryGetProductsRequest()
+        # Verify library allows empty request (buying_mode is required for wholesale variant)
+        lib_req = LibraryGetProductsRequest(buying_mode="wholesale")
         assert lib_req.brief is None
         assert lib_req.brand is None  # adcp 3.6.0: brand replaces brand_manifest
         assert lib_req.context is None
         assert lib_req.filters is None
 
-        # Our schema should also allow empty request
+        # Our schema widens buying_mode to optional, so empty request works
         our_req = GetProductsRequest()
         assert our_req.brief is None
         assert our_req.brand is None  # adcp 3.6.0: brand replaces brand_manifest
 
     def test_get_products_request_brand_accepts_domain(self):
         """Verify brand (BrandReference) accepts domain field per adcp 3.6.0."""
-        from adcp import GetProductsRequest as LibraryGetProductsRequest
+        from adcp.types import GetProductsWholesaleRequest as LibraryGetProductsRequest
 
-        # Library accepts brand with domain
-        lib_req = LibraryGetProductsRequest(brand={"domain": "acme.com"})
+        # Library accepts brand with domain (buying_mode required for wholesale variant)
+        lib_req = LibraryGetProductsRequest(brand={"domain": "acme.com"}, buying_mode="wholesale")
         assert lib_req.brand is not None
         assert lib_req.brand.domain == "acme.com"
 
@@ -227,14 +223,15 @@ class TestSchemaMatchesLibrary:
 
     def test_schema_validation_matches_library(self):
         """Compare our schema validation against library for common cases."""
-        from adcp import GetProductsRequest as LibraryGetProductsRequest
+        from adcp.types import GetProductsWholesaleRequest as LibraryGetProductsRequest
 
         # Test cases that should work in both (adcp 3.6.0: brand replaces brand_manifest)
+        # buying_mode is required for the wholesale variant in adcp 3.9
         test_cases = [
-            {},  # Empty
-            {"brief": "test"},  # Brief only
-            {"brand": {"domain": "acme.com"}},  # BrandReference
-            {"brief": "test", "brand": {"domain": "acme.com"}},  # Both
+            {"buying_mode": "wholesale"},  # Minimal valid
+            {"buying_mode": "wholesale", "brief": "test"},  # Brief only
+            {"buying_mode": "wholesale", "brand": {"domain": "acme.com"}},  # BrandReference
+            {"buying_mode": "wholesale", "brief": "test", "brand": {"domain": "acme.com"}},  # Both
         ]
 
         for case in test_cases:

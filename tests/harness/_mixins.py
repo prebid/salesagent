@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import MagicMock
 
-from adcp import GetProductsRequest as GetProductsRequestGenerated
+from src.core.schemas import GetProductsRequest as GetProductsRequestGenerated
 
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
