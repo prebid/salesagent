@@ -1,8 +1,9 @@
-"""Adapter platform mapping utilities.
+"""
+Platform mapping constants and resolver for adapter-specific advertiser IDs.
 
-Maps adapter short names to platform_mappings keys and resolves
-adapter-specific advertiser IDs. Lives in core (not adapters) because
-both ORM models and Pydantic schemas depend on it.
+These live in the core layer because they are consumed by both ORM models
+(``src/core/database/models.py``) and Pydantic schemas (``src/core/schemas/_base.py``).
+The mappings are pure data with no adapter logic.
 """
 
 # Map adapter short names to platform_mappings keys.

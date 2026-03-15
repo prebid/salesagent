@@ -235,7 +235,13 @@ class AdServerAdapter(ABC):
         else:
             self.console.print(message)
 
-    def _build_package_responses(self, packages: list[MediaPackage], *, paused: bool = False) -> list[ResponsePackage]:
+    def _build_package_responses(
+        self,
+        packages: list[MediaPackage],
+        *,
+        paused: bool = False,
+        include_product_id: bool = False,
+    ) -> list[ResponsePackage]:
         """Build AdCP-compliant package responses from MediaPackage list.
 
         Per AdCP spec, CreateMediaBuyResponse.Package requires package_id
@@ -244,18 +250,23 @@ class AdServerAdapter(ABC):
         Args:
             packages: List of MediaPackage objects from the request.
             paused: Whether packages should be marked as paused (e.g. for HITL).
+            include_product_id: Whether to include product_id in the response
+                (useful for adapters that need product tracking, e.g. Mock).
 
         Returns:
             List of ResponsePackage objects ready for CreateMediaBuySuccess.
         """
-        return [
-            ResponsePackage(
-                buyer_ref=package.buyer_ref or "unknown",
-                package_id=package.package_id,
-                paused=paused,
-            )
-            for package in packages
-        ]
+        responses = []
+        for package in packages:
+            kwargs: dict[str, Any] = {
+                "buyer_ref": package.buyer_ref or "unknown",
+                "package_id": package.package_id,
+                "paused": paused,
+            }
+            if include_product_id:
+                kwargs["product_id"] = package.product_id
+            responses.append(ResponsePackage(**kwargs))
+        return responses
 
     def _build_create_success(
         self,
@@ -264,8 +275,10 @@ class AdServerAdapter(ABC):
         packages: list[MediaPackage],
         *,
         paused: bool = False,
-        creative_deadline_days: int = 2,
+        creative_deadline_days: int | None = 2,
+        workflow_step_id: str | None = None,
         package_responses: list[ResponsePackage] | None = None,
+        include_product_id: bool = False,
     ) -> CreateMediaBuySuccess:
         """Build a CreateMediaBuySuccess response with standard fields.
 
@@ -279,18 +292,28 @@ class AdServerAdapter(ABC):
             packages: List of MediaPackage objects from the request.
             paused: Whether packages should be marked as paused.
             creative_deadline_days: Days from now for creative deadline.
+                None means no creative deadline (e.g. GAM sets this explicitly).
+            workflow_step_id: Optional workflow step ID for HITL tracking.
             package_responses: Pre-built package responses (overrides packages).
+            include_product_id: Whether to include product_id in package responses
+                (only used when package_responses is None).
 
         Returns:
             CreateMediaBuySuccess response.
         """
         if package_responses is None:
-            package_responses = self._build_package_responses(packages, paused=paused)
+            package_responses = self._build_package_responses(
+                packages, paused=paused, include_product_id=include_product_id
+            )
+        creative_deadline = (
+            datetime.now(UTC) + timedelta(days=creative_deadline_days) if creative_deadline_days is not None else None
+        )
         return CreateMediaBuySuccess(
             buyer_ref=request.buyer_ref or "unknown",
             media_buy_id=media_buy_id,
-            creative_deadline=datetime.now(UTC) + timedelta(days=creative_deadline_days),
+            creative_deadline=creative_deadline,
             packages=package_responses,
+            workflow_step_id=workflow_step_id,
         )
 
     def get_supported_pricing_models(self) -> set[str]:
