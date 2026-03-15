@@ -451,11 +451,6 @@ class SyncCreativesResponse(LibrarySyncCreativesSuccess):
     Design decision (salesagent-g3c): error variant never constructed.
     """
 
-    def model_dump(self, **kwargs) -> dict[str, Any]:
-        """Override to default exclude_none=True per AdCP convention."""
-        kwargs.setdefault("exclude_none", True)
-        return super().model_dump(**kwargs)
-
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""
         # Count actions from creatives list
