@@ -5,16 +5,65 @@ These fixtures are for tests that require database and service integration.
 """
 
 import os
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import pytest
+from sqlalchemy import delete, select
 
 from src.admin.app import create_app
 
 admin_app = create_app()
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Tenant
+from src.core.database.models import MediaBuy, MediaPackage, Principal, Tenant
 from tests.fixtures import TenantFactory
+
+# ---------------------------------------------------------------------------
+# Shared test helpers for media buy repository tests
+# ---------------------------------------------------------------------------
+
+
+def cleanup_tenant(tenant_id: str) -> None:
+    """Delete tenant and all dependent data (correct FK order)."""
+    with get_db_session() as session:
+        mb_ids = session.scalars(select(MediaBuy.media_buy_id).where(MediaBuy.tenant_id == tenant_id)).all()
+        if mb_ids:
+            session.execute(delete(MediaPackage).where(MediaPackage.media_buy_id.in_(mb_ids)))
+        session.execute(delete(MediaBuy).where(MediaBuy.tenant_id == tenant_id))
+        session.execute(delete(Principal).where(Principal.tenant_id == tenant_id))
+        session.execute(delete(Tenant).where(Tenant.tenant_id == tenant_id))
+        session.commit()
+
+
+def make_media_buy(tenant_id: str, principal_id: str, media_buy_id: str, **kwargs) -> MediaBuy:
+    """Helper to construct a MediaBuy ORM object with required fields."""
+    defaults = {
+        "order_name": f"Order {media_buy_id}",
+        "advertiser_name": "Test Advertiser",
+        "start_date": date(2026, 1, 1),
+        "end_date": date(2026, 12, 31),
+        "status": "draft",
+        "raw_request": {"test": True},
+    }
+    defaults.update(kwargs)
+    return MediaBuy(
+        media_buy_id=media_buy_id,
+        tenant_id=tenant_id,
+        principal_id=principal_id,
+        **defaults,
+    )
+
+
+def make_package(media_buy_id: str, package_id: str, **kwargs) -> MediaPackage:
+    """Helper to construct a MediaPackage ORM object."""
+    defaults = {
+        "package_config": {"name": f"Package {package_id}", "test": True},
+    }
+    defaults.update(kwargs)
+    return MediaPackage(
+        media_buy_id=media_buy_id,
+        package_id=package_id,
+        **defaults,
+    )
 
 
 @pytest.fixture(scope="function")
