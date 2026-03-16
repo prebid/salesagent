@@ -810,6 +810,31 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
 
         logger.info(f"[APPROVAL] Adapter creation succeeded for {media_buy_id}: {response.media_buy_id}")
 
+        # Persist platform_line_item_ids from adapter response (same as auto-approval path)
+        # Adapters (GAM, Broadstreet) attach _platform_line_item_ids to the response object
+        # These are required for update_media_buy operations (budget updates, pause/resume)
+        platform_line_item_ids = getattr(response, "_platform_line_item_ids", {})
+        if platform_line_item_ids:
+            logger.info(f"[APPROVAL] Found platform_line_item_ids mapping: {platform_line_item_ids}")
+            with MediaBuyUoW(tenant_id) as uow_plids:
+                # FIXME(salesagent-rva2): migrate to uow.media_buys.update_package_config()
+                assert uow_plids.session is not None
+                plid_session = uow_plids.session
+                for pkg_id, line_item_id in platform_line_item_ids.items():
+                    package_stmt = select(DBMediaPackage).filter_by(media_buy_id=media_buy_id, package_id=pkg_id)
+                    pkg_record: DBMediaPackage | None = plid_session.scalars(package_stmt).first()
+                    if pkg_record:
+                        pkg_record.package_config["platform_line_item_id"] = str(line_item_id)
+                        from sqlalchemy.orm import attributes
+
+                        attributes.flag_modified(pkg_record, "package_config")
+                        logger.info(f"[APPROVAL] Updated package {pkg_id} with platform_line_item_id: {line_item_id}")
+                    else:
+                        logger.warning(f"[APPROVAL] Could not find package {pkg_id} to save platform_line_item_id")
+                logger.info("[APPROVAL] Saved platform_line_item_ids to database")
+        else:
+            logger.info("[APPROVAL] No platform_line_item_ids found on response object")
+
         # Upload and associate inline creatives if any exist
         # This handles inline creatives that were uploaded during initial media buy creation
         with MediaBuyUoW(tenant_id) as uow2:
