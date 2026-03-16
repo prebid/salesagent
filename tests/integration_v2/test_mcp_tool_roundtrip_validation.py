@@ -424,8 +424,8 @@ class TestMCPToolRoundtripValidation:
                 assert hasattr(reconstructed_product, "format_ids")
                 assert isinstance(reconstructed_product.format_ids, list)
                 assert len(reconstructed_product.format_ids) > 0
-                # measurement is optional in AdCP spec (required=False)
-                assert hasattr(reconstructed_product, "measurement")
+                # delivery_measurement is optional in AdCP spec (renamed from measurement in adcp 3.9)
+                assert hasattr(reconstructed_product, "delivery_measurement")
                 # creative_policy is optional in AdCP spec
                 assert hasattr(reconstructed_product, "creative_policy")
 
