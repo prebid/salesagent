@@ -128,7 +128,7 @@ class TestPrecondSchemaObligations:
             response = await env.call_impl(
                 brief="test",
                 brand={"domain": "test.com"},
-                product_selectors=[{"product_id": "prod_001"}],
+                product_selectors={"product_id": "prod_001"},
             )
 
             # Verify request with both brand and product_selectors is accepted
