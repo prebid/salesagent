@@ -1,13 +1,9 @@
 """Creative-to-package assignment processing."""
 
 import logging
-import uuid
-from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
-
-from src.core.database.database_session import get_db_session
+from src.core.database.repositories.uow import CreativeUoW
 from src.core.exceptions import AdCPNotFoundError, AdCPValidationError
 from src.core.schemas import SyncCreativeResult
 
@@ -41,9 +37,9 @@ def _process_assignments(
 
     # Note: assignments should be a dict, but handle both dict and None
     if assignments and isinstance(assignments, dict):
-        with get_db_session() as session:
-            from src.core.database.models import CreativeAssignment as DBAssignment
-            from src.core.database.models import MediaBuy, MediaPackage
+        with CreativeUoW(tenant["tenant_id"]) as uow:
+            assert uow.assignments is not None
+            assignment_repo = uow.assignments
 
             for creative_id, package_ids in assignments.items():
                 # Initialize tracking for this creative
@@ -53,23 +49,13 @@ def _process_assignments(
                     assignment_errors_by_creative[creative_id] = {}
 
                 for package_id in package_ids:
-                    # Find which media buy this package belongs to by querying MediaPackage table
-                    # Note: We need to join with MediaBuy to verify tenant_id
-                    from sqlalchemy import join
-
-                    # FIXME(salesagent-rva2): migrate to MediaBuyRepository.get_package()
-                    package_stmt = (
-                        select(MediaPackage, MediaBuy)
-                        .select_from(join(MediaPackage, MediaBuy, MediaPackage.media_buy_id == MediaBuy.media_buy_id))
-                        .where(MediaPackage.package_id == package_id)
-                        .where(MediaBuy.tenant_id == tenant["tenant_id"])
-                    )
-                    result = session.execute(package_stmt).first()
+                    # Find which media buy this package belongs to
+                    pkg_result = assignment_repo.find_package_with_media_buy(package_id)
 
                     media_buy_id = None
                     actual_package_id = None
-                    if result:
-                        db_package, db_media_buy = result
+                    if pkg_result:
+                        db_package, db_media_buy = pkg_result
                         media_buy_id = db_package.media_buy_id
                         actual_package_id = db_package.package_id
 
@@ -86,24 +72,14 @@ def _process_assignments(
                             continue
 
                     # Validate creative format against package product formats
-                    # Get creative format
-                    from src.core.database.models import Creative as DBCreative
-                    from src.core.database.models import Product
-
-                    creative_stmt = select(DBCreative).where(
-                        DBCreative.tenant_id == tenant["tenant_id"], DBCreative.creative_id == creative_id
-                    )
-                    db_creative_result = session.scalars(creative_stmt).first()
+                    db_creative_result = assignment_repo.get_creative_by_id(creative_id)
 
                     # Get product_id from package_config
                     product_id = db_package.package_config.get("product_id") if db_package.package_config else None
 
                     if db_creative_result and product_id:
                         # Get product formats
-                        product_stmt = select(Product).where(
-                            Product.tenant_id == tenant["tenant_id"], Product.product_id == product_id
-                        )
-                        product = session.scalars(product_stmt).first()
+                        product = assignment_repo.get_product_by_id(product_id)
 
                         if product and product.format_ids:
                             # Build set of supported formats (agent_url, format_id) tuples
@@ -165,13 +141,13 @@ def _process_assignments(
                                     continue
 
                     # Check if assignment already exists (idempotent operation)
-                    stmt_existing = select(DBAssignment).filter_by(
-                        tenant_id=tenant["tenant_id"],
+                    # actual_package_id is always set when media_buy_id is set (guard above)
+                    assert actual_package_id is not None
+                    existing_assignment = assignment_repo.get_existing(
                         media_buy_id=media_buy_id,
                         package_id=actual_package_id,
                         creative_id=creative_id,
                     )
-                    existing_assignment = session.scalars(stmt_existing).first()
 
                     if existing_assignment:
                         # Assignment already exists - update weight if needed
@@ -183,18 +159,13 @@ def _process_assignments(
                             )
                         assignment = existing_assignment
                     else:
-                        # Create new assignment in creative_assignments table
-                        assignment = DBAssignment(
-                            tenant_id=tenant["tenant_id"],
-                            assignment_id=str(uuid.uuid4()),
+                        # Create new assignment
+                        assignment = assignment_repo.create(
                             media_buy_id=media_buy_id,
-                            package_id=actual_package_id,  # Use resolved package_id
+                            package_id=actual_package_id,
                             creative_id=creative_id,
                             principal_id=principal_id,
-                            weight=100,
-                            created_at=datetime.now(UTC),
                         )
-                        session.add(assignment)
                         logger.info(
                             f"Created new assignment: creative={creative_id}, "
                             f"package={actual_package_id}, media_buy={media_buy_id}"
@@ -224,7 +195,7 @@ def _process_assignments(
                     mb_obj.status = "pending_creatives"
                     logger.info(f"[SYNC_CREATIVES] Media buy {mb_id} transitioned from draft to pending_creatives")
 
-            session.commit()
+            # UoW auto-commits on clean exit
 
     # Update creative results with assignment information (per AdCP spec)
     for sync_result in results:

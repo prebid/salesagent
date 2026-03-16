@@ -1620,6 +1620,7 @@ class TestPricingOptionStringLookup:
         """
         from src.core.database.database_session import get_db_session
         from src.core.database.models import PricingOption, Product, Tenant
+        from src.core.database.repositories.product import ProductRepository
         from src.core.tools.media_buy_delivery import _get_pricing_options
 
         with get_db_session() as session:
@@ -1655,7 +1656,9 @@ class TestPricingOptionStringLookup:
             )
             session.commit()
 
-        result = _get_pricing_options(["cpm_usd_fixed"], tenant_id="t1")
+        with get_db_session() as session:
+            product_repo = ProductRepository(session, "t1")
+            result = _get_pricing_options(["cpm_usd_fixed"], tenant_id="t1", product_repo=product_repo)
 
         assert "cpm_usd_fixed" in result, (
             f"Expected key 'cpm_usd_fixed', got keys: {list(result.keys())}. "
@@ -1669,6 +1672,7 @@ class TestPricingOptionStringLookup:
         """
         from src.core.database.database_session import get_db_session
         from src.core.database.models import PricingOption, Product, Tenant
+        from src.core.database.repositories.product import ProductRepository
         from src.core.tools.media_buy_delivery import _get_pricing_options
 
         with get_db_session() as session:
@@ -1704,7 +1708,9 @@ class TestPricingOptionStringLookup:
             )
             session.commit()
 
-        result = _get_pricing_options(["cpm_usd_fixed"], tenant_id="t1")
+        with get_db_session() as session:
+            product_repo = ProductRepository(session, "t1")
+            result = _get_pricing_options(["cpm_usd_fixed"], tenant_id="t1", product_repo=product_repo)
 
         assert len(result) > 0, "Non-numeric pricing_option_id 'cpm_usd_fixed' was silently discarded."
 
@@ -1868,6 +1874,7 @@ class TestPricingOptionStringToIntComparisonRejected:
         """
         from src.core.database.database_session import get_db_session
         from src.core.database.models import PricingOption, Product, Tenant
+        from src.core.database.repositories.product import ProductRepository
         from src.core.tools.media_buy_delivery import _get_pricing_options
 
         with get_db_session() as session:
@@ -1903,10 +1910,13 @@ class TestPricingOptionStringToIntComparisonRejected:
             session.commit()
             po_id = po.id
 
-        result = _get_pricing_options(
-            tenant_id="t1",
-            pricing_option_ids=["cpm_usd_fixed"],
-        )
+        with get_db_session() as session:
+            product_repo = ProductRepository(session, "t1")
+            result = _get_pricing_options(
+                tenant_id="t1",
+                pricing_option_ids=["cpm_usd_fixed"],
+                product_repo=product_repo,
+            )
 
         # Key assertion: the map uses the string pricing_option_id, NOT the int PK
         assert "cpm_usd_fixed" in result
@@ -1919,6 +1929,7 @@ class TestPricingOptionStringToIntComparisonRejected:
         """
         from src.core.database.database_session import get_db_session
         from src.core.database.models import PricingOption, Product, Tenant
+        from src.core.database.repositories.product import ProductRepository
         from src.core.tools.media_buy_delivery import _get_pricing_options
 
         with get_db_session() as session:
@@ -1954,10 +1965,13 @@ class TestPricingOptionStringToIntComparisonRejected:
             )
             session.commit()
 
-        result = _get_pricing_options(
-            tenant_id="t1",
-            pricing_option_ids=["cpc_usd_fixed"],
-        )
+        with get_db_session() as session:
+            product_repo = ProductRepository(session, "t1")
+            result = _get_pricing_options(
+                tenant_id="t1",
+                pricing_option_ids=["cpc_usd_fixed"],
+                product_repo=product_repo,
+            )
 
         # Only the string pricing_option_id should work
         assert result.get("cpc_usd_fixed") is not None

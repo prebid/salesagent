@@ -27,11 +27,11 @@ class TestBlueprintSQLAlchemyImports:
         assert hasattr(core, "text"), "Missing required import: text from sqlalchemy"
 
     def test_creatives_blueprint_imports(self):
-        """Validate creatives.py has required SQLAlchemy imports."""
+        """Validate creatives.py can be imported (all queries routed through repos)."""
         from src.admin.blueprints import creatives
 
-        # creatives.py no longer uses or_ after CreativeFormat table was dropped
-        assert hasattr(creatives, "select"), "Missing required import: select from sqlalchemy"
+        # creatives.py no longer uses raw select() — all queries routed through repos (salesagent-p6i)
+        assert hasattr(creatives, "creatives_bp"), "Missing creatives_bp blueprint"
 
     def test_inventory_blueprint_imports(self):
         """Validate inventory.py has required SQLAlchemy imports."""

@@ -242,6 +242,15 @@ repos:
         pass_filenames: false
         always_run: false  # Only run when Python files in src/ changed
 
+      # Detect code duplication (ratcheting baseline — can only decrease)
+      - id: check-code-duplication
+        name: Check code duplication (pylint R0801)
+        entry: uv run python .pre-commit-hooks/check_code_duplication.py
+        language: system
+        files: '^(src|tests)/.*\.py$'
+        pass_filenames: false
+        always_run: true
+
       # Suggest factory usage in test files (non-blocking)
       - id: suggest-test-factories
         name: Suggest factory usage in test files

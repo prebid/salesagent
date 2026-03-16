@@ -3,8 +3,48 @@
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from pydantic import AnyUrl
 
 from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
+
+
+class TestCacheKeyAcceptsAnyUrl:
+    """Regression tests for #1106: _cache_key must accept Pydantic AnyUrl.
+
+    FormatId.agent_url is AnyUrl (not a str subclass in Pydantic v2).
+    When GAM line item creation resolves formats, the AnyUrl flows through
+    format_resolver → creative_agent_registry._cache_key → yarl.URL().
+    yarl.URL() rejects non-str input with TypeError.
+    """
+
+    def test_cache_key_accepts_pydantic_anyurl(self):
+        """_cache_key must not crash when given AnyUrl instead of str."""
+        registry = CreativeAgentRegistry()
+        agent_url = AnyUrl("https://creative.adcontextprotocol.org/")
+        result = registry._cache_key(agent_url)
+        assert result == "https://creative.adcontextprotocol.org"
+
+    def test_cache_key_normalizes_anyurl_same_as_str(self):
+        """AnyUrl and equivalent str must produce the same cache key."""
+        registry = CreativeAgentRegistry()
+        str_key = registry._cache_key("https://creative.adcontextprotocol.org/")
+        anyurl_key = registry._cache_key(AnyUrl("https://creative.adcontextprotocol.org/"))
+        assert str_key == anyurl_key
+
+    @pytest.mark.asyncio
+    async def test_get_format_accepts_anyurl_agent_url(self, monkeypatch):
+        """get_format must not crash when agent_url is AnyUrl (GAM line item path)."""
+        monkeypatch.delenv("ADCP_TESTING", raising=False)
+        registry = CreativeAgentRegistry()
+
+        # Patch _fetch to avoid real HTTP — we only test the cache_key path
+        async def mock_fetch(*args, **kwargs):
+            return []
+
+        monkeypatch.setattr(registry, "_fetch_formats_from_agent", mock_fetch)
+
+        result = await registry.get_format(AnyUrl("https://creative.adcontextprotocol.org/"), "display_300x250_image")
+        assert result is None  # Not found, but no TypeError
 
 
 class TestCreativeAgentRegistry:

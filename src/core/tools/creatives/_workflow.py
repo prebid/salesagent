@@ -5,10 +5,9 @@ from typing import Any
 
 from adcp import PushNotificationConfig
 from adcp.types.generated_poc.core.context import ContextObject
-from sqlalchemy import select
 
 from src.core.audit_logger import get_audit_logger
-from src.core.database.database_session import get_db_session
+from src.core.database.repositories.uow import WorkflowUoW
 from src.core.exceptions import AdCPAdapterError, AdCPAuthenticationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreativeStatusEnum
@@ -31,7 +30,6 @@ def _create_sync_workflow_steps(
     plus ``ObjectWorkflowMapping`` records linking each creative to its step.
     """
     from src.core.context_manager import get_context_manager
-    from src.core.database.models import ObjectWorkflowMapping
 
     ctx_manager = get_context_manager()
 
@@ -48,7 +46,8 @@ def _create_sync_workflow_steps(
     if persistent_ctx is None:
         raise AdCPAdapterError("Failed to create workflow context")
 
-    with get_db_session() as session:
+    with WorkflowUoW(tenant["tenant_id"]) as uow:
+        assert uow.workflows is not None
         for creative_info in creatives_needing_approval:
             # Build appropriate comment based on status
             status = creative_info.get("status", CreativeStatusEnum.pending_review.value)
@@ -103,15 +102,14 @@ def _create_sync_workflow_steps(
 
             # Create ObjectWorkflowMapping to link creative to workflow step
             # This is CRITICAL for webhook delivery when creative is approved
-            mapping = ObjectWorkflowMapping(
+            uow.workflows.add_mapping(
                 step_id=step.step_id,
                 object_type="creative",
                 object_id=creative_info["creative_id"],
                 action="approval_required",
             )
-            session.add(mapping)
 
-        session.commit()
+        # WorkflowUoW auto-commits on clean exit
         logger.info(f"📋 Created {len(creatives_needing_approval)} workflow steps for creative approval")
 
 
@@ -226,19 +224,15 @@ def _audit_log_sync(
 
     # Log audit trail for sync_creatives operation (with principal name from DB)
     try:
-        with get_db_session() as audit_session:
-            from src.core.database.models import Principal as DBPrincipal
+        with WorkflowUoW(tenant["tenant_id"]) as uow:
+            assert uow.workflows is not None
+            principal_name = uow.workflows.get_principal_name(principal_id) if principal_id else None
 
-            # Get principal info for audit log
-            principal_stmt = select(DBPrincipal).filter_by(tenant_id=tenant["tenant_id"], principal_id=principal_id)
-            principal = audit_session.scalars(principal_stmt).first()
-
-            if principal:
-                # Create audit logger and log the operation
+            if principal_name:
                 audit_logger = get_audit_logger("sync_creatives", tenant["tenant_id"])
                 audit_logger.log_operation(
                     operation="sync_creatives",
-                    principal_name=principal.name,
+                    principal_name=principal_name,
                     principal_id=principal_id_str,
                     adapter_id=principal_id_str,  # Use principal_id as adapter_id for consistency
                     success=(failed_count == 0),

@@ -19,6 +19,7 @@ from adcp.types.generated_poc.enums.creative_action import CreativeAction
 from pydantic import BaseModel
 
 from tests.factories import PrincipalFactory
+from tests.harness import make_mock_uow
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -55,8 +56,29 @@ def _make_creative_dict(creative_id="c1", name="Test Banner"):
     }
 
 
+def _make_creative_uow():
+    """Create a mock CreativeUoW with creative_repo returning sensible defaults."""
+    mock_creative_repo = MagicMock()
+    mock_creative_repo.get_provenance_policies.return_value = []
+    mock_creative_repo.get_by_id.return_value = None
+    mock_creative_repo.begin_nested.return_value.__enter__ = MagicMock(return_value=None)
+    mock_creative_repo.begin_nested.return_value.__exit__ = MagicMock(return_value=None)
+
+    # create() must return a mock with proper string attributes (Pydantic validation)
+    def mock_create(**kwargs):
+        db_creative = MagicMock()
+        db_creative.creative_id = kwargs.get("creative_id", "c_unknown")
+        db_creative.status = kwargs.get("status", "approved")
+        return db_creative
+
+    mock_creative_repo.create.side_effect = mock_create
+
+    _, mock_uow = make_mock_uow(repos={"creatives": mock_creative_repo})
+    return mock_uow, mock_creative_repo
+
+
 def _sync_patches():
-    """Context manager returning (mock_db, mock_registry) with standard patches."""
+    """Context manager returning (mock_creative_repo, mock_registry) with standard patches."""
     from contextlib import contextmanager
 
     @contextmanager
@@ -71,19 +93,18 @@ def _sync_patches():
         mock_registry.list_all_formats = mock_list_all_formats
         mock_registry.get_format = mock_get_format
 
+        mock_uow, mock_creative_repo = _make_creative_uow()
+
         with (
-            patch("src.core.tools.creatives._sync.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls,
             patch("src.core.creative_agent_registry.get_creative_agent_registry", return_value=mock_registry),
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
             patch("src.core.tools.creatives._sync.log_tool_activity"),
-            patch("src.core.tools.creatives._workflow.get_db_session") as mock_wf_db,
+            patch("src.core.tools.creatives._workflow.WorkflowUoW") as mock_wf_uow,
         ):
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
-            # Default: no existing creative, no products
-            mock_session.scalars.return_value.first.return_value = None
-            mock_session.scalars.return_value.all.return_value = []  # no tenant products
-            yield mock_session, mock_registry
+            mock_uow_cls.return_value.__enter__.return_value = mock_uow
+            mock_uow_cls.return_value.__exit__.return_value = None
+            yield mock_creative_repo, mock_registry
 
     return ctx
 
@@ -100,7 +121,7 @@ class TestSyncPushNotificationConfig:
         """Line 117-118: dict push_notification_config extracts URL."""
         from src.core.tools.creatives import _sync_creatives_impl
 
-        with _sync_patches()(mock_format_spec) as (mock_session, _):
+        with _sync_patches()(mock_format_spec) as (mock_creative_repo, _):
             response = _sync_creatives_impl(
                 creatives=[_make_creative_dict()],
                 identity=identity,
@@ -119,7 +140,7 @@ class TestSyncPushNotificationConfig:
             url="https://hook.example.com",
             authentication=Authentication(credentials="a" * 32, schemes=[AuthenticationScheme.Bearer]),
         )
-        with _sync_patches()(mock_format_spec) as (mock_session, _):
+        with _sync_patches()(mock_format_spec) as (mock_creative_repo, _):
             response = _sync_creatives_impl(
                 creatives=[_make_creative_dict()],
                 identity=identity,
@@ -143,7 +164,7 @@ class TestSyncBaseModelNormalization:
             assets: dict = {"banner_image": {"url": "https://example.com/banner.png"}}
             variants: list = []
 
-        with _sync_patches()(mock_format_spec) as (mock_session, _):
+        with _sync_patches()(mock_format_spec) as (mock_creative_repo, _):
             response = _sync_creatives_impl(
                 creatives=[CustomCreative()],
                 identity=identity,
@@ -160,32 +181,13 @@ class TestSyncDryRunExistingCreative:
         """Lines 217-218: dry_run=True with existing creative increments updated_count."""
         from src.core.tools.creatives import _sync_creatives_impl
 
-        with _sync_patches()(mock_format_spec) as (mock_session, _):
-            # First call returns existing creative on .first(), then returns [] for .all()
+        with _sync_patches()(mock_format_spec) as (mock_creative_repo, _):
             mock_existing = MagicMock()
             mock_existing.creative_id = "c1"
             mock_existing.status = "approved"
 
-            call_count = [0]
-            original_scalars = mock_session.scalars
-
-            def smart_scalars(stmt):
-                result = MagicMock()
-                call_count[0] += 1
-                if call_count[0] == 1:
-                    # First call: tenant_products query → no products
-                    result.all.return_value = []
-                    result.first.return_value = None
-                elif call_count[0] == 2:
-                    # Second call: get_by_id → existing creative
-                    result.first.return_value = mock_existing
-                    result.all.return_value = [mock_existing]
-                else:
-                    result.first.return_value = None
-                    result.all.return_value = []
-                return result
-
-            mock_session.scalars = smart_scalars
+            # get_by_id returns existing creative
+            mock_creative_repo.get_by_id.return_value = mock_existing
 
             response = _sync_creatives_impl(
                 creatives=[_make_creative_dict()],
@@ -205,26 +207,14 @@ class TestSyncUnchangedCount:
         from src.core.schemas import SyncCreativeResult
         from src.core.tools.creatives import _sync_creatives_impl
 
-        with _sync_patches()(mock_format_spec) as (mock_session, _):
+        with _sync_patches()(mock_format_spec) as (mock_creative_repo, _):
             mock_existing = MagicMock()
             mock_existing.creative_id = "c1"
             mock_existing.status = "approved"
             mock_existing.data = {}
 
-            call_count = [0]
-
-            def smart_scalars(stmt):
-                result = MagicMock()
-                call_count[0] += 1
-                if call_count[0] == 1:
-                    result.all.return_value = []
-                    result.first.return_value = None
-                else:
-                    result.first.return_value = mock_existing
-                    result.all.return_value = [mock_existing]
-                return result
-
-            mock_session.scalars = smart_scalars
+            # get_by_id returns existing creative
+            mock_creative_repo.get_by_id.return_value = mock_existing
 
             # Mock _update_existing_creative to return unchanged action
             unchanged_result = SyncCreativeResult(
@@ -264,26 +254,14 @@ class TestSyncAiReviewReasonOnUpdate:
             tenant=tenant,
         )
 
-        with _sync_patches()(mock_format_spec) as (mock_session, _):
+        with _sync_patches()(mock_format_spec) as (mock_creative_repo, _):
             mock_existing = MagicMock()
             mock_existing.creative_id = "c1"
             mock_existing.status = "pending_review"
             mock_existing.data = {"ai_review": {"reason": "Inappropriate content"}}
 
-            call_count = [0]
-
-            def smart_scalars(stmt):
-                result = MagicMock()
-                call_count[0] += 1
-                if call_count[0] == 1:
-                    result.all.return_value = []
-                    result.first.return_value = None
-                else:
-                    result.first.return_value = mock_existing
-                    result.all.return_value = [mock_existing]
-                return result
-
-            mock_session.scalars = smart_scalars
+            # get_by_id returns existing creative
+            mock_creative_repo.get_by_id.return_value = mock_existing
 
             update_result = SyncCreativeResult(
                 creative_id="c1",
@@ -329,31 +307,17 @@ class TestSyncProvenanceWarningOnUpdate:
             tenant=TENANT,
         )
 
-        with _sync_patches()(mock_format_spec) as (mock_session, _):
+        with _sync_patches()(mock_format_spec) as (mock_creative_repo, _):
             mock_existing = MagicMock()
             mock_existing.creative_id = "c1"
             mock_existing.status = "approved"
             mock_existing.data = {}
 
-            # Product with provenance_required
-            mock_product = MagicMock()
-            mock_product.creative_policy = {"provenance_required": True}
+            # get_provenance_policies returns a policy that requires provenance
+            mock_creative_repo.get_provenance_policies.return_value = [{"provenance_required": True}]
 
-            call_count = [0]
-
-            def smart_scalars(stmt):
-                result = MagicMock()
-                call_count[0] += 1
-                if call_count[0] == 1:
-                    # Tenant products query
-                    result.all.return_value = [mock_product]
-                    result.first.return_value = mock_product
-                else:
-                    result.first.return_value = mock_existing
-                    result.all.return_value = [mock_existing]
-                return result
-
-            mock_session.scalars = smart_scalars
+            # get_by_id returns existing creative
+            mock_creative_repo.get_by_id.return_value = mock_existing
 
             update_result = SyncCreativeResult(
                 creative_id="c1",
@@ -398,34 +362,19 @@ class TestSyncMixedMessageSuffix:
         from src.core.schemas import SyncCreativeResult
         from src.core.tools.creatives import _sync_creatives_impl
 
-        with _sync_patches()(mock_format_spec) as (mock_session, _):
+        with _sync_patches()(mock_format_spec) as (mock_creative_repo, _):
             mock_existing = MagicMock()
-            mock_existing.creative_id = "c1"
+            mock_existing.creative_id = "c2"
             mock_existing.status = "approved"
             mock_existing.data = {}
 
-            call_count = [0]
+            # c1: new (get_by_id returns None), c2: existing
+            def get_by_id_side_effect(creative_id, principal_id):
+                if creative_id == "c2":
+                    return mock_existing
+                return None
 
-            def smart_scalars(stmt):
-                result = MagicMock()
-                call_count[0] += 1
-                if call_count[0] == 1:
-                    result.all.return_value = []
-                    result.first.return_value = None
-                elif call_count[0] == 2:
-                    # c1: new creative
-                    result.first.return_value = None
-                    result.all.return_value = []
-                elif call_count[0] == 3:
-                    # c2: existing creative
-                    result.first.return_value = mock_existing
-                    result.all.return_value = [mock_existing]
-                else:
-                    result.first.return_value = None
-                    result.all.return_value = []
-                return result
-
-            mock_session.scalars = smart_scalars
+            mock_creative_repo.get_by_id.side_effect = get_by_id_side_effect
 
             update_result = SyncCreativeResult(
                 creative_id="c2",
@@ -506,10 +455,11 @@ class TestWorkflowStatusBranches:
 
         with (
             patch("src.core.context_manager.get_context_manager", return_value=mock_ctx_manager),
-            patch("src.core.tools.creatives._workflow.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._workflow.WorkflowUoW") as mock_uow_cls,
         ):
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+            mock_uow = MagicMock()
+            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
+            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=None)
 
             _create_sync_workflow_steps(
                 creatives_needing_approval=[
@@ -544,10 +494,11 @@ class TestWorkflowStatusBranches:
 
         with (
             patch("src.core.context_manager.get_context_manager", return_value=mock_ctx_manager),
-            patch("src.core.tools.creatives._workflow.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._workflow.WorkflowUoW") as mock_uow_cls,
         ):
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+            mock_uow = MagicMock()
+            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
+            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=None)
 
             _create_sync_workflow_steps(
                 creatives_needing_approval=[
@@ -582,10 +533,11 @@ class TestWorkflowStatusBranches:
 
         with (
             patch("src.core.context_manager.get_context_manager", return_value=mock_ctx_manager),
-            patch("src.core.tools.creatives._workflow.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._workflow.WorkflowUoW") as mock_uow_cls,
         ):
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
+            mock_uow = MagicMock()
+            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
+            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=None)
 
             _create_sync_workflow_steps(
                 creatives_needing_approval=[
@@ -645,11 +597,12 @@ class TestWorkflowStatusBranches:
         mock_audit = MagicMock()
         with (
             patch("src.core.tools.creatives._workflow.get_audit_logger", return_value=mock_audit),
-            patch("src.core.tools.creatives._workflow.get_db_session") as mock_db,
+            patch("src.core.tools.creatives._workflow.WorkflowUoW") as mock_uow_cls,
         ):
-            mock_session = MagicMock()
-            mock_db.return_value.__enter__.return_value = mock_session
-            mock_session.scalars.return_value.first.return_value = None
+            mock_uow = MagicMock()
+            mock_uow.workflows.get_principal_name.return_value = None
+            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
+            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=None)
 
             _audit_log_sync(
                 tenant=TENANT,

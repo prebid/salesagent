@@ -18,7 +18,7 @@ Coverage: 47/130 obligations implemented, 83 stubs remaining.
 
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
@@ -1819,9 +1819,9 @@ class TestUpdateMediaBuyPauseResume:
 
         assert isinstance(result, UpdateMediaBuySuccess)
         # Adapter should be called with pause action
-        adapter.update_media_buy.assert_called_once()
-        call_kwargs = adapter.update_media_buy.call_args
-        assert call_kwargs[1]["action"] == "pause_media_buy" or call_kwargs.kwargs["action"] == "pause_media_buy"
+        adapter.update_media_buy.assert_called_once_with(
+            media_buy_id=ANY, buyer_ref=ANY, action="pause_media_buy", package_id=ANY, budget=ANY, today=ANY
+        )
 
     def test_resume_paused_media_buy(self):
         """UC-003-PR02: paused=false on paused buy calls adapter with resume action.
@@ -1876,9 +1876,9 @@ class TestUpdateMediaBuyPauseResume:
             result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuySuccess)
-        adapter.update_media_buy.assert_called_once()
-        call_kwargs = adapter.update_media_buy.call_args
-        assert call_kwargs[1]["action"] == "resume_media_buy" or call_kwargs.kwargs["action"] == "resume_media_buy"
+        adapter.update_media_buy.assert_called_once_with(
+            media_buy_id=ANY, buyer_ref=ANY, action="resume_media_buy", package_id=ANY, budget=ANY, today=ANY
+        )
 
     def test_pause_skips_budget_validation(self):
         """UC-003-PR03: pause does not trigger currency/budget validation.
@@ -2820,9 +2820,9 @@ class TestUpdateMediaBuyManualApproval:
 
         # Should return success but workflow step should be marked as requires_approval
         assert isinstance(result, UpdateMediaBuySuccess)
-        ctx_mgr.update_workflow_step.assert_called_once()
-        call_kwargs = ctx_mgr.update_workflow_step.call_args
-        assert call_kwargs[1]["status"] == "requires_approval" or call_kwargs.kwargs["status"] == "requires_approval"
+        ctx_mgr.update_workflow_step.assert_called_once_with(
+            ANY, status="requires_approval", response_data=ANY, add_comment=ANY
+        )
         # Affected packages should be empty (not yet applied)
         assert result.affected_packages == []
 
@@ -3787,8 +3787,6 @@ class TestDeliveryImplPricingLookup:
         Source: UC-004, salesagent-mq3n
         Covers: UC-002-EXT-N-08
         """
-        from unittest.mock import patch
-
         from src.core.tools.media_buy_delivery import _get_pricing_options
 
         mock_po = MagicMock()
@@ -3798,13 +3796,10 @@ class TestDeliveryImplPricingLookup:
         mock_po.is_fixed = True
         mock_po.tenant_id = "test_tenant"
 
-        with patch("src.core.tools.media_buy_delivery.get_db_session") as mock_db:
-            mock_session = MagicMock()
-            mock_session.scalars.return_value.all.return_value = [mock_po]
-            mock_db.return_value.__enter__ = lambda s: mock_session
-            mock_db.return_value.__exit__ = MagicMock(return_value=False)
+        mock_repo = MagicMock()
+        mock_repo.get_all_pricing_options.return_value = [mock_po]
 
-            result = _get_pricing_options(["cpm_usd_fixed"], tenant_id="test_tenant")
+        result = _get_pricing_options(["cpm_usd_fixed"], tenant_id="test_tenant", product_repo=mock_repo)
 
         assert "cpm_usd_fixed" in result
         assert result["cpm_usd_fixed"] == mock_po

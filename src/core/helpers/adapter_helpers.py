@@ -1,6 +1,48 @@
 """Adapter instance creation and configuration helpers."""
 
-from typing import Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    from adcp import AgentConfig
+
+
+class _HasAgentFields(Protocol):
+    """Structural type for objects with agent config fields (CreativeAgent, SignalsAgent)."""
+
+    name: str
+    agent_url: str
+    auth: dict[str, Any] | None
+    auth_header: str | None
+    timeout: int
+
+
+def build_agent_config(agent: _HasAgentFields) -> AgentConfig:
+    """Build an adcp AgentConfig from any object with standard agent fields.
+
+    Shared by CreativeAgentRegistry and SignalsAgentRegistry to avoid
+    duplicating the auth-extraction and config-building logic.
+    """
+    from adcp import AgentConfig as _AgentConfig
+    from adcp import Protocol as AdcpProtocol
+
+    auth_type = "token"
+    auth_token = None
+    if agent.auth:
+        auth_type = agent.auth.get("type", "token")
+        auth_token = agent.auth.get("credentials")
+
+    return _AgentConfig(
+        id=agent.name,
+        agent_uri=str(agent.agent_url),
+        protocol=AdcpProtocol.MCP,
+        auth_token=auth_token,
+        auth_type=auth_type,
+        auth_header=agent.auth_header or "x-adcp-auth",
+        timeout=float(agent.timeout),
+    )
+
 
 from sqlalchemy import select
 

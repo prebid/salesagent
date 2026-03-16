@@ -14,8 +14,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import WorkflowStep
-from src.core.database.repositories import MediaBuyRepository
+from src.core.database.repositories import MediaBuyUoW, WorkflowUoW
 
 logger = logging.getLogger(__name__)
 
@@ -95,8 +94,8 @@ def _run_approval_polling_thread(
 
         orders_manager = None
         try:
+            # FIXME(salesagent-bou.4): AdapterConfig needs its own repository
             with get_db_session() as db:
-                # Get adapter config for GAM
                 from src.core.database.models import AdapterConfig
 
                 stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id, adapter_type="google_ad_manager")
@@ -119,7 +118,7 @@ def _run_approval_polling_thread(
 
         except Exception as e:
             logger.error(f"[{workflow_step_id}] Failed to initialize adapter: {e}")
-            _mark_approval_failed(workflow_step_id, f"Adapter initialization failed: {e}")
+            _mark_approval_failed(tenant_id, workflow_step_id, f"Adapter initialization failed: {e}")
             return
 
         # Poll GAM for approval readiness
@@ -134,11 +133,12 @@ def _run_approval_polling_thread(
                     f"({attempt} attempts). GAM forecasting still not ready."
                 )
                 logger.error(f"[{workflow_step_id}] {error_msg}")
-                _mark_approval_failed(workflow_step_id, error_msg)
+                _mark_approval_failed(tenant_id, workflow_step_id, error_msg)
                 break
 
             # Update progress
             _update_approval_progress(
+                tenant_id,
                 workflow_step_id,
                 {
                     "attempt": attempt,
@@ -154,8 +154,8 @@ def _run_approval_polling_thread(
                 approval_success = orders_manager.approve_order(order_id, max_retries=1)
 
                 if approval_success:
-                    logger.info(f"[{workflow_step_id}] ✓ Order {order_id} approved successfully")
-                    _mark_approval_complete(workflow_step_id, order_id, attempt, elapsed_seconds)
+                    logger.info(f"[{workflow_step_id}] Order {order_id} approved successfully")
+                    _mark_approval_complete(tenant_id, workflow_step_id, order_id, attempt, elapsed_seconds)
 
                     # Send webhook notification
                     _send_approval_webhook(tenant_id, order_id, workflow_step_id, "completed")
@@ -176,7 +176,7 @@ def _run_approval_polling_thread(
 
     except Exception as e:
         logger.error(f"[{workflow_step_id}] Approval polling failed: {e}", exc_info=True)
-        _mark_approval_failed(workflow_step_id, str(e))
+        _mark_approval_failed(tenant_id, workflow_step_id, str(e))
         _send_approval_webhook(tenant_id, order_id, workflow_step_id, "failed")
 
     finally:
@@ -185,82 +185,65 @@ def _run_approval_polling_thread(
             _active_approval_tasks.pop(thread_id, None)
 
 
-def _update_approval_progress(workflow_step_id: str, progress_data: dict) -> None:
-    """Update workflow step progress in database."""
+def _update_approval_progress(tenant_id: str, workflow_step_id: str, progress_data: dict) -> None:
+    """Update workflow step progress in database via WorkflowUoW."""
     try:
-        with get_db_session() as db:
-            stmt = select(WorkflowStep).where(WorkflowStep.step_id == workflow_step_id)
-            workflow_step = db.scalars(stmt).first()
-            if workflow_step:
-                # Update transaction_details with progress
-                if not workflow_step.transaction_details:
-                    workflow_step.transaction_details = {}
-                workflow_step.transaction_details["progress"] = progress_data
-                db.commit()
+        with WorkflowUoW(tenant_id) as uow:
+            assert uow.workflows is not None
+            step = uow.workflows.get_step_by_id(workflow_step_id)
+            if step:
+                td = step.transaction_details or {}
+                td["progress"] = progress_data
+                step.transaction_details = td
+            # auto-commits on exit
     except Exception as e:
         logger.warning(f"Failed to update approval progress: {e}")
 
 
-def _mark_approval_complete(workflow_step_id: str, order_id: str, attempts: int, elapsed_seconds: float) -> None:
-    """Mark approval as completed in workflow step."""
+def _mark_approval_complete(
+    tenant_id: str, workflow_step_id: str, order_id: str, attempts: int, elapsed_seconds: float
+) -> None:
+    """Mark approval as completed in workflow step via WorkflowUoW."""
     try:
-        with get_db_session() as db:
-            stmt = select(WorkflowStep).where(WorkflowStep.step_id == workflow_step_id)
-            workflow_step = db.scalars(stmt).first()
-            if workflow_step:
-                workflow_step.status = "completed"
-                workflow_step.completed_at = datetime.now(UTC)
-
-                # Update transaction details
-                if not workflow_step.transaction_details:
-                    workflow_step.transaction_details = {}
-                workflow_step.transaction_details.update(
-                    {
-                        "approval_status": "approved",
-                        "gam_order_status": "APPROVED",
-                        "attempts": attempts,
-                        "elapsed_seconds": int(elapsed_seconds),
-                        "completed_at": datetime.now(UTC).isoformat(),
-                    }
-                )
-
-                # Update response data
-                workflow_step.response_data = {
+        with WorkflowUoW(tenant_id) as uow:
+            assert uow.workflows is not None
+            step = uow.workflows.update_status(
+                workflow_step_id,
+                status="completed",
+                completed_at=datetime.now(UTC),
+                response_data={
                     "status": "completed",
                     "order_id": order_id,
                     "message": f"Order approved successfully after {attempts} attempts ({int(elapsed_seconds)}s)",
+                },
+            )
+            if step:
+                step.transaction_details = {
+                    "approval_status": "approved",
+                    "gam_order_status": "APPROVED",
+                    "attempts": attempts,
+                    "elapsed_seconds": int(elapsed_seconds),
+                    "completed_at": datetime.now(UTC).isoformat(),
                 }
-
-                db.commit()
-                logger.info(f"✓ Marked workflow step {workflow_step_id} as completed")
-
+            logger.info(f"Marked workflow step {workflow_step_id} as completed")
     except Exception as e:
         logger.error(f"Failed to mark approval complete: {e}")
 
 
-def _mark_approval_failed(workflow_step_id: str, error_message: str) -> None:
-    """Mark approval as failed in workflow step."""
+def _mark_approval_failed(tenant_id: str, workflow_step_id: str, error_message: str) -> None:
+    """Mark approval as failed in workflow step via WorkflowUoW."""
     try:
-        with get_db_session() as db:
-            stmt = select(WorkflowStep).where(WorkflowStep.step_id == workflow_step_id)
-            workflow_step = db.scalars(stmt).first()
-            if workflow_step:
-                workflow_step.status = "failed"
-                workflow_step.completed_at = datetime.now(UTC)
-                workflow_step.error_message = error_message
-
-                # Update transaction details
-                if not workflow_step.transaction_details:
-                    workflow_step.transaction_details = {}
-                workflow_step.transaction_details["approval_status"] = "failed"
-                workflow_step.transaction_details["failure_reason"] = error_message
-
-                # Update response data
-                workflow_step.response_data = {"status": "failed", "error": error_message}
-
-                db.commit()
-                logger.info(f"✗ Marked workflow step {workflow_step_id} as failed")
-
+        with WorkflowUoW(tenant_id) as uow:
+            assert uow.workflows is not None
+            step = uow.workflows.update_status(
+                workflow_step_id,
+                status="failed",
+                error_message=error_message,
+                response_data={"status": "failed", "error": error_message},
+            )
+            if step:
+                step.transaction_details = {"approval_status": "failed", "failure_reason": error_message}
+            logger.info(f"Marked workflow step {workflow_step_id} as failed")
     except Exception as e:
         logger.error(f"Failed to mark approval failed: {e}")
 
@@ -268,10 +251,9 @@ def _mark_approval_failed(workflow_step_id: str, error_message: str) -> None:
 def _send_approval_webhook(tenant_id: str, order_id: str, workflow_step_id: str, status: str) -> None:
     """Send webhook notification for approval completion/failure."""
     try:
-        # Find media buy associated with this order
-        with get_db_session() as db:
-            repo = MediaBuyRepository(db, tenant_id)
-            media_buy = repo.get_by_id(order_id)
+        with MediaBuyUoW(tenant_id) as uow:
+            assert uow.media_buys is not None
+            media_buy = uow.media_buys.get_by_id(order_id)
 
             if not media_buy:
                 logger.warning(f"No media buy found for order {order_id}, cannot send webhook")
