@@ -36,6 +36,7 @@ from adcp.types import (
     SyncCreativesRequest as LibrarySyncCreativesRequest,
 )
 from adcp.types.generated_poc.core.pagination_response import PaginationResponse as LibraryResponsePagination
+from adcp.types.generated_poc.core.provenance import AiTool
 from adcp.types.generated_poc.enums.creative_action import CreativeAction
 from adcp.types.generated_poc.media_buy.list_creatives_response import (
     Creative as LibraryCreative,
@@ -46,6 +47,7 @@ from adcp.types.generated_poc.media_buy.sync_creatives_response import (
 from pydantic import (
     ConfigDict,
     Field,
+    field_validator,
     model_validator,
 )
 
@@ -91,9 +93,18 @@ class Provenance(SalesAgentBaseModel):
     digital_source_type: DigitalSourceType = Field(
         ..., description="IPTC Digital Source Type indicating how the content was created"
     )
-    ai_tool: str | None = Field(
-        default=None, description="Name/identifier of the AI tool used to create or modify the content"
+    ai_tool: AiTool | None = Field(
+        default=None, description="AI tool used to create or modify the content (adcp 3.9 AiTool model)"
     )
+
+    @field_validator("ai_tool", mode="before")
+    @classmethod
+    def _coerce_ai_tool(cls, v: Any) -> Any:
+        """Accept a plain string for backward compatibility, wrapping it as AiTool(name=v)."""
+        if isinstance(v, str):
+            return AiTool(name=v)
+        return v
+
     human_oversight: bool | None = Field(
         default=None, description="Whether a human reviewed/approved the AI-generated content"
     )

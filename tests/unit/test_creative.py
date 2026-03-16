@@ -4931,7 +4931,7 @@ class TestProvenanceModel:
         )
         data = prov.model_dump(mode="json")
         assert data["digital_source_type"] == "composite_with_trained_model"
-        assert data["ai_tool"] == "DALL-E 3"
+        assert data["ai_tool"] == {"name": "DALL-E 3"}
         assert data["human_oversight"] is True
         assert data["declared_by"] == "Agency XYZ"
         assert data["c2pa"] == "https://c2pa.example.com/manifest/123"
@@ -4985,12 +4985,12 @@ class TestProvenanceModel:
         )
         assert creative.provenance is not None
         assert creative.provenance.digital_source_type == DigitalSourceType.digital_creation
-        assert creative.provenance.ai_tool == "Stable Diffusion"
+        assert creative.provenance.ai_tool.name == "Stable Diffusion"
 
         # Provenance included in model_dump
-        data = creative.model_dump()
+        data = creative.model_dump(mode="json")
         assert "provenance" in data
-        assert data["provenance"]["ai_tool"] == "Stable Diffusion"
+        assert data["provenance"]["ai_tool"] == {"name": "Stable Diffusion"}
 
     def test_creative_without_provenance(self):
         """Creative without provenance serializes correctly (backward compat)."""
