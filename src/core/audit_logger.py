@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AuditLog
@@ -60,6 +61,30 @@ class AuditLogger:
         self.adapter_name = adapter_name
         self.tenant_id = tenant_id
 
+    def _persist_audit_log(self, audit_log: AuditLog) -> None:
+        """Write an audit log record to the database.
+
+        Fire-and-forget: DB errors are logged but never raised, because
+        audit failures must not crash the business operation that triggered them.
+
+        IntegrityError (e.g. FK violation on tenant_id) is logged at ERROR —
+        it indicates the caller has bad data (not a transient issue).
+        Other failures (connection loss, no DB available) are logged at WARNING.
+        """
+        try:
+            with get_db_session() as db_session:
+                db_session.add(audit_log)
+                db_session.commit()
+        except IntegrityError as e:
+            audit_logger.error(
+                "Audit log write failed: integrity constraint violation (tenant_id=%s, operation=%s): %s",
+                audit_log.tenant_id,
+                audit_log.operation,
+                e,
+            )
+        except Exception as e:
+            audit_logger.warning("Audit log write failed: %s", e)
+
     def log_operation(
         self,
         operation: str,
@@ -100,25 +125,20 @@ class AuditLogger:
                 audit_logger.error(f"  Error: {error}")
 
         # Write to database
-        try:
-            with get_db_session() as db_session:
-                audit_log = AuditLog(
-                    tenant_id=tenant_id,
-                    timestamp=datetime.now(UTC),
-                    operation=f"{self.adapter_name}.{operation}",
-                    principal_name=principal_name,
-                    principal_id=principal_id,
-                    adapter_id=adapter_id,
-                    success=success,
-                    error_message=error if not success else None,
-                    # Pass dict directly - JSONType column handles serialization
-                    details=details or {},
-                )
-                db_session.add(audit_log)
-                db_session.commit()
-        except Exception as e:
-            audit_logger.error(f"Failed to write audit log to database: {e}")
-            # Continue with file logging as fallback
+        self._persist_audit_log(
+            AuditLog(
+                tenant_id=tenant_id,
+                timestamp=datetime.now(UTC),
+                operation=f"{self.adapter_name}.{operation}",
+                principal_name=principal_name,
+                principal_id=principal_id,
+                adapter_id=adapter_id,
+                success=success,
+                error_message=error if not success else None,
+                # Pass dict directly - JSONType column handles serialization
+                details=details or {},
+            )
+        )
 
         # Also write structured JSON log for machine processing (backup)
         self._write_structured_log(
@@ -201,11 +221,11 @@ class AuditLogger:
 
             # Check for high-value operations
             if details and isinstance(details, dict):
-                if "budget" in details and isinstance(details["budget"], (int, float)) and details["budget"] > 10000:
+                if "budget" in details and isinstance(details["budget"], int | float) and details["budget"] > 10000:
                     should_notify = True
                 if (
                     "total_budget" in details
-                    and isinstance(details["total_budget"], (int, float))
+                    and isinstance(details["total_budget"], int | float)
                     and details["total_budget"] > 10000
                 ):
                     should_notify = True
@@ -257,23 +277,20 @@ class AuditLogger:
         audit_logger.error(message)
 
         # Write to database
-        try:
-            with get_db_session() as db_session:
-                audit_log = AuditLog(
-                    tenant_id=tenant_id,
-                    timestamp=datetime.now(UTC),
-                    operation=f"SECURITY_VIOLATION:{self.adapter_name}.{operation}",
-                    principal_name=None,  # principal_name not available
-                    principal_id=principal_id,
-                    adapter_id=None,  # adapter_id not applicable
-                    success=False,  # Security violations are failures
-                    error_message=f"Attempted to access resource '{resource_id}' - {reason}",
-                    details=json.dumps({"resource_id": resource_id, "reason": reason}),
-                )
-                db_session.add(audit_log)
-                db_session.commit()
-        except Exception as e:
-            audit_logger.error(f"Failed to write security violation to database: {e}")
+        self._persist_audit_log(
+            AuditLog(
+                tenant_id=tenant_id,
+                timestamp=datetime.now(UTC),
+                operation=f"SECURITY_VIOLATION:{self.adapter_name}.{operation}",
+                principal_name=None,  # principal_name not available
+                principal_id=principal_id,
+                adapter_id=None,  # adapter_id not applicable
+                success=False,  # Security violations are failures
+                error_message=f"Attempted to access resource '{resource_id}' - {reason}",
+                # Pass dict directly — JSONType column handles serialization
+                details={"resource_id": resource_id, "reason": reason},
+            )
+        )
 
         # Write to security log (backup)
         self._write_security_log(

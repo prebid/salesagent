@@ -240,7 +240,7 @@ repos:
         language: system
         files: '^src/.*\.py$'
         pass_filenames: false
-        always_run: false  # Only run when Python files in src/ changed
+        always_run: true
 
       # Detect code duplication (ratcheting baseline — can only decrease)
       - id: check-code-duplication

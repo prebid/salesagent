@@ -13,6 +13,31 @@ import sys
 from pathlib import Path
 
 
+def _is_empty_body(node: ast.FunctionDef) -> bool:
+    """Check if a function body contains only pass/docstring."""
+    for stmt in node.body:
+        if isinstance(stmt, ast.Pass):
+            continue
+        if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant):
+            continue
+        return False
+    return True
+
+
+def _is_merge_migration(functions: dict[str, ast.FunctionDef]) -> bool:
+    """Check if this is a merge migration (empty upgrade + downgrade is OK).
+
+    Merge migrations reconcile multiple alembic branch heads. They have no
+    schema changes — both upgrade() and downgrade() are intentionally empty.
+    Mirrors the logic in test_architecture_migration_completeness.py.
+    """
+    upgrade = functions.get("upgrade")
+    downgrade = functions.get("downgrade")
+    if upgrade is None or downgrade is None:
+        return False
+    return _is_empty_body(upgrade) and _is_empty_body(downgrade)
+
+
 def check_migration_file(path: Path) -> list[str]:
     """Check a single migration file for structural issues.
 
@@ -38,6 +63,10 @@ def check_migration_file(path: Path) -> list[str]:
 
     if "downgrade" not in functions:
         errors.append(f"{path}: missing downgrade() function")
+
+    # Merge migrations have intentionally empty bodies — skip the emptiness check
+    if _is_merge_migration(functions):
+        return errors
 
     # Check for non-empty bodies (not just `pass` or docstring-only)
     for name, node in functions.items():

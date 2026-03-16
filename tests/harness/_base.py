@@ -352,6 +352,10 @@ class BaseTestEnv:
 
             try:
                 if self._session:
+                    try:
+                        self._session.rollback()  # Reset ABORTED transaction state
+                    except Exception:
+                        pass  # Session may already be clean — that's fine
                     self._session.close()
                     self._session = None
             except Exception as e:

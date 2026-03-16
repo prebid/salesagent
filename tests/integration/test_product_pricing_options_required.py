@@ -269,9 +269,9 @@ def test_product_without_eager_loading_fails_validation(integration_db):
         except Exception as e:
             # Expected: ValidationError for missing required field
             assert "pricing_options" in str(e).lower(), f"Expected pricing_options error, got: {e}"
-            assert "required" in str(e).lower() or "missing" in str(e).lower(), (
-                f"Expected required/missing error, got: {e}"
-            )
+            assert (
+                "required" in str(e).lower() or "missing" in str(e).lower()
+            ), f"Expected required/missing error, got: {e}"
 
 
 @pytest.mark.requires_db
@@ -292,7 +292,10 @@ def test_delivery_measurement_not_null_at_db_level(integration_db):
         tenant = TenantFactory()
         product = ProductFactory(tenant=tenant)
 
-        # UPDATE to NULL must fail — no server_default on UPDATE
+        # UPDATE to NULL must fail — no server_default on UPDATE.
+        # begin_nested() creates a SAVEPOINT so only the nested transaction
+        # rolls back; the outer session stays valid for teardown.
+        env._session.begin_nested()
         with pytest.raises(IntegrityError):
             env._session.execute(
                 text("UPDATE products SET delivery_measurement = NULL WHERE product_id = :pid AND tenant_id = :tid"),
