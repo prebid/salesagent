@@ -70,204 +70,17 @@ def make_package(media_buy_id: str, package_id: str, **kwargs) -> MediaPackage:
     )
 
 
-@pytest.fixture(scope="function")  # Changed to function scope for better isolation
+@pytest.fixture(scope="function")
 def integration_db():
     """Provide an isolated PostgreSQL database for each integration test.
 
-    REQUIRES: PostgreSQL container running (via run_all_tests.sh ci or GitHub Actions)
-    - Uses DATABASE_URL to get PostgreSQL connection info (host, port, user, password)
-    - Database name in URL is ignored - creates a unique database per test (e.g., test_a3f8d92c)
-    - Matches production environment exactly
-    - Better multi-process support (fixes mcp_server tests)
-    - Consistent JSONB behavior
+    Delegates to the shared ``make_integration_db`` context manager.
+    Yields the database name (used by mcp_server fixture).
     """
-    import uuid
+    from tests.fixtures.integration_db import make_integration_db
 
-    # Save original DATABASE_URL
-    original_url = os.environ.get("DATABASE_URL")
-    original_db_type = os.environ.get("DB_TYPE")
-
-    # Require PostgreSQL - no SQLite fallback
-    postgres_url = os.environ.get("DATABASE_URL")
-    if not postgres_url or not postgres_url.startswith("postgresql://"):
-        pytest.skip(
-            "Integration tests require PostgreSQL DATABASE_URL (e.g., postgresql://user:pass@localhost:5432/any_db)"
-        )
-
-    # PostgreSQL mode - create unique database per test
-    unique_db_name = f"test_{uuid.uuid4().hex[:8]}"
-
-    # Create the test database
-    import psycopg2
-    from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
-
-    parsed = parse_postgres_url()
-    if not parsed:
-        pytest.fail(
-            f"Failed to parse DATABASE_URL: {postgres_url}\nExpected format: postgresql://user:pass@host:port/dbname"
-        )
-    user, password, host, postgres_port = parsed
-
-    conn_params = {
-        "host": host,
-        "port": postgres_port,
-        "user": user,
-        "password": password,
-        "database": "postgres",  # Connect to default db first
-    }
-
-    conn = psycopg2.connect(**conn_params)
-    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-    cur = conn.cursor()
-
-    try:
-        cur.execute(f'CREATE DATABASE "{unique_db_name}"')
-    finally:
-        cur.close()
-        conn.close()
-
-    os.environ["DATABASE_URL"] = f"postgresql://{user}:{password}@{host}:{postgres_port}/{unique_db_name}"
-    os.environ["DB_TYPE"] = "postgresql"
-    db_path = unique_db_name  # For cleanup reference
-
-    # Create the database without running migrations
-    # (migrations are for production, tests create tables directly)
-    from sqlalchemy import create_engine
-    from sqlalchemy.orm import scoped_session, sessionmaker
-
-    # Import ALL models first, BEFORE using Base
-    # This ensures all tables are registered in Base.metadata
-    import src.core.database.models as all_models  # noqa: F401
-    from src.core.database.models import Base, Context, ObjectWorkflowMapping, WorkflowStep  # noqa: F401
-
-    # Explicitly ensure Context and workflow models are registered
-    # (in case the module import doesn't trigger class definition)
-    _ = (Context, WorkflowStep, ObjectWorkflowMapping)
-
-    from src.core.database.database_session import _pydantic_json_serializer
-
-    engine = create_engine(
-        f"postgresql://{user}:{password}@{host}:{postgres_port}/{unique_db_name}",
-        echo=False,
-        json_serializer=_pydantic_json_serializer,
-    )
-
-    # Ensure all model classes are imported and registered with Base.metadata
-    # Import order matters - some models may not be registered if imported too early
-    from src.core.database.models import (
-        AdapterConfig,
-        AuditLog,
-        AuthorizedProperty,
-        Creative,
-        CreativeAssignment,
-        FormatPerformanceMetrics,
-        GAMInventory,
-        GAMLineItem,
-        GAMOrder,
-        MediaBuy,
-        Principal,
-        Product,
-        ProductInventoryMapping,
-        PropertyTag,
-        PushNotificationConfig,
-        Strategy,
-        StrategyState,
-        SyncJob,
-        Tenant,
-        TenantManagementConfig,
-        User,
-    )
-
-    # Ensure workflow models are loaded (force evaluation)
-    _ = (
-        Context,
-        WorkflowStep,
-        ObjectWorkflowMapping,
-        Tenant,
-        Principal,
-        Product,
-        MediaBuy,
-        Creative,
-        AuthorizedProperty,
-        Strategy,
-        AuditLog,
-        CreativeAssignment,
-        TenantManagementConfig,
-        PushNotificationConfig,
-        User,
-        AdapterConfig,
-        GAMInventory,
-        ProductInventoryMapping,
-        FormatPerformanceMetrics,
-        GAMOrder,
-        GAMLineItem,
-        SyncJob,
-        StrategyState,
-        PropertyTag,
-    )
-
-    # Create all tables directly (no migrations)
-    Base.metadata.create_all(bind=engine, checkfirst=True)
-
-    # Reset engine and update globals to point to the test database
-    from src.core.database.database_session import reset_engine
-
-    reset_engine()
-
-    # Now update the globals to use our test engine
-    import src.core.database.database_session as db_session_module
-
-    db_session_module._engine = engine
-    db_session_module._session_factory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    db_session_module._scoped_session = scoped_session(db_session_module._session_factory)
-
-    # Reset context manager singleton so it uses the new database session
-    # This is critical because ContextManager caches a session reference
-    import src.core.context_manager
-
-    src.core.context_manager._context_manager_instance = None
-
-    yield db_path
-
-    # Reset engine to clean up test database connections
-    reset_engine()
-
-    # Reset context manager singleton again to avoid stale references
-    src.core.context_manager._context_manager_instance = None
-
-    # Cleanup
-    engine.dispose()
-
-    # Restore original environment
-    if original_url:
-        os.environ["DATABASE_URL"] = original_url
-    else:
-        del os.environ["DATABASE_URL"]
-
-    if original_db_type:
-        os.environ["DB_TYPE"] = original_db_type
-    elif "DB_TYPE" in os.environ:
-        del os.environ["DB_TYPE"]
-
-    # Drop PostgreSQL test database
-    try:
-        conn = psycopg2.connect(**conn_params)
-        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-        cur = conn.cursor()
-        # Terminate connections to the test database
-        cur.execute(
-            f"""
-            SELECT pg_terminate_backend(pg_stat_activity.pid)
-            FROM pg_stat_activity
-            WHERE pg_stat_activity.datname = '{db_path}'
-            AND pid <> pg_backend_pid()
-            """
-        )
-        cur.execute(f'DROP DATABASE IF EXISTS "{db_path}"')
-        cur.close()
-        conn.close()
-    except Exception:
-        pass  # Ignore cleanup errors
+    with make_integration_db(json_serializer=True) as db_name:
+        yield db_name
 
 
 @pytest.fixture
@@ -734,11 +547,16 @@ def mcp_server(integration_db):
     if not postgres_url or not postgres_url.startswith("postgresql://"):
         raise RuntimeError("mcp_server fixture requires PostgreSQL DATABASE_URL")
 
-    parsed = parse_postgres_url()
-    if not parsed:
+    import re
+
+    pattern = r"postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)"
+    match = re.match(pattern, postgres_url)
+    if match:
+        user, password, host, port_str, _ = match.groups()
+        postgres_port = int(port_str)
+        server_db_url = f"postgresql://{user}:{password}@{host}:{postgres_port}/{db_name}"
+    else:
         raise RuntimeError(f"Failed to parse DATABASE_URL: {postgres_url}")
-    user, password, host, postgres_port = parsed
-    server_db_url = f"postgresql://{user}:{password}@{host}:{postgres_port}/{db_name}"
 
     env = os.environ.copy()
     env["ADCP_SALES_PORT"] = str(port)

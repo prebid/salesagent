@@ -1,5 +1,8 @@
-.PHONY: quality quality-full pre-pr lint-fix lint typecheck test-fast test-full
-.PHONY: test-stack-up test-stack-down test-all test-cov
+.PHONY: setup quality quality-full pre-pr lint-fix lint typecheck test-fast test-full
+.PHONY: test-stack-up test-stack-down test-all test-cov test-int test-e2e
+
+setup:
+	uv run python scripts/setup-dev.py
 
 quality:
 	uv run ruff format --check .
@@ -48,3 +51,21 @@ test-all: test-stack-up
 test-cov:
 	@echo "Opening coverage report..."
 	@open htmlcov/index.html 2>/dev/null || xdg-open htmlcov/index.html 2>/dev/null || echo "Open htmlcov/index.html in your browser"
+
+# ─── single-test convenience targets ────────────────────────────
+# Usage:
+#   make test-int TARGET=tests/integration/test_products.py
+#   make test-int TARGET=tests/integration/test_products.py ARGS="-k test_brand -v"
+#   make test-e2e TARGET=tests/e2e/test_mcp.py
+
+test-int:
+ifndef TARGET
+	$(error TARGET is required. Usage: make test-int TARGET=tests/integration/test_file.py)
+endif
+	scripts/run-test.sh $(TARGET) $(ARGS)
+
+test-e2e:
+ifndef TARGET
+	$(error TARGET is required. Usage: make test-e2e TARGET=tests/e2e/test_file.py)
+endif
+	scripts/run-test.sh $(TARGET) $(ARGS)

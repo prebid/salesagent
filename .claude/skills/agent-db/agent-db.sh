@@ -103,7 +103,7 @@ export DATABASE_URL="${db_url}"
 export AGENT_PG_CONTAINER="${CONTAINER_NAME}"
 export AGENT_PG_PORT=${port}
 export ADCP_TESTING=true
-export ENCRYPTION_KEY="${ENCRYPTION_KEY:-PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk=}"
+export ENCRYPTION_KEY="${ENCRYPTION_KEY:-PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk=}"  # TEST ONLY — never use in production
 export GEMINI_API_KEY="${GEMINI_API_KEY:-test_key}"
 EOF
 
