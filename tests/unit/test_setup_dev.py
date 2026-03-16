@@ -468,7 +468,7 @@ class TestEnsurePreCommit:
 
         assert result.ok is True
         assert not result.skipped
-        mock_run.assert_called_once()
+        mock_run.assert_called_once_with(["uvx", "pre-commit", "install"])
 
 
 # ---------------------------------------------------------------------------
