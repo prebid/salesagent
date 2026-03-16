@@ -373,43 +373,55 @@ class CreativeAgentRegistry:
 
         logger = logging.getLogger(__name__)
         agent_url = str(agent.agent_url).rstrip("/")
+        # MCP endpoint may be at /mcp (as per adcp SDK fallback behavior)
         mcp_url = f"{agent_url}/mcp" if not agent_url.endswith("/mcp") else agent_url
 
         # Build headers with auth credentials if configured
-        headers: dict[str, str] = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+        headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
         if agent.auth:
             auth_header = agent.auth_header or "x-adcp-auth"
             auth_token = agent.auth.get("credentials")
             if auth_token:
                 headers[auth_header] = auth_token
 
-        async with httpx.AsyncClient(timeout=agent.timeout) as http:
-            response = await http.post(
-                mcp_url,
-                json={
-                    "jsonrpc": "2.0",
-                    "method": "tools/call",
-                    "params": {"name": "list_creative_formats", "arguments": {}},
-                    "id": 1,
-                },
-                headers=headers,
-            )
-            response.raise_for_status()
+        try:
+            async with httpx.AsyncClient(timeout=agent.timeout) as http:
+                response = await http.post(
+                    mcp_url,
+                    json={
+                        "jsonrpc": "2.0",
+                        "method": "tools/call",
+                        "params": {"name": "list_creative_formats", "arguments": {}},
+                        "id": 1,
+                    },
+                    headers=headers,
+                )
+                response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            logger.error(f"Creative agent fallback HTTP error: {exc.response.status_code} from {mcp_url}")
+            raise RuntimeError(f"Creative agent HTTP error: {exc.response.status_code}") from exc
+        except httpx.TimeoutException as exc:
+            logger.error(f"Creative agent fallback timed out: {mcp_url}")
+            raise RuntimeError(f"Request timed out: {mcp_url}") from exc
+        except httpx.RequestError as exc:
+            logger.error(f"Creative agent fallback connection failed: {mcp_url} — {exc}")
+            raise RuntimeError(f"Connection failed: {mcp_url} — {exc}") from exc
 
-            content_type = response.headers.get("content-type", "")
-            if "text/event-stream" in content_type:
-                for line in response.text.split("\n"):
-                    if line.startswith("data: "):
-                        event_data = json.loads(line[6:])
-                        if "result" in event_data:
-                            return self._parse_mcp_tool_result(event_data["result"], logger)
-            else:
-                data = response.json()
-                if "result" in data:
-                    return self._parse_mcp_tool_result(data["result"], logger)
+        # Parse SSE or JSON response
+        content_type = response.headers.get("content-type", "")
+        if "text/event-stream" in content_type:
+            for line in response.text.split("\n"):
+                if line.startswith("data: "):
+                    event_data = json.loads(line[6:])
+                    if "result" in event_data:
+                        return self._parse_mcp_tool_result(event_data["result"], logger)
+        else:
+            data = response.json()
+            if "result" in data:
+                return self._parse_mcp_tool_result(data["result"], logger)
 
-            logger.warning("_fetch_formats_raw_mcp: No parseable result in MCP response")
-            return []
+        logger.warning("_fetch_formats_raw_mcp: No parseable result in MCP response")
+        return []
 
     def _parse_mcp_tool_result(self, result: dict, logger: Any) -> list[Format]:
         """Parse formats from an MCP tools/call result."""
