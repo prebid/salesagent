@@ -22,14 +22,14 @@ from src.core.schemas import GetSignalsResponse, Signal, SignalDeployment
 
 def _make_signal(signal_agent_segment_id: str = "signal_123", **overrides) -> Signal:
     """Build a valid Signal with adcp 3.9 pricing_options."""
-    defaults = dict(
-        signal_agent_segment_id=signal_agent_segment_id,
-        name="Test Signal",
-        description="Test signal description",
-        signal_type="marketplace",
-        data_provider="TestProvider",
-        coverage_percentage=85.5,
-        deployments=[
+    defaults = {
+        "signal_agent_segment_id": signal_agent_segment_id,
+        "name": "Test Signal",
+        "description": "Test signal description",
+        "signal_type": "marketplace",
+        "data_provider": "TestProvider",
+        "coverage_percentage": 85.5,
+        "deployments": [
             SignalDeployment(
                 platform="gam",
                 account=None,
@@ -40,10 +40,10 @@ def _make_signal(signal_agent_segment_id: str = "signal_123", **overrides) -> Si
                 estimated_activation_duration_minutes=None,
             )
         ],
-        pricing_options=[
+        "pricing_options": [
             {"pricing_option_id": "cpm_usd", "cpm": 2.50, "currency": "USD", "model": "cpm"},
         ],
-    )
+    }
     defaults.update(overrides)
     return Signal(**defaults)
 

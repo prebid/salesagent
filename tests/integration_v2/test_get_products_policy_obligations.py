@@ -105,7 +105,6 @@ class TestBrandManifestPolicyRequireBrand:
         request is rejected with AdCPAuthorizationError.
         """
         from src.core.schemas import GetProductsRequest as GetProductsRequestGenerated
-
         from src.core.tools.products import _get_products_impl
 
         with ProductEnv(tenant_id="bmp-brand-no", principal_id="p1") as env:

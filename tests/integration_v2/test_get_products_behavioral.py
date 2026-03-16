@@ -873,7 +873,6 @@ class TestSearchCriteriaValidation:
     async def test_no_search_criteria_raises_validation_error(self, integration_db):
         """When brief, brand, and filters are all empty/None, _impl raises AdCPValidationError."""
         from src.core.schemas import GetProductsRequest as GetProductsRequestGenerated
-
         from src.core.tools.products import _get_products_impl
 
         with ProductEnv(tenant_id="no-crit", principal_id="p1") as env:
@@ -888,7 +887,6 @@ class TestSearchCriteriaValidation:
     async def test_empty_string_brief_counts_as_no_criteria(self, integration_db):
         """An empty string brief is equivalent to None for search criteria validation."""
         from src.core.schemas import GetProductsRequest as GetProductsRequestGenerated
-
         from src.core.tools.products import _get_products_impl
 
         with ProductEnv(tenant_id="empty-br", principal_id="p1") as env:
@@ -903,7 +901,6 @@ class TestSearchCriteriaValidation:
     async def test_brief_alone_satisfies_search_criteria(self, integration_db):
         """A non-empty brief is sufficient search criteria."""
         from src.core.schemas import GetProductsRequest as GetProductsRequestGenerated
-
         from src.core.tools.products import _get_products_impl
 
         with ProductEnv(tenant_id="brief-ok", principal_id="p1") as env:
@@ -947,7 +944,6 @@ class TestSearchCriteriaValidation:
     async def test_validation_error_has_correct_error_code(self, integration_db):
         """AdCPValidationError has error_code='VALIDATION_ERROR'."""
         from src.core.schemas import GetProductsRequest as GetProductsRequestGenerated
-
         from src.core.tools.products import _get_products_impl
 
         with ProductEnv(tenant_id="err-code", principal_id="p1") as env:
