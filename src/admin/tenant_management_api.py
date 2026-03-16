@@ -1,17 +1,15 @@
 """Tenant Management API for managing tenants - Using direct SQL queries."""
 
-import hmac
 import json
 import logging
-import os
 import secrets
 import uuid
 from datetime import UTC, datetime
-from functools import wraps
 
 from flask import Blueprint, jsonify, request
 from sqlalchemy import delete, func, select
 
+from src.admin.auth_helpers import require_api_key_auth
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
     AdapterConfig,
@@ -20,7 +18,6 @@ from src.core.database.models import (
     Principal,
     Product,
     Tenant,
-    TenantManagementConfig,
     User,
 )
 
@@ -30,45 +27,11 @@ logger = logging.getLogger(__name__)
 tenant_management_api = Blueprint("tenant_management_api", __name__, url_prefix="/api/v1/tenant-management")
 
 
-def _get_tenant_management_api_key() -> str | None:
-    """Get tenant management API key from env var or database.
-
-    Priority: TENANT_MANAGEMENT_API_KEY env var > database config.
-    """
-    env_key = os.environ.get("TENANT_MANAGEMENT_API_KEY")
-    if env_key:
-        return env_key
-
-    with get_db_session() as db_session:
-        stmt = select(TenantManagementConfig).filter_by(config_key="tenant_management_api_key")
-        config = db_session.scalars(stmt).first()
-        if config and config.config_value:
-            return config.config_value
-    return None
-
-
-def require_tenant_management_api_key(f):
-    """Decorator to require tenant management API key for access."""
-
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        api_key = request.headers.get("X-Tenant-Management-API-Key")
-
-        if not api_key:
-            return jsonify({"error": "Missing API key"}), 401
-
-        valid_key = _get_tenant_management_api_key()
-        if not valid_key:
-            logger.error("Tenant management API key not configured")
-            return jsonify({"error": "API not configured. Set TENANT_MANAGEMENT_API_KEY environment variable."}), 503
-
-        if not hmac.compare_digest(api_key, valid_key):
-            logger.warning("Invalid tenant management API key attempted")
-            return jsonify({"error": "Invalid API key"}), 401
-
-        return f(*args, **kwargs)
-
-    return decorated_function
+require_tenant_management_api_key = require_api_key_auth(
+    env_var="TENANT_MANAGEMENT_API_KEY",
+    config_key="tenant_management_api_key",
+    header="X-Tenant-Management-API-Key",
+)
 
 
 @tenant_management_api.route("/health", methods=["GET"])
