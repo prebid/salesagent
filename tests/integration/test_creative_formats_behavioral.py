@@ -12,7 +12,9 @@ from __future__ import annotations
 import pytest
 from adcp.types.generated_poc.core.format import (
     Assets5,
-    Assets16,
+    Assets18,
+    Assets19,
+    Assets22,
     Dimensions,
     Renders,
     Responsive,
@@ -210,17 +212,15 @@ class TestFormatsAssetTypes:
 
     def test_group_assets_match(self, integration_db):
         """Covers: T-UC-005-inv4-group — group assets with image match image filter."""
-        from adcp.types.generated_poc.core.format import Assets17, Assets20
-
-        group_asset = Assets16(
+        group_asset = Assets18(
             item_type="repeatable_group",
             asset_group_id="product_group",
             required=True,
             min_count=1,
             max_count=5,
             assets=[
-                Assets17(asset_id="product_image", required=True),
-                Assets20(asset_id="product_title", required=True),
+                Assets19(asset_id="product_image", required=True),
+                Assets22(asset_id="product_title", required=True),
             ],
         )
         fmt = Format(
@@ -240,15 +240,13 @@ class TestFormatsAssetTypes:
 
     def test_group_assets_no_match_excluded(self, integration_db):
         """Covers: T-UC-005-inv4-group — group with only text excluded by video filter."""
-        from adcp.types.generated_poc.core.format import Assets20
-
-        group_asset = Assets16(
+        group_asset = Assets18(
             item_type="repeatable_group",
             asset_group_id="text_group",
             required=True,
             min_count=1,
             max_count=3,
-            assets=[Assets20(asset_id="headline", required=True)],
+            assets=[Assets22(asset_id="headline", required=True)],
         )
         fmt = Format(
             format_id=FormatId(agent_url=DEFAULT_AGENT_URL, id="text_only"),
@@ -266,16 +264,14 @@ class TestFormatsAssetTypes:
 
     def test_mixed_individual_and_group_assets(self, integration_db):
         """Covers: T-UC-005-inv4-group — mixed format matches both asset types."""
-        from adcp.types.generated_poc.core.format import Assets17
-
         individual = Assets5(item_type="individual", asset_id="hero_video", required=True)
-        group = Assets16(
+        group = Assets18(
             item_type="repeatable_group",
             asset_group_id="product_group",
             required=False,
             min_count=0,
             max_count=5,
-            assets=[Assets17(asset_id="product_image", required=True)],
+            assets=[Assets19(asset_id="product_image", required=True)],
         )
         fmt = Format(
             format_id=FormatId(agent_url=DEFAULT_AGENT_URL, id="mixed"),
