@@ -14,15 +14,14 @@ import pytest
 from adcp.types.generated_poc.core.format import (
     Assets,
     Assets5,
-    Assets16,
     Dimensions,
     Renders,
 )
 
-# adcp 3.6.0: Assets classes are type-discriminated by asset_type + item_type.
+# adcp 3.9: Assets classes are type-discriminated by asset_type + item_type.
 # Assets = individual image, Assets5 = individual video
-# Assets16 = repeatable_group (has nested assets, no asset_type)
-# Nested group assets: Assets17 (image), Assets18 (video), Assets20 (text), etc.
+# Assets18 = repeatable_group (has nested assets, no asset_type)
+# Nested group assets: Assets19 (image), Assets20 (video), Assets22 (text), etc.
 from adcp.types.generated_poc.enums.format_category import FormatCategory
 
 from src.core.schemas import Format, FormatId, ListCreativeFormatsRequest
@@ -205,21 +204,21 @@ class TestAssetTypesFilterChecksGroupAssets:
 
     def test_asset_types_filter_finds_type_in_group_assets(self):
         """Format with group assets containing requested type should be included."""
-        # adcp 3.6.0: repeatable_group uses Assets16, nested items use Assets17+ variants
-        from adcp.types.generated_poc.core.format import Assets17, Assets20
+        # adcp 3.9: repeatable_group uses Assets18, nested items use Assets19+ variants
+        from adcp.types.generated_poc.core.format import Assets18, Assets19, Assets22
 
-        group_asset = Assets16(
+        group_asset = Assets18(
             item_type="repeatable_group",
             asset_group_id="product_group",
             required=True,
             min_count=1,
             max_count=5,
             assets=[
-                Assets17(
+                Assets19(
                     asset_id="product_image",
                     required=True,
                 ),
-                Assets20(
+                Assets22(
                     asset_id="product_title",
                     required=True,
                 ),
@@ -243,17 +242,17 @@ class TestAssetTypesFilterChecksGroupAssets:
 
     def test_asset_types_filter_excludes_group_without_match(self):
         """Format with group assets NOT containing requested type should be excluded."""
-        # adcp 3.6.0: repeatable_group uses Assets16, nested text items use Assets20
-        from adcp.types.generated_poc.core.format import Assets20
+        # adcp 3.9: repeatable_group uses Assets18, nested text items use Assets22
+        from adcp.types.generated_poc.core.format import Assets18, Assets22
 
-        group_asset = Assets16(
+        group_asset = Assets18(
             item_type="repeatable_group",
             asset_group_id="text_group",
             required=True,
             min_count=1,
             max_count=3,
             assets=[
-                Assets20(
+                Assets22(
                     asset_id="headline",
                     required=True,
                 ),
@@ -276,23 +275,23 @@ class TestAssetTypesFilterChecksGroupAssets:
 
     def test_asset_types_filter_mixed_individual_and_group(self):
         """Format with both individual and group assets: filter checks both."""
-        # adcp 3.6.0: Assets5 = individual video, Assets16 = repeatable_group
-        # Assets16 nested assets use Assets17+ classes (image=Assets17)
-        from adcp.types.generated_poc.core.format import Assets17
+        # adcp 3.9: Assets5 = individual video, Assets18 = repeatable_group
+        # Assets18 nested assets use Assets19+ classes (image=Assets19)
+        from adcp.types.generated_poc.core.format import Assets18, Assets19
 
         individual_asset = Assets5(
             item_type="individual",
             asset_id="hero_video",
             required=True,
         )
-        group_asset = Assets16(
+        group_asset = Assets18(
             item_type="repeatable_group",
             asset_group_id="product_group",
             required=False,
             min_count=0,
             max_count=5,
             assets=[
-                Assets17(
+                Assets19(
                     asset_id="product_image",
                     required=True,
                 ),

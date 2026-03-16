@@ -123,6 +123,7 @@ class TestSchemaInheritance:
             "AdCPBaseModel",  # Used as base for SalesAgentBaseModel (different naming)
             "BrandManifest",  # TypeAlias
             "GetSignalsRequest",  # Direct alias
+            "PackageUpdate",  # Local PackageUpdate is a simplified model; AdCPPackageUpdate extends library
             "Property",  # TypeAlias
             "PromotedProducts",  # Imported but unused (cleanup candidate)
             "ResponsePagination",  # Named differently in local code (Pagination)
@@ -163,6 +164,7 @@ class TestSchemaInheritance:
             "AdCPBaseModel",
             "BrandManifest",
             "GetSignalsRequest",
+            "PackageUpdate",
             "Property",
             "PromotedProducts",
             "ResponsePagination",
@@ -179,10 +181,6 @@ class TestSchemaInheritance:
             ("CreateMediaBuyRequest", "packages"),
             ("GetMediaBuyDeliveryResponse", "aggregated_totals"),
             ("GetMediaBuyDeliveryResponse", "media_buy_deliveries"),
-            ("GetProductsRequest", "pagination"),
-            ("GetProductsRequest", "brand"),
-            ("GetProductsRequest", "catalog"),
-            ("GetProductsRequest", "buyer_campaign_ref"),
             ("GetSignalsResponse", "signals"),
             ("ListCreativesResponse", "pagination"),
             ("ListCreativesResponse", "query_summary"),
@@ -192,10 +190,8 @@ class TestSchemaInheritance:
             ("PackageRequest", "creatives"),
             ("Placement", "format_ids"),
             ("Placement", "description"),
-            ("Product", "channels"),
             ("QuerySummary", "filters_applied"),
             ("Signal", "signal_type"),
-            ("Signal", "pricing"),
             ("Signal", "deployments"),
             ("SyncCreativeResult", "warnings"),
             ("SyncCreativeResult", "errors"),
@@ -211,8 +207,19 @@ class TestSchemaInheritance:
             ("Creative", "assets"),
             # Nested serialization — creative delivery uses local CreativeDeliveryData
             ("GetCreativeDeliveryResponse", "creatives"),
-            # Request field overrides — tighter validation
-            ("GetMediaBuyDeliveryRequest", "account_id"),
+            # adcp 3.9 field overrides — library added fields we already had locally
+            # with wider types (optional vs required) or salesagent-specific semantics
+            ("CreateMediaBuyRequest", "account"),  # optional override (library requires it)
+            ("CreativePolicy", "provenance_required"),  # custom description/default
+            ("GetMediaBuyDeliveryRequest", "account"),  # dict override (library uses AccountReference)
+            ("GetMediaBuyDeliveryRequest", "attribution_window"),  # dict override (salesagent extension)
+            ("GetMediaBuyDeliveryRequest", "include_package_daily_breakdown"),  # salesagent extension
+            ("GetMediaBuyDeliveryRequest", "reporting_dimensions"),  # dict override (salesagent extension)
+            ("GetProductsRequest", "buying_mode"),  # str|None override (library uses Literal discriminator)
+            ("SyncCreativesRequest", "account"),  # optional override (library requires it)
+            ("UpdateMediaBuyRequest", "end_time"),  # datetime|None (library uses AwareDatetime)
+            ("UpdateMediaBuyRequest", "packages"),  # list[AdCPPackageUpdate] (local subclass type)
+            ("UpdateMediaBuyRequest", "start_time"),  # datetime|Literal["asap"]|None (wider type)
         }
 
         violations = []
