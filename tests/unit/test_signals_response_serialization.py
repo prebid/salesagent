@@ -17,7 +17,7 @@ Related:
 
 from datetime import UTC, datetime
 
-from src.core.schemas import GetSignalsResponse, Signal, SignalDeployment, SignalPricing
+from src.core.schemas import GetSignalsResponse, Signal, SignalDeployment
 
 
 def _make_signal(signal_agent_segment_id: str = "signal_123", **overrides) -> Signal:
@@ -40,7 +40,6 @@ def _make_signal(signal_agent_segment_id: str = "signal_123", **overrides) -> Si
                 estimated_activation_duration_minutes=None,
             )
         ],
-        pricing=SignalPricing(),
         pricing_options=[
             {"pricing_option_id": "cpm_usd", "cpm": 2.50, "currency": "USD", "model": "cpm"},
         ],
@@ -80,7 +79,7 @@ def test_get_signals_response_excludes_internal_fields():
     assert signal_data["data_provider"] == "TestProvider"
     assert signal_data["coverage_percentage"] == 85.5
     assert "deployments" in signal_data
-    assert "pricing" in signal_data
+    assert "pricing_options" in signal_data
 
 
 def test_get_signals_response_with_multiple_signals():

@@ -78,7 +78,6 @@ from adcp.types import GetSignalsRequest as LibraryGetSignalsRequest
 from adcp.types import GetSignalsResponse as LibraryGetSignalsResponse
 from adcp.types import Measurement as LibraryMeasurement
 from adcp.types import PlatformDeployment as LibraryPlatformDeployment
-from adcp.types import Pricing as LibraryPricing
 from adcp.types import Property as LibraryProperty
 from adcp.types import Signal as LibrarySignal
 from adcp.types import SignalFilters as LibrarySignalFilters
@@ -1928,27 +1927,16 @@ class SignalDeployment(LibraryPlatformDeployment):
     )
 
 
-class SignalPricing(LibraryPricing):
-    """Extends library Pricing for signal-specific pricing.
-
-    Library provides: cpm, currency. This subclass preserves the library
-    schema while allowing future internal field additions.
-    """
-
-    model_config = ConfigDict(extra=get_pydantic_extra_mode())
-
-
 class Signal(LibrarySignal):
     """Extends library Signal with internal fields and local deployment/pricing types.
 
     Library provides: signal_agent_segment_id, name, description, signal_type,
-    data_provider, coverage_percentage, deployments, pricing — all inherited
-    from AdCP spec.
+    data_provider, coverage_percentage, deployments, pricing_options — all
+    inherited from AdCP spec.
 
     Local overrides:
     - signal_type: Literal instead of enum (string serialization in model_dump)
     - deployments: local SignalDeployment (has scope, decisioning_platform_segment_id)
-    - pricing: local SignalPricing (same structure, different base)
     - Internal fields with Field(exclude=True): tenant_id, created_at, updated_at, metadata
     """
 
@@ -1957,7 +1945,6 @@ class Signal(LibrarySignal):
     # Override types that differ from library
     signal_type: Literal["marketplace", "custom", "owned"] = Field(..., description="Type of signal")  # type: ignore[assignment]
     deployments: list[SignalDeployment] = Field(..., description="Array of platform deployments")  # type: ignore[assignment]
-    pricing: SignalPricing = Field(..., description="Pricing information")
 
     # Internal fields (not in AdCP spec, excluded from serialization)
     tenant_id: str | None = Field(None, description="Internal: Tenant ID for multi-tenancy", exclude=True)
@@ -1969,6 +1956,18 @@ class Signal(LibrarySignal):
     # Note: signal_id is now a library field in adcp 3.6.0 (SignalId | None)
     # The old @property signal_id that mapped to signal_agent_segment_id is removed
     # to avoid conflict with the new library field.
+
+    @property
+    def pricing(self) -> Any | None:
+        """Backward compat: return the inner model of the first pricing option.
+
+        DEPRECATED: Use pricing_options instead.
+        Provides .cpm, .currency etc. from the first pricing option's root model.
+        Returns None if pricing_options is empty.
+        """
+        if self.pricing_options:
+            return self.pricing_options[0].root
+        return None
 
     @property
     def type(self) -> str:
@@ -2010,10 +2009,7 @@ class SignalFilters(LibrarySignalFilters):
     pass  # All fields inherited from library
 
 
-# GetSignalsRequest — library changed to RootModel[GetSignalsRequest1 | GetSignalsRequest2] in 3.6.0.
-# RootModel does not support model_config['extra'] or property overrides.
-# Library now includes signal_ids, pagination, signal_spec, max_results directly.
-# Re-export the library type; callers use .signal_spec and .max_results directly.
+# Re-export the library type; callers use .signal_spec, .filters, .max_results directly.
 GetSignalsRequest = LibraryGetSignalsRequest
 
 

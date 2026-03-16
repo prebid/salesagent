@@ -16,6 +16,8 @@ from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
 
+from adcp.types import SignalPricingOption
+
 from src.core.auth import get_principal_object
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
@@ -24,9 +26,17 @@ from src.core.schemas import (
     GetSignalsResponse,
     Signal,
     SignalDeployment,
-    SignalPricing,
 )
 from src.core.testing_hooks import AdCPTestContext
+
+
+def _cpm_pricing_option(cpm: float, currency: str = "USD") -> list[SignalPricingOption]:
+    """Build a single-element pricing_options list for a CPM signal."""
+    return [
+        SignalPricingOption.model_validate(
+            {"pricing_option_id": f"cpm_{currency.lower()}", "model": "cpm", "cpm": cpm, "currency": currency}
+        )
+    ]
 
 
 async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity | None = None) -> GetSignalsResponse:
@@ -62,7 +72,7 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
             data_provider="Acme Data Solutions",
             coverage_percentage=85.0,
             deployments=[SignalDeployment(platform="google_ad_manager", is_live=True, type="platform")],
-            pricing=SignalPricing(cpm=3.0, currency="USD"),
+            pricing_options=_cpm_pricing_option(3.0),
         ),
         Signal(
             signal_agent_segment_id="luxury_travel_enthusiasts",
@@ -72,7 +82,7 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
             data_provider="Premium Audience Co",
             coverage_percentage=75.0,
             deployments=[SignalDeployment(platform="google_ad_manager", is_live=True, type="platform")],
-            pricing=SignalPricing(cpm=5.0, currency="USD"),
+            pricing_options=_cpm_pricing_option(5.0),
         ),
         Signal(
             signal_agent_segment_id="sports_content",
@@ -82,7 +92,7 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
             data_provider="Publisher Sports Network",
             coverage_percentage=95.0,
             deployments=[SignalDeployment(platform="google_ad_manager", is_live=True, type="platform")],
-            pricing=SignalPricing(cpm=1.5, currency="USD"),
+            pricing_options=_cpm_pricing_option(1.5),
         ),
         Signal(
             signal_agent_segment_id="finance_content",
@@ -92,7 +102,7 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
             data_provider="Financial News Corp",
             coverage_percentage=88.0,
             deployments=[SignalDeployment(platform="google_ad_manager", is_live=True, type="platform")],
-            pricing=SignalPricing(cpm=2.0, currency="USD"),
+            pricing_options=_cpm_pricing_option(2.0),
         ),
         Signal(
             signal_agent_segment_id="urban_millennials",
@@ -102,7 +112,7 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
             data_provider="Demographics Plus",
             coverage_percentage=78.0,
             deployments=[SignalDeployment(platform="google_ad_manager", is_live=True, type="platform")],
-            pricing=SignalPricing(cpm=1.8, currency="USD"),
+            pricing_options=_cpm_pricing_option(1.8),
         ),
         Signal(
             signal_agent_segment_id="pet_owners",
@@ -112,18 +122,15 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
             data_provider="Lifestyle Data Inc",
             coverage_percentage=92.0,
             deployments=[SignalDeployment(platform="google_ad_manager", is_live=True, type="platform")],
-            pricing=SignalPricing(cpm=1.2, currency="USD"),
+            pricing_options=_cpm_pricing_option(1.2),
         ),
     ]
 
-    # Unwrap RootModel to access fields (adcp 3.6.0: GetSignalsRequest is RootModel[...])
-    req_inner = req.root
-
-    # Filter based on request parameters using new AdCP-compliant fields
+    # Filter based on request parameters using AdCP-compliant fields
     for signal in sample_signals:
         # Apply signal_spec filter (natural language description matching)
-        if req_inner.signal_spec:
-            spec_lower = req_inner.signal_spec.lower()
+        if req.signal_spec:
+            spec_lower = req.signal_spec.lower()
             if (
                 spec_lower not in signal.name.lower()
                 and spec_lower not in signal.description.lower()
@@ -132,39 +139,36 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
                 continue
 
         # Apply filters if provided
-        if req_inner.filters:
+        if req.filters:
             # Filter by catalog_types (equivalent to old 'type' field)
-            if req_inner.filters.catalog_types and signal.signal_type not in req_inner.filters.catalog_types:
+            # catalog_types contains SignalCatalogType enums; compare via .value
+            if req.filters.catalog_types and signal.signal_type not in [ct.value for ct in req.filters.catalog_types]:
                 continue
 
             # Filter by data_providers
-            if req_inner.filters.data_providers and signal.data_provider not in req_inner.filters.data_providers:
+            if req.filters.data_providers and signal.data_provider not in req.filters.data_providers:
                 continue
 
-            # Filter by max_cpm (using signal's pricing.cpm)
-            if (
-                req_inner.filters.max_cpm is not None
-                and signal.pricing
-                and signal.pricing.cpm > req_inner.filters.max_cpm
-            ):
+            # Filter by max_cpm (using signal's first pricing option CPM)
+            if req.filters.max_cpm is not None and signal.pricing and signal.pricing.cpm > req.filters.max_cpm:
                 continue
 
             # Filter by min_coverage_percentage
             if (
-                req_inner.filters.min_coverage_percentage is not None
-                and signal.coverage_percentage < req_inner.filters.min_coverage_percentage
+                req.filters.min_coverage_percentage is not None
+                and signal.coverage_percentage < req.filters.min_coverage_percentage
             ):
                 continue
 
         signals.append(signal)
 
     # Apply max_results limit (AdCP-compliant field name)
-    if req_inner.max_results:
-        signals = signals[: req_inner.max_results]
+    if req.max_results:
+        signals = signals[: req.max_results]
 
     # Signals are already constructed as local types (extending library types),
     # so no conversion needed — pass directly to response.
-    return GetSignalsResponse(signals=signals, errors=None, context=req_inner.context)
+    return GetSignalsResponse(signals=signals, errors=None, context=req.context)
 
 
 async def get_signals(req: GetSignalsRequest, context: Context | ToolContext | None = None):

@@ -27,7 +27,6 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 # V3: Consolidated pricing types - CpmAuctionPricingOption/CpmFixedRatePricingOption → CpmPricingOption
 # Use fixed_price for fixed-rate, floor_price for auction
 from adcp import CpmPricingOption
-
 from adcp.types.generated_poc.core.signal_pricing_option import SignalPricingOption
 
 from src.core.schemas import (
@@ -37,7 +36,6 @@ from src.core.schemas import (
     Product,
     Signal,
     SignalDeployment,
-    SignalPricing,
     Targeting,
 )
 
@@ -479,7 +477,6 @@ class TestSignalSchemaContract:
             "deployments": [
                 SignalDeployment(platform="test_platform", is_live=True, type="platform", scope="platform-wide")
             ],
-            "pricing": SignalPricing.model_construct(cpm=3.50, currency="USD"),
             "pricing_options": [
                 SignalPricingOption.model_validate(
                     {"pricing_option_id": "cpm_usd", "cpm": 3.50, "currency": "USD", "model": "cpm"}
@@ -496,7 +493,7 @@ class TestSignalSchemaContract:
             "data_provider",
             "coverage_percentage",
             "deployments",
-            "pricing",
+            "pricing_options",
         }
 
         validator.validate_schema_contract(Signal, test_data, adcp_spec_fields)

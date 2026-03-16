@@ -62,7 +62,7 @@ class TestADCPSchemaCompatibility:
     def test_signal_from_adcp_response(self):
         """Test Signal model can be created from adcp library signal format."""
         # Simulate signal data as returned by adcp library (all required fields)
-        # adcp 3.9: pricing is now empty, pricing details moved to pricing_options (required)
+        # adcp 3.9: pricing_options replaces the old pricing field
         adcp_signal_data = {
             "signal_agent_segment_id": "segment_123",
             "name": "Automotive Enthusiasts",
@@ -77,7 +77,6 @@ class TestADCPSchemaCompatibility:
                     "type": "platform",
                 }
             ],
-            "pricing": {},
             "pricing_options": [
                 {"pricing_option_id": "cpm_usd", "cpm": 5.0, "currency": "USD", "model": "cpm"},
             ],
@@ -173,7 +172,7 @@ class TestADCPSchemaCompatibility:
 
     def test_signal_roundtrip_with_model_dump(self):
         """Test Signal can roundtrip through model_dump and reconstruction."""
-        # adcp 3.9: pricing is now empty, pricing details moved to pricing_options (required)
+        # adcp 3.9: pricing_options replaces the old pricing field
         original_data = {
             "signal_agent_segment_id": "roundtrip_seg",
             "name": "Roundtrip Signal",
@@ -188,7 +187,6 @@ class TestADCPSchemaCompatibility:
                     "type": "platform",
                 }
             ],
-            "pricing": {},
             "pricing_options": [
                 {"pricing_option_id": "cpm_usd", "cpm": 10.0, "currency": "USD", "model": "cpm"},
             ],

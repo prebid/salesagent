@@ -45,7 +45,6 @@ from src.core.schemas import (
     QuerySummary,
     Signal,
     SignalDeployment,
-    SignalPricing,
     SyncCreativesRequest,
     SyncCreativesResponse,
     Targeting,
@@ -924,9 +923,6 @@ class TestAdCPContract:
             estimated_activation_duration_minutes=0,
         )
 
-        # adcp 3.9: Pricing is now an empty base model; pricing details moved to pricing_options
-        pricing = SignalPricing()
-
         signal = Signal(
             signal_agent_segment_id="signal_auto_intenders_q1_2025",
             name="Auto Intenders Q1 2025",
@@ -935,7 +931,6 @@ class TestAdCPContract:
             data_provider="Acme Data Solutions",
             coverage_percentage=85.5,
             deployments=[deployment],
-            pricing=pricing,
             pricing_options=[
                 {"pricing_option_id": "cpm_usd", "cpm": 2.50, "currency": "USD", "model": "cpm"},
             ],
@@ -957,7 +952,7 @@ class TestAdCPContract:
             "data_provider",
             "coverage_percentage",
             "deployments",
-            "pricing",
+            "pricing_options",
         ]
         for field in adcp_required_fields:
             assert field in adcp_response, f"Required AdCP field '{field}' missing from response"
@@ -982,10 +977,7 @@ class TestAdCPContract:
         # scope is an internal field (exclude=True), should not appear in AdCP response
         assert "scope" not in deployment_obj, "Internal field 'scope' exposed in AdCP response"
 
-        # Verify pricing structure (adcp 3.9: pricing is now an empty base model)
-        assert isinstance(adcp_response["pricing"], dict), "pricing must be object"
-
-        # Verify pricing_options structure (adcp 3.9: pricing details moved here)
+        # Verify pricing_options structure (adcp 3.9: pricing details in pricing_options)
         assert "pricing_options" in adcp_response, "pricing_options must be present"
         assert isinstance(adcp_response["pricing_options"], list), "pricing_options must be array"
         assert len(adcp_response["pricing_options"]) >= 1, "pricing_options must have at least one entry"
@@ -2836,7 +2828,6 @@ class TestAdCPContract:
             "data_provider": "Acme Data",
             "coverage_percentage": 85.5,
             "deployments": [{"platform": "GAM", "is_live": True, "type": "platform"}],
-            "pricing": {},
             "pricing_options": [
                 {"pricing_option_id": "cpm_usd", "cpm": 2.50, "currency": "USD", "model": "cpm"},
             ],
