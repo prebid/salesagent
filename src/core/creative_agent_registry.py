@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from adcp import ADCPMultiAgentClient, AgentConfig, ListCreativeFormatsRequest, Protocol
+from adcp import ADCPMultiAgentClient, ListCreativeFormatsRequest
 from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPError, ADCPTimeoutError
 from adcp.types import AssetContentType as AssetType
 from adcp.types import FormatCategory as FormatType
@@ -173,38 +173,13 @@ class CreativeAgentRegistry:
         yarl handles: scheme/host lowercase, default port removal, percent-encoding.
         We additionally strip trailing slash so `/` and empty path are equivalent.
         """
-        return str(URL(agent_url)).rstrip("/")
+        return str(URL(str(agent_url))).rstrip("/")
 
     def _build_adcp_client(self, agents: list[CreativeAgent]) -> ADCPMultiAgentClient:
-        """Build AdCP client from creative agent configs.
+        """Build AdCP client from creative agent configs."""
+        from src.core.helpers.adapter_helpers import build_agent_config
 
-        Args:
-            agents: List of CreativeAgent instances
-
-        Returns:
-            ADCPMultiAgentClient configured with all agents
-        """
-        agent_configs = []
-        for agent in agents:
-            # Extract auth configuration
-            auth_type = "token"
-            auth_token = None
-            if agent.auth:
-                auth_type = agent.auth.get("type", "token")
-                auth_token = agent.auth.get("credentials")
-
-            config = AgentConfig(
-                id=agent.name,
-                agent_uri=str(agent.agent_url),  # Convert AnyUrl to string for adcp 2.5.0
-                protocol=Protocol.MCP,
-                auth_token=auth_token,
-                auth_type=auth_type,
-                auth_header=agent.auth_header or "x-adcp-auth",
-                timeout=30.0,
-            )
-            agent_configs.append(config)
-
-        return ADCPMultiAgentClient(agents=agent_configs)
+        return ADCPMultiAgentClient(agents=[build_agent_config(agent) for agent in agents])
 
     def _get_tenant_agents(self, tenant_id: str | None) -> list[CreativeAgent]:
         """Get list of creative agents for a tenant.
@@ -353,6 +328,13 @@ class CreativeAgentRegistry:
                 error_msg = (
                     getattr(result, "error", None) or getattr(result, "message", None) or "No error details provided"
                 )
+
+                # adcp SDK 3.6.0 requires structuredContent but some creative agents
+                # return TextContent with JSON. Fall back to raw HTTP + parse.
+                if "structuredContent" in str(error_msg):
+                    logger.warning(f"adcp SDK structuredContent mismatch, falling back to raw HTTP: {error_msg}")
+                    return await self._fetch_formats_raw_mcp(agent)
+
                 logger.error(f"Creative agent {agent.name} returned FAILED status. Error: {error_msg}")
                 debug_info = getattr(result, "debug_info", None)
                 if debug_info:
@@ -376,6 +358,84 @@ class CreativeAgentRegistry:
         except ADCPError as e:
             logger.error(f"AdCP error with creative agent {agent.name}: {e.message}")
             raise RuntimeError(str(e.message)) from e
+
+    async def _fetch_formats_raw_mcp(self, agent: CreativeAgent) -> list[Format]:
+        """Fallback: fetch formats via raw HTTP when adcp SDK rejects TextContent.
+
+        The adcp SDK 3.6.0 requires structuredContent in MCP responses, but some
+        creative agents return TextContent with JSON. This method calls the MCP
+        endpoint directly via HTTP and parses the JSON response.
+        """
+        import json
+        import logging
+
+        import httpx
+
+        logger = logging.getLogger(__name__)
+        agent_url = str(agent.agent_url).rstrip("/")
+        # MCP endpoint may be at /mcp (as per adcp SDK fallback behavior)
+        mcp_url = f"{agent_url}/mcp" if not agent_url.endswith("/mcp") else agent_url
+
+        # Build headers with auth credentials if configured
+        headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+        if agent.auth:
+            auth_header = agent.auth_header or "x-adcp-auth"
+            auth_token = agent.auth.get("credentials")
+            if auth_token:
+                headers[auth_header] = auth_token
+
+        try:
+            async with httpx.AsyncClient(timeout=agent.timeout) as http:
+                response = await http.post(
+                    mcp_url,
+                    json={
+                        "jsonrpc": "2.0",
+                        "method": "tools/call",
+                        "params": {"name": "list_creative_formats", "arguments": {}},
+                        "id": 1,
+                    },
+                    headers=headers,
+                )
+                response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            logger.error(f"Creative agent fallback HTTP error: {exc.response.status_code} from {mcp_url}")
+            raise RuntimeError(f"Creative agent HTTP error: {exc.response.status_code}") from exc
+        except httpx.TimeoutException as exc:
+            logger.error(f"Creative agent fallback timed out: {mcp_url}")
+            raise RuntimeError(f"Request timed out: {mcp_url}") from exc
+        except httpx.RequestError as exc:
+            logger.error(f"Creative agent fallback connection failed: {mcp_url} — {exc}")
+            raise RuntimeError(f"Connection failed: {mcp_url} — {exc}") from exc
+
+        # Parse SSE or JSON response
+        content_type = response.headers.get("content-type", "")
+        if "text/event-stream" in content_type:
+            for line in response.text.split("\n"):
+                if line.startswith("data: "):
+                    event_data = json.loads(line[6:])
+                    if "result" in event_data:
+                        return self._parse_mcp_tool_result(event_data["result"], logger)
+        else:
+            data = response.json()
+            if "result" in data:
+                return self._parse_mcp_tool_result(data["result"], logger)
+
+        logger.warning("_fetch_formats_raw_mcp: No parseable result in MCP response")
+        return []
+
+    def _parse_mcp_tool_result(self, result: dict, logger: Any) -> list[Format]:
+        """Parse formats from an MCP tools/call result."""
+        import json
+
+        content_list = result.get("content", [])
+        for item in content_list:
+            if item.get("type") == "text" and item.get("text"):
+                data = json.loads(item["text"])
+                formats_list = data.get("formats", [])
+                formats = [Format.model_validate(fmt_data) for fmt_data in formats_list]
+                logger.info(f"_fetch_formats_raw_mcp: Parsed {len(formats)} formats from TextContent")
+                return formats
+        return []
 
     async def get_formats_for_agent(
         self,

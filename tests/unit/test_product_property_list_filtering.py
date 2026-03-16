@@ -14,7 +14,7 @@ Filtering rules:
 - Products with property_targeting_allowed=true require ANY intersection
 """
 
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from adcp.types.generated_poc.core.property_id import PropertyId
 from adcp.types.generated_poc.core.publisher_property_selector import (
@@ -317,9 +317,16 @@ class TestCapabilitiesPropertyListFiltering:
             },
         )
 
+        mock_repo = MagicMock()
+        mock_repo.list_publisher_partners.return_value = []
+        mock_uow = MagicMock()
+        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+        mock_uow.__exit__ = MagicMock(return_value=False)
+        mock_uow.tenant_config = mock_repo
+
         with (
             patch("src.core.tools.capabilities.get_principal_object", return_value=None),
-            patch("src.core.tools.capabilities.get_db_session"),
+            patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow),
         ):
             response = _get_adcp_capabilities_impl(None, identity)
 

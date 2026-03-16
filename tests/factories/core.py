@@ -11,7 +11,7 @@ from typing import Any
 import factory
 from factory import LazyAttribute, RelatedFactory, Sequence, SubFactory
 
-from src.core.database.models import CurrencyLimit, PropertyTag, PublisherPartner, Tenant
+from src.core.database.models import AdapterConfig, CurrencyLimit, PropertyTag, PublisherPartner, Tenant
 
 
 class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
@@ -77,6 +77,17 @@ class PublisherPartnerFactory(factory.alchemy.SQLAlchemyModelFactory):
     display_name = LazyAttribute(lambda o: f"Publisher {o.publisher_domain}")
     is_verified = True
     sync_status = "success"
+
+
+class AdapterConfigFactory(factory.alchemy.SQLAlchemyModelFactory):
+    class Meta:
+        model = AdapterConfig
+        sqlalchemy_session = None
+        sqlalchemy_session_persistence = "commit"
+
+    tenant = SubFactory(TenantFactory)
+    tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
+    adapter_type = "mock"
 
 
 class PropertyTagFactory(factory.alchemy.SQLAlchemyModelFactory):

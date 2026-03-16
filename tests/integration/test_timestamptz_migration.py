@@ -5,15 +5,12 @@ to TIMESTAMPTZ on upgrade, and reverts cleanly on downgrade, against a real
 PostgreSQL instance.
 """
 
-import os
-import re
-import uuid
 from datetime import datetime
 
-import psycopg2
 import pytest
-from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
+
+from tests.integration.migration_helpers import run_alembic_downgrade, run_alembic_upgrade
 
 # The migration under test
 MIGRATION_REV = "3a16c5fc27ce"
@@ -34,16 +31,6 @@ SPOT_CHECK_COLUMNS = [
 ]
 
 
-def _parse_postgres_url():
-    """Parse DATABASE_URL into connection components."""
-    postgres_url = os.environ.get("DATABASE_URL", "")
-    match = re.match(r"postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)", postgres_url)
-    if not match:
-        return None
-    user, password, host, port_str, _ = match.groups()
-    return user, password, host, int(port_str)
-
-
 def _get_column_type(engine, table_name, column_name):
     """Query information_schema for the actual PostgreSQL column type."""
     with engine.connect() as conn:
@@ -55,97 +42,6 @@ def _get_column_type(engine, table_name, column_name):
         )
         row = result.fetchone()
         return row[0] if row else None
-
-
-@pytest.fixture(scope="module")
-def migration_db():
-    """Create an isolated PostgreSQL database for migration testing.
-
-    Uses Alembic to manage schema state — does NOT use Base.metadata.create_all().
-    """
-    parsed = _parse_postgres_url()
-    if not parsed:
-        pytest.skip("Requires PostgreSQL DATABASE_URL")
-
-    user, password, host, port = parsed
-    db_name = f"test_migration_{uuid.uuid4().hex[:8]}"
-
-    conn_params = {
-        "host": host,
-        "port": port,
-        "user": user,
-        "password": password,
-        "database": "postgres",
-    }
-
-    # Create the test database
-    conn = psycopg2.connect(**conn_params)
-    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-    cur = conn.cursor()
-    cur.execute(f'CREATE DATABASE "{db_name}"')
-    cur.close()
-    conn.close()
-
-    db_url = f"postgresql://{user}:{password}@{host}:{port}/{db_name}"
-    engine = create_engine(db_url, echo=False)
-
-    yield engine, db_url
-
-    # Cleanup
-    engine.dispose()
-    try:
-        conn = psycopg2.connect(**conn_params)
-        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-        cur = conn.cursor()
-        cur.execute(
-            f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-            f"WHERE datname = '{db_name}' AND pid <> pg_backend_pid()"
-        )
-        cur.execute(f'DROP DATABASE IF EXISTS "{db_name}"')
-        cur.close()
-        conn.close()
-    except Exception:
-        pass
-
-
-def _run_alembic(db_url, target_revision):
-    """Run Alembic upgrade to a specific revision.
-
-    Sets DATABASE_URL env var because alembic/env.py reads from
-    DatabaseConfig.get_connection_string() which uses the env var.
-    """
-    from alembic.config import Config
-
-    from alembic import command
-
-    old_url = os.environ.get("DATABASE_URL")
-    os.environ["DATABASE_URL"] = db_url
-    try:
-        alembic_cfg = Config("alembic.ini")
-        command.upgrade(alembic_cfg, target_revision)
-    finally:
-        if old_url:
-            os.environ["DATABASE_URL"] = old_url
-        elif "DATABASE_URL" in os.environ:
-            del os.environ["DATABASE_URL"]
-
-
-def _run_alembic_downgrade(db_url, target_revision):
-    """Run Alembic downgrade to a specific revision."""
-    from alembic.config import Config
-
-    from alembic import command
-
-    old_url = os.environ.get("DATABASE_URL")
-    os.environ["DATABASE_URL"] = db_url
-    try:
-        alembic_cfg = Config("alembic.ini")
-        command.downgrade(alembic_cfg, target_revision)
-    finally:
-        if old_url:
-            os.environ["DATABASE_URL"] = old_url
-        elif "DATABASE_URL" in os.environ:
-            del os.environ["DATABASE_URL"]
 
 
 def _insert_test_tenant(engine, test_time):
@@ -176,7 +72,7 @@ class TestTimestamptzMigration:
         engine, db_url = migration_db
 
         # Step 1: Migrate to the revision BEFORE our migration
-        _run_alembic(db_url, PRE_MIGRATION_REV)
+        run_alembic_upgrade(db_url, PRE_MIGRATION_REV)
 
         # Verify columns are naive TIMESTAMP before our migration
         for table, column in SPOT_CHECK_COLUMNS:
@@ -190,7 +86,7 @@ class TestTimestamptzMigration:
         _insert_test_tenant(engine, test_time)
 
         # Step 3: Run our migration (upgrade)
-        _run_alembic(db_url, MIGRATION_REV)
+        run_alembic_upgrade(db_url, MIGRATION_REV)
 
         # Step 4: Verify columns are now TIMESTAMPTZ
         for table, column in SPOT_CHECK_COLUMNS:
@@ -223,7 +119,7 @@ class TestTimestamptzMigration:
         assert col_type == "timestamp with time zone", f"Expected TIMESTAMPTZ before downgrade, got: {col_type}"
 
         # Step 1: Downgrade
-        _run_alembic_downgrade(db_url, PRE_MIGRATION_REV)
+        run_alembic_downgrade(db_url, PRE_MIGRATION_REV)
 
         # Step 2: Verify columns are back to TIMESTAMP
         for table, column in SPOT_CHECK_COLUMNS:

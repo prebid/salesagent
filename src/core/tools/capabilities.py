@@ -26,11 +26,9 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
 )
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
-from sqlalchemy import select
 
 from src.core.auth import get_principal_object
-from src.core.database.database_session import get_db_session
-from src.core.database.models import PublisherPartner
+from src.core.database.repositories.uow import TenantConfigUoW
 from src.core.helpers.activity_helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
@@ -123,9 +121,9 @@ def _get_adcp_capabilities_impl(
     # Get publisher domains from database
     publisher_domains: list[PublisherDomain] = []
     try:
-        with get_db_session() as session:
-            stmt = select(PublisherPartner).filter_by(tenant_id=tenant_id)
-            partners = session.scalars(stmt).all()
+        with TenantConfigUoW(tenant_id) as uow:
+            assert uow.tenant_config is not None
+            partners = uow.tenant_config.list_publisher_partners()
             for partner in partners:
                 if partner.publisher_domain:
                     publisher_domains.append(PublisherDomain(root=partner.publisher_domain))

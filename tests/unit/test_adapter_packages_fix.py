@@ -298,7 +298,7 @@ class TestXandrAdapterPackages:
             "src.adapters.xandr.XandrAdapter",
             __abstractmethods__=set(),  # Allow instantiation of abstract class
         ):
-            adapter = XandrAdapter(config=config, principal=mock_principal)
+            adapter = XandrAdapter(config=config, principal=mock_principal, tenant_id="test_tenant")
             # advertiser_id is set automatically from platform_mappings
 
             # Mock abstract methods

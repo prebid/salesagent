@@ -1,9 +1,8 @@
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 import requests
-from adcp.types.aliases import Package as ResponsePackage
 
 from src.adapters.base import AdServerAdapter, CreativeEngineAdapter
 from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
@@ -317,8 +316,7 @@ class Kevel(AdServerAdapter):
             campaign_id = campaign_data["Id"]
             self.audit_logger.log_success(f"Created Kevel Campaign ID: {campaign_id}")
 
-            # Create flights for each package and track flight IDs
-            package_responses = []
+            # Create flights for each package
             for package in packages:
                 # Get pricing for this package
                 pricing_info = package_pricing_info.get(package.package_id) if package_pricing_info else None
@@ -361,46 +359,12 @@ class Kevel(AdServerAdapter):
 
                 flight_response = requests.post(f"{self.base_url}/flight", headers=self.headers, json=flight_payload)
                 flight_response.raise_for_status()
-                flight_data = flight_response.json()
-                flight_id = flight_data.get("Id")
-
-                # Build package response - Per AdCP spec v2.9.0, CreateMediaBuyResponse.Package requires:
-                # - package_id (required)
-                # - status (required)
-                # MediaPackage has buyer_ref populated from request
-                package_responses.append(
-                    ResponsePackage(
-                        buyer_ref=package.buyer_ref or "unknown",
-                        package_id=package.package_id,
-                        paused=False,  # Default to not paused for created packages
-                    )
-                )
+                flight_response.json()
 
             # Use the actual campaign ID from Kevel
             media_buy_id = f"kevel_{campaign_id}"
 
-        # For dry_run, build package responses with ALL package data (no flight IDs)
-        if self.dry_run:
-            package_responses = []
-            for package in packages:
-                # Build package response - Per AdCP spec v2.9.0, CreateMediaBuyResponse.Package requires:
-                # - package_id (required)
-                # - status (required)
-                # MediaPackage has buyer_ref populated from request
-                package_responses.append(
-                    ResponsePackage(
-                        buyer_ref=package.buyer_ref or "unknown",
-                        package_id=package.package_id,
-                        paused=False,  # Default to not paused for created packages
-                    )
-                )
-
-        return CreateMediaBuySuccess(
-            buyer_ref=request.buyer_ref or "unknown",
-            media_buy_id=media_buy_id,
-            creative_deadline=datetime.now(UTC) + timedelta(days=2),
-            packages=package_responses,
-        )
+        return self._build_create_success(request, media_buy_id, packages)
 
     def add_creative_assets(
         self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
