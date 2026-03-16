@@ -376,7 +376,15 @@ class CreativeAgentRegistry:
         # MCP endpoint may be at /mcp (as per adcp SDK fallback behavior)
         mcp_url = f"{agent_url}/mcp" if not agent_url.endswith("/mcp") else agent_url
 
-        async with httpx.AsyncClient(timeout=30) as http:
+        # Build headers with auth credentials if configured
+        headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+        if agent.auth:
+            auth_header = agent.auth_header or "x-adcp-auth"
+            auth_token = agent.auth.get("credentials")
+            if auth_token:
+                headers[auth_header] = auth_token
+
+        async with httpx.AsyncClient(timeout=agent.timeout) as http:
             # MCP Streamable HTTP: POST to endpoint with tools/call
             response = await http.post(
                 mcp_url,
@@ -386,7 +394,7 @@ class CreativeAgentRegistry:
                     "params": {"name": "list_creative_formats", "arguments": {}},
                     "id": 1,
                 },
-                headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
+                headers=headers,
             )
             response.raise_for_status()
 
