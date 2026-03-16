@@ -276,13 +276,16 @@ def build_order_name_context(
 def build_line_item_name_context(
     order_name: str,
     product_name: str,
+    package_name: str | None = None,
     package_index: int | None = None,
 ) -> dict:
     """Build context dictionary for line item name template.
 
     Args:
         order_name: Name of the parent order
-        product_name: Name of the product/package
+        product_name: Name of the product/package (from database)
+        package_name: Name from the package itself (from MediaPackage.name).
+            Falls back to product_name if not provided.
         package_index: Optional index of package in order (1-based)
 
     Returns:
@@ -291,6 +294,7 @@ def build_line_item_name_context(
     context = {
         "order_name": order_name,
         "product_name": product_name,
+        "package_name": package_name or product_name,  # Fallback to product_name
     }
 
     if package_index is not None:

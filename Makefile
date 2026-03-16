@@ -5,6 +5,7 @@ quality:
 	uv run ruff format --check .
 	uv run ruff check .
 	uv run mypy src/ --config-file=mypy.ini
+	uv run python .pre-commit-hooks/check_code_duplication.py
 	uv run pytest tests/unit/ -x
 
 quality-full:

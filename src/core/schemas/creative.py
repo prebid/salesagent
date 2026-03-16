@@ -61,6 +61,7 @@ from src.core.schemas._base import (
     NestedModelSerializerMixin,
     SalesAgentBaseModel,
     Targeting,
+    _upgrade_legacy_format_ids,
 )
 
 
@@ -532,24 +533,7 @@ class ListCreativeFormatsRequest(LibraryListCreativeFormatsRequest):
     @model_validator(mode="before")
     @classmethod
     def upgrade_legacy_format_ids(cls, values: dict) -> dict:
-        """Convert dict format_ids to FormatId objects (AdCP v2.4 compliance)."""
-        if not isinstance(values, dict):
-            return values
-
-        format_ids = values.get("format_ids")
-        if format_ids and isinstance(format_ids, list):
-            # Convert any dict format_ids to FormatId objects
-            upgraded = []
-            for fmt_id in format_ids:
-                if isinstance(fmt_id, dict) and "agent_url" in fmt_id and "id" in fmt_id:
-                    # Dict with FormatId structure - convert to FormatId object
-                    upgraded.append(FormatId(**fmt_id))
-                else:
-                    # Already a FormatId object - pass through
-                    upgraded.append(fmt_id)
-            values["format_ids"] = upgraded
-
-        return values
+        return _upgrade_legacy_format_ids(values)
 
 
 class ListCreativeFormatsResponse(NestedModelSerializerMixin, LibraryListCreativeFormatsResponse):
