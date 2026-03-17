@@ -59,6 +59,11 @@ class TestSchemaFieldMapping:
             "max_optimization_goals",  # Max optimization goals from adcp 3.9 spec
             "metric_optimization",  # Metric optimization config from adcp 3.9 spec
             "outcome_measurement",  # Outcome measurement config from adcp 3.9 spec
+            # AdCP 3.10+ fields - inherited from library Product, not yet stored in database
+            "enforced_policies",  # Policy enforcement config from adcp 3.10 spec
+            "show_ids",  # Show/series identifiers from adcp 3.10 spec
+            "exclusivity",  # Exclusivity constraints from adcp 3.10 spec
+            "episodes",  # Episode-level targeting from adcp 3.10 spec
         }
 
         # Fields that exist in database but should NOT be in external schema (internal only)

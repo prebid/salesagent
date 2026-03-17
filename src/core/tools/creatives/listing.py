@@ -124,7 +124,7 @@ def _list_creatives_impl(
     if status:
         filters_dict["statuses"] = [status]
     if format:
-        filters_dict["formats"] = [format]
+        filters_dict["format_ids"] = [format]
     if tags:
         filters_dict["tags"] = tags
     if created_after_dt:
@@ -319,8 +319,8 @@ def _list_creatives_impl(
             filters_applied.append(f"buyer_refs={','.join(req.filters.buyer_refs)}")
         if req.filters.statuses:
             filters_applied.append(f"statuses={','.join(str(s) for s in req.filters.statuses)}")
-        if req.filters.formats:
-            filters_applied.append(f"formats={','.join(req.filters.formats)}")
+        if req.filters.format_ids:
+            filters_applied.append(f"format_ids={','.join(str(f) for f in req.filters.format_ids)}")
         if req.filters.tags:
             filters_applied.append(f"tags={','.join(req.filters.tags)}")
         if req.filters.created_after:
