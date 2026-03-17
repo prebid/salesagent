@@ -89,7 +89,7 @@ def _list_creatives_impl(
         ListCreativesResponse with filtered creative assets and pagination info
     """
     from adcp.types import CreativeFilters as LibraryCreativeFilters
-    from adcp.types import Sort as LibrarySort
+    from adcp.types.generated_poc.creative.list_creatives_request import Sort as LibrarySort
     from adcp.types.generated_poc.core.pagination_request import PaginationRequest as LibraryPagination
 
     from src.core.schemas import ListCreativesRequest

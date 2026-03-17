@@ -1531,7 +1531,7 @@ class TestAdCPContract:
         Now extends library ListCreativesRequest directly - all fields are spec-compliant.
         """
         from adcp.types import CreativeFilters as LibraryCreativeFilters
-        from adcp.types import Sort as LibrarySort
+        from adcp.types.generated_poc.creative.list_creatives_request import Sort as LibrarySort
 
         # adcp 3.6.0: Request pagination uses PaginationRequest (cursor + max_results)
         from adcp.types.generated_poc.core.pagination_request import PaginationRequest
