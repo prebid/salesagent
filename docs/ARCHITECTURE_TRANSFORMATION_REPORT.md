@@ -3,7 +3,7 @@
 **Period:** February 16 -- March 9, 2026 (3 weeks)
 **Repository:** [prebid/salesagent](https://github.com/prebid/salesagent)
 **Author:** Konstantin Mirin
-**Methodology source:** [adcp-req](../../../adcp-req/) (requirements derivation repository)
+**Methodology source:** adcp-req (requirements derivation repository)
 
 ---
 
@@ -62,7 +62,7 @@ Before any code changes, the first step was understanding *what the system shoul
 
 ### The adcp-req Repository
 
-A dedicated requirements repository ([adcp-req](../../../adcp-req/)) was created to derive, formalize, and track requirements from the AdCP protocol specification (v3.0.0-beta.3 through v3.6.0). The methodology follows a five-phase process documented in `REQUIREMENTS_METHODOLOGY.md` (v4.5):
+A dedicated requirements repository (adcp-req) was created to derive, formalize, and track requirements from the AdCP protocol specification (v3.0.0-beta.3 through v3.6.0). The methodology follows a five-phase process documented in `REQUIREMENTS_METHODOLOGY.md` (v4.5):
 
 **Derivation chain:**
 

@@ -13,6 +13,25 @@ import sys
 from pathlib import Path
 
 
+def _is_merge_migration(functions: dict[str, ast.FunctionDef]) -> bool:
+    """Check if this is a merge migration (both upgrade and downgrade are empty).
+
+    Merge migrations reconcile multiple alembic branch heads. They have no
+    schema changes — both upgrade() and downgrade() are intentionally empty.
+    """
+    if "upgrade" not in functions or "downgrade" not in functions:
+        return False
+
+    for name in ("upgrade", "downgrade"):
+        for stmt in functions[name].body:
+            if isinstance(stmt, ast.Pass):
+                continue
+            if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant):
+                continue
+            return False
+    return True
+
+
 def check_migration_file(path: Path) -> list[str]:
     """Check a single migration file for structural issues.
 
@@ -32,6 +51,10 @@ def check_migration_file(path: Path) -> list[str]:
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name in ("upgrade", "downgrade"):
             functions[node.name] = node
+
+    # Merge migrations have intentionally empty upgrade() + downgrade() — skip them
+    if _is_merge_migration(functions):
+        return errors
 
     if "upgrade" not in functions:
         errors.append(f"{path}: missing upgrade() function")

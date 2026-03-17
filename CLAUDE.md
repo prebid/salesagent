@@ -80,7 +80,7 @@ PR titles should use one of these prefixes:
 **Without a prefix, commits won't appear in release notes!** The code will still be released, but the change won't be documented in the changelog.
 
 ### Structural Guards (Automated Architecture Enforcement)
-Fourteen AST-scanning tests enforce architecture invariants on every `make quality` run. New violations fail the build immediately. See [docs/development/structural-guards.md](docs/development/structural-guards.md) for full details.
+Sixteen AST-scanning tests enforce architecture invariants on every `make quality` run. New violations fail the build immediately. See [docs/development/structural-guards.md](docs/development/structural-guards.md) for full details.
 
 | Guard | Enforces | Test File |
 |-------|----------|-----------|
@@ -96,9 +96,11 @@ Fourteen AST-scanning tests enforce architecture invariants on every `make quali
 | No raw MediaPackage select | All MediaPackage access goes through repository, not raw `select()` | `test_architecture_no_raw_media_package_select.py` |
 | No raw select outside repos | All ORM model queries go through repositories, not raw `select()` | `test_architecture_no_raw_select.py` |
 | Obligation coverage | Behavioral obligations in docs have matching test coverage | `test_architecture_obligation_coverage.py` |
+| Obligation test quality | Obligation-tagged tests must CALL production code, not just import it | `test_architecture_obligation_test_quality.py` |
 | Code duplication (DRY) | Duplicate block count in src/ and tests/ cannot increase | `check_code_duplication.py` (pre-commit + make quality) |
 | Workflow tenant isolation | WorkflowRepository queries join DBContext for tenant scoping | `test_architecture_workflow_tenant_isolation.py` |
 | No split mock assertions | Tests use `assert_called_once_with()`, not `assert_called_once()` + `call_args` | `test_architecture_weak_mock_assertions.py` |
+| Single migration head | Alembic migration graph has exactly one head | `test_architecture_single_migration_head.py` |
 
 **Rules for guards:**
 - Allowlists can only shrink — never add new violations, fix them instead

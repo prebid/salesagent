@@ -31,8 +31,17 @@ def extract_links_from_file(filepath: Path) -> list[tuple[int, str, str]]:
     links = []
     try:
         content = filepath.read_text(encoding="utf-8")
+        in_code_block = False
         for line_num, line in enumerate(content.splitlines(), start=1):
-            for match in MARKDOWN_LINK_PATTERN.finditer(line):
+            # Skip fenced code blocks
+            if line.strip().startswith("```"):
+                in_code_block = not in_code_block
+                continue
+            if in_code_block:
+                continue
+            # Strip inline code spans before searching for links
+            line_without_code = re.sub(r"`[^`]+`", "", line)
+            for match in MARKDOWN_LINK_PATTERN.finditer(line_without_code):
                 link_text = match.group(1)
                 link_path = match.group(2)
                 links.append((line_num, link_text, link_path))

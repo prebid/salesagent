@@ -353,6 +353,82 @@ def test_something(integration_db, sample_tenant):
 
 All tracked by `salesagent-qo8a`.
 
+### Obligation Test Quality Guard
+
+**File:** `tests/unit/test_architecture_obligation_test_quality.py`
+
+**What it enforces:** Every test tagged with `Covers: <obligation-id>` must
+actually CALL production code from `src.*`, not just import it.
+
+**Why it matters:** A test with a `Covers:` tag claims to verify a behavioral
+contract. If the test body only imports a function without calling it, it
+inflates coverage metrics without providing assurance. This catches the gaming
+pattern: `from src.core.tools import _impl  # noqa: F401` with no actual call.
+
+#### How it works
+
+The guard scans obligation-tagged test files using AST:
+
+1. Finds all `test_*` functions whose docstring contains `Covers: <id>`
+2. For non-xfail tests: checks for `ast.Call` nodes that invoke production
+   names (imported from `src.*`, `tests.harness.*`, `tests.helpers.*`, or
+   `tests.factories.*`). Transitivity is handled — calling a helper that
+   calls production code counts.
+3. For xfail tests (stubs): weaker check — must at least import from `src.*`
+   to show intent, but doesn't need to call it (the function may not exist yet).
+
+#### Tests
+
+| Test | What It Checks |
+|------|---------------|
+| `test_no_new_sham_tests` | No new obligation-tagged tests that don't call production code |
+| `test_allowlist_entries_still_violations` | Stale allowlist detection |
+| `test_violation_count_tracked` | Allowlist size matches actual violation count |
+
+#### Current known violations
+
+Tracked in `obligation_test_quality_allowlist.json`. Allowlist can only shrink.
+Tracked by `salesagent-9q5g`.
+
+### Single Migration Head Guard
+
+**File:** `tests/unit/test_architecture_single_migration_head.py`
+
+**What it enforces:** The Alembic migration graph must have exactly one head
+revision at all times.
+
+**Why it matters:** When two PRs each create a migration branching from the
+same parent and both merge to main, the migration DAG forks into multiple
+heads. This makes `alembic upgrade head` fail, `alembic downgrade -1`
+ambiguous, and `alembic revision` error without `--head`. The problem is
+invisible to PR authors because neither has the other's migration locally.
+
+#### How it works
+
+The guard parses every migration file's AST to extract `revision` (string)
+and `down_revision` (string, tuple, or None). It handles both `ast.Assign`
+and `ast.AnnAssign` styles. It then builds the set of all revisions and the
+set of all revisions pointed to by a `down_revision`. Heads are revisions
+not pointed to by any other migration. The test asserts exactly one head.
+
+#### Tests
+
+| Test | What It Checks |
+|------|---------------|
+| `test_single_migration_head` | Exactly one head exists in the migration graph |
+
+#### No allowlist
+
+Zero tolerance. If multiple heads exist, you must create a merge migration
+before your PR merges:
+
+```bash
+uv run alembic merge -m "Merge migration heads" heads
+```
+
+The smoke test in `tests/smoke/test_database_migrations.py` also checks this,
+providing coverage in the CI smoke-tests job before unit tests run.
+
 ## Adding a New Guard
 
 1. Create `tests/unit/test_architecture_{name}.py`
@@ -379,10 +455,10 @@ uv run pytest tests/unit/test_architecture_schema_inheritance.py -v
 ## Relationship to Other Quality Mechanisms
 
 ```
-Pre-commit hooks (11)          ← catch formatting, route conflicts, star imports
+Pre-commit hooks (40)          ← catch formatting, route conflicts, star imports
     │
     ▼
-Structural guards (7)          ← catch architecture violations (THIS FILE)
+Structural guards (16)         ← catch architecture violations (THIS FILE)
     │
     ▼
 Unit tests (~2950)             ← catch behavior bugs

@@ -4,9 +4,8 @@
 import sys
 from pathlib import Path
 
-from alembic.config import Config
-
 from alembic import command
+from alembic.config import Config
 
 
 def run_migrations(exit_on_error=True):
@@ -28,10 +27,11 @@ def run_migrations(exit_on_error=True):
     # Run migrations
     try:
         print("Running database migrations...")
-        # Use 'heads' instead of 'head' to handle multiple migration heads
-        # This will upgrade to all head revisions, which is necessary when
-        # there are parallel migration branches that haven't been merged yet
-        command.upgrade(alembic_cfg, "heads")
+        # Use 'head' (singular) — the migration graph must have exactly one head.
+        # Structural guard test_architecture_single_migration_head.py enforces this.
+        # If this fails with "multiple heads", create a merge migration first:
+        #   uv run alembic merge -m "Merge migration heads" heads
+        command.upgrade(alembic_cfg, "head")
         print("✅ Database migrations completed successfully!")
 
         # In single-tenant mode, ensure default tenant exists
@@ -52,7 +52,7 @@ def run_migrations(exit_on_error=True):
             print("⚠️ alembic_version table already exists (race condition with another container)")
             print("🔄 Retrying migration...")
             try:
-                command.upgrade(alembic_cfg, "heads")
+                command.upgrade(alembic_cfg, "head")
                 print("✅ Database migrations completed successfully on retry!")
 
                 # In single-tenant mode, ensure default tenant exists
@@ -68,40 +68,6 @@ def run_migrations(exit_on_error=True):
             except Exception as retry_error:
                 print(f"❌ Migration retry also failed: {retry_error}")
                 # Fall through to other error handlers
-
-        # Handle specific case of missing revision f7e503a712cf
-        if "f7e503a712cf" in error_msg:
-            print("🔧 Detected broken migration chain - attempting to fix...")
-            try:
-                # Direct database approach - force update to current head
-                print("Force updating alembic_version table to current head...")
-                from src.core.database.db_config import get_db_connection
-
-                conn = get_db_connection()
-                # Update directly to current head - this bypasses the missing revision entirely
-                cursor = conn.execute("UPDATE alembic_version SET version_num = '6e19576203a0'")
-                conn.commit()
-                conn.close()
-                print("✅ Database version force-updated to current head!")
-                print("✅ Database migrations completed successfully after direct fix!")
-                return
-            except Exception as fix_error:
-                print(f"❌ Failed to force-update migration version: {fix_error}")
-                # Try emergency approach - completely reset
-                try:
-                    print("🔧 Attempting emergency reset of migration state...")
-                    from src.core.database.db_config import get_db_connection
-
-                    conn = get_db_connection()
-                    # Reset to current head
-                    cursor = conn.execute("DELETE FROM alembic_version")
-                    cursor = conn.execute("INSERT INTO alembic_version (version_num) VALUES ('6e19576203a0')")
-                    conn.commit()
-                    conn.close()
-                    print("✅ Emergency reset completed - database is now at current head!")
-                    return
-                except Exception as emergency_error:
-                    print(f"❌ Emergency reset failed: {emergency_error}")
 
         if exit_on_error:
             sys.exit(1)

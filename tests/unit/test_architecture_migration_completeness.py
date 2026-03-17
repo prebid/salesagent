@@ -14,9 +14,14 @@ beads: salesagent-t735
 """
 
 import ast
-from pathlib import Path
 
-MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "alembic" / "versions"
+from tests.unit._migration_helpers import (
+    MIGRATIONS_DIR,
+    get_migration_files,
+    is_empty_body,
+    is_merge_migration,
+    parse_function,
+)
 
 # Alembic operations that modify schema structure
 SCHEMA_OPS = {
@@ -53,45 +58,6 @@ KNOWN_DOWNGRADE_COVERAGE_GAPS = {
 }
 
 
-def _get_migration_files() -> list[Path]:
-    """Get all migration Python files (excluding __init__.py)."""
-    return sorted(f for f in MIGRATIONS_DIR.glob("*.py") if f.name != "__init__.py" and not f.name.startswith("__"))
-
-
-def _parse_function(tree: ast.Module, name: str) -> ast.FunctionDef | None:
-    """Find a top-level function by name in the AST."""
-    for node in ast.iter_child_nodes(tree):
-        if isinstance(node, ast.FunctionDef) and node.name == name:
-            return node
-    return None
-
-
-def _is_empty_body(node: ast.FunctionDef) -> bool:
-    """Check if a function body contains only pass/docstring."""
-    for stmt in node.body:
-        if isinstance(stmt, ast.Pass):
-            continue
-        if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant):
-            continue
-        return False
-    return True
-
-
-def _is_merge_migration(tree: ast.Module) -> bool:
-    """Check if this is a merge migration (empty upgrade + downgrade is OK).
-
-    Merge migrations reconcile multiple alembic branch heads. They have no
-    schema changes — both upgrade() and downgrade() are intentionally empty.
-    """
-    upgrade = _parse_function(tree, "upgrade")
-    downgrade = _parse_function(tree, "downgrade")
-
-    if upgrade is None or downgrade is None:
-        return False
-
-    return _is_empty_body(upgrade) and _is_empty_body(downgrade)
-
-
 def _extract_table_names(node: ast.FunctionDef) -> set[str]:
     """Extract table names referenced in op.XXX() calls."""
     tables = set()
@@ -117,20 +83,20 @@ class TestMigrationCompleteness:
         missing = []
         empty = []
 
-        for path in _get_migration_files():
+        for path in get_migration_files():
             source = path.read_text()
             try:
                 tree = ast.parse(source, filename=str(path))
             except SyntaxError:
                 continue
 
-            if _is_merge_migration(tree):
+            if is_merge_migration(tree):
                 continue
 
-            func = _parse_function(tree, "upgrade")
+            func = parse_function(tree, "upgrade")
             if func is None:
                 missing.append(path.name)
-            elif _is_empty_body(func):
+            elif is_empty_body(func):
                 empty.append(path.name)
 
         violations = []
@@ -146,7 +112,7 @@ class TestMigrationCompleteness:
         missing = []
         empty = []
 
-        for path in _get_migration_files():
+        for path in get_migration_files():
             if path.name in KNOWN_EMPTY_DOWNGRADE:
                 continue
 
@@ -156,13 +122,13 @@ class TestMigrationCompleteness:
             except SyntaxError:
                 continue
 
-            if _is_merge_migration(tree):
+            if is_merge_migration(tree):
                 continue
 
-            func = _parse_function(tree, "downgrade")
+            func = parse_function(tree, "downgrade")
             if func is None:
                 missing.append(path.name)
-            elif _is_empty_body(func):
+            elif is_empty_body(func):
                 empty.append(path.name)
 
         violations = []
@@ -181,7 +147,7 @@ class TestMigrationCompleteness:
         """
         gaps = []
 
-        for path in _get_migration_files():
+        for path in get_migration_files():
             if path.name in KNOWN_DOWNGRADE_COVERAGE_GAPS:
                 continue
 
@@ -191,15 +157,15 @@ class TestMigrationCompleteness:
             except SyntaxError:
                 continue
 
-            if _is_merge_migration(tree):
+            if is_merge_migration(tree):
                 continue
 
-            upgrade = _parse_function(tree, "upgrade")
-            downgrade = _parse_function(tree, "downgrade")
+            upgrade = parse_function(tree, "upgrade")
+            downgrade = parse_function(tree, "downgrade")
 
             if upgrade is None or downgrade is None:
                 continue
-            if _is_empty_body(upgrade) or _is_empty_body(downgrade):
+            if is_empty_body(upgrade) or is_empty_body(downgrade):
                 continue
 
             up_tables = _extract_table_names(upgrade)
@@ -230,8 +196,8 @@ class TestMigrationCompleteness:
             except SyntaxError:
                 continue
 
-            downgrade = _parse_function(tree, "downgrade")
-            if downgrade is not None and not _is_empty_body(downgrade):
+            downgrade = parse_function(tree, "downgrade")
+            if downgrade is not None and not is_empty_body(downgrade):
                 stale.append(f"{name} (downgrade added — remove from allowlist)")
 
         assert not stale, "Stale entries in KNOWN_EMPTY_DOWNGRADE:\n" + "\n".join(f"  {s}" for s in stale)
@@ -251,8 +217,8 @@ class TestMigrationCompleteness:
             except SyntaxError:
                 continue
 
-            upgrade = _parse_function(tree, "upgrade")
-            downgrade = _parse_function(tree, "downgrade")
+            upgrade = parse_function(tree, "upgrade")
+            downgrade = parse_function(tree, "downgrade")
             if upgrade is None or downgrade is None:
                 continue
 
