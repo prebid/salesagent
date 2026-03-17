@@ -1531,14 +1531,16 @@ class TestAdCPContract:
         Now extends library ListCreativesRequest directly - all fields are spec-compliant.
         """
         from adcp.types import CreativeFilters as LibraryCreativeFilters
-        from adcp.types.generated_poc.creative.list_creatives_request import Sort as LibrarySort
 
         # adcp 3.6.0: Request pagination uses PaginationRequest (cursor + max_results)
         from adcp.types.generated_poc.core.pagination_request import PaginationRequest
+        from adcp.types.generated_poc.creative.list_creatives_request import Sort as LibrarySort
 
         from src.core.schemas import ListCreativesRequest
 
         # Create request using spec-compliant structured objects
+        # adcp 3.10: include_performance and include_sub_assets removed from spec;
+        # include_assignments, include_snapshot, include_items, include_variables remain
         request = ListCreativesRequest(
             filters=LibraryCreativeFilters(
                 status="approved",
@@ -1551,9 +1553,7 @@ class TestAdCPContract:
             ),
             pagination=PaginationRequest(max_results=50),  # Request pagination uses cursor/max_results
             sort=LibrarySort(field="created_date", direction="desc"),  # type: ignore[arg-type]
-            include_performance=False,
             include_assignments=True,
-            include_sub_assets=False,
         )
 
         # Test model_dump - should output AdCP-compliant structured fields
@@ -1589,21 +1589,20 @@ class TestAdCPContract:
         assert field_val == "created_date", "sort.field should match input"
         assert direction_val == "desc", "sort.direction should match input"
 
-        # Fields WITH defaults should be present
-        assert "include_performance" in adcp_response, "Field with default should be present"
-        assert adcp_response["include_performance"] is False, "Default value should match"
+        # Fields WITH defaults should be present (adcp 3.10 spec fields)
         assert "include_assignments" in adcp_response, "Field with default should be present"
         assert adcp_response["include_assignments"] is True, "Default value should match"
 
-        # Verify all spec fields are present (per library schema)
+        # Verify all spec fields are present (per adcp 3.10 library schema)
         spec_fields = {
             "context",
             "ext",
             "fields",
             "filters",
             "include_assignments",
-            "include_performance",
-            "include_sub_assets",
+            "include_items",
+            "include_snapshot",
+            "include_variables",
             "pagination",
             "sort",
         }

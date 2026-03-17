@@ -89,8 +89,8 @@ def _list_creatives_impl(
         ListCreativesResponse with filtered creative assets and pagination info
     """
     from adcp.types import CreativeFilters as LibraryCreativeFilters
-    from adcp.types.generated_poc.creative.list_creatives_request import Sort as LibrarySort
     from adcp.types.generated_poc.core.pagination_request import PaginationRequest as LibraryPagination
+    from adcp.types.generated_poc.creative.list_creatives_request import Sort as LibrarySort
 
     from src.core.schemas import ListCreativesRequest
 
@@ -177,9 +177,7 @@ def _list_creatives_impl(
             pagination=structured_pagination,
             sort=structured_sort,
             fields=fields,
-            include_performance=include_performance,
             include_assignments=include_assignments,
-            include_sub_assets=include_sub_assets,
             context=context,
         )
     except ValidationError as e:

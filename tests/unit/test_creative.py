@@ -1557,6 +1557,68 @@ class TestListCreativesRawBoundaryCompleteness:
             assert mock_impl.call_args.kwargs["include_assignments"] is True
 
 
+class TestListCreativesRequestRejectsInternalFlags:
+    """Regression: internal behavior flags must NOT be on ListCreativesRequest.
+
+    External callers must never control _impl behavior through request objects.
+    The flags include_performance and include_sub_assets are not part of the
+    AdCP ListCreativesRequest spec (adcp 3.10). They must be passed as explicit
+    _impl parameters by transport wrappers, never accepted from buyers.
+    """
+
+    def test_include_performance_rejected(self):
+        """ListCreativesRequest must reject include_performance.
+
+        Covers: SEC-001 — internal flags must not be in request objects.
+        """
+        from pydantic import ValidationError
+
+        from src.core.schemas import ListCreativesRequest
+
+        with pytest.raises(ValidationError, match="include_performance"):
+            ListCreativesRequest(include_performance=True)
+
+    def test_include_sub_assets_rejected(self):
+        """ListCreativesRequest must reject include_sub_assets.
+
+        Covers: SEC-001 — internal flags must not be in request objects.
+        """
+        from pydantic import ValidationError
+
+        from src.core.schemas import ListCreativesRequest
+
+        with pytest.raises(ValidationError, match="include_sub_assets"):
+            ListCreativesRequest(include_sub_assets=False)
+
+    def test_include_assignments_is_spec_field(self):
+        """include_assignments IS a valid AdCP spec field (adcp 3.10).
+
+        Covers: SEC-001 — only non-spec fields are extracted.
+        """
+        from src.core.schemas import ListCreativesRequest
+
+        req = ListCreativesRequest(include_assignments=True)
+        assert req.include_assignments is True
+
+    def test_impl_receives_flags_as_parameters_not_from_request(self):
+        """_list_creatives_impl must use function params for include_* flags.
+
+        The request object should NOT carry include_performance or
+        include_sub_assets. Transport wrappers pass them as explicit kwargs.
+
+        Covers: SEC-001 — separation of external request from internal flags.
+        """
+        import inspect
+
+        from src.core.tools.creatives.listing import _list_creatives_impl
+
+        sig = inspect.signature(_list_creatives_impl)
+        params = list(sig.parameters.keys())
+        assert "include_performance" in params, "_impl must accept include_performance as param"
+        assert "include_sub_assets" in params, "_impl must accept include_sub_assets as param"
+        assert "include_assignments" in params, "_impl must accept include_assignments as param"
+
+
 # ============================================================================
 # 8. LIST CREATIVE FORMATS (UC-005)
 # ============================================================================
