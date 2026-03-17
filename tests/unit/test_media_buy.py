@@ -1634,9 +1634,9 @@ class TestUpdateMediaBuyMainFlow:
             adapter.update_media_buy.return_value = adapter_result
             mock_adapter.return_value = adapter
 
-            # Media buy via repo, currency limit via session
+            # Media buy via repo, currency limit via session (x2: max_daily + min_package)
             mock_uow.media_buys.get_by_id.return_value = mock_buy
-            mock_session.scalars.return_value.first.side_effect = [cl]
+            mock_session.scalars.return_value.first.side_effect = [cl, cl]
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
@@ -1711,10 +1711,10 @@ class TestUpdateMediaBuyMainFlow:
             adapter.update_media_buy.return_value = adapter_result
             mock_adapter.return_value = adapter
 
-            # buyer_ref resolution via repo, media buy + currency limit via repo/session
+            # buyer_ref resolution via repo, media buy + currency limit via repo/session (x2)
             mock_uow.media_buys.get_by_buyer_ref.return_value = mock_buy
             mock_uow.media_buys.get_by_id.return_value = mock_buy
-            mock_session.scalars.return_value.first.side_effect = [cl]
+            mock_session.scalars.return_value.first.side_effect = [cl, cl]
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
@@ -2019,7 +2019,7 @@ class TestUpdateMediaBuyTiming:
             # Media buy via repo (called twice: currency check + date path)
             mock_uow.media_buys.get_by_id.side_effect = [mock_buy, mock_buy]
             # Currency limit via session
-            mock_uow_session.scalars.return_value.first.side_effect = [cl]
+            mock_uow_session.scalars.return_value.first.side_effect = [cl, cl]
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
@@ -2089,7 +2089,7 @@ class TestUpdateMediaBuyTiming:
 
             # Media buy via repo, currency limit via session
             mock_uow.media_buys.get_by_id.return_value = mock_buy
-            mock_uow_session.scalars.return_value.first.side_effect = [cl]
+            mock_uow_session.scalars.return_value.first.side_effect = [cl, cl]
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
@@ -3006,7 +3006,7 @@ class TestUpdateMediaBuyAdapterFailure:
 
             # Media buy via repo, currency limit via session
             mock_uow.media_buys.get_by_id.return_value = mock_buy
-            uow_session.scalars.return_value.first.side_effect = [cl]
+            uow_session.scalars.return_value.first.side_effect = [cl, cl]
 
             result = _update_media_buy_impl(req=req, identity=identity)
 

@@ -9,10 +9,21 @@ Handles media buy updates including:
 """
 
 import logging
+import os
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 from adcp import PushNotificationConfig
+
+# ---------------------------------------------------------------------------
+# Financial policy constants (F-05)
+# ---------------------------------------------------------------------------
+
+#: Absolute upper bound for any campaign-level budget update.
+#: Configurable via MAX_CAMPAIGN_BUDGET_USD env var; default 10,000,000.
+MAX_CAMPAIGN_BUDGET: Decimal = Decimal(os.environ.get("MAX_CAMPAIGN_BUDGET_USD", "10000000"))
+
 from adcp.types import Error
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.core.targeting import TargetingOverlay
@@ -508,11 +519,41 @@ def _update_media_buy_impl(
                     currency: str
                     if isinstance(pkg_update.budget, int | float):
                         budget_amount = float(pkg_update.budget)
-                        currency = "USD"  # Default currency for float budgets
+                        # F-07: preserve existing DB currency rather than defaulting to USD
+                        _existing_mb = uow.media_buys.get_by_id(req.media_buy_id)
+                        currency = str(_existing_mb.currency) if _existing_mb and _existing_mb.currency else "USD"
                     else:
                         # Budget object with .total and .currency attributes
                         budget_amount = float(pkg_update.budget.total)
                         currency = str(pkg_update.budget.currency) if pkg_update.budget.currency else "USD"
+
+                    # F-08: enforce minimum package spend on updates, mirroring create path
+                    from src.core.database.models import CurrencyLimit as _CurrencyLimit
+
+                    _cl_stmt = select(_CurrencyLimit).where(
+                        _CurrencyLimit.tenant_id == tenant["tenant_id"],
+                        _CurrencyLimit.currency_code == currency,
+                    )
+                    _cl = session.scalars(_cl_stmt).first()
+                    if _cl and _cl.min_package_budget:
+                        _pkg_budget = Decimal(str(budget_amount))
+                        _min_spend = Decimal(str(_cl.min_package_budget))
+                        if _pkg_budget < _min_spend:
+                            error_msg = (
+                                f"Package budget ({budget_amount} {currency}) does not meet the minimum spend "
+                                f"requirement ({_min_spend} {currency}). "
+                                "The same minimum applies to updates as to creation."
+                            )
+                            response_data = UpdateMediaBuyError(
+                                errors=[Error(code="budget_below_minimum", message=error_msg)],
+                                context=req.context,
+                            )
+                            ctx_manager.update_workflow_step(
+                                step.step_id,
+                                status="failed",
+                                error_message=error_msg,
+                            )
+                            return response_data
 
                     result = adapter.update_media_buy(
                         media_buy_id=req.media_buy_id,
@@ -1067,7 +1108,11 @@ def _update_media_buy_impl(
             budget_currency: str  # Renamed to avoid redefinition
             if isinstance(req.budget, int | float):
                 total_budget = float(req.budget)
-                budget_currency = "USD"  # Default currency for float budgets
+                # F-07: preserve existing DB currency rather than defaulting to USD
+                _mb_for_currency = uow.media_buys.get_by_id(req.media_buy_id)
+                budget_currency = (
+                    str(_mb_for_currency.currency) if _mb_for_currency and _mb_for_currency.currency else "USD"
+                )
             else:
                 # Budget object with .total and .currency attributes
                 total_budget = float(req.budget.total)
@@ -1083,6 +1128,24 @@ def _update_media_buy_impl(
                     step.step_id,
                     status="failed",
                     response_data=response_data.model_dump(mode="json"),
+                    error_message=error_msg,
+                )
+                return response_data
+
+            # F-05: reject budgets that exceed the configured ceiling
+            if Decimal(str(total_budget)) > MAX_CAMPAIGN_BUDGET:
+                error_msg = (
+                    f"Budget {total_budget} {budget_currency} exceeds the maximum allowed campaign budget "
+                    f"({MAX_CAMPAIGN_BUDGET} {budget_currency}). "
+                    "Contact your publisher representative if you require a higher limit."
+                )
+                response_data = UpdateMediaBuyError(
+                    errors=[Error(code="budget_ceiling_exceeded", message=error_msg)],
+                    context=req.context,
+                )
+                ctx_manager.update_workflow_step(
+                    step.step_id,
+                    status="failed",
                     error_message=error_msg,
                 )
                 return response_data

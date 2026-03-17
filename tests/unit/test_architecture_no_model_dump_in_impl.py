@@ -25,31 +25,32 @@ BANNED_METHODS = {"model_dump", "model_dump_internal"}
 # Known violations — allowlist shrinks as violations are fixed.
 # Each entry is (relative_path_from_tools_dir, line_number).
 # FIXME(salesagent-hr8n): 25 violations remain (4 fixed by salesagent-lfto).
+# Line numbers updated by PR04 patch (F-05 constant block shifted all entries +11).
 KNOWN_VIOLATIONS = {
     # _update_media_buy_impl: 23 violations (workflow step response_data)
-    ("media_buy_update.py", 186),  # req.model_dump() → request_data_for_workflow
-    ("media_buy_update.py", 212),  # response_data.model_dump()
-    ("media_buy_update.py", 267),  # approval_response.model_dump()
-    ("media_buy_update.py", 268),  # req.model_dump() → approval_data
-    ("media_buy_update.py", 331),  # response_data.model_dump()
-    ("media_buy_update.py", 398),  # response_data.model_dump()
-    ("media_buy_update.py", 422),  # error_response.model_dump()
-    ("media_buy_update.py", 456),  # success_response.model_dump()
-    ("media_buy_update.py", 484),  # response_data.model_dump()
-    ("media_buy_update.py", 501),  # response_data.model_dump()
-    ("media_buy_update.py", 534),  # response_data.model_dump()
-    ("media_buy_update.py", 565),  # response_data.model_dump()
-    ("media_buy_update.py", 585),  # response_data.model_dump()
-    ("media_buy_update.py", 611),  # response_data.model_dump()
-    ("media_buy_update.py", 791),  # response_data.model_dump()
-    ("media_buy_update.py", 819),  # response_data.model_dump()
-    ("media_buy_update.py", 848),  # response_data.model_dump()
-    ("media_buy_update.py", 1020),  # response_data.model_dump()
-    ("media_buy_update.py", 1038),  # response_data.model_dump()
-    ("media_buy_update.py", 1085),  # response_data.model_dump()
-    ("media_buy_update.py", 1162),  # response_data.model_dump()
-    ("media_buy_update.py", 1194),  # response_data.model_dump()
-    ("media_buy_update.py", 1256),  # final_response.model_dump()
+    ("media_buy_update.py", 197),  # req.model_dump() -> request_data_for_workflow
+    ("media_buy_update.py", 223),  # response_data.model_dump()
+    ("media_buy_update.py", 278),  # approval_response.model_dump()
+    ("media_buy_update.py", 279),  # req.model_dump() -> approval_data
+    ("media_buy_update.py", 342),  # response_data.model_dump()
+    ("media_buy_update.py", 409),  # response_data.model_dump()
+    ("media_buy_update.py", 433),  # error_response.model_dump()
+    ("media_buy_update.py", 467),  # success_response.model_dump()
+    ("media_buy_update.py", 495),  # response_data.model_dump()
+    ("media_buy_update.py", 512),  # response_data.model_dump()
+    ("media_buy_update.py", 575),  # response_data.model_dump()
+    ("media_buy_update.py", 606),  # response_data.model_dump()
+    ("media_buy_update.py", 626),  # response_data.model_dump()
+    ("media_buy_update.py", 652),  # response_data.model_dump()
+    ("media_buy_update.py", 832),  # response_data.model_dump()
+    ("media_buy_update.py", 860),  # response_data.model_dump()
+    ("media_buy_update.py", 889),  # response_data.model_dump()
+    ("media_buy_update.py", 1061),  # response_data.model_dump()
+    ("media_buy_update.py", 1079),  # response_data.model_dump()
+    ("media_buy_update.py", 1130),  # response_data.model_dump()
+    ("media_buy_update.py", 1225),  # response_data.model_dump()
+    ("media_buy_update.py", 1257),  # response_data.model_dump()
+    ("media_buy_update.py", 1319),  # final_response.model_dump()
     # _get_products_impl: 1 violation (logging)
     ("products.py", 637),  # req.filters.model_dump() in logger.info
     # _list_creatives_impl: 1 violation (filter dict conversion)

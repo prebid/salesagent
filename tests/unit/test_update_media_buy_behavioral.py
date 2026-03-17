@@ -17,6 +17,7 @@ BDD scenario cross-references:
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from itertools import repeat
 from unittest.mock import ANY, MagicMock, Mock, patch
 
 import pytest
@@ -78,6 +79,7 @@ def _make_mock_currency_limit(max_daily=None):
     """Create a mock CurrencyLimit with proper numeric values."""
     cl = MagicMock()
     cl.max_daily_package_spend = Decimal(str(max_daily)) if max_daily else None
+    cl.min_package_budget = Decimal("0")
     return cl
 
 
@@ -237,7 +239,7 @@ def test_combined_campaign_and_package_update(standard_mocks):
 
     # Session scalars for currency limit lookup
     mock_scalars = MagicMock()
-    mock_scalars.first.side_effect = [mock_currency_limit]
+    mock_scalars.first.side_effect = repeat(mock_currency_limit)
     mock_session.scalars.return_value = mock_scalars
 
     identity = _make_identity()
@@ -291,7 +293,12 @@ def test_multi_package_update_processes_all_packages(standard_mocks):
     mock_currency_limit = _make_mock_currency_limit(max_daily=100000)
     standard_mocks["uow_instance"].media_buys.get_by_id.return_value = mock_media_buy
     mock_scalars = MagicMock()
-    mock_scalars.first.side_effect = [mock_currency_limit]
+    mock_scalars.first.side_effect = [
+        mock_currency_limit,
+        mock_currency_limit,
+        mock_currency_limit,
+        mock_currency_limit,
+    ]
     mock_session.scalars.return_value = mock_scalars
 
     identity = _make_identity()
@@ -368,7 +375,7 @@ def test_main_flow_package_budget_update(standard_mocks):
     standard_mocks["uow_instance"].media_buys.get_by_id.return_value = _make_mock_media_buy("mb_main")
     mock_currency_limit = _make_mock_currency_limit(max_daily=100000)
     mock_scalars = MagicMock()
-    mock_scalars.first.side_effect = [mock_currency_limit]
+    mock_scalars.first.side_effect = repeat(mock_currency_limit)
     mock_session.scalars.return_value = mock_scalars
 
     identity = _make_identity()
@@ -450,9 +457,8 @@ class TestFlightDateValidationAndPersistence:
             mock_existing_mb,
         ]
         mock_scalars = MagicMock()
-        mock_scalars.first.side_effect = [
-            _make_mock_currency_limit(),
-        ]
+        mock_currency_limit = _make_mock_currency_limit()
+        mock_scalars.first.side_effect = repeat(mock_currency_limit)
         mock_session.scalars.return_value = mock_scalars
 
         # end_time BEFORE start_time
@@ -487,9 +493,8 @@ class TestFlightDateValidationAndPersistence:
             mock_existing_mb,
         ]
         mock_scalars = MagicMock()
-        mock_scalars.first.side_effect = [
-            _make_mock_currency_limit(),
-        ]
+        mock_currency_limit = _make_mock_currency_limit()
+        mock_scalars.first.side_effect = repeat(mock_currency_limit)
         mock_session.scalars.return_value = mock_scalars
 
         identity = _make_identity()
@@ -522,7 +527,7 @@ class TestCampaignBudgetValidationAndPersistence:
 
         mock_currency_limit = _make_mock_currency_limit()
         mock_scalars = MagicMock()
-        mock_scalars.first.side_effect = [mock_currency_limit]
+        mock_scalars.first.side_effect = repeat(mock_currency_limit)
         mock_session.scalars.return_value = mock_scalars
 
         # Mock packages for campaign budget affected tracking (via repo)
@@ -805,6 +810,7 @@ class TestTimezoneHandlingRegression:
         mock_scalars = MagicMock()
         mock_scalars.first.side_effect = [
             _make_mock_currency_limit(),
+            _make_mock_currency_limit(),
         ]
         mock_session.scalars.return_value = mock_scalars
 
@@ -836,6 +842,7 @@ class TestTimezoneHandlingRegression:
         ]
         mock_scalars = MagicMock()
         mock_scalars.first.side_effect = [
+            _make_mock_currency_limit(),
             _make_mock_currency_limit(),
         ]
         mock_session.scalars.return_value = mock_scalars
