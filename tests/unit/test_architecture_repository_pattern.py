@@ -270,6 +270,9 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
         "test_trigger_still_blocks_manual_deletion_of_last_pricing_option",
     ),
     ("tests/integration/test_product_deletion_with_trigger.py", "test_product_deletion_with_multiple_pricing_options"),
+    # tests/integration/test_product_format_validation.py
+    ("tests/integration/test_product_format_validation.py", "tenant_with_prereqs"),
+    ("tests/integration/test_product_format_validation.py", "app_client"),
     # tests/integration/test_product_formats_update.py
     ("tests/integration/test_product_formats_update.py", "sample_product"),
     # tests/integration/test_product_multiple_format_ids.py
