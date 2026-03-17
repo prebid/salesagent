@@ -266,7 +266,6 @@ class TritonDigital(AdServerAdapter):
 
                 flight_response = requests.post(f"{self.base_url}/flights", headers=self.headers, json=flight_payload)
                 flight_response.raise_for_status()
-                flight_response.json()
 
             # Use the actual campaign ID from Triton
             media_buy_id = f"triton_{campaign_id}"

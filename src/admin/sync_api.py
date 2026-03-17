@@ -11,13 +11,13 @@ import json
 import logging
 import secrets
 from datetime import UTC, datetime
-from functools import wraps
 from typing import Any
 
 from flask import Blueprint, Response, jsonify, request
 from sqlalchemy import func, select
 
 from src.adapters.google_ad_manager import GoogleAdManager
+from src.admin.auth_helpers import require_api_key_auth
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig, SyncJob, Tenant, TenantManagementConfig
 from src.services.gam_inventory_service import db_session as gam_db_session
@@ -31,38 +31,15 @@ sync_api = Blueprint("sync_api", __name__, url_prefix="/api/v1/sync")
 db_session = gam_db_session
 
 
-def get_tenant_management_api_key() -> str | None:
-    """Get tenant management API key from database."""
-    with get_db_session() as db_session:
-        stmt = select(TenantManagementConfig).filter_by(config_key="api_key")
-        config = db_session.scalars(stmt).first()
-
-    if config:
-        return config.config_value
-    return None
-
-
-def require_tenant_management_api_key(f: Any) -> Any:
-    """Decorator to require tenant management API key authentication."""
-
-    @wraps(f)
-    def decorated_function(*args: Any, **kwargs: Any) -> Any:
-        api_key = request.headers.get("X-API-Key")
-
-        if not api_key:
-            return jsonify({"error": "API key required"}), 401
-
-        valid_key = get_tenant_management_api_key()
-        if not valid_key or api_key != valid_key:
-            return jsonify({"error": "Invalid API key"}), 401
-
-        return f(*args, **kwargs)
-
-    return decorated_function
+require_sync_api_key = require_api_key_auth(
+    env_var="SYNC_API_KEY",
+    config_key="api_key",
+    header="X-API-Key",
+)
 
 
 @sync_api.route("/trigger/<tenant_id>", methods=["POST"])
-@require_tenant_management_api_key
+@require_sync_api_key
 def trigger_sync(tenant_id: str) -> tuple[Response, int]:
     """
     Trigger an inventory sync for a tenant.
@@ -224,7 +201,7 @@ def trigger_sync(tenant_id: str) -> tuple[Response, int]:
 
 
 @sync_api.route("/status/<sync_id>", methods=["GET"])
-@require_tenant_management_api_key
+@require_sync_api_key
 def get_sync_status(sync_id: str) -> tuple[Response, int]:
     """Get status of a specific sync job."""
     try:
@@ -268,7 +245,7 @@ def get_sync_status(sync_id: str) -> tuple[Response, int]:
 
 
 @sync_api.route("/history/<tenant_id>", methods=["GET"])
-@require_tenant_management_api_key
+@require_sync_api_key
 def get_sync_history(tenant_id: str) -> tuple[Response, int]:
     """
     Get sync history for a tenant.
@@ -335,7 +312,7 @@ def get_sync_history(tenant_id: str) -> tuple[Response, int]:
 
 
 @sync_api.route("/tenants", methods=["GET"])
-@require_tenant_management_api_key
+@require_sync_api_key
 def list_tenants() -> tuple[Response, int]:
     """List all GAM-enabled tenants."""
     try:
@@ -391,7 +368,7 @@ def list_tenants() -> tuple[Response, int]:
 
 
 @sync_api.route("/stats", methods=["GET"])
-@require_tenant_management_api_key
+@require_sync_api_key
 def get_sync_stats() -> tuple[Response, int]:
     """Get overall sync statistics across all tenants."""
     try:
@@ -482,7 +459,7 @@ def get_sync_stats() -> tuple[Response, int]:
 
 
 @sync_api.route("/tenant/<tenant_id>/orders/sync", methods=["POST"])
-@require_tenant_management_api_key
+@require_sync_api_key
 def sync_tenant_orders(tenant_id: str) -> tuple[Response, int]:
     """Trigger orders and line items sync for a tenant."""
     db_session.remove()  # Clean start
@@ -584,7 +561,7 @@ def sync_tenant_orders(tenant_id: str) -> tuple[Response, int]:
 
 
 @sync_api.route("/tenant/<tenant_id>/orders", methods=["GET"])
-@require_tenant_management_api_key
+@require_sync_api_key
 def get_tenant_orders(tenant_id: str) -> tuple[Response, int]:
     """Get orders for a tenant."""
     try:
@@ -641,7 +618,7 @@ def get_tenant_orders(tenant_id: str) -> tuple[Response, int]:
 
 
 @sync_api.route("/tenant/<tenant_id>/orders/<order_id>", methods=["GET"])
-@require_tenant_management_api_key
+@require_sync_api_key
 def get_order_details(tenant_id: str, order_id: str) -> tuple[Response, int]:
     """Get detailed information about an order including line items."""
     try:
@@ -671,7 +648,7 @@ def get_order_details(tenant_id: str, order_id: str) -> tuple[Response, int]:
 
 
 @sync_api.route("/tenant/<tenant_id>/line-items", methods=["GET"])
-@require_tenant_management_api_key
+@require_sync_api_key
 def get_tenant_line_items(tenant_id: str) -> tuple[Response, int]:
     """Get line items for a tenant."""
     try:
@@ -726,5 +703,5 @@ def initialize_tenant_management_api_key() -> str:
         session.add(new_config)
         session.commit()
 
-        logger.info(f"Generated new tenant management API key: {api_key[:10]}...")
+        logger.info("Generated new sync API key")
         return api_key

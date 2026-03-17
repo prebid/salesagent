@@ -533,6 +533,7 @@ class ListCreativeFormatsRequest(LibraryListCreativeFormatsRequest):
     @model_validator(mode="before")
     @classmethod
     def upgrade_legacy_format_ids(cls, values: dict) -> dict:
+        """Convert dict format_ids to FormatId objects (AdCP v2.4 compliance)."""
         return _upgrade_legacy_format_ids(values)
 
 

@@ -1123,7 +1123,7 @@ class Principal(SalesAgentBaseModel):
 
     def get_adapter_id(self, adapter_name: str) -> str | None:
         """Get the adapter-specific ID for this principal."""
-        from src.core.utils.adapter_mapping import resolve_adapter_id
+        from src.core.platform_mappings import resolve_adapter_id
 
         return resolve_adapter_id(self.platform_mappings, adapter_name)
 
@@ -1192,6 +1192,29 @@ class FormatId(LibraryFormatId):
             Duration in milliseconds, or None if not specified.
         """
         return self.duration_ms
+
+
+def _upgrade_legacy_format_ids(values: dict) -> dict:
+    """Convert dict format_ids entries to FormatId objects (AdCP v2.4 compliance).
+
+    Shared validator logic used by PackageRequest, ProductFilters, and
+    ListCreativeFormatsRequest.  Each class delegates its
+    ``@model_validator(mode="before")`` to this function.
+    """
+    if not isinstance(values, dict):
+        return values
+
+    format_ids = values.get("format_ids")
+    if format_ids and isinstance(format_ids, list):
+        upgraded = []
+        for fmt_id in format_ids:
+            if isinstance(fmt_id, dict) and "agent_url" in fmt_id and "id" in fmt_id:
+                upgraded.append(FormatId(**fmt_id))
+            else:
+                upgraded.append(fmt_id)
+        values["format_ids"] = upgraded
+
+    return values
 
 
 # --- Brand Manifest Models (AdCP v1.8.0) ---
@@ -1270,27 +1293,6 @@ class BrandManifestRef(SalesAgentBaseModel):
 # --- Package Schemas (Extend adcp library for proper request/response separation) ---
 
 
-def _upgrade_legacy_format_ids(values: dict) -> dict:
-    """Convert dict format_ids to FormatId objects (AdCP v2.4 compliance).
-
-    Shared validator used by PackageRequest, ProductFilters, and ListCreativeFormatsRequest.
-    """
-    if not isinstance(values, dict):
-        return values
-
-    format_ids = values.get("format_ids")
-    if format_ids and isinstance(format_ids, list):
-        upgraded = []
-        for fmt_id in format_ids:
-            if isinstance(fmt_id, dict) and "agent_url" in fmt_id and "id" in fmt_id:
-                upgraded.append(FormatId(**fmt_id))
-            else:
-                upgraded.append(fmt_id)
-        values["format_ids"] = upgraded
-
-    return values
-
-
 class PackageRequest(LibraryPackageRequest):
     """Package request schema (for CreateMediaBuyRequest).
 
@@ -1364,6 +1366,7 @@ class PackageRequest(LibraryPackageRequest):
     @model_validator(mode="before")
     @classmethod
     def upgrade_legacy_format_ids(cls, values: dict) -> dict:
+        """Convert dict format_ids to FormatId objects (AdCP v2.4 compliance)."""
         return _upgrade_legacy_format_ids(values)
 
 
@@ -2262,17 +2265,7 @@ class ListAuthorizedPropertiesResponse(NestedModelSerializerMixin, SalesAgentBas
 # When the project migrates to adcp >=3.6.0, these can be replaced with library imports.
 
 
-class DeliveryStatus(str, Enum):
-    """Operational delivery state of a package.
-
-    Used by Snapshot (get_media_buys types). The delivery.py module defines
-    a superset of this enum with additional values for delivery responses.
-    """
-
-    delivering = "delivering"
-    not_delivering = "not_delivering"
-    completed = "completed"
-    budget_exhausted = "budget_exhausted"
+from src.core.schemas.delivery import DeliveryStatus  # noqa: E402
 
 
 class SnapshotUnavailableReason(str, Enum):

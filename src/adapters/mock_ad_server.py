@@ -1,12 +1,11 @@
 import random
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from src.core.schemas import Snapshot
 
 # adcp 3.6.0: BrandManifest removed from CreateMediaBuyRequest; now uses BrandReference (brand field)
-from adcp.types.aliases import Package as ResponsePackage
 from pydantic import Field
 
 from src.adapters.base import (
@@ -824,44 +823,12 @@ class MockAdServer(AdServerAdapter):
         else:
             self.log(f"Would return: Campaign ID '{media_buy_id}' with status 'pending_creative'")
 
-        # Build packages response with buyer_ref from original request
-        # Per AdCP spec, CreateMediaBuyResponse.Package only contains:
-        # - buyer_ref (required)
-        # - package_id (required)
-        response_packages = []
-        for idx, pkg in enumerate(packages):
-            # Get package_id from MediaPackage
-            package_id = pkg.package_id
-
-            # If package doesn't have package_id yet, generate one
-            if not package_id:
-                import uuid
-
-                package_id = f"pkg_{idx}_{uuid.uuid4().hex[:8]}"
-                self.log(f"[DEBUG] MockAdapter: Generated package_id for package {idx}: {package_id}")
-
-            # Get buyer_ref from original request package
-            buyer_ref = "unknown"  # Default fallback
-            if request.packages and idx < len(request.packages):
-                buyer_ref = request.packages[idx].buyer_ref or buyer_ref
-
-            # Create AdCP-compliant Package response (package_id + status required per v2.9.0)
-            # Include product_id to ensure it's preserved in database storage
-            response_packages.append(
-                ResponsePackage(
-                    buyer_ref=buyer_ref,
-                    package_id=package_id,
-                    product_id=pkg.product_id,  # Preserve product_id from input package
-                    paused=False,  # Default to not paused for created packages
-                )
-            )
-
-        self.log(f"[DEBUG] MockAdapter: Returning {len(response_packages)} packages in response")
-        return CreateMediaBuySuccess(
-            buyer_ref=request.buyer_ref or "unknown",  # Required field per AdCP spec
-            media_buy_id=media_buy_id,
-            creative_deadline=datetime.now(UTC) + timedelta(days=2),
-            packages=response_packages,
+        self.log(f"[DEBUG] MockAdapter: Returning {len(packages)} packages in response")
+        return self._build_create_success(
+            request,
+            media_buy_id,
+            packages,
+            include_product_id=True,
         )
 
     def add_creative_assets(
