@@ -54,23 +54,30 @@ console = Console()
 
 
 def validate_agent_url(url: str | None) -> bool:
-    """Validate agent_url is a safe HTTP(S) URL per AdCP spec.
+    """Validate agent_url is a well-formed HTTP(S) URL per AdCP spec.
 
-    Rejects private/internal/loopback targets and cloud metadata endpoints
-    in addition to basic scheme and netloc validation.
+    This validates format/structure only (scheme + netloc). It does NOT
+    perform DNS resolution or SSRF network checks because it is called
+    during approval processing against URLs that are already stored in
+    the database — not against live user-supplied input.
+
+    SSRF protection for user-supplied agent URLs is enforced at the admin
+    ingestion boundary in src/admin/blueprints/signals_agents.py using
+    check_url_ssrf(), which includes DNS resolution.
 
     Args:
         url: URL string to validate
 
     Returns:
-        True if the URL is a safe, reachable public HTTP(S) endpoint.
+        True if valid HTTP(S) URL with a non-empty netloc.
     """
     if not url or not isinstance(url, str):
         return False
-    from src.core.security.url_validator import check_url_ssrf
-
-    is_safe, _ = check_url_ssrf(url)
-    return is_safe
+    try:
+        result = urlparse(url)
+        return all([result.scheme in ("http", "https"), result.netloc])
+    except Exception:
+        return False
 
 
 # Tool-specific imports

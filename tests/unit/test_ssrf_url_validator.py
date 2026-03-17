@@ -130,7 +130,13 @@ class TestBlockedHostnames:
 
 
 class TestValidateAgentUrl:
-    """validate_agent_url in media_buy_create delegates to check_url_ssrf."""
+    """validate_agent_url in media_buy_create validates format only (scheme + netloc).
+
+    This function is called during approval processing against URLs already stored
+    in the database, not against live user input. It validates structure, not
+    network safety. SSRF protection for user-supplied URLs is enforced at the
+    admin ingestion boundary in signals_agents.py via check_url_ssrf().
+    """
 
     def test_none_rejected(self):
         from src.core.tools.media_buy_create import validate_agent_url
@@ -145,22 +151,25 @@ class TestValidateAgentUrl:
     def test_public_https_url_accepted(self):
         from src.core.tools.media_buy_create import validate_agent_url
 
-        with patch("src.core.security.url_validator.socket.gethostbyname", return_value="93.184.216.34"):
-            assert validate_agent_url("https://example.com/agent") is True
+        assert validate_agent_url("https://creatives.example.com/agent") is True
 
-    def test_localhost_rejected(self):
+    def test_public_http_url_accepted(self):
         from src.core.tools.media_buy_create import validate_agent_url
 
-        assert validate_agent_url("http://localhost:9999") is False
+        assert validate_agent_url("http://creatives.example.com/agent") is True
 
-    def test_private_ip_rejected(self):
+    def test_non_http_scheme_rejected(self):
         from src.core.tools.media_buy_create import validate_agent_url
 
-        with patch("src.core.security.url_validator.socket.gethostbyname", return_value="10.0.0.1"):
-            assert validate_agent_url("http://internal.corp") is False
+        assert validate_agent_url("ftp://creatives.example.com") is False
 
-    def test_docker_internal_rejected(self):
-        """F-04 regression: host.docker.internal must be blocked."""
+    def test_missing_netloc_rejected(self):
         from src.core.tools.media_buy_create import validate_agent_url
 
-        assert validate_agent_url("http://host.docker.internal:9999") is False
+        assert validate_agent_url("https://") is False
+
+    def test_unresolvable_hostname_accepted(self):
+        """Format validation does not do DNS resolution — offline services are structurally valid."""
+        from src.core.tools.media_buy_create import validate_agent_url
+
+        assert validate_agent_url("https://not-deployed-yet.internal.example.com/agent") is True
