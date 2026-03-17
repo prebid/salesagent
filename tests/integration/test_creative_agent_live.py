@@ -13,6 +13,7 @@ enable_live_mode fixture so they call the real creative agent.
 
 import pytest
 
+from src.core import creative_agent_registry as creative_agent_registry_module
 from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
 
 # The live creative agent URL
@@ -31,10 +32,21 @@ def enable_live_mode(monkeypatch):
     monkeypatch.setenv("ADCP_TESTING", "false")
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def registry():
-    """Fresh registry instance for each test."""
-    return CreativeAgentRegistry()
+    """Shared registry instance so live tests reuse the format cache.
+
+    A per-test registry defeats caching and can hammer the public creative
+    agent hard enough to trigger rate limiting in CI.
+    """
+    previous_registry = creative_agent_registry_module._registry
+    shared_registry = CreativeAgentRegistry()
+    shared_registry._format_cache.clear()
+    creative_agent_registry_module._registry = shared_registry
+    try:
+        yield shared_registry
+    finally:
+        creative_agent_registry_module._registry = previous_registry
 
 
 class TestCreativeAgentLiveConnection:
