@@ -50,6 +50,9 @@ async def list_tasks(
     if not identity or not identity.tenant:
         raise AdCPAuthenticationError("No tenant context available. Check x-adcp-auth token and host headers.")
 
+    if not identity.is_authenticated:
+        raise AdCPAuthenticationError("Authentication required. Provide a valid x-adcp-auth token to access tasks.")
+
     tenant = identity.tenant
 
     with WorkflowUoW(tenant["tenant_id"]) as uow:
@@ -137,6 +140,9 @@ async def get_task(
     if not identity or not identity.tenant:
         raise AdCPAuthenticationError("No tenant context available. Check x-adcp-auth token and host headers.")
 
+    if not identity.is_authenticated:
+        raise AdCPAuthenticationError("Authentication required. Provide a valid x-adcp-auth token to access tasks.")
+
     tenant = identity.tenant
 
     with WorkflowUoW(tenant["tenant_id"]) as uow:
@@ -205,6 +211,9 @@ async def complete_task(
 
     if not identity or not identity.tenant:
         raise AdCPAuthenticationError("No tenant context available. Check x-adcp-auth token and host headers.")
+
+    if not identity.is_authenticated:
+        raise AdCPAuthenticationError("Authentication required. Provide a valid x-adcp-auth token to complete tasks.")
 
     principal_id = identity.principal_id
     tenant = identity.tenant
