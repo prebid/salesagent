@@ -123,8 +123,9 @@ def _list_creatives_impl(
     filters_dict: dict[str, Any] = {}
     if status:
         filters_dict["statuses"] = [status]
-    if format:
-        filters_dict["format_ids"] = [format]
+    # Note: flat 'format' param is handled by DB query directly (line ~213),
+    # not via CreativeFilters. adcp 3.10 format_ids requires FormatId objects
+    # which need agent_url — structured filters.format_ids handles this properly.
     if tags:
         filters_dict["tags"] = tags
     if created_after_dt:
