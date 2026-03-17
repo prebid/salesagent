@@ -2359,7 +2359,6 @@ class GetMediaBuysRequest(SalesAgentBaseModel):
     media_buy_ids: list[str] | None = Field(default=None, description="Specific media buy IDs to retrieve")
     buyer_refs: list[str] | None = Field(default=None, description="Buyer references to filter by")
     status_filter: Any | None = Field(default=None, description="Filter by status (MediaBuyStatus or list)")
-    include_snapshot: bool = Field(default=False, description="Include near-real-time delivery snapshot per package")
     account_id: str | None = Field(default=None, description="Account to filter to")
     context: ContextObject | None = Field(default=None, description="Application-level context")
 
