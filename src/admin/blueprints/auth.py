@@ -18,6 +18,7 @@ from authlib.integrations.flask_client import OAuth
 from flask import Blueprint, abort, current_app, flash, redirect, render_template, request, session, url_for
 from sqlalchemy import select
 
+from src.admin.auth_utils import extract_user_info
 from src.admin.utils import is_super_admin
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
@@ -110,69 +111,6 @@ def get_oauth_config():
                 logger.error(f"Failed to load OAuth credentials from {filepath}: {e}")
 
     return None, None, None, None
-
-
-def extract_user_info(token):
-    """Extract user info from OAuth token, handling different provider formats.
-
-    Different OIDC providers return user info in different claim formats:
-    - Google: email, name, picture
-    - Microsoft: email OR preferred_username, name, picture
-    - Okta: email, name, picture (or custom claims)
-    - Auth0: email, name, picture
-    - Keycloak: email, preferred_username, name, picture
-
-    Returns dict with normalized keys: email, name, picture
-    """
-    import jwt
-
-    user = token.get("userinfo")
-
-    if not user:
-        # Try to decode from ID token
-        id_token = token.get("id_token")
-        if id_token:
-            try:
-                user = jwt.decode(id_token, options={"verify_signature": False})
-            except Exception as e:
-                logger.warning(f"Failed to decode ID token: {e}")
-                return None
-
-    if not user:
-        return None
-
-    # Extract email - try multiple claim names
-    email = (
-        user.get("email")
-        or user.get("preferred_username")
-        or user.get("upn")  # Microsoft UPN
-        or user.get("sub")  # Fallback to subject
-    )
-
-    if not email:
-        logger.error(f"Could not extract email from user claims: {list(user.keys())}")
-        return None
-
-    # Extract name - try multiple claim names
-    name = user.get("name") or user.get("display_name")
-    if not name:
-        # Try constructing from given/family names
-        given = user.get("given_name", "")
-        family = user.get("family_name", "")
-        if given or family:
-            name = f"{given} {family}".strip()
-    if not name:
-        # Fallback to email prefix
-        name = email.split("@")[0]
-
-    # Extract picture - try multiple claim names
-    picture = user.get("picture") or user.get("avatar_url") or user.get("photo") or ""
-
-    return {
-        "email": email.lower(),
-        "name": name,
-        "picture": picture,
-    }
 
 
 def init_oauth(app):

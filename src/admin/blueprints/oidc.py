@@ -9,6 +9,7 @@ from authlib.integrations.flask_client import OAuth
 from flask import Blueprint, current_app, flash, jsonify, redirect, render_template, request, session, url_for
 from sqlalchemy import select
 
+from src.admin.auth_utils import extract_user_info
 from src.admin.utils import require_tenant_access
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant, User
@@ -428,58 +429,3 @@ def login(tenant_id: str):
         logger.info(f"Initiating OIDC login for tenant {tenant_id}")
 
         return oauth.login_oidc.authorize_redirect(redirect_uri)
-
-
-def extract_user_info(token: dict) -> dict | None:
-    """Extract user info from OAuth token.
-
-    Handles different provider formats.
-
-    Args:
-        token: OAuth token response
-
-    Returns:
-        Dict with email, name, picture or None
-    """
-    import jwt
-
-    user = token.get("userinfo")
-
-    if not user:
-        # Try to decode from ID token
-        id_token = token.get("id_token")
-        if id_token:
-            try:
-                user = jwt.decode(id_token, options={"verify_signature": False})
-            except Exception as e:
-                logger.warning(f"Failed to decode ID token: {e}")
-                return None
-
-    if not user:
-        return None
-
-    # Extract email
-    email = user.get("email") or user.get("preferred_username") or user.get("upn") or user.get("sub")
-
-    if not email:
-        logger.error(f"Could not extract email from user claims: {list(user.keys())}")
-        return None
-
-    # Extract name
-    name = user.get("name") or user.get("display_name")
-    if not name:
-        given = user.get("given_name", "")
-        family = user.get("family_name", "")
-        if given or family:
-            name = f"{given} {family}".strip()
-    if not name:
-        name = email.split("@")[0]
-
-    # Extract picture
-    picture = user.get("picture") or user.get("avatar_url") or ""
-
-    return {
-        "email": email.lower(),
-        "name": name,
-        "picture": picture,
-    }

@@ -4,16 +4,14 @@ Fetches buyer property lists from external agent services and caches
 the results using the cache_valid_until TTL from the response.
 """
 
-import ipaddress
 import logging
-import socket
 from datetime import UTC, datetime, timedelta
-from urllib.parse import urlparse
 
 import httpx
 from adcp.types import GetPropertyListResponse, PropertyListReference
 
 from src.core.exceptions import AdCPAdapterError
+from src.core.security.url_validator import check_url_ssrf
 
 logger = logging.getLogger(__name__)
 
@@ -26,27 +24,6 @@ _DEFAULT_CACHE_TTL_SECONDS = 300  # 5 minutes
 # Cache: (agent_url, list_id) -> (identifier_values, expires_at)
 _cache: dict[tuple[str, str], tuple[list[str], datetime]] = {}
 
-# Blocked hostnames (cloud metadata services, localhost aliases)
-_BLOCKED_HOSTNAMES = {
-    "localhost",
-    "metadata.google.internal",
-    "169.254.169.254",
-    "metadata",
-    "instance-data",
-}
-
-# Blocked IP ranges (RFC 1918 private networks, loopback, link-local)
-_BLOCKED_NETWORKS = [
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("127.0.0.0/8"),
-    ipaddress.ip_network("169.254.0.0/16"),
-    ipaddress.ip_network("::1/128"),
-    ipaddress.ip_network("fc00::/7"),
-    ipaddress.ip_network("fe80::/10"),
-]
-
 
 def _validate_agent_url(agent_url: str) -> None:
     """Validate agent_url to prevent SSRF attacks.
@@ -57,33 +34,9 @@ def _validate_agent_url(agent_url: str) -> None:
     Raises:
         AdCPAdapterError: If the URL is not allowed.
     """
-    parsed = urlparse(agent_url)
-
-    # Enforce HTTPS
-    if parsed.scheme != "https":
-        raise AdCPAdapterError(f"Property list agent_url must use HTTPS scheme, got '{parsed.scheme}'")
-
-    hostname = parsed.hostname
-    if not hostname:
-        raise AdCPAdapterError("Property list agent_url must have a valid hostname")
-
-    # Check against blocked hostnames
-    if hostname.lower() in _BLOCKED_HOSTNAMES:
-        raise AdCPAdapterError(f"Property list agent_url hostname '{hostname}' is blocked (internal/private)")
-
-    # Resolve hostname to IP and validate
-    try:
-        ip_str = socket.gethostbyname(hostname)
-        ip = ipaddress.ip_address(ip_str)
-    except socket.gaierror:
-        raise AdCPAdapterError(f"Cannot resolve property list agent_url hostname: {hostname}")
-
-    for network in _BLOCKED_NETWORKS:
-        if ip in network:
-            raise AdCPAdapterError(f"Property list agent_url resolves to blocked private/internal IP range ({network})")
-
-    if ip.is_loopback or ip.is_link_local or ip.is_private:
-        raise AdCPAdapterError(f"Property list agent_url resolves to private/internal IP address: {ip}")
+    is_safe, error = check_url_ssrf(agent_url, require_https=True)
+    if not is_safe:
+        raise AdCPAdapterError(f"Property list agent_url rejected: {error}")
 
 
 async def resolve_property_list(ref: PropertyListReference) -> list[str]:
