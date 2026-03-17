@@ -112,6 +112,7 @@ from src.core.schemas import (
 )
 from src.core.testing_hooks import AdCPTestContext, TestingContext, apply_testing_hooks
 from src.core.tool_context import ToolContext
+from src.core.tools.financial_validation import validate_max_daily_package_spend, validate_min_package_budget
 
 # Import get_product_catalog from main (after refactor)
 from src.core.validation_helpers import format_validation_error
@@ -1808,10 +1809,19 @@ async def _create_media_buy_impl(
                                         package_min_spend = Decimal(str(currency_limit.min_package_budget))
 
                                 # Validate if minimum spend is set
-                                if package_min_spend and package_budget < package_min_spend:
-                                    error_msg = (
-                                        f"Package budget ({package_budget} {package_currency}) does not meet minimum spend requirement "
-                                        f"({package_min_spend} {package_currency}) for products in this package"
+                                error_msg = (
+                                    validate_min_package_budget(
+                                        package_budget=package_budget,
+                                        min_package_budget=package_min_spend,
+                                        currency=package_currency,
+                                    )
+                                    if package_min_spend
+                                    else None
+                                )
+                                if error_msg:
+                                    error_msg = error_msg.replace(
+                                        "The same minimum applies to updates as to creation.",
+                                        "for products in this package",
                                     )
                                     raise ValueError(error_msg)
                     else:
@@ -1821,10 +1831,18 @@ async def _create_media_buy_impl(
                             required_min_spend = max(applicable_min_spends)
                             budget_decimal = Decimal(str(total_budget))
 
-                            if budget_decimal < required_min_spend:
-                                error_msg = (
-                                    f"Total budget ({total_budget} {request_currency}) does not meet minimum spend requirement "
-                                    f"({required_min_spend} {request_currency}) for the selected products"
+                            error_msg = validate_min_package_budget(
+                                package_budget=budget_decimal,
+                                min_package_budget=required_min_spend,
+                                currency=request_currency,
+                            )
+                            if error_msg:
+                                error_msg = error_msg.replace(
+                                    "Package budget",
+                                    "Total budget",
+                                ).replace(
+                                    "The same minimum applies to updates as to creation.",
+                                    "for the selected products",
                                 )
                                 raise ValueError(error_msg)
 
@@ -1845,25 +1863,40 @@ async def _create_media_buy_impl(
                             continue
                         # Package.budget is now always float | None (per AdCP spec)
                         package_budget = Decimal(str(package.budget))
-                        package_daily_budget = package_budget / Decimal(str(flight_days))
-
-                        if package_daily_budget > currency_limit.max_daily_package_spend:
-                            error_msg = (
-                                f"Package daily budget ({package_daily_budget} {request_currency}) exceeds "
-                                f"maximum daily spend per package ({currency_limit.max_daily_package_spend} {request_currency}). "
-                                f"This protects against accidental large budgets and prevents GAM line item proliferation."
+                        error_msg = validate_max_daily_package_spend(
+                            package_budget=package_budget,
+                            flight_days=flight_days,
+                            max_daily_spend=Decimal(str(currency_limit.max_daily_package_spend)),
+                            currency=request_currency,
+                        )
+                        if error_msg:
+                            error_msg = error_msg.replace(
+                                "exceeds maximum",
+                                "exceeds maximum daily spend per package",
+                            ).replace(
+                                "Flight date changes that reduce daily budget are not allowed to bypass limits.",
+                                "This protects against accidental large budgets and prevents GAM line item proliferation.",
                             )
                             raise ValueError(error_msg)
                 else:
                     # Legacy mode: validate total budget
-                    legacy_daily_budget: Decimal = Decimal(str(total_budget)) / Decimal(str(flight_days))
-                    max_daily_spend: Decimal = Decimal(str(currency_limit.max_daily_package_spend))
+                    error_msg = validate_max_daily_package_spend(
+                        package_budget=Decimal(str(total_budget)),
+                        flight_days=flight_days,
+                        max_daily_spend=Decimal(str(currency_limit.max_daily_package_spend)),
+                        currency=request_currency,
+                    )
 
-                    if legacy_daily_budget > max_daily_spend:
-                        error_msg = (
-                            f"Daily budget ({legacy_daily_budget} {request_currency}) exceeds maximum daily spend "
-                            f"({currency_limit.max_daily_package_spend} {request_currency}). "
-                            f"This protects against accidental large budgets."
+                    if error_msg:
+                        error_msg = error_msg.replace(
+                            "Package daily budget",
+                            "Daily budget",
+                        ).replace(
+                            "exceeds maximum",
+                            "exceeds maximum daily spend",
+                        ).replace(
+                            "Flight date changes that reduce daily budget are not allowed to bypass limits.",
+                            "This protects against accidental large budgets.",
                         )
                         raise ValueError(error_msg)
 

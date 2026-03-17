@@ -94,10 +94,13 @@ def standard_mocks():
     """
     mock_session, mock_cm = _make_mock_db_session()
 
-    # Build a mock UoW that provides session and media_buys repo
+    # Build a mock UoW that provides session, media_buys, and currency_limits repos
     mock_uow = MagicMock()
     mock_uow.session = mock_session
     mock_uow.media_buys = MagicMock()
+    mock_currency_limits_repo = MagicMock()
+    mock_currency_limits_repo.get_for_currency.return_value = _make_mock_currency_limit(max_daily=100000)
+    mock_uow.currency_limits = mock_currency_limits_repo
     mock_uow.__enter__ = Mock(return_value=mock_uow)
     mock_uow.__exit__ = Mock(return_value=False)
 
@@ -198,6 +201,19 @@ def test_principal_not_found_returns_error(standard_mocks):
     standard_mocks["ctx_mgr_instance"].update_workflow_step.assert_called_once_with(
         ANY, status="failed", response_data=ANY, error_message=ANY
     )
+
+
+def test_workflow_step_receives_request_model_with_protocol_metadata(standard_mocks):
+    """Workflow persistence should serialize at the ContextManager boundary, not in _impl."""
+    identity = _make_identity()
+    req = UpdateMediaBuyRequest(media_buy_id="mb_workflow_meta")
+
+    _update_media_buy_impl(req=req, identity=identity)
+
+    standard_mocks["ctx_mgr_instance"].create_workflow_step.assert_called_once()
+    call_kwargs = standard_mocks["ctx_mgr_instance"].create_workflow_step.call_args.kwargs
+    assert call_kwargs["request_data"] is req
+    assert call_kwargs["request_metadata"] == {"protocol": "mcp"}
 
 
 # ---------------------------------------------------------------------------
@@ -895,7 +911,7 @@ class TestUC003MainObligations:
 
         Covers: UC-003-MAIN-05
         """
-        mock_session = _setup_db_session(standard_mocks)
+        _setup_db_session(standard_mocks)
 
         # 30-day flight, max_daily=$1000
         mock_mb = _make_mock_media_buy("mb_cur_limit")
@@ -904,9 +920,7 @@ class TestUC003MainObligations:
         standard_mocks["uow_instance"].media_buys.get_by_id.return_value = mock_mb
 
         mock_cl = _make_mock_currency_limit(max_daily=1000)
-        mock_scalars = MagicMock()
-        mock_scalars.first.return_value = mock_cl
-        mock_session.scalars.return_value = mock_scalars
+        standard_mocks["uow_instance"].currency_limits.get_for_currency.return_value = mock_cl
 
         identity = _make_identity()
         # daily = 50000/30 = 1666.67 > 1000
@@ -1144,7 +1158,7 @@ class TestUC003CampaignLevelBudget:
 
         Covers: UC-003-ALT-CAMPAIGN-LEVEL-BUDGET-04
         """
-        mock_session = _setup_db_session(standard_mocks)
+        _setup_db_session(standard_mocks)
 
         # 10-day flight, max_daily=$500
         mock_mb = _make_mock_media_buy("mb_recalc")
@@ -1153,9 +1167,7 @@ class TestUC003CampaignLevelBudget:
         standard_mocks["uow_instance"].media_buys.get_by_id.return_value = mock_mb
 
         mock_cl = _make_mock_currency_limit(max_daily=500)
-        mock_scalars = MagicMock()
-        mock_scalars.first.return_value = mock_cl
-        mock_session.scalars.return_value = mock_scalars
+        standard_mocks["uow_instance"].currency_limits.get_for_currency.return_value = mock_cl
 
         identity = _make_identity()
         # daily = 10000/10 = 1000 > 500
@@ -1885,14 +1897,11 @@ class TestUC003ManualApproval:
         assert isinstance(result, UpdateMediaBuySuccess)
         # The workflow step was created (step_id="step_001")
         # and the response allows the buyer to track the status
-        standard_mocks["ctx_mgr_instance"].create_workflow_step.assert_called_once_with(
-            context_id=ANY,
-            step_type=ANY,
-            owner=ANY,
-            status=ANY,
-            tool_name="update_media_buy",
-            request_data=ANY,
-        )
+        standard_mocks["ctx_mgr_instance"].create_workflow_step.assert_called_once()
+        call_kwargs = standard_mocks["ctx_mgr_instance"].create_workflow_step.call_args.kwargs
+        assert call_kwargs["tool_name"] == "update_media_buy"
+        assert call_kwargs["request_data"] is req
+        assert call_kwargs["request_metadata"] == {"protocol": "mcp"}
 
 
 # ---------------------------------------------------------------------------
@@ -2084,16 +2093,14 @@ class TestUC003ExtF:
 
         Covers: UC-003-EXT-F-01
         """
-        mock_session = _setup_db_session(standard_mocks)
+        _setup_db_session(standard_mocks)
 
         mock_mb = _make_mock_media_buy("mb_gbp")
         mock_mb.currency = "GBP"
         standard_mocks["uow_instance"].media_buys.get_by_id.return_value = mock_mb
 
         # Currency limit NOT found (GBP not configured)
-        mock_scalars = MagicMock()
-        mock_scalars.first.return_value = None
-        mock_session.scalars.return_value = mock_scalars
+        standard_mocks["uow_instance"].currency_limits.get_for_currency.return_value = None
 
         identity = _make_identity()
         req = UpdateMediaBuyRequest(
@@ -2119,7 +2126,7 @@ class TestUC003ExtG:
 
         Covers: UC-003-EXT-G-01
         """
-        mock_session = _setup_db_session(standard_mocks)
+        _setup_db_session(standard_mocks)
 
         mock_mb = _make_mock_media_buy("mb_daily")
         mock_mb.start_time = datetime(2025, 1, 1, tzinfo=UTC)
@@ -2127,9 +2134,7 @@ class TestUC003ExtG:
         standard_mocks["uow_instance"].media_buys.get_by_id.return_value = mock_mb
 
         mock_cl = _make_mock_currency_limit(max_daily=500)
-        mock_scalars = MagicMock()
-        mock_scalars.first.return_value = mock_cl
-        mock_session.scalars.return_value = mock_scalars
+        standard_mocks["uow_instance"].currency_limits.get_for_currency.return_value = mock_cl
 
         identity = _make_identity()
         # daily = 10000/10 = 1000 > 500

@@ -54,6 +54,11 @@ from src.core.schemas import (
     UpdateMediaBuySuccess,
 )
 from src.core.testing_hooks import AdCPTestContext
+from src.core.tools.financial_validation import (
+    validate_max_campaign_budget,
+    validate_max_daily_package_spend,
+    validate_min_package_budget,
+)
 from src.core.validation_helpers import format_validation_error
 
 
@@ -147,7 +152,6 @@ def _update_media_buy_impl(
     # Single UoW for entire update operation — one session, one transaction
     with MediaBuyUoW(tenant["tenant_id"]) as uow:
         assert uow.media_buys is not None
-        # FIXME(salesagent-9f2): raw session usages below should migrate to repository methods
         assert uow.session is not None
         session = uow.session
 
@@ -193,12 +197,6 @@ def _update_media_buy_impl(
             if persistent_ctx is None:
                 raise ValueError("Failed to create or get persistent context")
 
-            # Prepare request data with protocol detection
-            request_data_for_workflow = req.model_dump(mode="json")  # Convert dates to strings
-
-            # Store protocol type for webhook payload creation
-            request_data_for_workflow["protocol"] = identity.protocol
-
             # Create workflow step for this tool call
             step = ctx_manager.create_workflow_step(
                 context_id=persistent_ctx.context_id,  # Now safe to access
@@ -206,7 +204,8 @@ def _update_media_buy_impl(
                 owner="principal",
                 status="in_progress",
                 tool_name="update_media_buy",
-                request_data=request_data_for_workflow,
+                request_data=req,
+                request_metadata={"protocol": identity.protocol},
             )
 
         principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)  # Now guaranteed to be str
@@ -304,31 +303,22 @@ def _update_media_buy_impl(
         # Validate currency limits if flight dates or budget changes
         # This prevents workarounds where buyers extend flight to bypass daily max
         if req.start_time or req.end_time or req.budget or (req.packages and any(pkg.budget for pkg in req.packages)):
-            from decimal import Decimal
-
-            from src.core.database.models import CurrencyLimit
-
-            # Get media buy from database to check currency and current dates
             media_buy = uow.media_buys.get_by_id(req.media_buy_id)
 
             if media_buy:
-                # Determine currency (use updated or existing)
-                # Extract currency from Budget object if present (and if it's an object, not plain number)
                 request_currency: str
                 if req.budget:
-                    # Check if it's a Budget object with currency attribute, otherwise use existing
-                    if req.budget.currency:
+                    if isinstance(req.budget, int | float):
+                        request_currency = str(media_buy.currency) if media_buy.currency else "USD"
+                    elif req.budget.currency:
                         request_currency = str(req.budget.currency)
                     else:
                         request_currency = str(media_buy.currency) if media_buy.currency else "USD"
                 else:
                     request_currency = str(media_buy.currency) if media_buy.currency else "USD"
 
-                # Get currency limit
-                currency_stmt = select(CurrencyLimit).where(
-                    CurrencyLimit.tenant_id == tenant["tenant_id"], CurrencyLimit.currency_code == request_currency
-                )
-                currency_limit = session.scalars(currency_stmt).first()
+                assert uow.currency_limits is not None
+                currency_limit = uow.currency_limits.get_for_currency(request_currency)
 
                 if not currency_limit:
                     error_msg = f"Currency {request_currency} is not supported by this publisher."
@@ -344,14 +334,11 @@ def _update_media_buy_impl(
                     )
                     return response_data
 
-                # Calculate new flight duration
                 start = req.start_time if req.start_time else media_buy.start_time
                 end = req.end_time if req.end_time else media_buy.end_time
 
-                # Parse datetime strings if needed, handle 'asap' (AdCP v1.7.0)
                 from datetime import datetime as dt
 
-                # Convert to datetime objects
                 start_dt: datetime
                 end_dt: datetime
 
@@ -363,7 +350,6 @@ def _update_media_buy_impl(
                 elif isinstance(start, datetime):
                     start_dt = start
                 else:
-                    # Handle None or other types
                     start_dt = dt.now(UTC)
 
                 if isinstance(end, str):
@@ -371,34 +357,28 @@ def _update_media_buy_impl(
                 elif isinstance(end, datetime):
                     end_dt = end
                 else:
-                    # Handle None - default to start + 1 day
                     end_dt = start_dt + timedelta(days=1)
 
                 flight_days = (end_dt - start_dt).days
                 if flight_days <= 0:
                     flight_days = 1
 
-                # Validate max daily spend for packages
                 if currency_limit.max_daily_package_spend and req.packages:
                     for pkg_update in req.packages:
                         if pkg_update.budget:
-                            # Extract budget amount - handle both float and Budget object
                             pkg_budget_amount: float
                             if isinstance(pkg_update.budget, int | float):
                                 pkg_budget_amount = float(pkg_update.budget)
                             else:
-                                # Budget object with .total attribute
                                 pkg_budget_amount = float(pkg_update.budget.total)
 
-                            package_budget = Decimal(str(pkg_budget_amount))
-                            package_daily = package_budget / Decimal(str(flight_days))
-
-                            if package_daily > currency_limit.max_daily_package_spend:
-                                error_msg = (
-                                    f"Updated package daily budget ({package_daily} {request_currency}) "
-                                    f"exceeds maximum ({currency_limit.max_daily_package_spend} {request_currency}). "
-                                    f"Flight date changes that reduce daily budget are not allowed to bypass limits."
-                                )
+                            error_msg = validate_max_daily_package_spend(
+                                package_budget=Decimal(str(pkg_budget_amount)),
+                                flight_days=flight_days,
+                                max_daily_spend=currency_limit.max_daily_package_spend,
+                                currency=request_currency,
+                            )
+                            if error_msg:
                                 response_data = UpdateMediaBuyError(
                                     errors=[Error(code="budget_limit_exceeded", message=error_msg)],
                                     context=req.context,
@@ -527,23 +507,15 @@ def _update_media_buy_impl(
                         budget_amount = float(pkg_update.budget.total)
                         currency = str(pkg_update.budget.currency) if pkg_update.budget.currency else "USD"
 
-                    # F-08: enforce minimum package spend on updates, mirroring create path
-                    from src.core.database.models import CurrencyLimit as _CurrencyLimit
-
-                    _cl_stmt = select(_CurrencyLimit).where(
-                        _CurrencyLimit.tenant_id == tenant["tenant_id"],
-                        _CurrencyLimit.currency_code == currency,
-                    )
-                    _cl = session.scalars(_cl_stmt).first()
+                    assert uow.currency_limits is not None
+                    _cl = uow.currency_limits.get_for_currency(currency)
                     if _cl and _cl.min_package_budget:
-                        _pkg_budget = Decimal(str(budget_amount))
-                        _min_spend = Decimal(str(_cl.min_package_budget))
-                        if _pkg_budget < _min_spend:
-                            error_msg = (
-                                f"Package budget ({budget_amount} {currency}) does not meet the minimum spend "
-                                f"requirement ({_min_spend} {currency}). "
-                                "The same minimum applies to updates as to creation."
-                            )
+                        error_msg = validate_min_package_budget(
+                            package_budget=Decimal(str(budget_amount)),
+                            min_package_budget=Decimal(str(_cl.min_package_budget)),
+                            currency=currency,
+                        )
+                        if error_msg:
                             response_data = UpdateMediaBuyError(
                                 errors=[Error(code="budget_below_minimum", message=error_msg)],
                                 context=req.context,
@@ -1132,21 +1104,20 @@ def _update_media_buy_impl(
                 )
                 return response_data
 
-            # F-05: reject budgets that exceed the configured ceiling
-            if Decimal(str(total_budget)) > MAX_CAMPAIGN_BUDGET:
-                error_msg = (
-                    f"Budget {total_budget} {budget_currency} exceeds the maximum allowed campaign budget "
-                    f"({MAX_CAMPAIGN_BUDGET} {budget_currency}). "
-                    "Contact your publisher representative if you require a higher limit."
-                )
+            budget_error = validate_max_campaign_budget(
+                campaign_budget=Decimal(str(total_budget)),
+                max_campaign_budget=MAX_CAMPAIGN_BUDGET,
+                currency=budget_currency,
+            )
+            if budget_error:
                 response_data = UpdateMediaBuyError(
-                    errors=[Error(code="budget_ceiling_exceeded", message=error_msg)],
+                    errors=[Error(code="budget_ceiling_exceeded", message=budget_error)],
                     context=req.context,
                 )
                 ctx_manager.update_workflow_step(
                     step.step_id,
                     status="failed",
-                    error_message=error_msg,
+                    error_message=budget_error,
                 )
                 return response_data
 
@@ -1349,25 +1320,30 @@ def _build_update_request(
     effective_start = start_time or flight_start_date
     effective_end = end_time or flight_end_date
 
-    # Convert flat budget/currency/pacing to Budget object
+    # Preserve bare float budgets when no extra budget metadata is provided.
+    # This lets _impl reuse the existing media buy currency instead of forcing USD
+    # at the transport boundary.
     budget_obj = None
     if budget is not None:
-        from typing import Literal
+        if currency is None and pacing is None and daily_budget is None:
+            budget_obj = float(budget)
+        else:
+            from typing import Literal
 
-        from src.core.schemas import Budget
+            from src.core.schemas import Budget
 
-        pacing_val: Literal["even", "asap", "daily_budget"] = "even"
-        if pacing == "asap":
-            pacing_val = "asap"
-        elif pacing == "daily_budget":
-            pacing_val = "daily_budget"
-        budget_obj = Budget(
-            total=budget,
-            currency=currency or "USD",
-            pacing=pacing_val,
-            daily_cap=daily_budget,
-            auto_pause_on_budget_exhaustion=None,
-        )
+            pacing_val: Literal["even", "asap", "daily_budget"] = "even"
+            if pacing == "asap":
+                pacing_val = "asap"
+            elif pacing == "daily_budget":
+                pacing_val = "daily_budget"
+            budget_obj = Budget(
+                total=budget,
+                currency=currency or "USD",
+                pacing=pacing_val,
+                daily_cap=daily_budget,
+                auto_pause_on_budget_exhaustion=None,
+            )
 
     # Build request with only non-None values (strict validation in dev mode)
     request_params: dict[str, Any] = {}
