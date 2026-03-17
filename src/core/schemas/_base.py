@@ -1001,9 +1001,7 @@ class Budget(SalesAgentBaseModel):
     """Budget object with multi-currency support (AdCP spec compliant)."""
 
     total: float = Field(..., gt=0, description="Total budget amount (AdCP spec field name)")
-    currency: str | None = Field(
-        None, description="ISO 4217 currency code (e.g., 'USD', 'EUR'). None = preserve existing."
-    )
+    currency: str = Field(..., description="ISO 4217 currency code (e.g., 'USD', 'EUR')")
     daily_cap: float | None = Field(None, description="Optional daily spending limit")
     pacing: Literal["even", "asap", "daily_budget"] = Field("even", description="Budget pacing strategy")
     auto_pause_on_budget_exhaustion: bool | None = Field(
@@ -1056,7 +1054,7 @@ def extract_budget_amount(budget: "Budget | float | dict | None", default_curren
         return (float(budget), default_currency)
     else:
         # Budget object with .total and .currency attributes
-        return (budget.total, budget.currency or default_currency)
+        return (budget.total, budget.currency)
 
 
 # AdCP Compliance Models
@@ -1627,7 +1625,9 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest1):
     # Override packages to use our extended type with creative_ids
     packages: list[AdCPPackageUpdate] | None = None  # type: ignore[assignment]
     # Campaign-level budget (not in library spec — convenience field)
-    budget: Budget | None = None
+    # Bare float is accepted so transport wrappers can preserve existing DB currency
+    # when the caller updates only the amount.
+    budget: Budget | float | None = None
     # Internal testing field
     today: date | None = Field(None, exclude=True, description="For testing/simulation only - not part of AdCP spec")
 
