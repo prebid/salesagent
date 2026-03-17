@@ -2,10 +2,6 @@
 
 Get the Prebid Sales Agent running locally in under 5 minutes.
 
-## Warning
-
-Some of the instructions below are not yet fixed to work in the new repo location
-
 ## Prerequisites
 
 - Docker installed
@@ -171,6 +167,7 @@ docker compose up -d    # Recreate demo tenant
 
 ## Next Steps
 
+- **Developer setup**: See [Getting Started](development/GETTING_STARTED.md) for local development with tests and pre-commit hooks
 - **Deploy to the cloud**: See [deployment/](deployment/) for production deployment guides
 - **Configure GAM**: See [adapters/gam/](adapters/gam/) to connect Google Ad Manager
 - **User guide**: See [user-guide/](user-guide/) for setting up products, advertisers, and creatives
