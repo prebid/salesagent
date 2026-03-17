@@ -11,14 +11,15 @@ Usage:
 
 import sys
 
-from src.admin.sync_api import get_tenant_management_api_key, initialize_tenant_management_api_key
+from src.admin.auth_helpers import get_api_key_from_config
+from src.admin.sync_api import initialize_tenant_management_api_key
 
 
 def main():
     print("🔑 Checking for existing tenant management API key...")
 
     # Check if key already exists
-    existing_key = get_tenant_management_api_key()
+    existing_key = get_api_key_from_config("SYNC_API_KEY", "api_key")
 
     if existing_key:
         print(f"✅ API key already exists: {existing_key[:10]}...{existing_key[-4:]}")
