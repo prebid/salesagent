@@ -2212,50 +2212,52 @@ class TestAdCPContract:
     def test_property_adcp_compliance(self):
         """Test that Property complies with AdCP property schema.
 
-        adcp 3.6.0: Property schema changed significantly.
-        New required fields: identifier (str), type (enum)
-        New optional fields: primary (bool), region (str), store (enum)
-        Old fields removed: name, identifiers (list), publisher_domain, tags, property_id
+        adcp 3.10: Property schema requires property_type (enum), name (str),
+        identifiers (list of {type, value} dicts).
+        Optional fields: property_id, tags, supported_channels, publisher_domain.
         """
-        # Create property with required fields (adcp 3.6.0 schema)
+        # Create property with required fields (adcp 3.10 schema)
         property_obj = Property(
-            identifier="example.com",
-            type="website",
+            property_type="website",
+            name="Example",
+            identifiers=[{"type": "domain", "value": "example.com"}],
         )
 
         # Test AdCP-compliant response (mode="json" serializes enums to strings)
-        adcp_response = property_obj.model_dump(mode="json")
+        adcp_response = property_obj.model_dump(mode="json", exclude_none=True)
 
         # Verify required AdCP fields present and non-null
-        required_fields = ["identifier", "type"]
+        required_fields = ["property_type", "name", "identifiers"]
         for field in required_fields:
             assert field in adcp_response
             assert adcp_response[field] is not None
 
         # Verify property type is valid enum value (as string after json serialization)
         valid_types = ["website", "mobile_app", "ctv_app", "desktop_app", "dooh", "podcast", "radio", "streaming_audio"]
-        assert adcp_response["type"] in valid_types
+        assert adcp_response["property_type"] in valid_types
 
-        # Verify primary field has default value
-        assert "primary" in adcp_response
-        assert adcp_response["primary"] is False  # Default value
+        # Verify identifiers structure
+        assert len(adcp_response["identifiers"]) == 1
+        assert adcp_response["identifiers"][0]["type"] == "domain"
+        assert adcp_response["identifiers"][0]["value"] == "example.com"
 
-        # None-valued optional fields should be excluded
-        assert "region" not in adcp_response or adcp_response["region"] is None
-        assert "store" not in adcp_response or adcp_response["store"] is None
+        # None-valued optional fields should be excluded (using exclude_none=True)
+        assert "tags" not in adcp_response
+        assert "supported_channels" not in adcp_response
+        assert "publisher_domain" not in adcp_response
 
         # Test with optional fields
-        property_with_store = Property(
-            identifier="com.example.app",
-            type="mobile_app",
-            primary=True,
-            store="apple",
+        property_with_extras = Property(
+            property_type="mobile_app",
+            name="Example App",
+            identifiers=[{"type": "ios_bundle", "value": "com.example.app"}],
+            publisher_domain="example.com",
         )
-        store_response = property_with_store.model_dump(mode="json")
-        assert store_response["identifier"] == "com.example.app"
-        assert store_response["type"] == "mobile_app"
-        assert store_response["primary"] is True
-        assert store_response["store"] == "apple"
+        extras_response = property_with_extras.model_dump(mode="json", exclude_none=True)
+        assert extras_response["property_type"] == "mobile_app"
+        assert extras_response["name"] == "Example App"
+        assert extras_response["identifiers"][0]["value"] == "com.example.app"
+        assert extras_response["publisher_domain"] == "example.com"
 
     def test_property_tag_metadata_adcp_compliance(self):
         """Test that PropertyTagMetadata complies with AdCP tag metadata schema."""
