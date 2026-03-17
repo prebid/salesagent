@@ -5,11 +5,11 @@ import logging
 import secrets
 import uuid
 from datetime import UTC, datetime
-from functools import wraps
 
 from flask import Blueprint, jsonify, request
 from sqlalchemy import delete, func, select
 
+from src.admin.auth_helpers import require_api_key_auth
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
     AdapterConfig,
@@ -18,7 +18,6 @@ from src.core.database.models import (
     Principal,
     Product,
     Tenant,
-    TenantManagementConfig,
     User,
 )
 
@@ -28,32 +27,11 @@ logger = logging.getLogger(__name__)
 tenant_management_api = Blueprint("tenant_management_api", __name__, url_prefix="/api/v1/tenant-management")
 
 
-def require_tenant_management_api_key(f):
-    """Decorator to require tenant management API key for access."""
-
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        api_key = request.headers.get("X-Tenant-Management-API-Key")
-
-        if not api_key:
-            return jsonify({"error": "Missing API key"}), 401
-
-        # Get the stored API key from database
-        with get_db_session() as db_session:
-            stmt = select(TenantManagementConfig).filter_by(config_key="tenant_management_api_key")
-            config = db_session.scalars(stmt).first()
-
-            if not config or not config.config_value:
-                logger.error("Tenant management API key not configured in database")
-                return jsonify({"error": "API not configured"}), 503
-
-            if api_key != config.config_value:
-                logger.warning(f"Invalid tenant management API key attempted: {api_key[:8]}...")
-                return jsonify({"error": "Invalid API key"}), 401
-
-            return f(*args, **kwargs)
-
-    return decorated_function
+require_tenant_management_api_key = require_api_key_auth(
+    env_var="TENANT_MANAGEMENT_API_KEY",
+    config_key="tenant_management_api_key",
+    header="X-Tenant-Management-API-Key",
+)
 
 
 @tenant_management_api.route("/health", methods=["GET"])
@@ -545,47 +523,3 @@ def delete_tenant(tenant_id):
             db_session.rollback()
             logger.error(f"Error deleting tenant {tenant_id}: {str(e)}")
             return jsonify({"error": f"Failed to delete tenant: {str(e)}"}), 500
-
-
-@tenant_management_api.route("/init-api-key", methods=["POST"])
-def initialize_api_key():
-    """Initialize the tenant management API key (can only be done once)."""
-
-    with get_db_session() as db_session:
-        try:
-            # Check if API key already exists
-            stmt = select(TenantManagementConfig).filter_by(config_key="tenant_management_api_key")
-            existing_config = db_session.scalars(stmt).first()
-
-            if existing_config:
-                return jsonify({"error": "API key already initialized"}), 409
-
-            # Generate new API key
-            api_key = f"sk-{secrets.token_urlsafe(32)}"
-
-            # Store in database
-            new_config = TenantManagementConfig(
-                config_key="tenant_management_api_key",
-                config_value=api_key,
-                description="Tenant management API key for tenant administration",
-                updated_at=datetime.now(UTC),
-                updated_by="system",
-            )
-            db_session.add(new_config)
-            db_session.commit()
-
-            return (
-                jsonify(
-                    {
-                        "message": "Tenant management API key initialized",
-                        "api_key": api_key,
-                        "warning": "Save this key securely. It cannot be retrieved again.",
-                    }
-                ),
-                201,
-            )
-
-        except Exception as e:
-            db_session.rollback()
-            logger.error(f"Error initializing API key: {str(e)}")
-            return jsonify({"error": "Failed to initialize API key"}), 500

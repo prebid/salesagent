@@ -384,44 +384,36 @@ class CreativeAgentRegistry:
             if auth_token:
                 headers[auth_header] = auth_token
 
-        try:
-            async with httpx.AsyncClient(timeout=agent.timeout) as http:
-                response = await http.post(
-                    mcp_url,
-                    json={
-                        "jsonrpc": "2.0",
-                        "method": "tools/call",
-                        "params": {"name": "list_creative_formats", "arguments": {}},
-                        "id": 1,
-                    },
-                    headers=headers,
-                )
-                response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            logger.error(f"Creative agent fallback HTTP error: {exc.response.status_code} from {mcp_url}")
-            raise RuntimeError(f"Creative agent HTTP error: {exc.response.status_code}") from exc
-        except httpx.TimeoutException as exc:
-            logger.error(f"Creative agent fallback timed out: {mcp_url}")
-            raise RuntimeError(f"Request timed out: {mcp_url}") from exc
-        except httpx.RequestError as exc:
-            logger.error(f"Creative agent fallback connection failed: {mcp_url} — {exc}")
-            raise RuntimeError(f"Connection failed: {mcp_url} — {exc}") from exc
+        async with httpx.AsyncClient(timeout=agent.timeout) as http:
+            # MCP Streamable HTTP: POST to endpoint with tools/call
+            response = await http.post(
+                mcp_url,
+                json={
+                    "jsonrpc": "2.0",
+                    "method": "tools/call",
+                    "params": {"name": "list_creative_formats", "arguments": {}},
+                    "id": 1,
+                },
+                headers=headers,
+            )
+            response.raise_for_status()
 
-        # Parse SSE or JSON response
-        content_type = response.headers.get("content-type", "")
-        if "text/event-stream" in content_type:
-            for line in response.text.split("\n"):
-                if line.startswith("data: "):
-                    event_data = json.loads(line[6:])
-                    if "result" in event_data:
-                        return self._parse_mcp_tool_result(event_data["result"], logger)
-        else:
-            data = response.json()
-            if "result" in data:
-                return self._parse_mcp_tool_result(data["result"], logger)
+            # Parse SSE or JSON response
+            content_type = response.headers.get("content-type", "")
+            if "text/event-stream" in content_type:
+                # Parse SSE events — find the result event
+                for line in response.text.split("\n"):
+                    if line.startswith("data: "):
+                        event_data = json.loads(line[6:])
+                        if "result" in event_data:
+                            return self._parse_mcp_tool_result(event_data["result"], logger)
+            else:
+                data = response.json()
+                if "result" in data:
+                    return self._parse_mcp_tool_result(data["result"], logger)
 
-        logger.warning("_fetch_formats_raw_mcp: No parseable result in MCP response")
-        return []
+            logger.warning("_fetch_formats_raw_mcp: No parseable result in MCP response")
+            return []
 
     def _parse_mcp_tool_result(self, result: dict, logger: Any) -> list[Format]:
         """Parse formats from an MCP tools/call result."""

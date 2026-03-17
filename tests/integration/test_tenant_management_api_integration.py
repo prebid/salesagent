@@ -21,7 +21,7 @@ def mock_api_key_auth(integration_db):
     This fixture bypasses the require_tenant_management_api_key decorator
     by creating a valid API key in the database that all tests can use.
 
-    We keep separate tests for authentication itself (test_init_api_key).
+    API key is provisioned via TENANT_MANAGEMENT_API_KEY env var in production.
     """
     from datetime import UTC, datetime
 
@@ -102,16 +102,10 @@ def test_tenant(integration_db):
 class TestTenantManagementAPIIntegration:
     """Integration tests for Tenant Management API."""
 
-    def test_init_api_key(self, client):
-        """Test API key initialization."""
+    def test_init_api_key_endpoint_removed(self, client):
+        """Verify the unauthenticated init-api-key endpoint no longer exists."""
         response = client.post("/api/v1/tenant-management/init-api-key")
-        # May be 201 (created) or 409 (already exists)
-        assert response.status_code in [201, 409]
-
-        if response.status_code == 201:
-            data = response.json
-            assert "api_key" in data
-            assert data["api_key"].startswith("sk-")
+        assert response.status_code == 404  # Route removed entirely
 
     def test_health_check(self, client, mock_api_key_auth):
         """Test health check endpoint."""
@@ -307,6 +301,139 @@ class TestTenantManagementAPIIntegration:
 
         assert get_response.status_code == 200
         assert get_response.json["is_active"] is False
+
+
+class TestTenantManagementEnvVarAuth:
+    """Test env var auth codepath for tenant management API."""
+
+    def test_env_var_auth_succeeds(self, integration_db, monkeypatch):
+        """TENANT_MANAGEMENT_API_KEY env var → auth succeeds."""
+        monkeypatch.setenv("TENANT_MANAGEMENT_API_KEY", "env-test-key")
+
+        app = Flask(__name__)
+        app.config["TESTING"] = True
+        app.register_blueprint(tenant_management_api)
+
+        with app.test_client() as client:
+            resp = client.get(
+                "/api/v1/tenant-management/health",
+                headers={"X-Tenant-Management-API-Key": "env-test-key"},
+            )
+            assert resp.status_code == 200
+
+    def test_env_var_takes_priority_over_db(self, integration_db, mock_api_key_auth, monkeypatch):
+        """When both env var and DB have keys, env var wins."""
+        monkeypatch.setenv("TENANT_MANAGEMENT_API_KEY", "env-priority-key")
+
+        app = Flask(__name__)
+        app.config["TESTING"] = True
+        app.register_blueprint(tenant_management_api)
+
+        with app.test_client() as client:
+            # DB key should be rejected when env var is set
+            resp = client.get(
+                "/api/v1/tenant-management/health",
+                headers={"X-Tenant-Management-API-Key": mock_api_key_auth},
+            )
+            assert resp.status_code == 401
+
+            # Env var key should succeed
+            resp = client.get(
+                "/api/v1/tenant-management/health",
+                headers={"X-Tenant-Management-API-Key": "env-priority-key"},
+            )
+            assert resp.status_code == 200
+
+
+class TestTenantManagementAuthRejection:
+    """Test auth rejection cases for tenant management API."""
+
+    def test_missing_header_returns_401(self, app, client):
+        """Request without auth header returns 401."""
+        resp = client.get("/api/v1/tenant-management/health")
+        assert resp.status_code == 401
+        assert "Missing API key" in resp.json["error"]
+
+    def test_wrong_key_returns_401(self, app, client, mock_api_key_auth):
+        """Request with incorrect key returns 401."""
+        resp = client.get(
+            "/api/v1/tenant-management/health",
+            headers={"X-Tenant-Management-API-Key": "wrong-key"},
+        )
+        assert resp.status_code == 401
+        assert "Invalid API key" in resp.json["error"]
+
+    def test_unconfigured_returns_503(self, integration_db):
+        """When no key is configured anywhere, returns 503."""
+        app = Flask(__name__)
+        app.config["TESTING"] = True
+        app.register_blueprint(tenant_management_api)
+
+        with app.test_client() as client:
+            resp = client.get(
+                "/api/v1/tenant-management/health",
+                headers={"X-Tenant-Management-API-Key": "any-key"},
+            )
+            assert resp.status_code == 503
+            assert "TENANT_MANAGEMENT_API_KEY" in resp.json["error"]
+
+
+class TestSyncApiAuth:
+    """Test auth for sync API using the shared helper."""
+
+    @pytest.fixture
+    def sync_app(self, integration_db):
+        """Create test Flask app with sync API blueprint."""
+        from src.admin.sync_api import sync_api
+
+        app = Flask(__name__)
+        app.config["TESTING"] = True
+        app.register_blueprint(sync_api)
+        return app
+
+    def test_env_var_auth_succeeds(self, sync_app, monkeypatch):
+        """SYNC_API_KEY env var → auth succeeds (hits real route)."""
+        monkeypatch.setenv("SYNC_API_KEY", "sync-test-key")
+
+        with sync_app.test_client() as client:
+            resp = client.get(
+                "/api/v1/sync/stats",
+                headers={"X-API-Key": "sync-test-key"},
+            )
+            # Auth passed — we get past the decorator. Route may fail on DB
+            # but must NOT return 401 (missing/invalid key) or 503 (unconfigured).
+            assert resp.status_code not in (401, 403, 503), (
+                f"Auth should have succeeded but got {resp.status_code}: {resp.json}"
+            )
+
+    def test_missing_header_returns_401(self, sync_app, monkeypatch):
+        """Request without X-API-Key header returns 401."""
+        monkeypatch.setenv("SYNC_API_KEY", "sync-test-key")
+
+        with sync_app.test_client() as client:
+            resp = client.post("/api/v1/sync/trigger/test-tenant")
+            assert resp.status_code == 401
+
+    def test_wrong_key_returns_401(self, sync_app, monkeypatch):
+        """Request with incorrect key returns 401."""
+        monkeypatch.setenv("SYNC_API_KEY", "correct-key")
+
+        with sync_app.test_client() as client:
+            resp = client.post(
+                "/api/v1/sync/trigger/test-tenant",
+                headers={"X-API-Key": "wrong-key"},
+            )
+            assert resp.status_code == 401
+
+    def test_unconfigured_returns_503(self, sync_app):
+        """When no key is configured anywhere, returns 503."""
+        with sync_app.test_client() as client:
+            resp = client.post(
+                "/api/v1/sync/trigger/test-tenant",
+                headers={"X-API-Key": "any-key"},
+            )
+            assert resp.status_code == 503
+            assert "SYNC_API_KEY" in resp.json["error"]
 
 
 if __name__ == "__main__":

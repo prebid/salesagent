@@ -160,58 +160,6 @@ class TestFetchFormatsRawMcp:
             assert headers.get("x-test-auth") == "test-token"
 
 
-class TestFetchFormatsRawMcpErrorHandling:
-    """Test error handling in the raw HTTP fallback."""
-
-    @pytest.mark.asyncio
-    async def test_timeout_raises_runtime_error(self, registry, agent):
-        """httpx timeout → RuntimeError with message."""
-        import httpx
-
-        mock_http = AsyncMock()
-        mock_http.post.side_effect = httpx.ReadTimeout("timed out")
-        mock_http.__aenter__ = AsyncMock(return_value=mock_http)
-        mock_http.__aexit__ = AsyncMock(return_value=False)
-
-        with patch("httpx.AsyncClient", return_value=mock_http):
-            with pytest.raises(RuntimeError, match="Request timed out"):
-                await registry._fetch_formats_raw_mcp(agent)
-
-    @pytest.mark.asyncio
-    async def test_connection_error_raises_runtime_error(self, registry, agent):
-        """httpx connection error → RuntimeError with message."""
-        import httpx
-
-        mock_http = AsyncMock()
-        mock_http.post.side_effect = httpx.ConnectError("connection refused")
-        mock_http.__aenter__ = AsyncMock(return_value=mock_http)
-        mock_http.__aexit__ = AsyncMock(return_value=False)
-
-        with patch("httpx.AsyncClient", return_value=mock_http):
-            with pytest.raises(RuntimeError, match="Connection failed"):
-                await registry._fetch_formats_raw_mcp(agent)
-
-    @pytest.mark.asyncio
-    async def test_http_status_error_raises_runtime_error(self, registry, agent):
-        """httpx HTTP 500 → RuntimeError with status code."""
-        import httpx
-
-        mock_response = MagicMock()
-        mock_response.status_code = 500
-        mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
-            "Server Error", request=MagicMock(), response=mock_response
-        )
-
-        mock_http = AsyncMock()
-        mock_http.post.return_value = mock_response
-        mock_http.__aenter__ = AsyncMock(return_value=mock_http)
-        mock_http.__aexit__ = AsyncMock(return_value=False)
-
-        with patch("httpx.AsyncClient", return_value=mock_http):
-            with pytest.raises(RuntimeError, match="HTTP error: 500"):
-                await registry._fetch_formats_raw_mcp(agent)
-
-
 class TestParseMcpToolResult:
     """Test the MCP tool result parser."""
 
