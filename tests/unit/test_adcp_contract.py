@@ -2921,17 +2921,18 @@ class TestProductV36FieldContract:
             create_test_publisher_properties_by_tag,
         )
 
-        with pytest.raises(ValidationError, match="delivery_measurement"):
-            Product(
-                product_id="no_dm",
-                name="No DM",
-                description="Missing delivery_measurement",
-                format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
-                delivery_type="guaranteed",
-                publisher_properties=[create_test_publisher_properties_by_tag()],
-                pricing_options=[create_test_cpm_pricing_option()],
-                # delivery_measurement intentionally omitted
-            )
+        # adcp 3.10: delivery_measurement is now optional (was required in 3.6-3.9)
+        product = Product(
+            product_id="no_dm",
+            name="No DM",
+            description="Missing delivery_measurement",
+            format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
+            delivery_type="guaranteed",
+            publisher_properties=[create_test_publisher_properties_by_tag()],
+            pricing_options=[create_test_cpm_pricing_option()],
+            # delivery_measurement intentionally omitted — now optional per adcp 3.10
+        )
+        assert product.delivery_measurement is None
 
     def test_delivery_measurement_present_in_dump(self):
         """delivery_measurement appears in model_dump with correct structure."""
