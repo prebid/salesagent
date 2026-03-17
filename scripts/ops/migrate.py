@@ -7,6 +7,27 @@ from pathlib import Path
 from alembic import command
 from alembic.config import Config
 
+# Project root (two levels up from scripts/ops/)
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_ALEMBIC_INI = _PROJECT_ROOT / "alembic.ini"
+
+
+def _get_alembic_cfg() -> Config:
+    """Return an Alembic Config pointing at the project's alembic.ini."""
+    return Config(str(_ALEMBIC_INI))
+
+
+def _ensure_default_tenant() -> None:
+    """In single-tenant mode, ensure the default tenant exists."""
+    try:
+        from src.core.config_loader import ensure_default_tenant_exists
+
+        tenant = ensure_default_tenant_exists()
+        if tenant:
+            print(f"✅ Default tenant ready: {tenant.get('name', 'Unknown')}")
+    except Exception as e:
+        print(f"⚠️ Could not ensure default tenant: {e}")
+
 
 def run_migrations(exit_on_error=True):
     """Run all pending database migrations.
@@ -14,15 +35,7 @@ def run_migrations(exit_on_error=True):
     Args:
         exit_on_error: If True, exit the process on error. If False, raise exception.
     """
-    # Get the project root directory (two levels up from scripts/ops/)
-    script_dir = Path(__file__).parent
-    project_root = script_dir.parent.parent
-
-    # Path to alembic.ini in project root
-    alembic_ini_path = project_root / "alembic.ini"
-
-    # Create Alembic configuration
-    alembic_cfg = Config(str(alembic_ini_path))
+    alembic_cfg = _get_alembic_cfg()
 
     # Run migrations
     try:
@@ -33,16 +46,7 @@ def run_migrations(exit_on_error=True):
         #   uv run alembic merge -m "Merge migration heads" heads
         command.upgrade(alembic_cfg, "head")
         print("✅ Database migrations completed successfully!")
-
-        # In single-tenant mode, ensure default tenant exists
-        try:
-            from src.core.config_loader import ensure_default_tenant_exists
-
-            tenant = ensure_default_tenant_exists()
-            if tenant:
-                print(f"✅ Default tenant ready: {tenant.get('name', 'Unknown')}")
-        except Exception as e:
-            print(f"⚠️ Could not ensure default tenant: {e}")
+        _ensure_default_tenant()
     except Exception as e:
         error_msg = str(e)
         print(f"❌ Error running migrations: {error_msg}")
@@ -54,16 +58,7 @@ def run_migrations(exit_on_error=True):
             try:
                 command.upgrade(alembic_cfg, "head")
                 print("✅ Database migrations completed successfully on retry!")
-
-                # In single-tenant mode, ensure default tenant exists
-                try:
-                    from src.core.config_loader import ensure_default_tenant_exists
-
-                    tenant = ensure_default_tenant_exists()
-                    if tenant:
-                        print(f"✅ Default tenant ready: {tenant.get('name', 'Unknown')}")
-                except Exception as tenant_error:
-                    print(f"⚠️ Could not ensure default tenant: {tenant_error}")
+                _ensure_default_tenant()
                 return
             except Exception as retry_error:
                 print(f"❌ Migration retry also failed: {retry_error}")
@@ -77,10 +72,7 @@ def run_migrations(exit_on_error=True):
 
 def check_migration_status():
     """Check current migration status."""
-    script_dir = Path(__file__).parent
-    project_root = script_dir.parent.parent
-    alembic_ini_path = project_root / "alembic.ini"
-    alembic_cfg = Config(str(alembic_ini_path))
+    alembic_cfg = _get_alembic_cfg()
 
     try:
         print("Checking migration status...")
@@ -91,9 +83,7 @@ def check_migration_status():
 
 def create_migration(message: str):
     """Create a new migration."""
-    script_dir = Path(__file__).parent
-    alembic_ini_path = script_dir / "alembic.ini"
-    alembic_cfg = Config(str(alembic_ini_path))
+    alembic_cfg = _get_alembic_cfg()
 
     try:
         print(f"Creating migration: {message}")
