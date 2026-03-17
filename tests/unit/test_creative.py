@@ -159,7 +159,7 @@ class TestCreativeSchemaCompliance:
         library type at adcp-client-python media_buy/list_creatives_response.py.
         Existing: test_architecture_schema_inheritance.py (structural guard)
         """
-        from adcp.types.generated_poc.media_buy.list_creatives_response import (
+        from adcp.types.generated_poc.creative.list_creatives_response import (
             Creative as ListingCreative,
         )
 
@@ -492,7 +492,7 @@ class TestSyncCreativesRequestSchema:
         assignments as optional list of Assignment objects (creative_id + package_id).
         Covers: UC-006-ASSIGNMENT-PACKAGE-VALIDATION-01
         """
-        from adcp.types.generated_poc.media_buy.sync_creatives_request import Assignment
+        from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
 
         creative = _make_creative()
         req = SyncCreativesRequest(
@@ -2862,7 +2862,7 @@ class TestCreativeWrongBaseClass:
         from adcp.types.generated_poc.creative.get_creative_delivery_response import (
             Creative as DeliveryCreative,
         )
-        from adcp.types.generated_poc.media_buy.list_creatives_response import (
+        from adcp.types.generated_poc.creative.list_creatives_response import (
             Creative as ListingCreative,
         )
 
@@ -4623,12 +4623,12 @@ class TestAsyncLifecycle:
 
     Spec: CONFIRMED -- adcp spec defines sync-creatives-async-response-submitted,
     sync-creatives-async-response-working, sync-creatives-async-response-input-required.
-    https://github.com/adcontextprotocol/adcp-client-python/blob/a08805d6345c96d43ba9369bb0afe0597182871f/src/adcp/types/generated_poc/media_buy/sync_creatives_async_response_submitted.py
+    https://github.com/adcontextprotocol/adcp-client-python/blob/a08805d6345c96d43ba9369bb0afe0597182871f/src/adcp.types.generated_poc.creative.sync_creatives_async_response_submitted.py
     """
 
     def test_async_submitted_response(self):
         """Async submitted acknowledgment conforms to adcp 3.6.0 schema."""
-        from adcp.types.generated_poc.media_buy.sync_creatives_async_response_submitted import (
+        from adcp.types.generated_poc.creative.sync_creatives_async_response_submitted import (
             SyncCreativesSubmitted,
         )
 
@@ -4643,7 +4643,7 @@ class TestAsyncLifecycle:
 
     def test_async_working_response(self):
         """Async working response includes progress percentage and counts."""
-        from adcp.types.generated_poc.media_buy.sync_creatives_async_response_working import (
+        from adcp.types.generated_poc.creative.sync_creatives_async_response_working import (
             SyncCreativesWorking,
         )
 
@@ -4663,7 +4663,7 @@ class TestAsyncLifecycle:
 
     def test_async_input_required_response(self):
         """Async input-required response indicates what input is needed."""
-        from adcp.types.generated_poc.media_buy.sync_creatives_async_response_input_required import (
+        from adcp.types.generated_poc.creative.sync_creatives_async_response_input_required import (
             Reason,
             SyncCreativesInputRequired,
         )

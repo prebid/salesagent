@@ -1409,7 +1409,7 @@ class TestAdCPContract:
         )
 
         # Test with spec-compliant fields only (adcp 3.9)
-        from adcp.types.generated_poc.media_buy.sync_creatives_request import Assignment
+        from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
 
         request = SyncCreativesRequest(
             creatives=[creative],
