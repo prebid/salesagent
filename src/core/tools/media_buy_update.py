@@ -49,7 +49,6 @@ from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     AffectedPackage,
-    Budget,
     UpdateMediaBuyError,
     UpdateMediaBuyRequest,
     UpdateMediaBuySuccess,
@@ -220,7 +219,7 @@ def _update_media_buy_impl(
                 ctx_manager.update_workflow_step(
                     step.step_id,
                     status="failed",
-                    response_data=response_data.model_dump(mode="json"),
+                    response_data=response_data,
                     error_message=error_msg,
                 )
             return response_data
@@ -309,11 +308,10 @@ def _update_media_buy_impl(
             if media_buy:
                 request_currency: str
                 if req.budget:
-                    if isinstance(req.budget, int | float):
-                        request_currency = str(media_buy.currency) if media_buy.currency else "USD"
-                    elif req.budget.currency:
+                    if req.budget.currency:
                         request_currency = str(req.budget.currency)
                     else:
+                        # Budget.currency=None → preserve existing DB currency
                         request_currency = str(media_buy.currency) if media_buy.currency else "USD"
                 else:
                     request_currency = str(media_buy.currency) if media_buy.currency else "USD"
@@ -330,7 +328,7 @@ def _update_media_buy_impl(
                     ctx_manager.update_workflow_step(
                         step.step_id,
                         status="failed",
-                        response_data=response_data.model_dump(mode="json"),
+                        response_data=response_data,
                         error_message=error_msg,
                     )
                     return response_data
@@ -387,7 +385,7 @@ def _update_media_buy_impl(
                                 ctx_manager.update_workflow_step(
                                     step.step_id,
                                     status="failed",
-                                    response_data=response_data.model_dump(mode="json"),
+                                    response_data=response_data,
                                     error_message=package_daily_spend_error,
                                 )
                                 return response_data
@@ -411,7 +409,7 @@ def _update_media_buy_impl(
                 ctx_manager.update_workflow_step(
                     step.step_id,
                     status="failed",
-                    response_data=error_response.model_dump(mode="json"),
+                    response_data=error_response,
                     error_message=result.errors[0].message if result.errors else "Pause/resume failed",
                 )
                 return error_response
@@ -445,7 +443,7 @@ def _update_media_buy_impl(
                 ctx_manager.update_workflow_step(
                     step.step_id,
                     status="completed",
-                    response_data=success_response.model_dump(mode="json"),
+                    response_data=success_response,
                 )
                 return success_response
 
@@ -473,7 +471,7 @@ def _update_media_buy_impl(
                         ctx_manager.update_workflow_step(
                             step.step_id,
                             status="failed",
-                            response_data=response_data.model_dump(mode="json"),
+                            response_data=response_data,
                             error_message=error_message,
                         )
                         return response_data
@@ -490,7 +488,7 @@ def _update_media_buy_impl(
                         ctx_manager.update_workflow_step(
                             step.step_id,
                             status="failed",
-                            response_data=response_data.model_dump(mode="json"),
+                            response_data=response_data,
                             error_message=error_msg,
                         )
                         return response_data
@@ -545,7 +543,7 @@ def _update_media_buy_impl(
                         ctx_manager.update_workflow_step(
                             step.step_id,
                             status="failed",
-                            response_data=response_data.model_dump(mode="json"),
+                            response_data=response_data,
                             error_message=error_message,
                         )
                         return response_data
@@ -576,7 +574,7 @@ def _update_media_buy_impl(
                         ctx_manager.update_workflow_step(
                             step.step_id,
                             status="failed",
-                            response_data=response_data.model_dump(mode="json"),
+                            response_data=response_data,
                             error_message=error_msg,
                         )
                         return response_data
@@ -596,7 +594,7 @@ def _update_media_buy_impl(
                         ctx_manager.update_workflow_step(
                             step.step_id,
                             status="failed",
-                            response_data=response_data.model_dump(mode="json"),
+                            response_data=response_data,
                             error_message=error_msg,
                         )
                         return response_data
@@ -622,7 +620,7 @@ def _update_media_buy_impl(
                         ctx_manager.update_workflow_step(
                             step.step_id,
                             status="failed",
-                            response_data=response_data.model_dump(mode="json"),
+                            response_data=response_data,
                             error_message=error_msg,
                         )
                         return response_data
@@ -802,7 +800,7 @@ def _update_media_buy_impl(
                         ctx_manager.update_workflow_step(
                             step.step_id,
                             status="failed",
-                            response_data=response_data.model_dump(mode="json"),
+                            response_data=response_data,
                             error_message=error_msg,
                         )
                         return response_data
@@ -830,7 +828,7 @@ def _update_media_buy_impl(
                         ctx_manager.update_workflow_step(
                             step.step_id,
                             status="failed",
-                            response_data=response_data.model_dump(mode="json"),
+                            response_data=response_data,
                             error_message=error_msg,
                         )
                         return response_data
@@ -859,7 +857,7 @@ def _update_media_buy_impl(
                         ctx_manager.update_workflow_step(
                             step.step_id,
                             status="failed",
-                            response_data=response_data.model_dump(mode="json"),
+                            response_data=response_data,
                             error_message=error_msg,
                         )
                         return response_data
@@ -1031,7 +1029,7 @@ def _update_media_buy_impl(
                         ctx_manager.update_workflow_step(
                             step.step_id,
                             status="failed",
-                            response_data=response_data.model_dump(mode="json"),
+                            response_data=response_data,
                             error_message=error_msg,
                         )
                         return response_data
@@ -1049,7 +1047,7 @@ def _update_media_buy_impl(
                         ctx_manager.update_workflow_step(
                             step.step_id,
                             status="failed",
-                            response_data=response_data.model_dump(mode="json"),
+                            response_data=response_data,
                             error_message=error_msg,
                         )
                         return response_data
@@ -1074,22 +1072,17 @@ def _update_media_buy_impl(
                         )
                     )
 
-        # Handle budget updates (handle both float and Budget object)
+        # Handle budget updates (req.budget is always a Budget object)
         if req.budget is not None:
-            # Extract budget amount - handle both float and Budget object
-            total_budget: float
-            budget_currency: str  # Renamed to avoid redefinition
-            if isinstance(req.budget, int | float):
-                total_budget = float(req.budget)
-                # F-07: preserve existing DB currency rather than defaulting to USD
+            total_budget = float(req.budget.total)
+            # Budget.currency=None → preserve existing DB currency (F-07)
+            if req.budget.currency:
+                budget_currency = str(req.budget.currency)
+            else:
                 _mb_for_currency = uow.media_buys.get_by_id(req.media_buy_id)
                 budget_currency = (
                     str(_mb_for_currency.currency) if _mb_for_currency and _mb_for_currency.currency else "USD"
                 )
-            else:
-                # Budget object with .total and .currency attributes
-                total_budget = float(req.budget.total)
-                budget_currency = str(req.budget.currency) if req.budget.currency else "USD"
 
             if total_budget <= 0:
                 error_msg = f"Invalid budget: {total_budget}. Budget must be positive."
@@ -1100,7 +1093,7 @@ def _update_media_buy_impl(
                 ctx_manager.update_workflow_step(
                     step.step_id,
                     status="failed",
-                    response_data=response_data.model_dump(mode="json"),
+                    response_data=response_data,
                     error_message=error_msg,
                 )
                 return response_data
@@ -1194,7 +1187,7 @@ def _update_media_buy_impl(
                     ctx_manager.update_workflow_step(
                         step.step_id,
                         status="failed",
-                        response_data=response_data.model_dump(mode="json"),
+                        response_data=response_data,
                         error_message=error_msg,
                     )
                     return response_data
@@ -1226,7 +1219,7 @@ def _update_media_buy_impl(
                     ctx_manager.update_workflow_step(
                         step.step_id,
                         status="failed",
-                        response_data=response_data.model_dump(mode="json"),
+                        response_data=response_data,
                         error_message=error_msg,
                     )
                     return response_data
@@ -1288,7 +1281,7 @@ def _update_media_buy_impl(
         ctx_manager.update_workflow_step(
             step.step_id,
             status="completed",
-            response_data=final_response.model_dump(mode="json"),
+            response_data=final_response,
         )
 
     return final_response
@@ -1321,30 +1314,26 @@ def _build_update_request(
     effective_start = start_time or flight_start_date
     effective_end = end_time or flight_end_date
 
-    # Preserve bare float budgets when no extra budget metadata is provided.
-    # This lets _impl reuse the existing media buy currency instead of forcing USD
-    # at the transport boundary.
-    budget_obj: Budget | float | None = None
+    # Always construct a Budget object — currency=None signals "preserve existing
+    # DB currency" so _impl can fill it in from the media buy record.
+    budget_obj: Any = None
     if budget is not None:
-        if currency is None and pacing is None and daily_budget is None:
-            budget_obj = float(budget)
-        else:
-            from typing import Literal
+        from typing import Literal
 
-            from src.core.schemas import Budget
+        from src.core.schemas import Budget
 
-            pacing_val: Literal["even", "asap", "daily_budget"] = "even"
-            if pacing == "asap":
-                pacing_val = "asap"
-            elif pacing == "daily_budget":
-                pacing_val = "daily_budget"
-            budget_obj = Budget(
-                total=budget,
-                currency=currency or "USD",
-                pacing=pacing_val,
-                daily_cap=daily_budget,
-                auto_pause_on_budget_exhaustion=None,
-            )
+        pacing_val: Literal["even", "asap", "daily_budget"] = "even"
+        if pacing == "asap":
+            pacing_val = "asap"
+        elif pacing == "daily_budget":
+            pacing_val = "daily_budget"
+        budget_obj = Budget(
+            total=budget,
+            currency=currency,  # None = "preserve existing DB currency"
+            pacing=pacing_val,
+            daily_cap=daily_budget,
+            auto_pause_on_budget_exhaustion=None,
+        )
 
     # Build request with only non-None values (strict validation in dev mode)
     request_params: dict[str, Any] = {}

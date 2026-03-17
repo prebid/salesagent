@@ -1888,15 +1888,19 @@ async def _create_media_buy_impl(
                     )
 
                     if legacy_daily_spend_error:
-                        legacy_daily_spend_error = legacy_daily_spend_error.replace(
-                            "Package daily budget",
-                            "Daily budget",
-                        ).replace(
-                            "exceeds maximum",
-                            "exceeds maximum daily spend",
-                        ).replace(
-                            "Flight date changes that reduce daily budget are not allowed to bypass limits.",
-                            "This protects against accidental large budgets.",
+                        legacy_daily_spend_error = (
+                            legacy_daily_spend_error.replace(
+                                "Package daily budget",
+                                "Daily budget",
+                            )
+                            .replace(
+                                "exceeds maximum",
+                                "exceeds maximum daily spend",
+                            )
+                            .replace(
+                                "Flight date changes that reduce daily budget are not allowed to bypass limits.",
+                                "This protects against accidental large budgets.",
+                            )
                         )
                         raise ValueError(legacy_daily_spend_error)
 

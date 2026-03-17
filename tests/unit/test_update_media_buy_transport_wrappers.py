@@ -86,7 +86,7 @@ def test_a2a_wrapper_rejects_oversized_campaign_budget():
         mock_uow, protocol="a2a"
     )
 
-    with (uow_patch, principal_patch, adapter_patch, ctx_patch, audit_patch, verify_patch):
+    with uow_patch, principal_patch, adapter_patch, ctx_patch, audit_patch, verify_patch:
         result = update_media_buy_raw(
             media_buy_id="mb_transport",
             budget=888_888_888.0,
@@ -109,7 +109,7 @@ def test_a2a_wrapper_rejects_package_budget_below_minimum():
         mock_uow, protocol="a2a"
     )
 
-    with (uow_patch, principal_patch, adapter_patch, ctx_patch, audit_patch, verify_patch):
+    with uow_patch, principal_patch, adapter_patch, ctx_patch, audit_patch, verify_patch:
         result = update_media_buy_raw(
             media_buy_id="mb_transport",
             packages=[{"package_id": "pkg-1", "budget": 50.0}],
@@ -134,7 +134,7 @@ def test_mcp_wrapper_preserves_existing_currency_for_float_budget():
     mock_ctx = MagicMock(spec=Context)
     mock_ctx.get_state = AsyncMock(side_effect=[identity, "ctx_transport"])
 
-    with (uow_patch, principal_patch, adapter_patch, ctx_patch, audit_patch, verify_patch):
+    with uow_patch, principal_patch, adapter_patch, ctx_patch, audit_patch, verify_patch:
         result = asyncio.run(
             update_media_buy(
                 media_buy_id="mb_transport",

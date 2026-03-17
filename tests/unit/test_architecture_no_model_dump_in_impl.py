@@ -24,32 +24,11 @@ BANNED_METHODS = {"model_dump", "model_dump_internal"}
 
 # Known violations — allowlist shrinks as violations are fixed.
 # Each entry is (relative_path_from_tools_dir, line_number).
-# FIXME(salesagent-hr8n): 24 violations remain (5 fixed by salesagent-lfto).
-# Line numbers shifted by PR04 repository/helper refactoring in media_buy_update.py.
+# FIXME(salesagent-hr8n): 4 violations remain (20 fixed by auto-serialization in update_workflow_step).
 KNOWN_VIOLATIONS = {
-    # _update_media_buy_impl: 22 violations (workflow step response_data)
-    ("media_buy_update.py", 223),
+    # _update_media_buy_impl: 2 violations (composite approval dict — needs further refactoring)
+    ("media_buy_update.py", 277),
     ("media_buy_update.py", 278),
-    ("media_buy_update.py", 279),
-    ("media_buy_update.py", 333),
-    ("media_buy_update.py", 390),
-    ("media_buy_update.py", 414),
-    ("media_buy_update.py", 448),
-    ("media_buy_update.py", 476),
-    ("media_buy_update.py", 493),
-    ("media_buy_update.py", 548),
-    ("media_buy_update.py", 579),
-    ("media_buy_update.py", 599),
-    ("media_buy_update.py", 625),
-    ("media_buy_update.py", 805),
-    ("media_buy_update.py", 833),
-    ("media_buy_update.py", 862),
-    ("media_buy_update.py", 1034),
-    ("media_buy_update.py", 1052),
-    ("media_buy_update.py", 1103),
-    ("media_buy_update.py", 1197),
-    ("media_buy_update.py", 1229),
-    ("media_buy_update.py", 1291),
     # _get_products_impl: 1 violation (logging)
     ("products.py", 637),
     # _list_creatives_impl: 1 violation (filter dict conversion)

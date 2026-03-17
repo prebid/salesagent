@@ -239,7 +239,7 @@ class ContextManager(DatabaseManager):
         self,
         step_id: str,
         status: str | None = None,
-        response_data: dict[str, Any] | None = None,
+        response_data: dict[str, Any] | Any | None = None,
         error_message: str | None = None,
         transaction_details: dict[str, Any] | None = None,
         add_comment: dict[str, str] | None = None,
@@ -250,13 +250,19 @@ class ContextManager(DatabaseManager):
         Args:
             step_id: The step ID
             status: New status
-            response_data: Response/result data
+            response_data: Response/result data (dict or Pydantic model — serialized at this boundary)
             error_message: Error message if failed
             transaction_details: Actual API calls made
             add_comment: Optional comment to add {user, comment}
             tenant_id: Tenant scope — joins through Context for isolation.
                 If provided, the step must belong to this tenant or no update occurs.
         """
+        # Serialize Pydantic models at the DB boundary (same pattern as create_workflow_step)
+        from pydantic import BaseModel
+
+        if isinstance(response_data, BaseModel):
+            response_data = response_data.model_dump(mode="json")
+
         session = self.session
         try:
             stmt = select(WorkflowStep).filter_by(step_id=step_id)
