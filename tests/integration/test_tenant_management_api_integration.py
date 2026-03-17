@@ -392,16 +392,19 @@ class TestSyncApiAuth:
         return app
 
     def test_env_var_auth_succeeds(self, sync_app, monkeypatch):
-        """SYNC_API_KEY env var → auth succeeds."""
+        """SYNC_API_KEY env var → auth succeeds (hits real route)."""
         monkeypatch.setenv("SYNC_API_KEY", "sync-test-key")
 
         with sync_app.test_client() as client:
             resp = client.get(
-                "/api/v1/sync/status",
+                "/api/v1/sync/stats",
                 headers={"X-API-Key": "sync-test-key"},
             )
-            # 200 or 404 (route may not exist for GET) — but NOT 401/503
-            assert resp.status_code not in (401, 503)
+            # Auth passed — we get past the decorator. Route may fail on DB
+            # but must NOT return 401 (missing/invalid key) or 503 (unconfigured).
+            assert resp.status_code not in (401, 403, 503), (
+                f"Auth should have succeeded but got {resp.status_code}: {resp.json}"
+            )
 
     def test_missing_header_returns_401(self, sync_app, monkeypatch):
         """Request without X-API-Key header returns 401."""
