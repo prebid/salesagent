@@ -69,6 +69,31 @@ def _format_to_dict(fmt: Format) -> dict:
     return data
 
 
+def _parse_format_entries(formats_parsed: list[dict]) -> list[dict]:
+    """Parse format entries from form JSON without validation.
+
+    Extracts agent_url, id, and optional dimension/duration parameters
+    from each parsed format dict. Used when validation is skipped
+    (creative agent unreachable or returned no formats).
+    """
+    entries = []
+    for fmt in formats_parsed:
+        if not isinstance(fmt, dict) or not fmt.get("agent_url"):
+            continue
+        format_id = fmt.get("id") or fmt.get("format_id")
+        if not format_id:
+            continue
+        format_entry: dict = {"agent_url": fmt["agent_url"], "id": format_id}
+        if fmt.get("width") is not None:
+            format_entry["width"] = int(fmt["width"])
+        if fmt.get("height") is not None:
+            format_entry["height"] = int(fmt["height"])
+        if fmt.get("duration_ms") is not None:
+            format_entry["duration_ms"] = float(fmt["duration_ms"])
+        entries.append(format_entry)
+    return entries
+
+
 def _format_id_to_display_name(format_id: str) -> str:
     """Convert a format_id to a friendly display name when format lookup fails.
 
@@ -719,74 +744,55 @@ def add_product(tenant_id):
 
                         try:
                             registry = get_creative_agent_registry()
-                            available_formats = asyncio.run(registry.list_all_formats(tenant_id=tenant_id))
+                            result = asyncio.run(registry.list_all_formats_with_errors(tenant_id=tenant_id))
 
-                            # Build lookup of valid format IDs from live agent
-                            valid_format_ids = set()
-                            for fmt in available_formats:
-                                format_id_str = fmt.format_id.id
-                                valid_format_ids.add(format_id_str)
-
-                            invalid_formats = []
-                            for fmt in formats_parsed:
-                                if not isinstance(fmt, dict) or not fmt.get("agent_url"):
-                                    continue
-
-                                # Support both legacy {format_id} and new {id} field names
-                                format_id = fmt.get("id") or fmt.get("format_id")
-                                if not format_id:
-                                    continue
-
-                                if format_id in valid_format_ids:
-                                    # Build format dict with parameterized fields
-                                    format_entry = {"agent_url": fmt["agent_url"], "id": format_id}
-
-                                    # Include optional dimension/duration parameters
-                                    if fmt.get("width") is not None:
-                                        format_entry["width"] = int(fmt["width"])
-                                    if fmt.get("height") is not None:
-                                        format_entry["height"] = int(fmt["height"])
-                                    if fmt.get("duration_ms") is not None:
-                                        format_entry["duration_ms"] = float(fmt["duration_ms"])
-
-                                    formats.append(format_entry)
-                                else:
-                                    invalid_formats.append(format_id)
-
-                            # Block save if any formats are invalid
-                            if invalid_formats:
-                                flash(
-                                    f"Invalid format IDs: {', '.join(invalid_formats)}. "
-                                    f"These formats do not exist in the creative agent.",
-                                    "error",
+                            if result.errors and not result.formats:
+                                # Agent unreachable — graceful degradation
+                                logger.warning(
+                                    f"Creative agent errors ({len(result.errors)}), "
+                                    f"saving formats without validation: {result.errors[0].message}"
                                 )
-                                return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
+                                formats.extend(_parse_format_entries(formats_parsed))
+                                flash(
+                                    "Format validation unavailable (creative agent unreachable). "
+                                    "Formats will be verified when creating media buys.",
+                                    "warning",
+                                )
+                            else:
+                                # Agent reachable — validate format IDs
+                                valid_format_ids = {fmt.format_id.id for fmt in result.formats}
 
-                            logger.info(f"Validated {len(formats)} formats for new product")
+                                invalid_formats = []
+                                for fmt in formats_parsed:
+                                    if not isinstance(fmt, dict) or not fmt.get("agent_url"):
+                                        continue
+                                    format_id = fmt.get("id") or fmt.get("format_id")
+                                    if not format_id:
+                                        continue
 
-                        except (ADCPConnectionError, ADCPTimeoutError) as e:
-                            # Creative agent unreachable - graceful degradation
-                            logger.warning(f"Creative agent unreachable, saving formats without validation: {e}")
-                            for fmt in formats_parsed:
-                                if not isinstance(fmt, dict) or not fmt.get("agent_url"):
-                                    continue
-                                format_id = fmt.get("id") or fmt.get("format_id")
-                                if not format_id:
-                                    continue
+                                    if format_id in valid_format_ids:
+                                        format_entry = {"agent_url": fmt["agent_url"], "id": format_id}
+                                        if fmt.get("width") is not None:
+                                            format_entry["width"] = int(fmt["width"])
+                                        if fmt.get("height") is not None:
+                                            format_entry["height"] = int(fmt["height"])
+                                        if fmt.get("duration_ms") is not None:
+                                            format_entry["duration_ms"] = float(fmt["duration_ms"])
+                                        formats.append(format_entry)
+                                    else:
+                                        invalid_formats.append(format_id)
 
-                                format_entry = {"agent_url": fmt["agent_url"], "id": format_id}
-                                if fmt.get("width") is not None:
-                                    format_entry["width"] = int(fmt["width"])
-                                if fmt.get("height") is not None:
-                                    format_entry["height"] = int(fmt["height"])
-                                if fmt.get("duration_ms") is not None:
-                                    format_entry["duration_ms"] = float(fmt["duration_ms"])
-                                formats.append(format_entry)
-                            flash(
-                                "Format validation unavailable (creative agent unreachable). "
-                                "Formats will be verified when creating media buys.",
-                                "warning",
-                            )
+                                if invalid_formats:
+                                    flash(
+                                        f"Invalid format IDs: {', '.join(invalid_formats)}. "
+                                        f"These formats do not exist in the creative agent.",
+                                        "error",
+                                    )
+                                    return _render_add_product_form(
+                                        tenant_id, tenant, adapter_type, currencies, form_data
+                                    )
+
+                                logger.info(f"Validated {len(formats)} formats for new product")
 
                         except (ADCPError, Exception) as e:
                             logger.error(f"Failed to validate formats: {e}")
@@ -1374,77 +1380,57 @@ def edit_product(tenant_id, product_id):
 
                 try:
                     registry = get_creative_agent_registry()
-                    available_formats = asyncio.run(registry.list_all_formats(tenant_id=tenant_id))
-
-                    # Build lookup of valid format IDs from live agent
-                    valid_format_ids = set()
-                    for fmt in available_formats:
-                        format_id_str = fmt.format_id.id
-                        valid_format_ids.add(format_id_str)
+                    result = asyncio.run(registry.list_all_formats_with_errors(tenant_id=tenant_id))
 
                     validated_formats = []
-                    invalid_formats = []
-                    for fmt in formats_parsed:
-                        if not isinstance(fmt, dict) or not fmt.get("agent_url"):
-                            continue
 
-                        # Support both legacy {format_id} and new {id} field names
-                        format_id = fmt.get("id") or fmt.get("format_id")
-                        if not format_id:
-                            continue
-
-                        if format_id in valid_format_ids:
-                            # Build format dict with parameterized fields
-                            format_entry = {"agent_url": fmt["agent_url"], "id": format_id}
-
-                            # Include optional dimension/duration parameters
-                            if fmt.get("width") is not None:
-                                format_entry["width"] = int(fmt["width"])
-                            if fmt.get("height") is not None:
-                                format_entry["height"] = int(fmt["height"])
-                            if fmt.get("duration_ms") is not None:
-                                format_entry["duration_ms"] = float(fmt["duration_ms"])
-
-                            validated_formats.append(format_entry)
-                        else:
-                            invalid_formats.append(format_id)
-
-                    # Block save if any formats are invalid (registry confirmed they don't exist)
-                    if invalid_formats:
-                        flash(
-                            f"Invalid format IDs: {', '.join(invalid_formats)}. "
-                            f"These formats do not exist in the creative agent.",
-                            "error",
+                    if result.errors and not result.formats:
+                        # Agent unreachable — graceful degradation
+                        logger.warning(
+                            f"Creative agent errors ({len(result.errors)}), "
+                            f"saving formats without validation: {result.errors[0].message}"
                         )
-                        return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
+                        validated_formats = _parse_format_entries(formats_parsed)
+                        flash(
+                            "Format validation unavailable (creative agent unreachable). "
+                            "Formats will be verified when creating media buys.",
+                            "warning",
+                        )
+                    else:
+                        # Agent reachable — validate format IDs
+                        valid_format_ids = {fmt.format_id.id for fmt in result.formats}
+
+                        invalid_formats = []
+                        for fmt in formats_parsed:
+                            if not isinstance(fmt, dict) or not fmt.get("agent_url"):
+                                continue
+                            format_id = fmt.get("id") or fmt.get("format_id")
+                            if not format_id:
+                                continue
+
+                            if format_id in valid_format_ids:
+                                format_entry = {"agent_url": fmt["agent_url"], "id": format_id}
+                                if fmt.get("width") is not None:
+                                    format_entry["width"] = int(fmt["width"])
+                                if fmt.get("height") is not None:
+                                    format_entry["height"] = int(fmt["height"])
+                                if fmt.get("duration_ms") is not None:
+                                    format_entry["duration_ms"] = float(fmt["duration_ms"])
+                                validated_formats.append(format_entry)
+                            else:
+                                invalid_formats.append(format_id)
+
+                        if invalid_formats:
+                            flash(
+                                f"Invalid format IDs: {', '.join(invalid_formats)}. "
+                                f"These formats do not exist in the creative agent.",
+                                "error",
+                            )
+                            return redirect(
+                                url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id)
+                            )
 
                     logger.info(f"Validated {len(validated_formats)} formats for product {product_id}")
-
-                except (ADCPConnectionError, ADCPTimeoutError) as e:
-                    # Creative agent unreachable - graceful degradation
-                    # Save with warning, hard validation happens at media buy creation
-                    logger.warning(f"Creative agent unreachable, saving formats without validation: {e}")
-                    validated_formats = []
-                    for fmt in formats_parsed:
-                        if not isinstance(fmt, dict) or not fmt.get("agent_url"):
-                            continue
-                        format_id = fmt.get("id") or fmt.get("format_id")
-                        if not format_id:
-                            continue
-
-                        format_entry = {"agent_url": fmt["agent_url"], "id": format_id}
-                        if fmt.get("width") is not None:
-                            format_entry["width"] = int(fmt["width"])
-                        if fmt.get("height") is not None:
-                            format_entry["height"] = int(fmt["height"])
-                        if fmt.get("duration_ms") is not None:
-                            format_entry["duration_ms"] = float(fmt["duration_ms"])
-                        validated_formats.append(format_entry)
-                    flash(
-                        "Format validation unavailable (creative agent unreachable). "
-                        "Formats will be verified when creating media buys.",
-                        "warning",
-                    )
 
                 except (ADCPError, Exception) as e:
                     # Unexpected error - fail hard
