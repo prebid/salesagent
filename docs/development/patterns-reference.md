@@ -129,40 +129,84 @@ KNOWN_VIOLATIONS = {
 
 If new code shifts existing violations, fix some violations to offset the churn. The allowlist should be smaller after your PR, not the same size with different numbers.
 
-## 4. Writing Unit Tests
+## 4. Writing Unit Tests — The Test Harness
 
-### Test harness: `standard_mocks` fixture
+The project has a **test harness** at [`tests/harness/`](../../tests/harness/) that provides domain-specific test environments. These environments handle all mock wiring, identity creation, UoW setup, and multi-transport dispatch so tests focus purely on behavior.
 
-For testing `_impl` functions, use the shared fixture pattern instead of rebuilding mock scaffolding in every test.
+### Canonical example
 
-**Canonical example:** [`tests/unit/test_update_media_buy_behavioral.py`](../../tests/unit/test_update_media_buy_behavioral.py) lines 84–155
+**Base class:** [`tests/harness/_base.py`](../../tests/harness/_base.py) — `BaseTestEnv` (unit) and `IntegrationEnv` (real DB)
 
-```python
-@pytest.fixture
-def standard_mocks():
-    """Shared mock scaffolding for _update_media_buy_impl tests.
-
-    Patches MediaBuyUoW to provide a mock session and repository,
-    plus adapter, principal, and context manager mocks.
-    """
-    mock_session, mock_cm = _make_mock_db_session()
-
-    mock_uow = MagicMock()
-    mock_uow.session = mock_session
-    mock_uow.media_buys = MagicMock()
-    mock_uow.currency_limits = MagicMock()
-    # ... wired into patches
-```
-
-Tests using this fixture are concise and focused on behavior:
+**Domain environment:** [`tests/harness/delivery_poll_unit.py`](../../tests/harness/delivery_poll_unit.py) — `DeliveryPollEnv`
 
 ```python
-def test_extreme_budget_rejected(standard_mocks):
-    req = UpdateMediaBuyRequest(media_buy_id="mb_1", budget=Budget(total=999999999, currency="USD"))
-    result = _update_media_buy_impl(req=req, identity=_make_identity())
-    assert isinstance(result, UpdateMediaBuyError)
-    assert result.errors[0].code == "budget_ceiling_exceeded"
+class DeliveryPollEnv(DeliveryPollMixin, BaseTestEnv):
+    MODULE = "src.core.tools.media_buy_delivery"
+    EXTERNAL_PATCHES = {
+        "uow": f"{MODULE}.MediaBuyUoW",
+        "principal": f"{MODULE}.get_principal_object",
+        "adapter": f"{MODULE}.get_adapter",
+        "pricing": f"{MODULE}._get_pricing_options",
+    }
+
+    def _configure_mocks(self) -> None: ...   # Wire happy-path defaults
+    def add_buy(self, media_buy_id, ...) -> MagicMock: ...  # Fluent data API
+    def call_impl(self, **kwargs) -> Any: ...  # Call production _impl
 ```
+
+**Test using the harness** (from [`tests/unit/test_delivery_poll_behavioral.py`](../../tests/unit/test_delivery_poll_behavioral.py)):
+
+```python
+from tests.harness.delivery_poll_unit import DeliveryPollEnv
+
+def test_completed_status_filter(self):
+    """Covers: UC-004-ALT-STATUS-FILTERED-DELIVERY-03"""
+    with DeliveryPollEnv() as env:
+        env.add_buy(media_buy_id="mb_completed", start_date=date(2025, 1, 1), end_date=date(2025, 6, 30))
+        env.set_adapter_response("mb_completed", impressions=5000, spend=250.0)
+
+        response = env.call_impl(status_filter="completed")
+
+        returned_ids = [d.media_buy_id for d in response.media_buy_deliveries]
+        assert returned_ids == ["mb_completed"]
+```
+
+No mock wiring. No MagicMock scaffolding. The test is 6 lines of pure behavior.
+
+### Available harness environments
+
+| Environment | Domain | File |
+|-------------|--------|------|
+| `ProductEnv` | `_get_products_impl` | `tests/harness/product_unit.py` |
+| `DeliveryPollEnv` | `_get_media_buy_delivery_impl` | `tests/harness/delivery_poll_unit.py` |
+| `CreativeSyncEnv` | Creative sync | `tests/harness/creative_sync.py` |
+| `CreativeListEnv` | Creative listing | `tests/harness/creative_list.py` |
+| `CreativeFormatsEnv` | Creative formats | `tests/harness/creative_formats.py` |
+| `CircuitBreakerEnv` | Delivery circuit breaker | `tests/harness/delivery_circuit_breaker.py` |
+| `WebhookEnv` | Delivery webhooks | `tests/harness/delivery_webhook.py` |
+
+### Multi-transport testing
+
+The harness supports dispatching the same test through multiple transports:
+
+```python
+@pytest.mark.parametrize("transport", [Transport.IMPL, Transport.A2A, Transport.REST])
+def test_something(self, integration_db, transport):
+    with CreativeSyncEnv() as env:
+        result = env.call_via(transport, creatives=[...])
+        assert result.is_success
+```
+
+### Adding a new harness environment
+
+If no environment exists for the `_impl` function you're testing:
+
+1. Create `tests/harness/your_domain_unit.py` subclassing `BaseTestEnv`
+2. Define `EXTERNAL_PATCHES` — the dependencies to mock
+3. Implement `_configure_mocks()` — wire happy-path defaults
+4. Implement `call_impl(**kwargs)` — construct request and call production code
+5. Add fluent helpers (`add_buy()`, `set_adapter_response()`, etc.) for test data
+6. Export from `tests/harness/__init__.py`
 
 ### Anti-pattern: rebuilding mock scaffolding per test
 
@@ -177,7 +221,7 @@ def test_something():
     # ... same 15 lines in the next test
 ```
 
-If the fixture doesn't exist for the function you're testing, create one following the `standard_mocks` pattern. Don't copy-paste mock setup across tests.
+This pattern exists in older test files as tracked debt. New tests must use the harness or create a new harness environment if one doesn't exist for that domain.
 
 ### Testing Flask endpoints
 
@@ -284,9 +328,9 @@ This is tracked debt — the functions should be renamed to `_list_tasks_impl` e
 
 **Enforced by:** `test_transport_agnostic_impl.py`, `test_impl_resolved_identity.py`, `test_no_toolerror_in_impl.py`, `test_architecture_boundary_completeness.py`
 
-## 7. Shared Validation (DRY)
+## 7. Shared Validation (DRY) and Error Handling
 
-When the same validation logic applies to multiple code paths (e.g., create and update), extract a shared validator.
+When the same validation logic applies to multiple code paths (e.g., create and update), extract a shared validator. Validation failures must be raised as `AdCPError` subclasses — never returned as error response objects from `_impl`.
 
 ### Canonical example
 
@@ -304,21 +348,47 @@ def validate_min_package_budget(
 
 Properties:
 - Pure function — no session, no transport, no side effects
-- Returns `str | None` — caller decides how to wrap the error
+- Returns `str | None` — the validator produces the message, the caller raises the appropriate `AdCPError`
 - Used by both create and update paths
 
-### Anti-pattern
+**Caller raises the error:**
 
 ```python
-# WRONG: duplicated validation in two files with slightly different messages
+error_msg = validate_min_package_budget(
+    package_budget=budget, min_package_budget=limit, currency=currency,
+)
+if error_msg:
+    raise AdCPValidationError(error_msg)
+```
+
+`_impl` functions raise `AdCPError` subclasses (see `src/core/exceptions.py`). The transport wrapper catches these and translates to the transport-appropriate format (ToolError for MCP, HTTP status for REST, etc.). `_impl` never constructs transport error responses directly.
+
+**Enforced by:** `test_no_toolerror_in_impl.py`
+
+### Anti-pattern: returning error objects instead of raising
+
+```python
+# WRONG: _impl returns an error response object instead of raising
+if budget_amount < min_package_budget:
+    return UpdateMediaBuyError(errors=[Error(code="budget_below_minimum", ...)])
+```
+
+This couples `_impl` to the response shape and forces every caller to check for error types. Raising `AdCPValidationError` lets the transport boundary handle formatting.
+
+### Anti-pattern: duplicated inline validation
+
+```python
+# WRONG: same check copy-pasted with different messages
 # media_buy_create.py
 if package_budget < package_min_spend:
     raise ValueError(f"Package budget ... does not meet minimum ...")
 
-# media_buy_update.py (different message, same logic)
+# media_buy_update.py
 if budget_amount < min_package_budget:
-    return UpdateMediaBuyError(errors=[Error(code="budget_below_minimum", ...)])
+    raise ValueError(f"Budget below minimum ...")
 ```
+
+Extract to a shared validator so the logic and message text live in one place.
 
 ## Quick Reference: Where to Look
 
@@ -327,7 +397,8 @@ if budget_amount < min_package_budget:
 | Add a repository | `src/core/database/repositories/media_buy.py` |
 | Wire a repo into UoW | `src/core/database/repositories/uow.py` |
 | Write an `_impl` function | `src/core/tools/media_buy_delivery.py` (cleanest) |
-| Write a behavioral unit test | `tests/unit/test_update_media_buy_behavioral.py` |
+| Write a test for an `_impl` function | `tests/harness/_base.py` (BaseTestEnv), then a domain env like `tests/harness/delivery_poll_unit.py` |
+| See tests using the harness | `tests/unit/test_delivery_poll_behavioral.py` |
 | Write a Flask endpoint test | `tests/unit/test_signup_flow_session.py` |
 | Create a factory | `tests/factories/media_buy.py` |
 | Add a structural guard | `docs/development/structural-guards.md` |
