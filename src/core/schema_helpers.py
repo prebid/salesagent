@@ -130,7 +130,7 @@ def create_get_products_request(
         elif isinstance(filters, dict):
             filters_obj = ProductFilters(**filters)
 
-    return GetProductsRequest(
+    return GetProductsRequest(  # type: ignore[call-arg]
         brand=to_brand_reference(brand),
         brief=brief or None,
         filters=filters_obj,

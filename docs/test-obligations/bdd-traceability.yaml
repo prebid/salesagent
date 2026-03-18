@@ -18,7 +18,7 @@ schema_version: 1
 source:
   repository: adcp-req
   commit: bd801586c630f4d09c3d3162c3c6fd8d0a8b53c6
-  compiled_at: "2026-03-12T03:43:50Z"
+  compiled_at: "2026-03-18T22:50:27Z"
 
 mappings:
   UC-004:
@@ -953,3 +953,334 @@ mappings:
       upstream_refs: ["BR-UC-005-main-mcp", "BR-RULE-209"]
       business_rules: ["BR-RULE-209"]
       status: mapped
+  UC-011:
+    - adcp_scenario_id: "T-UC-011-list-main"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011-main-list-mcp", "BR-UC-011-main-list-a2a", "BR-RULE-054", "BR-RULE-055"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-list-status-filter"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011-main-list-mcp", "BR-RULE-054"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-list-no-accounts"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-054", "BR-RULE-055"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-list-unauth"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-055"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-list-pagination"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011-main-list-mcp", "BR-UC-011-main-list-a2a"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-list-status-filter-no-match"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-054"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-list-invalid-status"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-list-pagination-bva"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-list-status-all"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-054"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-sync-create"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011-main-sync", "BR-RULE-056", "BR-RULE-058"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-sync-multi-brand"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-058"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-sync-brand-direct"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-058", "BR-RULE-059"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-sync-update"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-056"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-sync-unchanged"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-056"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-sync-billing-enum"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-059"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-sync-mixed"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-056"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-sync-brand-echo"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-056", "BR-RULE-058"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-sync-shortest-domain"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-058"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-ext-a-no-token"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011-ext-a", "BR-RULE-055", "BR-RULE-057"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-ext-a-expired"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011-ext-a", "BR-RULE-055"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-ext-b-partial"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011-ext-b", "BR-RULE-056", "BR-RULE-057"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-ext-c-rejected"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011-ext-c", "BR-RULE-059"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-ext-c-mixed"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011-ext-c", "BR-UC-011-ext-b", "BR-RULE-059", "BR-RULE-057"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-ext-c-invalid-enum"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-059"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-ext-d-pending-url"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011-ext-d", "BR-RULE-060"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-ext-d-pending-message"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011-ext-d", "BR-RULE-060"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-ext-d-active"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-060"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-ext-d-push"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011-ext-d", "BR-RULE-060"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-ext-e-preview"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011-ext-e", "BR-RULE-062"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-ext-e-normal"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-062"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-ext-e-omitted"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-062"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-ext-f-deactivate"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011-ext-f", "BR-RULE-061"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-ext-f-scoped"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011-ext-f", "BR-RULE-061"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-ext-f-false"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-061"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-ext-f-none-absent"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-061"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-ext-f-omitted"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-061"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-ext-g-echo"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011-ext-g", "BR-RULE-043"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-ext-g-echo-error"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011-ext-g", "BR-RULE-043"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-ext-g-absent"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-043"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-ext-g-empty"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-043"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-ext-g-nested"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-043"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-sync-empty-accounts"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-sync-missing-brand"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011", "BR-RULE-058"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-sync-missing-operator"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011", "BR-RULE-058"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-sync-missing-billing"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011", "BR-RULE-059"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-sync-invalid-patterns"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011", "BR-RULE-058"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-sync-accounts-bva"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-atomic-success"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-057"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-atomic-all-failed"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-057"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-atomic-error"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-057"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-atomic-service-error"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-057"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-atomic-both"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-057"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-sandbox-provision"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011-main-sync", "BR-RULE-209"]
+      business_rules: ["BR-RULE-209"]
+      status: new
+    - adcp_scenario_id: "T-UC-011-sandbox-list-filter"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011-main-list-mcp", "BR-RULE-209"]
+      business_rules: ["BR-RULE-209"]
+      status: new
+    - adcp_scenario_id: "T-UC-011-sandbox-validation"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011-main-sync", "BR-RULE-209"]
+      business_rules: ["BR-RULE-209"]
+      status: new

@@ -789,6 +789,7 @@ def migration_db():
     except Exception:
         pass
 
+
 @pytest.fixture
 def mock_identity(sample_tenant, sample_principal):
     """Build a ResolvedIdentity from real test DB fixtures.

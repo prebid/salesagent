@@ -2913,8 +2913,6 @@ class TestProductV36FieldContract:
 
     def test_delivery_measurement_required(self):
         """delivery_measurement is required per AdCP spec; omitting it fails validation."""
-        from pydantic import ValidationError
-
         from src.core.schemas import Product
         from tests.helpers.adcp_factories import (
             create_test_cpm_pricing_option,
