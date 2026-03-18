@@ -4,8 +4,9 @@
 import sys
 from pathlib import Path
 
-from alembic import command
 from alembic.config import Config
+
+from alembic import command
 
 # Project root (two levels up from scripts/ops/)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
