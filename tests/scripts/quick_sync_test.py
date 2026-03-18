@@ -11,11 +11,11 @@ import sys
 
 import requests
 
-# Add parent directory to path for imports
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add project root to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Import the sync API functions directly
-from sync_api import get_tenant_management_api_key, initialize_tenant_management_api_key
+from src.admin.auth_helpers import get_api_key_from_config
+from src.admin.sync_api import initialize_tenant_management_api_key
 
 
 def main():
@@ -27,7 +27,7 @@ def main():
 
     # 1. Get API key
     print("\n1. Getting API key...")
-    api_key = get_tenant_management_api_key()
+    api_key = get_api_key_from_config("SYNC_API_KEY", "api_key")
     if not api_key:
         print("   Creating new API key...")
         api_key = initialize_tenant_management_api_key()

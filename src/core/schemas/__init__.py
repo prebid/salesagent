@@ -13,7 +13,7 @@ from src.core.schemas._base import *  # noqa: F401, F403
 from src.core.schemas._base import GetMediaBuysPackage as _GetMediaBuysPackage
 from src.core.schemas._base import PackageRequest as _PackageRequest
 from src.core.schemas.product import *  # noqa: F401,F403
-from src.core.schemas.delivery import *  # type: ignore[assignment]  # noqa: F401,F403
+from src.core.schemas.delivery import *  # noqa: F401,F403
 from src.core.schemas.creative import *  # noqa: F401, F403
 from src.core.schemas.creative import Creative as _Creative
 from src.core.schemas.creative import CreativeApproval as _CreativeApproval
