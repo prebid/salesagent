@@ -208,6 +208,76 @@ Source: BR-UC-005-main-mcp.md
 **Business Rule** Step 7 of main MCP flow
 **Priority** P1 -- protocol correctness
 
+#### Scenario: Filter by disclosure_positions (AND semantics)
+**Obligation ID** UC-005-MAIN-MCP-18
+**Layer** behavioral
+
+**Given** the format catalog contains formats with various disclosure position attributes
+**When** the Buyer calls `list_creative_formats` with `disclosure_positions` filter
+**Then** only formats that support ALL requested disclosure positions are returned (AND semantics)
+**And** formats with only partial position overlap are excluded
+**And** formats without disclosure position information are excluded
+**Business Rule** BR-RULE-049 INV-8: Disclosure positions filter uses AND-match semantics
+**Priority** P2 -- filter correctness
+
+#### Scenario: Filter by output_format_ids (OR semantics)
+**Obligation ID** UC-005-MAIN-MCP-19
+**Layer** behavioral
+
+**Given** the format catalog contains formats with various output format ID references
+**When** the Buyer calls `list_creative_formats` with `output_format_ids` filter
+**Then** only formats matching at least one of the requested output format IDs are returned (OR semantics)
+**And** formats with no matching output format IDs are excluded
+**And** formats without output_format_ids information are excluded
+**Business Rule** BR-RULE-049 INV-9: Output format IDs filter uses OR-match semantics
+**Priority** P2 -- filter correctness
+
+#### Scenario: Filter by input_format_ids (OR semantics)
+**Obligation ID** UC-005-MAIN-MCP-20
+**Layer** behavioral
+
+**Given** the format catalog contains formats with various input format ID references
+**When** the Buyer calls `list_creative_formats` with `input_format_ids` filter
+**Then** only formats matching at least one of the requested input format IDs are returned (OR semantics)
+**And** formats with no matching input format IDs are excluded
+**And** formats without input_format_ids information are excluded
+**Business Rule** BR-RULE-049 INV-10: Input format IDs filter uses OR-match semantics
+**Priority** P2 -- filter correctness
+
+#### Scenario: Filter creative agent formats by type
+**Obligation ID** UC-005-MAIN-MCP-21
+**Layer** behavioral
+
+**Given** the format catalog includes formats from creative agents with different format types
+**When** the Buyer calls `list_creative_formats` with a creative agent type filter
+**Then** only creative agent formats matching the requested type are returned
+**And** formats from creative agents of other types are excluded
+**Business Rule** BR-RULE-049: Creative agent type filter
+**Priority** P2 -- filter correctness
+
+#### Scenario: Filter creative agent formats by asset_types
+**Obligation ID** UC-005-MAIN-MCP-22
+**Layer** behavioral
+
+**Given** the format catalog includes creative agent formats with various asset types
+**When** the Buyer calls `list_creative_formats` with a creative agent asset_types filter
+**Then** only creative agent formats containing at least one matching asset type are returned
+**And** creative agent formats with no matching asset types are excluded
+**Business Rule** BR-RULE-049: Creative agent asset type filter
+**Priority** P2 -- filter correctness
+
+#### Scenario: Sandbox account creative format discovery
+**Obligation ID** UC-005-MAIN-MCP-23
+**Layer** behavioral
+
+**Given** the Buyer is authenticated with a sandbox account
+**When** the Buyer calls `list_creative_formats`
+**Then** the response contains simulated formats with a `sandbox: true` flag
+**And** a production account receives no sandbox field in the response
+**And** a sandbox account with invalid filter parameters receives a real validation error (not a simulated success)
+**Business Rule** BR-RULE-209: Sandbox accounts receive simulated data with sandbox flag
+**Priority** P2 -- sandbox behavior
+
 ---
 
 ### Main Flow (REST): Discover Creative Formats via A2A/REST
@@ -379,6 +449,76 @@ These verify ListCreativeFormatsRequest/Response roundtrip against adcp 3.6.0 sc
 **Then** format_id is an object with `agent_url` (URL) and `id` (string)
 **And** not a bare string identifier
 **Priority** P1 -- schema structure
+
+#### Scenario: Invalid disclosure position value
+**Obligation ID** UC-005-EXT-B-10
+**Layer** schema
+
+**Given** the Seller Agent is operational
+**When** the Buyer calls `list_creative_formats` with an invalid disclosure position value
+**Then** the response is an error with code `DISCLOSURE_POSITIONS_INVALID_VALUE`
+**And** the error message identifies the invalid position value
+**Priority** P2 -- validation error contract
+
+#### Scenario: Empty disclosure positions array
+**Obligation ID** UC-005-EXT-B-11
+**Layer** schema
+
+**Given** the Seller Agent is operational
+**When** the Buyer calls `list_creative_formats` with an empty `disclosure_positions` array
+**Then** the response is an error with code `DISCLOSURE_POSITIONS_EMPTY`
+**And** the error message indicates the array must not be empty
+**Priority** P2 -- validation error contract
+
+#### Scenario: Duplicate disclosure positions
+**Obligation ID** UC-005-EXT-B-12
+**Layer** schema
+
+**Given** the Seller Agent is operational
+**When** the Buyer calls `list_creative_formats` with duplicate values in `disclosure_positions`
+**Then** the response is an error with code `DISCLOSURE_POSITIONS_DUPLICATES`
+**And** the error message identifies the duplicate values
+**Priority** P2 -- validation error contract
+
+#### Scenario: Empty output_format_ids array
+**Obligation ID** UC-005-EXT-B-13
+**Layer** schema
+
+**Given** the Seller Agent is operational
+**When** the Buyer calls `list_creative_formats` with an empty `output_format_ids` array
+**Then** the response is an error with code `OUTPUT_FORMAT_IDS_EMPTY`
+**And** the error message indicates the array must not be empty
+**Priority** P2 -- validation error contract
+
+#### Scenario: Malformed output FormatId structure
+**Obligation ID** UC-005-EXT-B-14
+**Layer** schema
+
+**Given** the Seller Agent is operational
+**When** the Buyer calls `list_creative_formats` with malformed `output_format_ids` (e.g., missing `agent_url` or `id`)
+**Then** the response is an error with code `OUTPUT_FORMAT_IDS_INVALID_STRUCTURE`
+**And** the error identifies the structural problem in the FormatId object
+**Priority** P2 -- structural validation
+
+#### Scenario: Empty input_format_ids array
+**Obligation ID** UC-005-EXT-B-15
+**Layer** schema
+
+**Given** the Seller Agent is operational
+**When** the Buyer calls `list_creative_formats` with an empty `input_format_ids` array
+**Then** the response is an error with code `INPUT_FORMAT_IDS_EMPTY`
+**And** the error message indicates the array must not be empty
+**Priority** P2 -- validation error contract
+
+#### Scenario: Malformed input FormatId structure
+**Obligation ID** UC-005-EXT-B-16
+**Layer** schema
+
+**Given** the Seller Agent is operational
+**When** the Buyer calls `list_creative_formats` with malformed `input_format_ids` (e.g., missing `agent_url` or `id`)
+**Then** the response is an error with code `INPUT_FORMAT_IDS_INVALID_STRUCTURE`
+**And** the error identifies the structural problem in the FormatId object
+**Priority** P2 -- structural validation
 
 ---
 

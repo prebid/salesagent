@@ -1,5 +1,5 @@
 .PHONY: setup quality quality-full pre-pr lint-fix lint typecheck test-fast test-full
-.PHONY: test-stack-up test-stack-down test-all test-cov test-int test-e2e
+.PHONY: test-stack-up test-stack-down test-all test-cov test-int test-e2e test-entity
 
 setup:
 	uv run python scripts/setup-dev.py
@@ -69,3 +69,10 @@ ifndef TARGET
 	$(error TARGET is required. Usage: make test-e2e TARGET=tests/e2e/test_file.py)
 endif
 	scripts/run-test.sh $(TARGET) $(ARGS)
+
+# ─── Entity-scoped test runs ────────────────────────────────────
+# Usage: make test-entity ENTITY=delivery
+#        make test-entity ENTITY="creative and unit"
+ENTITY ?= ""
+test-entity:
+	uv run pytest tests/unit/ tests/integration/ tests/e2e/ tests/admin/ -m "$(ENTITY)" -x -v

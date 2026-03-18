@@ -14,21 +14,239 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+# ---------------------------------------------------------------------------
+# Entity marker taxonomy — auto-applied to tests by filename / path patterns
+# ---------------------------------------------------------------------------
+# These markers let developers run any slice of the test suite:
+#   uv run pytest -m delivery          # all delivery tests across all suites
+#   uv run pytest -m "creative and unit"  # creative unit tests only
+#   make test-entity ENTITY=product    # convenience target
+
+_ENTITY_MARKERS: frozenset[str] = frozenset(
+    {
+        "delivery",
+        "creative",
+        "product",
+        "media_buy",
+        "tenant",
+        "auth",
+        "adapter",
+        "inventory",
+        "schema",
+        "admin",
+        "architecture",
+        "targeting",
+        "transport",
+        "workflow",
+        "policy",
+        "agent",
+        "infra",
+    }
+)
+
+# Maps entity markers to filename substrings. A test file whose name
+# contains any of the substrings gets the corresponding entity marker.
+# Tests may receive multiple entity markers when they match multiple patterns.
+_ENTITY_PATTERNS: dict[str, list[str]] = {
+    # --- Core domain entities ---
+    "delivery": [
+        "delivery",
+        "webhook",
+        "push_notification",
+        "metrics",
+    ],
+    "creative": [
+        "creative",
+        "format_id",
+        "format_cache",
+        "format_display",
+        "format_resolver",
+        "format_template",
+        "format_trailing",
+        "formatid",
+        "build_creative_data",
+        "extract_url_from_assets",
+        "normalize_agent_url",
+        "list_creative_formats",
+    ],
+    "product": [
+        "product",
+        "pricing",
+        "property_list",
+        "property_discovery",
+        "property_verification",
+        "measurement_provider",
+        "get_recommended_cpm",
+        "duplicate_product",
+    ],
+    "media_buy": [
+        "media_buy",
+        "budget",
+        "dry_run",
+        "multi_package",
+        "order_approval",
+        "execute_approved",
+        "format_conversion_approval",
+        "impression_tracker",
+    ],
+    "tenant": [
+        "tenant",
+        "virtual_host",
+        "domain_routing",
+        "setup_checklist",
+        "self_service_signup",
+    ],
+    "auth": [
+        "auth",
+        "identity",
+        "token",
+        "oauth",
+        "resolve_identity",
+        "signup_flow",
+    ],
+    "adapter": [
+        "adapter",
+        "gam_",
+        "broadstreet",
+        "mock_adapter",
+    ],
+    "inventory": [
+        "inventory",
+        "incremental_sync",
+        "sync_job",
+    ],
+    "schema": [
+        "adcp_contract",
+        "schema",
+        "adcp_",
+        "pydantic_",
+        "spec_compliance",
+        "protocol_envelope",
+        "response_shapes",
+        "null_field",
+        "validation_errors",
+        "annotated_type",
+        "all_response_str",
+        "openapi_surface",
+        "manual_vs_generated",
+        "json_serialization",
+        "version_compat",
+        "signals_response",
+        "discovery_endpoint",
+    ],
+    "admin": [
+        "admin_ui",
+        "dashboard",
+        "form_validation",
+        "signup",
+        "activity_feed",
+        "comprehensive_pages",
+        "landing_page",
+    ],
+    "architecture": [
+        "architecture",
+        "no_toolerror_in_impl",
+        "transport_agnostic_impl",
+        "impl_resolved_identity",
+        "no_model_dump_in_impl",
+        "inspect_bdd_steps",
+    ],
+    # --- Extended domain entities ---
+    "targeting": [
+        "targeting",
+        "geo_overlap",
+        "overlay_validation",
+        "city_targeting",
+        "device_platform",
+        "axe_segment",
+        "enhanced_custom_targeting",
+        "validate_geo",
+    ],
+    "transport": [
+        "a2a_",
+        "mcp_",
+        "rest_",
+        "boundary_field",
+        "shared_header",
+        "parse_tool_result",
+        "no_contextvar",
+        "raw_function_parameter",
+        "error_boundary",
+        "error_format",
+        "mock_server_response",
+        "tool_result_format",
+        "tool_registration",
+    ],
+    "workflow": [
+        "workflow",
+        "approval_error",
+        "context_management",
+    ],
+    "policy": [
+        "policy",
+        "brand",
+        "quiet_failure",
+    ],
+    "agent": [
+        "ai_review",
+        "ai_service",
+        "naming_agent",
+        "naming_parameter",
+        "naming_unawaited",
+        "review_agent",
+        "task_management",
+        "signals_agent",
+    ],
+    "infra": [
+        "tox_config",
+        "import_collision",
+        "blueprint_imports",
+        "warning_filters",
+        "stale_docs",
+        "e2e_fixture_cleanup",
+        "database_health",
+        "datetime_string",
+        "encryption",
+        "json_type",
+        "pgbouncer",
+        "scheduler_env",
+        "slack_notification",
+        "performance_index",
+        "fastapi_app",
+        "link_validation",
+        "template_url",
+        "health_route",
+        "notification_url",
+        "timestamptz",
+        "composite_pk",
+        "session_json",
+        "pr1071",
+        "version",
+    ],
+}
+
+# Subdirectory → entity marker. Tests under these paths get the marker
+# regardless of filename.
+_PATH_ENTITY_MAP: dict[str, str] = {
+    "/adapters/": "adapter",
+    "/admin/": "admin",
+}
+
 
 def pytest_configure(config):
-    """Prevent fastmcp from overriding pytest's warning filters.
+    """Register entity markers and configure test environment.
 
-    FastMCP's __init__.py calls ``warnings.simplefilter("default",
-    DeprecationWarning)`` at import time, which prepends a catch-all
-    ``default`` filter to the front of the warnings filter list.  This
-    causes the ``ignore`` entries in pytest.ini's ``filterwarnings`` to
-    be shadowed, so third-party deprecation warnings (a2a HTTP_413,
-    starlette WSGI) leak through despite being explicitly suppressed.
+    Entity markers allow slicing the test suite by domain:
+        pytest -m delivery          # all delivery tests
+        pytest -m "creative and unit"  # creative unit tests only
 
-    Setting FASTMCP_DEPRECATION_WARNINGS=false before fastmcp is
-    imported disables this behaviour and lets pytest.ini filters work
-    as intended.
+    Also prevents fastmcp from overriding pytest's warning filters.
     """
+    # --- Entity marker registration ---
+    for marker in sorted(_ENTITY_MARKERS):
+        config.addinivalue_line("markers", f"{marker}: Entity marker (auto-applied by filename/path)")
+
+    # --- Environment setup ---
     os.environ.setdefault("FASTMCP_DEPRECATION_WARNINGS", "false")
 
     # Disable OpenTelemetry SDK during tests. Logfire (added for Pydantic AI
@@ -118,7 +336,7 @@ def test_environment(monkeypatch, request):
     monkeypatch.setenv("ADCP_AUTH_TEST_MODE", "true")  # Enable test mode for auth
 
     # Check if this is a test that needs the database
-    is_integration_test = "integration" in str(request.fspath)
+    is_integration_test = "integration" in str(request.fspath) or "bdd" in str(request.fspath)
     has_requires_db_marker = request.node.get_closest_marker("requires_db") is not None
     database_url = os.environ.get("DATABASE_URL")
 
@@ -549,9 +767,39 @@ def benchmark(request):
 
 
 def pytest_collection_modifyitems(config, items):
-    """Modify test collection to skip tests that need the full Docker stack."""
+    """Auto-apply entity markers and skip tests that need the full Docker stack."""
     import socket
 
+    # --- Entity marker auto-application ---
+    # For each test item, check filename and path against entity patterns.
+    # Build a lookup cache: filename → set of entity markers
+    _filename_cache: dict[str, set[str]] = {}
+
+    for item in items:
+        fspath = str(item.fspath)
+        filename = Path(fspath).stem  # e.g. "test_delivery_webhook_behavioral"
+
+        if filename not in _filename_cache:
+            markers: set[str] = set()
+
+            # 1. Match filename against entity patterns (substring match)
+            for entity, patterns in _ENTITY_PATTERNS.items():
+                for pattern in patterns:
+                    if pattern in filename:
+                        markers.add(entity)
+                        break  # one match per entity is enough
+
+            # 2. Match path against directory-based entity map
+            for path_fragment, entity in _PATH_ENTITY_MAP.items():
+                if path_fragment in fspath:
+                    markers.add(entity)
+
+            _filename_cache[filename] = markers
+
+        for marker_name in _filename_cache[filename]:
+            item.add_marker(getattr(pytest.mark, marker_name))
+
+    # --- Server reachability check ---
     def _server_reachable(host: str = "localhost", port: int = 8100) -> bool:
         try:
             with socket.create_connection((host, port), timeout=1):

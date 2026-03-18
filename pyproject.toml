@@ -103,6 +103,7 @@ dev = [
     "types-waitress>=3.0.1.20250801",
     "pytest-json-report>=1.5.0",
     "pylint>=4.0.5",
+    "pytest-bdd>=7.0.0",
     # Security patches for transitive dev dependencies
     "black>=26.3.1",  # GHSA-3936-cmfr-pm3m
 ]
