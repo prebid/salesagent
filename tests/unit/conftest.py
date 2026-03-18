@@ -85,3 +85,33 @@ def fast_password_hashing():
         with patch("werkzeug.security.check_password_hash") as mock_check:
             mock_check.side_effect = lambda h, p: h == f"hashed_{p}"
             yield
+
+
+@pytest.fixture
+def make_auth_test_client():
+    """Factory fixture: context manager yielding (client, mock_session) with auth DB patched.
+
+    Usage::
+
+        with make_auth_test_client(auth_setup_mode=True) as (client, mock_session):
+            with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true", ...}):
+                response = client.post("/test/auth", ...)
+    """
+    from contextlib import contextmanager
+
+    from src.admin.app import create_app
+
+    @contextmanager
+    def _factory(auth_setup_mode: bool = True):
+        app = create_app({"TESTING": True, "SECRET_KEY": "test-secret", "WTF_CSRF_ENABLED": False})
+        client = app.test_client()
+        mock_tenant = MagicMock()
+        mock_tenant.auth_setup_mode = auth_setup_mode
+        mock_session = MagicMock()
+        mock_session.scalars.return_value.first.return_value = mock_tenant
+        with patch("src.admin.blueprints.auth.get_db_session") as mock_db:
+            mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
+            mock_db.return_value.__exit__ = MagicMock(return_value=False)
+            yield client, mock_session
+
+    return _factory

@@ -21,8 +21,7 @@ def is_admin_production() -> bool:
     so security-sensitive checks do not drift between deployment styles.
     """
     return (
-        os.environ.get("PRODUCTION", "").lower() == "true"
-        or os.environ.get("ENVIRONMENT", "").lower() == "production"
+        os.environ.get("PRODUCTION", "").lower() == "true" or os.environ.get("ENVIRONMENT", "").lower() == "production"
     )
 
 
