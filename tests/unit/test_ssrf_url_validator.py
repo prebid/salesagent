@@ -10,8 +10,6 @@ Covers:
 import os
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from src.core.security.url_validator import BLOCKED_HOSTNAMES, check_url_ssrf
 
 

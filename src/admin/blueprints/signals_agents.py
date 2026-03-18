@@ -278,6 +278,17 @@ def test_signals_agent(tenant_id, agent_id):
                     "credentials": agent.auth_credentials,
                 }
 
+            # Validate URL before making outbound request (defence-in-depth: stored URLs
+            # may pre-date the add/edit SSRF checks)
+            is_safe, ssrf_error = check_url_ssrf(agent.agent_url)
+            if not is_safe:
+                logger.warning(
+                    "[SECURITY] Signals agent test-connection rejected unsafe URL %r: %s",
+                    agent.agent_url,
+                    ssrf_error,
+                )
+                return jsonify({"success": False, "error": f"Agent URL is not allowed: {ssrf_error}"}), 400
+
             # Test connection
             # Use asyncio.run() instead of new_event_loop() for better compatibility with adcp library
             result = asyncio.run(registry.test_connection(agent.agent_url, auth=auth, auth_header=agent.auth_header))
