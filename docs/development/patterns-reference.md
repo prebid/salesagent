@@ -1,16 +1,16 @@
 # Architecture Patterns Reference
 
-This document maps every key pattern in the codebase to its **canonical implementation** — the file you should read and follow. It also identifies **known anti-patterns** that exist in the codebase as tracked technical debt. New code must follow the canonical pattern, not the anti-pattern, even when the anti-pattern appears in surrounding code.
+This document maps every key pattern to its **canonical implementation file** and identifies **known anti-patterns** that exist as tracked debt. New code must follow the canonical pattern, not the anti-pattern, even when the anti-pattern appears in surrounding code.
 
-> **Why this document exists:** The codebase has two eras of code — legacy code written before the current architecture was established, and current code that follows the patterns described here. Most code by volume is legacy. If you pattern-match from surrounding code, you will likely follow a legacy pattern. This document tells you which files represent the target architecture.
+> **Why this document exists:** The codebase has two eras — legacy code and current architecture. Most code by volume is legacy. If you pattern-match from surrounding code, you will likely follow a legacy pattern. This document tells you which files represent the target architecture.
 
-## 1. Repository Pattern
+These patterns are machine-enforced by 8 review agents (`.claude/agents/review-*.md`) and 14+ structural guard tests (`tests/unit/test_architecture_*.py`).
 
-All database access goes through repository classes. `_impl` functions never contain raw `select()` calls, `session.scalars()`, `session.add()`, or direct model imports for data access.
+## 1. Repository Pattern (CP-3)
 
-### Canonical example
+All database access goes through repository classes. `_impl` functions never contain raw `select()`, `session.scalars()`, `session.add()`, or direct model imports for data access.
 
-**Repository:** [`src/core/database/repositories/media_buy.py`](../../src/core/database/repositories/media_buy.py)
+**Canonical file:** [`src/core/database/repositories/media_buy.py`](../../src/core/database/repositories/media_buy.py)
 
 ```python
 class MediaBuyRepository:
@@ -28,17 +28,13 @@ class MediaBuyRepository:
 ```
 
 Key properties:
-- Constructor takes `session` and `tenant_id` — tenant scoping is automatic
-- All queries include `tenant_id` in the WHERE clause
-- Write methods add to session but never commit — the UoW handles that
+- Constructor takes `session` and `tenant_id` — tenant scoping is automatic in every query
+- Write methods (`create_from_request`, `update_fields`, etc.) add to session but never commit — the UoW handles that
 - Returns ORM model instances, not dicts
 
-### Anti-pattern (exists in codebase as tracked debt)
-
+**Anti-pattern** (exists in codebase, tracked by `FIXME(salesagent-9f2)`):
 ```python
 # WRONG: raw select() inside _impl function
-from src.core.database.models import CurrencyLimit
-
 currency_stmt = select(CurrencyLimit).where(
     CurrencyLimit.tenant_id == tenant["tenant_id"],
     CurrencyLimit.currency_code == request_currency,
@@ -46,43 +42,32 @@ currency_stmt = select(CurrencyLimit).where(
 currency_limit = session.scalars(currency_stmt).first()
 ```
 
-This bypasses tenant isolation guarantees, scatters data access logic across business functions, and is caught by the `test_architecture_no_raw_select.py` structural guard.
+**Adding a new repository:** Create `src/core/database/repositories/your_model.py` following `media_buy.py`, add to `__init__.py`, wire into the appropriate UoW. The `test_architecture_no_raw_select.py` guard catches raw `select()` calls outside repository files.
 
-### Adding a new repository
-
-1. Create `src/core/database/repositories/your_model.py` following the `media_buy.py` pattern
-2. Add it to `src/core/database/repositories/__init__.py`
-3. Wire it into the appropriate UoW class (see next section)
-4. The `test_architecture_no_raw_select.py` guard will enforce that new code uses it
+**Enforced by:** `review-architecture` (CP-3), `review-execution-excellence` (Repository+UoW), `review-layering` (_impl → Repository leaks), `test_architecture_no_raw_select.py`, `test_architecture_repository_pattern.py`
 
 ## 2. Unit of Work (UoW)
 
-The UoW manages session lifecycle: creates on entry, commits on clean exit, rolls back on exception. It provides tenant-scoped repositories.
+The UoW manages session lifecycle: creates on entry, commits on clean exit, rolls back on exception.
 
-### Canonical example
-
-**UoW:** [`src/core/database/repositories/uow.py`](../../src/core/database/repositories/uow.py)
+**Canonical file:** [`src/core/database/repositories/uow.py`](../../src/core/database/repositories/uow.py)
 
 ```python
 class MediaBuyUoW(BaseUoW):
     media_buys: MediaBuyRepository | None
-    currency_limits: CurrencyLimitRepository | None
 
     def _init_repos(self) -> None:
         assert self._session is not None
         self.media_buys = MediaBuyRepository(self._session, self._tenant_id)
-        self.currency_limits = CurrencyLimitRepository(self._session, self._tenant_id)
 
     def _clear_repos(self) -> None:
         self.media_buys = None
-        self.currency_limits = None
 ```
 
 Usage in `_impl`:
 ```python
 with MediaBuyUoW(tenant["tenant_id"]) as uow:
     media_buy = uow.media_buys.get_by_id(req.media_buy_id)
-    currency_limit = uow.currency_limits.get_for_currency("USD")
 ```
 
 ### `uow.session` is deprecated
@@ -90,54 +75,37 @@ with MediaBuyUoW(tenant["tenant_id"]) as uow:
 `BaseUoW.session` emits a `DeprecationWarning` at runtime:
 
 ```
-uow.session is deprecated — use repository methods instead of raw session access.
+uow.session is deprecated — use repository methods instead of raw session access. See salesagent-9f2.
 ```
 
-If you see `session = uow.session` in existing code, that is tracked debt (`FIXME(salesagent-9f2)`), not a pattern to follow. If you need data access that no repository method provides, **add a repository method** — don't use the raw session.
+If you see `session = uow.session` in existing code, that is tracked debt. If you need data access that no repository method provides, **add a repository method** — don't use the raw session.
 
-### Anti-pattern
-
-```python
-# WRONG: accessing deprecated session property
-session = uow.session
-result = session.scalars(select(Model).where(...)).first()
-```
+**Enforced by:** `review-execution-excellence` (Repository+UoW pattern), `review-layering` (_impl → Repository leaks)
 
 ## 3. Structural Guards and Allowlists
 
 AST-scanning tests enforce architecture invariants on every `make quality` run. See [`docs/development/structural-guards.md`](structural-guards.md) for the full inventory.
 
-### Core rule: allowlists only shrink
-
-Every guard has a set of known violations (pre-existing code). The allowlist tracks this debt.
+### Core rules
 
 - **New code that introduces a violation fails CI immediately** — no exceptions
-- **Allowlists are never expanded** — if your change shifts line numbers, fix violations to compensate, don't renumber the list
-- **Every allowlisted violation has a `# FIXME(salesagent-xxxx)`** comment at the source location linking to a tracked issue
-- **Removing a FIXME without fixing the underlying issue is not acceptable** — the FIXME is a contract that the debt is known and tracked
+- **Allowlists track pre-existing debt and only shrink** — never add new entries
+- **Every allowlisted violation has a `# FIXME(salesagent-xxxx)`** comment linking to a tracked issue
+- **Removing a FIXME without fixing the underlying issue is not acceptable** — the FIXME is a contract
 
-### Anti-pattern
+Guards use `(file_path, function_name)` tuples in their allowlists, not line numbers. This makes them resilient to line shifts from unrelated changes.
 
-```python
-# WRONG: shifting allowlist line numbers to accommodate new code
-KNOWN_VIOLATIONS = {
-    ("media_buy_update.py", 197),  # was 186 — shifted by new constant block
-    ("media_buy_update.py", 223),  # was 212
-    ...
-}
-```
+**Enforced by:** `review-architecture` (references all 14 guards), CI (`make quality`)
 
-If new code shifts existing violations, fix some violations to offset the churn. The allowlist should be smaller after your PR, not the same size with different numbers.
+## 4. Writing Tests — The Test Harness
 
-## 4. Writing Unit Tests — The Test Harness
-
-The project has a **test harness** at [`tests/harness/`](../../tests/harness/) that provides domain-specific test environments. These environments handle all mock wiring, identity creation, UoW setup, and multi-transport dispatch so tests focus purely on behavior.
-
-### Canonical example
+The project has a **test harness** at [`tests/harness/`](../../tests/harness/) that provides domain-specific test environments. These environments handle mock wiring, identity creation, UoW setup, and multi-transport dispatch so tests focus purely on behavior.
 
 **Base class:** [`tests/harness/_base.py`](../../tests/harness/_base.py) — `BaseTestEnv` (unit) and `IntegrationEnv` (real DB)
 
-**Domain environment:** [`tests/harness/delivery_poll_unit.py`](../../tests/harness/delivery_poll_unit.py) — `DeliveryPollEnv`
+### How it works
+
+Each domain has an environment class that subclasses `BaseTestEnv`:
 
 ```python
 class DeliveryPollEnv(DeliveryPollMixin, BaseTestEnv):
@@ -147,6 +115,7 @@ class DeliveryPollEnv(DeliveryPollMixin, BaseTestEnv):
         "principal": f"{MODULE}.get_principal_object",
         "adapter": f"{MODULE}.get_adapter",
         "pricing": f"{MODULE}._get_pricing_options",
+        "circuit_open": f"{MODULE}._is_circuit_breaker_open",
     }
 
     def _configure_mocks(self) -> None: ...   # Wire happy-path defaults
@@ -159,10 +128,11 @@ class DeliveryPollEnv(DeliveryPollMixin, BaseTestEnv):
 ```python
 from tests.harness.delivery_poll_unit import DeliveryPollEnv
 
-def test_completed_status_filter(self):
-    """Covers: UC-004-ALT-STATUS-FILTERED-DELIVERY-03"""
+def test_only_completed_buys_returned(self):
+    """Covers: UC-004-ALT-STATUS-FILTERED-DELIVERY-02"""
     with DeliveryPollEnv() as env:
         env.add_buy(media_buy_id="mb_completed", start_date=date(2025, 1, 1), end_date=date(2025, 6, 30))
+        env.add_buy(media_buy_id="mb_active", start_date=date(2026, 1, 1), end_date=date(2026, 12, 31))
         env.set_adapter_response("mb_completed", impressions=5000, spend=250.0)
 
         response = env.call_impl(status_filter="completed")
@@ -171,23 +141,25 @@ def test_completed_status_filter(self):
         assert returned_ids == ["mb_completed"]
 ```
 
-No mock wiring. No MagicMock scaffolding. The test is 6 lines of pure behavior.
+No mock wiring. No MagicMock scaffolding. The test is pure behavior.
 
 ### Available harness environments
 
-| Environment | Domain | File |
-|-------------|--------|------|
-| `ProductEnv` | `_get_products_impl` | `tests/harness/product_unit.py` |
-| `DeliveryPollEnv` | `_get_media_buy_delivery_impl` | `tests/harness/delivery_poll_unit.py` |
-| `CreativeSyncEnv` | Creative sync | `tests/harness/creative_sync.py` |
-| `CreativeListEnv` | Creative listing | `tests/harness/creative_list.py` |
-| `CreativeFormatsEnv` | Creative formats | `tests/harness/creative_formats.py` |
-| `CircuitBreakerEnv` | Delivery circuit breaker | `tests/harness/delivery_circuit_breaker.py` |
-| `WebhookEnv` | Delivery webhooks | `tests/harness/delivery_webhook.py` |
+| Environment | Domain | Unit | Integration |
+|-------------|--------|------|-------------|
+| `ProductEnv` | `_get_products_impl` | `product_unit.py` | `product.py` |
+| `DeliveryPollEnv` | `_get_media_buy_delivery_impl` | `delivery_poll_unit.py` | `delivery_poll.py` |
+| `CreativeSyncEnv` | Creative sync | — | `creative_sync.py` |
+| `CreativeListEnv` | Creative listing | — | `creative_list.py` |
+| `CreativeFormatsEnv` | Creative formats | — | `creative_formats.py` |
+| `CircuitBreakerEnv` | Delivery circuit breaker | `delivery_circuit_breaker_unit.py` | `delivery_circuit_breaker.py` |
+| `WebhookEnv` | Delivery webhooks | `delivery_webhook_unit.py` | `delivery_webhook.py` |
+
+Supporting modules: `_mixins.py` (shared fluent APIs), `_mock_uow.py` (UoW mock builder), `_identity.py` (identity factory), `assertions.py` (shared assertion helpers), `dispatchers.py` (transport dispatch), `transport.py` (Transport enum + TransportResult).
 
 ### Multi-transport testing
 
-The harness supports dispatching the same test through multiple transports:
+The harness dispatches the same test through multiple transports:
 
 ```python
 @pytest.mark.parametrize("transport", [Transport.IMPL, Transport.A2A, Transport.REST])
@@ -199,13 +171,11 @@ def test_something(self, integration_db, transport):
 
 ### Adding a new harness environment
 
-If no environment exists for the `_impl` function you're testing:
-
 1. Create `tests/harness/your_domain_unit.py` subclassing `BaseTestEnv`
 2. Define `EXTERNAL_PATCHES` — the dependencies to mock
 3. Implement `_configure_mocks()` — wire happy-path defaults
 4. Implement `call_impl(**kwargs)` — construct request and call production code
-5. Add fluent helpers (`add_buy()`, `set_adapter_response()`, etc.) for test data
+5. Add fluent helpers (`add_buy()`, `set_adapter_response()`, etc.)
 6. Export from `tests/harness/__init__.py`
 
 ### Anti-pattern: rebuilding mock scaffolding per test
@@ -221,174 +191,144 @@ def test_something():
     # ... same 15 lines in the next test
 ```
 
-This pattern exists in older test files as tracked debt. New tests must use the harness or create a new harness environment if one doesn't exist for that domain.
+This exists in older test files as tracked debt. New tests must use the harness or create a new environment.
 
 ### Testing Flask endpoints
 
-For testing Flask routes, use Flask's test client — not boolean logic reconstruction.
+For Flask routes, use Flask's test client — not boolean logic reconstruction.
 
-**Canonical example:** [`tests/unit/test_signup_flow_session.py`](../../tests/unit/test_signup_flow_session.py)
+**Canonical file:** [`tests/unit/test_signup_flow_session.py`](../../tests/unit/test_signup_flow_session.py)
 
 ```python
 from src.admin.app import create_app
 
-app = create_app({"TESTING": True, "SECRET_KEY": "test-secret"})
+app = create_app()
+app.config["TESTING"] = True
+app.config["SECRET_KEY"] = "test-secret"
+
 with app.test_client() as client:
-    with client.session_transaction() as sess:
-        sess["authenticated"] = True
     response = client.post("/test/auth", data={...})
     assert response.status_code == 302
 ```
 
-### Anti-pattern: testing logic instead of behavior
-
+**Anti-pattern:**
 ```python
-# WRONG: reconstructing application logic and asserting the boolean
-env_test_mode = os.environ.get("ADCP_AUTH_TEST_MODE", "").lower() == "true"
-tenant_setup_mode = False
+# WRONG: reimplementing the gate logic and asserting the boolean
 should_abort = not env_test_mode or not tenant_setup_mode
-assert should_abort is True  # This tests Python, not your application
+assert should_abort is True  # Tests Python arithmetic, not your endpoint
 ```
 
-This test passes regardless of what the actual endpoint does. If the gate logic changes in `auth.py`, this test still passes because it never calls the code.
+**Enforced by:** `review-testing` (Anti-Pattern 1: Mock Echo, Anti-Pattern 2: Assertion-Free, Anti-Pattern 5: Happy Path Only)
 
 ## 5. Factory Fixtures for Integration Tests
 
-Integration tests use `factory-boy` factories, not inline `session.add()` boilerplate.
+Integration tests use `factory-boy` factories, not inline `session.add()`.
 
-### Canonical example
-
-**Factories:** [`tests/factories/`](../../tests/factories/)
+**Canonical directory:** [`tests/factories/`](../../tests/factories/)
 
 ```python
 from tests.factories import TenantFactory, MediaBuyFactory
 
-@pytest.fixture
-def sample_tenant(integration_db):
-    return TenantFactory.create_sync()
-
-@pytest.fixture
-def sample_media_buy(sample_tenant, sample_principal):
-    return MediaBuyFactory.create_sync(
-        tenant_id=sample_tenant.tenant_id,
-        principal_id=sample_principal.principal_id,
-    )
+tenant = TenantFactory(tenant_id="t1")
+buy = MediaBuyFactory(tenant=tenant)
 ```
 
-### Anti-pattern
+The API is standard factory-boy: `Factory(...)` or `Factory.create(...)`. Factories auto-commit via `sqlalchemy_session_persistence = "commit"`.
 
+**Anti-pattern:**
 ```python
-# WRONG: 20 lines of manual model construction
+# WRONG: manual model construction in tests
 with get_db_session() as session:
-    tenant = Tenant(tenant_id="test", name="Test", subdomain="test", ...)
+    tenant = Tenant(tenant_id="test", name="Test", ...)
     session.add(tenant)
     session.commit()
 ```
 
-The `test_architecture_repository_pattern.py` guard catches new `session.add()` calls in integration tests.
+**Enforced by:** `review-execution-excellence` (Factory Fixtures), `test_architecture_repository_pattern.py` (catches `session.add()` in integration tests)
 
-## 6. Transport Boundary (Critical Pattern #5)
+## 6. Transport Boundary (CP-5)
 
-All tools have two layers: transport wrappers (MCP, A2A) and business logic (`_impl` functions).
+All tools have two layers: transport wrappers (MCP, A2A, REST) and business logic (`_impl` functions).
 
-### Canonical example
+**`_impl` rules:** Accept `ResolvedIdentity` (not `Context`). Raise `AdCPError` subclasses (not `ToolError`). Zero imports from `fastmcp`/`a2a`/`starlette`/`fastapi`.
 
-**`_impl` function:** accepts `ResolvedIdentity`, raises `AdCPError`, has zero transport imports.
+**Transport wrapper rules:** Call `resolve_identity()` first. Forward every `_impl` parameter. Translate `AdCPError` to transport-specific format.
 
-```python
-async def _create_media_buy_impl(
-    req: CreateMediaBuyRequest,
-    identity: ResolvedIdentity,  # NOT Context, NOT ToolContext
-) -> CreateMediaBuyResult:
-    ...
-```
-
-**Transport wrapper:** resolves identity, forwards ALL params to `_impl`.
-
-```python
-@mcp.tool()
-async def create_media_buy(ctx: Context, ...) -> CreateMediaBuyResponse:
-    identity = resolve_identity(ctx.http.headers, protocol="mcp")
-    return await _create_media_buy_impl(req=req, identity=identity)
-```
-
-### Anti-pattern (exists in `task_management.py`)
-
+**Anti-pattern** (exists in `task_management.py`):
 ```python
 # WRONG: business logic function accepts Context directly
 async def list_tasks(
-    context: Context | None = None,  # Should be ResolvedIdentity
+    context: Context | None = None,  # Should be ResolvedIdentity only
     identity: ResolvedIdentity | None = None,
 ) -> dict:
     if identity is None and context is not None:
         identity = await context.get_state("identity")  # Auth resolution in _impl
 ```
 
-This is tracked debt — the functions should be renamed to `_list_tasks_impl` etc. with proper wrappers.
+This is tracked debt — functions should be split into `_list_tasks_impl` + transport wrappers.
 
-**Enforced by:** `test_transport_agnostic_impl.py`, `test_impl_resolved_identity.py`, `test_no_toolerror_in_impl.py`, `test_architecture_boundary_completeness.py`
+**Enforced by:** `review-architecture` (CP-5), `review-layering` (Transport → _impl leaks), `test_transport_agnostic_impl.py`, `test_impl_resolved_identity.py`, `test_no_toolerror_in_impl.py`, `test_architecture_boundary_completeness.py`
 
-## 7. Shared Validation (DRY) and Error Handling
+## 7. Error Hierarchy
 
-When the same validation logic applies to multiple code paths (e.g., create and update), extract a shared validator. Validation failures must be raised as `AdCPError` subclasses — never returned as error response objects from `_impl`.
+`_impl` functions raise `AdCPError` subclasses (defined in `src/core/exceptions.py`). Transport wrappers catch these and translate to transport-appropriate format.
 
-### Canonical example
+**Canonical file:** [`src/core/exceptions.py`](../../src/core/exceptions.py)
 
-**Shared validators:** [`src/core/tools/financial_validation.py`](../../src/core/tools/financial_validation.py)
-
-```python
-def validate_min_package_budget(
-    *, package_budget: Decimal, min_package_budget: Decimal, currency: str,
-) -> str | None:
-    """Returns error message if validation fails, None if OK."""
-    if package_budget < min_package_budget:
-        return f"Package budget ({package_budget} {currency}) does not meet ..."
-    return None
+```
+AdCPError
+├── AdCPValidationError      (400)
+├── AdCPAuthenticationError   (401)
+├── AdCPAuthorizationError    (403)
+├── AdCPNotFoundError         (404)
+├── AdCPRateLimitError        (429)
+└── AdCPAdapterError          (502)
 ```
 
-Properties:
-- Pure function — no session, no transport, no side effects
-- Returns `str | None` — the validator produces the message, the caller raises the appropriate `AdCPError`
-- Used by both create and update paths
+**Anti-pattern: returning error response objects instead of raising**
 
-**Caller raises the error:**
+`media_buy_update.py` has 22 instances where validation failures are returned as `UpdateMediaBuyError` objects instead of raising `AdCPValidationError`. This is tracked debt — the dominant pattern in that file but not the target architecture.
 
 ```python
-error_msg = validate_min_package_budget(
-    package_budget=budget, min_package_budget=limit, currency=currency,
-)
-if error_msg:
-    raise AdCPValidationError(error_msg)
+# WRONG (exists as debt): returning error response from _impl
+if total_budget <= 0:
+    return UpdateMediaBuyError(errors=[Error(code="invalid_budget", message=...)])
+
+# CORRECT: raise AdCPError, let transport wrapper format the response
+if total_budget <= 0:
+    raise AdCPValidationError("Budget must be positive")
 ```
 
-`_impl` functions raise `AdCPError` subclasses (see `src/core/exceptions.py`). The transport wrapper catches these and translates to the transport-appropriate format (ToolError for MCP, HTTP status for REST, etc.). `_impl` never constructs transport error responses directly.
-
-**Enforced by:** `test_no_toolerror_in_impl.py`
-
-### Anti-pattern: returning error objects instead of raising
+**Anti-pattern: using ValueError/RuntimeError instead of AdCPError**
 
 ```python
-# WRONG: _impl returns an error response object instead of raising
+# WRONG: generic Python exceptions
+raise ValueError(f"Media buy '{media_buy_id}' not found.")
+
+# CORRECT: domain exception
+raise AdCPNotFoundError(f"Media buy '{media_buy_id}' not found.")
+```
+
+**Enforced by:** `review-execution-excellence` (AdCPError Hierarchy), `review-python-practices` (Error Handling), `test_no_toolerror_in_impl.py`
+
+## 8. DRY — Shared Validation
+
+When the same validation logic applies to multiple code paths (create and update), extract a shared validator. Both create and update should call the same validation function.
+
+**Anti-pattern** (exists in codebase):
+```python
+# media_buy_create.py — inline validation
+if package_budget < package_min_spend:
+    raise ValueError(f"Package budget does not meet minimum ...")
+
+# media_buy_update.py — same logic, different code path
 if budget_amount < min_package_budget:
     return UpdateMediaBuyError(errors=[Error(code="budget_below_minimum", ...)])
 ```
 
-This couples `_impl` to the response shape and forces every caller to check for error types. Raising `AdCPValidationError` lets the transport boundary handle formatting.
+Same check, two implementations, different error handling. When the validation rule changes, one gets updated and the other doesn't.
 
-### Anti-pattern: duplicated inline validation
-
-```python
-# WRONG: same check copy-pasted with different messages
-# media_buy_create.py
-if package_budget < package_min_spend:
-    raise ValueError(f"Package budget ... does not meet minimum ...")
-
-# media_buy_update.py
-if budget_amount < min_package_budget:
-    raise ValueError(f"Budget below minimum ...")
-```
-
-Extract to a shared validator so the logic and message text live in one place.
+**Enforced by:** `review-dry` (Category 4: Database Query Patterns, Category 3: Error Handling), `check_code_duplication.py` (pre-commit + make quality)
 
 ## Quick Reference: Where to Look
 
@@ -396,23 +336,23 @@ Extract to a shared validator so the logic and message text live in one place.
 |---------------------|---------------|
 | Add a repository | `src/core/database/repositories/media_buy.py` |
 | Wire a repo into UoW | `src/core/database/repositories/uow.py` |
-| Write an `_impl` function | `src/core/tools/media_buy_delivery.py` (cleanest) |
-| Write a test for an `_impl` function | `tests/harness/_base.py` (BaseTestEnv), then a domain env like `tests/harness/delivery_poll_unit.py` |
+| Write an `_impl` function | `src/core/tools/products.py` (cleanest layering) |
+| Write a test for an `_impl` | `tests/harness/_base.py` → domain env like `tests/harness/delivery_poll_unit.py` |
 | See tests using the harness | `tests/unit/test_delivery_poll_behavioral.py` |
 | Write a Flask endpoint test | `tests/unit/test_signup_flow_session.py` |
-| Create a factory | `tests/factories/media_buy.py` |
+| Create a test factory | `tests/factories/media_buy.py` |
+| Understand error hierarchy | `src/core/exceptions.py` |
 | Add a structural guard | `docs/development/structural-guards.md` |
-| Understand the allowlist rules | This document, Section 3 |
-| Add shared validation | `src/core/tools/financial_validation.py` |
+| Understand the review agents | `.claude/agents/review-*.md` (8 agents) |
 
 ## Legacy Code Awareness
 
-The following files contain significant legacy patterns that are being incrementally migrated. **Do not follow patterns from these files for new code:**
+These files contain significant legacy patterns. **Do not follow patterns from these files for new code:**
 
-| File | Legacy patterns present | Tracked by |
-|------|------------------------|------------|
-| `src/core/tools/media_buy_update.py` | 16 raw `session.scalars/add/delete/flush` calls, `uow.session` usage | `FIXME(salesagent-9f2)` |
-| `src/core/tools/media_buy_create.py` | Scattered `"USD"` defaults, inline validation | Being extracted to `financial_validation.py` |
+| File | Legacy patterns | Tracked by |
+|------|----------------|------------|
+| `src/core/tools/media_buy_update.py` | 16 raw `session.*` calls, 22 returned error objects instead of raised, deprecated `uow.session` usage | `FIXME(salesagent-9f2)` |
+| `src/core/tools/media_buy_create.py` | Scattered `"USD"` defaults, inline validation duplicating update path | Incremental migration |
 | `src/core/tools/task_management.py` | Accepts `Context` instead of `ResolvedIdentity`, no `_impl` separation | Follow-up refactor needed |
 
 When working in these files: follow the patterns in this document, not the surrounding code.
