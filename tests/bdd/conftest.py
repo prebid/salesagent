@@ -35,6 +35,7 @@ pytest_plugins = [
     "tests.bdd.steps.generic.then_error",
     "tests.bdd.steps.generic.then_payload",
     "tests.bdd.steps.domain.uc004_delivery",
+    "tests.bdd.steps.domain.uc011_accounts",
 ]
 
 # ---------------------------------------------------------------------------
@@ -303,6 +304,8 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
         return "UC-005"
     if any(t.startswith("T-UC-004") for t in marker_names):
         return "UC-004"
+    if any(t.startswith("T-UC-011") for t in marker_names):
+        return "UC-011"
     return None
 
 
