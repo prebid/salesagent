@@ -4,6 +4,10 @@ DRY extraction: test_architecture_migration_completeness.py,
 test_architecture_single_migration_head.py, and the smoke test
 (tests/smoke/test_database_migrations.py) share migration directory,
 file enumeration, and revision-graph logic.
+
+NOTE: The pre-commit hook (check_migration_completeness.py) has its own
+copy of is_merge_migration() because hooks run via ``python script.py``
+where the project root is not on sys.path.  Keep both in sync.
 """
 
 import ast
@@ -110,6 +114,9 @@ def is_merge_migration(tree: ast.Module) -> bool:
 
     Merge migrations reconcile multiple alembic branch heads. They have no
     schema changes — both upgrade() and downgrade() are intentionally empty.
+
+    NOTE: Duplicated in .pre-commit-hooks/check_migration_completeness.py
+    (hooks cannot import from tests/).  Keep both in sync.
     """
     upgrade = parse_function(tree, "upgrade")
     downgrade = parse_function(tree, "downgrade")

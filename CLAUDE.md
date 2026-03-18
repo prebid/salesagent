@@ -80,7 +80,7 @@ PR titles should use one of these prefixes:
 **Without a prefix, commits won't appear in release notes!** The code will still be released, but the change won't be documented in the changelog.
 
 ### Structural Guards (Automated Architecture Enforcement)
-Sixteen AST-scanning tests enforce architecture invariants on every `make quality` run. New violations fail the build immediately. See [docs/development/structural-guards.md](docs/development/structural-guards.md) for full details.
+Seventeen AST-scanning tests enforce architecture invariants on every `make quality` run. New violations fail the build immediately. See [docs/development/structural-guards.md](docs/development/structural-guards.md) for full details.
 
 | Guard | Enforces | Test File |
 |-------|----------|-----------|

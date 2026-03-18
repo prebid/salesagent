@@ -18,6 +18,12 @@ def _is_merge_migration(functions: dict[str, ast.FunctionDef]) -> bool:
 
     Merge migrations reconcile multiple alembic branch heads. They have no
     schema changes — both upgrade() and downgrade() are intentionally empty.
+
+    NOTE: This duplicates logic in tests/unit/_migration_helpers.py:is_merge_migration().
+    Pre-commit hooks run via ``python script.py`` where sys.path[0] is the
+    script directory, not the project root — so ``from tests.unit...`` is not
+    importable.  Keep both implementations in sync when changing empty-body
+    detection logic.
     """
     if "upgrade" not in functions or "downgrade" not in functions:
         return False

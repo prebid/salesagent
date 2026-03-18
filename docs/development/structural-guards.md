@@ -458,7 +458,7 @@ uv run pytest tests/unit/test_architecture_schema_inheritance.py -v
 Pre-commit hooks (40)          ← catch formatting, route conflicts, star imports
     │
     ▼
-Structural guards (16)         ← catch architecture violations (THIS FILE)
+Structural guards (17)         ← catch architecture violations (THIS FILE)
     │
     ▼
 Unit tests (~2950)             ← catch behavior bugs
