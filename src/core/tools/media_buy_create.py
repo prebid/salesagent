@@ -2107,6 +2107,7 @@ async def _create_media_buy_impl(
                     order_name=f"{req.buyer_ref} - {start_time.strftime('%Y-%m-%d')}",
                     package_id_map=package_id_map,
                     by_alias=True,
+                    account_id=identity.account_id if identity else None,
                     created_at=datetime.now(UTC),
                 )
                 logger.info(f"✅ Created media buy {media_buy_id} with status=pending_approval")
@@ -2982,6 +2983,7 @@ async def _create_media_buy_impl(
                 status=media_buy_status,
                 campaign_objective=getattr(req, "campaign_objective", "") or "",
                 kpi_goal=getattr(req, "kpi_goal", "") or "",
+                account_id=identity.account_id if identity else None,
             )
             # UoW auto-commits on clean exit
 

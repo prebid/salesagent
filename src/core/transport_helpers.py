@@ -6,8 +6,13 @@ A2A headers) to the transport-agnostic ResolvedIdentity used by _impl functions.
 Each transport boundary calls one of these helpers before invoking _impl.
 """
 
+from __future__ import annotations
+
 import logging
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from adcp.types.generated_poc.core.account_ref import AccountReference
 
 from fastmcp.server.context import Context
 from fastmcp.server.dependencies import get_http_headers
@@ -96,3 +101,38 @@ def resolve_identity_from_context(
         protocol=protocol,
         testing_context=testing_context,
     )
+
+
+def enrich_identity_with_account(
+    identity: ResolvedIdentity | None,
+    account_ref: AccountReference | None = None,
+) -> ResolvedIdentity | None:
+    """Enrich a ResolvedIdentity with a resolved account_id.
+
+    Called at the transport boundary after resolve_identity(), when the request
+    payload contains an AccountReference. Opens an AccountUoW, resolves the
+    reference to a validated account_id, and returns an enriched identity.
+
+    If account_ref is None or identity is None, returns identity unchanged.
+
+    Args:
+        identity: Base ResolvedIdentity from resolve_identity().
+        account_ref: AccountReference from the request body (optional).
+
+    Returns:
+        ResolvedIdentity with account_id populated, or original identity if no account.
+    """
+    if identity is None or account_ref is None:
+        return identity
+
+    if identity.tenant_id is None:
+        return identity
+
+    from src.core.database.repositories.uow import AccountUoW
+    from src.core.helpers.account_helpers import resolve_account
+
+    with AccountUoW(identity.tenant_id) as uow:
+        assert uow.accounts is not None
+        account_id = resolve_account(account_ref, identity, uow.accounts)
+
+    return identity.model_copy(update={"account_id": account_id})
