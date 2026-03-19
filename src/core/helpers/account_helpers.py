@@ -61,7 +61,10 @@ def _resolve_by_id(
     """Resolve by explicit account_id — lookup + access check."""
     account = repo.get_by_id(account_id)
     if account is None:
-        raise AdCPNotFoundError(f"Account '{account_id}' not found.")
+        raise AdCPNotFoundError(
+            f"Account '{account_id}' not found.",
+            error_code="ACCOUNT_NOT_FOUND",
+        )
 
     principal_id = identity.principal_id
     if principal_id and not repo.has_access(principal_id, account_id):
@@ -88,6 +91,9 @@ def _resolve_by_natural_key(
         sandbox=ref.sandbox,
     )
     if account is None:
-        raise AdCPNotFoundError(f"Account not found for brand '{brand_domain}', operator '{ref.operator}'.")
+        raise AdCPNotFoundError(
+            f"Account not found for brand '{brand_domain}', operator '{ref.operator}'.",
+            error_code="ACCOUNT_NOT_FOUND",
+        )
 
     return account.account_id
