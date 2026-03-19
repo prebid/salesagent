@@ -1,5 +1,7 @@
 """MCP and A2A wrapper functions for sync_creatives."""
 
+from typing import Any
+
 from adcp import PushNotificationConfig
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.core.creative_asset import CreativeAsset
@@ -22,6 +24,7 @@ async def sync_creatives(
     validation_mode: ValidationMode | None = None,
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,  # Application level context per adcp spec
+    account: Any | None = None,  # AccountReference per AdCP spec
     ctx: Context | ToolContext | None = None,
 ):
     """Sync creative assets to centralized library (AdCP v2.5 spec compliant endpoint).
@@ -44,6 +47,11 @@ async def sync_creatives(
         ToolResult with SyncCreativesResponse data
     """
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
+
+    # Resolve account at transport boundary (before _impl)
+    from src.core.transport_helpers import enrich_identity_with_account
+
+    identity = enrich_identity_with_account(identity, account)
 
     # Phase 1a: Pass typed models directly to impl (no more model_dump conversion)
     validation_mode_str = validation_mode.value if validation_mode else "strict"
@@ -71,6 +79,7 @@ def sync_creatives_raw(
     validation_mode: str = "strict",
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,
+    account: Any | None = None,  # AccountReference per AdCP spec
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ):
@@ -97,6 +106,11 @@ def sync_creatives_raw(
         from src.core.transport_helpers import resolve_identity_from_context
 
         identity = resolve_identity_from_context(ctx)
+
+    # Resolve account at transport boundary (before _impl)
+    from src.core.transport_helpers import enrich_identity_with_account
+
+    identity = enrich_identity_with_account(identity, account)
 
     return _sync_creatives_impl(
         creatives=creatives,
