@@ -1,25 +1,41 @@
-"""List Accounts tool implementation.
+"""Account tool implementations (list + sync).
 
-Handles account discovery per AdCP spec (UC-011):
+Handles account management per AdCP spec (UC-011):
 - Agent-scoped results (BR-RULE-054)
-- Auth-optional with empty fallback (BR-RULE-055)
-- Status filtering
-- Cursor pagination
+- Auth-optional list with empty fallback (BR-RULE-055)
+- Upsert by natural key (BR-RULE-056)
+- Atomic XOR response (BR-RULE-057)
+- Brand echo (BR-RULE-058)
+- Approval workflow (BR-RULE-060)
+- delete_missing (BR-RULE-061)
+- dry_run (BR-RULE-062)
 
-beads: salesagent-hl0
+beads: salesagent-hl0, salesagent-619
 """
 
 import logging
+import uuid
 from typing import Any, cast
 
+from adcp.types.generated_poc.account.sync_accounts_response import (
+    Account as SyncResponseAccount,
+)
 from adcp.types.generated_poc.core.context import ContextObject
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 
+from src.core.audit_logger import get_audit_logger
 from src.core.database.models import Account as DBAccount
 from src.core.database.repositories.uow import AccountUoW
+from src.core.exceptions import AdCPAuthenticationError
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schemas.account import Account, ListAccountsRequest, ListAccountsResponse
+from src.core.schemas.account import (
+    Account,
+    ListAccountsRequest,
+    ListAccountsResponse,
+    SyncAccountsRequest,
+    SyncAccountsResponse,
+)
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -162,3 +178,348 @@ def list_accounts_raw(
 
         identity = resolve_identity_from_context(ctx, require_valid_token=False)
     return _list_accounts_impl(req, identity)
+
+
+# ===========================================================================
+# sync_accounts — upsert accounts by natural key (BR-RULE-056..062)
+# ===========================================================================
+
+
+def _generate_account_id() -> str:
+    """Generate a unique account ID."""
+    return f"acc_{uuid.uuid4().hex[:12]}"
+
+
+def _generate_account_name(brand_domain: str, operator: str, brand_id: str | None = None) -> str:
+    """Generate a human-readable account name from brand + operator."""
+    brand_part = f"{brand_domain}:{brand_id}" if brand_id else brand_domain
+    return f"{brand_part} c/o {operator}"
+
+
+def _enum_to_str(val: Any) -> str | None:
+    """Extract string value from an enum or return as-is. Returns None for None."""
+    if val is None:
+        return None
+    return val.value if hasattr(val, "value") else str(val)
+
+
+def _serialize_governance_agents(agents: Any) -> list[dict[str, Any]] | None:
+    """Convert GovernanceAgent models to JSON-serializable dicts for DB storage."""
+    if agents is None:
+        return None
+    result: list[dict[str, Any]] = []
+    for g in agents:
+        if isinstance(g, dict):
+            result.append(g)
+        elif hasattr(g, "model_dump"):
+            result.append(g.model_dump(mode="json"))
+        else:
+            result.append(dict(g))
+    return result
+
+
+def _account_fields_changed(db_account: DBAccount, entry: Any) -> dict[str, Any]:
+    """Compare incoming sync entry fields against existing DB account.
+
+    Returns a dict of fields that changed (key → new value).
+    Only compares mutable fields that can be updated via sync.
+    """
+    changes: dict[str, Any] = {}
+
+    billing_val = _enum_to_str(entry.billing)
+    if db_account.billing != billing_val:
+        changes["billing"] = billing_val
+
+    payment_terms_val = _enum_to_str(entry.payment_terms)
+    if db_account.payment_terms != payment_terms_val:
+        changes["payment_terms"] = payment_terms_val
+
+    # Normalize: None and False are equivalent for sandbox (DB defaults to False)
+    sandbox_val = entry.sandbox or False
+    db_sandbox = db_account.sandbox or False
+    if db_sandbox != sandbox_val:
+        changes["sandbox"] = entry.sandbox
+
+    # Compare governance_agents (JSON field)
+    incoming_gov = _serialize_governance_agents(entry.governance_agents)
+    if db_account.governance_agents != incoming_gov:
+        changes["governance_agents"] = incoming_gov
+
+    return changes
+
+
+def _build_sync_result(
+    *,
+    brand: Any,
+    operator: str,
+    action: str,
+    status: str,
+    name: str | None = None,
+    billing: str | None = None,
+    sandbox: bool | None = None,
+) -> SyncResponseAccount:
+    """Build an AdCP sync response Account object."""
+    return SyncResponseAccount(
+        brand=brand,
+        operator=operator,
+        action=action,
+        status=status,
+        name=name,
+        billing=billing,
+        sandbox=sandbox,
+    )
+
+
+def _extract_natural_key(entry: Any) -> tuple[str, str | None, str, bool | None]:
+    """Extract natural key components from a sync request account entry.
+
+    Returns (brand_domain, brand_id, operator, sandbox).
+    """
+    brand = entry.brand
+    brand_domain = brand.domain
+    brand_id = None
+    if hasattr(brand, "brand_id") and brand.brand_id is not None:
+        brand_id = str(brand.brand_id)
+    operator = entry.operator
+    sandbox = entry.sandbox
+    return brand_domain, brand_id, operator, sandbox
+
+
+async def _sync_accounts_impl(
+    req: SyncAccountsRequest | None = None,
+    identity: ResolvedIdentity | None = None,
+) -> SyncAccountsResponse:
+    """Sync accounts by natural key — upsert, delete_missing, dry_run.
+
+    Per AdCP spec (BR-RULE-055..062):
+    - Auth required (BR-RULE-055)
+    - Upsert by natural key: brand.domain + brand.brand_id + operator + sandbox (BR-RULE-056)
+    - Atomic XOR: success accounts[] or error errors[], never both (BR-RULE-057)
+    - Brand echoed from request (BR-RULE-058)
+    - New accounts get status=active (BR-RULE-060, auto-approve for now)
+    - delete_missing closes absent accounts scoped to agent (BR-RULE-061)
+    - dry_run previews without persisting (BR-RULE-062)
+
+    Args:
+        req: Sync request with accounts list and options.
+        identity: Resolved identity (must be authenticated).
+
+    Returns:
+        SyncAccountsResponse with per-account action results.
+    """
+    if req is None:
+        req = SyncAccountsRequest(accounts=[])
+
+    # BR-RULE-055: sync requires auth
+    if identity is None or identity.principal_id is None or identity.tenant_id is None:
+        raise AdCPAuthenticationError("Authentication required: sync_accounts requires a valid auth token.")
+
+    tenant_id = identity.tenant_id
+    principal_id = identity.principal_id
+    dry_run = bool(req.dry_run)
+    delete_missing = bool(req.delete_missing)
+
+    results: list[SyncResponseAccount] = []
+    # Track natural keys in the payload for delete_missing
+    seen_account_ids: set[str] = set()
+
+    with AccountUoW(tenant_id) as uow:
+        assert uow.accounts is not None
+        repo = uow.accounts
+
+        for entry in req.accounts:
+            brand_domain, brand_id, operator, sandbox = _extract_natural_key(entry)
+
+            # Look up existing account by natural key
+            existing = repo.get_by_natural_key(
+                operator=operator,
+                brand_domain=brand_domain,
+                brand_id=brand_id,
+                sandbox=sandbox,
+            )
+
+            if existing is not None:
+                seen_account_ids.add(existing.account_id)
+
+                if dry_run:
+                    # Check if fields would change
+                    changes = _account_fields_changed(existing, entry)
+                    action = "updated" if changes else "unchanged"
+                    results.append(
+                        _build_sync_result(
+                            brand=entry.brand,
+                            operator=operator,
+                            action=action,
+                            status=existing.status,
+                            name=existing.name,
+                            billing=existing.billing,
+                            sandbox=existing.sandbox,
+                        )
+                    )
+                    continue
+
+                # Check for field changes and update if needed
+                changes = _account_fields_changed(existing, entry)
+                if changes:
+                    repo.update_fields(existing.account_id, **changes)
+                    action = "updated"
+                else:
+                    action = "unchanged"
+
+                results.append(
+                    _build_sync_result(
+                        brand=entry.brand,
+                        operator=operator,
+                        action=action,
+                        status=existing.status,
+                        name=existing.name,
+                        billing=existing.billing,
+                        sandbox=existing.sandbox,
+                    )
+                )
+            else:
+                # Create new account
+                billing_val = _enum_to_str(entry.billing)
+                payment_terms_val = _enum_to_str(entry.payment_terms)
+                governance_agents_val = _serialize_governance_agents(entry.governance_agents)
+
+                account_id = _generate_account_id()
+                account_name = _generate_account_name(brand_domain, operator, brand_id)
+
+                if dry_run:
+                    results.append(
+                        _build_sync_result(
+                            brand=entry.brand,
+                            operator=operator,
+                            action="created",
+                            status="active",
+                            name=account_name,
+                            billing=billing_val,
+                            sandbox=sandbox,
+                        )
+                    )
+                    continue
+
+                # BR-RULE-060: auto-approve for now (status=active)
+                new_account = DBAccount(
+                    tenant_id=tenant_id,
+                    account_id=account_id,
+                    name=account_name,
+                    status="active",
+                    brand={"domain": brand_domain, **({"brand_id": brand_id} if brand_id else {})},
+                    operator=operator,
+                    billing=billing_val,
+                    payment_terms=payment_terms_val,
+                    sandbox=sandbox,
+                    governance_agents=governance_agents_val,
+                    principal_id=principal_id,
+                )
+                repo.create(new_account)
+                seen_account_ids.add(account_id)
+
+                # Grant agent access to the new account
+                repo.grant_access(principal_id, account_id)
+
+                results.append(
+                    _build_sync_result(
+                        brand=entry.brand,
+                        operator=operator,
+                        action="created",
+                        status="active",
+                        name=account_name,
+                        billing=billing_val,
+                        sandbox=sandbox,
+                    )
+                )
+
+        # BR-RULE-061: delete_missing — close accounts not in payload
+        if delete_missing and not dry_run:
+            agent_accounts = repo.list_by_principal(principal_id)
+            for db_acct in agent_accounts:
+                if db_acct.account_id not in seen_account_ids:
+                    repo.update_status(db_acct.account_id, "closed")
+                    results.append(
+                        _build_sync_result(
+                            brand=db_acct.brand,
+                            operator=db_acct.operator or "",
+                            action="updated",
+                            status="closed",
+                            name=db_acct.name,
+                            billing=db_acct.billing,
+                            sandbox=db_acct.sandbox,
+                        )
+                    )
+
+    # Audit log
+    audit_logger = get_audit_logger("sync_accounts", tenant_id)
+    action_counts: dict[str, int] = {}
+    for r in results:
+        act = _enum_to_str(r.action) or "unknown"
+        action_counts[act] = action_counts.get(act, 0) + 1
+    audit_logger.log_info(f"sync_accounts completed: {action_counts} (dry_run={dry_run}, principal={principal_id})")
+
+    return SyncAccountsResponse(
+        accounts=results,
+        dry_run=dry_run if dry_run else None,
+        context=req.context,
+    )
+
+
+# ---------------------------------------------------------------------------
+# sync_accounts MCP wrapper
+# ---------------------------------------------------------------------------
+
+
+async def sync_accounts(
+    req: SyncAccountsRequest | None = None,
+    ctx: Context | ToolContext | None = None,
+    context: ContextObject | None = None,
+) -> Any:
+    """Sync accounts by natural key (MCP tool).
+
+    Args:
+        req: Sync request with accounts to upsert.
+        context: Application-level context per AdCP spec.
+        ctx: FastMCP context for authentication.
+
+    Returns:
+        ToolResult with human-readable text and structured data.
+    """
+    if context is not None:
+        if req is None:
+            req = SyncAccountsRequest(accounts=[], context=context)
+        else:
+            req = cast(SyncAccountsRequest, req)
+            req.context = context
+
+    identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
+    response = await _sync_accounts_impl(cast(SyncAccountsRequest | None, req), identity)
+
+    return ToolResult(content=str(response), structured_content=response)
+
+
+# ---------------------------------------------------------------------------
+# sync_accounts A2A raw wrapper
+# ---------------------------------------------------------------------------
+
+
+async def sync_accounts_raw(
+    req: SyncAccountsRequest | None = None,
+    ctx: Context | ToolContext | None = None,
+    identity: ResolvedIdentity | None = None,
+) -> SyncAccountsResponse:
+    """Sync accounts by natural key (raw function for A2A).
+
+    Args:
+        req: Sync request with accounts to upsert.
+        ctx: FastMCP context.
+        identity: Pre-resolved identity (if available).
+
+    Returns:
+        SyncAccountsResponse with per-account action results.
+    """
+    if identity is None:
+        from src.core.transport_helpers import resolve_identity_from_context
+
+        identity = resolve_identity_from_context(ctx, require_valid_token=True)
+    return await _sync_accounts_impl(req, identity)

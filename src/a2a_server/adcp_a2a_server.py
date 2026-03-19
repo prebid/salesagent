@@ -85,6 +85,9 @@ from src.core.tools import (
     list_creatives_raw as core_list_creatives_tool,
 )
 from src.core.tools import (
+    sync_accounts_raw as core_sync_accounts_tool,
+)
+from src.core.tools import (
     sync_creatives_raw as core_sync_creatives_tool,
 )
 from src.core.tools import (
@@ -384,6 +387,7 @@ class AdCPRequestHandler(RequestHandler):
                 ListAuthorizedPropertiesResponse,
                 ListCreativeFormatsResponse,
                 ListCreativesResponse,
+                SyncAccountsResponse,
                 SyncCreativesResponse,
                 UpdateMediaBuyError,
                 UpdateMediaBuySuccess,
@@ -410,6 +414,7 @@ class AdCPRequestHandler(RequestHandler):
                 "get_media_buys": GetMediaBuysResponse,
                 "get_products": GetProductsResponse,
                 "list_accounts": ListAccountsResponse,
+                "sync_accounts": SyncAccountsResponse,
                 "list_authorized_properties": ListAuthorizedPropertiesResponse,
                 "list_creative_formats": ListCreativeFormatsResponse,
                 "list_creatives": ListCreativesResponse,
@@ -1332,6 +1337,7 @@ class AdCPRequestHandler(RequestHandler):
             # ✅ NEW: Missing AdCP Discovery Skills (CRITICAL for protocol compliance)
             "list_creative_formats": self._handle_list_creative_formats_skill,
             "list_accounts": self._handle_list_accounts_skill,
+            "sync_accounts": self._handle_sync_accounts_skill,
             "list_authorized_properties": self._handle_list_authorized_properties_skill,
             # ✅ NEW: Missing Media Buy Management Skills (CRITICAL for campaign lifecycle)
             "update_media_buy": self._handle_update_media_buy_skill,
@@ -1761,6 +1767,21 @@ class AdCPRequestHandler(RequestHandler):
         )
         return core_list_accounts_tool(req=request, identity=identity)
 
+    async def _handle_sync_accounts_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
+        """Handle explicit sync_accounts skill invocation.
+
+        Authentication is REQUIRED per BR-RULE-055.
+        """
+        from src.core.schemas.account import SyncAccountsRequest
+
+        request = SyncAccountsRequest(
+            accounts=parameters.get("accounts", []),
+            delete_missing=parameters.get("delete_missing", False),
+            dry_run=parameters.get("dry_run", False),
+            context=parameters.get("context"),
+        )
+        return await core_sync_accounts_tool(req=request, identity=identity)
+
     async def _handle_list_authorized_properties_skill(
         self, parameters: dict, identity: ResolvedIdentity | None
     ) -> Any:
@@ -2146,6 +2167,12 @@ def create_agent_card() -> AgentCard:
                 name="list_accounts",
                 description="List billing accounts accessible to this agent",
                 tags=["accounts", "billing", "discovery", "adcp"],
+            ),
+            AgentSkill(
+                id="sync_accounts",
+                name="sync_accounts",
+                description="Sync billing accounts by natural key (upsert, delete_missing, dry_run)",
+                tags=["accounts", "billing", "sync", "upsert", "adcp"],
             ),
             # ✅ NEW: Media Buy Management Skills (CRITICAL for campaign lifecycle)
             AgentSkill(

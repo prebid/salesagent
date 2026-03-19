@@ -56,8 +56,9 @@ class AccountRepository:
         operator: str,
         brand_domain: str,
         brand_id: str | None = None,
+        sandbox: bool | None = None,
     ) -> Account | None:
-        """Get an account by its natural key (operator + brand).
+        """Get an account by its natural key (operator + brand + sandbox).
 
         The brand field is JSONType containing {"domain": ..., "brand_id": ...}.
         """
@@ -68,6 +69,10 @@ class AccountRepository:
         )
         if brand_id is not None:
             stmt = stmt.where(Account.brand["brand_id"].as_string() == brand_id)
+        if sandbox is not None:
+            stmt = stmt.where(Account.sandbox == sandbox)
+        else:
+            stmt = stmt.where(Account.sandbox.is_(None) | (Account.sandbox == False))  # noqa: E712
         return self._session.scalars(stmt).first()
 
     # ------------------------------------------------------------------
@@ -97,6 +102,23 @@ class AccountRepository:
                 )
             ).all()
         )
+
+    def list_by_principal(self, principal_id: str, *, status: str | None = None) -> list[Account]:
+        """List accounts created by a specific agent (for delete_missing scoping).
+
+        Queries by Account.principal_id (the creating agent), not AgentAccountAccess.
+        Optionally filter by status to exclude already-closed accounts.
+        """
+        stmt = select(Account).where(
+            Account.tenant_id == self._tenant_id,
+            Account.principal_id == principal_id,
+        )
+        if status is not None:
+            stmt = stmt.where(Account.status == status)
+        else:
+            # Exclude already-closed accounts by default
+            stmt = stmt.where(Account.status != "closed")
+        return list(self._session.scalars(stmt).all())
 
     # ------------------------------------------------------------------
     # Write methods (flush, never commit)

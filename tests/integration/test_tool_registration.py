@@ -20,6 +20,7 @@ ALL_TOOLS = [
     "list_creative_formats",
     "list_authorized_properties",
     "list_accounts",
+    "sync_accounts",
     "update_performance_index",
     # Task management tools (HITL - Human-in-the-loop)
     "list_tasks",
