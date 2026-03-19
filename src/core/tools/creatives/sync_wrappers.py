@@ -1,8 +1,7 @@
 """MCP and A2A wrapper functions for sync_creatives."""
 
-from typing import Any
-
 from adcp import PushNotificationConfig
+from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.core.creative_asset import CreativeAsset
 from adcp.types.generated_poc.enums.validation_mode import ValidationMode
@@ -24,7 +23,7 @@ async def sync_creatives(
     validation_mode: ValidationMode | None = None,
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,  # Application level context per adcp spec
-    account: Any | None = None,  # AccountReference per AdCP spec
+    account: LibraryAccountReference | None = None,
     ctx: Context | ToolContext | None = None,
 ):
     """Sync creative assets to centralized library (AdCP v2.5 spec compliant endpoint).
@@ -79,7 +78,7 @@ def sync_creatives_raw(
     validation_mode: str = "strict",
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,
-    account: Any | None = None,  # AccountReference per AdCP spec
+    account: LibraryAccountReference | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ):
