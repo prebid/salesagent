@@ -280,6 +280,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-011-ext-c-rejected",
             "T-UC-011-ext-c-mixed",
             "T-UC-011-ext-c-invalid-enum",
+            # Slice 5: approval workflow + push
+            "T-UC-011-ext-d-pending-url",
+            "T-UC-011-ext-d-pending-message",
+            "T-UC-011-ext-d-active",
+            "T-UC-011-ext-d-push",
         }
         if any(t.startswith("T-UC-011") for t in marker_names):
             is_list = "list" in marker_names

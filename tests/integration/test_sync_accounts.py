@@ -322,3 +322,37 @@ class TestSyncAccountsBillingPolicy:
         actions = {a.brand.domain: _action_value(a.action) for a in response.accounts}
         assert actions["good.com"] == "created"
         assert actions["bad.com"] == "failed"
+
+
+class TestSyncAccountsApproval:
+    """BR-RULE-060: approval workflow determines initial account status."""
+
+    @pytest.mark.asyncio
+    async def test_credit_review_returns_pending_with_setup(self, integration_db):
+        """Credit review → pending_approval with setup (url + message + expires_at)."""
+        with AccountSyncEnv(
+            tenant_id="sync_t11",
+            principal_id="agent_sync11",
+            account_approval_mode="credit_review",
+        ) as env:
+            env.setup_default_data()
+
+            req = SyncAccountsRequest(
+                accounts=[
+                    {
+                        "brand": {"domain": "acme.com"},
+                        "operator": "example.com",
+                        "billing": "operator",
+                    }
+                ],
+            )
+            response = await env.call_impl_async(req=req)
+
+        assert len(response.accounts) == 1
+        result = response.accounts[0]
+        assert _action_value(result.action) == "created"
+        assert _status_value(result.status) == "pending_approval"
+        assert result.setup is not None
+        assert result.setup.message is not None
+        assert result.setup.url is not None
+        assert result.setup.expires_at is not None

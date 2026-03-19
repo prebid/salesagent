@@ -16,6 +16,7 @@ beads: salesagent-hl0, salesagent-619
 import base64
 import logging
 import uuid
+from datetime import UTC
 from typing import Any, cast
 
 from adcp.types.generated_poc.account.list_accounts_request import (
@@ -341,6 +342,7 @@ def _build_sync_result(
     billing: str | None = None,
     sandbox: bool | None = None,
     errors: list[Any] | None = None,
+    setup: Any | None = None,
 ) -> SyncResponseAccount:
     """Build an AdCP sync response Account object."""
     return SyncResponseAccount(
@@ -352,7 +354,30 @@ def _build_sync_result(
         billing=billing,
         sandbox=sandbox,
         errors=errors,
+        setup=setup,
     )
+
+
+def _build_setup_for_approval(mode: str, tenant_id: str) -> Any:
+    """Build a Setup object based on the approval mode.
+
+    Returns Setup for pending_approval modes, None for auto-approve.
+    """
+    from datetime import datetime, timedelta
+
+    from adcp.types.generated_poc.account.sync_accounts_response import Setup
+
+    if mode == "credit_review":
+        return Setup(
+            message="Account requires credit review before activation. Please complete the credit application.",
+            url=f"https://seller.example.com/accounts/review?tenant={tenant_id}",
+            expires_at=datetime.now(tz=UTC) + timedelta(days=7),
+        )
+    if mode == "legal_review":
+        return Setup(
+            message="Account requires legal review before activation. Our team will review your application.",
+        )
+    return None
 
 
 def _check_domain_validity(brand_domain: str) -> list[Any] | None:
@@ -568,12 +593,16 @@ async def _sync_accounts_impl(
                     )
                     continue
 
-                # BR-RULE-060: auto-approve for now (status=active)
+                # BR-RULE-060: determine approval status
+                approval_mode = getattr(identity, "account_approval_mode", None)
+                setup = _build_setup_for_approval(approval_mode or "auto", tenant_id)
+                initial_status = "pending_approval" if setup else "active"
+
                 new_account = DBAccount(
                     tenant_id=tenant_id,
                     account_id=account_id,
                     name=account_name,
-                    status="active",
+                    status=initial_status,
                     brand={"domain": brand_domain, **({"brand_id": brand_id} if brand_id else {})},
                     operator=operator,
                     billing=billing_val,
@@ -593,10 +622,11 @@ async def _sync_accounts_impl(
                         brand=entry.brand,
                         operator=operator,
                         action="created",
-                        status="active",
+                        status=initial_status,
                         name=account_name,
                         billing=billing_val,
                         sandbox=sandbox,
+                        setup=setup,
                     )
                 )
 

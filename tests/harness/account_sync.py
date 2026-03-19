@@ -53,9 +53,15 @@ class AccountSyncEnv(IntegrationEnv):
         "audit_logger": "src.core.tools.accounts.get_audit_logger",
     }
 
-    def __init__(self, supported_billing: list[str] | None = None, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        supported_billing: list[str] | None = None,
+        account_approval_mode: str | None = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(**kwargs)
         self._supported_billing = supported_billing
+        self._account_approval_mode = account_approval_mode
 
     def _configure_mocks(self) -> None:
         """Set up happy-path defaults for audit logger."""
@@ -63,11 +69,14 @@ class AccountSyncEnv(IntegrationEnv):
         self.mock["audit_logger"].return_value = mock_logger
 
     def identity_for(self, transport: Any) -> Any:
-        """Build identity with optional billing policy."""
+        """Build identity with optional billing policy and approval mode."""
         ident = super().identity_for(transport)
+        updates: dict[str, Any] = {}
         if self._supported_billing is not None:
-            return ident.model_copy(update={"supported_billing": self._supported_billing})
-        return ident
+            updates["supported_billing"] = self._supported_billing
+        if self._account_approval_mode is not None:
+            updates["account_approval_mode"] = self._account_approval_mode
+        return ident.model_copy(update=updates) if updates else ident
 
     async def call_impl_async(self, **kwargs: Any) -> SyncAccountsResponse:
         """Call _sync_accounts_impl with real DB (async version).

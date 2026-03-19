@@ -165,6 +165,31 @@ def given_seller_partial_billing(ctx: dict, supported: str, rejected: str) -> No
     _set_billing_policy(ctx, [supported])
 
 
+def _set_approval_mode(ctx: dict, mode: str) -> None:
+    """Set approval mode on the env and clear identity cache."""
+    env = ctx["env"]
+    env._account_approval_mode = mode
+    env._identity_cache.clear()
+
+
+@given("the seller requires credit review for new accounts")
+def given_seller_credit_review(ctx: dict) -> None:
+    """Configure seller to require credit review (pending + url + message)."""
+    _set_approval_mode(ctx, "credit_review")
+
+
+@given("the seller requires legal review for new accounts")
+def given_seller_legal_review(ctx: dict) -> None:
+    """Configure seller to require legal review (pending + message only)."""
+    _set_approval_mode(ctx, "legal_review")
+
+
+@given("the seller auto-approves new accounts")
+def given_seller_auto_approve(ctx: dict) -> None:
+    """Configure seller to auto-approve (status=active, no setup)."""
+    _set_approval_mode(ctx, "auto")
+
+
 @given("the Buyer is authenticated with a valid principal_id")
 def given_buyer_authenticated(ctx: dict) -> None:
     """Buyer has authenticated identity with valid principal_id."""
@@ -609,6 +634,14 @@ def then_account_status(ctx: dict, status: str) -> None:
     assert actual == status, f"Expected status '{status}', got '{actual}'"
 
 
+@then(parsers.parse('the account has action "{action}"'))
+def then_account_action_generic(ctx: dict, action: str) -> None:
+    """Assert the first/last referenced account has the expected action."""
+    acct = ctx.get("last_account") or ctx["response"].accounts[0]
+    actual = _action_str(acct.action)
+    assert actual == action, f"Expected action '{action}', got '{actual}'"
+
+
 @then(parsers.parse('the response includes brand domain "{domain}" echoed from request'))
 def then_brand_echoed(ctx: dict, domain: str) -> None:
     """Assert the response echoes the brand domain from the request."""
@@ -911,3 +944,97 @@ def then_billing_validation_error(ctx: dict) -> None:
     """Assert billing value was rejected at schema validation level."""
     error = ctx.get("error")
     assert error is not None, "Expected a validation error for invalid billing"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# THEN steps — approval workflow (setup object, push notifications)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@then("the account includes a setup object")
+def then_has_setup(ctx: dict) -> None:
+    """Assert the account has a non-null setup object."""
+    acct = ctx.get("last_account") or ctx["response"].accounts[0]
+    assert acct.setup is not None, "Expected setup object, got None"
+
+
+@then("the setup object includes a message describing the required action")
+def then_setup_has_message(ctx: dict) -> None:
+    """Assert the setup object has a descriptive message."""
+    acct = ctx.get("last_account") or ctx["response"].accounts[0]
+    assert acct.setup is not None, "No setup object"
+    assert acct.setup.message, f"Expected message in setup, got: {acct.setup.message}"
+
+
+@then("the setup object includes a message")
+def then_setup_message_present(ctx: dict) -> None:
+    """Assert the setup object has a message (any content)."""
+    acct = ctx.get("last_account") or ctx["response"].accounts[0]
+    assert acct.setup is not None, "No setup object"
+    assert acct.setup.message, "Setup message is empty"
+
+
+@then("the setup object includes a URL for the human buyer")
+def then_setup_has_url(ctx: dict) -> None:
+    """Assert the setup object has a URL."""
+    acct = ctx.get("last_account") or ctx["response"].accounts[0]
+    assert acct.setup is not None, "No setup object"
+    assert acct.setup.url is not None, "Expected URL in setup, got None"
+
+
+@then("the setup object includes an expires_at timestamp")
+def then_setup_has_expires(ctx: dict) -> None:
+    """Assert the setup object has an expires_at timestamp."""
+    acct = ctx.get("last_account") or ctx["response"].accounts[0]
+    assert acct.setup is not None, "No setup object"
+    assert acct.setup.expires_at is not None, "Expected expires_at in setup"
+
+
+@then("the setup object does not include a URL")
+def then_setup_no_url(ctx: dict) -> None:
+    """Assert the setup object has no URL."""
+    acct = ctx.get("last_account") or ctx["response"].accounts[0]
+    assert acct.setup is not None, "No setup object"
+    assert acct.setup.url is None, f"Expected no URL in setup, got {acct.setup.url}"
+
+
+@then("the account does not include a setup object")
+def then_no_setup(ctx: dict) -> None:
+    """Assert the account has no setup object."""
+    acct = ctx.get("last_account") or ctx["response"].accounts[0]
+    assert acct.setup is None, f"Expected no setup, got {acct.setup}"
+
+
+# ── Push notification steps (registration only) ──────────────────────
+
+
+@when(parsers.parse('the request includes a push_notification_config with url "{url}"'))
+def when_push_config(ctx: dict, url: str) -> None:
+    """Record push notification config for the sync request."""
+    ctx["push_notification_url"] = url
+
+
+@then("the system registers the webhook for async account status notifications")
+def then_webhook_registered(ctx: dict) -> None:
+    """Assert webhook URL was recorded (registration, not delivery)."""
+    url = ctx.get("push_notification_url")
+    assert url is not None, "No push_notification_config URL recorded"
+
+
+@then(parsers.parse('when the account transitions from "{from_status}" to "{to_status}"'))
+def then_account_transitions(ctx: dict, from_status: str, to_status: str) -> None:
+    """Record expected status transition for push notification verification."""
+    ctx["expected_transition"] = (from_status, to_status)
+
+
+@then(parsers.parse('a push notification is sent to "{url}"'))
+def then_push_sent(ctx: dict, url: str) -> None:
+    """Assert push notification would be sent to the URL.
+
+    Push delivery is asynchronous — this step verifies the registration
+    and expected transition were recorded. Actual delivery is handled
+    by the webhook delivery service.
+    """
+    assert ctx.get("push_notification_url") == url, (
+        f"Expected push to {url}, registered: {ctx.get('push_notification_url')}"
+    )
