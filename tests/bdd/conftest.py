@@ -294,6 +294,21 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-011-ext-f-false",
             "T-UC-011-ext-f-none-absent",
             "T-UC-011-ext-f-omitted",
+            # Slice 7: context echo + validation + schema + sandbox
+            "T-UC-011-ext-g-echo",
+            "T-UC-011-ext-g-echo-error",
+            "T-UC-011-ext-g-absent",
+            "T-UC-011-ext-g-empty",
+            "T-UC-011-ext-g-nested",
+            "T-UC-011-sync-empty-accounts",
+            "T-UC-011-sync-missing-brand",
+            "T-UC-011-sync-missing-operator",
+            "T-UC-011-sync-missing-billing",
+            "T-UC-011-sync-invalid-patterns",
+            "T-UC-011-sync-accounts-bva",
+            "T-UC-011-sandbox-provision",
+            "T-UC-011-sandbox-list-filter",
+            "T-UC-011-sandbox-validation",
         }
         if any(t.startswith("T-UC-011") for t in marker_names):
             is_list = "list" in marker_names
@@ -384,6 +399,11 @@ def _detect_uc011_harness(marker_names: set[str]) -> str:
     if "list" in marker_names:
         return "list"
     if "sync" in marker_names:
+        return "sync"
+    # Context-echo and sandbox scenarios are cross-cutting: they test both
+    # list_accounts and sync_accounts. Use sync harness as default since
+    # it's the superset (context-echo When step creates its own env if needed).
+    if "context-echo" in marker_names or "sandbox" in marker_names:
         return "sync"
     return "unknown"
 

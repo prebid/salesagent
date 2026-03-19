@@ -474,6 +474,10 @@ async def _sync_accounts_impl(
     if identity is None or identity.principal_id is None or identity.tenant_id is None:
         raise AdCPAuthenticationError("Authentication required: sync_accounts requires a valid auth token.")
 
+    # Validate non-empty accounts array
+    if not req.accounts:
+        raise AdCPValidationError("accounts array must not be empty — at least one account is required.")
+
     tenant_id = identity.tenant_id
     principal_id = identity.principal_id
     dry_run = bool(req.dry_run)
