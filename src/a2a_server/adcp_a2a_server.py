@@ -70,6 +70,9 @@ from src.core.tools import (
 from src.core.tools import (
     get_products_raw as core_get_products_tool,
 )
+from src.core.tools import (
+    list_accounts_raw as core_list_accounts_tool,
+)
 
 # Signals tools removed - should come from dedicated signals agents, not sales agent
 from src.core.tools import (
@@ -122,6 +125,7 @@ def _adcp_to_a2a_error(exc: AdCPError) -> InvalidParamsError | InvalidRequestErr
 DISCOVERY_SKILLS = frozenset(
     {
         "get_adcp_capabilities",  # Agent capabilities (always public per AdCP spec)
+        "list_accounts",  # Account discovery (public, returns empty for unauthed per BR-RULE-055)
         "list_creative_formats",  # Creative specifications (always public)
         "list_authorized_properties",  # Property catalog (always public)
         "get_products",  # Conditional: depends on tenant brand_manifest_policy setting
@@ -376,6 +380,7 @@ class AdCPRequestHandler(RequestHandler):
                 GetMediaBuyDeliveryResponse,
                 GetMediaBuysResponse,
                 GetProductsResponse,
+                ListAccountsResponse,
                 ListAuthorizedPropertiesResponse,
                 ListCreativeFormatsResponse,
                 ListCreativesResponse,
@@ -404,6 +409,7 @@ class AdCPRequestHandler(RequestHandler):
                 "get_media_buy_delivery": GetMediaBuyDeliveryResponse,
                 "get_media_buys": GetMediaBuysResponse,
                 "get_products": GetProductsResponse,
+                "list_accounts": ListAccountsResponse,
                 "list_authorized_properties": ListAuthorizedPropertiesResponse,
                 "list_creative_formats": ListCreativeFormatsResponse,
                 "list_creatives": ListCreativesResponse,
@@ -1325,6 +1331,7 @@ class AdCPRequestHandler(RequestHandler):
             "create_media_buy": self._handle_create_media_buy_skill,
             # ✅ NEW: Missing AdCP Discovery Skills (CRITICAL for protocol compliance)
             "list_creative_formats": self._handle_list_creative_formats_skill,
+            "list_accounts": self._handle_list_accounts_skill,
             "list_authorized_properties": self._handle_list_authorized_properties_skill,
             # ✅ NEW: Missing Media Buy Management Skills (CRITICAL for campaign lifecycle)
             "update_media_buy": self._handle_update_media_buy_skill,
@@ -1739,6 +1746,21 @@ class AdCPRequestHandler(RequestHandler):
             logger.error(f"Error in list_creative_formats skill: {e}")
             raise ServerError(InternalError(message=f"Unable to retrieve creative formats: {str(e)}"))
 
+    async def _handle_list_accounts_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
+        """Handle explicit list_accounts skill invocation.
+
+        Authentication is OPTIONAL per BR-RULE-055 — unauthenticated calls
+        return an empty account list.
+        """
+        from src.core.schemas.account import ListAccountsRequest
+
+        request = ListAccountsRequest(
+            status=parameters.get("status"),
+            sandbox=parameters.get("sandbox"),
+            context=parameters.get("context"),
+        )
+        return core_list_accounts_tool(req=request, identity=identity)
+
     async def _handle_list_authorized_properties_skill(
         self, parameters: dict, identity: ResolvedIdentity | None
     ) -> Any:
@@ -2118,6 +2140,12 @@ def create_agent_card() -> AgentCard:
                 name="list_authorized_properties",
                 description="List authorized properties this agent can sell advertising for",
                 tags=["properties", "authorization", "publisher", "adcp"],
+            ),
+            AgentSkill(
+                id="list_accounts",
+                name="list_accounts",
+                description="List billing accounts accessible to this agent",
+                tags=["accounts", "billing", "discovery", "adcp"],
             ),
             # ✅ NEW: Media Buy Management Skills (CRITICAL for campaign lifecycle)
             AgentSkill(
