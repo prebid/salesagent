@@ -36,6 +36,7 @@ pytest_plugins = [
     "tests.bdd.steps.generic.then_payload",
     "tests.bdd.steps.domain.uc004_delivery",
     "tests.bdd.steps.domain.uc011_accounts",
+    "tests.bdd.steps.domain.admin_accounts",
 ]
 
 # ---------------------------------------------------------------------------
@@ -317,6 +318,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             if not is_list and not is_implemented_sync:
                 item.add_marker(pytest.mark.xfail(reason="UC-011 steps not implemented", strict=True))
 
+        # --- Admin BDD: @pending scenarios need step definitions ---
+        if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
+            if "pending" in marker_names:
+                item.add_marker(pytest.mark.xfail(reason="Admin BDD steps not yet implemented", strict=True))
+
         # --- Entity marker auto-application based on BDD tags ---
         # BDD tests don't have entity keywords in filenames; instead they
         # use tags like T-UC-004-* (delivery) and T-UC-005-* (creative).
@@ -324,6 +330,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             item.add_marker(pytest.mark.delivery)
         if any(t.startswith("T-UC-005") for t in marker_names):
             item.add_marker(pytest.mark.creative)
+        if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
+            item.add_marker(pytest.mark.admin)
 
 
 # ---------------------------------------------------------------------------
@@ -337,6 +345,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 # Tags that indicate a scenario already dispatches through a specific transport.
 # These scenarios must NOT be multiplied — they have explicit When steps.
 _TRANSPORT_SPECIFIC_TAGS = {"rest", "mcp", "a2a"}
+
+# Admin scenarios have their own transport (Flask test_client / requests.Session).
+# They must NOT be parametrized across MCP/A2A/REST/IMPL API transports.
+_ADMIN_TAG_PREFIX = "T-ADMIN-"
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
@@ -357,6 +369,10 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     marker_names = {m.name for m in metafunc.definition.iter_markers()}
     if marker_names & _TRANSPORT_SPECIFIC_TAGS:
         # Transport-specific scenario — don't multiply
+        return
+
+    # Admin scenarios use Flask test_client, not API transports
+    if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
         return
 
     metafunc.parametrize(
@@ -391,6 +407,8 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
         return "UC-004"
     if any(t.startswith("T-UC-011") for t in marker_names):
         return "UC-011"
+    if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
+        return "ADMIN"
     return None
 
 
@@ -457,6 +475,14 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 ctx["env"] = env
                 yield
         else:
+            yield
+
+    elif uc == "ADMIN":
+        request.getfixturevalue("integration_db")
+        from tests.harness.admin_accounts import AdminAccountEnv
+
+        with AdminAccountEnv() as env:
+            ctx["env"] = env
             yield
 
     elif uc == "UC-004":
