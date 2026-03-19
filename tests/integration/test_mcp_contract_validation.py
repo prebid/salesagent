@@ -133,7 +133,7 @@ class TestMCPContractValidation:
     def test_get_signals_minimal_now_works(self):
         """Test get_signals with minimal parameters.
 
-        adcp 3.6.0: GetSignalsRequest is a RootModel union; fields accessed via .root.
+        Our GetSignalsRequest alias is GetSignalsRequest1 directly, not the union.
         """
         # Library DeliverTo requires explicit deployments and countries
         request = GetSignalsRequest(
@@ -144,10 +144,10 @@ class TestMCPContractValidation:
             ),
         )
 
-        # adcp 3.6.0: RootModel wraps the actual request; access via .root
-        assert request.root.signal_spec == "audience_automotive"
-        assert len(request.root.deliver_to.deployments) == 1
-        assert request.root.deliver_to.countries[0].root == "US"
+        # Our GetSignalsRequest alias is GetSignalsRequest1 directly (not the RootModel union)
+        assert request.signal_spec == "audience_automotive"
+        assert len(request.deliver_to.deployments) == 1
+        assert request.deliver_to.countries[0].root == "US"
 
     def test_get_signals_with_custom_delivery(self):
         """Test get_signals with custom delivery requirements."""
@@ -162,9 +162,9 @@ class TestMCPContractValidation:
             ),
         )
 
-        # adcp 3.6.0: RootModel wraps the actual request; access via .root
-        assert len(request.root.deliver_to.deployments) == 2
-        assert len(request.root.deliver_to.countries) == 3
+        # Our GetSignalsRequest alias is GetSignalsRequest1 directly (not the RootModel union)
+        assert len(request.deliver_to.deployments) == 2
+        assert len(request.deliver_to.countries) == 3
 
     def test_update_media_buy_minimal(self):
         """Test update_media_buy identifiers (oneOf enforced in adcp 3.6.0 model)."""
@@ -323,7 +323,7 @@ class TestMCPToolMinimalCalls:
                     countries=["US"],
                 ),
             )
-            assert signals_request.root.signal_spec == "audience_automotive"
+            assert signals_request.signal_spec == "audience_automotive"
         except Exception as e:
             pytest.fail(f"GetSignalsRequest creation failed: {e}")
 

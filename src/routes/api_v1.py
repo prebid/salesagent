@@ -98,6 +98,7 @@ class GetMediaBuyDeliveryBody(BaseModel):
     buyer_refs: list[str] | None = None
     start_date: str | None = None
     end_date: str | None = None
+    reporting_dimensions: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
 
 
@@ -252,6 +253,7 @@ async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, identity: Resolv
             buyer_refs=body.buyer_refs,
             start_date=body.start_date,
             end_date=body.end_date,
+            reporting_dimensions=body.reporting_dimensions,
             identity=identity,
         )
     except ToolError as e:

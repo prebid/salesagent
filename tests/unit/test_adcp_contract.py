@@ -81,10 +81,9 @@ class TestSchemaMatchesLibrary:
         from adcp import (
             GetProductsRequest as LibGetProductsRequest,
         )
-        from adcp import (
-            GetSignalsRequest as LibGetSignalsRequest,
-        )
 
+        # NOTE: GetSignalsRequest is now a UnionType in adcp 3.6.0;
+        # comparison uses GetSignalsRequest1 directly (see below).
         # NOTE: ListAuthorizedPropertiesRequest was removed from adcp 3.2.0
         # We define it locally in src/core/schemas.py
         from adcp import (
@@ -125,8 +124,9 @@ class TestSchemaMatchesLibrary:
         # product_selectors — internal-only field
         # buying_mode — local extension for buying mode selection
         # account — local extension for account-based product lookup (library has account_id)
+        # preferred_delivery_types — spec field for buyer delivery preference (not yet in adcp 3.6.0)
         # adcp 3.6.0: brand, catalog, buyer_campaign_ref, pagination are now in the library
-        local_extensions = {"product_selectors", "buying_mode", "account"}
+        local_extensions = {"product_selectors", "buying_mode", "account", "preferred_delivery_types"}
         assert lib_fields == local_fields - local_extensions, (
             f"GetProductsRequest drift: lib={lib_fields}, local={local_fields}"
         )
@@ -164,15 +164,16 @@ class TestSchemaMatchesLibrary:
         # NOTE: ListAuthorizedPropertiesRequest comparison skipped - type removed from adcp 3.2.0
         # We define it locally in src/core/schemas.py with fields: context, ext, property_tags, publisher_domains
 
-        # GetSignalsRequest - local extends library with spec fields not yet in library
-        lib_fields = set(LibGetSignalsRequest.model_fields.keys())
-        local_fields = set(LocalGetSignalsRequest.model_fields.keys())
-        # TODO(adcp-lib): Remove allowlist when adcp library adds signal_ids and pagination
-        # signal_ids, pagination — AdCP spec fields not yet in adcp library v3.2.0
-        local_extensions = {"signal_ids", "pagination"}
-        assert lib_fields == local_fields - local_extensions, (
-            f"GetSignalsRequest drift: lib={lib_fields}, local={local_fields}"
+        # GetSignalsRequest — adcp 3.6.0 exports a UnionType. We alias to GetSignalsRequest1
+        # (signal_spec required variant) in src/core/schemas/_base.py. Compare against
+        # the concrete variant, not the union.
+        from adcp.types.generated_poc.signals.get_signals_request import (
+            GetSignalsRequest1 as LibGetSignalsRequest1,
         )
+
+        lib_fields = set(LibGetSignalsRequest1.model_fields.keys())
+        local_fields = set(LocalGetSignalsRequest.model_fields.keys())
+        assert lib_fields == local_fields, f"GetSignalsRequest drift: lib={lib_fields}, local={local_fields}"
 
         # SyncCreativesRequest - now has ext field, should match
         lib_fields = set(LibSyncCreativesRequest.model_fields.keys())
@@ -2426,14 +2427,13 @@ class TestAdCPContract:
         minimal_response = minimal_request.model_dump()
         assert "deployments" in minimal_response["deliver_to"]
 
-        # adcp 3.6.0: GetSignalsRequest is now a RootModel (discriminated union)
-        # Access fields via .root.field_name
-        assert adcp_request.root.signal_spec == "Sports enthusiasts in automotive market", (
-            "signal_spec should be accessible via .root.signal_spec"
+        # Our GetSignalsRequest aliases GetSignalsRequest1 (signal_spec-based discovery)
+        # so fields are accessed directly, no .root wrapper.
+        assert adcp_request.signal_spec == "Sports enthusiasts in automotive market", (
+            "signal_spec should be directly accessible on GetSignalsRequest"
         )
 
         # Verify field count (at minimum: signal_spec, deliver_to, filters, max_results)
-        # RootModel serializes the inner object's fields
         assert len(adcp_response) >= 2, f"AdCP request should have at least 2 fields, got {len(adcp_response)}"
 
     def test_update_media_buy_request_adcp_compliance(self):

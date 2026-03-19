@@ -227,7 +227,7 @@ jobs:
         DATABASE_URL: postgresql://adcp_user:test_password@localhost:5432/adcp_test_v2
       run: uv run python scripts/ops/migrate.py
 
-    - name: Run integration V2 tests
+    - name: Run integration tests (V2 — pricing migration)
       env:
         DATABASE_URL: postgresql://adcp_user:test_password@localhost:5432/adcp_test_v2
         GEMINI_API_KEY: test_key_for_mocking
@@ -236,7 +236,7 @@ jobs:
         SUPER_ADMIN_EMAILS: test@example.com
         ENCRYPTION_KEY: PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk=  # TEST ONLY — never use in production
         ADCP_TESTING: true
-      run: uv run pytest tests/integration_v2/ -v --tb=short --cov=. --cov-report=term-missing -m "not skip_ci"
+      run: uv run pytest tests/integration/ -v --tb=short --cov=. --cov-report=term-missing -m "not requires_server and not skip_ci"
 
   quickstart-test:
     name: Quickstart Docker Compose Test

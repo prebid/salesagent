@@ -75,7 +75,6 @@ from adcp.types import (
 # AdCP creative types for schema definitions
 from adcp.types import CreativePolicy as LibraryCreativePolicy
 from adcp.types import FrequencyCap as LibraryFrequencyCap
-from adcp.types import GetSignalsRequest as LibraryGetSignalsRequest
 from adcp.types import GetSignalsResponse as LibraryGetSignalsResponse
 from adcp.types import Measurement as LibraryMeasurement
 from adcp.types import PlatformDeployment as LibraryPlatformDeployment
@@ -2013,11 +2012,14 @@ class SignalFilters(LibrarySignalFilters):
     pass  # All fields inherited from library
 
 
-# GetSignalsRequest — library changed to RootModel[GetSignalsRequest1 | GetSignalsRequest2] in 3.6.0.
-# RootModel does not support model_config['extra'] or property overrides.
-# Library now includes signal_ids, pagination, signal_spec, max_results directly.
-# Re-export the library type; callers use .signal_spec and .max_results directly.
-GetSignalsRequest = LibraryGetSignalsRequest
+# GetSignalsRequest — library 3.6.0 exports a UnionType (GetSignalsRequest1 | GetSignalsRequest2).
+# GS1: signal_spec required, signal_ids optional (discovery by text).
+# GS2: signal_ids required, signal_spec optional (lookup by ID).
+# We alias to GS1 (text-based discovery) which is our primary use case.
+# This gives us a concrete BaseModel class for construction, model_fields, and mypy.
+from adcp.types.generated_poc.signals.get_signals_request import (  # noqa: E402, F401
+    GetSignalsRequest1 as GetSignalsRequest,
+)
 
 
 class GetSignalsResponse(NestedModelSerializerMixin, LibraryGetSignalsResponse):

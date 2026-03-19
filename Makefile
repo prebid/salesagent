@@ -1,5 +1,6 @@
 .PHONY: setup quality quality-full pre-pr lint-fix lint typecheck test-fast test-full
-.PHONY: test-stack-up test-stack-down test-all test-cov test-int test-e2e
+.PHONY: test-stack-up test-stack-down test-all test-cov test-entity
+.PHONY: test-int test-bdd test-e2e
 
 setup:
 	uv run python scripts/setup-dev.py
@@ -52,20 +53,35 @@ test-cov:
 	@echo "Opening coverage report..."
 	@open htmlcov/index.html 2>/dev/null || xdg-open htmlcov/index.html 2>/dev/null || echo "Open htmlcov/index.html in your browser"
 
-# ─── single-test convenience targets ────────────────────────────
+# ─── Single-suite convenience targets ──────────────────────────
 # Usage:
 #   make test-int TARGET=tests/integration/test_products.py
 #   make test-int TARGET=tests/integration/test_products.py ARGS="-k test_brand -v"
+#   make test-bdd TARGET=tests/bdd/ ARGS="-k uc004"
 #   make test-e2e TARGET=tests/e2e/test_mcp.py
 
 test-int:
 ifndef TARGET
 	$(error TARGET is required. Usage: make test-int TARGET=tests/integration/test_file.py)
 endif
-	scripts/run-test.sh $(TARGET) $(ARGS)
+	scripts/run-test.sh --db $(TARGET) $(ARGS)
+
+test-bdd:
+ifndef TARGET
+	scripts/run-test.sh --db tests/bdd/ $(ARGS)
+else
+	scripts/run-test.sh --db $(TARGET) $(ARGS)
+endif
 
 test-e2e:
 ifndef TARGET
 	$(error TARGET is required. Usage: make test-e2e TARGET=tests/e2e/test_file.py)
 endif
-	scripts/run-test.sh $(TARGET) $(ARGS)
+	scripts/run-test.sh --stack $(TARGET) $(ARGS)
+
+# ─── Entity-scoped test runs ────────────────────────────────────
+# Usage: make test-entity ENTITY=delivery
+#        make test-entity ENTITY="creative and unit"
+ENTITY ?= ""
+test-entity:
+	uv run pytest tests/unit/ tests/integration/ tests/e2e/ tests/admin/ -m "$(ENTITY)" -x -v

@@ -261,6 +261,14 @@ repos:
         always_run: false  # Only run when test files change
 
 
+      # ast-grep BDD guards (structural AST pattern detection)
+      - id: ast-grep-bdd-guards
+        name: ast-grep BDD step guards
+        entry: ast-grep scan --rule .ast-grep/rules/
+        language: system
+        files: '^tests/bdd/steps/.*\.py$'
+        pass_filenames: false
+
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:

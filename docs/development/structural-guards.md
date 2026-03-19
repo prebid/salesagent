@@ -353,6 +353,61 @@ def test_something(integration_db, sample_tenant):
 
 All tracked by `salesagent-qo8a`.
 
+### BDD Step Quality Guards
+
+Five AST-scanning guards enforce step definition quality in `tests/bdd/steps/`.
+They prevent the most common LLM-generated BDD anti-patterns.
+
+#### No-Op Then Steps
+
+**File:** `tests/unit/test_architecture_bdd_no_pass_steps.py`
+
+Catches three failure modes in `@then` step functions:
+1. **Empty body** — `pass`, ellipsis, or docstring-only
+2. **No code** — no assert, call, or raise at all
+3. **No-op delegation** — body has zero `assert` statements and only delegates to
+   non-assertion helpers (like `_pending(ctx, step)`). Catches any LLM-invented
+   placeholder by structure, not by name.
+
+A call counts as "meaningful" only if the function name starts with `assert_`,
+`_assert_`, `check_`, `_check_`, `verify_`, `_verify_`, or is `pytest.skip/xfail/fail`,
+or is `env.*` (harness method).
+
+**Current known violations:** 41 Then steps in `uc004_delivery.py` using `_pending()`.
+
+#### Trivial Assertions
+
+**File:** `tests/unit/test_architecture_bdd_no_trivial_assertions.py`
+
+Catches `@then` steps that only use bare truthiness checks (`assert x`) without
+comparisons (`==`, `!=`, `in`, `not in`, `is`, `isinstance`).
+
+#### No Dict in Registry
+
+**File:** `tests/unit/test_architecture_bdd_no_dict_registry.py`
+
+Catches `@given` steps that store raw dict literals in `ctx["registry_formats"]`
+instead of `FormatFactory.build()` objects.
+
+#### No Duplicate Step Bodies
+
+**File:** `tests/unit/test_architecture_bdd_no_duplicate_steps.py`
+
+Catches groups of 3+ step functions with identical normalized bodies (after
+stripping docstrings). Threshold of 2 is tolerated for partition/boundary pairs.
+
+#### No Silent Env Degradation
+
+**File:** `tests/unit/test_architecture_bdd_no_silent_env.py`
+
+Catches two "No Quiet Failures" violations:
+1. **`ctx.get("env")`** — returns `None` instead of `KeyError` when harness is missing.
+   Canonical: `ctx["env"]` (guaranteed by autouse fixture).
+2. **`hasattr(env, "method")`** — probes harness at runtime instead of using typed
+   protocols. If env lacks a method, xfail the scenario rather than silently skip.
+
+**Current known violations:** 17 `ctx.get("env")` + 22 `hasattr(env, ...)` in `uc004_delivery.py`.
+
 ### Obligation Test Quality Guard
 
 **File:** `tests/unit/test_architecture_obligation_test_quality.py`
@@ -455,10 +510,10 @@ uv run pytest tests/unit/test_architecture_schema_inheritance.py -v
 ## Relationship to Other Quality Mechanisms
 
 ```
-Pre-commit hooks (40)          ← catch formatting, route conflicts, star imports
+Pre-commit hooks               ← catch formatting, route conflicts, star imports
     │
     ▼
-Structural guards (17)         ← catch architecture violations (THIS FILE)
+Structural guards              ← catch architecture violations with allowlists (THIS FILE)
     │
     ▼
 Unit tests (~2950)             ← catch behavior bugs
@@ -472,3 +527,8 @@ E2E tests (Docker stack)       ← catch deployment/wiring bugs
 
 Guards sit between pre-commit hooks (syntactic) and unit tests (behavioral).
 They enforce structural properties that are invisible to both.
+
+**ast-grep scan rules** (`.ast-grep/rules/`) provide fast first-line defense at
+commit time for simple BDD patterns (`ctx.get("env")`, `hasattr(env, ...)`,
+error fabrication). Python AST guards manage the allowlists for existing
+violations and handle complex cross-file analysis.

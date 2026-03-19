@@ -64,3 +64,6 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
 
         # httpx.Client: 200 OK by default
         self.set_http_response(200)
+
+        # Expose inner httpx post as mock["post"] so BDD steps can inspect call_args
+        self.mock["post"] = self.mock["client"].return_value.__enter__.return_value.post
