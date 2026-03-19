@@ -502,7 +502,7 @@ class TestAuthErrorResponseSchema:
 
         err = AdCPAuthenticationError("Authentication required by tenant policy")
         err_dict = err.to_dict()
-        assert err_dict["error_code"] == "AUTHENTICATION_ERROR"
+        assert err_dict["error_code"] == "AUTH_TOKEN_INVALID"
         assert "Authentication required" in err_dict["message"]
 
 

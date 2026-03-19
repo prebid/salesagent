@@ -69,7 +69,7 @@ class AdCPAuthenticationError(AdCPError):
     """Missing or invalid authentication credentials (401)."""
 
     status_code = 401
-    error_code = "AUTHENTICATION_ERROR"
+    error_code = "AUTH_TOKEN_INVALID"
 
 
 class AdCPAuthorizationError(AdCPError):

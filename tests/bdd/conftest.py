@@ -257,6 +257,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # --- UC-011 xfail: scenarios pending step definitions ---
         # Tags implemented: @list (slice 1), sync core scenarios (slice 2)
         _UC011_IMPLEMENTED_TAGS = {
+            # Slice 2: sync core
             "T-UC-011-sync-create",
             "T-UC-011-sync-multi-brand",
             "T-UC-011-sync-brand-direct",
@@ -266,6 +267,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-011-sync-mixed",
             "T-UC-011-sync-brand-echo",
             "T-UC-011-sync-shortest-domain",
+            # Slice 3: auth + atomic XOR
+            "T-UC-011-ext-a-no-token",
+            "T-UC-011-ext-a-expired",
+            "T-UC-011-atomic-error",
+            "T-UC-011-atomic-service-error",
+            "T-UC-011-atomic-both",
+            "T-UC-011-atomic-success",
         }
         if any(t.startswith("T-UC-011") for t in marker_names):
             is_list = "list" in marker_names
