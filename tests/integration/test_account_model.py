@@ -77,7 +77,7 @@ class TestAccountModel:
                 governance_agents=[
                     {
                         "url": "https://gov.example.com",
-                        "authentication": {"schemes": ["bearer"], "credentials": "x" * 32},
+                        "authentication": {"schemes": ["Bearer"], "credentials": "x" * 32},
                     }
                 ],
                 sandbox=False,
@@ -89,8 +89,10 @@ class TestAccountModel:
         assert result is not None
         assert result.advertiser == "Acme Corp"
         assert result.billing == "operator"
-        assert result.brand == {"domain": "acme-corp.com"}
-        assert result.credit_limit == {"amount": 50000, "currency": "USD"}
+        # brand and credit_limit are now typed Pydantic models, not dicts
+        assert result.brand.domain == "acme-corp.com"
+        assert result.credit_limit.amount == 50000
+        assert result.credit_limit.currency == "USD"
         assert result.sandbox is False
 
     def test_account_tenant_cascade_delete(self, integration_db):

@@ -2,6 +2,10 @@
 
 This codebase uses PostgreSQL exclusively - no SQLite support.
 This type uses native JSONB storage with additional validation.
+
+When a Pydantic ``model`` is specified, values are coerced to typed models
+on read and serialized transparently on write. All new columns should
+specify a model — bare JSONType (no model) is legacy.
 """
 
 import logging
@@ -16,39 +20,30 @@ logger = logging.getLogger(__name__)
 
 
 class JSONType(TypeDecorator):
-    """PostgreSQL JSONB type with validation.
+    """PostgreSQL JSONB type with optional Pydantic coercion.
 
-    This type uses PostgreSQL's native JSONB storage (binary JSON format)
-    with additional validation to ensure data integrity.
+    When ``model`` is provided, values are coerced to the Pydantic model
+    on read (``process_result_value``) and serialized on write
+    (``process_bind_param``). This is the correct way to use this type —
+    all new columns should specify a model.
 
-    Architecture Decision:
-        Per CLAUDE.md, this codebase is PostgreSQL-only. We do NOT support SQLite.
-        Therefore, we use native JSONB for optimal performance and features.
+    When ``model`` is omitted, values pass through as raw dicts/lists.
+    This is legacy behavior for columns not yet migrated to typed models.
 
-    Usage:
-        class MyModel(Base):
-            data = Column(JSONType)  # Stores as PostgreSQL JSONB
+    Usage::
 
-    Features:
-        - Native PostgreSQL JSONB storage (binary format, faster than TEXT)
-        - Validates data before storage (dict/list only)
-        - Handles None values gracefully (stores as SQL NULL)
-        - Supports all JSONB operators (@>, ?, ->, etc.)
-        - GIN indexes work natively without CAST
-        - Cache-safe for SQLAlchemy query caching
+        # Typed (preferred — new code):
+        brand: Mapped[BrandReference | None] = mapped_column(
+            JSONType(model=BrandReference), nullable=True
+        )
 
-    PostgreSQL JSONB Benefits:
-        - Faster queries (binary format vs TEXT parsing)
-        - Smaller storage size (compressed binary)
-        - Native indexing support (GIN, GiST)
-        - Query operators built-in (@>, ?, #>, etc.)
-        - Can index nested fields
-        - Automatic validation on insert
+        # Typed list:
+        agents: Mapped[list[GovernanceAgent] | None] = mapped_column(
+            JSONType(model=GovernanceAgent, is_list=True), nullable=True
+        )
 
-    Error Handling:
-        - Non-JSON types are logged and converted to empty dict
-        - Validation happens before database write
-        - PostgreSQL enforces JSONB validity at database level
+        # Legacy (untyped — existing code only):
+        data: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     """
 
     # PostgreSQL-specific JSONB type with none_as_null=True
@@ -56,15 +51,22 @@ class JSONType(TypeDecorator):
     impl = JSONB(none_as_null=True)
     cache_ok = True
 
+    def __init__(
+        self,
+        *args: Any,
+        model: type[BaseModel] | None = None,
+        is_list: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        self._model = model
+        self._is_list = is_list
+        super().__init__(*args, **kwargs)
+
     def process_bind_param(self, value: Any, dialect: Dialect) -> dict | list | None:
-        """Process value being sent to database.
+        """Serialize value for database storage.
 
-        Args:
-            value: Python object to store (dict, list, or None)
-            dialect: Database dialect (must be PostgreSQL)
-
-        Returns:
-            Python dict/list for PostgreSQL JSONB storage, or None for SQL NULL
+        Accepts Pydantic models, dicts, and lists. Pydantic models are
+        serialized via the engine's JSON serializer (pydantic_core.to_json).
         """
         if value is None:
             return None
@@ -81,35 +83,32 @@ class JSONType(TypeDecorator):
 
         return value
 
-    def process_result_value(self, value: Any, dialect: Dialect) -> dict | list | None:
-        """Process value returned from database.
-
-        Args:
-            value: Raw value from database (dict, list, or None from PostgreSQL JSONB)
-            dialect: Database dialect (must be PostgreSQL)
-
-        Returns:
-            Python object (dict/list) or None
-
-        Note:
-            PostgreSQL JSONB columns are automatically deserialized by psycopg2 driver.
-            This method just validates and passes through the already-deserialized value.
-        """
+    def process_result_value(self, value: Any, dialect: Dialect) -> Any:
+        """Deserialize value from database, coercing to Pydantic model if configured."""
         if value is None:
             return None
 
         # PostgreSQL JSONB is already deserialized by psycopg2 driver
-        if isinstance(value, dict | list):
+        if not isinstance(value, dict | list):
+            logger.error(
+                f"Unexpected type in JSONB column: {type(value).__name__}. "
+                f"Expected dict or list from PostgreSQL JSONB. "
+                f"Value: {repr(value)[:100]}"
+            )
+            raise TypeError(
+                f"Unexpected type in JSONB column: {type(value).__name__}. "
+                "PostgreSQL JSONB should always return dict or list. "
+                "This may indicate a database schema issue."
+            )
+
+        # No model configured — legacy passthrough
+        if self._model is None:
             return value
 
-        # Unexpected type - should never happen with PostgreSQL JSONB
-        logger.error(
-            f"Unexpected type in JSONB column: {type(value).__name__}. "
-            f"Expected dict or list from PostgreSQL JSONB. "
-            f"Value: {repr(value)[:100]}"
-        )
-        raise TypeError(
-            f"Unexpected type in JSONB column: {type(value).__name__}. "
-            "PostgreSQL JSONB should always return dict or list. "
-            "This may indicate a database schema issue."
-        )
+        # Coerce to typed Pydantic model(s)
+        if self._is_list:
+            if not isinstance(value, list):
+                raise TypeError(f"Expected list from JSONB for list column, got {type(value).__name__}")
+            return [self._model.model_validate(item) for item in value]
+
+        return self._model.model_validate(value)

@@ -68,18 +68,14 @@ def _brand_id_str(bid: Any) -> str | None:
 def _find_account_by_brand(resp: Any, domain: str, brand_id: str | None = None) -> Any:
     """Find an account in sync response by brand domain (and optional brand_id)."""
     for acct in resp.accounts:
-        acct_domain = acct.brand.domain if hasattr(acct.brand, "domain") else acct.brand.get("domain")
-        if acct_domain != domain:
+        if acct.brand.domain != domain:
             continue
         if brand_id is not None:
             acct_bid = _brand_id_str(getattr(acct.brand, "brand_id", None))
             if acct_bid != brand_id:
                 continue
         return acct
-    domains = [
-        getattr(a.brand, "domain", None) or (a.brand.get("domain") if isinstance(a.brand, dict) else None)
-        for a in resp.accounts
-    ]
+    domains = [a.brand.domain for a in resp.accounts]
     suffix = f" and brand_id '{brand_id}'" if brand_id else ""
     raise AssertionError(f"No account found for domain '{domain}'{suffix}. Available: {domains}")
 
@@ -680,8 +676,7 @@ def then_brand_echoed(ctx: dict, domain: str) -> None:
     """Assert the response echoes the brand domain from the request."""
     resp = ctx["response"]
     acct = _find_account_by_brand(resp, domain)
-    acct_domain = acct.brand.domain if hasattr(acct.brand, "domain") else acct.brand.get("domain")
-    assert acct_domain == domain, f"Expected brand domain '{domain}', got '{acct_domain}'"
+    assert acct.brand.domain == domain, f"Expected brand domain '{domain}', got '{acct.brand.domain}'"
 
 
 @then(parsers.parse("the response contains {count:d} account results"))
@@ -698,7 +693,7 @@ def then_all_accounts_echo_brand(ctx: dict) -> None:
     resp = ctx["response"]
     for acct in resp.accounts:
         brand = acct.brand
-        domain = brand.domain if hasattr(brand, "domain") else brand.get("domain")
+        domain = brand.domain
         bid = _brand_id_str(getattr(brand, "brand_id", None))
         assert domain is not None, f"Account missing brand domain: {brand}"
         assert bid is not None, f"Account for {domain} missing brand_id: {brand}"
@@ -725,9 +720,8 @@ def then_per_account_brand_echo(ctx: dict, domain: str, bid: str) -> None:
     """Assert a per-account result echoes the exact brand domain and brand_id."""
     resp = ctx["response"]
     acct = _find_account_by_brand(resp, domain, brand_id=bid)
-    acct_domain = acct.brand.domain if hasattr(acct.brand, "domain") else acct.brand.get("domain")
     acct_bid = _brand_id_str(getattr(acct.brand, "brand_id", None))
-    assert acct_domain == domain, f"Expected brand domain '{domain}', got '{acct_domain}'"
+    assert acct.brand.domain == domain, f"Expected brand domain '{domain}', got '{acct.brand.domain}'"
     assert acct_bid == bid, f"Expected brand_id '{bid}', got '{acct_bid}'"
 
 
@@ -1284,7 +1278,7 @@ def then_no_db_writes(ctx: dict) -> None:
         repo = AccountRepository(session, tenant.tenant_id)
         accounts = repo.list_by_principal(principal.principal_id)
         assert len(accounts) == 0, (
-            f"Expected 0 accounts after dry_run, but found {len(accounts)}: {[a.brand['domain'] for a in accounts]}"
+            f"Expected 0 accounts after dry_run, but found {len(accounts)}: {[a.brand.domain for a in accounts]}"
         )
 
 
@@ -1337,7 +1331,7 @@ def then_agent_b_not_affected(ctx: dict, domain: str) -> None:
     with get_db_session() as session:
         repo = AccountRepository(session, tenant.tenant_id)
         accounts = repo.list_by_principal(agent_b.principal_id)
-        matching = [a for a in accounts if a.brand["domain"] == domain]
+        matching = [a for a in accounts if a.brand and a.brand.domain == domain]
         assert len(matching) == 1, f"Expected 1 account for agent B domain {domain}, got {len(matching)}"
         assert matching[0].status != "closed", (
             f"Agent B's account {domain} was deactivated (status={matching[0].status})"
@@ -1364,7 +1358,7 @@ def then_brand_unchanged(ctx: dict, domain: str) -> None:
     with get_db_session() as session:
         repo = AccountRepository(session, tenant.tenant_id)
         accounts = repo.list_by_principal(principal.principal_id)
-        matching = [a for a in accounts if a.brand["domain"] == domain]
+        matching = [a for a in accounts if a.brand and a.brand.domain == domain]
         assert len(matching) == 1, f"Expected account for {domain}, got {len(matching)}"
         assert matching[0].status != "closed", (
             f"Account {domain} was deactivated (status={matching[0].status}) but should be unchanged"
@@ -1393,7 +1387,7 @@ def then_no_deactivations(ctx: dict) -> None:
         all_accounts = repo.list_by_principal(principal.principal_id)
         closed = [a for a in all_accounts if a.status == "closed"]
         assert len(closed) == 0, (
-            f"Expected 0 deactivated accounts, found {len(closed)}: {[a.brand['domain'] for a in closed]}"
+            f"Expected 0 deactivated accounts, found {len(closed)}: {[a.brand.domain for a in closed]}"
         )
 
 

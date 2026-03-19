@@ -3,8 +3,11 @@
 import logging
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 from uuid import uuid4
 
+from adcp.types.generated_poc.core.account import CreditLimit, GovernanceAgent, Setup
+from adcp.types.generated_poc.core.brand_ref import BrandReference
 from sqlalchemy import (
     DECIMAL,
     BigInteger,
@@ -854,10 +857,10 @@ class Account(Base):
     rate_card: Mapped[str | None] = mapped_column(String(255), nullable=True)
     payment_terms: Mapped[str | None] = mapped_column(String(20), nullable=True)
     account_scope: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    brand: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
-    credit_limit: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
-    setup: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
-    governance_agents: Mapped[list | None] = mapped_column(JSONType, nullable=True)
+    brand: Mapped[Any] = mapped_column(JSONType(model=BrandReference), nullable=True)
+    credit_limit: Mapped[Any] = mapped_column(JSONType(model=CreditLimit), nullable=True)
+    setup: Mapped[Any] = mapped_column(JSONType(model=Setup), nullable=True)
+    governance_agents: Mapped[Any] = mapped_column(JSONType(model=GovernanceAgent, is_list=True), nullable=True)
     sandbox: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
     ext: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
 

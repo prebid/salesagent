@@ -45,9 +45,9 @@
             <div class="field-label">Brand</div>
             <div class="field-value">
                 {% if account.brand %}
-                <span class="brand-domain">{{ account.brand.get('domain', '-') if account.brand is mapping else '-' }}</span>
-                {% if account.brand is mapping and account.brand.get('brand_id') %}
-                    : {{ account.brand.get('brand_id') }}
+                <span class="brand-domain">{{ account.brand.domain or '-' }}</span>
+                {% if account.brand.brand_id %}
+                    : {{ account.brand.brand_id.root if account.brand.brand_id.root is defined else account.brand.brand_id }}
                 {% endif %}
                 {% else %}-{% endif %}
             </div>

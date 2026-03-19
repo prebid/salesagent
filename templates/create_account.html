@@ -40,7 +40,7 @@
         <div class="form-group">
             <label for="brand_domain">Brand Domain</label>
             <input type="text" id="brand_domain" name="brand_domain"
-                   value="{{ account.brand.get('domain', '') if edit_mode and account.brand else '' }}"
+                   value="{{ account.brand.domain if edit_mode and account.brand else '' }}"
                    placeholder="e.g., acme-corp.com"
                    {{ 'readonly' if edit_mode else '' }}>
             <small>The brand's domain name (part of natural key, immutable after creation)</small>
@@ -49,7 +49,7 @@
         <div class="form-group">
             <label for="brand_id">Brand ID (optional)</label>
             <input type="text" id="brand_id" name="brand_id"
-                   value="{{ account.brand.get('brand_id', '') if edit_mode and account.brand else '' }}"
+                   value="{{ account.brand.brand_id.root if edit_mode and account.brand and account.brand.brand_id else '' }}"
                    placeholder="e.g., spark"
                    {{ 'readonly' if edit_mode else '' }}>
             <small>Sub-brand identifier for multi-brand domains</small>

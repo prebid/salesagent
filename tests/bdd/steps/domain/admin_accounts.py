@@ -307,7 +307,7 @@ def then_db_no_account_with_domain(ctx: dict, domain: str) -> None:
     with get_db_session() as session:
         accounts = session.scalars(select(Account).where(Account.tenant_id == env.tenant_id)).all()
         for acct in accounts:
-            if acct.brand and isinstance(acct.brand, dict) and acct.brand.get("domain") == domain:
+            if acct.brand and acct.brand.domain == domain:
                 raise AssertionError(f"Found account with brand domain '{domain}' — should not exist")
 
 
@@ -318,9 +318,7 @@ def then_account_has_brand_domain(ctx: dict, name: str, domain: str) -> None:
     account = env.get_account_from_db(name=name)
     assert account is not None, f"Account '{name}' not found"
     assert account.brand is not None, f"Account '{name}' has no brand"
-    assert account.brand.get("domain") == domain, (
-        f"Expected brand domain '{domain}', got '{account.brand.get('domain')}'"
-    )
+    assert account.brand.domain == domain, f"Expected brand domain '{domain}', got '{account.brand.domain}'"
 
 
 @then(parsers.parse('the database shows account "{name}" with billing "{billing}"'))

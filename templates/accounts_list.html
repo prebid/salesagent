@@ -56,7 +56,7 @@
             <td><strong>{{ acct.name }}</strong><br><small style="color: #9ca3af;">{{ acct.account_id }}</small></td>
             <td>
                 {% if acct.brand %}
-                <span class="brand-domain">{{ acct.brand.get('domain', '-') if acct.brand is mapping else '-' }}</span>
+                <span class="brand-domain">{{ acct.brand.domain or '-' }}</span>
                 {% else %}-{% endif %}
             </td>
             <td>{{ acct.operator or '-' }}</td>
