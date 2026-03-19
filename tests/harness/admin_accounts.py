@@ -83,9 +83,13 @@ class AdminAccountEnv:
 
     DEFAULT_TENANT_ID = "bdd_admin_tenant"
 
-    def __init__(self) -> None:
+    def __init__(self, *, mode: str | None = None) -> None:
         self._e2e_port = os.environ.get("ADCP_SALES_PORT")
-        self._mode = "e2e" if self._e2e_port else "integration"
+        # Explicit mode overrides auto-detection
+        if mode is not None:
+            self._mode = mode
+        else:
+            self._mode = "e2e" if self._e2e_port else "integration"
 
         # Integration mode: Flask app + test_client
         self._app: Any = None

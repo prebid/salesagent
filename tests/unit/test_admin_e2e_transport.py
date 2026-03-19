@@ -19,15 +19,36 @@ class TestAdminE2eTransportCapability:
         env = AdminAccountEnv()
         assert hasattr(env, "mode"), "AdminAccountEnv must have a 'mode' attribute for transport selection"
 
-    def test_default_mode_is_integration(self) -> None:
-        """Without ADCP_SALES_PORT, mode should be 'integration'."""
+    def test_explicit_integration_mode(self) -> None:
+        """Explicit mode='integration' overrides env var."""
         from tests.harness.admin_accounts import AdminAccountEnv
 
-        env = AdminAccountEnv()
+        env = AdminAccountEnv(mode="integration")
         assert env.mode == "integration", f"Expected 'integration' mode, got '{env.mode}'"
 
-    def test_e2e_mode_when_port_set(self) -> None:
-        """With ADCP_SALES_PORT set, mode should be 'e2e'."""
+    def test_explicit_e2e_mode(self) -> None:
+        """Explicit mode='e2e' works regardless of env var."""
+        from tests.harness.admin_accounts import AdminAccountEnv
+
+        env = AdminAccountEnv(mode="e2e")
+        assert env.mode == "e2e", f"Expected 'e2e' mode, got '{env.mode}'"
+
+    def test_auto_detection_without_port(self) -> None:
+        """Without ADCP_SALES_PORT, auto mode is 'integration'."""
+        import os
+
+        from tests.harness.admin_accounts import AdminAccountEnv
+
+        old = os.environ.pop("ADCP_SALES_PORT", None)
+        try:
+            env = AdminAccountEnv()
+            assert env.mode == "integration", f"Expected 'integration', got '{env.mode}'"
+        finally:
+            if old is not None:
+                os.environ["ADCP_SALES_PORT"] = old
+
+    def test_auto_detection_with_port(self) -> None:
+        """With ADCP_SALES_PORT, auto mode is 'e2e'."""
         import os
 
         from tests.harness.admin_accounts import AdminAccountEnv
@@ -35,6 +56,6 @@ class TestAdminE2eTransportCapability:
         os.environ["ADCP_SALES_PORT"] = "8092"
         try:
             env = AdminAccountEnv()
-            assert env.mode == "e2e", f"Expected 'e2e' mode when ADCP_SALES_PORT set, got '{env.mode}'"
+            assert env.mode == "e2e", f"Expected 'e2e', got '{env.mode}'"
         finally:
             del os.environ["ADCP_SALES_PORT"]

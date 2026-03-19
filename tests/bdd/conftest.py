@@ -481,7 +481,9 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         request.getfixturevalue("integration_db")
         from tests.harness.admin_accounts import AdminAccountEnv
 
-        with AdminAccountEnv() as env:
+        # BDD suite always uses integration mode (Flask test_client).
+        # E2E mode (requests.Session + Docker) is tested separately.
+        with AdminAccountEnv(mode="integration") as env:
             ctx["env"] = env
             yield
 
