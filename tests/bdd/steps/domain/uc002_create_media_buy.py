@@ -233,38 +233,36 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
         )
 
     elif partition == "account_setup_required":
-        AccountFactory(
+        account = AccountFactory(
             tenant=tenant,
             account_id="acc-setup",
             status="pending_approval",
             brand={"domain": "setup.com"},
             operator="setup.com",
         )
-        AgentAccountAccessFactory(
-            tenant_id=tenant.tenant_id,
-            principal=principal,
-            account=AccountFactory._meta.model.query.filter_by(account_id="acc-setup").first() if False else None,
-        )
+        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
         ctx["account_ref"] = AccountReference(root=AccountReference1(account_id="acc-setup"))
 
     elif partition == "account_payment_required":
-        AccountFactory(
+        account = AccountFactory(
             tenant=tenant,
             account_id="acc-payment",
             status="payment_required",
             brand={"domain": "payment.com"},
             operator="payment.com",
         )
+        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
         ctx["account_ref"] = AccountReference(root=AccountReference1(account_id="acc-payment"))
 
     elif partition == "account_suspended":
-        AccountFactory(
+        account = AccountFactory(
             tenant=tenant,
             account_id="acc-suspended",
             status="suspended",
             brand={"domain": "suspended.com"},
             operator="suspended.com",
         )
+        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
         ctx["account_ref"] = AccountReference(root=AccountReference1(account_id="acc-suspended"))
 
     else:

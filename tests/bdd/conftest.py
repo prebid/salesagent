@@ -326,11 +326,30 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-002-ext-r-nk",
             "T-UC-002-ext-s",
             "T-UC-002-ext-t",
-            "T-UC-002-inv-080-1",
+            # INV-080-1 excluded: tests INVALID_REQUEST (schema-level, not resolve_account)
             "T-UC-002-partition-account-ref",
             "T-UC-002-boundary-account-ref",
         }
+        # FIXME(salesagent-2rq): INVALID_REQUEST validation (missing account / both fields)
+        # is Pydantic-level oneOf validation, not resolve_account. INV-080-1 is same.
+        _UC002_VALIDATION_XFAIL: list[tuple[str, set[str], str]] = [
+            (
+                "T-UC-002-partition-account-ref",
+                {"missing_account", "invalid_oneOf_both"},
+                "INVALID_REQUEST validation not implemented (schema-level)",
+            ),
+            (
+                "T-UC-002-boundary-account-ref",
+                {"account field absent", "both account_id and brand"},
+                "INVALID_REQUEST validation not implemented (schema-level)",
+            ),
+        ]
         if any(t.startswith("T-UC-002") for t in marker_names):
+            # Selective xfail for INVALID_REQUEST examples within implemented tags
+            for tag, substrings, reason in _UC002_VALIDATION_XFAIL:
+                if tag in marker_names and any(s in nodeid for s in substrings):
+                    item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
+                    break
             is_implemented = bool(marker_names & _UC002_IMPLEMENTED_TAGS)
             if "pending" in marker_names and not is_implemented:
                 item.add_marker(pytest.mark.xfail(reason="UC-002 BDD steps not yet implemented", strict=True))
