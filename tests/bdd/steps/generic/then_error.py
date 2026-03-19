@@ -178,7 +178,21 @@ def then_error_format_id_structure(ctx: dict) -> None:
 # ── Suggestion field ─────────────────────────────────────────────────
 
 
+@then(parsers.parse('the error recovery should be "{recovery}"'))
+def then_error_recovery(ctx: dict, recovery: str) -> None:
+    """Assert the error recovery hint matches."""
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    from src.core.exceptions import AdCPError
+
+    if isinstance(error, AdCPError):
+        assert error.recovery == recovery, f"Expected recovery '{recovery}', got '{error.recovery}'"
+    else:
+        raise AssertionError(f"Cannot check recovery on non-AdCPError: {type(error).__name__}")
+
+
 @then('the error should include a "suggestion" field')
+@then('the error should include "suggestion" field')
 def then_error_has_suggestion(ctx: dict) -> None:
     """Assert error includes a suggestion field."""
     error = ctx.get("error")

@@ -35,6 +35,7 @@ pytest_plugins = [
     "tests.bdd.steps.generic.then_error",
     "tests.bdd.steps.generic.then_payload",
     "tests.bdd.steps.domain.uc004_delivery",
+    "tests.bdd.steps.domain.uc002_create_media_buy",
     "tests.bdd.steps.domain.uc011_accounts",
     "tests.bdd.steps.domain.admin_accounts",
 ]
@@ -55,7 +56,7 @@ def pytest_configure(config: pytest.Config) -> None:
     seen: set[str] = set()
     for feature_file in features_dir.glob("**/*.feature"):
         text = feature_file.read_text()
-        for match in re.finditer(r"@([\w-]+)", text):
+        for match in re.finditer(r"@([\w.\-]+)", text):
             tag = match.group(1)
             if tag not in seen:
                 seen.add(tag)
@@ -318,6 +319,22 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             if not is_list and not is_implemented_sync:
                 item.add_marker(pytest.mark.xfail(reason="UC-011 steps not implemented", strict=True))
 
+        # --- UC-002: @pending scenarios need step definitions ---
+        # Account resolution scenarios are implemented (salesagent-2rq)
+        _UC002_IMPLEMENTED_TAGS = {
+            "T-UC-002-ext-r",
+            "T-UC-002-ext-r-nk",
+            "T-UC-002-ext-s",
+            "T-UC-002-ext-t",
+            "T-UC-002-inv-080-1",
+            "T-UC-002-partition-account-ref",
+            "T-UC-002-boundary-account-ref",
+        }
+        if any(t.startswith("T-UC-002") for t in marker_names):
+            is_implemented = bool(marker_names & _UC002_IMPLEMENTED_TAGS)
+            if "pending" in marker_names and not is_implemented:
+                item.add_marker(pytest.mark.xfail(reason="UC-002 BDD steps not yet implemented", strict=True))
+
         # --- Admin BDD: @pending scenarios need step definitions ---
         if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
             if "pending" in marker_names:
@@ -326,6 +343,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # --- Entity marker auto-application based on BDD tags ---
         # BDD tests don't have entity keywords in filenames; instead they
         # use tags like T-UC-004-* (delivery) and T-UC-005-* (creative).
+        if any(t.startswith("T-UC-002") for t in marker_names):
+            item.add_marker(pytest.mark.media_buy)
         if any(t.startswith("T-UC-004") for t in marker_names):
             item.add_marker(pytest.mark.delivery)
         if any(t.startswith("T-UC-005") for t in marker_names):
@@ -401,6 +420,8 @@ def ctx(request: pytest.FixtureRequest) -> dict:
 def _detect_uc(request: pytest.FixtureRequest) -> str | None:
     """Detect which use case a BDD scenario belongs to via its tags."""
     marker_names = {m.name for m in request.node.iter_markers()}
+    if any(t.startswith("T-UC-002") for t in marker_names):
+        return "UC-002"
     if any(t.startswith("T-UC-005") for t in marker_names):
         return "UC-005"
     if any(t.startswith("T-UC-004") for t in marker_names):
@@ -448,7 +469,15 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
     """
     uc = _detect_uc(request)
 
-    if uc == "UC-005":
+    if uc == "UC-002":
+        request.getfixturevalue("integration_db")
+        from tests.harness.media_buy_account import MediaBuyAccountEnv
+
+        with MediaBuyAccountEnv() as env:
+            ctx["env"] = env
+            yield
+
+    elif uc == "UC-005":
         request.getfixturevalue("integration_db")
         from tests.harness.creative_formats import CreativeFormatsEnv
 

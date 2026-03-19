@@ -15,7 +15,15 @@ from adcp.types.generated_poc.core.account_ref import (
 )
 
 from src.core.database.repositories.account import AccountRepository
-from src.core.exceptions import AdCPAccountNotFoundError, AdCPAuthorizationError, AdCPNotFoundError
+from src.core.exceptions import (
+    AdCPAccountAmbiguousError,
+    AdCPAccountNotFoundError,
+    AdCPAccountPaymentRequiredError,
+    AdCPAccountSetupRequiredError,
+    AdCPAccountSuspendedError,
+    AdCPAuthorizationError,
+    AdCPNotFoundError,
+)
 from src.core.resolved_identity import ResolvedIdentity
 
 
@@ -39,8 +47,12 @@ def resolve_account(
         Validated account_id string.
 
     Raises:
-        AdCPNotFoundError: Account not found by ID or natural key.
+        AdCPAccountNotFoundError: Account not found by ID or natural key.
         AdCPAuthorizationError: Agent doesn't have access to the account.
+        AdCPAccountAmbiguousError: Natural key matches multiple accounts.
+        AdCPAccountSetupRequiredError: Account requires setup before use.
+        AdCPAccountSuspendedError: Account is suspended.
+        AdCPAccountPaymentRequiredError: Account has outstanding payment.
     """
     inner = account_ref.root
 
@@ -53,19 +65,43 @@ def resolve_account(
     raise AdCPNotFoundError(f"Unsupported AccountReference variant: {type(inner)}")
 
 
+def _check_account_status(account_id: str, status: str | None) -> None:
+    """Raise if account status blocks operations."""
+    if status == "pending_approval":
+        raise AdCPAccountSetupRequiredError(
+            f"Account '{account_id}' requires setup.",
+            details={"suggestion": "Complete billing configuration before use."},
+        )
+    if status == "suspended":
+        raise AdCPAccountSuspendedError(
+            f"Account '{account_id}' is suspended.",
+            details={"suggestion": "Contact your account manager."},
+        )
+    if status == "payment_required":
+        raise AdCPAccountPaymentRequiredError(
+            f"Account '{account_id}' has outstanding payment.",
+            details={"suggestion": "Resolve payment before use."},
+        )
+
+
 def _resolve_by_id(
     account_id: str,
     identity: ResolvedIdentity,
     repo: AccountRepository,
 ) -> str:
-    """Resolve by explicit account_id — lookup + access check."""
+    """Resolve by explicit account_id — lookup + access check + status check."""
     account = repo.get_by_id(account_id)
     if account is None:
-        raise AdCPAccountNotFoundError(f"Account '{account_id}' not found.")
+        raise AdCPAccountNotFoundError(
+            f"Account '{account_id}' not found.",
+            details={"suggestion": "Use list_accounts to find valid account IDs."},
+        )
 
     principal_id = identity.principal_id
     if principal_id and not repo.has_access(principal_id, account_id):
         raise AdCPAuthorizationError(f"Agent '{principal_id}' does not have access to account '{account_id}'.")
+
+    _check_account_status(account_id, account.status)
 
     return account.account_id
 
@@ -75,11 +111,24 @@ def _resolve_by_natural_key(
     identity: ResolvedIdentity,
     repo: AccountRepository,
 ) -> str:
-    """Resolve by natural key (brand + operator + sandbox) — lookup."""
+    """Resolve by natural key (brand + operator + sandbox) — lookup + ambiguity check + status check."""
     brand_domain = ref.brand.domain
     brand_id = None
     if ref.brand.brand_id is not None:
         brand_id = str(ref.brand.brand_id.root) if hasattr(ref.brand.brand_id, "root") else str(ref.brand.brand_id)
+
+    # Check for ambiguity first
+    match_count = repo.count_by_natural_key(
+        operator=ref.operator,
+        brand_domain=brand_domain,
+        brand_id=brand_id,
+        sandbox=ref.sandbox,
+    )
+    if match_count > 1:
+        raise AdCPAccountAmbiguousError(
+            f"Natural key matches {match_count} accounts for brand '{brand_domain}', operator '{ref.operator}'.",
+            details={"suggestion": "Use explicit account_id instead of brand+operator to avoid ambiguity."},
+        )
 
     account = repo.get_by_natural_key(
         operator=ref.operator,
@@ -88,6 +137,11 @@ def _resolve_by_natural_key(
         sandbox=ref.sandbox,
     )
     if account is None:
-        raise AdCPAccountNotFoundError(f"Account not found for brand '{brand_domain}', operator '{ref.operator}'.")
+        raise AdCPAccountNotFoundError(
+            f"Account not found for brand '{brand_domain}', operator '{ref.operator}'.",
+            details={"suggestion": "Use list_accounts to find valid accounts."},
+        )
+
+    _check_account_status(account.account_id, account.status)
 
     return account.account_id

@@ -75,6 +75,33 @@ class AccountRepository:
             stmt = stmt.where(Account.sandbox.is_(None) | (Account.sandbox == False))  # noqa: E712
         return self._session.scalars(stmt).first()
 
+    def count_by_natural_key(
+        self,
+        operator: str,
+        brand_domain: str,
+        brand_id: str | None = None,
+        sandbox: bool | None = None,
+    ) -> int:
+        """Count accounts matching a natural key (for ambiguity detection)."""
+        from sqlalchemy import func
+
+        stmt = (
+            select(func.count())
+            .select_from(Account)
+            .where(
+                Account.tenant_id == self._tenant_id,
+                Account.operator == operator,
+                Account.brand["domain"].as_string() == brand_domain,
+            )
+        )
+        if brand_id is not None:
+            stmt = stmt.where(Account.brand["brand_id"].as_string() == brand_id)
+        if sandbox is not None:
+            stmt = stmt.where(Account.sandbox == sandbox)
+        else:
+            stmt = stmt.where(Account.sandbox.is_(None) | (Account.sandbox == False))  # noqa: E712
+        return self._session.scalar(stmt) or 0
+
     # ------------------------------------------------------------------
     # List queries
     # ------------------------------------------------------------------

@@ -39,6 +39,7 @@ def given_tenant_resolvable(ctx: dict) -> None:
 
 
 @given("a tenant has completed setup checklist")
+@given("a tenant exists with completed setup checklist")
 def given_tenant_setup_complete(ctx: dict) -> None:
     """Tenant has completed all setup steps (Background)."""
     ctx["tenant_setup_complete"] = True

@@ -734,6 +734,11 @@ class TestErrorCodeVocabularyConsistency:
         "AUTH_TOKEN_INVALID",  # HTTP 401 (salesagent extension)
         "AUTHORIZATION_ERROR",  # HTTP 403 (salesagent extension)
         "NOT_FOUND",  # Generic form of {ENTITY}_NOT_FOUND
+        "ACCOUNT_NOT_FOUND",  # adcp-req: Account resolution (BR-RULE-080)
+        "ACCOUNT_AMBIGUOUS",  # adcp-req: Natural key matches multiple accounts (BR-RULE-080)
+        "ACCOUNT_SETUP_REQUIRED",  # adcp-req: Account requires setup (BR-RULE-080)
+        "ACCOUNT_SUSPENDED",  # adcp-req: Account is suspended (BR-RULE-080)
+        "ACCOUNT_PAYMENT_REQUIRED",  # adcp-req: Account has outstanding payment (BR-RULE-080)
         "CONFLICT",  # Generic form of {ENTITY}_EXISTS
         "GONE",  # HTTP 410 (salesagent extension)
         "BUDGET_EXHAUSTED",  # HTTP 422 (salesagent extension)
@@ -797,12 +802,15 @@ class TestErrorCodeVocabularyConsistency:
         """CANONICAL_ERROR_CODES must have exactly one entry per exception subclass."""
         from src.core.exceptions import AdCPError
 
-        # Discover all concrete subclasses
+        # Discover all concrete subclasses (recursively)
         subclass_codes = set()
-        for cls in AdCPError.__subclasses__():
+
+        def _collect(cls: type) -> None:
             subclass_codes.add(cls.error_code)
-        # Include the base class
-        subclass_codes.add(AdCPError.error_code)
+            for sub in cls.__subclasses__():
+                _collect(sub)
+
+        _collect(AdCPError)
 
         # Every subclass code must be in canonical set
         missing = subclass_codes - self.CANONICAL_ERROR_CODES
