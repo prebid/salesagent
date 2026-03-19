@@ -13,7 +13,7 @@ from adcp.types.generated_poc.core.account_ref import (
     AccountReference2,
 )
 
-from src.core.exceptions import AdCPAuthorizationError, AdCPNotFoundError
+from src.core.exceptions import AdCPAccountNotFoundError, AdCPAuthorizationError
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 from tests.harness.account_sync import AccountSyncEnv
 
@@ -43,7 +43,7 @@ class TestResolveAccountById:
             assert result == "acc_001"
 
     def test_not_found_raises(self, integration_db):
-        """Non-existent account_id → AdCPNotFoundError."""
+        """Non-existent account_id → AdCPAccountNotFoundError."""
         with AccountSyncEnv(tenant_id="resolve_t2", principal_id="agent_r2") as env:
             env.setup_default_data()
             env._commit_factory_data()
@@ -55,7 +55,7 @@ class TestResolveAccountById:
             ref = AccountReference(AccountReference1(account_id="nonexistent"))
             with get_db_session() as session:
                 repo = AccountRepository(session, "resolve_t2")
-                with pytest.raises(AdCPNotFoundError):
+                with pytest.raises(AdCPAccountNotFoundError):
                     resolve_account(ref, env.identity, repo)
 
     def test_no_access_raises(self, integration_db):
@@ -105,7 +105,7 @@ class TestResolveAccountByNaturalKey:
             assert result == "acc_nat"
 
     def test_natural_key_not_found_raises(self, integration_db):
-        """Non-existent brand+operator → AdCPNotFoundError."""
+        """Non-existent brand+operator → AdCPAccountNotFoundError."""
         with AccountSyncEnv(tenant_id="resolve_t5", principal_id="agent_r5") as env:
             env.setup_default_data()
             env._commit_factory_data()
@@ -117,5 +117,5 @@ class TestResolveAccountByNaturalKey:
             ref = AccountReference(AccountReference2(brand={"domain": "unknown.com"}, operator="unknown.com"))
             with get_db_session() as session:
                 repo = AccountRepository(session, "resolve_t5")
-                with pytest.raises(AdCPNotFoundError):
+                with pytest.raises(AdCPAccountNotFoundError):
                     resolve_account(ref, env.identity, repo)

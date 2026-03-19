@@ -15,7 +15,7 @@ from adcp.types.generated_poc.core.account_ref import (
 )
 
 from src.core.database.repositories.account import AccountRepository
-from src.core.exceptions import AdCPAuthorizationError, AdCPNotFoundError
+from src.core.exceptions import AdCPAccountNotFoundError, AdCPAuthorizationError, AdCPNotFoundError
 from src.core.resolved_identity import ResolvedIdentity
 
 
@@ -61,10 +61,7 @@ def _resolve_by_id(
     """Resolve by explicit account_id — lookup + access check."""
     account = repo.get_by_id(account_id)
     if account is None:
-        raise AdCPNotFoundError(
-            f"Account '{account_id}' not found.",
-            error_code="ACCOUNT_NOT_FOUND",
-        )
+        raise AdCPAccountNotFoundError(f"Account '{account_id}' not found.")
 
     principal_id = identity.principal_id
     if principal_id and not repo.has_access(principal_id, account_id):
@@ -91,9 +88,6 @@ def _resolve_by_natural_key(
         sandbox=ref.sandbox,
     )
     if account is None:
-        raise AdCPNotFoundError(
-            f"Account not found for brand '{brand_domain}', operator '{ref.operator}'.",
-            error_code="ACCOUNT_NOT_FOUND",
-        )
+        raise AdCPAccountNotFoundError(f"Account not found for brand '{brand_domain}', operator '{ref.operator}'.")
 
     return account.account_id

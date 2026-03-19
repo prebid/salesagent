@@ -15,7 +15,7 @@ from adcp.types.generated_poc.core.account_ref import (
 from adcp.types.generated_poc.core.brand_ref import BrandReference
 
 from src.core.database.repositories.uow import AccountUoW
-from src.core.exceptions import AdCPNotFoundError
+from src.core.exceptions import AdCPAccountNotFoundError, AdCPNotFoundError
 from src.core.helpers.account_helpers import resolve_account
 from src.core.resolved_identity import ResolvedIdentity
 from tests.harness._base import IntegrationEnv
@@ -56,16 +56,15 @@ class TestAccountResolutionErrorCodes:
             ref = AccountReference(root=AccountReference1(account_id="nonexistent_acc"))
 
             with AccountUoW(tenant.tenant_id) as uow:
-                with pytest.raises(AdCPNotFoundError) as exc_info:
+                with pytest.raises(AdCPAccountNotFoundError) as exc_info:
                     resolve_account(ref, identity, uow.accounts)
 
-            assert exc_info.value.error_code == "ACCOUNT_NOT_FOUND", (
-                f"Expected error_code 'ACCOUNT_NOT_FOUND', got '{exc_info.value.error_code}'. "
-                "Account resolution must use spec-compliant error codes."
-            )
+            # AdCPAccountNotFoundError is a subclass of AdCPNotFoundError (still 404)
+            assert isinstance(exc_info.value, AdCPNotFoundError)
+            assert exc_info.value.error_code == "ACCOUNT_NOT_FOUND"
 
     def test_not_found_by_natural_key_returns_account_not_found(self, integration_db):
-        """resolve_account with nonexistent natural key → ACCOUNT_NOT_FOUND."""
+        """resolve_account with nonexistent natural key → AdCPAccountNotFoundError."""
         from tests.factories import TenantFactory
 
         with _AccountResolutionEnv() as env:
@@ -81,9 +80,7 @@ class TestAccountResolutionErrorCodes:
             )
 
             with AccountUoW(tenant.tenant_id) as uow:
-                with pytest.raises(AdCPNotFoundError) as exc_info:
+                with pytest.raises(AdCPAccountNotFoundError) as exc_info:
                     resolve_account(ref, identity, uow.accounts)
 
-            assert exc_info.value.error_code == "ACCOUNT_NOT_FOUND", (
-                f"Expected error_code 'ACCOUNT_NOT_FOUND', got '{exc_info.value.error_code}'"
-            )
+            assert exc_info.value.error_code == "ACCOUNT_NOT_FOUND"

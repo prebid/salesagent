@@ -34,15 +34,12 @@ class AdCPError(Exception):
         self,
         message: str = "",
         *,
-        error_code: str | None = None,
         details: dict[str, Any] | None = None,
         recovery: RecoveryHint | None = None,
     ) -> None:
         super().__init__(message)
         self.message = message
         self.details = details
-        if error_code is not None:
-            self.error_code = error_code
         if recovery is not None:
             self.recovery = recovery
 
@@ -87,6 +84,12 @@ class AdCPNotFoundError(AdCPError):
 
     status_code = 404
     error_code = "NOT_FOUND"
+
+
+class AdCPAccountNotFoundError(AdCPNotFoundError):
+    """Account not found by ID or natural key (404, ACCOUNT_NOT_FOUND)."""
+
+    error_code = "ACCOUNT_NOT_FOUND"
 
 
 class AdCPConflictError(AdCPError):
