@@ -274,6 +274,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-011-atomic-service-error",
             "T-UC-011-atomic-both",
             "T-UC-011-atomic-success",
+            "T-UC-011-atomic-all-failed",
+            # Slice 4: billing policy + partial failure
+            "T-UC-011-ext-b-partial",
+            "T-UC-011-ext-c-rejected",
+            "T-UC-011-ext-c-mixed",
+            "T-UC-011-ext-c-invalid-enum",
         }
         if any(t.startswith("T-UC-011") for t in marker_names):
             is_list = "list" in marker_names

@@ -340,6 +340,7 @@ def _build_sync_result(
     name: str | None = None,
     billing: str | None = None,
     sandbox: bool | None = None,
+    errors: list[Any] | None = None,
 ) -> SyncResponseAccount:
     """Build an AdCP sync response Account object."""
     return SyncResponseAccount(
@@ -350,7 +351,58 @@ def _build_sync_result(
         name=name,
         billing=billing,
         sandbox=sandbox,
+        errors=errors,
     )
+
+
+def _check_domain_validity(brand_domain: str) -> list[Any] | None:
+    """Check if the brand domain is valid for account provisioning.
+
+    Returns a list of Error objects if invalid, None if valid.
+    Reserved TLDs (.test, .invalid, .example, .localhost) are rejected.
+    """
+    from adcp.types.generated_poc.core.error import Error
+
+    reserved_tlds = {".test", ".invalid", ".example", ".localhost"}
+    for tld in reserved_tlds:
+        if brand_domain.endswith(tld):
+            return [
+                Error(
+                    code="INVALID_DOMAIN",
+                    message=f"Domain '{brand_domain}' uses reserved TLD '{tld}' "
+                    f"and cannot be used for account provisioning.",
+                    suggestion="Use a real domain name for production accounts.",
+                    field="brand.domain",
+                )
+            ]
+    return None
+
+
+def _check_billing_policy(
+    billing_val: str | None,
+    identity: ResolvedIdentity,
+) -> list[Any] | None:
+    """Check if the billing model is supported by the seller.
+
+    Returns a list of Error objects if rejected, None if accepted.
+    Per BR-RULE-059: unsupported billing → BILLING_NOT_SUPPORTED.
+    """
+    from adcp.types.generated_poc.core.error import Error
+
+    supported = getattr(identity, "supported_billing", None)
+    if supported is None:
+        return None  # No policy configured → accept all
+
+    if billing_val not in supported:
+        return [
+            Error(
+                code="BILLING_NOT_SUPPORTED",
+                message=f"Billing model '{billing_val}' is not supported by this seller. "
+                f"Supported models: {', '.join(supported)}.",
+                suggestion=f"Use one of the supported billing models: {', '.join(supported)}.",
+            )
+        ]
+    return None
 
 
 def _extract_natural_key(entry: Any) -> tuple[str, str | None, str, bool | None]:
@@ -412,6 +464,39 @@ async def _sync_accounts_impl(
 
         for entry in req.accounts:
             brand_domain, brand_id, operator, sandbox = _extract_natural_key(entry)
+            billing_val = _enum_to_str(entry.billing)
+
+            # Domain validation: reject reserved TLDs
+            domain_errors = _check_domain_validity(brand_domain)
+            if domain_errors is not None:
+                results.append(
+                    _build_sync_result(
+                        brand=entry.brand,
+                        operator=operator,
+                        action="failed",
+                        status="rejected",
+                        billing=billing_val,
+                        sandbox=sandbox,
+                        errors=domain_errors,
+                    )
+                )
+                continue
+
+            # BR-RULE-059: check billing policy before processing
+            billing_errors = _check_billing_policy(billing_val, identity)
+            if billing_errors is not None:
+                results.append(
+                    _build_sync_result(
+                        brand=entry.brand,
+                        operator=operator,
+                        action="failed",
+                        status="rejected",
+                        billing=billing_val,
+                        sandbox=sandbox,
+                        errors=billing_errors,
+                    )
+                )
+                continue
 
             # Look up existing account by natural key
             existing = repo.get_by_natural_key(

@@ -34,6 +34,7 @@ class ResolvedIdentity(BaseModel, frozen=True):
     auth_token: str | None = None
     protocol: Literal["mcp", "a2a", "rest"] = "mcp"
     testing_context: AdCPTestContext | None = None
+    supported_billing: list[str] | None = None  # BR-RULE-059: seller billing policy
 
     @property
     def is_authenticated(self) -> bool:

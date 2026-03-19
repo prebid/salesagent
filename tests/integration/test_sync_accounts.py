@@ -258,3 +258,67 @@ class TestSyncAccountsDryRun:
             assert uow.accounts is not None
             all_accounts = uow.accounts.list_all()
             assert len(all_accounts) == 0
+
+
+class TestSyncAccountsBillingPolicy:
+    """BR-RULE-059: billing policy enforcement per-account."""
+
+    @pytest.mark.asyncio
+    async def test_unsupported_billing_returns_failed(self, integration_db):
+        """Unsupported billing → action=failed, status=rejected, BILLING_NOT_SUPPORTED."""
+        with AccountSyncEnv(
+            tenant_id="sync_t9",
+            principal_id="agent_sync9",
+            supported_billing=["agent"],
+        ) as env:
+            env.setup_default_data()
+
+            req = SyncAccountsRequest(
+                accounts=[
+                    {
+                        "brand": {"domain": "acme.com"},
+                        "operator": "example.com",
+                        "billing": "operator",
+                    }
+                ],
+            )
+            response = await env.call_impl_async(req=req)
+
+        assert len(response.accounts) == 1
+        result = response.accounts[0]
+        assert _action_value(result.action) == "failed"
+        assert _status_value(result.status) == "rejected"
+        assert result.errors is not None
+        assert len(result.errors) >= 1
+        assert result.errors[0].code == "BILLING_NOT_SUPPORTED"
+
+    @pytest.mark.asyncio
+    async def test_mixed_billing_partial_success(self, integration_db):
+        """Mixed billing: supported succeeds, unsupported fails per-account."""
+        with AccountSyncEnv(
+            tenant_id="sync_t10",
+            principal_id="agent_sync10",
+            supported_billing=["agent"],
+        ) as env:
+            env.setup_default_data()
+
+            req = SyncAccountsRequest(
+                accounts=[
+                    {
+                        "brand": {"domain": "good.com"},
+                        "operator": "example.com",
+                        "billing": "agent",
+                    },
+                    {
+                        "brand": {"domain": "bad.com"},
+                        "operator": "example.com",
+                        "billing": "operator",
+                    },
+                ],
+            )
+            response = await env.call_impl_async(req=req)
+
+        assert len(response.accounts) == 2
+        actions = {a.brand.domain: _action_value(a.action) for a in response.accounts}
+        assert actions["good.com"] == "created"
+        assert actions["bad.com"] == "failed"

@@ -141,14 +141,28 @@ def given_seller_internal_failure(ctx: dict) -> None:
 
 @given("the seller does not support any of the requested billing models")
 def given_seller_no_billing(ctx: dict) -> None:
-    """Configure seller to reject all billing models.
+    """Configure seller to reject all billing models."""
+    _set_billing_policy(ctx, [])  # Empty list = reject everything
 
-    Note: current production code auto-approves all billing. This Given
-    records the intent — the Then step checks for action=failed, which
-    requires production billing validation (not yet implemented).
-    For now, this is a placeholder that will need production support.
-    """
-    ctx["seller_billing_policy"] = "reject_all"
+
+def _set_billing_policy(ctx: dict, supported: list[str]) -> None:
+    """Set billing policy on the env and clear identity cache."""
+    env = ctx["env"]
+    env._supported_billing = supported
+    env._identity_cache.clear()  # Force re-creation with new billing policy
+
+
+@given(parsers.parse('the seller does not support "{billing}" billing'))
+def given_seller_no_specific_billing(ctx: dict, billing: str) -> None:
+    """Configure seller to not support a specific billing model."""
+    all_models = {"operator", "agent"}
+    _set_billing_policy(ctx, sorted(all_models - {billing}))
+
+
+@given(parsers.parse('the seller supports "{supported}" billing but not "{rejected}" billing'))
+def given_seller_partial_billing(ctx: dict, supported: str, rejected: str) -> None:
+    """Configure seller to support one billing model but not another."""
+    _set_billing_policy(ctx, [supported])
 
 
 @given("the Buyer is authenticated with a valid principal_id")
@@ -703,11 +717,23 @@ def then_error_message_auth(ctx: dict) -> None:
 def then_error_has_suggestion(ctx: dict) -> None:
     """Assert the error includes a suggestion field.
 
-    AdCPError subclasses have a 'recovery' attribute that serves as suggestion.
+    Checks two sources:
+    1. Per-account errors (last_account.errors[].suggestion)
+    2. Operation-level exception (AdCPError.recovery)
     """
-    error = _get_error(ctx)
-    has_suggestion = hasattr(error, "recovery") or hasattr(error, "suggestion") or "suggestion" in str(error).lower()
-    assert has_suggestion, f"Expected suggestion/recovery in error: {error}"
+    # Check per-account error suggestion first
+    acct = ctx.get("last_account")
+    if acct is not None and acct.errors:
+        has_suggestion = any(getattr(e, "suggestion", None) for e in acct.errors)
+        if has_suggestion:
+            return
+    # Fall back to operation-level exception
+    error = ctx.get("error")
+    if error is not None:
+        has_suggestion = hasattr(error, "recovery") or hasattr(error, "suggestion")
+        assert has_suggestion, f"Expected suggestion/recovery in error: {error}"
+        return
+    raise AssertionError("No error found — expected suggestion field on per-account or operation error")
 
 
 @then(parsers.parse("the response contains an errors array with at least {count:d} error"))
@@ -821,3 +847,67 @@ def then_all_accounts_action(ctx: dict, action: str) -> None:
     for acct in resp.accounts:
         actual = _action_str(acct.action)
         assert actual == action, f"Expected action '{action}', got '{actual}'"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# THEN steps — per-account errors (billing rejection, partial failure)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@then("the failed account includes a per-account errors array")
+def then_failed_has_errors(ctx: dict) -> None:
+    """Assert the last referenced (failed) account has a non-empty errors array."""
+    acct = ctx.get("last_account")
+    assert acct is not None, "No account referenced — need a prior 'account for brand domain' step"
+    assert acct.errors is not None, "Expected errors array on failed account, got None"
+    assert len(acct.errors) > 0, f"Expected non-empty errors array, got {acct.errors}"
+
+
+@then("the response does not contain an operation-level errors field")
+def then_no_operation_level_errors(ctx: dict) -> None:
+    """Assert the success response has no top-level errors field."""
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    errors = getattr(resp, "errors", None)
+    assert errors is None or len(errors) == 0, f"Unexpected operation-level errors: {errors}"
+
+
+@then(parsers.parse('the per-account errors array contains an error with code "{code}"'))
+def then_per_account_error_code(ctx: dict, code: str) -> None:
+    """Assert the failed account's errors contain a specific error code."""
+    acct = ctx.get("last_account")
+    assert acct is not None, "No account referenced"
+    assert acct.errors is not None, "No errors on account"
+    codes = [e.code for e in acct.errors]
+    assert code in codes, f"Expected error code '{code}' in {codes}"
+
+
+@then("the error message explains the billing model is not available")
+def then_billing_error_message(ctx: dict) -> None:
+    """Assert the billing error has an explanatory message."""
+    acct = ctx.get("last_account")
+    assert acct is not None and acct.errors, "No account errors"
+    billing_err = next((e for e in acct.errors if e.code == "BILLING_NOT_SUPPORTED"), None)
+    assert billing_err is not None, "No BILLING_NOT_SUPPORTED error found"
+    assert "billing" in billing_err.message.lower() or "supported" in billing_err.message.lower(), (
+        f"Expected billing-related message, got: {billing_err.message}"
+    )
+
+
+@then(parsers.parse('the failed account has status "{status}" with {code} error'))
+def then_failed_status_with_error(ctx: dict, status: str, code: str) -> None:
+    """Assert the last failed account has given status and error code."""
+    acct = ctx.get("last_account")
+    assert acct is not None, "No account referenced"
+    actual_status = _status_str(acct.status)
+    assert actual_status == status, f"Expected status '{status}', got '{actual_status}'"
+    assert acct.errors is not None, "Expected errors on failed account"
+    codes = [e.code for e in acct.errors]
+    assert code in codes, f"Expected error code '{code}' in {codes}"
+
+
+@then("the account processing fails with a validation error for billing")
+def then_billing_validation_error(ctx: dict) -> None:
+    """Assert billing value was rejected at schema validation level."""
+    error = ctx.get("error")
+    assert error is not None, "Expected a validation error for invalid billing"

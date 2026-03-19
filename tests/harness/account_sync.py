@@ -44,16 +44,30 @@ class AccountSyncEnv(IntegrationEnv):
     Both sync and async call patterns are supported:
     - call_impl() / call_a2a(): sync wrappers for BDD steps and dispatchers
     - call_impl_async() / call_a2a_async(): for @pytest.mark.asyncio tests
+
+    Constructor accepts ``supported_billing`` to configure billing policy
+    on the identity (BR-RULE-059).
     """
 
     EXTERNAL_PATCHES = {
         "audit_logger": "src.core.tools.accounts.get_audit_logger",
     }
 
+    def __init__(self, supported_billing: list[str] | None = None, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._supported_billing = supported_billing
+
     def _configure_mocks(self) -> None:
         """Set up happy-path defaults for audit logger."""
         mock_logger = MagicMock()
         self.mock["audit_logger"].return_value = mock_logger
+
+    def identity_for(self, transport: Any) -> Any:
+        """Build identity with optional billing policy."""
+        ident = super().identity_for(transport)
+        if self._supported_billing is not None:
+            return ident.model_copy(update={"supported_billing": self._supported_billing})
+        return ident
 
     async def call_impl_async(self, **kwargs: Any) -> SyncAccountsResponse:
         """Call _sync_accounts_impl with real DB (async version).
