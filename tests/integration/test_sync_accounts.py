@@ -43,7 +43,7 @@ class TestSyncAccountsCreate:
                     }
                 ],
             )
-            response = await env.call_impl(req=req)
+            response = await env.call_impl_async(req=req)
 
         assert len(response.accounts) == 1
         result = response.accounts[0]
@@ -71,7 +71,7 @@ class TestSyncAccountsCreate:
                     },
                 ],
             )
-            response = await env.call_impl(req=req)
+            response = await env.call_impl_async(req=req)
 
         assert len(response.accounts) == 2
         actions = [_action_value(a.action) for a in response.accounts]
@@ -96,7 +96,7 @@ class TestSyncAccountsUpdate:
                     }
                 ],
             )
-            await env.call_impl(req=req1)
+            await env.call_impl_async(req=req1)
 
             # Sync again with updated billing
             req2 = SyncAccountsRequest(
@@ -108,7 +108,7 @@ class TestSyncAccountsUpdate:
                     }
                 ],
             )
-            response = await env.call_impl(req=req2)
+            response = await env.call_impl_async(req=req2)
 
         assert len(response.accounts) == 1
         result = response.accounts[0]
@@ -129,9 +129,9 @@ class TestSyncAccountsUpdate:
                 ],
             )
             # Create
-            await env.call_impl(req=req)
+            await env.call_impl_async(req=req)
             # Sync identical
-            response = await env.call_impl(req=req)
+            response = await env.call_impl_async(req=req)
 
         assert len(response.accounts) == 1
         assert _action_value(response.accounts[0].action) == "unchanged"
@@ -157,7 +157,7 @@ class TestSyncAccountsAuth:
                 ],
             )
             with pytest.raises(AdCPAuthenticationError):
-                await env.call_impl(req=req, identity=None)
+                await env.call_impl_async(req=req, identity=None)
 
 
 class TestSyncAccountsDeleteMissing:
@@ -183,7 +183,7 @@ class TestSyncAccountsDeleteMissing:
                     },
                 ],
             )
-            await env.call_impl(req=req1)
+            await env.call_impl_async(req=req1)
 
             # Sync with only one account + delete_missing=True
             req2 = SyncAccountsRequest(
@@ -196,7 +196,7 @@ class TestSyncAccountsDeleteMissing:
                 ],
                 delete_missing=True,
             )
-            response = await env.call_impl(req=req2)
+            response = await env.call_impl_async(req=req2)
 
         # The synced account is unchanged
         actions = {a.brand.domain: _action_value(a.action) for a in response.accounts}
@@ -227,7 +227,7 @@ class TestSyncAccountsDryRun:
                 ],
                 dry_run=True,
             )
-            response = await env.call_impl(req=req)
+            response = await env.call_impl_async(req=req)
 
         assert len(response.accounts) == 1
         assert _action_value(response.accounts[0].action) == "created"
@@ -251,7 +251,7 @@ class TestSyncAccountsDryRun:
                 ],
                 dry_run=True,
             )
-            await env.call_impl(req=req)
+            await env.call_impl_async(req=req)
 
         # Verify no account was actually created
         with AccountUoW("sync_t8") as uow:

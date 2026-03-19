@@ -232,10 +232,25 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
                 break
 
-        # --- UC-011 xfail: non-list scenarios pending step definitions ---
-        # FIXME(salesagent-wo9): sync_accounts BDD steps not implemented yet
-        if any(t.startswith("T-UC-011") for t in marker_names) and "list" not in marker_names:
-            item.add_marker(pytest.mark.xfail(reason="UC-011 non-list steps not implemented", strict=True))
+        # --- UC-011 xfail: scenarios pending step definitions ---
+        # Tags implemented: @list (slice 1), sync core scenarios (slice 2)
+        _UC011_IMPLEMENTED_TAGS = {
+            "T-UC-011-sync-create",
+            "T-UC-011-sync-multi-brand",
+            "T-UC-011-sync-brand-direct",
+            "T-UC-011-sync-update",
+            "T-UC-011-sync-unchanged",
+            "T-UC-011-sync-billing-enum",
+            "T-UC-011-sync-mixed",
+            "T-UC-011-sync-brand-echo",
+            "T-UC-011-sync-shortest-domain",
+        }
+        if any(t.startswith("T-UC-011") for t in marker_names):
+            is_list = "list" in marker_names
+            is_implemented_sync = bool(marker_names & _UC011_IMPLEMENTED_TAGS)
+            # FIXME(salesagent-pnc): remaining sync scenarios not yet implemented
+            if not is_list and not is_implemented_sync:
+                item.add_marker(pytest.mark.xfail(reason="UC-011 steps not implemented", strict=True))
 
         # --- Entity marker auto-application based on BDD tags ---
         # BDD tests don't have entity keywords in filenames; instead they

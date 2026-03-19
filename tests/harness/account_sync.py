@@ -12,7 +12,7 @@ Usage::
         with AccountSyncEnv() as env:
             tenant, principal = env.setup_default_data()
 
-            response = await env.call_impl(
+            response = await env.call_impl_async(
                 accounts=[{"brand": {"domain": "acme.com"}, "operator": "acme.com", "billing": "operator"}]
             )
             assert len(response.accounts) == 1
@@ -25,6 +25,7 @@ beads: salesagent-7do
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -39,6 +40,10 @@ class AccountSyncEnv(IntegrationEnv):
     - Real get_db_session -> real DB queries
     - Real AccountRepository -> real DB writes
     - Real upsert, deactivate_missing, grant_access logic
+
+    Both sync and async call patterns are supported:
+    - call_impl() / call_a2a(): sync wrappers for BDD steps and dispatchers
+    - call_impl_async() / call_a2a_async(): for @pytest.mark.asyncio tests
     """
 
     EXTERNAL_PATCHES = {
@@ -50,11 +55,10 @@ class AccountSyncEnv(IntegrationEnv):
         mock_logger = MagicMock()
         self.mock["audit_logger"].return_value = mock_logger
 
-    async def call_impl(self, **kwargs: Any) -> SyncAccountsResponse:
-        """Call _sync_accounts_impl with real DB.
+    async def call_impl_async(self, **kwargs: Any) -> SyncAccountsResponse:
+        """Call _sync_accounts_impl with real DB (async version).
 
-        Accepts all _sync_accounts_impl kwargs. The 'identity' kwarg
-        defaults to self.identity if not provided.
+        For use in @pytest.mark.asyncio tests with ``await``.
         """
         from src.core.tools.accounts import _sync_accounts_impl
 
@@ -62,10 +66,27 @@ class AccountSyncEnv(IntegrationEnv):
         kwargs.setdefault("identity", self.identity)
         return await _sync_accounts_impl(**kwargs)
 
-    async def call_a2a(self, **kwargs: Any) -> SyncAccountsResponse:
-        """Call sync_accounts_raw (A2A wrapper) with real DB."""
+    def call_impl(self, **kwargs: Any) -> SyncAccountsResponse:
+        """Call _sync_accounts_impl with real DB (sync wrapper).
+
+        Bridges async _impl for sync callers (BDD steps, dispatchers).
+        """
+        return asyncio.run(self.call_impl_async(**kwargs))
+
+    async def call_a2a_async(self, **kwargs: Any) -> SyncAccountsResponse:
+        """Call sync_accounts_raw (A2A wrapper) with real DB (async version)."""
         from src.core.tools.accounts import sync_accounts_raw
 
         self._commit_factory_data()
         kwargs.setdefault("identity", self.identity)
         return await sync_accounts_raw(**kwargs)
+
+    def call_a2a(self, **kwargs: Any) -> SyncAccountsResponse:
+        """Call sync_accounts_raw (A2A wrapper) with real DB (sync wrapper)."""
+        return asyncio.run(self.call_a2a_async(**kwargs))
+
+    def call_mcp(self, **kwargs: Any) -> SyncAccountsResponse:
+        """Call sync_accounts MCP wrapper with mock Context."""
+        from src.core.tools.accounts import sync_accounts
+
+        return self._run_mcp_wrapper(sync_accounts, SyncAccountsResponse, **kwargs)

@@ -51,6 +51,52 @@ def _status_str(status: Any) -> str:
     return status.value if hasattr(status, "value") else str(status)
 
 
+def _action_str(action: Any) -> str:
+    """Extract string value from Action enum or return as-is."""
+    return action.value if hasattr(action, "value") else str(action)
+
+
+def _brand_id_str(bid: Any) -> str | None:
+    """Extract string value from BrandId (RootModel[str]) or return as-is."""
+    if bid is None:
+        return None
+    if hasattr(bid, "root"):
+        return str(bid.root)
+    return str(bid)
+
+
+def _find_account_by_brand(resp: Any, domain: str, brand_id: str | None = None) -> Any:
+    """Find an account in sync response by brand domain (and optional brand_id)."""
+    for acct in resp.accounts:
+        acct_domain = acct.brand.domain if hasattr(acct.brand, "domain") else acct.brand.get("domain")
+        if acct_domain != domain:
+            continue
+        if brand_id is not None:
+            acct_bid = _brand_id_str(getattr(acct.brand, "brand_id", None))
+            if acct_bid != brand_id:
+                continue
+        return acct
+    domains = [
+        getattr(a.brand, "domain", None) or (a.brand.get("domain") if isinstance(a.brand, dict) else None)
+        for a in resp.accounts
+    ]
+    suffix = f" and brand_id '{brand_id}'" if brand_id else ""
+    raise AssertionError(f"No account found for domain '{domain}'{suffix}. Available: {domains}")
+
+
+def _sync_pre_create(ctx: dict, brand_domain: str, operator: str, billing: str) -> None:
+    """Pre-create an account via sync so it exists for update/unchanged tests."""
+    from src.core.schemas.account import SyncAccountsRequest
+
+    req = SyncAccountsRequest(
+        accounts=[{"brand": {"domain": brand_domain}, "operator": operator, "billing": billing}],
+    )
+    dispatch_request(ctx, req=req)
+    # Clear response so the next When step's response is fresh
+    ctx.pop("response", None)
+    ctx.pop("error", None)
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — authentication and account setup
 # ═══════════════════════════════════════════════════════════════════════
@@ -112,6 +158,16 @@ def given_n_accessible_accounts(ctx: dict, count: int) -> None:
     """Create N accessible accounts with default active status."""
     for _ in range(count):
         _create_accessible_account(ctx, status="active")
+
+
+# ── Sync-specific Given steps ──────────────────────────────────────────
+
+
+@given(parsers.parse('an account for brand domain "{domain}" already exists with billing "{billing}"'))
+def given_existing_account(ctx: dict, domain: str, billing: str) -> None:
+    """Pre-create an account via sync_accounts so it exists for update/unchanged scenarios."""
+    _setup_tenant_and_principal(ctx)
+    _sync_pre_create(ctx, brand_domain=domain, operator=domain, billing=billing)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -383,3 +439,163 @@ def then_response_outcome(ctx: dict, outcome: str) -> None:
             expected_count = int(match.group(1))
             actual = len(resp.accounts)
             assert actual == expected_count, f"Expected {expected_count} accounts for outcome '{outcome}', got {actual}"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# WHEN steps — sync_accounts requests
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _parse_sync_table(datatable: Any) -> list[dict[str, Any]]:
+    """Parse a Gherkin data table into sync_accounts account entries.
+
+    Handles columns: brand.domain, brand.brand_id, operator, billing, sandbox.
+    Nested dot-notation is converted to nested dicts (e.g., brand.domain → {"brand": {"domain": ...}}).
+    """
+    accounts: list[dict[str, Any]] = []
+    for row in datatable:
+        entry: dict[str, Any] = {}
+        brand: dict[str, str] = {}
+        for key, value in row.items():
+            if key == "brand.domain":
+                brand["domain"] = value
+            elif key == "brand.brand_id":
+                brand["brand_id"] = value
+            elif key == "sandbox":
+                entry[key] = value.lower() == "true"
+            else:
+                entry[key] = value
+        if brand:
+            entry["brand"] = brand
+        accounts.append(entry)
+    return accounts
+
+
+@when("the Buyer Agent sends a sync_accounts request with:")
+def when_sync_accounts_with_table(ctx: dict, datatable: Any) -> None:
+    """Send sync_accounts with accounts from Gherkin data table.
+
+    pytest-bdd datatable: list of lists. First row = headers, rest = data rows.
+    """
+    from src.core.schemas.account import SyncAccountsRequest
+
+    headers = datatable[0]
+    rows = [dict(zip(headers, row, strict=True)) for row in datatable[1:]]
+    accounts = _parse_sync_table(rows)
+    try:
+        req = SyncAccountsRequest(accounts=accounts)
+        dispatch_request(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# THEN steps — sync_accounts response assertions
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@then("the response is a success variant with accounts array")
+def then_success_with_accounts(ctx: dict) -> None:
+    """Assert the response is a success variant containing an accounts array."""
+    error = ctx.get("error")
+    assert error is None, f"Expected success but got error: {error}"
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    assert hasattr(resp, "accounts"), f"Response missing 'accounts': {type(resp)}"
+    assert isinstance(resp.accounts, list), f"accounts is not a list: {type(resp.accounts)}"
+
+
+@then(
+    parsers.re(
+        r'the account for brand domain "(?P<domain>[^"]+)" brand_id "(?P<bid>[^"]+)" has action "(?P<action>[^"]+)"'
+    )
+)
+def then_account_action_with_brand_id(ctx: dict, domain: str, bid: str, action: str) -> None:
+    """Assert a specific account (by domain + brand_id) has the expected action."""
+    resp = ctx["response"]
+    acct = _find_account_by_brand(resp, domain, brand_id=bid)
+    actual = _action_str(acct.action)
+    assert actual == action, f"Expected action '{action}' for {domain}:{bid}, got '{actual}'"
+    ctx["last_account"] = acct
+
+
+@then(parsers.re(r'the account for brand domain "(?P<domain>[^"]+)" has action "(?P<action>[^"]+)"'))
+def then_account_action(ctx: dict, domain: str, action: str) -> None:
+    """Assert a specific account has the expected action."""
+    resp = ctx["response"]
+    acct = _find_account_by_brand(resp, domain)
+    actual = _action_str(acct.action)
+    assert actual == action, f"Expected action '{action}' for {domain}, got '{actual}'"
+    ctx["last_account"] = acct
+
+
+@then("the account has a seller-assigned account_id")
+def then_account_has_id(ctx: dict) -> None:
+    """Assert the last referenced account has a seller-assigned account_id."""
+    acct = ctx.get("last_account") or ctx["response"].accounts[0]
+    name = getattr(acct, "name", None)
+    assert name is not None, "Account missing name (seller-assigned identifier)"
+
+
+@then(parsers.parse('the account has status "{status}"'))
+def then_account_status(ctx: dict, status: str) -> None:
+    """Assert the last referenced account has the expected status."""
+    acct = ctx.get("last_account") or ctx["response"].accounts[0]
+    actual = _status_str(acct.status)
+    assert actual == status, f"Expected status '{status}', got '{actual}'"
+
+
+@then(parsers.parse('the response includes brand domain "{domain}" echoed from request'))
+def then_brand_echoed(ctx: dict, domain: str) -> None:
+    """Assert the response echoes the brand domain from the request."""
+    resp = ctx["response"]
+    acct = _find_account_by_brand(resp, domain)
+    acct_domain = acct.brand.domain if hasattr(acct.brand, "domain") else acct.brand.get("domain")
+    assert acct_domain == domain, f"Expected brand domain '{domain}', got '{acct_domain}'"
+
+
+@then(parsers.parse("the response contains {count:d} account results"))
+def then_n_account_results(ctx: dict, count: int) -> None:
+    """Assert the sync response has exactly N account results."""
+    resp = ctx["response"]
+    actual = len(resp.accounts)
+    assert actual == count, f"Expected {count} account results, got {actual}"
+
+
+@then("each account echoes brand domain and brand_id from the request")
+def then_all_accounts_echo_brand(ctx: dict) -> None:
+    """Assert each account in the response has brand with domain and brand_id."""
+    resp = ctx["response"]
+    for acct in resp.accounts:
+        brand = acct.brand
+        domain = brand.domain if hasattr(brand, "domain") else brand.get("domain")
+        bid = _brand_id_str(getattr(brand, "brand_id", None))
+        assert domain is not None, f"Account missing brand domain: {brand}"
+        assert bid is not None, f"Account for {domain} missing brand_id: {brand}"
+
+
+@then(parsers.parse('the account operator is "{operator}"'))
+def then_account_operator(ctx: dict, operator: str) -> None:
+    """Assert the last referenced account has the expected operator."""
+    acct = ctx.get("last_account") or ctx["response"].accounts[0]
+    actual = acct.operator
+    assert actual == operator, f"Expected operator '{operator}', got '{actual}'"
+
+
+@then(parsers.parse('the account billing is "{billing}"'))
+def then_account_billing(ctx: dict, billing: str) -> None:
+    """Assert the last referenced account has the expected billing model."""
+    acct = ctx.get("last_account") or ctx["response"].accounts[0]
+    actual = _status_str(acct.billing) if acct.billing else None
+    assert actual == billing, f"Expected billing '{billing}', got '{actual}'"
+
+
+@then(parsers.parse('the per-account result echoes brand domain "{domain}" and brand_id "{bid}"'))
+def then_per_account_brand_echo(ctx: dict, domain: str, bid: str) -> None:
+    """Assert a per-account result echoes the exact brand domain and brand_id."""
+    resp = ctx["response"]
+    acct = _find_account_by_brand(resp, domain, brand_id=bid)
+    acct_domain = acct.brand.domain if hasattr(acct.brand, "domain") else acct.brand.get("domain")
+    acct_bid = _brand_id_str(getattr(acct.brand, "brand_id", None))
+    assert acct_domain == domain, f"Expected brand domain '{domain}', got '{acct_domain}'"
+    assert acct_bid == bid, f"Expected brand_id '{bid}', got '{acct_bid}'"
