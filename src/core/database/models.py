@@ -3,7 +3,6 @@
 import logging
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
 from uuid import uuid4
 
 from adcp.types.generated_poc.core.account import CreditLimit, GovernanceAgent, Setup
@@ -857,10 +856,12 @@ class Account(Base):
     rate_card: Mapped[str | None] = mapped_column(String(255), nullable=True)
     payment_terms: Mapped[str | None] = mapped_column(String(20), nullable=True)
     account_scope: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    brand: Mapped[Any] = mapped_column(JSONType(model=BrandReference), nullable=True)
-    credit_limit: Mapped[Any] = mapped_column(JSONType(model=CreditLimit), nullable=True)
-    setup: Mapped[Any] = mapped_column(JSONType(model=Setup), nullable=True)
-    governance_agents: Mapped[Any] = mapped_column(JSONType(model=GovernanceAgent, is_list=True), nullable=True)
+    brand: Mapped[BrandReference | None] = mapped_column(JSONType(model=BrandReference), nullable=True)
+    credit_limit: Mapped[CreditLimit | None] = mapped_column(JSONType(model=CreditLimit), nullable=True)
+    setup: Mapped[Setup | None] = mapped_column(JSONType(model=Setup), nullable=True)
+    governance_agents: Mapped[list[GovernanceAgent] | None] = mapped_column(
+        JSONType(model=GovernanceAgent, is_list=True), nullable=True
+    )
     sandbox: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
     ext: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
 
