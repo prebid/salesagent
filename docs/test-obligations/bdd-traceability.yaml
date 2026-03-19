@@ -18,7 +18,7 @@ schema_version: 1
 source:
   repository: adcp-req
   commit: bd801586c630f4d09c3d3162c3c6fd8d0a8b53c6
-  compiled_at: "2026-03-19T21:44:00Z"
+  compiled_at: "2026-03-19T23:02:00Z"
 
 mappings:
   UC-002:
@@ -1626,6 +1626,673 @@ mappings:
       upstream_refs: ["BR-UC-005-main-mcp", "BR-RULE-209"]
       business_rules: ["BR-RULE-209"]
       status: mapped
+  UC-006:
+    - adcp_scenario_id: "T-UC-006-main-rest"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-main-rest"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-main-rest-update"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-main-rest"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-main-rest-unchanged"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-main-rest"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-main-rest-assign"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-main-rest"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-main-rest-warnings"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-main-rest"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-main-rest-approval"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-main-rest"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-main-rest-lenient-warnings"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-main-rest"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-main-rest-provenance-warning"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-main-rest", "BR-RULE-094"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-main-rest-weight"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-main-rest", "BR-RULE-093"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-main-mcp"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-main-mcp"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-main-mcp-update"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-main-mcp"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-ext-a-rest"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-ext-a"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-ext-a-mcp"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-ext-a"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-ext-a-empty"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-ext-a"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-ext-b-rest"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-ext-b"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-ext-b-mcp"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-ext-b"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-ext-c-rest"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-ext-c"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-ext-c-mcp"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-ext-c"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-ext-d-rest"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-ext-d"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-ext-d-mcp"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-ext-d"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-ext-d-whitespace"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-ext-d"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-ext-e-rest"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-ext-e"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-ext-e-mcp"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-ext-e"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-ext-f-rest"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-ext-f"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-ext-f-mcp"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-ext-f"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-ext-g-rest"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-ext-g"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-ext-g-mcp"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-ext-g"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-ext-h-rest"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-ext-h"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-ext-h-mcp"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-ext-h"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-ext-i-rest"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-ext-i"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-ext-i-mcp"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-ext-i"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-ext-j-rest"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-ext-j"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-ext-j-mcp"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-ext-j"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-ext-k-rest"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-ext-k"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-ext-k-mcp"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-ext-k"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-033-inv1"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-033"]
+      business_rules: ["BR-RULE-033"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-033-inv2"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-033"]
+      business_rules: ["BR-RULE-033"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-033-inv3"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-033"]
+      business_rules: ["BR-RULE-033"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-033-inv4"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-033"]
+      business_rules: ["BR-RULE-033"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-033-inv5"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-033"]
+      business_rules: ["BR-RULE-033"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-034-inv1"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-034"]
+      business_rules: ["BR-RULE-034"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-034-inv2"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-034"]
+      business_rules: ["BR-RULE-034"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-034-inv3"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-034"]
+      business_rules: ["BR-RULE-034"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-035-static"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-035"]
+      business_rules: ["BR-RULE-035"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-035-inv2"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-035"]
+      business_rules: ["BR-RULE-035"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-036-inv1"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-036"]
+      business_rules: ["BR-RULE-036"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-036-inv2"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-036"]
+      business_rules: ["BR-RULE-036"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-036-inv3"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-036"]
+      business_rules: ["BR-RULE-036"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-036-inv4"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-036"]
+      business_rules: ["BR-RULE-036"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-036-inv5"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-036"]
+      business_rules: ["BR-RULE-036"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-036-inv6"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-036"]
+      business_rules: ["BR-RULE-036"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-037-inv1"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-037"]
+      business_rules: ["BR-RULE-037"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-037-inv2"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-037"]
+      business_rules: ["BR-RULE-037"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-037-inv3"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-037"]
+      business_rules: ["BR-RULE-037"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-037-inv4"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-037"]
+      business_rules: ["BR-RULE-037"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-037-inv5"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-037"]
+      business_rules: ["BR-RULE-037"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-037-inv6"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-037"]
+      business_rules: ["BR-RULE-037"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-038-inv1"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-038"]
+      business_rules: ["BR-RULE-038"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-038-inv3"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-038"]
+      business_rules: ["BR-RULE-038"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-038-inv4"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-038"]
+      business_rules: ["BR-RULE-038"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-038-inv4-violated"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-038"]
+      business_rules: ["BR-RULE-038"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-038-inv5"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-038"]
+      business_rules: ["BR-RULE-038"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-039-inv1"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-039"]
+      business_rules: ["BR-RULE-039"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-039-inv2"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-039"]
+      business_rules: ["BR-RULE-039"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-039-inv3"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-039"]
+      business_rules: ["BR-RULE-039"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-039-inv4"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-039"]
+      business_rules: ["BR-RULE-039"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-039-inv6"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-039"]
+      business_rules: ["BR-RULE-039"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-039-inv5-lenient"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-039"]
+      business_rules: ["BR-RULE-039"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-040-inv1"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-040"]
+      business_rules: ["BR-RULE-040"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-040-inv2"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-040"]
+      business_rules: ["BR-RULE-040"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-040-inv3"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-040"]
+      business_rules: ["BR-RULE-040"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-040-inv4"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-040"]
+      business_rules: ["BR-RULE-040"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-093-inv1"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-093"]
+      business_rules: ["BR-RULE-093"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-093-inv2"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-093"]
+      business_rules: ["BR-RULE-093"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-093-inv3"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-093"]
+      business_rules: ["BR-RULE-093"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-094-inv1"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-094"]
+      business_rules: ["BR-RULE-094"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-094-inv2"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-094"]
+      business_rules: ["BR-RULE-094"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-094-inv3"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-094"]
+      business_rules: ["BR-RULE-094"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-094-inv4"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-094"]
+      business_rules: ["BR-RULE-094"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-rule-094-inv5"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-094"]
+      business_rules: ["BR-RULE-094"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-partition-validation-mode"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-033"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-partition-approval-mode"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-037"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-partition-creative-scope"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-034"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-partition-format-id"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-035"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-partition-generative"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-036"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-partition-assignment-pkg"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-038"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-partition-assignment-fmt"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-039"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-partition-mb-status"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-040"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-partition-provenance"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-094"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-partition-assignments-structure"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-093"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-partition-assignment-weight"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-093"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-partition-auth"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006", "BR-UC-006-ext-a"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-partition-account"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-partition-idempotency-key"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-boundary-approval"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-037"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-boundary-validation-mode"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-033"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-boundary-format-id"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-035"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-boundary-generative"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-036"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-boundary-creative-scope"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-034"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-boundary-media-buy"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-040"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-boundary-assignment-package"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-038"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-boundary-assignment-format"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-039"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-boundary-principal"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006", "BR-UC-006-ext-a"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-boundary-provenance"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-094"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-boundary-assignments-structure"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-093"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-boundary-assignment-weight"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-093"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-boundary-account"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-boundary-idempotency-key"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-sandbox-happy"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-main-mcp", "BR-RULE-209"]
+      business_rules: ["BR-RULE-209"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-sandbox-production"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-main-mcp", "BR-RULE-209"]
+      business_rules: ["BR-RULE-209"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-sandbox-validation"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-main-mcp", "BR-RULE-209"]
+      business_rules: ["BR-RULE-209"]
+      status: new
   UC-011:
     - adcp_scenario_id: "T-UC-011-list-main"
       adcp_feature: "BR-UC-011-manage-accounts.feature"

@@ -36,6 +36,7 @@ pytest_plugins = [
     "tests.bdd.steps.generic.then_payload",
     "tests.bdd.steps.domain.uc004_delivery",
     "tests.bdd.steps.domain.uc002_create_media_buy",
+    "tests.bdd.steps.domain.uc006_sync_creatives",
     "tests.bdd.steps.domain.uc011_accounts",
     "tests.bdd.steps.domain.admin_accounts",
 ]
@@ -354,6 +355,36 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             if "pending" in marker_names and not is_implemented:
                 item.add_marker(pytest.mark.xfail(reason="UC-002 BDD steps not yet implemented", strict=True))
 
+        # --- UC-006: @pending scenarios need step definitions ---
+        # Account resolution scenarios are implemented (salesagent-71q)
+        _UC006_IMPLEMENTED_TAGS = {
+            "T-UC-006-partition-account",
+            "T-UC-006-boundary-account",
+        }
+        # FIXME(salesagent-71q): INVALID_REQUEST validation (missing account / both fields)
+        # is Pydantic-level oneOf validation, not resolve_account.
+        _UC006_VALIDATION_XFAIL: list[tuple[str, set[str], str]] = [
+            (
+                "T-UC-006-partition-account",
+                {"missing_account", "invalid_oneOf_both"},
+                "INVALID_REQUEST validation not implemented (schema-level)",
+            ),
+            (
+                "T-UC-006-boundary-account",
+                {"account field absent", "both account_id and brand"},
+                "INVALID_REQUEST validation not implemented (schema-level)",
+            ),
+        ]
+        if any(t.startswith("T-UC-006") for t in marker_names):
+            # Selective xfail for INVALID_REQUEST examples within implemented tags
+            for tag, substrings, reason in _UC006_VALIDATION_XFAIL:
+                if tag in marker_names and any(s in nodeid for s in substrings):
+                    item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
+                    break
+            is_implemented = bool(marker_names & _UC006_IMPLEMENTED_TAGS)
+            if "pending" in marker_names and not is_implemented:
+                item.add_marker(pytest.mark.xfail(reason="UC-006 BDD steps not yet implemented", strict=True))
+
         # --- Admin BDD: @pending scenarios need step definitions ---
         if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
             if "pending" in marker_names:
@@ -364,6 +395,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # use tags like T-UC-004-* (delivery) and T-UC-005-* (creative).
         if any(t.startswith("T-UC-002") for t in marker_names):
             item.add_marker(pytest.mark.media_buy)
+        if any(t.startswith("T-UC-006") for t in marker_names):
+            item.add_marker(pytest.mark.creative)
         if any(t.startswith("T-UC-004") for t in marker_names):
             item.add_marker(pytest.mark.delivery)
         if any(t.startswith("T-UC-005") for t in marker_names):
@@ -441,6 +474,8 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
     marker_names = {m.name for m in request.node.iter_markers()}
     if any(t.startswith("T-UC-002") for t in marker_names):
         return "UC-002"
+    if any(t.startswith("T-UC-006") for t in marker_names):
+        return "UC-006"
     if any(t.startswith("T-UC-005") for t in marker_names):
         return "UC-005"
     if any(t.startswith("T-UC-004") for t in marker_names):
@@ -494,6 +529,19 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
 
         with MediaBuyAccountEnv() as env:
             ctx["env"] = env
+            yield
+
+    elif uc == "UC-006":
+        # Account resolution scenarios reuse MediaBuyAccountEnv — same resolve_account()
+        marker_names = {m.name for m in request.node.iter_markers()}
+        if "account" in marker_names:
+            request.getfixturevalue("integration_db")
+            from tests.harness.media_buy_account import MediaBuyAccountEnv
+
+            with MediaBuyAccountEnv() as env:
+                ctx["env"] = env
+                yield
+        else:
             yield
 
     elif uc == "UC-005":

@@ -384,52 +384,16 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
 @when("the Buyer Agent sends the create_media_buy request")
 def when_send_create_media_buy(ctx: dict) -> None:
     """Send the create_media_buy request and capture the result or error."""
-    from src.core.exceptions import AdCPError, AdCPValidationError
+    from tests.bdd.steps.generic._account_resolution import resolve_account_or_error
 
-    env = ctx["env"]
-    account_ref = ctx.get("account_ref")
-
-    # Handle missing account field
-    if ctx.get("account_absent"):
-        ctx["error"] = AdCPValidationError(
-            "Account field is required. Use account_id or brand+operator to identify the account.",
-            details={"suggestion": "Include an 'account' field with either account_id or brand+operator."},
-        )
-        return
-
-    # Handle invalid both-fields case
-    if ctx.get("account_invalid_both"):
-        ctx["error"] = AdCPValidationError(
-            "Account field must be either account_id OR brand+operator, not both.",
-            details={"suggestion": "Use either account_id or brand+operator, not both."},
-        )
-        return
-
-    if account_ref is None:
-        ctx["error"] = AdCPValidationError(
-            "Account reference is required.",
-            details={"suggestion": "Provide an account reference."},
-        )
-        return
-
-    # Ensure default tenant/principal exist (idempotent — harness creates session,
-    # but we need DB data for resolve_account to query against)
-    _ensure_tenant_principal(ctx, env)
-
-    try:
-        result = env.call_impl(account_ref=account_ref)
-        ctx["response"] = result
-        ctx["resolved_account_id"] = result
-    except AdCPError as e:
-        ctx["error"] = e
+    resolve_account_or_error(ctx)
 
 
 def _ensure_tenant_principal(ctx: dict, env: object) -> None:
     """Create tenant + principal if not already created by a Given step."""
-    if "tenant" not in ctx:
-        tenant, principal = env.setup_default_data()
-        ctx["tenant"] = tenant
-        ctx["principal"] = principal
+    from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
+
+    ensure_tenant_principal(ctx, env)
 
 
 # ═══════════════════════════════════════════════════════════════════════
