@@ -31,6 +31,13 @@ def given_seller_operational(ctx: dict) -> None:
     ctx["seller_operational"] = True
 
 
+@given("a tenant is resolvable from the request context")
+def given_tenant_resolvable(ctx: dict) -> None:
+    """Tenant can be resolved from request context (Background)."""
+    ctx["has_tenant"] = True
+    ctx.setdefault("tenant_id", "test_tenant")
+
+
 @given("a tenant has completed setup checklist")
 def given_tenant_setup_complete(ctx: dict) -> None:
     """Tenant has completed all setup steps (Background)."""

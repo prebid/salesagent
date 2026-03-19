@@ -17,6 +17,8 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
+from tests.bdd.steps.generic._dispatch import dispatch_request
+
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
@@ -27,26 +29,6 @@ def _pending(ctx: dict, step: str) -> None:
     structural guard while clearly documenting which steps need harness work.
     """
     ctx.setdefault("pending_steps", []).append(step)
-
-
-def _call_delivery(ctx: dict, **kwargs: Any) -> None:
-    """Dispatch delivery request through ctx['transport'] via call_via."""
-    transport = ctx.get("transport")
-    env = ctx["env"]
-    if transport is not None:
-        try:
-            result = env.call_via(transport, **kwargs)
-            if result.is_error:
-                ctx["error"] = result.error
-            else:
-                ctx["response"] = result.payload
-        except Exception as exc:
-            ctx["error"] = exc
-    else:
-        try:
-            ctx["response"] = env.call_impl(**kwargs)
-        except Exception as exc:
-            ctx["error"] = exc
 
 
 def _parse_json_list(text: str) -> list[str]:
@@ -420,53 +402,53 @@ def given_device_type_under_limit(ctx: dict) -> None:
 def when_request_by_ids(ctx: dict, ids_json: str) -> None:
     """Request delivery metrics by media_buy_ids."""
     media_buy_ids = _parse_json_list(ids_json)
-    _call_delivery(ctx, media_buy_ids=media_buy_ids)
+    dispatch_request(ctx, media_buy_ids=media_buy_ids)
 
 
 @when("the Buyer Agent requests delivery metrics without media_buy_ids or buyer_refs")
 def when_request_no_identifiers(ctx: dict) -> None:
     """Request delivery metrics without any identifiers."""
-    _call_delivery(ctx)
+    dispatch_request(ctx)
 
 
 @when(parsers.parse("the Buyer Agent requests delivery metrics with {request_params}"))
 def when_request_with_params(ctx: dict, request_params: str) -> None:
     """Request with arbitrary params (Scenario Outline)."""
     kwargs = _parse_request_params(request_params)
-    _call_delivery(ctx, **kwargs)
+    dispatch_request(ctx, **kwargs)
 
 
 @when(parsers.parse("the Buyer Agent requests delivery metrics with media_buy_ids {ids_json}"))
 def when_request_with_media_buy_ids(ctx: dict, ids_json: str) -> None:
     """Request with explicit media_buy_ids list."""
     if ids_json == "[]":
-        _call_delivery(ctx, media_buy_ids=[])
+        dispatch_request(ctx, media_buy_ids=[])
     else:
         media_buy_ids = _parse_json_list(ids_json)
-        _call_delivery(ctx, media_buy_ids=media_buy_ids)
+        dispatch_request(ctx, media_buy_ids=media_buy_ids)
 
 
 @when(parsers.parse("the Buyer Agent requests delivery metrics with buyer_refs {refs_json}"))
 def when_request_with_buyer_refs(ctx: dict, refs_json: str) -> None:
     """Request with buyer_refs list."""
     if refs_json == "[]":
-        _call_delivery(ctx, buyer_refs=[])
+        dispatch_request(ctx, buyer_refs=[])
     else:
         buyer_refs = _parse_json_list(refs_json)
-        _call_delivery(ctx, buyer_refs=buyer_refs)
+        dispatch_request(ctx, buyer_refs=buyer_refs)
 
 
 @when(parsers.re(r'the Buyer Agent requests delivery metrics with status_filter "(?P<filter_value>[^"]+)"'))
 def when_request_with_status_filter(ctx: dict, filter_value: str) -> None:
     """Request with status_filter string."""
-    _call_delivery(ctx, status_filter=[filter_value])
+    dispatch_request(ctx, status_filter=[filter_value])
 
 
 @when(parsers.re(r"the Buyer Agent requests delivery metrics with status_filter (?P<filter_json>\[.+?\])"))
 def when_request_with_status_filter_list(ctx: dict, filter_json: str) -> None:
     """Request with status_filter list."""
     status_filter = _parse_json_list(filter_json)
-    _call_delivery(ctx, status_filter=status_filter)
+    dispatch_request(ctx, status_filter=status_filter)
 
 
 @when("the Buyer Agent requests delivery metrics without status_filter")
@@ -474,25 +456,25 @@ def when_request_no_status_filter(ctx: dict) -> None:
     """Request without status_filter (all statuses)."""
     media_buys = ctx.get("media_buys", {})
     mb_ids = list(media_buys.keys())
-    _call_delivery(ctx, media_buy_ids=mb_ids if mb_ids else None)
+    dispatch_request(ctx, media_buy_ids=mb_ids if mb_ids else None)
 
 
 @when(parsers.parse('the Buyer Agent requests delivery metrics with start_date "{start}" and end_date "{end}"'))
 def when_request_date_range(ctx: dict, start: str, end: str) -> None:
     """Request with date range."""
-    _call_delivery(ctx, start_date=start, end_date=end)
+    dispatch_request(ctx, start_date=start, end_date=end)
 
 
 @when(parsers.parse('the Buyer Agent requests delivery metrics with start_date "{start}" and no end_date'))
 def when_request_start_only(ctx: dict, start: str) -> None:
     """Request with start_date only."""
-    _call_delivery(ctx, start_date=start)
+    dispatch_request(ctx, start_date=start)
 
 
 @when(parsers.parse('the Buyer Agent requests delivery metrics with end_date "{end}" and no start_date'))
 def when_request_end_only(ctx: dict, end: str) -> None:
     """Request with end_date only."""
-    _call_delivery(ctx, end_date=end)
+    dispatch_request(ctx, end_date=end)
 
 
 @when("the Buyer Agent requests delivery metrics")
@@ -500,14 +482,14 @@ def when_request_delivery_default(ctx: dict) -> None:
     """Request delivery metrics (generic, uses ctx media_buys)."""
     media_buys = ctx.get("media_buys", {})
     mb_ids = list(media_buys.keys()) or None
-    _call_delivery(ctx, media_buy_ids=mb_ids)
+    dispatch_request(ctx, media_buy_ids=mb_ids)
 
 
 @when("the Buyer Agent sends a delivery metrics request without authentication")
 def when_request_no_auth(ctx: dict) -> None:
     """Request delivery metrics without authentication."""
     ctx["has_auth"] = False
-    _call_delivery(ctx)
+    dispatch_request(ctx)
 
 
 # ── Webhook When steps ─────────────────────────────────────────────
@@ -641,12 +623,12 @@ def when_webhook_evaluates(ctx: dict, mb_id: str) -> None:
 def when_request_with_dimensions(ctx: dict, mb_id: str, dims_json: str) -> None:
     """Request delivery metrics with reporting dimensions."""
     dims = json.loads(dims_json)
-    _call_delivery(ctx, media_buy_ids=[mb_id], reporting_dimensions=dims)
+    dispatch_request(ctx, media_buy_ids=[mb_id], reporting_dimensions=dims)
 
 
 def _request_single_mb(ctx: dict, mb_id: str) -> None:
     """Shared: request delivery for a single media buy."""
-    _call_delivery(ctx, media_buy_ids=[mb_id])
+    dispatch_request(ctx, media_buy_ids=[mb_id])
 
 
 @when(parsers.parse('the Buyer Agent requests delivery metrics for "{mb_id}"'))
@@ -671,7 +653,7 @@ def when_request_no_attribution(ctx: dict, mb_id: str) -> None:
 def when_request_with_attribution(ctx: dict, mb_id: str, aw_json: str) -> None:
     """Request with attribution window."""
     aw = json.loads(aw_json)
-    _call_delivery(ctx, media_buy_ids=[mb_id], attribution_window=aw)
+    dispatch_request(ctx, media_buy_ids=[mb_id], attribution_window=aw)
 
 
 # ── Partition/boundary When steps ─────────────────────────────────
@@ -728,13 +710,13 @@ def when_boundary_account(ctx: dict, value: str) -> None:
 @when(parsers.re(r'the Buyer Agent requests delivery metrics with status_filter "(?P<partition_value>[^"]+)"'))
 def when_partition_status_filter(ctx: dict, partition_value: str) -> None:
     """Partition test: status_filter value."""
-    _call_delivery(ctx, status_filter=[partition_value])
+    dispatch_request(ctx, status_filter=[partition_value])
 
 
 @when(parsers.re(r'the Buyer Agent requests delivery metrics at status_filter boundary "(?P<boundary_value>[^"]+)"'))
 def when_boundary_status_filter(ctx: dict, boundary_value: str) -> None:
     """Boundary test: status_filter value."""
-    _call_delivery(ctx, status_filter=[boundary_value])
+    dispatch_request(ctx, status_filter=[boundary_value])
 
 
 @when(parsers.re(r'the Buyer Agent requests delivery metrics with date range "(?P<partition>[^"]+)"'))
@@ -807,7 +789,7 @@ def when_query_single_mb(ctx: dict, mb_id: str) -> None:
 @when("the Buyer Agent queries delivery metrics for a non-existent media buy")
 def when_query_nonexistent(ctx: dict) -> None:
     """Query delivery metrics for a non-existent media buy."""
-    _call_delivery(ctx, media_buy_ids=["mb-nonexistent"])
+    dispatch_request(ctx, media_buy_ids=["mb-nonexistent"])
 
 
 @when(parsers.parse('the Buyer Agent requests delivery metrics for media_buy_ids ["{mb_id}"]'))
@@ -1513,16 +1495,16 @@ def _dispatch_partition(ctx: dict, field: str, value: str) -> None:
 
     # Handle special partition values
     if value_stripped in ("(field absent)", "(omitted)", "(not provided)"):
-        _call_delivery(ctx)
+        dispatch_request(ctx)
         return
 
     # Try to parse as JSON
     try:
         parsed = json.loads(value_stripped)
-        _call_delivery(ctx, **{field: parsed})
+        dispatch_request(ctx, **{field: parsed})
         return
     except (json.JSONDecodeError, TypeError):
         pass
 
     # Pass as string
-    _call_delivery(ctx, **{field: value_stripped})
+    dispatch_request(ctx, **{field: value_stripped})

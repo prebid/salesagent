@@ -71,3 +71,9 @@ class AccountListEnv(IntegrationEnv):
         self._commit_factory_data()
         kwargs.setdefault("identity", self.identity)
         return list_accounts_raw(**kwargs)
+
+    def call_mcp(self, **kwargs: Any) -> ListAccountsResponse:
+        """Call list_accounts MCP wrapper with mock Context."""
+        from src.core.tools.accounts import list_accounts
+
+        return self._run_mcp_wrapper(list_accounts, ListAccountsResponse, **kwargs)

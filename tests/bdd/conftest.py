@@ -232,6 +232,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
                 break
 
+        # --- UC-011 xfail: non-list scenarios pending step definitions ---
+        # FIXME(salesagent-wo9): sync_accounts BDD steps not implemented yet
+        if any(t.startswith("T-UC-011") for t in marker_names) and "list" not in marker_names:
+            item.add_marker(pytest.mark.xfail(reason="UC-011 non-list steps not implemented", strict=True))
+
         # --- Entity marker auto-application based on BDD tags ---
         # BDD tests don't have entity keywords in filenames; instead they
         # use tags like T-UC-004-* (delivery) and T-UC-005-* (creative).
@@ -309,6 +314,15 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
     return None
 
 
+def _detect_uc011_harness(marker_names: set[str]) -> str:
+    """Detect which UC-011 harness a scenario needs based on tags."""
+    if "list" in marker_names:
+        return "list"
+    if "sync" in marker_names:
+        return "sync"
+    return "unknown"
+
+
 def _detect_delivery_harness(request: pytest.FixtureRequest) -> str:
     """Detect which delivery harness a UC-004 scenario needs."""
     marker_names = {m.name for m in request.node.iter_markers()}
@@ -337,6 +351,27 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
 
         with CreativeFormatsEnv() as env:
             ctx["env"] = env
+            yield
+
+    elif uc == "UC-011":
+        marker_names = {m.name for m in request.node.iter_markers()}
+        harness_type = _detect_uc011_harness(marker_names)
+
+        if harness_type == "list":
+            request.getfixturevalue("integration_db")
+            from tests.harness.account_list import AccountListEnv
+
+            with AccountListEnv() as env:
+                ctx["env"] = env
+                yield
+        elif harness_type == "sync":
+            request.getfixturevalue("integration_db")
+            from tests.harness.account_sync import AccountSyncEnv
+
+            with AccountSyncEnv() as env:
+                ctx["env"] = env
+                yield
+        else:
             yield
 
     elif uc == "UC-004":

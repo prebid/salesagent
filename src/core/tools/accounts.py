@@ -13,21 +13,27 @@ Handles account management per AdCP spec (UC-011):
 beads: salesagent-hl0, salesagent-619
 """
 
+import base64
 import logging
 import uuid
 from typing import Any, cast
 
+from adcp.types.generated_poc.account.list_accounts_request import (
+    Status as ListAccountsStatus,
+)
 from adcp.types.generated_poc.account.sync_accounts_response import (
     Account as SyncResponseAccount,
 )
 from adcp.types.generated_poc.core.context import ContextObject
+from adcp.types.generated_poc.core.pagination_request import PaginationRequest
+from adcp.types.generated_poc.core.pagination_response import PaginationResponse
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.models import Account as DBAccount
 from src.core.database.repositories.uow import AccountUoW
-from src.core.exceptions import AdCPAuthenticationError
+from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas.account import (
     Account,
@@ -63,6 +69,73 @@ def _db_account_to_schema(db_account: DBAccount) -> Account:
     )
 
 
+_MAX_RESULTS_UPPER = 100
+_MAX_RESULTS_LOWER = 1
+
+
+def _validate_list_request(req: ListAccountsRequest) -> None:
+    """Validate list_accounts request parameters.
+
+    Raises AdCPValidationError for invalid status or pagination bounds.
+    """
+    # Validate status enum if provided (raw string check for unknown values)
+    status_val = getattr(req, "status", None)
+    if status_val is not None:
+        valid_statuses = {s.value for s in ListAccountsStatus}
+        raw = status_val.value if hasattr(status_val, "value") else str(status_val)
+        if raw not in valid_statuses:
+            raise AdCPValidationError(
+                f"Invalid status filter: '{raw}'. Valid values: {', '.join(sorted(valid_statuses))}"
+            )
+
+    # Validate pagination bounds
+    pagination = getattr(req, "pagination", None)
+    if pagination is not None:
+        max_results = getattr(pagination, "max_results", None)
+        if max_results is not None:
+            if max_results < _MAX_RESULTS_LOWER or max_results > _MAX_RESULTS_UPPER:
+                raise AdCPValidationError(
+                    f"max_results must be between {_MAX_RESULTS_LOWER} and {_MAX_RESULTS_UPPER}, got {max_results}."
+                )
+
+
+def _encode_cursor(offset: int) -> str:
+    """Encode an offset as a base64 cursor string."""
+    return base64.b64encode(str(offset).encode()).decode()
+
+
+def _decode_cursor(cursor: str) -> int:
+    """Decode a base64 cursor string to an offset. Returns 0 for invalid cursors."""
+    try:
+        return int(base64.b64decode(cursor).decode())
+    except (ValueError, Exception):
+        return 0
+
+
+def _apply_pagination(
+    accounts: list[Account],
+    pagination: PaginationRequest | None,
+) -> tuple[list[Account], PaginationResponse | None]:
+    """Apply cursor-based pagination to an account list.
+
+    Returns (paginated_accounts, pagination_response_or_None).
+    """
+    if pagination is None:
+        return accounts, None
+
+    max_results = pagination.max_results or 50
+    offset = _decode_cursor(pagination.cursor) if pagination.cursor else 0
+
+    paginated = accounts[offset : offset + max_results]
+    has_more = (offset + max_results) < len(accounts)
+
+    return paginated, PaginationResponse(
+        has_more=has_more,
+        cursor=_encode_cursor(offset + max_results) if has_more else None,
+        total_count=len(accounts),
+    )
+
+
 def _list_accounts_impl(
     req: ListAccountsRequest | None = None,
     identity: ResolvedIdentity | None = None,
@@ -81,6 +154,8 @@ def _list_accounts_impl(
     """
     if req is None:
         req = ListAccountsRequest()
+
+    _validate_list_request(req)
 
     # BR-RULE-055: unauthenticated → empty response
     if identity is None or identity.tenant_id is None:
@@ -102,18 +177,26 @@ def _list_accounts_impl(
         # Apply status filter if requested
         status_filter = getattr(req, "status", None)
         if status_filter is not None:
-            db_accounts = [a for a in db_accounts if a.status == status_filter]
+            status_str = status_filter.value if hasattr(status_filter, "value") else str(status_filter)
+            db_accounts = [a for a in db_accounts if a.status == status_str]
 
         # Apply sandbox filter if requested
         sandbox_filter = getattr(req, "sandbox", None)
         if sandbox_filter is not None:
             db_accounts = [a for a in db_accounts if a.sandbox == sandbox_filter]
 
+        # Sort for deterministic pagination
+        db_accounts.sort(key=lambda a: a.account_id)
+
         # Convert ORM models to schema models while session is alive
         schema_accounts = [_db_account_to_schema(a) for a in db_accounts]
 
+    # Apply pagination after conversion
+    paginated, pagination_resp = _apply_pagination(schema_accounts, getattr(req, "pagination", None))
+
     return ListAccountsResponse(
-        accounts=schema_accounts,
+        accounts=paginated,
+        pagination=pagination_resp,
         context=req.context,
     )
 
