@@ -492,6 +492,15 @@ class WebhookDeliveryService:
                         circuit_breaker.record_success()
                         return True
 
+                    # Client errors (4xx): do NOT retry — the request is invalid
+                    if 400 <= response.status_code < 500:
+                        logger.warning(
+                            f"Webhook delivery to {config.url} returned "
+                            f"client error {response.status_code}, will not retry"
+                        )
+                        circuit_breaker.record_failure()
+                        return False
+
                     logger.warning(
                         f"Webhook delivery to {config.url} returned "
                         f"status {response.status_code} "

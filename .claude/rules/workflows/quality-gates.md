@@ -37,11 +37,12 @@ make test-cov                          # Open HTML coverage report
 ```bash
 tox -e unit                            # Unit tests only (no Docker needed)
 tox -e integration                     # Integration tests (needs Docker)
-tox -e integration_v2                  # Integration V2 (needs Docker)
 tox -e e2e                             # End-to-end (needs full Docker stack)
-tox -e ui                              # UI tests (needs full Docker stack)
+tox -e admin                           # Admin UI tests (needs full Docker stack)
+tox -e bdd                             # BDD behavioral tests
 tox -e coverage                        # Combine coverage + generate reports
 tox -e integration -- -k test_name     # Pass pytest args after --
+make test-entity ENTITY=delivery       # Entity-scoped (across unit+integration+e2e+admin)
 ```
 
 ## Test Integrity — HARD STOP Rules

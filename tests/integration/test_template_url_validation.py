@@ -15,7 +15,7 @@ from src.admin.app import create_app
 
 admin_app = create_app()
 
-pytestmark = [pytest.mark.integration, pytest.mark.requires_db, pytest.mark.ui]
+pytestmark = [pytest.mark.integration, pytest.mark.requires_db, pytest.mark.admin]
 
 
 class TestTemplateUrlValidation:

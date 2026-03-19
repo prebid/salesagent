@@ -45,6 +45,8 @@ class DeliveryPollEnv(DeliveryPollMixin, IntegrationEnv):
         call_impl(...)             -- call _get_media_buy_delivery_impl with real DB
     """
 
+    REST_ENDPOINT = "/api/v1/media-buys/delivery"
+
     EXTERNAL_PATCHES = {
         "adapter": "src.core.tools.media_buy_delivery.get_adapter",
     }
@@ -55,3 +57,41 @@ class DeliveryPollEnv(DeliveryPollMixin, IntegrationEnv):
 
     def _configure_mocks(self) -> None:
         self._configure_adapter_mock()
+
+    # -- Override transport methods to forward reporting_dimensions --------
+
+    def call_a2a(self, **kwargs: Any) -> Any:
+        """Call get_media_buy_delivery_raw with reporting_dimensions support."""
+        from src.core.tools.media_buy_delivery import get_media_buy_delivery_raw
+
+        self._commit_factory_data()
+        identity = kwargs.pop("identity", None) or self.identity
+
+        fwd: dict[str, Any] = {"identity": identity}
+        for field in ("media_buy_ids", "buyer_refs", "start_date", "end_date", "status_filter", "reporting_dimensions"):
+            if kwargs.get(field) is not None:
+                fwd[field] = kwargs[field]
+
+        return get_media_buy_delivery_raw(**fwd)
+
+    def call_mcp(self, **kwargs: Any) -> Any:
+        """Call get_media_buy_delivery MCP wrapper with reporting_dimensions support."""
+        from src.core.schemas import GetMediaBuyDeliveryResponse
+        from src.core.tools.media_buy_delivery import get_media_buy_delivery
+
+        kwargs.pop("identity", None)
+
+        fwd: dict[str, Any] = {}
+        for field in ("media_buy_ids", "buyer_refs", "start_date", "end_date", "status_filter", "reporting_dimensions"):
+            if kwargs.get(field) is not None:
+                fwd[field] = kwargs[field]
+
+        return self._run_mcp_wrapper(get_media_buy_delivery, GetMediaBuyDeliveryResponse, **fwd)
+
+    def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
+        """Build REST body including reporting_dimensions."""
+        body: dict[str, Any] = {}
+        for field in ("media_buy_ids", "buyer_refs", "start_date", "end_date", "status_filter", "reporting_dimensions"):
+            if kwargs.get(field) is not None:
+                body[field] = kwargs[field]
+        return body

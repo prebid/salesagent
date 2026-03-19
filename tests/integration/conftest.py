@@ -70,17 +70,8 @@ def make_package(media_buy_id: str, package_id: str, **kwargs) -> MediaPackage:
     )
 
 
-@pytest.fixture(scope="function")
-def integration_db():
-    """Provide an isolated PostgreSQL database for each integration test.
-
-    Delegates to the shared ``make_integration_db`` context manager.
-    Yields the database name (used by mcp_server fixture).
-    """
-    from tests.fixtures.integration_db import make_integration_db
-
-    with make_integration_db(json_serializer=True) as db_name:
-        yield db_name
+# integration_db fixture moved to tests/conftest_db.py (visible to all test suites including tests/bdd/)
+# It is available here via tests/conftest.py -> from tests.conftest_db import *
 
 
 @pytest.fixture
@@ -368,6 +359,7 @@ def sample_tenant(integration_db):
         return {
             "tenant_id": tenant.tenant_id,
             "name": tenant.name,
+            "subdomain": tenant.subdomain,
             "admin_token": tenant.admin_token,
         }
 
@@ -747,6 +739,376 @@ def test_audit_logger(integration_db):
     logger = AuditLogger("test_tenant")
 
     yield logger
+
+
+@pytest.fixture
+def mock_identity(sample_tenant, sample_principal):
+    """Build a ResolvedIdentity from real test DB fixtures.
+
+    Use this with: patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity)
+
+    Uses LazyTenantContext so the tenant dict is always read from the DB,
+    matching production behavior (where resolve_identity → LazyTenantContext
+    defers DB load until a field is accessed).
+    """
+    from src.core.resolved_identity import ResolvedIdentity
+    from src.core.tenant_context import LazyTenantContext
+
+    return ResolvedIdentity(
+        principal_id=sample_principal["principal_id"],
+        tenant_id=sample_tenant["tenant_id"],
+        tenant=LazyTenantContext(sample_tenant["tenant_id"]),
+        protocol="a2a",
+    )
+
+
+# ============================================================================
+# Pricing Helper Functions (merged from integration_v2)
+# ============================================================================
+# These helpers provide a consistent API for creating Products with
+# pricing_options. They will break if Product/PricingOption schema changes
+# (intentional - ensures tests stay up to date with migrations).
+
+
+def get_pricing_option_id(product, currency: str = "USD") -> str:
+    """Get the pricing_option_id for a given product and currency.
+
+    Args:
+        product: Product instance (from create_test_product_with_pricing)
+        currency: Currency code to find (default: USD)
+
+    Returns:
+        String pricing_option_id in format {pricing_model}_{currency}_{fixed|auction}
+
+    Raises:
+        ValueError: If no pricing option found for currency
+    """
+    for pricing_option in product.pricing_options:
+        if pricing_option.currency == currency:
+            fixed_str = "fixed" if pricing_option.is_fixed else "auction"
+            return f"{pricing_option.pricing_model}_{pricing_option.currency.lower()}_{fixed_str}"
+    raise ValueError(f"No pricing option found for currency {currency} on product {product.product_id}")
+
+
+def create_test_product_with_pricing(
+    session,
+    tenant_id: str,
+    product_id: str | None = None,
+    name: str = "Test Product",
+    pricing_model: str = "CPM",
+    rate="15.00",
+    is_fixed: bool = True,
+    currency: str = "USD",
+    min_spend_per_package=None,
+    price_guidance: dict | None = None,
+    format_ids: list[dict[str, str]] | None = None,
+    targeting_template: dict | None = None,
+    delivery_type: str = "guaranteed_impressions",
+    property_tags: list[str] | None = None,
+    **product_kwargs,
+):
+    """Create a Product with pricing_options using the new pricing model."""
+    import uuid
+    from decimal import Decimal
+
+    from src.core.database.models import PricingOption, Product
+
+    if product_id is None:
+        product_id = f"test_product_{uuid.uuid4().hex[:8]}"
+
+    if format_ids is None:
+        format_ids = [{"agent_url": "https://test.com", "id": "300x250"}]
+
+    if targeting_template is None:
+        targeting_template = {}
+
+    # Convert rate to Decimal
+    if isinstance(rate, str):
+        rate_decimal = Decimal(rate)
+    elif isinstance(rate, float):
+        rate_decimal = Decimal(str(rate))
+    else:
+        rate_decimal = rate
+
+    # Convert min_spend to Decimal if provided
+    min_spend_decimal = None
+    if min_spend_per_package is not None:
+        if isinstance(min_spend_per_package, str):
+            min_spend_decimal = Decimal(min_spend_per_package)
+        elif isinstance(min_spend_per_package, float):
+            min_spend_decimal = Decimal(str(min_spend_per_package))
+        else:
+            min_spend_decimal = min_spend_per_package
+
+    # AdCP Library Schema Compliance defaults
+    if "delivery_measurement" not in product_kwargs:
+        product_kwargs["delivery_measurement"] = {
+            "provider": "Google Ad Manager",
+            "notes": "MRC-accredited viewability",
+        }
+
+    if property_tags is None and "properties" not in product_kwargs:
+        property_tags = ["all_inventory"]
+
+    # Fix measurement - remove invalid fields
+    if "measurement" in product_kwargs and isinstance(product_kwargs["measurement"], dict):
+        valid_measurement_fields = {"available_metrics", "reporting_frequency", "reporting_delay_hours"}
+        product_kwargs["measurement"] = {
+            k: v for k, v in product_kwargs["measurement"].items() if k in valid_measurement_fields
+        }
+        if not product_kwargs["measurement"]:
+            del product_kwargs["measurement"]
+
+    # Fix creative_policy - remove invalid fields
+    if "creative_policy" in product_kwargs and isinstance(product_kwargs["creative_policy"], dict):
+        valid_creative_policy_fields = {"co_branding", "landing_page", "templates_available"}
+        filtered_policy = {
+            k: v for k, v in product_kwargs["creative_policy"].items() if k in valid_creative_policy_fields
+        }
+        if "co_branding" not in filtered_policy:
+            filtered_policy["co_branding"] = "optional"
+        if "landing_page" not in filtered_policy:
+            filtered_policy["landing_page"] = "any"
+        if "templates_available" not in filtered_policy:
+            filtered_policy["templates_available"] = False
+        product_kwargs["creative_policy"] = filtered_policy
+    elif "creative_policy" not in product_kwargs:
+        product_kwargs["creative_policy"] = {
+            "co_branding": "optional",
+            "landing_page": "any",
+            "templates_available": False,
+        }
+
+    product = Product(
+        tenant_id=tenant_id,
+        product_id=product_id,
+        name=name,
+        format_ids=format_ids,
+        targeting_template=targeting_template,
+        delivery_type=delivery_type,
+        property_tags=property_tags,
+        **product_kwargs,
+    )
+    session.add(product)
+    session.flush()
+
+    pricing_model_lower = pricing_model.lower() if isinstance(pricing_model, str) else pricing_model
+    pricing_option = PricingOption(
+        tenant_id=tenant_id,
+        product_id=product_id,
+        pricing_model=pricing_model_lower,
+        rate=rate_decimal,
+        currency=currency,
+        is_fixed=is_fixed,
+        price_guidance=price_guidance,
+        min_spend_per_package=min_spend_decimal,
+    )
+    session.add(pricing_option)
+    session.flush()
+
+    session.refresh(product)
+    return product
+
+
+def create_auction_product(
+    session,
+    tenant_id: str,
+    product_id: str | None = None,
+    name: str = "Auction Product",
+    pricing_model: str = "CPM",
+    floor_cpm="1.00",
+    currency: str = "USD",
+    **kwargs,
+):
+    """Create a Product with auction pricing (is_fixed=False)."""
+    if "price_guidance" not in kwargs:
+        floor_value = float(floor_cpm)
+        kwargs["price_guidance"] = {
+            "floor": floor_value,
+            "p50": floor_value * 1.5,
+            "p75": floor_value * 2.0,
+            "p90": floor_value * 2.5,
+        }
+
+    return create_test_product_with_pricing(
+        session=session,
+        tenant_id=tenant_id,
+        product_id=product_id,
+        name=name,
+        pricing_model=pricing_model,
+        rate=floor_cpm,
+        is_fixed=False,
+        currency=currency,
+        **kwargs,
+    )
+
+
+def create_flat_rate_product(
+    session,
+    tenant_id: str,
+    product_id: str | None = None,
+    name: str = "Flat Rate Product",
+    rate="10000.00",
+    currency: str = "USD",
+    **kwargs,
+):
+    """Create a Product with flat-rate pricing."""
+    return create_test_product_with_pricing(
+        session=session,
+        tenant_id=tenant_id,
+        product_id=product_id,
+        name=name,
+        pricing_model="FLAT_RATE",
+        rate=rate,
+        is_fixed=True,
+        currency=currency,
+        delivery_type="sponsorship",
+        **kwargs,
+    )
+
+
+def add_required_setup_data(session, tenant_id: str):
+    """Add required setup data for a tenant to pass setup validation.
+
+    This helper ensures tenants have all required relationships for
+    tests to pass setup checklist validation.
+    """
+    from decimal import Decimal
+
+    from sqlalchemy import select
+    from sqlalchemy.orm import attributes
+
+    from src.core.database.models import (
+        AuthorizedProperty,
+        CurrencyLimit,
+        GAMInventory,
+        Principal,
+        PropertyTag,
+        PublisherPartner,
+        Tenant,
+        TenantAuthConfig,
+    )
+
+    stmt = select(Tenant).filter_by(tenant_id=tenant_id)
+    tenant = session.scalars(stmt).first()
+    if tenant:
+        if not tenant.authorized_emails:
+            tenant.authorized_emails = ["test@example.com"]
+            attributes.flag_modified(tenant, "authorized_emails")
+        tenant.auth_setup_mode = False
+        if tenant.ad_server is None:
+            tenant.ad_server = "mock"
+        session.flush()
+
+    # TenantAuthConfig
+    stmt_auth_config = select(TenantAuthConfig).filter_by(tenant_id=tenant_id)
+    if not session.scalars(stmt_auth_config).first():
+        auth_config = TenantAuthConfig(
+            tenant_id=tenant_id,
+            oidc_enabled=True,
+            oidc_provider="google",
+            oidc_discovery_url="https://accounts.google.com/.well-known/openid-configuration",
+            oidc_client_id="test_client_id_for_fixtures",
+            oidc_scopes="openid email profile",
+        )
+        session.add(auth_config)
+
+    # PublisherPartner
+    stmt_publisher = select(PublisherPartner).filter_by(
+        tenant_id=tenant_id, publisher_domain="fixture-default.example.com"
+    )
+    if not session.scalars(stmt_publisher).first():
+        publisher_partner = PublisherPartner(
+            tenant_id=tenant_id,
+            publisher_domain="fixture-default.example.com",
+            display_name="Fixture Default Publisher",
+            is_verified=True,
+            sync_status="success",
+        )
+        session.add(publisher_partner)
+
+    # AuthorizedProperty
+    stmt_property = select(AuthorizedProperty).filter_by(tenant_id=tenant_id)
+    if not session.scalars(stmt_property).first():
+        authorized_property = AuthorizedProperty(
+            tenant_id=tenant_id,
+            property_id=f"{tenant_id}_property_1",
+            property_type="website",
+            name="Fixture Default Property",
+            identifiers=[{"type": "domain", "value": "fixture-default.example.com"}],
+            publisher_domain="fixture-default.example.com",
+            verification_status="verified",
+        )
+        session.add(authorized_property)
+
+    # CurrencyLimit
+    stmt_currency = select(CurrencyLimit).filter_by(tenant_id=tenant_id, currency_code="USD")
+    if not session.scalars(stmt_currency).first():
+        currency_limit = CurrencyLimit(
+            tenant_id=tenant_id,
+            currency_code="USD",
+            min_package_budget=Decimal("1.00"),
+            max_daily_package_spend=Decimal("100000.00"),
+        )
+        session.add(currency_limit)
+
+    # PropertyTag
+    stmt_tag = select(PropertyTag).filter_by(tenant_id=tenant_id, tag_id="all_inventory")
+    if not session.scalars(stmt_tag).first():
+        property_tag = PropertyTag(
+            tenant_id=tenant_id,
+            tag_id="all_inventory",
+            name="All Inventory",
+            description="All available inventory",
+        )
+        session.add(property_tag)
+
+    # Principal
+    stmt_principal = select(Principal).filter_by(tenant_id=tenant_id)
+    existing_principal = session.scalars(stmt_principal).first()
+    if not existing_principal:
+        principal = Principal(
+            tenant_id=tenant_id,
+            principal_id=f"{tenant_id}_default_principal",
+            name="Default Test Principal",
+            access_token=f"{tenant_id}_default_token",
+            platform_mappings={
+                "kevel": {"advertiser_id": f"kevel_adv_{tenant_id}"},
+                "mock": {"advertiser_id": f"mock_adv_{tenant_id}"},
+            },
+        )
+        session.add(principal)
+    elif existing_principal.platform_mappings and "kevel" not in existing_principal.platform_mappings:
+        existing_principal.platform_mappings["kevel"] = {
+            "advertiser_id": f"kevel_adv_{existing_principal.principal_id}"
+        }
+        attributes.flag_modified(existing_principal, "platform_mappings")
+
+    # GAMInventory
+    stmt_inventory = select(GAMInventory).filter_by(tenant_id=tenant_id)
+    if not session.scalars(stmt_inventory).first():
+        inventory_items = [
+            GAMInventory(
+                tenant_id=tenant_id,
+                inventory_type="ad_unit",
+                inventory_id=f"{tenant_id}_ad_unit_1",
+                name="Test Ad Unit",
+                path=["root", "test"],
+                status="active",
+                inventory_metadata={"sizes": ["300x250"]},
+            ),
+            GAMInventory(
+                tenant_id=tenant_id,
+                inventory_type="placement",
+                inventory_id=f"{tenant_id}_placement_1",
+                name="Test Placement",
+                path=["root"],
+                status="active",
+                inventory_metadata={},
+            ),
+        ]
+        for item in inventory_items:
+            session.add(item)
 
 
 @pytest.fixture(scope="module")

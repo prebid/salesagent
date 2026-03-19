@@ -112,6 +112,7 @@ class TestPackageDeliveryFields:
         "pricing_model",
         "rate",
         "currency",
+        "by_placement",
     }
 
     def test_field_names(self):
@@ -326,7 +327,7 @@ class TestGetMediaBuyDeliveryResponseMethods:
 
 class TestAdapterPackageDelivery:
     def test_fields(self):
-        assert set(AdapterPackageDelivery.model_fields.keys()) == {"package_id", "impressions", "spend"}
+        assert set(AdapterPackageDelivery.model_fields.keys()) == {"package_id", "impressions", "spend", "by_placement"}
 
     def test_construction(self):
         obj = AdapterPackageDelivery(package_id="pkg_1", impressions=1000, spend=5.0)

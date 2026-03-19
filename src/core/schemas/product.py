@@ -243,6 +243,15 @@ class GetProductsRequest(LibraryGetProductsRequest):
         None,
         description="Buyer intent: 'brief' (publisher curates) or 'wholesale' (buyer applies own audiences)",
     )
+    preferred_delivery_types: list[str] | None = Field(
+        None,
+        description=(
+            "Delivery types the buyer prefers, in priority order. "
+            "Unlike filters.delivery_type which excludes non-matching products, "
+            "this signals preference for curation — the publisher may still include "
+            "other delivery types when they match the brief well."
+        ),
+    )
     account: dict[str, Any] | None = Field(
         None,
         description="Account for product lookup. Returns products with pricing specific to this account's rate card (spec: account-ref.json)",

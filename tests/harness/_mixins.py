@@ -87,6 +87,7 @@ class DeliveryPollMixin:
                     package_id=p["package_id"],
                     impressions=p.get("impressions", 0),
                     spend=p.get("spend", 0.0),
+                    by_placement=p.get("by_placement"),
                 )
                 for p in packages
             ]
@@ -133,6 +134,9 @@ class DeliveryPollMixin:
         """Call _get_media_buy_delivery_impl with the given parameters."""
         self._commit_factory_data()  # type: ignore[attr-defined]
 
+        # identity is injected by call_via but belongs on the _impl call, not the request
+        identity = extra.pop("identity", None) or self.identity  # type: ignore[attr-defined]
+
         kwargs: dict[str, Any] = {}
         if media_buy_ids is not None:
             kwargs["media_buy_ids"] = media_buy_ids
@@ -144,10 +148,103 @@ class DeliveryPollMixin:
             kwargs["end_date"] = end_date
         if status_filter is not None:
             kwargs["status_filter"] = status_filter
+
+        # Only pass extra fields that GetMediaBuyDeliveryRequest actually accepts.
+        # In production, the transport layer (MCP/A2A/REST) validates and strips
+        # unknown fields BEFORE _impl receives the request.
+        #
+        # Fail loudly if a test passes fields not in the schema — this prevents
+        # vacuous passes where the mixin silently drops the field and the test
+        # exercises the default code path instead of the field-specific path.
+        valid_fields = set(GetMediaBuyDeliveryRequest.model_fields)
+        unknown = {k for k in extra if k not in valid_fields}
+        if unknown:
+            raise ValueError(
+                f"Fields {unknown} not in GetMediaBuyDeliveryRequest schema. "
+                f"Valid fields: {sorted(valid_fields)}. "
+                f"If testing validation of these fields, route through "
+                f"the transport layer instead of call_impl()."
+            )
         kwargs.update(extra)
 
         req = GetMediaBuyDeliveryRequest(**kwargs)
-        return _get_media_buy_delivery_impl(req, self.identity)  # type: ignore[attr-defined]
+        return _get_media_buy_delivery_impl(req, identity)
+
+    def call_a2a(
+        self,
+        media_buy_ids: list[str] | None = None,
+        buyer_refs: list[str] | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        status_filter: list[str] | None = None,
+        **extra: Any,
+    ) -> GetMediaBuyDeliveryResponse:
+        """Call get_media_buy_delivery_raw (A2A wrapper)."""
+        from src.core.tools.media_buy_delivery import get_media_buy_delivery_raw
+
+        self._commit_factory_data()  # type: ignore[attr-defined]
+
+        identity = extra.pop("identity", None) or self.identity  # type: ignore[attr-defined]
+
+        kwargs: dict[str, Any] = {"identity": identity}
+        if media_buy_ids is not None:
+            kwargs["media_buy_ids"] = media_buy_ids
+        if buyer_refs is not None:
+            kwargs["buyer_refs"] = buyer_refs
+        if start_date is not None:
+            kwargs["start_date"] = start_date
+        if end_date is not None:
+            kwargs["end_date"] = end_date
+        if status_filter is not None:
+            kwargs["status_filter"] = status_filter
+
+        return get_media_buy_delivery_raw(**kwargs)
+
+    def call_mcp(
+        self,
+        media_buy_ids: list[str] | None = None,
+        buyer_refs: list[str] | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        status_filter: list[str] | None = None,
+        **extra: Any,
+    ) -> GetMediaBuyDeliveryResponse:
+        """Call get_media_buy_delivery MCP wrapper with mock Context."""
+        from src.core.tools.media_buy_delivery import get_media_buy_delivery
+
+        # MCP wrapper gets identity from Context, not from kwargs
+        extra.pop("identity", None)
+
+        kwargs: dict[str, Any] = {}
+        if media_buy_ids is not None:
+            kwargs["media_buy_ids"] = media_buy_ids
+        if buyer_refs is not None:
+            kwargs["buyer_refs"] = buyer_refs
+        if start_date is not None:
+            kwargs["start_date"] = start_date
+        if end_date is not None:
+            kwargs["end_date"] = end_date
+        if status_filter is not None:
+            kwargs["status_filter"] = status_filter
+
+        return self._run_mcp_wrapper(get_media_buy_delivery, GetMediaBuyDeliveryResponse, **kwargs)  # type: ignore[attr-defined]
+
+    def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
+        """Convert kwargs to GetMediaBuyDeliveryBody shape for REST POST.
+
+        Includes fields present in GetMediaBuyDeliveryBody
+        (src/routes/api_v1.py): media_buy_ids, buyer_refs, start_date,
+        end_date, status_filter.
+        """
+        body: dict[str, Any] = {}
+        for field in ("media_buy_ids", "buyer_refs", "start_date", "end_date", "status_filter"):
+            if kwargs.get(field) is not None:
+                body[field] = kwargs[field]
+        return body
+
+    def parse_rest_response(self, data: dict[str, Any]) -> GetMediaBuyDeliveryResponse:
+        """Parse REST JSON into GetMediaBuyDeliveryResponse."""
+        return GetMediaBuyDeliveryResponse(**data)
 
     @staticmethod
     def _make_default_adapter_response() -> AdapterGetMediaBuyDeliveryResponse:
@@ -165,6 +262,12 @@ class DeliveryPollMixin:
 
 class WebhookMixin:
     """Shared fluent API for webhook delivery testing."""
+
+    def set_adapter_response(self, **kwargs: Any) -> None:
+        """No-op: webhook envs don't use adapters. Allows shared Given steps."""
+
+    def set_adapter_error(self, exception: Exception) -> None:
+        """No-op: webhook envs don't use adapters. Allows shared Given steps."""
 
     def set_http_status(self, code: int, text: str = "") -> None:
         """Configure requests.post to return a single response with the given status."""
@@ -247,11 +350,34 @@ class CircuitBreakerMixin:
         """Return a fresh CircuitBreaker instance with the given params."""
         return CircuitBreaker(**kwargs)
 
+    def set_adapter_response(self, **kwargs: Any) -> None:
+        """No-op: circuit breaker envs don't use adapters. Allows shared Given steps."""
+
+    def set_adapter_error(self, exception: Exception) -> None:
+        """No-op: circuit breaker envs don't use adapters. Allows shared Given steps."""
+
     def set_http_response(self, status_code: int) -> None:
         """Configure the httpx Client mock to return the given status code."""
         mock_response = MagicMock()
         mock_response.status_code = status_code
         self.mock["client"].return_value.__enter__.return_value.post.return_value = mock_response  # type: ignore[attr-defined]
+
+    def set_http_status(self, code: int, text: str = "") -> None:
+        """Alias for set_http_response — BDD steps use this name consistently."""
+        self.set_http_response(code)
+
+    def set_http_sequence(self, responses: list[tuple[int, str]]) -> None:
+        """Configure httpx Client to return a sequence of responses.
+
+        Each call to post() returns the next response in sequence.
+        """
+        mocks = []
+        for code, text in responses:
+            r = MagicMock()
+            r.status_code = code
+            r.text = text
+            mocks.append(r)
+        self.mock["client"].return_value.__enter__.return_value.post.side_effect = mocks  # type: ignore[attr-defined]
 
     def call_send(
         self,
@@ -277,6 +403,16 @@ class CircuitBreakerMixin:
             spend=spend,
             **extra,
         )
+
+    def call_deliver(self, **kwargs: Any) -> tuple[bool, dict[str, Any]]:
+        """Deliver a webhook and return (success, details) tuple.
+
+        Wraps call_send to match the interface expected by BDD steps
+        that use ``env.call_deliver()`` (shared with WebhookMixin).
+        """
+        success = self.call_send(**kwargs)
+        status = "delivered" if success else "failed"
+        return success, {"status": status}
 
     def call_impl(self, **kwargs: Any) -> bool:
         """Alias for call_send to satisfy BaseTestEnv interface."""

@@ -330,9 +330,17 @@ class CreativeAgentRegistry:
                 )
 
                 # adcp SDK 3.6.0 requires structuredContent but some creative agents
-                # return TextContent with JSON. Fall back to raw HTTP + parse.
-                if "structuredContent" in str(error_msg):
-                    logger.warning(f"adcp SDK structuredContent mismatch, falling back to raw HTTP: {error_msg}")
+                # return TextContent with JSON. Also falls back when the SDK fails
+                # with generic errors (e.g., "no running event loop" → "No error
+                # details provided") that indicate an SDK-level transport issue.
+                sdk_transport_error = (
+                    "structuredContent" in str(error_msg)
+                    or "No error details provided" in str(error_msg)
+                    or "no running event loop" in str(error_msg)
+                    or "Failed to connect" in str(error_msg)
+                )
+                if sdk_transport_error:
+                    logger.warning(f"adcp SDK transport issue, falling back to raw HTTP: {error_msg}")
                     return await self._fetch_formats_raw_mcp(agent)
 
                 logger.error(f"Creative agent {agent.name} returned FAILED status. Error: {error_msg}")
@@ -384,36 +392,64 @@ class CreativeAgentRegistry:
             if auth_token:
                 headers[auth_header] = auth_token
 
-        async with httpx.AsyncClient(timeout=agent.timeout) as http:
-            # MCP Streamable HTTP: POST to endpoint with tools/call
-            response = await http.post(
-                mcp_url,
-                json={
-                    "jsonrpc": "2.0",
-                    "method": "tools/call",
-                    "params": {"name": "list_creative_formats", "arguments": {}},
-                    "id": 1,
-                },
-                headers=headers,
-            )
-            response.raise_for_status()
+        import asyncio
 
-            # Parse SSE or JSON response
-            content_type = response.headers.get("content-type", "")
-            if "text/event-stream" in content_type:
-                # Parse SSE events — find the result event
-                for line in response.text.split("\n"):
-                    if line.startswith("data: "):
-                        event_data = json.loads(line[6:])
-                        if "result" in event_data:
-                            return self._parse_mcp_tool_result(event_data["result"], logger)
-            else:
-                data = response.json()
-                if "result" in data:
-                    return self._parse_mcp_tool_result(data["result"], logger)
+        max_retries = 3
+        last_exc: Exception | None = None
+        for attempt in range(max_retries):
+            try:
+                async with httpx.AsyncClient(timeout=agent.timeout) as http:
+                    response = await http.post(
+                        mcp_url,
+                        json={
+                            "jsonrpc": "2.0",
+                            "method": "tools/call",
+                            "params": {"name": "list_creative_formats", "arguments": {}},
+                            "id": 1,
+                        },
+                        headers=headers,
+                    )
+                    if response.status_code == 429 and attempt < max_retries - 1:
+                        retry_after = int(response.headers.get("Retry-After", 2**attempt))
+                        logger.warning(f"Creative agent 429, retrying in {retry_after}s (attempt {attempt + 1})")
+                        await asyncio.sleep(retry_after)
+                        continue
+                    response.raise_for_status()
+                    break  # success
+            except httpx.HTTPStatusError as exc:
+                last_exc = exc
+                logger.error(f"Creative agent fallback HTTP error: {exc.response.status_code} from {mcp_url}")
+                raise RuntimeError(f"Creative agent HTTP error: {exc.response.status_code}") from exc
+            except httpx.TimeoutException as exc:
+                last_exc = exc
+                if attempt < max_retries - 1:
+                    logger.warning(f"Creative agent fallback timed out, retrying (attempt {attempt + 1})")
+                    await asyncio.sleep(2**attempt)
+                    continue
+                logger.error(f"Creative agent fallback timed out: {mcp_url}")
+                raise RuntimeError(f"Request timed out: {mcp_url}") from exc
+            except httpx.RequestError as exc:
+                last_exc = exc
+                logger.error(f"Creative agent fallback connection failed: {mcp_url} — {exc}")
+                raise RuntimeError(f"Connection failed: {mcp_url} — {exc}") from exc
+        else:
+            raise RuntimeError(f"Creative agent HTTP error after {max_retries} retries") from last_exc
 
-            logger.warning("_fetch_formats_raw_mcp: No parseable result in MCP response")
-            return []
+        # Parse SSE or JSON response
+        content_type = response.headers.get("content-type", "")
+        if "text/event-stream" in content_type:
+            for line in response.text.split("\n"):
+                if line.startswith("data: "):
+                    event_data = json.loads(line[6:])
+                    if "result" in event_data:
+                        return self._parse_mcp_tool_result(event_data["result"], logger)
+        else:
+            data = response.json()
+            if "result" in data:
+                return self._parse_mcp_tool_result(data["result"], logger)
+
+        logger.warning("_fetch_formats_raw_mcp: No parseable result in MCP response")
+        return []
 
     def _parse_mcp_tool_result(self, result: dict, logger: Any) -> list[Format]:
         """Parse formats from an MCP tools/call result."""
@@ -684,8 +720,6 @@ class CreativeAgentRegistry:
         """
         # Find agent
         agent = CreativeAgent(agent_url=agent_url, name="Unknown", enabled=True)
-
-        # Get formats (uses cache)
         formats = await self.get_formats_for_agent(agent)
 
         # Find matching format

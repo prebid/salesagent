@@ -42,7 +42,7 @@ class TestToxEnvironments:
         parser.read(str(TOX_INI))
         return parser
 
-    @pytest.mark.parametrize("env", ["unit", "integration", "integration_v2", "e2e", "ui"])
+    @pytest.mark.parametrize("env", ["unit", "integration", "e2e", "admin"])
     def test_test_environment_exists(self, tox_config, env):
         """Each test suite has a corresponding tox environment."""
         section = f"testenv:{env}"
@@ -58,7 +58,7 @@ class TestToxEnvironments:
         if not tox_config.has_section(section):
             pytest.skip("No coverage env")
         deps_str = tox_config.get(section, "depends", fallback="")
-        for suite in ["unit", "integration", "integration_v2", "e2e", "ui"]:
+        for suite in ["unit", "integration", "e2e", "admin"]:
             assert suite in deps_str, f"coverage env missing depends on '{suite}'"
 
 

@@ -31,9 +31,9 @@ make test-cov                          # Open htmlcov/index.html
 ## Test Organization
 - **tests/unit/**: Fast, isolated (mock external deps only) — `tox -e unit`
 - **tests/integration/**: Real PostgreSQL database — `tox -e integration`
-- **tests/integration_v2/**: Real PostgreSQL database — `tox -e integration_v2`
 - **tests/e2e/**: Full system tests (Docker stack) — `tox -e e2e`
-- **tests/ui/**: Admin UI tests (Docker stack) — `tox -e ui`
+- **tests/admin/**: Admin UI tests (Docker stack) — `tox -e admin`
+- **tests/bdd/**: BDD behavioral tests — `tox -e bdd`
 
 ## Database Fixtures
 ```python
@@ -91,7 +91,8 @@ When a test fails, you must NOT say any of the following and continue:
 | DB for worktree agent | `eval $(.claude/skills/agent-db/agent-db.sh up)` | Bare Postgres (unique port) |
 | **Full suite (all 5 envs)** | **`./run_all_tests.sh`** | **Full Docker stack (auto-teardown)** |
 | Full suite, targeted | `./run_all_tests.sh ci tests/path -k name` | Full Docker stack |
-| Quick suite (no e2e/ui) | `./run_all_tests.sh quick` | Nothing (needs DATABASE_URL) |
+| Quick suite (no e2e/admin) | `./run_all_tests.sh quick` | Nothing (needs DATABASE_URL) |
+| Entity-scoped | `make test-entity ENTITY=delivery` | Nothing (across all non-BDD suites) |
 
 **Port conflicts are impossible** — both `test-stack.sh` and `agent-db.sh` scan for free ports in 50000-60000.
 
