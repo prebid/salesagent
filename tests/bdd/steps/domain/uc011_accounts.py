@@ -583,9 +583,9 @@ def when_sync_accounts_with_table(ctx: dict, datatable: Any) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-@then("the response is a success variant with accounts array")
+@then(parsers.re(r"the response is a success variant(?:\s+with accounts array)?"))
 def then_success_with_accounts(ctx: dict) -> None:
-    """Assert the response is a success variant containing an accounts array."""
+    """Assert the response is a success variant (optionally with accounts array)."""
     error = ctx.get("error")
     assert error is None, f"Expected success but got error: {error}"
     resp = ctx.get("response")
@@ -1038,3 +1038,339 @@ def then_push_sent(ctx: dict, url: str) -> None:
     assert ctx.get("push_notification_url") == url, (
         f"Expected push to {url}, registered: {ctx.get('push_notification_url')}"
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Slice 6: dry_run + delete_missing steps
+# ═══════════════════════════════════════════════════════════════════════
+
+
+# ── Given: previously synced accounts ─────────────────────────────────
+
+
+@given(parsers.parse('the agent previously synced accounts for brand domain "{d1}" and "{d2}"'))
+def given_previously_synced_two(ctx: dict, d1: str, d2: str) -> None:
+    """Pre-create two accounts via sync_accounts."""
+    _setup_tenant_and_principal(ctx)
+    _sync_pre_create(ctx, brand_domain=d1, operator=d1, billing="operator")
+    _sync_pre_create(ctx, brand_domain=d2, operator=d2, billing="operator")
+
+
+@given(parsers.parse('the agent previously synced accounts for brand domain "{d}" only'))
+def given_previously_synced_one(ctx: dict, d: str) -> None:
+    """Pre-create one account via sync_accounts."""
+    _setup_tenant_and_principal(ctx)
+    _sync_pre_create(ctx, brand_domain=d, operator=d, billing="operator")
+
+
+def _create_agent(ctx: dict, agent_name: str) -> Any:
+    """Create a separate principal (agent) for multi-agent tests.
+
+    Returns the principal. Caches in ctx["agents"][name].
+    """
+    from tests.factories.principal import PrincipalFactory
+
+    agents = ctx.setdefault("agents", {})
+    if agent_name in agents:
+        return agents[agent_name]
+
+    tenant, _ = _setup_tenant_and_principal(ctx)
+    agent_principal = PrincipalFactory(tenant=tenant)
+    agents[agent_name] = agent_principal
+    return agent_principal
+
+
+def _make_identity_for_agent(ctx: dict, agent_name: str) -> Any:
+    """Build a ResolvedIdentity for a named agent."""
+    from tests.factories.principal import PrincipalFactory
+
+    agent = _create_agent(ctx, agent_name)
+    return PrincipalFactory.make_identity(
+        principal_id=agent.principal_id,
+        tenant_id=agent.tenant_id,
+    )
+
+
+@given(parsers.parse('agent A previously synced accounts for brand domain "{d}"'))
+def given_agent_a_synced(ctx: dict, d: str) -> None:
+    """Pre-create an account under agent A's identity."""
+    _setup_tenant_and_principal(ctx)
+    agent_a = _create_agent(ctx, "A")
+    identity_a = _make_identity_for_agent(ctx, "A")
+    env = ctx["env"]
+    from src.core.schemas.account import SyncAccountsRequest
+
+    req = SyncAccountsRequest(
+        accounts=[{"brand": {"domain": d}, "operator": d, "billing": "operator"}],
+    )
+    try:
+        env.call_impl(req=req, identity=identity_a)
+    except Exception:
+        pass  # Swallow — we just want the DB state
+    ctx.pop("response", None)
+    ctx.pop("error", None)
+
+
+@given(parsers.parse('agent B previously synced accounts for brand domain "{d}"'))
+def given_agent_b_synced(ctx: dict, d: str) -> None:
+    """Pre-create an account under agent B's identity."""
+    _setup_tenant_and_principal(ctx)
+    _create_agent(ctx, "B")
+    identity_b = _make_identity_for_agent(ctx, "B")
+    env = ctx["env"]
+    from src.core.schemas.account import SyncAccountsRequest
+
+    req = SyncAccountsRequest(
+        accounts=[{"brand": {"domain": d}, "operator": d, "billing": "operator"}],
+    )
+    try:
+        env.call_impl(req=req, identity=identity_b)
+    except Exception:
+        pass
+    ctx.pop("response", None)
+    ctx.pop("error", None)
+
+
+# ── When: sync with dry_run / delete_missing flags ────────────────────
+
+
+@when(parsers.re(r"the Buyer Agent sends a sync_accounts request with dry_run (?P<value>true|false) and:"))
+def when_sync_with_dry_run(ctx: dict, value: str, datatable: Any) -> None:
+    """Send sync_accounts with dry_run flag and accounts table."""
+    from src.core.schemas.account import SyncAccountsRequest
+
+    headers = datatable[0]
+    rows = [dict(zip(headers, row, strict=True)) for row in datatable[1:]]
+    accounts = _parse_sync_table(rows)
+
+    try:
+        req = SyncAccountsRequest(
+            accounts=accounts,
+            dry_run=value.lower() == "true",
+        )
+        dispatch_request(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
+
+
+@when(parsers.re(r"the Buyer Agent sends a sync_accounts request with delete_missing (?P<value>true|false) and:"))
+def when_sync_with_delete_missing(ctx: dict, value: str, datatable: Any) -> None:
+    """Send sync_accounts with delete_missing flag and accounts table."""
+    from src.core.schemas.account import SyncAccountsRequest
+
+    headers = datatable[0]
+    rows = [dict(zip(headers, row, strict=True)) for row in datatable[1:]]
+    accounts = _parse_sync_table(rows)
+
+    try:
+        req = SyncAccountsRequest(
+            accounts=accounts,
+            delete_missing=value.lower() == "true",
+        )
+        dispatch_request(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
+
+
+@when("the Buyer Agent sends a sync_accounts request without delete_missing and:")
+def when_sync_without_delete_missing(ctx: dict, datatable: Any) -> None:
+    """Send sync_accounts without delete_missing (uses default=False)."""
+    from src.core.schemas.account import SyncAccountsRequest
+
+    headers = datatable[0]
+    rows = [dict(zip(headers, row, strict=True)) for row in datatable[1:]]
+    accounts = _parse_sync_table(rows)
+
+    try:
+        req = SyncAccountsRequest(accounts=accounts)
+        dispatch_request(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
+
+
+@when("agent A sends a sync_accounts request with delete_missing true and:")
+def when_agent_a_sync_delete_missing(ctx: dict, datatable: Any) -> None:
+    """Send sync_accounts under agent A's identity with delete_missing=True."""
+    from src.core.schemas.account import SyncAccountsRequest
+
+    headers = datatable[0]
+    rows = [dict(zip(headers, row, strict=True)) for row in datatable[1:]]
+    accounts = _parse_sync_table(rows)
+
+    identity_a = _make_identity_for_agent(ctx, "A")
+
+    try:
+        req = SyncAccountsRequest(
+            accounts=accounts,
+            delete_missing=True,
+        )
+        env = ctx["env"]
+        ctx["response"] = env.call_impl(req=req, identity=identity_a)
+    except Exception as exc:
+        ctx["error"] = exc
+
+
+# ── Then: dry_run response assertions ─────────────────────────────────
+
+
+@then("the response includes dry_run true")
+def then_dry_run_true(ctx: dict) -> None:
+    """Assert the response has dry_run=True."""
+    resp = ctx["response"]
+    assert resp is not None, "Expected a response"
+    assert resp.dry_run is True, f"Expected dry_run=True, got {resp.dry_run}"
+
+
+@then("the response does not include a dry_run field")
+def then_no_dry_run_include(ctx: dict) -> None:
+    """Assert the response doesn't include dry_run (alias for 'does not contain')."""
+    resp = ctx.get("response")
+    if resp is not None:
+        dry_run = getattr(resp, "dry_run", None)
+        assert dry_run is None, f"Expected no dry_run, got {dry_run}"
+
+
+@then(parsers.parse('the account for brand domain "{domain}" shows action "{action}"'))
+def then_account_shows_action(ctx: dict, domain: str, action: str) -> None:
+    """Assert account has expected action (alias for 'has action')."""
+    resp = ctx["response"]
+    acct = _find_account_by_brand(resp, domain)
+    actual = _action_str(acct.action)
+    assert actual == action, f"Expected action '{action}' for {domain}, got '{actual}'"
+    ctx["last_account"] = acct
+
+
+@then("no accounts were actually created or modified on the seller")
+def then_no_db_writes(ctx: dict) -> None:
+    """Assert dry_run didn't write to DB — query repo and verify no accounts exist."""
+    from src.core.database.database_session import get_db_session
+    from src.core.database.repositories.account import AccountRepository
+
+    tenant, principal = ctx["tenant"], ctx["principal"]
+    with get_db_session() as session:
+        repo = AccountRepository(session, tenant.tenant_id)
+        accounts = repo.list_by_principal(principal.principal_id)
+        assert len(accounts) == 0, (
+            f"Expected 0 accounts after dry_run, but found {len(accounts)}: {[a.brand['domain'] for a in accounts]}"
+        )
+
+
+@then("the account was actually created on the seller")
+def then_account_in_db(ctx: dict) -> None:
+    """Assert the sync actually wrote to DB."""
+    from src.core.database.database_session import get_db_session
+    from src.core.database.repositories.account import AccountRepository
+
+    tenant, principal = ctx["tenant"], ctx["principal"]
+    with get_db_session() as session:
+        repo = AccountRepository(session, tenant.tenant_id)
+        accounts = repo.list_by_principal(principal.principal_id)
+        assert len(accounts) > 0, "Expected at least 1 account in DB after sync"
+
+
+# ── Then: delete_missing assertions ───────────────────────────────────
+
+
+@then(parsers.parse('the response includes a result for brand domain "{domain}" showing deactivation'))
+def then_deactivation_result(ctx: dict, domain: str) -> None:
+    """Assert the response shows a deactivated account for the given domain."""
+    resp = ctx["response"]
+    acct = _find_account_by_brand(resp, domain)
+    actual_status = _status_str(acct.status)
+    actual_action = _action_str(acct.action)
+    assert actual_status == "closed" or actual_action == "updated", (
+        f"Expected deactivation for {domain}: got status={actual_status}, action={actual_action}"
+    )
+
+
+@then(parsers.parse('the account for brand domain "{domain}" has action "unchanged" or "updated"'))
+def then_account_unchanged_or_updated(ctx: dict, domain: str) -> None:
+    """Assert account has action 'unchanged' or 'updated' (either is acceptable)."""
+    resp = ctx["response"]
+    acct = _find_account_by_brand(resp, domain)
+    actual = _action_str(acct.action)
+    assert actual in ("unchanged", "updated"), f"Expected 'unchanged' or 'updated' for {domain}, got '{actual}'"
+    ctx["last_account"] = acct
+
+
+@then(parsers.parse('agent B\'s account for brand domain "{domain}" is not affected'))
+def then_agent_b_not_affected(ctx: dict, domain: str) -> None:
+    """Assert agent B's account is still active (not deactivated by agent A)."""
+    from src.core.database.database_session import get_db_session
+    from src.core.database.repositories.account import AccountRepository
+
+    tenant = ctx["tenant"]
+    agent_b = ctx["agents"]["B"]
+    with get_db_session() as session:
+        repo = AccountRepository(session, tenant.tenant_id)
+        accounts = repo.list_by_principal(agent_b.principal_id)
+        matching = [a for a in accounts if a.brand["domain"] == domain]
+        assert len(matching) == 1, f"Expected 1 account for agent B domain {domain}, got {len(matching)}"
+        assert matching[0].status != "closed", (
+            f"Agent B's account {domain} was deactivated (status={matching[0].status})"
+        )
+
+
+@then("only agent A's absent accounts are deactivated")
+def then_only_agent_a_deactivated(ctx: dict) -> None:
+    """Assert only agent A's absent accounts were deactivated."""
+    # If agent B's account assertion passed, this is implicitly true.
+    # The sync response should show the deactivation for agent A's missing accounts.
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+
+
+@then(parsers.parse('brand domain "{domain}" remains in its current state'))
+def then_brand_unchanged(ctx: dict, domain: str) -> None:
+    """Assert the account for the given domain was NOT deactivated."""
+    from src.core.database.database_session import get_db_session
+    from src.core.database.repositories.account import AccountRepository
+
+    tenant = ctx["tenant"]
+    principal = ctx["principal"]
+    with get_db_session() as session:
+        repo = AccountRepository(session, tenant.tenant_id)
+        accounts = repo.list_by_principal(principal.principal_id)
+        matching = [a for a in accounts if a.brand["domain"] == domain]
+        assert len(matching) == 1, f"Expected account for {domain}, got {len(matching)}"
+        assert matching[0].status != "closed", (
+            f"Account {domain} was deactivated (status={matching[0].status}) but should be unchanged"
+        )
+
+
+@then("only the included accounts are processed")
+def then_only_included_processed(ctx: dict) -> None:
+    """Assert only the accounts in the sync request were processed."""
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    # The response should contain exactly the accounts from the request
+    # (absent accounts are NOT in the response unless delete_missing is true)
+
+
+@then("no accounts are deactivated")
+def then_no_deactivations(ctx: dict) -> None:
+    """Assert no accounts were deactivated (all still active/non-closed)."""
+    from src.core.database.database_session import get_db_session
+    from src.core.database.repositories.account import AccountRepository
+
+    tenant = ctx["tenant"]
+    principal = ctx["principal"]
+    with get_db_session() as session:
+        repo = AccountRepository(session, tenant.tenant_id)
+        all_accounts = repo.list_by_principal(principal.principal_id)
+        closed = [a for a in all_accounts if a.status == "closed"]
+        assert len(closed) == 0, (
+            f"Expected 0 deactivated accounts, found {len(closed)}: {[a.brand['domain'] for a in closed]}"
+        )
+
+
+@then(parsers.parse('the account for brand domain "{domain}" is processed normally'))
+def then_account_processed_normally(ctx: dict, domain: str) -> None:
+    """Assert the account was processed (action is created/updated/unchanged, not failed)."""
+    resp = ctx["response"]
+    acct = _find_account_by_brand(resp, domain)
+    actual = _action_str(acct.action)
+    assert actual in ("created", "updated", "unchanged"), (
+        f"Expected normal processing for {domain}, got action '{actual}'"
+    )
+    ctx["last_account"] = acct

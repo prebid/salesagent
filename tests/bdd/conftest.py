@@ -285,6 +285,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-011-ext-d-pending-message",
             "T-UC-011-ext-d-active",
             "T-UC-011-ext-d-push",
+            # Slice 6: dry_run + delete_missing
+            "T-UC-011-ext-e-preview",
+            "T-UC-011-ext-e-normal",
+            "T-UC-011-ext-e-omitted",
+            "T-UC-011-ext-f-deactivate",
+            "T-UC-011-ext-f-scoped",
+            "T-UC-011-ext-f-false",
+            "T-UC-011-ext-f-none-absent",
+            "T-UC-011-ext-f-omitted",
         }
         if any(t.startswith("T-UC-011") for t in marker_names):
             is_list = "list" in marker_names
