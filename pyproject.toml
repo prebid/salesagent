@@ -1,6 +1,6 @@
 [project]
 name = "adcp-sales-agent"
-version = "1.5.0"
+version = "1.6.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -102,6 +102,8 @@ dev = [
     "types-pytz>=2025.2.0.20250809",
     "types-waitress>=3.0.1.20250801",
     "pytest-json-report>=1.5.0",
+    "pytest-bdd>=7.0.0",
+    "semgrep>=1.50.0",
     "pylint>=4.0.5",
     # Security patches for transitive dev dependencies
     "black>=26.3.1",  # GHSA-3936-cmfr-pm3m

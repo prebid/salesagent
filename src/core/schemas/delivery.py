@@ -135,6 +135,15 @@ class DeliveryTotals(SalesAgentBaseModel):
     viewability: float | None = Field(None, ge=0, le=1, description="Viewability percentage as 0.0-1.0 (if applicable)")
 
 
+class PlacementBreakdown(SalesAgentBaseModel):
+    """Delivery metrics for a single placement within a package."""
+
+    placement_id: str = Field(description="Placement identifier")
+    impressions: float = Field(ge=0, description="Placement impressions")
+    spend: float = Field(ge=0, description="Placement spend")
+    clicks: float | None = Field(None, ge=0, description="Placement clicks")
+
+
 class PackageDelivery(SalesAgentBaseModel):
     """Metrics broken down by package.
 
@@ -163,6 +172,10 @@ class PackageDelivery(SalesAgentBaseModel):
         None,
         pattern=r"^[A-Z]{3}$",
         description="ISO 4217 currency code for this package during delivery (e.g., USD, EUR, GBP)",
+    )
+    by_placement: list[PlacementBreakdown] | None = Field(
+        None,
+        description="Placement-level delivery breakdown (populated when reporting_dimensions includes 'placement')",
     )
 
 
@@ -343,6 +356,7 @@ class AdapterPackageDelivery(SalesAgentBaseModel):
     package_id: str
     impressions: int
     spend: float
+    by_placement: list[dict[str, Any]] | None = None
 
 
 class AdapterGetMediaBuyDeliveryResponse(NestedModelSerializerMixin, SalesAgentBaseModel):

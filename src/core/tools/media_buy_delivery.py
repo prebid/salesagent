@@ -44,6 +44,7 @@ from src.core.schemas import (
     GetMediaBuyDeliveryResponse,
     MediaBuyDeliveryData,
     PackageDelivery,
+    PlacementBreakdown,
     PricingModel,
 )
 from src.core.schemas import (
@@ -276,6 +277,7 @@ def _get_media_buy_delivery_impl(
                                 "impressions": float(adapter_pkg.impressions),
                                 "spend": float(adapter_pkg.spend),
                                 "clicks": None,  # AdapterPackageDelivery doesn't have clicks yet
+                                "by_placement": adapter_pkg.by_placement,
                             }
                             total_spend_from_adapter += float(adapter_pkg.spend)
                             total_impressions_from_adapter += int(adapter_pkg.impressions)
@@ -368,11 +370,14 @@ def _get_media_buy_delivery_impl(
                         )
 
                         # Get REAL per-package metrics from adapter if available, otherwise divide equally
+                        raw_placements: list[dict[str, Any]] | None = None
                         if package_id in adapter_package_metrics:
                             # Use real metrics from adapter
                             pkg_metrics = adapter_package_metrics[package_id]
                             package_spend = pkg_metrics["spend"]
                             package_impressions = pkg_metrics["impressions"]
+                            _raw = pkg_metrics.get("by_placement")
+                            raw_placements = _raw if isinstance(_raw, list) else None
                         else:
                             # Fallback: divide equally if adapter didn't return this package
                             package_spend = spend / len(packages)
@@ -386,6 +391,25 @@ def _get_media_buy_delivery_impl(
                             package_clicks = floor(spend / (float(pricing_option.rate)))
                         else:
                             package_clicks = None
+
+                        # Build placement breakdown if reporting_dimensions includes "placement"
+                        placement_breakdown = None
+                        placement_dim = (
+                            (req.reporting_dimensions or {}).get("placement") if req.reporting_dimensions else None
+                        )
+                        if placement_dim is not None and raw_placements:
+                            placement_breakdown = [PlacementBreakdown(**p) for p in raw_placements]
+                            # Apply sort_by: use requested metric if available, fall back to "spend"
+                            sort_metric = (
+                                placement_dim.get("sort_by", "spend") if isinstance(placement_dim, dict) else "spend"
+                            )
+                            # Check if all placements have the sort metric
+                            has_metric = all(getattr(p, sort_metric, None) is not None for p in placement_breakdown)
+                            effective_sort = sort_metric if has_metric else "spend"
+                            placement_breakdown.sort(
+                                key=lambda p: getattr(p, effective_sort, 0) or 0,
+                                reverse=True,
+                            )
 
                         package_deliveries.append(
                             PackageDelivery(
@@ -404,6 +428,7 @@ def _get_media_buy_delivery_impl(
                                     else None
                                 ),
                                 currency=pricing_info.get("currency") if pricing_info else None,
+                                by_placement=placement_breakdown,
                             )
                         )
 
@@ -565,6 +590,7 @@ async def get_media_buy_delivery(
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
+    reporting_dimensions: dict[str, Any] | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
 ):
@@ -578,6 +604,7 @@ async def get_media_buy_delivery(
         status_filter: Filter by status - single status or array of MediaBuyStatus enums (optional)
         start_date: Start date for reporting period in YYYY-MM-DD format (optional)
         end_date: End date for reporting period in YYYY-MM-DD format (optional)
+        reporting_dimensions: Request dimensional breakdowns (optional)
         context: Application level context object (ContextObject)
         ctx: FastMCP context (automatically provided)
 
@@ -594,6 +621,7 @@ async def get_media_buy_delivery(
             status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
             start_date=start_date,
             end_date=end_date,
+            reporting_dimensions=reporting_dimensions,
             context=cast(ContextObject | None, context),
         )
 
@@ -610,6 +638,7 @@ def get_media_buy_delivery_raw(
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
+    reporting_dimensions: dict[str, Any] | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
@@ -622,6 +651,7 @@ def get_media_buy_delivery_raw(
         status_filter: Filter by status - single status or array of MediaBuyStatus enums (optional)
         start_date: Start date for reporting period in YYYY-MM-DD format (optional)
         end_date: End date for reporting period in YYYY-MM-DD format (optional)
+        reporting_dimensions: Request dimensional breakdowns (optional)
         context: Application level context (ContextObject)
         ctx: Context for authentication
         identity: Pre-resolved identity (preferred over ctx)
@@ -641,6 +671,7 @@ def get_media_buy_delivery_raw(
         status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
         start_date=start_date,
         end_date=end_date,
+        reporting_dimensions=reporting_dimensions,
         context=cast(ContextObject | None, context),
     )
 

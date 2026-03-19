@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit._migration_helpers import get_migration_heads
+
 
 class TestMigrationVersioning:
     """Test migration version tracking."""
@@ -25,6 +27,15 @@ class TestMigrationVersioning:
         # Check that at least one migration exists
         migration_files = list(versions_dir.glob("*.py"))
         assert len(migration_files) > 0, "No migration files found"
+
+    @pytest.mark.smoke
+    def test_single_migration_head(self):
+        """Smoke test: migration graph must have exactly one head."""
+        heads = get_migration_heads()
+        assert len(heads) == 1, (
+            f"Multiple migration heads detected: {sorted(heads)}. "
+            f"Run: uv run alembic merge -m 'Merge migration heads' heads"
+        )
 
 
 if __name__ == "__main__":

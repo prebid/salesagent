@@ -2,75 +2,13 @@
 
 ## Local Development Setup
 
-### Prerequisites
+See [Getting Started](GETTING_STARTED.md) for full setup instructions. Quick version:
 
-- Python 3.12+
-- Docker and Docker Compose
-- Git
-- uv (Python package manager): `pip install uv`
-
-### Initial Setup
-
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/prebid/salesagent.git
-   cd salesagent
-   ```
-
-2. **Set up environment variables:**
-   ```bash
-   cp .env.template .env
-   # Edit .env with your configuration (optional for basic testing)
-   ```
-
-3. **Build and start development services:**
-   ```bash
-   docker compose -f docker-compose.yml build
-   docker compose -f docker-compose.yml up -d
-   ```
-
-4. **Run database migrations:**
-   ```bash
-   docker compose -f docker-compose.yml exec admin-ui python scripts/ops/migrate.py
-   ```
-
-5. **Install local dependencies (for running tests outside Docker):**
-   ```bash
-   uv sync
-   ```
-
-### Running the Services
-
-**Development (recommended):**
 ```bash
-# Build from source (includes all dependencies, enables hot-reload)
-docker compose -f docker-compose.yml build
-docker compose -f docker-compose.yml up -d
-
-# View logs
-docker compose -f docker-compose.yml logs -f
-
-# Stop services
-docker compose -f docker-compose.yml down
+git clone https://github.com/prebid/salesagent.git
+cd salesagent
+make setup    # Installs deps, starts Docker, verifies health
 ```
-
-**Production-style (uses pre-built images):**
-```bash
-docker compose up -d
-```
-
-Access points (all via nginx proxy on port 8000):
-- Admin UI: http://localhost:8000/admin
-- MCP Server: http://localhost:8000/mcp/
-- A2A Server: http://localhost:8000/a2a
-
-Test login: `test_super_admin@example.com` / `test123`
-
-**Why use `docker-compose.yml`?**
-- Builds from local source code (not pre-built images)
-- Hot-reload for code changes
-- Includes all dependencies (new packages work immediately)
-- Source code mounted for live development
 
 ## Conductor Development Environment
 
@@ -347,7 +285,7 @@ def downgrade():
 4. Run migration:
 ```bash
 # Inside Docker (recommended)
-docker compose -f docker-compose.yml exec admin-ui python scripts/ops/migrate.py
+docker compose exec adcp-server python scripts/ops/migrate.py
 
 # Or locally with uv
 uv run python scripts/ops/migrate.py

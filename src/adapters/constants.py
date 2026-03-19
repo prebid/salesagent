@@ -18,3 +18,13 @@ UPDATE_ACTIONS = {
 
 # All adapters must support these standard actions
 REQUIRED_UPDATE_ACTIONS = list(UPDATE_ACTIONS.keys())
+
+# Re-export platform mapping symbols from core layer.
+# These were moved to src/core/platform_mappings.py to fix the reverse
+# dependency (core importing from adapters).  Adapter code that already
+# imports from this module continues to work via these re-exports.
+from src.core.platform_mappings import (  # noqa: F401
+    _OLD_FIELD_MAP,
+    ADAPTER_PLATFORM_MAP,
+    resolve_adapter_id,
+)

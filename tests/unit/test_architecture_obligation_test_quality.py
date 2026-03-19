@@ -37,7 +37,7 @@ _COVERS_RE = re.compile(r"Covers:\s+([\w-]+)")
 _TEST_ROOT = Path(__file__).resolve().parents[1]
 _UNIT_DIR = _TEST_ROOT / "unit"
 _INTEGRATION_DIR = _TEST_ROOT / "integration"
-_INTEGRATION_V2_DIR = _TEST_ROOT / "integration_v2"
+# integration_v2 merged into integration — no separate directory
 
 _ALLOWLIST_FILE = Path(__file__).resolve().parent / "obligation_test_quality_allowlist.json"
 
@@ -51,6 +51,30 @@ _UNIT_ENTITY_FILES = [
     "test_property_list_schema.py",
     "test_quiet_failure_propagation.py",
     "test_get_products_impl_coverage.py",
+]
+
+# Former integration_v2 files with Covers: tags (merged into integration/)
+_INTEGRATION_FORMER_V2_FILES = [
+    "test_creative_formats_aggregation.py",
+    "test_creative_formats_catalog.py",
+    "test_creative_formats_discovery.py",
+    "test_creative_formats_id_filters.py",
+    "test_creative_formats_mcp_filters.py",
+    "test_creative_formats_ordering.py",
+    "test_creative_formats_pagination.py",
+    "test_creative_formats_protocol.py",
+    "test_creative_formats_validation_a.py",
+    "test_creative_formats_validation_b.py",
+    "test_get_products_anonymous_pricing.py",
+    "test_get_products_auth_obligations.py",
+    "test_get_products_device_type_filter.py",
+    "test_get_products_filter_semantics.py",
+    "test_get_products_policy_obligations.py",
+    "test_get_products_response_constraints.py",
+    "test_property_list_crud.py",
+    "test_property_list_resolution.py",
+    "test_property_list_validation.py",
+    "test_targeting_validation_chain.py",
 ]
 
 
@@ -345,13 +369,15 @@ def _scan_all_files() -> list[tuple[str, str, str]]:
         if path.exists():
             violations.extend(_scan_file(path))
 
-    # Integration tests
+    # Integration tests — v3 files (original scope)
     for path in sorted(_INTEGRATION_DIR.glob("test_*_v3.py")):
         violations.extend(_scan_file(path))
 
-    # Integration V2 tests
-    for path in sorted(_INTEGRATION_V2_DIR.glob("test_*.py")):
-        violations.extend(_scan_file(path))
+    # Former integration_v2 files with Covers: tags (merged into integration/)
+    for name in _INTEGRATION_FORMER_V2_FILES:
+        path = _INTEGRATION_DIR / name
+        if path.exists():
+            violations.extend(_scan_file(path))
 
     return violations
 

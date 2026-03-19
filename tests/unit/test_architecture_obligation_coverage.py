@@ -7,7 +7,6 @@ must either:
 
 The guard scans:
 - Integration tests: tests/integration/test_*_v3.py + behavioral files
-- Integration V2 tests: tests/integration_v2/test_*.py
 - Unit entity tests: tests/unit/test_media_buy.py, test_creative.py, test_delivery.py
 
 The allowlist can only SHRINK — adding new uncovered obligations fails CI.
@@ -25,7 +24,6 @@ from pathlib import Path
 
 OBLIGATIONS_DIR = Path(__file__).resolve().parents[2] / "docs" / "test-obligations"
 INTEGRATION_DIR = Path(__file__).resolve().parents[2] / "tests" / "integration"
-INTEGRATION_V2_DIR = Path(__file__).resolve().parents[2] / "tests" / "integration_v2"
 UNIT_DIR = Path(__file__).resolve().parents[2] / "tests" / "unit"
 ALLOWLIST_FILE = Path(__file__).resolve().parent / "obligation_coverage_allowlist.json"
 
@@ -118,8 +116,8 @@ def _get_covered_obligations() -> set[str]:
         if tf.exists():
             _scan_file(tf)
 
-    # Integration V2 tests (all files use formal obligation IDs)
-    for tf in INTEGRATION_V2_DIR.glob("test_*.py"):
+    # All integration tests (includes former integration_v2 files)
+    for tf in INTEGRATION_DIR.glob("test_*.py"):
         _scan_file(tf)
 
     # Unit entity tests

@@ -16,7 +16,6 @@ VALID_POLICIES = {"require_auth", "require_brand", "public"}
 TEST_DIRS = [
     Path("tests/e2e"),
     Path("tests/integration"),
-    Path("tests/integration_v2"),
 ]
 
 

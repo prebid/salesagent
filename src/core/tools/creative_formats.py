@@ -330,6 +330,15 @@ def _list_creative_formats_impl(
             if f.accessibility is not None and _WCAG_ORDER.get(f.accessibility.wcag_level, 0) >= min_level
         ]
 
+    # Filter by output_format_ids / input_format_ids (OR semantics each)
+    for req_ids, attr in (
+        (req.output_format_ids, "output_format_ids"),
+        (req.input_format_ids, "input_format_ids"),
+    ):
+        if req_ids:
+            requested = {fmt.id for fmt in req_ids}
+            formats = [f for f in formats if getattr(f, attr) and {fid.id for fid in getattr(f, attr)} & requested]
+
     # Sort formats by type and name for consistent ordering
     # Use .value to convert enum to string for sorting (enums don't support < comparison)
     formats.sort(key=lambda f: (f.type.value if f.type is not None else "", f.name))

@@ -20,7 +20,6 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 if TYPE_CHECKING:
     from src.core.schemas import Snapshot
 
-from adcp.types.aliases import Package as ResponsePackage
 from flask import Flask
 
 from src.adapters.base import AdapterCapabilities, AdServerAdapter, TargetingCapabilities
@@ -52,7 +51,6 @@ from src.core.schemas import (
     CreateMediaBuyError,
     CreateMediaBuyRequest,
     CreateMediaBuyResponse,
-    CreateMediaBuySuccess,
     Error,
     MediaPackage,
     ReportingPeriod,
@@ -571,37 +569,13 @@ class GoogleAdManager(AdServerAdapter):
                 request, packages, start_time, end_time, media_buy_id
             )
 
-            # Build package responses - Per AdCP spec, CreateMediaBuyResponse.Package only contains:
-            # - buyer_ref (required)
-            # - package_id (required)
-            # - status (required)
-            package_responses = []
-            for idx, package in enumerate(packages):
-                # Get matching request package for buyer_ref
-                matching_req_package = None
-                if request.packages and idx < len(request.packages):
-                    matching_req_package = request.packages[idx]
-
-                buyer_ref = "unknown"  # Default fallback
-                if matching_req_package and hasattr(matching_req_package, "buyer_ref"):
-                    buyer_ref = matching_req_package.buyer_ref or buyer_ref
-
-                # Create AdCP-compliant Package response (package_id + status required per v2.9.0)
-                package_responses.append(
-                    ResponsePackage(
-                        buyer_ref=buyer_ref,
-                        package_id=package.package_id,
-                        paused=False,  # Default to not paused for created packages
-                    )
-                )
-
             if step_id:
-                return CreateMediaBuySuccess(
-                    buyer_ref=request.buyer_ref or "",
-                    media_buy_id=media_buy_id,
-                    creative_deadline=None,
+                return self._build_create_success(
+                    request,
+                    media_buy_id,
+                    packages,
+                    creative_deadline_days=None,
                     workflow_step_id=step_id,
-                    packages=package_responses,
                 )
             else:
                 error_msg = "Failed to create manual order workflow step"
@@ -786,38 +760,14 @@ class GoogleAdManager(AdServerAdapter):
 
             step_id = self.workflow_manager.create_activation_workflow_step(order_id, packages)
 
-            # Build package responses - Per AdCP spec, CreateMediaBuyResponse.Package only contains:
-            # - buyer_ref (required)
-            # - package_id (required)
-            # - status (required)
-            package_responses = []
-            for idx, (package, _line_item_id) in enumerate(zip(packages, line_item_ids, strict=False)):
-                # Get matching request package for buyer_ref
-                matching_req_package = None
-                if request.packages and idx < len(request.packages):
-                    matching_req_package = request.packages[idx]
-
-                buyer_ref = "unknown"  # Default fallback
-                if matching_req_package and hasattr(matching_req_package, "buyer_ref"):
-                    buyer_ref = matching_req_package.buyer_ref or buyer_ref
-
-                # Create AdCP-compliant Package response (package_id + status required per v2.9.0)
-                package_responses.append(
-                    ResponsePackage(
-                        buyer_ref=buyer_ref,
-                        package_id=package.package_id,
-                        paused=False,  # Default to not paused for created packages
-                    )
-                )
-
             # Create response and attach platform_line_item_id mapping for database persistence
             # This mapping is used by media_buy_create.py to update MediaPackage records
-            response = CreateMediaBuySuccess(
-                buyer_ref=request.buyer_ref or "",
-                media_buy_id=order_id,
-                creative_deadline=None,
+            response = self._build_create_success(
+                request,
+                order_id,
+                packages,
+                creative_deadline_days=None,
                 workflow_step_id=step_id,
-                packages=package_responses,
             )
 
             # Store platform_line_item_id mapping as a non-standard attribute
@@ -836,37 +786,13 @@ class GoogleAdManager(AdServerAdapter):
 
             return response
 
-        # Build package responses - Per AdCP spec, CreateMediaBuyResponse.Package only contains:
-        # - buyer_ref (required)
-        # - package_id (required)
-        # - status (required)
-        package_responses = []
-        for idx, (package, _line_item_id) in enumerate(zip(packages, line_item_ids, strict=False)):
-            # Get matching request package for buyer_ref
-            matching_req_package = None
-            if request.packages and idx < len(request.packages):
-                matching_req_package = request.packages[idx]
-
-            buyer_ref = "unknown"  # Default fallback
-            if matching_req_package and hasattr(matching_req_package, "buyer_ref"):
-                buyer_ref = matching_req_package.buyer_ref or buyer_ref
-
-            # Create AdCP-compliant Package response (package_id + status required per v2.9.0)
-            package_responses.append(
-                ResponsePackage(
-                    buyer_ref=buyer_ref,
-                    package_id=package.package_id,
-                    paused=False,  # Default to not paused for created packages
-                )
-            )
-
         # Create response and store platform_line_item_id mapping for database persistence
         # This mapping is used by media_buy_create.py to update MediaPackage records
-        response = CreateMediaBuySuccess(
-            buyer_ref=request.buyer_ref or "",
-            media_buy_id=order_id,
-            creative_deadline=None,
-            packages=package_responses,
+        response = self._build_create_success(
+            request,
+            order_id,
+            packages,
+            creative_deadline_days=None,
         )
 
         # Store platform_line_item_id mapping as a non-standard attribute

@@ -14,7 +14,6 @@ removing principal_id= from the production site should cause IntegrityError.
 
 from __future__ import annotations
 
-import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import patch
@@ -28,11 +27,11 @@ from src.core.database.models import CreativeAssignment as DBAssignment
 from src.core.database.models import Tenant as TenantModel
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
-    CreateMediaBuyRequest,
     UpdateMediaBuyRequest,
 )
 from src.core.testing_hooks import AdCPTestContext
 from tests.helpers.adcp_factories import create_test_format
+from tests.integration.media_buy_helpers import _get_tenant_dict, _make_create_request
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -64,44 +63,6 @@ def _make_identity(
             test_session_id=None,
         ),
     )
-
-
-def _get_tenant_dict(tenant_id: str) -> dict[str, Any]:
-    """Load full tenant dict from DB (matches resolve_identity output)."""
-    with get_db_session() as session:
-        stmt = select(TenantModel).where(TenantModel.tenant_id == tenant_id)
-        tenant = session.scalars(stmt).first()
-        if not tenant:
-            raise ValueError(f"Tenant {tenant_id} not found")
-        return {
-            "tenant_id": tenant.tenant_id,
-            "name": tenant.name,
-            "subdomain": tenant.subdomain,
-            "ad_server": tenant.ad_server,
-            "human_review_required": tenant.human_review_required,
-            "auto_create_media_buys": getattr(tenant, "auto_create_media_buys", True),
-            "slack_webhook_url": getattr(tenant, "slack_webhook_url", None),
-            "slack_audit_webhook_url": getattr(tenant, "slack_audit_webhook_url", None),
-        }
-
-
-def _make_create_request(**overrides: Any) -> CreateMediaBuyRequest:
-    defaults: dict[str, Any] = {
-        "buyer_ref": f"test-buyer-{uuid.uuid4().hex[:8]}",
-        "brand": {"domain": "testbrand.com"},
-        "start_time": _future(1),
-        "end_time": _future(8),
-        "packages": [
-            {
-                "product_id": "guaranteed_display",
-                "buyer_ref": "pkg-1",
-                "budget": 5000.0,
-                "pricing_option_id": "cpm_usd_fixed",
-            }
-        ],
-    }
-    defaults.update(overrides)
-    return CreateMediaBuyRequest(**defaults)
 
 
 def _query_assignments(tenant_id: str, media_buy_id: str) -> list[DBAssignment]:

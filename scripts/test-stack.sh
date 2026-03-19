@@ -42,7 +42,7 @@ cmd_up() {
     export DATABASE_URL="postgresql://adcp_user:secure_password_change_me@localhost:${POSTGRES_PORT}/adcp_test"
     export DELIVERY_WEBHOOK_INTERVAL=5
     export GEMINI_API_KEY="${GEMINI_API_KEY:-test_key}"
-    export ENCRYPTION_KEY="${ENCRYPTION_KEY:-PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk=}"
+    export ENCRYPTION_KEY="${ENCRYPTION_KEY:-PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk=}"  # TEST ONLY — never use in production
 
     dc build --progress=plain 2>&1 | grep -E "(Step|#|Building|exporting)" | tail -10
     dc up -d || { dc logs; exit 1; }

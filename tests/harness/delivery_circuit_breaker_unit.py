@@ -21,6 +21,8 @@ Available mocks via env.mock:
     "sleep"     -- time.sleep mock
     "random"    -- random.uniform mock
     "db"        -- get_db_session mock
+    "logger"    -- module-level logger mock
+    "post"      -- shortcut to httpx client.post mock
 """
 
 from __future__ import annotations
@@ -53,6 +55,7 @@ class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
         "sleep": f"{MODULE}.time.sleep",
         "random": f"{MODULE}.random.uniform",
         "db": "src.core.database.database_session.get_db_session",
+        "logger": f"{MODULE}.logger",
     }
 
     def __init__(self, **kwargs: Any) -> None:
@@ -67,10 +70,16 @@ class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
         # httpx.Client: 200 OK by default (from mixin)
         self.set_http_response(200)
 
-        # DB session: return a mock session with no webhook configs
+        # Expose inner httpx post as mock["post"] so BDD steps can inspect call_args
+        self.mock["post"] = self.mock["client"].return_value.__enter__.return_value.post
+
+        # DB session: return a mock session with one active webhook config
+        # (BDD Given steps store config in ctx dict; the unit env provides a default
+        # so send_delivery_webhook finds at least one endpoint to deliver to)
+        default_config = self.make_webhook_config(url="https://buyer.example.com/webhook")
         mock_session = MagicMock()
         mock_scalars = MagicMock()
-        mock_scalars.all.return_value = []
+        mock_scalars.all.return_value = [default_config]
         mock_session.scalars.return_value = mock_scalars
         mock_ctx = MagicMock()
         mock_ctx.__enter__.return_value = mock_session

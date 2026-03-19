@@ -28,7 +28,7 @@ def _stub_dns():
     TestSSRFProtection override this where needed.
     """
     with patch(
-        "src.core.property_list_resolver.socket.gethostbyname",
+        "src.core.security.url_validator.socket.gethostbyname",
         return_value="93.184.216.34",
     ):
         yield
@@ -446,7 +446,7 @@ class TestSSRFProtection:
         ref = _make_ref(agent_url=malicious_url)
 
         with patch(
-            "src.core.property_list_resolver.socket.gethostbyname",
+            "src.core.security.url_validator.socket.gethostbyname",
             return_value=resolved_ip,
         ):
             with pytest.raises(AdCPAdapterError, match="[Bb]locked|[Pp]rivate|[Ii]nternal"):

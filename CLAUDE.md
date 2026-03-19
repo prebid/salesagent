@@ -80,7 +80,7 @@ PR titles should use one of these prefixes:
 **Without a prefix, commits won't appear in release notes!** The code will still be released, but the change won't be documented in the changelog.
 
 ### Structural Guards (Automated Architecture Enforcement)
-Fourteen AST-scanning tests enforce architecture invariants on every `make quality` run. New violations fail the build immediately. See [docs/development/structural-guards.md](docs/development/structural-guards.md) for full details.
+AST-scanning tests enforce architecture invariants on every `make quality` run. New violations fail the build immediately. See [docs/development/structural-guards.md](docs/development/structural-guards.md) for full details.
 
 | Guard | Enforces | Test File |
 |-------|----------|-----------|
@@ -96,9 +96,16 @@ Fourteen AST-scanning tests enforce architecture invariants on every `make quali
 | No raw MediaPackage select | All MediaPackage access goes through repository, not raw `select()` | `test_architecture_no_raw_media_package_select.py` |
 | No raw select outside repos | All ORM model queries go through repositories, not raw `select()` | `test_architecture_no_raw_select.py` |
 | Obligation coverage | Behavioral obligations in docs have matching test coverage | `test_architecture_obligation_coverage.py` |
+| BDD no-op Then steps | Then steps must assert, not delegate to `_pending()`-like no-ops | `test_architecture_bdd_no_pass_steps.py` |
+| BDD trivial assertions | Then steps must compare values, not just check truthiness | `test_architecture_bdd_no_trivial_assertions.py` |
+| BDD no dict registry | Given steps must use factories, not raw dicts | `test_architecture_bdd_no_dict_registry.py` |
+| BDD no duplicate steps | No 3+ step functions with identical bodies | `test_architecture_bdd_no_duplicate_steps.py` |
+| BDD no silent env | No `ctx.get("env")` or `hasattr(env, ...)` in step functions | `test_architecture_bdd_no_silent_env.py` |
+| Obligation test quality | Obligation-tagged tests must CALL production code, not just import it | `test_architecture_obligation_test_quality.py` |
 | Code duplication (DRY) | Duplicate block count in src/ and tests/ cannot increase | `check_code_duplication.py` (pre-commit + make quality) |
 | Workflow tenant isolation | WorkflowRepository queries join DBContext for tenant scoping | `test_architecture_workflow_tenant_isolation.py` |
 | No split mock assertions | Tests use `assert_called_once_with()`, not `assert_called_once()` + `call_args` | `test_architecture_weak_mock_assertions.py` |
+| Single migration head | Alembic migration graph has exactly one head | `test_architecture_single_migration_head.py` |
 
 **Rules for guards:**
 - Allowlists can only shrink — never add new violations, fix them instead
@@ -398,7 +405,7 @@ tox -e unit               # Unit tests only (fast, no Docker)
 
 # ─── Full suite (Docker + all 5 suites in parallel via tox) ───
 ./run_all_tests.sh        # One command: starts Docker, runs tox -p, tears down
-./run_all_tests.sh quick  # No Docker: unit + integration + integration_v2
+./run_all_tests.sh quick  # No Docker: unit + integration
 
 # ─── Manual Docker lifecycle (for iterating) ───
 make test-stack-up        # Start Docker stack, writes .test-stack.env
@@ -442,7 +449,17 @@ Tenant → CurrencyLimit (USD required for budget validation)
 - **tests/unit/**: Fast, isolated (mock external deps only)
 - **tests/integration/**: Real PostgreSQL database
 - **tests/e2e/**: Full system tests
-- **tests/ui/**: Admin UI tests
+- **tests/admin/**: Admin UI tests
+- **tests/bdd/**: BDD behavioral tests (pytest-bdd)
+
+### Entity Markers
+Tests are auto-tagged with entity markers by filename pattern. Use `-m` to run entity-scoped slices:
+```bash
+make test-entity ENTITY=delivery          # All delivery tests
+make test-entity ENTITY="creative"        # All creative tests
+make test-entity ENTITY="product"         # All product tests
+```
+Entities: delivery, creative, product, media_buy, tenant, auth, adapter, inventory, schema, admin, architecture, targeting, transport, workflow, policy, agent, infra.
 
 ### Database Fixtures
 ```python
@@ -472,7 +489,7 @@ def test_something():
 
 1. **NEVER skip, ignore, deselect, or exclude failing tests.** Do not use `--ignore`, `-k "not test_name"`, `--deselect`, `pytest.mark.skip`, or `pytest.mark.xfail` to work around failures.
 2. **NEVER rationalize failures.** Do not classify failures as "pre-existing", "infrastructure issue", "misplaced test", "needs a running server", or "was deselected in the full run". A failing test is a failing test — fix it or report it to the user as a blocker.
-3. **Start the right infrastructure.** If a test needs Docker (integration, e2e, ui), start Docker. The tooling exists — use it. See the infrastructure decision tree below.
+3. **Start the right infrastructure.** If a test needs Docker (integration, e2e, admin), start Docker. The tooling exists — use it. See the infrastructure decision tree below.
 4. **If infrastructure is broken, STOP.** Do not skip tests and report success. Tell the user the infrastructure is broken and either fix it or ask the user to fix it.
 5. **Test results are saved as JSON** in `test-results/<ddmmyy_HHmm>/`. Review these instead of re-running the full suite. Background processes may crash and lose output — the JSON reports are the resilient record.
 
@@ -487,7 +504,8 @@ def test_something():
 | Integration DB for a worktree agent | `eval $(.claude/skills/agent-db/agent-db.sh up)` | Bare Postgres (unique port per worktree) |
 | Full suite (all 5 envs) | `./run_all_tests.sh` | Full Docker stack (Postgres + app + nginx), auto-teardown |
 | Full suite, targeted | `./run_all_tests.sh ci tests/integration/test_file.py -k test_name` | Full Docker stack |
-| Quick suite (no e2e/ui) | `./run_all_tests.sh quick` | Nothing (needs pre-existing DATABASE_URL) |
+| Quick suite (no e2e/admin) | `./run_all_tests.sh quick` | Nothing (needs pre-existing DATABASE_URL) |
+| Entity-scoped | `make test-entity ENTITY=delivery` | Nothing (runs across unit+integration+e2e+admin) |
 | Manual Docker lifecycle | `make test-stack-up` → `source .test-stack.env && tox -p` → `make test-stack-down` | Full Docker stack (stays up between runs) |
 
 **Port conflicts are not possible.** Both `test-stack.sh` and `agent-db.sh` scan for free ports in the 50000-60000 range. Multiple instances can run simultaneously.
