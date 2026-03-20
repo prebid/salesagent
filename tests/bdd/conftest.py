@@ -568,8 +568,15 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             request.getfixturevalue("integration_db")
             from tests.harness.delivery_poll import DeliveryPollEnv
 
-            with DeliveryPollEnv() as env:
+            # Use "buyer-001" as principal — matches most UC-004 scenarios.
+            # _ensure_media_buy_in_db creates media buys owned by the
+            # scenario's "owner" (usually "buyer-001"), and _impl filters
+            # by the identity's principal. They must match.
+            with DeliveryPollEnv(principal_id="buyer-001") as env:
+                tenant, principal = env.setup_default_data()
                 ctx["env"] = env
+                ctx["db_tenant"] = tenant
+                ctx[f"db_principal_{env._principal_id}"] = principal
                 yield
         elif harness_type == "webhook":
             from tests.harness.delivery_webhook import WebhookEnv
