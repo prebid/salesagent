@@ -1,4 +1,4 @@
-# Generated from adcp-req @ bd801586c630f4d09c3d3162c3c6fd8d0a8b53c6 on 2026-03-20T01:32:25Z
+# Generated from adcp-req @ 8a219ece2b54628c33f1075d386b73082a0f4832 on 2026-03-20T11:24:39Z
 # DO NOT EDIT -- re-run: python scripts/compile_bdd.py
 
 Feature: BR-UC-004 Deliver Media Buy Metrics
@@ -1013,7 +1013,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
 
   @T-UC-004-sandbox-validation @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account with invalid media buy ID returns real validation error
-    And the request targets a sandbox account
+    Given the request targets a sandbox account
     When the Buyer Agent queries delivery metrics for a non-existent media buy
     Then the response should indicate a validation error
     And the error should be a real validation error, not simulated
