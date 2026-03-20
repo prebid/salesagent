@@ -240,11 +240,27 @@ class BaseTestEnv:
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert call_impl kwargs to the REST endpoint body shape.
 
-        Override in subclass. Must match the Pydantic body model
-        defined in src/routes/api_v1.py.
+        Default: if ``req`` is a Pydantic model, delegates serialization to it
+        via ``model_dump(mode="json", exclude_none=True)``.  Enums, nested
+        models, and optional fields are handled by Pydantic — no manual
+        field-by-field extraction needed.
+
+        If no ``req`` is present, returns empty dict (valid for endpoints
+        where all parameters are optional).
+
+        Subclasses that receive flat kwargs (not a ``req`` object) must
+        override to build the body dict themselves.
         """
+        from pydantic import BaseModel as PydanticBaseModel
+
+        req = kwargs.get("req")
+        if req is not None and isinstance(req, PydanticBaseModel):
+            return req.model_dump(mode="json", exclude_none=True)
+        if req is None:
+            return {}
         raise NotImplementedError(
-            f"{type(self).__name__} does not implement build_rest_body(). Override to enable Transport.REST dispatch."
+            f"{type(self).__name__}.build_rest_body() received non-Pydantic 'req': {type(req)}. "
+            "Override build_rest_body() to handle this type."
         )
 
     def parse_rest_response(self, data: dict[str, Any]) -> BaseModel:

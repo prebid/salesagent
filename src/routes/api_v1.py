@@ -19,6 +19,7 @@ from fastmcp.exceptions import ToolError
 from pydantic import BaseModel
 
 from src.core.auth_context import require_auth, resolve_auth
+from src.core.tools import accounts as accounts_module
 from src.core.tools import capabilities as capabilities_module
 from src.core.tools import creative_formats as creative_formats_module
 from src.core.tools import media_buy_create as media_buy_create_module
@@ -131,6 +132,23 @@ class ListCreativeFormatsBody(BaseModel):
 
 
 class ListAuthorizedPropertiesBody(BaseModel):
+    adcp_version: str = "1.0.0"
+
+
+class ListAccountsBody(BaseModel):
+    status: str | None = None
+    sandbox: bool | None = None
+    pagination: dict[str, Any] | None = None
+    context: dict[str, Any] | None = None
+    adcp_version: str = "1.0.0"
+
+
+class SyncAccountsBody(BaseModel):
+    accounts: list[dict[str, Any]] = []
+    delete_missing: bool = False
+    dry_run: bool = False
+    push_notification_config: dict[str, Any] | None = None
+    context: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
 
 
@@ -306,6 +324,34 @@ async def update_performance_index(body: UpdatePerformanceIndexBody, identity: R
             performance_data=body.performance_data,
             identity=identity,
         )
+    except ToolError as e:
+        return _handle_tool_error(e)
+
+    return response.model_dump(mode="json")
+
+
+@router.post("/accounts")
+async def list_accounts(body: ListAccountsBody, identity: ResolvedIdentity = require_auth):
+    """List accounts accessible to the authenticated agent (auth required)."""
+    from src.core.schemas.account import ListAccountsRequest
+
+    try:
+        req = ListAccountsRequest(**body.model_dump(exclude_none=True, exclude={"adcp_version"}))
+        response = accounts_module.list_accounts_raw(req=req, identity=identity)
+    except ToolError as e:
+        return _handle_tool_error(e)
+
+    return response.model_dump(mode="json")
+
+
+@router.post("/accounts/sync")
+async def sync_accounts(body: SyncAccountsBody, identity: ResolvedIdentity = require_auth):
+    """Sync accounts by natural key (auth required)."""
+    from src.core.schemas.account import SyncAccountsRequest
+
+    try:
+        req = SyncAccountsRequest(**body.model_dump(exclude_none=True, exclude={"adcp_version"}))
+        response = await accounts_module.sync_accounts_raw(req=req, identity=identity)
     except ToolError as e:
         return _handle_tool_error(e)
 

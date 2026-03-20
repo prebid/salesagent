@@ -77,3 +77,9 @@ class AccountListEnv(IntegrationEnv):
         from src.core.tools.accounts import list_accounts
 
         return self._run_mcp_wrapper(list_accounts, ListAccountsResponse, **kwargs)
+
+    REST_ENDPOINT = "/api/v1/accounts"
+
+    def parse_rest_response(self, data: dict[str, Any]) -> ListAccountsResponse:
+        """Parse REST JSON into ListAccountsResponse."""
+        return ListAccountsResponse(**data)
