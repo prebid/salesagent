@@ -260,7 +260,13 @@ class BaseTestEnv:
         if identity is _NO_OVERRIDE:
             identity = self.identity_for(Transport.REST)
 
-        # Configure per-request auth
+        self._commit_factory_data()
+
+        # Get client first (may set default dep overrides on first call),
+        # then override per-request auth AFTER.
+        client = self.get_rest_client()
+
+        # Configure per-request auth (must be after get_rest_client)
         if identity is None:
             from src.core.exceptions import AdCPAuthenticationError
 
@@ -273,9 +279,6 @@ class BaseTestEnv:
             app.dependency_overrides[_require_auth_dep] = lambda: identity
             app.dependency_overrides[_resolve_auth_dep] = lambda: identity
 
-        self._commit_factory_data()
-
-        client = self.get_rest_client()
         body = self.build_rest_body(**kwargs)
         return client.post(endpoint, json=body)
 

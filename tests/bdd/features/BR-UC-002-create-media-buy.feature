@@ -1,4 +1,4 @@
-# Generated from adcp-req @ bd801586c630f4d09c3d3162c3c6fd8d0a8b53c6 on 2026-03-20T01:32:25Z
+# Generated from adcp-req @ 8a219ece2b54628c33f1075d386b73082a0f4832 on 2026-03-20T11:43:42Z
 # DO NOT EDIT -- re-run: python scripts/compile_bdd.py
 
 @analysis-2026-03-09 @schema-v3.0.0-rc.1
@@ -30,7 +30,7 @@ Feature: BR-UC-002 Create Media Buy
     And the Buyer is authenticated with a valid principal_id
 
 
-  @T-UC-002-main @main-flow @post-s1 @post-s2 @post-s3 @post-s4 @post-s5 @post-s6
+  @T-UC-002-main @main-flow @post-s1 @post-s2 @post-s3 @post-s4 @post-s5 @post-s6 @pending
   Scenario: Auto-approved media buy with valid package-based request
     Given the tenant is configured for auto-approval
     And a valid create_media_buy request with:
@@ -60,7 +60,7 @@ Feature: BR-UC-002 Create Media Buy
     # POST-S5: Buyer receives an unambiguous success confirmation
     # POST-S6: Buyer knows the request completed successfully
 
-  @T-UC-002-alt-manual @alternative @alt-manual @post-s7 @post-s8 @post-s9 @post-s10
+  @T-UC-002-alt-manual @alternative @alt-manual @post-s7 @post-s8 @post-s9 @post-s10 @pending
   Scenario: Manual approval required -- media buy enters pending state
     Given the tenant has "human_review_required" set to true
     And a valid create_media_buy request with account "acc-001"
@@ -76,7 +76,7 @@ Feature: BR-UC-002 Create Media Buy
     # POST-S9: Buyer can track the pending media buy via task_id
     # POST-S10: Buyer knows how to check approval progress
 
-  @T-UC-002-alt-manual-reject @alternative @alt-manual @post-s12
+  @T-UC-002-alt-manual-reject @alternative @alt-manual @post-s12 @pending
   Scenario: Seller rejects a pending media buy
     Given a media buy exists in "pending_approval" state
     When the Seller rejects the media buy with reason "Budget too low for Q1 campaign"
@@ -86,7 +86,7 @@ Feature: BR-UC-002 Create Media Buy
     # POST-S12: Buyer knows the media buy was rejected and the reason for rejection
     # --- Alt: ASAP Start Timing ---
 
-  @T-UC-002-alt-asap @alternative @alt-asap @post-s1 @post-s4
+  @T-UC-002-alt-asap @alternative @alt-asap @post-s1 @post-s4 @pending
   Scenario: ASAP start timing resolves to current UTC
     Given a valid create_media_buy request with start_time "asap"
     And the account exists and is active
@@ -99,7 +99,7 @@ Feature: BR-UC-002 Create Media Buy
     # POST-S4: Buyer's advertising campaign is live (or activating) on the ad server
     # --- Alt: With Inline Creatives ---
 
-  @T-UC-002-alt-creatives @alternative @alt-creatives @post-s1
+  @T-UC-002-alt-creatives @alternative @alt-creatives @post-s1 @pending
   Scenario: Media buy with inline creative uploads
     Given a valid create_media_buy request
     And the account exists and is active
@@ -113,7 +113,7 @@ Feature: BR-UC-002 Create Media Buy
     # POST-S1: Buyer knows their media buy has been created and is activating
     # --- Alt: Proposal-Based ---
 
-  @T-UC-002-alt-proposal @alternative @alt-proposal @post-s1 @post-s2 @post-s3 @post-s11
+  @T-UC-002-alt-proposal @alternative @alt-proposal @post-s1 @post-s2 @post-s3 @post-s11 @pending
   Scenario: Proposal-based media buy executes get_products proposal
     Given a valid create_media_buy request with:
     | field          | value                        |
@@ -136,7 +136,7 @@ Feature: BR-UC-002 Create Media Buy
     # POST-S3: Buyer knows each package's allocation, product, and pricing
     # POST-S11: Buyer knows the proposal was successfully executed with their total budget
 
-  @T-UC-002-ext-a @extension @ext-a @error @post-f1 @post-f2 @post-f3
+  @T-UC-002-ext-a @extension @ext-a @error @post-f1 @post-f2 @post-f3 @pending
   Scenario: Budget validation failure -- total budget is zero
     Given a valid create_media_buy request
     And the account exists and is active
@@ -152,7 +152,7 @@ Feature: BR-UC-002 Create Media Buy
     # POST-F3: Buyer knows how to fix the issue
     # --- ext-b: Product Not Found ---
 
-  @T-UC-002-ext-b @extension @ext-b @error @post-f1 @post-f2 @post-f3
+  @T-UC-002-ext-b @extension @ext-b @error @post-f1 @post-f2 @post-f3 @pending
   Scenario: Product not found in tenant catalog
     Given a valid create_media_buy request
     And the account exists and is active
@@ -168,7 +168,7 @@ Feature: BR-UC-002 Create Media Buy
     # POST-F3: Buyer knows how to fix the issue
     # --- ext-c: DateTime Validation Failure ---
 
-  @T-UC-002-ext-c @extension @ext-c @error @post-f1 @post-f2 @post-f3
+  @T-UC-002-ext-c @extension @ext-c @error @post-f1 @post-f2 @post-f3 @pending
   Scenario: Start time is in the past
     Given a valid create_media_buy request
     And the account exists and is active
@@ -183,7 +183,7 @@ Feature: BR-UC-002 Create Media Buy
     # POST-F2: Buyer knows what failed
     # POST-F3: Buyer knows how to fix the issue
 
-  @T-UC-002-ext-c-end @extension @ext-c @error
+  @T-UC-002-ext-c-end @extension @ext-c @error @pending
   Scenario: End time is before start time
     Given a valid create_media_buy request
     And the account exists and is active
@@ -196,7 +196,7 @@ Feature: BR-UC-002 Create Media Buy
     And the error should include "suggestion" field
     # --- ext-d: Currency Not Supported ---
 
-  @T-UC-002-ext-d @extension @ext-d @error @post-f1 @post-f2 @post-f3
+  @T-UC-002-ext-d @extension @ext-d @error @post-f1 @post-f2 @post-f3 @pending
   Scenario: Currency not supported by tenant
     Given a valid create_media_buy request
     And the account exists and is active
@@ -212,7 +212,7 @@ Feature: BR-UC-002 Create Media Buy
     # POST-F3: Buyer knows how to fix the issue
     # --- ext-e: Duplicate Products ---
 
-  @T-UC-002-ext-e @extension @ext-e @error @post-f1 @post-f2 @post-f3
+  @T-UC-002-ext-e @extension @ext-e @error @post-f1 @post-f2 @post-f3 @pending
   Scenario: Duplicate product_id across packages
     Given a valid create_media_buy request with 2 packages
     And the account exists and is active
@@ -227,7 +227,7 @@ Feature: BR-UC-002 Create Media Buy
     # POST-F3: Buyer knows how to fix the issue
     # --- ext-f: Targeting Validation Failure ---
 
-  @T-UC-002-ext-f @extension @ext-f @error @post-f1 @post-f2 @post-f3
+  @T-UC-002-ext-f @extension @ext-f @error @post-f1 @post-f2 @post-f3 @pending
   Scenario: Targeting overlay contains unknown field
     Given a valid create_media_buy request
     And the account exists and is active
@@ -242,7 +242,7 @@ Feature: BR-UC-002 Create Media Buy
     # POST-F2: Buyer knows what failed
     # POST-F3: Buyer knows how to fix the issue
 
-  @T-UC-002-ext-f-managed @extension @ext-f @error
+  @T-UC-002-ext-f-managed @extension @ext-f @error @pending
   Scenario: Targeting overlay sets a managed-only dimension
     Given a valid create_media_buy request
     And the account exists and is active
@@ -253,7 +253,7 @@ Feature: BR-UC-002 Create Media Buy
     And the error message should contain "managed"
     And the error should include "suggestion" field
 
-  @T-UC-002-ext-f-geo @extension @ext-f @error
+  @T-UC-002-ext-f-geo @extension @ext-f @error @pending
   Scenario: Targeting overlay has geo include/exclude overlap
     Given a valid create_media_buy request
     And the account exists and is active
@@ -264,7 +264,7 @@ Feature: BR-UC-002 Create Media Buy
     And the error should include "suggestion" field
     # --- ext-g: Creative Validation Failure ---
 
-  @T-UC-002-ext-g @extension @ext-g @error @post-f1 @post-f2 @post-f3
+  @T-UC-002-ext-g @extension @ext-g @error @post-f1 @post-f2 @post-f3 @pending
   Scenario: Creative missing required URL field
     Given a valid create_media_buy request with inline creatives
     And the account exists and is active
@@ -279,7 +279,7 @@ Feature: BR-UC-002 Create Media Buy
     # POST-F3: Buyer knows how to fix the issue
     # --- ext-h: Format ID Validation Failure ---
 
-  @T-UC-002-ext-h @extension @ext-h @error @post-f1 @post-f2 @post-f3
+  @T-UC-002-ext-h @extension @ext-h @error @post-f1 @post-f2 @post-f3 @pending
   Scenario: Format ID is a plain string instead of object
     Given a valid create_media_buy request
     And the account exists and is active
@@ -292,7 +292,7 @@ Feature: BR-UC-002 Create Media Buy
     # POST-F2: Buyer knows what failed
     # POST-F3: Buyer knows how to fix the issue
 
-  @T-UC-002-ext-h-agent @extension @ext-h @error
+  @T-UC-002-ext-h-agent @extension @ext-h @error @pending
   Scenario: Format ID references unregistered creative agent
     Given a valid create_media_buy request
     And the account exists and is active
@@ -303,7 +303,7 @@ Feature: BR-UC-002 Create Media Buy
     And the error should include "suggestion" field
     # --- ext-i: Authentication Error ---
 
-  @T-UC-002-ext-i @extension @ext-i @error @post-f1 @post-f2 @post-f3
+  @T-UC-002-ext-i @extension @ext-i @error @post-f1 @post-f2 @post-f3 @pending
   Scenario: Authentication failure -- no principal in context
     Given the Buyer has no authentication credentials
     When the Buyer Agent sends the create_media_buy request
@@ -316,7 +316,7 @@ Feature: BR-UC-002 Create Media Buy
     # POST-F3: Buyer knows how to fix the issue
     # --- ext-j: Adapter Execution Failure ---
 
-  @T-UC-002-ext-j @extension @ext-j @error @post-f1 @post-f2 @post-f3
+  @T-UC-002-ext-j @extension @ext-j @error @post-f1 @post-f2 @post-f3 @pending
   Scenario: Adapter execution failure -- ad server returns error
     Given a valid create_media_buy request that passes all validation
     And the account exists and is active
@@ -331,7 +331,7 @@ Feature: BR-UC-002 Create Media Buy
     # POST-F3: Buyer knows how to fix the issue
     # --- ext-k: Maximum Daily Spend Exceeded ---
 
-  @T-UC-002-ext-k @extension @ext-k @error @post-f1 @post-f2 @post-f3
+  @T-UC-002-ext-k @extension @ext-k @error @post-f1 @post-f2 @post-f3 @pending
   Scenario: Daily budget exceeds maximum daily spend cap
     Given a valid create_media_buy request
     And the account exists and is active
@@ -347,7 +347,7 @@ Feature: BR-UC-002 Create Media Buy
     # POST-F3: Buyer knows how to fix the issue
     # --- ext-l: Proposal Not Found or Expired ---
 
-  @T-UC-002-ext-l @extension @ext-l @error @post-f1 @post-f2 @post-f3
+  @T-UC-002-ext-l @extension @ext-l @error @post-f1 @post-f2 @post-f3 @pending
   Scenario: Proposal not found or expired
     Given a valid create_media_buy request with proposal_id "prop-expired"
     And the account exists and is active
@@ -363,7 +363,7 @@ Feature: BR-UC-002 Create Media Buy
     # POST-F3: Buyer knows how to fix the issue
     # --- ext-m: Proposal Budget Mismatch ---
 
-  @T-UC-002-ext-m @extension @ext-m @error @post-f1 @post-f2 @post-f3
+  @T-UC-002-ext-m @extension @ext-m @error @post-f1 @post-f2 @post-f3 @pending
   Scenario: Proposal total budget below guidance minimum
     Given a valid create_media_buy request with proposal_id and total_budget amount 10
     And the account exists and is active
@@ -378,7 +378,7 @@ Feature: BR-UC-002 Create Media Buy
     # POST-F3: Buyer knows how to fix the issue
     # --- ext-n: Pricing Option Validation Failure ---
 
-  @T-UC-002-ext-n @extension @ext-n @error @post-f1 @post-f2 @post-f3
+  @T-UC-002-ext-n @extension @ext-n @error @post-f1 @post-f2 @post-f3 @pending
   Scenario: Pricing option not found on product
     Given a valid create_media_buy request
     And the account exists and is active
@@ -391,7 +391,7 @@ Feature: BR-UC-002 Create Media Buy
     # POST-F2: Buyer knows what failed
     # POST-F3: Buyer knows how to fix the issue
 
-  @T-UC-002-ext-n-bid @extension @ext-n @error
+  @T-UC-002-ext-n-bid @extension @ext-n @error @pending
   Scenario: Auction pricing without bid_price
     Given a valid create_media_buy request
     And the account exists and is active
@@ -401,7 +401,7 @@ Feature: BR-UC-002 Create Media Buy
     And the error code should be "PRICING_ERROR"
     And the error should include "suggestion" field
 
-  @T-UC-002-ext-n-floor @extension @ext-n @error
+  @T-UC-002-ext-n-floor @extension @ext-n @error @pending
   Scenario: Bid price below floor price
     Given a valid create_media_buy request
     And the account exists and is active
@@ -412,7 +412,7 @@ Feature: BR-UC-002 Create Media Buy
     And the error should include "suggestion" field
     # --- ext-o: Creative Not Found in Library ---
 
-  @T-UC-002-ext-o @extension @ext-o @error @post-f1 @post-f2 @post-f3
+  @T-UC-002-ext-o @extension @ext-o @error @post-f1 @post-f2 @post-f3 @pending
   Scenario: Creative IDs not found in library
     Given a valid create_media_buy request
     And the account exists and is active
@@ -427,7 +427,7 @@ Feature: BR-UC-002 Create Media Buy
     # POST-F3: Buyer knows how to fix the issue
     # --- ext-p: Creative Format Mismatch ---
 
-  @T-UC-002-ext-p @extension @ext-p @error @post-f1 @post-f2 @post-f3
+  @T-UC-002-ext-p @extension @ext-p @error @post-f1 @post-f2 @post-f3 @pending
   Scenario: Creative format does not match product supported formats
     Given a valid create_media_buy request
     And the account exists and is active
@@ -441,7 +441,7 @@ Feature: BR-UC-002 Create Media Buy
     # POST-F3: Buyer knows how to fix the issue
     # --- ext-q: Creative Upload Failed ---
 
-  @T-UC-002-ext-q @extension @ext-q @error @post-f2 @post-f3
+  @T-UC-002-ext-q @extension @ext-q @error @post-f2 @post-f3 @pending
   Scenario: Creative upload to ad server fails
     Given a valid create_media_buy request with inline creatives that passes all validation
     And the account exists and is active
@@ -454,7 +454,7 @@ Feature: BR-UC-002 Create Media Buy
     # POST-F3: Buyer knows how to fix the issue
     # --- ext-r: Account Not Found ---
 
-  @T-UC-002-ext-r @extension @ext-r @error @post-f1 @post-f2 @post-f3
+  @T-UC-002-ext-r @extension @ext-r @error @post-f1 @post-f2 @post-f3 @pending
   Scenario: Account not found -- explicit account_id
     Given a valid create_media_buy request with account_id "acc-nonexistent"
     But the account_id does not exist in the seller's account store
@@ -468,7 +468,7 @@ Feature: BR-UC-002 Create Media Buy
     # POST-F2: Buyer knows what failed
     # POST-F3: Buyer knows to escalate (terminal)
 
-  @T-UC-002-ext-r-nk @extension @ext-r @error
+  @T-UC-002-ext-r-nk @extension @ext-r @error @pending
   Scenario: Account not found -- natural key
     Given a valid create_media_buy request with account natural key brand "unknown.com" operator "unknown.com"
     But no account matches the brand + operator combination
@@ -479,7 +479,7 @@ Feature: BR-UC-002 Create Media Buy
     And the error should include "suggestion" field
     # --- ext-s: Account Setup Required ---
 
-  @T-UC-002-ext-s @extension @ext-s @error @post-f1 @post-f2 @post-f3
+  @T-UC-002-ext-s @extension @ext-s @error @post-f1 @post-f2 @post-f3 @pending
   Scenario: Account requires setup before use
     Given a valid create_media_buy request with account_id "acc-new"
     And the account "acc-new" exists but requires setup (billing not configured)
@@ -494,7 +494,7 @@ Feature: BR-UC-002 Create Media Buy
     # POST-F3: Buyer knows how to fix the issue
     # --- ext-t: Account Ambiguous ---
 
-  @T-UC-002-ext-t @extension @ext-t @error @post-f1 @post-f2 @post-f3
+  @T-UC-002-ext-t @extension @ext-t @error @post-f1 @post-f2 @post-f3 @pending
   Scenario: Account ambiguous -- natural key matches multiple accounts
     Given a valid create_media_buy request with account natural key brand "multi-brand.com" operator "agency.com"
     And the natural key matches 3 accounts
@@ -510,7 +510,7 @@ Feature: BR-UC-002 Create Media Buy
     # POST-F3: Buyer knows how to fix the issue
     # --- ext-u: Optimization Goal Validation Failure ---
 
-  @T-UC-002-ext-u @extension @ext-u @error @post-f1 @post-f2 @post-f3
+  @T-UC-002-ext-u @extension @ext-u @error @post-f1 @post-f2 @post-f3 @pending
   Scenario: Optimization goal with unsupported metric
     Given a valid create_media_buy request
     And the account exists and is active
@@ -525,7 +525,7 @@ Feature: BR-UC-002 Create Media Buy
     # POST-F2: Buyer knows what failed
     # POST-F3: Buyer knows how to fix the issue
 
-  @T-UC-002-ext-u-event @extension @ext-u @error
+  @T-UC-002-ext-u-event @extension @ext-u @error @pending
   Scenario: Optimization goal with unregistered event source
     Given a valid create_media_buy request
     And the account exists and is active
@@ -539,7 +539,7 @@ Feature: BR-UC-002 Create Media Buy
     And the suggestion should contain "sync_event_sources"
     # --- ext-v: Catalog Validation Failure ---
 
-  @T-UC-002-ext-v @extension @ext-v @error @post-f1 @post-f2 @post-f3
+  @T-UC-002-ext-v @extension @ext-v @error @post-f1 @post-f2 @post-f3 @pending
   Scenario: Duplicate catalog types on a package
     Given a valid create_media_buy request
     And the account exists and is active
@@ -554,7 +554,7 @@ Feature: BR-UC-002 Create Media Buy
     # POST-F2: Buyer knows what failed
     # POST-F3: Buyer knows how to fix the issue
 
-  @T-UC-002-ext-v-notfound @extension @ext-v @error
+  @T-UC-002-ext-v-notfound @extension @ext-v @error @pending
   Scenario: Catalog ID not found in synced catalogs
     Given a valid create_media_buy request
     And the account exists and is active
@@ -566,7 +566,7 @@ Feature: BR-UC-002 Create Media Buy
     And the error should include "suggestion" field
     And the suggestion should contain "sync_catalogs"
 
-  @T-UC-002-inv-006-1 @invariant @BR-RULE-006
+  @T-UC-002-inv-006-1 @invariant @BR-RULE-006 @pending
   Scenario: INV-1 holds -- fixed_price set and floor_price null (valid fixed pricing)
     Given a valid create_media_buy request
     And the account exists and is active
@@ -574,7 +574,7 @@ Feature: BR-UC-002 Create Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the pricing validation should pass
 
-  @T-UC-002-inv-006-2 @invariant @BR-RULE-006
+  @T-UC-002-inv-006-2 @invariant @BR-RULE-006 @pending
   Scenario: INV-2 holds -- floor_price set and fixed_price null (valid auction pricing)
     Given a valid create_media_buy request
     And the account exists and is active
@@ -583,7 +583,7 @@ Feature: BR-UC-002 Create Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the pricing validation should pass
 
-  @T-UC-002-inv-006-3 @invariant @BR-RULE-006 @error
+  @T-UC-002-inv-006-3 @invariant @BR-RULE-006 @error @pending
   Scenario: INV-3 violated -- both fixed_price and floor_price set
     Given a valid create_media_buy request
     And the account exists and is active
@@ -592,7 +592,7 @@ Feature: BR-UC-002 Create Media Buy
     Then the operation should fail
     And the error should include "suggestion" field
 
-  @T-UC-002-inv-006-4 @invariant @BR-RULE-006 @error
+  @T-UC-002-inv-006-4 @invariant @BR-RULE-006 @error @pending
   Scenario: INV-4 violated -- neither fixed_price nor floor_price set
     Given a valid create_media_buy request
     And the account exists and is active
@@ -602,14 +602,14 @@ Feature: BR-UC-002 Create Media Buy
     And the error should include "suggestion" field
     # --- BR-RULE-008: Budget Positivity ---
 
-  @T-UC-002-inv-008-1 @invariant @BR-RULE-008
+  @T-UC-002-inv-008-1 @invariant @BR-RULE-008 @pending
   Scenario: INV-1 holds -- total budget greater than zero
     Given a valid create_media_buy request with total budget 5000
     And the account exists and is active
     When the Buyer Agent sends the create_media_buy request
     Then the budget validation should pass
 
-  @T-UC-002-inv-008-2 @invariant @BR-RULE-008 @error
+  @T-UC-002-inv-008-2 @invariant @BR-RULE-008 @error @pending
   Scenario: INV-2 violated -- total budget is zero or negative
     Given a valid create_media_buy request with total budget 0
     And the account exists and is active
@@ -620,7 +620,7 @@ Feature: BR-UC-002 Create Media Buy
     And the error should include "suggestion" field
     # --- BR-RULE-013: DateTime Validity ---
 
-  @T-UC-002-inv-013-4 @invariant @BR-RULE-013
+  @T-UC-002-inv-013-4 @invariant @BR-RULE-013 @pending
   Scenario: INV-4 holds -- start_time is literal "asap" (case-sensitive)
     Given a valid create_media_buy request with start_time "asap"
     And the account exists and is active
@@ -628,7 +628,7 @@ Feature: BR-UC-002 Create Media Buy
     Then the system should resolve start_time to current UTC
     And the date validation should pass
 
-  @T-UC-002-inv-013-5 @invariant @BR-RULE-013 @error
+  @T-UC-002-inv-013-5 @invariant @BR-RULE-013 @error @pending
   Scenario: INV-5 violated -- start_time is "ASAP" wrong case
     Given a valid create_media_buy request with start_time "ASAP"
     And the account exists and is active
@@ -638,7 +638,7 @@ Feature: BR-UC-002 Create Media Buy
     And the error should include "suggestion" field
     # --- BR-RULE-017: Approval Workflow Determination ---
 
-  @T-UC-002-inv-017-1 @invariant @BR-RULE-017
+  @T-UC-002-inv-017-1 @invariant @BR-RULE-017 @pending
   Scenario: INV-1 holds -- both flags false results in auto-approval
     Given a valid create_media_buy request
     And the account exists and is active
@@ -648,7 +648,7 @@ Feature: BR-UC-002 Create Media Buy
     Then the approval path should be auto-approved
     And the media buy should proceed to adapter execution
 
-  @T-UC-002-inv-017-2 @invariant @BR-RULE-017
+  @T-UC-002-inv-017-2 @invariant @BR-RULE-017 @pending
   Scenario: INV-2 holds -- tenant human_review_required triggers manual approval
     Given a valid create_media_buy request
     And the account exists and is active
@@ -657,7 +657,7 @@ Feature: BR-UC-002 Create Media Buy
     Then the approval path should be manual
     And the media buy should enter pending state
 
-  @T-UC-002-inv-017-3 @invariant @BR-RULE-017
+  @T-UC-002-inv-017-3 @invariant @BR-RULE-017 @pending
   Scenario: INV-3 holds -- adapter manual_approval_required triggers manual approval
     Given a valid create_media_buy request
     And the account exists and is active
@@ -667,7 +667,7 @@ Feature: BR-UC-002 Create Media Buy
     And the media buy should enter pending state
     # --- BR-RULE-018: Atomic Response Semantics ---
 
-  @T-UC-002-inv-018-1 @invariant @BR-RULE-018
+  @T-UC-002-inv-018-1 @invariant @BR-RULE-018 @pending
   Scenario: INV-1 holds -- successful creation has success fields only
     Given a valid create_media_buy request that passes all validation
     And the account exists and is active
@@ -675,7 +675,7 @@ Feature: BR-UC-002 Create Media Buy
     Then the response should have success fields
     And the response should NOT have an "errors" field
 
-  @T-UC-002-inv-018-2 @invariant @BR-RULE-018 @error
+  @T-UC-002-inv-018-2 @invariant @BR-RULE-018 @error @pending
   Scenario: INV-2 holds -- validation failure has errors array only
     Given a create_media_buy request that fails validation
     And the account exists and is active
@@ -684,7 +684,7 @@ Feature: BR-UC-002 Create Media Buy
     And the response should NOT have success fields (media_buy_id, packages)
     And each error should include "suggestion" field
 
-  @T-UC-002-inv-018-4 @invariant @BR-RULE-018
+  @T-UC-002-inv-018-4 @invariant @BR-RULE-018 @pending
   Scenario: INV-4 holds -- transient error includes retry_after hint
     Given a create_media_buy request
     And the account exists and is active
@@ -693,7 +693,7 @@ Feature: BR-UC-002 Create Media Buy
     Then the error recovery should be "transient"
     And the error should include "retry_after" field
 
-  @T-UC-002-inv-018-5 @invariant @BR-RULE-018
+  @T-UC-002-inv-018-5 @invariant @BR-RULE-018 @pending
   Scenario: INV-5 holds -- correctable error includes suggestion and field
     Given a create_media_buy request that fails with a correctable error
     And the account exists and is active
@@ -702,7 +702,7 @@ Feature: BR-UC-002 Create Media Buy
     And the error should include "suggestion" field
     And the error should include "field" field
 
-  @T-UC-002-inv-018-6 @invariant @BR-RULE-018
+  @T-UC-002-inv-018-6 @invariant @BR-RULE-018 @pending
   Scenario: INV-6 holds -- terminal error signals agent to escalate
     Given a create_media_buy request with account_id that does not exist
     When the Buyer Agent sends the create_media_buy request
@@ -710,7 +710,7 @@ Feature: BR-UC-002 Create Media Buy
     And the error recovery should be "terminal"
     # --- BR-RULE-020: Adapter Atomicity ---
 
-  @T-UC-002-inv-020-1 @invariant @BR-RULE-020
+  @T-UC-002-inv-020-1 @invariant @BR-RULE-020 @pending
   Scenario: INV-1 holds -- adapter success persists all records
     Given a valid create_media_buy request that passes all validation
     And the account exists and is active
@@ -720,7 +720,7 @@ Feature: BR-UC-002 Create Media Buy
     And the package records should be persisted
     And the creative assignment records should be persisted
 
-  @T-UC-002-inv-020-2 @invariant @BR-RULE-020 @error
+  @T-UC-002-inv-020-2 @invariant @BR-RULE-020 @error @pending
   Scenario: INV-2 holds -- adapter failure creates no records
     Given a valid create_media_buy request that passes all validation
     And the account exists and is active
@@ -730,7 +730,7 @@ Feature: BR-UC-002 Create Media Buy
     And no package records should be persisted
     And the error should include "suggestion" field
 
-  @T-UC-002-inv-020-3 @invariant @BR-RULE-020
+  @T-UC-002-inv-020-3 @invariant @BR-RULE-020 @pending
   Scenario: INV-3 holds -- manual approval path persists in pending state
     Given a valid create_media_buy request
     And the account exists and is active
@@ -740,7 +740,7 @@ Feature: BR-UC-002 Create Media Buy
     And the package records should be persisted
     # --- BR-RULE-026: Creative Assignment Validation ---
 
-  @T-UC-002-inv-026-1 @invariant @BR-RULE-026
+  @T-UC-002-inv-026-1 @invariant @BR-RULE-026 @pending
   Scenario: INV-1 holds -- all creatives valid and formats compatible
     Given a valid create_media_buy request with creative assignments
     And the account exists and is active
@@ -748,7 +748,7 @@ Feature: BR-UC-002 Create Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the creative assignment should proceed
 
-  @T-UC-002-inv-026-2 @invariant @BR-RULE-026 @error
+  @T-UC-002-inv-026-2 @invariant @BR-RULE-026 @error @pending
   Scenario: INV-2 violated -- creative in error state rejected
     Given a valid create_media_buy request with creative assignments
     And the account exists and is active
@@ -757,7 +757,7 @@ Feature: BR-UC-002 Create Media Buy
     Then the operation should fail
     And the error should include "suggestion" field
 
-  @T-UC-002-inv-026-4 @invariant @BR-RULE-026 @error
+  @T-UC-002-inv-026-4 @invariant @BR-RULE-026 @error @pending
   Scenario: INV-4 violated -- creative format incompatible with product
     Given a valid create_media_buy request with creative assignments
     And the account exists and is active
@@ -767,7 +767,7 @@ Feature: BR-UC-002 Create Media Buy
     And the error should include "suggestion" field
     # --- BR-RULE-080: Account Resolution Validation ---
 
-  @T-UC-002-inv-080-1 @invariant @BR-RULE-080 @error
+  @T-UC-002-inv-080-1 @invariant @BR-RULE-080 @error @pending
   Scenario: INV-1 violated -- account field absent from request
     Given a create_media_buy request without account field
     When the Buyer Agent sends the create_media_buy request
@@ -777,7 +777,7 @@ Feature: BR-UC-002 Create Media Buy
     And the error should include "suggestion" field
     # --- BR-RULE-087: Optimization Goal Validation ---
 
-  @T-UC-002-inv-087-5 @invariant @BR-RULE-087 @error
+  @T-UC-002-inv-087-5 @invariant @BR-RULE-087 @error @pending
   Scenario: INV-5 violated -- duplicate priority values in optimization goals
     Given a valid create_media_buy request
     And the account exists and is active
@@ -789,7 +789,7 @@ Feature: BR-UC-002 Create Media Buy
     And the error message should contain "priority"
     And the error should include "suggestion" field
 
-  @T-UC-002-inv-087-6 @invariant @BR-RULE-087 @error
+  @T-UC-002-inv-087-6 @invariant @BR-RULE-087 @error @pending
   Scenario: INV-6 violated -- optimization_goals array empty
     Given a valid create_media_buy request
     And the account exists and is active
@@ -800,7 +800,7 @@ Feature: BR-UC-002 Create Media Buy
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
 
-  @T-UC-002-inv-087-7 @invariant @BR-RULE-087 @error
+  @T-UC-002-inv-087-7 @invariant @BR-RULE-087 @error @pending
   Scenario: INV-7 violated -- per_ad_spend target without value_field on event source
     Given a valid create_media_buy request
     And the account exists and is active
@@ -811,7 +811,7 @@ Feature: BR-UC-002 Create Media Buy
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
 
-  @T-UC-002-partition-budget-amount @partition @budget-amount
+  @T-UC-002-partition-budget-amount @partition @budget-amount @pending
   Scenario Outline: Budget amount partition validation - <partition>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -829,7 +829,7 @@ Feature: BR-UC-002 Create Media Buy
       | zero_amount      | 0     | error BUDGET_TOO_LOW with suggestion          |
       | negative_amount  | -50   | error BUDGET_TOO_LOW with suggestion          |
 
-  @T-UC-002-partition-pricing-option-xor @partition @pricing-option-xor
+  @T-UC-002-partition-pricing-option-xor @partition @pricing-option-xor @pending
   Scenario Outline: Pricing option XOR partition validation - <partition>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -849,7 +849,7 @@ Feature: BR-UC-002 Create Media Buy
       | both_set          | error with suggestion           |
       | neither_set       | error with suggestion           |
 
-  @T-UC-002-partition-currency-consistency @partition @currency-consistency
+  @T-UC-002-partition-currency-consistency @partition @currency-consistency @pending
   Scenario Outline: Currency consistency partition validation - <partition>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -869,7 +869,7 @@ Feature: BR-UC-002 Create Media Buy
       | mixed_currencies         | error UNSUPPORTED_FEATURE with suggestion  |
       | currency_not_in_tenant   | error UNSUPPORTED_FEATURE with suggestion  |
 
-  @T-UC-002-partition-product-uniqueness @partition @product-uniqueness
+  @T-UC-002-partition-product-uniqueness @partition @product-uniqueness @pending
   Scenario Outline: Product uniqueness partition validation - <partition>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -887,7 +887,7 @@ Feature: BR-UC-002 Create Media Buy
       | partition           | outcome                         |
       | duplicate_product   | error with suggestion           |
 
-  @T-UC-002-partition-minimum-spend @partition @minimum-spend
+  @T-UC-002-partition-minimum-spend @partition @minimum-spend @pending
   Scenario Outline: Minimum spend partition validation - <partition>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -907,7 +907,7 @@ Feature: BR-UC-002 Create Media Buy
       | budget_below_product_min   | error with suggestion           |
       | budget_below_tenant_min    | error with suggestion           |
 
-  @T-UC-002-partition-daily-spend-cap @partition @daily-spend-cap
+  @T-UC-002-partition-daily-spend-cap @partition @daily-spend-cap @pending
   Scenario Outline: Daily spend cap partition validation - <partition>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -926,7 +926,7 @@ Feature: BR-UC-002 Create Media Buy
       | partition             | outcome                                      |
       | exceeds_cap           | error BUDGET_TOO_LOW with suggestion           |
 
-  @T-UC-002-partition-start-time @partition @start-time
+  @T-UC-002-partition-start-time @partition @start-time @pending
   Scenario Outline: Start time partition validation - <partition>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -947,7 +947,7 @@ Feature: BR-UC-002 Create Media Buy
       | absent                 | null                        | error INVALID_REQUEST with suggestion  |
       | wrong_case_asap        | ASAP                        | error INVALID_REQUEST with suggestion  |
 
-  @T-UC-002-partition-end-time @partition @end-time
+  @T-UC-002-partition-end-time @partition @end-time @pending
   Scenario Outline: End time partition validation - <partition>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -967,7 +967,7 @@ Feature: BR-UC-002 Create Media Buy
       | before_start           | 2026-03-15T00:00:00Z       | error INVALID_REQUEST with suggestion  |
       | absent                 | null                        | error INVALID_REQUEST with suggestion  |
 
-  @T-UC-002-partition-targeting-overlay @partition @targeting-overlay
+  @T-UC-002-partition-targeting-overlay @partition @targeting-overlay @pending
   Scenario Outline: Targeting overlay partition validation - <partition>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -1001,7 +1001,7 @@ Feature: BR-UC-002 Create Media Buy
       | frequency_cap_missing_fields       | error INVALID_REQUEST with suggestion          |
       | keyword_duplicate                  | error INVALID_REQUEST with suggestion          |
 
-  @T-UC-002-partition-creative-asset @partition @creative-asset
+  @T-UC-002-partition-creative-asset @partition @creative-asset @pending
   Scenario Outline: Creative asset partition validation - <partition>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -1026,7 +1026,7 @@ Feature: BR-UC-002 Create Media Buy
       | missing_required_assets             | error CREATIVE_REJECTED with suggestion          |
       | exceeds_max_creatives               | error INVALID_REQUEST with suggestion            |
 
-  @T-UC-002-partition-approval-workflow @partition @approval-workflow
+  @T-UC-002-partition-approval-workflow @partition @approval-workflow @pending
   Scenario Outline: Approval workflow partition validation - <partition>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -1041,7 +1041,7 @@ Feature: BR-UC-002 Create Media Buy
       | pending_human_review         | manual approval required     |
       | pending_adapter_approval     | manual approval required     |
 
-  @T-UC-002-partition-account-ref @partition @account
+  @T-UC-002-partition-account-ref @partition @account @pending
   Scenario Outline: Account reference partition validation - <partition>
     Given a create_media_buy request with account configuration <partition>
     When the Buyer Agent sends the create_media_buy request
@@ -1064,7 +1064,7 @@ Feature: BR-UC-002 Create Media Buy
       | account_payment_required     | error ACCOUNT_PAYMENT_REQUIRED terminal            |
       | account_suspended            | error ACCOUNT_SUSPENDED terminal                  |
 
-  @T-UC-002-partition-optimization-goals @partition @optimization-goals
+  @T-UC-002-partition-optimization-goals @partition @optimization-goals @pending
   Scenario Outline: Optimization goals partition validation - <partition>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -1102,7 +1102,7 @@ Feature: BR-UC-002 Create Media Buy
       | metric_not_supported_by_product        | error UNSUPPORTED_FEATURE with suggestion          |
       | event_not_supported_by_product         | error UNSUPPORTED_FEATURE with suggestion          |
 
-  @T-UC-002-partition-catalog-distinct-type @partition @catalog-distinct-type
+  @T-UC-002-partition-catalog-distinct-type @partition @catalog-distinct-type @pending
   Scenario Outline: Catalog distinct type partition validation - <partition>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -1124,7 +1124,7 @@ Feature: BR-UC-002 Create Media Buy
       | multiple_duplicates    | error INVALID_REQUEST with suggestion          |
       | catalog_not_found      | error INVALID_REQUEST with suggestion          |
 
-  @T-UC-002-partition-format-id-structure @partition @format-id-structure
+  @T-UC-002-partition-format-id-structure @partition @format-id-structure @pending
   Scenario Outline: Format ID structure partition validation - <partition>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -1145,7 +1145,7 @@ Feature: BR-UC-002 Create Media Buy
       | unregistered_agent     | error with suggestion        |
       | unknown_format         | error with suggestion        |
 
-  @T-UC-002-partition-persistence-timing @partition @persistence-timing
+  @T-UC-002-partition-persistence-timing @partition @persistence-timing @pending
   Scenario Outline: Persistence timing partition validation - <partition>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -1163,7 +1163,7 @@ Feature: BR-UC-002 Create Media Buy
       | partition                       | outcome                                      |
       | auto_approve_adapter_failure    | no records persisted after adapter failure    |
 
-  @T-UC-002-partition-tasks-sort-field @partition @tasks-sort-field
+  @T-UC-002-partition-tasks-sort-field @partition @tasks-sort-field @pending
   Scenario Outline: Tasks sort field partition validation - <partition>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -1185,7 +1185,7 @@ Feature: BR-UC-002 Create Media Buy
       | partition       | outcome                               |
       | unknown_value   | error unknown sort field               |
 
-  @T-UC-002-partition-sort-direction @partition @sort-direction
+  @T-UC-002-partition-sort-direction @partition @sort-direction @pending
   Scenario Outline: Sort direction partition validation - <partition>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -1204,7 +1204,7 @@ Feature: BR-UC-002 Create Media Buy
       | partition       | outcome                               |
       | unknown_value   | error unknown sort direction           |
 
-  @T-UC-002-partition-adcp-domain @partition @adcp-domain
+  @T-UC-002-partition-adcp-domain @partition @adcp-domain @pending
   Scenario Outline: AdCP domain partition validation - <partition>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -1227,7 +1227,7 @@ Feature: BR-UC-002 Create Media Buy
       | unknown_value   | error unknown domain value             |
       | empty_array     | error empty array violates minItems    |
 
-  @T-UC-002-partition-task-status @partition @task-status
+  @T-UC-002-partition-task-status @partition @task-status @pending
   Scenario Outline: Task status partition validation - <partition>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -1255,7 +1255,7 @@ Feature: BR-UC-002 Create Media Buy
       | unknown_value    | error unknown status value             |
       | empty_array      | error empty array violates minItems    |
 
-  @T-UC-002-partition-task-type @partition @task-type
+  @T-UC-002-partition-task-type @partition @task-type @pending
   Scenario Outline: Task type partition validation - <partition>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -1287,7 +1287,7 @@ Feature: BR-UC-002 Create Media Buy
       | unknown_value          | error unknown task type                  |
       | empty_array            | error empty array violates minItems      |
 
-  @T-UC-002-boundary-budget-amount @boundary @budget-amount
+  @T-UC-002-boundary-budget-amount @boundary @budget-amount @pending
   Scenario Outline: Budget amount boundary validation - <boundary_point>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -1302,7 +1302,7 @@ Feature: BR-UC-002 Create Media Buy
       | amount = 0.01 (minimum positive)     | 0.01  | budget validation passes                     |
       | amount negative                      | -1    | error BUDGET_TOO_LOW with suggestion          |
 
-  @T-UC-002-boundary-pricing-option-xor @boundary @pricing-option-xor
+  @T-UC-002-boundary-pricing-option-xor @boundary @pricing-option-xor @pending
   Scenario Outline: Pricing option XOR boundary validation - <boundary_point>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -1318,7 +1318,7 @@ Feature: BR-UC-002 Create Media Buy
       | both present (ambiguous)            | fixed+floor             | error with suggestion           |
       | neither present (undefined)         | neither                 | error with suggestion           |
 
-  @T-UC-002-boundary-currency-consistency @boundary @currency-consistency
+  @T-UC-002-boundary-currency-consistency @boundary @currency-consistency @pending
   Scenario Outline: Currency consistency boundary validation - <boundary_point>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -1334,7 +1334,7 @@ Feature: BR-UC-002 Create Media Buy
       | two packages, different currencies       | 2 pkg USD+EUR    | error UNSUPPORTED_FEATURE with suggestion |
       | currency not in tenant table             | 1 pkg XYZ        | error UNSUPPORTED_FEATURE with suggestion |
 
-  @T-UC-002-boundary-product-uniqueness @boundary @product-uniqueness
+  @T-UC-002-boundary-product-uniqueness @boundary @product-uniqueness @pending
   Scenario Outline: Product uniqueness boundary validation - <boundary_point>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -1349,7 +1349,7 @@ Feature: BR-UC-002 Create Media Buy
       | two packages, different products         | 2 pkg prod-A,B    | product validation passes    |
       | two packages, same product_id            | 2 pkg prod-A,A    | error with suggestion        |
 
-  @T-UC-002-boundary-minimum-spend @boundary @minimum-spend
+  @T-UC-002-boundary-minimum-spend @boundary @minimum-spend @pending
   Scenario Outline: Minimum spend boundary validation - <boundary_point>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -1366,7 +1366,7 @@ Feature: BR-UC-002 Create Media Buy
       | budget = tenant min_package_budget - 0.01 (no product min)    | budget=49.99 tmin=50 | error with suggestion        |
       | no min configured at any level                                 | budget=1 no-min     | minimum spend passes         |
 
-  @T-UC-002-boundary-daily-spend-cap @boundary @daily-spend-cap
+  @T-UC-002-boundary-daily-spend-cap @boundary @daily-spend-cap @pending
   Scenario Outline: Daily spend cap boundary validation - <boundary_point>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -1382,7 +1382,7 @@ Feature: BR-UC-002 Create Media Buy
       | cap not configured (skipped)             | daily=9999 no-cap   | daily spend passes                           |
       | flight duration 0 days (floor to 1)      | 0-day-flight        | daily spend passes                           |
 
-  @T-UC-002-boundary-start-time @boundary @start-time
+  @T-UC-002-boundary-start-time @boundary @start-time @pending
   Scenario Outline: Start time boundary validation - <boundary_point>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -1399,7 +1399,7 @@ Feature: BR-UC-002 Create Media Buy
       | 'ASAP' wrong case          | ASAP                     | error INVALID_REQUEST with suggestion |
       | absent (null)              | null                     | error INVALID_REQUEST with suggestion |
 
-  @T-UC-002-boundary-end-time @boundary @end-time
+  @T-UC-002-boundary-end-time @boundary @end-time @pending
   Scenario Outline: End time boundary validation - <boundary_point>
     Given a valid create_media_buy request with start_time "2026-04-01T00:00:00Z"
     And the account exists and is active
@@ -1415,7 +1415,7 @@ Feature: BR-UC-002 Create Media Buy
       | end_time before start_time           | 2026-03-15T00:00:00Z     | error INVALID_REQUEST with suggestion |
       | absent (null)                        | null                     | error INVALID_REQUEST with suggestion |
 
-  @T-UC-002-boundary-targeting-overlay @boundary @targeting-overlay
+  @T-UC-002-boundary-targeting-overlay @boundary @targeting-overlay @pending
   Scenario Outline: Targeting overlay boundary validation - <boundary_point>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -1443,7 +1443,7 @@ Feature: BR-UC-002 Create Media Buy
       | keyword_targets with unique tuples                | kw=shoes exact        | targeting validation passes                  |
       | keyword_targets with duplicate (keyword, match_type) | kw=shoes exact x2 | error INVALID_REQUEST with suggestion          |
 
-  @T-UC-002-boundary-creative-asset @boundary @creative-asset
+  @T-UC-002-boundary-creative-asset @boundary @creative-asset @pending
   Scenario Outline: Creative asset boundary validation - <boundary_point>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -1463,7 +1463,7 @@ Feature: BR-UC-002 Create Media Buy
       | weight = 100 (max)                | weight=100           | creative validation passes                    |
       | 101 inline creatives              | 101 uploads          | error INVALID_REQUEST with suggestion          |
 
-  @T-UC-002-boundary-approval-workflow @boundary @approval-workflow
+  @T-UC-002-boundary-approval-workflow @boundary @approval-workflow @pending
   Scenario Outline: Approval workflow boundary validation - <boundary_point>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -1478,7 +1478,7 @@ Feature: BR-UC-002 Create Media Buy
       | tenant flag true (pending)            | tenant_hr=true        | manual approval required     |
       | adapter flag true (pending)           | adapter_ma=true       | manual approval required     |
 
-  @T-UC-002-boundary-account-ref @boundary @account
+  @T-UC-002-boundary-account-ref @boundary @account @pending
   Scenario Outline: Account reference boundary validation - <boundary_point>
     Given a create_media_buy request with account: <config>
     When the Buyer Agent sends the create_media_buy request
@@ -1498,7 +1498,7 @@ Feature: BR-UC-002 Create Media Buy
       | account field absent                                 | no account               | error INVALID_REQUEST with suggestion             |
       | both account_id and brand/operator present           | both fields              | error INVALID_REQUEST with suggestion             |
 
-  @T-UC-002-boundary-optimization-goals @boundary @optimization-goals
+  @T-UC-002-boundary-optimization-goals @boundary @optimization-goals @pending
   Scenario Outline: Optimization goals boundary validation - <boundary_point>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -1530,7 +1530,7 @@ Feature: BR-UC-002 Create Media Buy
       | per_ad_spend target + value_field present on event source               | roas with value_field    | optimization validation passes                   |
       | per_ad_spend target + no value_field on any event source                | roas no value_field      | error INVALID_REQUEST with suggestion             |
 
-  @T-UC-002-boundary-catalog-distinct-type @boundary @catalog-distinct-type
+  @T-UC-002-boundary-catalog-distinct-type @boundary @catalog-distinct-type @pending
   Scenario Outline: Catalog distinct type boundary validation - <boundary_point>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -1552,7 +1552,7 @@ Feature: BR-UC-002 Create Media Buy
       | catalog_id references a synced catalog                                       | valid catalog_id     | catalog validation passes                    |
       | catalog_id references a non-existent catalog                                 | bad catalog_id       | error INVALID_REQUEST with suggestion          |
 
-  @T-UC-002-boundary-format-id-structure @boundary @format-id-structure
+  @T-UC-002-boundary-format-id-structure @boundary @format-id-structure @pending
   Scenario Outline: Format ID structure boundary validation - <boundary_point>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -1569,7 +1569,7 @@ Feature: BR-UC-002 Create Media Buy
       | unregistered agent                             | bad agent_url       | error with suggestion        |
       | unknown format id                              | unknown format      | error with suggestion        |
 
-  @T-UC-002-boundary-persistence-timing @boundary @persistence-timing
+  @T-UC-002-boundary-persistence-timing @boundary @persistence-timing @pending
   Scenario Outline: Persistence timing boundary validation - <boundary_point>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -1584,7 +1584,7 @@ Feature: BR-UC-002 Create Media Buy
       | adapter returns error (auto-approval)       | auto-approve failure  | no records persisted after adapter failure    |
       | manual approval detected (pending state)    | manual approval       | records persisted in pending state            |
 
-  @T-UC-002-boundary-tasks-sort-field @boundary @tasks-sort-field
+  @T-UC-002-boundary-tasks-sort-field @boundary @tasks-sort-field @pending
   Scenario Outline: Tasks sort field boundary validation - <boundary_point>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -1600,7 +1600,7 @@ Feature: BR-UC-002 Create Media Buy
       | Not provided (uses default created_at)    | omitted         | defaults to created_at sort            |
       | priority (not in enum)                    | priority        | error unknown sort field               |
 
-  @T-UC-002-boundary-sort-direction @boundary @sort-direction
+  @T-UC-002-boundary-sort-direction @boundary @sort-direction @pending
   Scenario Outline: Sort direction boundary validation - <boundary_point>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -1616,7 +1616,7 @@ Feature: BR-UC-002 Create Media Buy
       | Not provided (uses default desc)    | omitted     | defaults to desc order                 |
       | ascending (not in enum)             | ascending   | error unknown sort direction           |
 
-  @T-UC-002-boundary-adcp-domain @boundary @adcp-domain
+  @T-UC-002-boundary-adcp-domain @boundary @adcp-domain @pending
   Scenario Outline: AdCP domain boundary validation - <boundary_point>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -1634,7 +1634,7 @@ Feature: BR-UC-002 Create Media Buy
       | analytics (not in enum)                             | analytics                 | error unknown domain value             |
       | [] (empty array, violates minItems)                 | empty array               | error empty array violates minItems    |
 
-  @T-UC-002-boundary-task-status @boundary @task-status
+  @T-UC-002-boundary-task-status @boundary @task-status @pending
   Scenario Outline: Task status boundary validation - <boundary_point>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -1652,7 +1652,7 @@ Feature: BR-UC-002 Create Media Buy
       | pending (not in enum)                                                 | pending                             | error unknown status value             |
       | [] (empty array, violates minItems)                                   | empty array                         | error empty array violates minItems    |
 
-  @T-UC-002-boundary-task-type @boundary @task-type
+  @T-UC-002-boundary-task-type @boundary @task-type @pending
   Scenario Outline: Task type boundary validation - <boundary_point>
     Given a valid create_media_buy request
     And the account exists and is active
@@ -1669,7 +1669,7 @@ Feature: BR-UC-002 Create Media Buy
       | delete_media_buy (not in enum)                                    | delete_media_buy                   | error unknown task type                |
       | [] (empty array, violates minItems)                               | empty array                        | error empty array violates minItems    |
 
-  @T-UC-002-nfr-001 @nfr @nfr-001
+  @T-UC-002-nfr-001 @nfr @nfr-001 @pending
   Scenario: Security hardening -- request validation and rate limiting
     Given a valid create_media_buy request
     And the account exists and is active
@@ -1678,7 +1678,7 @@ Feature: BR-UC-002 Create Media Buy
     And the system should enforce rate limiting on the endpoint
     And the system should validate payload size limits
 
-  @T-UC-002-nfr-003 @nfr @nfr-003
+  @T-UC-002-nfr-003 @nfr @nfr-003 @pending
   Scenario: Audit logging -- all steps are logged
     Given a valid create_media_buy request
     And the account exists and is active
@@ -1687,14 +1687,14 @@ Feature: BR-UC-002 Create Media Buy
     And the approval decision should be logged
     And the adapter execution should be logged
 
-  @T-UC-002-nfr-004 @nfr @nfr-004
+  @T-UC-002-nfr-004 @nfr @nfr-004 @pending
   Scenario: Response latency -- within SLA
     Given a valid create_media_buy request
     And the account exists and is active
     When the Buyer Agent sends the create_media_buy request
     Then the response should be returned within 15 seconds (p95)
 
-  @T-UC-002-nfr-006 @nfr @nfr-006
+  @T-UC-002-nfr-006 @nfr @nfr-006 @pending
   Scenario: Minimum order size enforcement
     Given a valid create_media_buy request
     And the account exists and is active
@@ -1702,7 +1702,7 @@ Feature: BR-UC-002 Create Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the system should validate budget against minimum order requirements
 
-  @T-UC-002-sandbox-happy @invariant @br-rule-209 @sandbox
+  @T-UC-002-sandbox-happy @invariant @br-rule-209 @sandbox @pending
   Scenario: Sandbox account creates simulated media buy with sandbox flag
     Given a valid create_media_buy request with packages
     And the request targets a sandbox account
@@ -1716,7 +1716,7 @@ Feature: BR-UC-002 Create Media Buy
     # BR-RULE-209 INV-3: real billing suppressed
     # BR-RULE-209 INV-4: response includes sandbox: true
 
-  @T-UC-002-sandbox-production @invariant @br-rule-209 @sandbox
+  @T-UC-002-sandbox-production @invariant @br-rule-209 @sandbox @pending
   Scenario: Production account media buy response does not include sandbox flag
     Given a valid create_media_buy request with packages
     And the request targets a production account
@@ -1725,7 +1725,7 @@ Feature: BR-UC-002 Create Media Buy
     And the response should not include a sandbox field
     # BR-RULE-209 INV-5: production account -> sandbox absent
 
-  @T-UC-002-sandbox-validation @invariant @br-rule-209 @sandbox
+  @T-UC-002-sandbox-validation @invariant @br-rule-209 @sandbox @pending
   Scenario: Sandbox account with invalid budget returns real validation error
     Given a create_media_buy request with total_budget of 0
     And the request targets a sandbox account

@@ -1,4 +1,4 @@
-# Generated from adcp-req @ bd801586c630f4d09c3d3162c3c6fd8d0a8b53c6 on 2026-03-20T01:32:25Z
+# Generated from adcp-req @ 8a219ece2b54628c33f1075d386b73082a0f4832 on 2026-03-20T11:43:42Z
 # DO NOT EDIT -- re-run: python scripts/compile_bdd.py
 
 Feature: BR-UC-005 Discover Creative Formats
