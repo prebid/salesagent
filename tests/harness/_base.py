@@ -208,6 +208,11 @@ class BaseTestEnv:
         3. Extract structured_content from ToolResult
         4. Parse into response_cls
 
+        If ``_mcp_identity`` is in kwargs, it overrides the default identity
+        on the mock Context. This enables multi-agent scenarios (different
+        agents per dispatch) and no-auth scenarios (identity=None simulates
+        auth middleware rejection).
+
         Subclass call_mcp() should do any pre-processing (enum coercion,
         kwarg popping) then delegate here.
         """
@@ -220,8 +225,14 @@ class BaseTestEnv:
 
         self._commit_factory_data()
 
+        # Allow identity override for multi-agent and no-auth scenarios.
+        # _mcp_identity=None means "no auth" (simulates auth middleware rejection).
+        _MCP_NO_OVERRIDE = object()
+        identity_override = kwargs.pop("_mcp_identity", _MCP_NO_OVERRIDE)
+        mcp_identity = self.identity_for(Transport.MCP) if identity_override is _MCP_NO_OVERRIDE else identity_override
+
         mock_ctx = MagicMock(spec=Context)
-        mock_ctx.get_state = AsyncMock(return_value=self.identity_for(Transport.MCP))
+        mock_ctx.get_state = AsyncMock(return_value=mcp_identity)
 
         tool_result = asyncio.run(wrapper_fn(ctx=mock_ctx, **kwargs))
         return response_cls(**tool_result.structured_content)

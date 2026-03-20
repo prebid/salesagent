@@ -78,6 +78,9 @@ class RestDispatcher:
             return TransportResult(error=exc)
 
 
+_MCP_SENTINEL = object()
+
+
 class McpDispatcher:
     """Dispatch via mock Context → async MCP wrapper → _impl().
 
@@ -89,8 +92,12 @@ class McpDispatcher:
     def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
         try:
             # MCP wrappers get identity from ctx.get_state(), not kwargs.
-            # Remove identity from kwargs to avoid passing it as a wrapper param.
-            kwargs.pop("identity", None)
+            # Extract identity and pass it as _mcp_identity so _run_mcp_wrapper
+            # can set the mock Context's get_state to return this identity
+            # instead of the default. This enables multi-agent and no-auth scenarios.
+            identity = kwargs.pop("identity", _MCP_SENTINEL)
+            if identity is not _MCP_SENTINEL:
+                kwargs["_mcp_identity"] = identity
             payload = env.call_mcp(**kwargs)
         except Exception as exc:
             return TransportResult(error=exc)
