@@ -348,6 +348,73 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
                     break
 
+        # --- UC-004: xfails for unimplemented production features ---
+        # FIXME(salesagent-ckb): These production features are not yet implemented.
+        _UC004_XFAIL_TAGS: dict[str, str] = {
+            # Empty array validation: schema allows [] but spec says reject
+            "T-UC-004-identify-empty": "empty media_buy_ids=[] not rejected by schema",
+            "T-UC-004-identify-buyer-refs-empty": "empty buyer_refs=[] not rejected by schema",
+            # Invalid status filter: production doesn't validate enum values
+            "T-UC-004-filter-invalid": "invalid status_filter values not rejected",
+            # Status filter: filtering by status returns wrong results (production gap)
+            "T-UC-004-filter": "status_filter not correctly applied in _impl",
+            "T-UC-004-filter-empty": "status_filter not correctly applied in _impl",
+            "T-UC-004-filter-default": "default status_filter=active not applied when no IDs",
+            "T-UC-004-filter-array": "status_filter array not correctly applied",
+            # Date range validation: production doesn't validate start>end
+            "T-UC-004-daterange-invalid": "date range validation (start>end) not implemented",
+            "T-UC-004-daterange-equal": "date range validation (start==end) not implemented",
+            # Date range: custom date range not applied to reporting_period
+            "T-UC-004-daterange": "custom date range not forwarded to adapter/response",
+            "T-UC-004-daterange-start-only": "start-only date range not applied",
+            "T-UC-004-daterange-end-only": "end-only date range not applied",
+            # Webhook delivery: not yet in production
+            "T-UC-004-webhook-scheduled": "webhook delivery not implemented",
+            # Sandbox: not yet in delivery _impl
+            "T-UC-004-sandbox-happy": "sandbox mode not implemented in delivery",
+            "T-UC-004-sandbox-validation": "sandbox mode not implemented in delivery",
+        }
+        for tag, reason in _UC004_XFAIL_TAGS.items():
+            if tag in marker_names:
+                item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
+                break
+
+        # UC-004 boundary scenarios: boundary validation not implemented in production.
+        # Only xfail the "invalid" boundary examples (expect errors) — valid boundaries
+        # should pass through without errors.
+        _UC004_BOUNDARY_XFAIL: list[tuple[str, set[str], str]] = [
+            (
+                "T-UC-004-boundary-reporting-dims",
+                {"invalid", "malformed", "non-object"},
+                "reporting_dimensions boundary validation not implemented",
+            ),
+            (
+                "T-UC-004-boundary-attribution",
+                {"invalid", "malformed", "non-object"},
+                "attribution_window boundary validation not implemented",
+            ),
+            (
+                "T-UC-004-boundary-daily-breakdown",
+                {"string", "invalid"},
+                "include_package_daily_breakdown boundary validation not implemented",
+            ),
+            (
+                "T-UC-004-boundary-account",
+                {"invalid", "malformed"},
+                "account boundary validation not implemented",
+            ),
+            (
+                "T-UC-004-boundary-sampling",
+                {"first enum", "last enum"},
+                "sampling_method not implemented in delivery",
+            ),
+        ]
+        if any(t.startswith("T-UC-004-boundary") for t in marker_names):
+            for tag, substrings, reason in _UC004_BOUNDARY_XFAIL:
+                if tag in marker_names and any(s in nodeid for s in substrings):
+                    item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
+                    break
+
         # --- Entity marker auto-application based on BDD tags ---
         # BDD tests don't have entity keywords in filenames; instead they
         # use tags like T-UC-004-* (delivery) and T-UC-005-* (creative).

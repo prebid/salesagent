@@ -590,10 +590,9 @@ def when_validate_webhook_config(ctx: dict) -> None:
     """Validate webhook configuration."""
     secret = ctx.get("webhook_secret", "")
     if len(secret) < 32:
-        from src.core.exceptions import AdCPError
+        from src.core.exceptions import AdCPValidationError
 
-        ctx["error"] = AdCPError(
-            error_code="validation_error",
+        ctx["error"] = AdCPValidationError(
             message="credentials must be at least 32 characters",
             details={"suggestion": "credentials must be at least 32 characters"},
         )
@@ -907,14 +906,15 @@ def then_has_packages(ctx: dict) -> None:
 
 @then("the response should include the reporting period start and end dates")
 def then_has_reporting_period(ctx: dict) -> None:
-    """Assert response includes reporting period."""
+    """Assert response includes reporting period.
+
+    reporting_period is on the response object (GetMediaBuyDeliveryResponse),
+    not on individual MediaBuyDeliveryData entries.
+    """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
-    deliveries = getattr(resp, "media_buy_deliveries", None) or []
-    assert len(deliveries) > 0, "No delivery data to check"
-    d = deliveries[0]
-    period = getattr(d, "reporting_period", None)
-    assert period is not None, "Delivery data missing reporting_period"
+    period = getattr(resp, "reporting_period", None)
+    assert period is not None, "Response missing reporting_period"
     assert hasattr(period, "start"), "Reporting period missing start"
     assert hasattr(period, "end"), "Reporting period missing end"
 
@@ -994,39 +994,36 @@ def then_only_status(ctx: dict, status: str) -> None:
 
 @then(parsers.parse('the response reporting_period start should be "{date}"'))
 def then_period_start(ctx: dict, date: str) -> None:
-    """Assert reporting period start date."""
+    """Assert reporting period start date (response-level, not per-delivery)."""
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
-    deliveries = getattr(resp, "media_buy_deliveries", None) or []
-    assert len(deliveries) > 0, "No delivery data"
-    period = deliveries[0].reporting_period
+    period = getattr(resp, "reporting_period", None)
+    assert period is not None, "Response missing reporting_period"
     actual = str(period.start)[:10]
     assert actual == date, f"Expected period start '{date}', got '{actual}'"
 
 
 @then(parsers.parse('the response reporting_period end should be "{date}"'))
 def then_period_end(ctx: dict, date: str) -> None:
-    """Assert reporting period end date."""
+    """Assert reporting period end date (response-level, not per-delivery)."""
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
-    deliveries = getattr(resp, "media_buy_deliveries", None) or []
-    assert len(deliveries) > 0, "No delivery data"
-    period = deliveries[0].reporting_period
+    period = getattr(resp, "reporting_period", None)
+    assert period is not None, "Response missing reporting_period"
     actual = str(period.end)[:10]
     assert actual == date, f"Expected period end '{date}', got '{actual}'"
 
 
 @then("the response reporting_period end should be today's date")
 def then_period_end_today(ctx: dict) -> None:
-    """Assert reporting period end is today."""
+    """Assert reporting period end is today (response-level)."""
     from datetime import UTC, datetime
 
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     today = datetime.now(UTC).strftime("%Y-%m-%d")
-    deliveries = getattr(resp, "media_buy_deliveries", None) or []
-    assert len(deliveries) > 0, "No delivery data"
-    period = deliveries[0].reporting_period
+    period = getattr(resp, "reporting_period", None)
+    assert period is not None, "Response missing reporting_period"
     actual = str(period.end)[:10]
     assert actual == today, f"Expected period end '{today}', got '{actual}'"
 

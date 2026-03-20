@@ -14,12 +14,20 @@ from pytest_bdd import parsers, then
 # ── Helpers ─────────────────────────────────────────────────────────
 
 
-def _get_error_code(error: Exception) -> str:
-    """Extract error code from a real exception."""
+def _get_error_code(error: object) -> str:
+    """Extract error code from an exception or Error model.
+
+    Handles two patterns:
+    1. Exception-based: AdCPError with .error_code
+    2. Partial success: adcp.types.Error model with .code (from response.errors)
+    """
     from src.core.exceptions import AdCPError
 
     if isinstance(error, AdCPError):
         return error.error_code
+    # adcp.types.Error model (from partial success response.errors)
+    if hasattr(error, "code") and not isinstance(error, Exception):
+        return error.code
     # Pydantic ValidationError → VALIDATION_ERROR
     try:
         from pydantic import ValidationError
@@ -31,11 +39,14 @@ def _get_error_code(error: Exception) -> str:
     return type(error).__name__
 
 
-def _get_error_message(error: Exception) -> str:
-    """Extract human-readable message from a real exception."""
+def _get_error_message(error: object) -> str:
+    """Extract human-readable message from an exception or Error model."""
     from src.core.exceptions import AdCPError
 
     if isinstance(error, AdCPError):
+        return error.message
+    # adcp.types.Error model
+    if hasattr(error, "message") and not isinstance(error, Exception):
         return error.message
     return str(error)
 
@@ -60,8 +71,21 @@ def _get_error_dict(error: Exception) -> dict:
 
 @then("the operation should fail")
 def then_operation_fails(ctx: dict) -> None:
-    """Assert the operation resulted in an error."""
-    assert "error" in ctx, "Expected an error but none was recorded in ctx"
+    """Assert the operation resulted in an error.
+
+    Checks two patterns:
+    1. Exception-based: ctx["error"] set by dispatch on exception
+    2. Partial success: response.errors non-empty (UC-004 delivery pattern)
+    """
+    if "error" in ctx:
+        return  # Exception-based error — OK
+    resp = ctx.get("response")
+    if resp is not None and hasattr(resp, "errors") and resp.errors:
+        # Promote the first response error to ctx["error"] so downstream
+        # Then steps (error_code, error_message) can find it.
+        ctx["error"] = resp.errors[0]
+        return
+    raise AssertionError("Expected an error but none was recorded in ctx")
 
 
 # ── Error code ───────────────────────────────────────────────────────
