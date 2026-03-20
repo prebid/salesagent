@@ -1,4 +1,4 @@
-# Generated from adcp-req @ 8a219ece2b54628c33f1075d386b73082a0f4832 on 2026-03-20T11:43:42Z
+# Generated from adcp-req @ 8a219ece2b54628c33f1075d386b73082a0f4832 on 2026-03-20T12:00:24Z
 # DO NOT EDIT -- re-run: python scripts/compile_bdd.py
 
 Feature: BR-UC-016 Sync Audiences
@@ -35,7 +35,7 @@ Feature: BR-UC-016 Sync Audiences
     And the account reference resolves to a valid account
 
 
-  @T-UC-016-main @main-flow @discovery @post-s2 @post-s7 @pending
+  @T-UC-016-main @main-flow @discovery @post-s2 @post-s7
   Scenario Outline: Discovery-only mode via <transport> -- list all audiences on account
     Given the account has 3 synced audiences with various statuses
     And the Buyer Agent has an authenticated connection via <transport>
@@ -53,7 +53,7 @@ Feature: BR-UC-016 Sync Audiences
       | MCP       |
       | REST      |
 
-  @T-UC-016-discovery-empty @main-flow @discovery @post-s2 @boundary @pending
+  @T-UC-016-discovery-empty @main-flow @discovery @post-s2 @boundary
   Scenario: Discovery-only mode -- empty account returns empty audiences array
     Given the account has 0 audiences
     When the Buyer Agent sends a sync_audiences request with no audiences array
@@ -61,7 +61,7 @@ Feature: BR-UC-016 Sync Audiences
     And the audiences array is empty
     # BR-RULE-125 INV-4: no audiences exist -> empty array returned
 
-  @T-UC-016-discovery-mode-valid @main-flow @partition @boundary @discovery-mode @pending
+  @T-UC-016-discovery-mode-valid @main-flow @partition @boundary @discovery-mode
   Scenario Outline: Discovery mode valid -- <partition>
     When the Buyer Agent sends a sync_audiences request with <setup>
     Then <outcome>
@@ -73,7 +73,7 @@ Feature: BR-UC-016 Sync Audiences
       | discovery_empty_account  | audiences omitted, account has no audiences | audiences omitted, account has 0 audiences  | empty audiences array returned                           |
       | sync_mode                | audiences provided                          | audiences array provided with 1 audience    | sync processing (not discovery-only)                     |
 
-  @T-UC-016-upsert-valid @post-s1 @post-s3 @partition @boundary @upsert-semantics @pending
+  @T-UC-016-upsert-valid @post-s1 @post-s3 @partition @boundary @upsert-semantics
   Scenario Outline: Upsert semantics valid -- <partition>
     Given the account has audience "aud_existing" with name "Old Segment"
     When the Buyer Agent syncs audiences with <setup>
@@ -86,7 +86,7 @@ Feature: BR-UC-016 Sync Audiences
       | update_existing  | existing audience_id on account          | aud_existing | existing "aud_existing" with new add members        | updated         |
       | unchanged        | existing audience_id with no changes     | aud_existing | existing "aud_existing" with no changes             | unchanged       |
 
-  @T-UC-016-upsert-invalid @ext-a @error @partition @boundary @upsert-semantics @post-f2 @pending
+  @T-UC-016-upsert-invalid @ext-a @error @partition @boundary @upsert-semantics @post-f2
   Scenario Outline: Upsert semantics invalid -- <partition>
     When the Buyer Agent syncs audiences with <setup>
     Then the error code should be "INVALID_REQUEST"
@@ -97,7 +97,7 @@ Feature: BR-UC-016 Sync Audiences
       | partition              | boundary_point                      | setup                                 |
       | missing_audience_id    | audience object missing audience_id | audience object without audience_id   |
 
-  @T-UC-016-partial-success @post-f4 @pending
+  @T-UC-016-partial-success @post-f4
   Scenario: Partial success -- one audience fails, others succeed
     Given the account exists
     When the Buyer Agent syncs 3 audiences where audience "aud_bad" triggers a platform error
@@ -109,7 +109,7 @@ Feature: BR-UC-016 Sync Audiences
     # BR-RULE-114 INV-5
     # --- Member Delta Semantics (BR-RULE-115) ---
 
-  @T-UC-016-member-delta-valid @partition @boundary @member-delta @pending
+  @T-UC-016-member-delta-valid @partition @boundary @member-delta
   Scenario Outline: Member delta valid -- <partition>
     Given the account has an existing audience "aud_delta"
     When the Buyer Agent syncs audience "aud_delta" with <setup>
@@ -123,7 +123,7 @@ Feature: BR-UC-016 Sync Audiences
       | add_and_remove  | both add and remove provided    | add array with 3 members and remove with 1   | both operations applied atomically                   |
       | neither         | no add or remove                | only metadata name change, no add or remove   | metadata updated, action is "updated"                |
 
-  @T-UC-016-member-delta-invalid @ext-a @error @partition @boundary @member-delta @post-f2 @pending
+  @T-UC-016-member-delta-invalid @ext-a @error @partition @boundary @member-delta @post-f2
   Scenario Outline: Member delta invalid -- <partition>
     Given the account has an existing audience "aud_delta"
     When the Buyer Agent syncs audience "aud_delta" with <setup>
@@ -137,7 +137,7 @@ Feature: BR-UC-016 Sync Audiences
       | empty_add       | add present but empty array      | add array present but empty                  |
       | empty_remove    | remove present but empty array   | remove array present but empty               |
 
-  @T-UC-016-remove-precedence @post-s8 @partition @boundary @remove-precedence @pending
+  @T-UC-016-remove-precedence @post-s8 @partition @boundary @remove-precedence
   Scenario Outline: Remove precedence over add -- <partition>
     Given the account has an existing audience "aud_conflict"
     When the Buyer Agent syncs audience "aud_conflict" with <setup>
@@ -151,7 +151,7 @@ Feature: BR-UC-016 Sync Audiences
       | no_overlap            | disjoint add and remove sets                | add member "u1" and remove member "u2" (disjoint sets)                   | both operations applied normally                       |
       | overlap_remove_wins   | same external_id in both add and remove     | add member "u1" and remove member "u1" (same external_id in both)        | member "u1" is removed, not added                      |
 
-  @T-UC-016-member-identity-valid @partition @boundary @member-identity @pending
+  @T-UC-016-member-identity-valid @partition @boundary @member-identity
   Scenario Outline: Member identity valid -- <partition>
     When the Buyer Agent syncs an audience with a member having <setup>
     Then <outcome>
@@ -164,7 +164,7 @@ Feature: BR-UC-016 Sync Audiences
       | uid_only                 | external_id + one matchable identifier     | external_id "crm_001" and uids array with uid2           | member accepted for processing    |
       | multiple_identifiers     | external_id + all matchable identifiers    | external_id "crm_001" with hashed_email and hashed_phone | member accepted for processing    |
 
-  @T-UC-016-member-identity-invalid @ext-a @error @partition @boundary @member-identity @post-f2 @pending
+  @T-UC-016-member-identity-invalid @ext-a @error @partition @boundary @member-identity @post-f2
   Scenario Outline: Member identity invalid -- <partition>
     When the Buyer Agent syncs an audience with a member having <setup>
     Then the error code should be "INVALID_REQUEST"
@@ -177,7 +177,7 @@ Feature: BR-UC-016 Sync Audiences
       | missing_external_id      | missing external_id                        | hashed_email only, no external_id                       |
       | no_matchable_identifier  | external_id but no matchable identifiers   | external_id "crm_001" only, no email/phone/uids         |
 
-  @T-UC-016-hashed-id-valid @partition @boundary @hashed-identifier @pending
+  @T-UC-016-hashed-id-valid @partition @boundary @hashed-identifier
   Scenario Outline: Hashed identifier valid -- <partition>
     When the Buyer Agent syncs an audience with a member having hashed_email "<hash_value>"
     Then the identifier is accepted for platform matching
@@ -188,7 +188,7 @@ Feature: BR-UC-016 Sync Audiences
       | valid_sha256_email     | exactly 64 lowercase hex characters | a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2 |
       | valid_sha256_phone     | exactly 64 lowercase hex characters | f6e5d4c3b2a1f6e5d4c3b2a1f6e5d4c3b2a1f6e5d4c3b2a1f6e5d4c3b2a1f6e5 |
 
-  @T-UC-016-hashed-id-invalid @ext-a @error @partition @boundary @hashed-identifier @post-f2 @pending
+  @T-UC-016-hashed-id-invalid @ext-a @error @partition @boundary @hashed-identifier @post-f2
   Scenario Outline: Hashed identifier invalid -- <partition>
     When the Buyer Agent syncs an audience with a member having hashed_email "<hash_value>"
     Then the error code should be "INVALID_REQUEST"
@@ -202,7 +202,7 @@ Feature: BR-UC-016 Sync Audiences
       | non_hex_chars          | 64 characters with non-hex          | g1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2 |
       | unhashed_email         | plaintext email                     | user@example.com                                                  |
 
-  @T-UC-016-hashed-id-boundary-65 @ext-a @error @boundary @hashed-identifier @post-f2 @pending
+  @T-UC-016-hashed-id-boundary-65 @ext-a @error @boundary @hashed-identifier @post-f2
   Scenario: Hashed identifier boundary -- 65 characters rejected
     When the Buyer Agent syncs an audience with a member having hashed_email "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2f"
     Then the error code should be "INVALID_REQUEST"
@@ -223,7 +223,7 @@ Feature: BR-UC-016 Sync Audiences
       | lookalike_seed   | lookalike_seed   | "lookalike_seed" | audience used as seed for lookalike modeling          |
       | omitted          | field omitted    | (absent)         | seller applies default handling                      |
 
-  @T-UC-016-audience-type-invalid @ext-a @error @partition @boundary @audience-type @post-f2 @pending
+  @T-UC-016-audience-type-invalid @ext-a @error @partition @boundary @audience-type @post-f2
   Scenario Outline: Audience type invalid -- <partition>
     When the Buyer Agent syncs an audience with audience_type <type_value>
     Then the error code should be "INVALID_REQUEST"
@@ -235,7 +235,7 @@ Feature: BR-UC-016 Sync Audiences
       | partition        | boundary_point       | type_value      |
       | invalid_enum     | unknown enum value   | "retargeting"   |
 
-  @T-UC-016-audience-tags-valid @partition @boundary @audience-tags @pending
+  @T-UC-016-audience-tags-valid @partition @boundary @audience-tags
   Scenario Outline: Audience tags valid -- <partition>
     When the Buyer Agent syncs an audience with tags <tags_value>
     Then <outcome>
@@ -247,7 +247,7 @@ Feature: BR-UC-016 Sync Audiences
       | multiple_tags    | multiple unique tags  | ["holiday_2026", "high_ltv", "us_east"] | tags stored by seller            |
       | omitted          | tags omitted          | (absent)                                | no tags stored; previous unaffected |
 
-  @T-UC-016-audience-tags-invalid @ext-a @error @partition @boundary @audience-tags @post-f2 @pending
+  @T-UC-016-audience-tags-invalid @ext-a @error @partition @boundary @audience-tags @post-f2
   Scenario Outline: Audience tags invalid -- <partition>
     When the Buyer Agent syncs an audience with tags <tags_value>
     Then the error code should be "INVALID_REQUEST"
@@ -260,7 +260,7 @@ Feature: BR-UC-016 Sync Audiences
       | empty_string_tag   | empty string tag | [""]                      |
       | duplicate_tags     | duplicate tags   | ["high_ltv", "high_ltv"]  |
 
-  @T-UC-016-consent-basis-valid @partition @boundary @consent-basis @pending
+  @T-UC-016-consent-basis-valid @partition @boundary @consent-basis
   Scenario Outline: Consent basis valid -- <partition>
     When the Buyer Agent syncs an audience with consent_basis <consent_value>
     Then <outcome>
@@ -274,7 +274,7 @@ Feature: BR-UC-016 Sync Audiences
       | legal_obligation       | valid enum value | "legal_obligation"     | value stored, does not affect processing |
       | omitted                | field omitted    | (absent)               | buyer asserts implicit basis             |
 
-  @T-UC-016-consent-basis-invalid @ext-a @error @partition @boundary @consent-basis @post-f2 @pending
+  @T-UC-016-consent-basis-invalid @ext-a @error @partition @boundary @consent-basis @post-f2
   Scenario Outline: Consent basis invalid -- <partition>
     When the Buyer Agent syncs an audience with consent_basis <consent_value>
     Then the error code should be "INVALID_REQUEST"
@@ -286,7 +286,7 @@ Feature: BR-UC-016 Sync Audiences
       | partition              | boundary_point       | consent_value   |
       | invalid_enum           | unknown enum value   | "performance"   |
 
-  @T-UC-016-status-presence @post-s3 @post-s4 @partition @boundary @status-presence @pending
+  @T-UC-016-status-presence @post-s3 @post-s4 @partition @boundary @status-presence
   Scenario Outline: Status presence and conditional fields -- <partition>
     Given the account has an audience that was synced with result action "<action>" and matching status "<status>"
     Then <outcome>
@@ -302,7 +302,7 @@ Feature: BR-UC-016 Sync Audiences
       | absent_for_deleted             | action=deleted with no status          | deleted   | (absent)   | no status field; no matched_count or minimum_size                    |
       | absent_for_failed              | action=failed with no status           | failed    | (absent)   | no status field; errors field present instead                        |
 
-  @T-UC-016-status-boundary @boundary @status-presence @pending
+  @T-UC-016-status-boundary @boundary @status-presence
   Scenario Outline: Status and count boundaries -- <boundary_point>
     Given an audience sync result with the given conditions
     Then <outcome>
@@ -317,7 +317,7 @@ Feature: BR-UC-016 Sync Audiences
       | status=too_small, minimum_size=1000    | typical platform minimum                                     |
       | status=ready                           | minimum_size not expected                                    |
 
-  @T-UC-016-matched-count @partition @matched-count @pending
+  @T-UC-016-matched-count @partition @matched-count
   Scenario Outline: Matched count population -- <partition>
     Given an audience sync result with status "<status>"
     Then <outcome>
@@ -330,7 +330,7 @@ Feature: BR-UC-016 Sync Audiences
       | processing_no_count   | processing | matched_count may not be populated (matching in progress)      |
       | too_small_no_count    | too_small  | matched_count may or may not be present                        |
 
-  @T-UC-016-minimum-size @partition @minimum-size @pending
+  @T-UC-016-minimum-size @partition @minimum-size
   Scenario Outline: Minimum size population -- <partition>
     Given an audience sync result with status "<status>"
     Then <outcome>
@@ -342,7 +342,7 @@ Feature: BR-UC-016 Sync Audiences
       | too_small_with_minimum  | too_small  | minimum_size is populated (integer >= 1)                         |
       | ready_no_minimum        | ready      | minimum_size not expected (audience meets threshold)             |
 
-  @T-UC-016-member-count @partition @boundary @member-count @pending
+  @T-UC-016-member-count @partition @boundary @member-count
   Scenario Outline: Member count recommendation -- <partition>
     When the Buyer Agent syncs an audience with <member_count> members in the add array
     Then <outcome>
@@ -355,7 +355,7 @@ Feature: BR-UC-016 Sync Audiences
       | at_limit       | 100,000 members     | 100000       | request processed normally                                 |
       | over_limit     | 100,001 members     | 200000       | request processed (protocol recommends against but accepts) |
 
-  @T-UC-016-response-exclusivity-valid @partition @boundary @response-exclusivity @pending
+  @T-UC-016-response-exclusivity-valid @partition @boundary @response-exclusivity
   Scenario Outline: Response structure exclusivity valid -- <partition>
     When a sync_audiences operation completes with <operation_result>
     Then the response <response_check>
@@ -366,7 +366,7 @@ Feature: BR-UC-016 Sync Audiences
       | success     | audiences present, no errors    | at least partial success | has audiences array and no top-level errors field       |
       | error       | errors present, no audiences    | complete failure         | has errors array and no audiences or sandbox fields     |
 
-  @T-UC-016-response-exclusivity-invalid @ext-a @error @partition @boundary @response-exclusivity @post-f2 @pending
+  @T-UC-016-response-exclusivity-invalid @ext-a @error @partition @boundary @response-exclusivity @post-f2
   Scenario Outline: Response structure exclusivity invalid -- <partition>
     When a sync_audiences response has <response_shape>
     Then the response should be invalid (violates oneOf constraint)
@@ -379,7 +379,7 @@ Feature: BR-UC-016 Sync Audiences
       | both_present      | both audiences and errors       | both arrays present        |
       | neither_present   | neither audiences nor errors    | neither array present      |
 
-  @T-UC-016-action-vocab-valid @partition @boundary @action-vocabulary @pending
+  @T-UC-016-action-vocab-valid @partition @boundary @action-vocabulary
   Scenario Outline: Per-audience action vocabulary valid -- <partition>
     Given a sync operation produces a result with action "<action>"
     Then <outcome>
@@ -393,7 +393,7 @@ Feature: BR-UC-016 Sync Audiences
       | deleted     | each valid enum value    | deleted   | status absent; errors absent                               |
       | failed      | each valid enum value    | failed    | errors present with per-audience error details             |
 
-  @T-UC-016-action-vocab-invalid @ext-a @error @partition @boundary @action-vocabulary @post-f2 @pending
+  @T-UC-016-action-vocab-invalid @ext-a @error @partition @boundary @action-vocabulary @post-f2
   Scenario Outline: Per-audience action vocabulary invalid -- <partition>
     When an audience result has action <action>
     Then the result should be invalid
@@ -405,7 +405,7 @@ Feature: BR-UC-016 Sync Audiences
       | missing_action  | action field missing | (absent)   |
       | invalid_enum    | unknown action value | "removed"  |
 
-  @T-UC-016-delete-valid @ext-b @post-s5 @post-s7 @partition @boundary @delete-semantics @pending
+  @T-UC-016-delete-valid @ext-b @post-s5 @post-s7 @partition @boundary @delete-semantics
   Scenario Outline: Delete specific audience -- <partition>
     Given the account has audiences including "aud_target"
     When the Buyer Agent syncs with <setup>
@@ -419,14 +419,14 @@ Feature: BR-UC-016 Sync Audiences
       | delete_false       | delete=false                       | audience "aud_target" with delete=false                   | normal sync processing (create/update)               |
       | delete_not_found   | delete=true, audience not found    | audience "aud_nonexistent" with delete=true               | audience result action=failed with error             |
 
-  @T-UC-016-delete-boundary @ext-b @boundary @delete-semantics @pending
+  @T-UC-016-delete-boundary @ext-b @boundary @delete-semantics
   Scenario: Delete semantics boundary -- delete omitted defaults to false
     Given the account has audience "aud_1"
     When the Buyer Agent syncs audience "aud_1" without the delete field
     Then normal sync processing occurs (not deletion)
     # BR-RULE-122 INV-4: delete omitted = normal sync
 
-  @T-UC-016-delete-ignores-fields @ext-b @invariant @br-rule-122 @pending
+  @T-UC-016-delete-ignores-fields @ext-b @invariant @br-rule-122
   Scenario: Delete ignores other fields -- delete=true with name, add, and tags present
     Given the account has audience "aud_deleteme"
     When the Buyer Agent syncs audience "aud_deleteme" with delete=true and name "New Name" and add members and tags ["test"]
@@ -435,7 +435,7 @@ Feature: BR-UC-016 Sync Audiences
     And the audience is removed from the account
     # BR-RULE-122 INV-2: Other fields ignored when delete=true
 
-  @T-UC-016-delete-mixed @ext-b @happy-path @post-f4 @pending
+  @T-UC-016-delete-mixed @ext-b @happy-path @post-f4
   Scenario: Delete combined with sync -- delete and create in same request
     When the Buyer Agent syncs with audience "aud_old" delete=true and audience "aud_new" with members
     Then the audience result for "aud_old" has action "deleted"
@@ -443,7 +443,7 @@ Feature: BR-UC-016 Sync Audiences
     # BR-RULE-122: delete and sync in same batch
     # POST-F4: Independent processing
 
-  @T-UC-016-delete-missing-cond-valid @partition @boundary @delete-missing-conditional @pending
+  @T-UC-016-delete-missing-cond-valid @partition @boundary @delete-missing-conditional
   Scenario Outline: Delete missing conditional valid -- <partition>
     When the Buyer Agent sends a sync_audiences request with <setup>
     Then <outcome>
@@ -455,7 +455,7 @@ Feature: BR-UC-016 Sync Audiences
       | delete_missing_false             | delete_missing=false without audiences      | delete_missing=false, no audiences                           | discovery-only mode                              |
       | discovery_only                   | delete_missing omitted without audiences    | no delete_missing, no audiences                              | discovery-only mode                              |
 
-  @T-UC-016-delete-missing-cond-invalid @ext-c @error @partition @boundary @delete-missing-conditional @post-f2 @pending
+  @T-UC-016-delete-missing-cond-invalid @ext-c @error @partition @boundary @delete-missing-conditional @post-f2
   Scenario Outline: Delete missing conditional invalid -- <partition>
     When the Buyer Agent sends a sync_audiences request with <setup>
     Then the error code should be "INVALID_REQUEST"
@@ -466,7 +466,7 @@ Feature: BR-UC-016 Sync Audiences
       | partition                        | boundary_point                              | setup                                             |
       | delete_missing_no_audiences      | delete_missing=true without audiences       | delete_missing=true but audiences array omitted   |
 
-  @T-UC-016-delete-missing-scope @post-s6 @partition @boundary @delete-missing-scope @pending
+  @T-UC-016-delete-missing-scope @post-s6 @partition @boundary @delete-missing-scope
   Scenario Outline: Delete missing scope -- <partition>
     Given the account has buyer-managed audiences "aud_buyer_1", "aud_buyer_2" and seller-managed audience "platform_seg_1"
     When the Buyer Agent sends sync_audiences with delete_missing=true and audiences array containing only "aud_buyer_1"
@@ -480,14 +480,14 @@ Feature: BR-UC-016 Sync Audiences
       | seller_managed_safe    | delete_missing=true, seller-managed audience absent from request  | "platform_seg_1" is preserved (seller-managed, never affected)  |
       | buyer_managed_kept     | delete_missing=true, buyer-managed audience present in request    | "aud_buyer_1" is processed normally (in request, not purged)    |
 
-  @T-UC-016-cap-gate-valid @partition @boundary @cap-gate @pending
+  @T-UC-016-cap-gate-valid @partition @boundary @cap-gate
   Scenario: Capability gate valid -- capability_true boundary capability=true
     Given the seller's capabilities response has audience_targeting set to true
     When the Buyer Agent sends a sync_audiences request
     Then the request proceeds to audience processing
     # BR-RULE-132 INV-1: capability=true -> task available
 
-  @T-UC-016-cap-gate-invalid @ext-g @error @partition @boundary @cap-gate @post-f2 @pending
+  @T-UC-016-cap-gate-invalid @ext-g @error @partition @boundary @cap-gate @post-f2
   Scenario Outline: Capability gate invalid -- <partition>
     Given the seller's capabilities response has audience_targeting set to <capability>
     When the Buyer Agent sends a sync_audiences request
@@ -501,7 +501,7 @@ Feature: BR-UC-016 Sync Audiences
       | capability_false    | capability=false   | false      |
       | capability_absent   | capability absent  | (absent)   |
 
-  @T-UC-016-ext-d @extension @ext-d @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-016-ext-d @extension @ext-d @error @post-f1 @post-f2 @post-f3
   Scenario Outline: ACCOUNT_NOT_FOUND via <transport>
     Given the account reference does not match any account on the seller platform
     And the Buyer Agent has an authenticated connection via <transport>
@@ -522,7 +522,7 @@ Feature: BR-UC-016 Sync Audiences
       | MCP       |
       | REST      |
 
-  @T-UC-016-ext-e @extension @ext-e @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-016-ext-e @extension @ext-e @error @post-f1 @post-f2 @post-f3
   Scenario Outline: INVALID_REQUEST via <transport> -- <trigger>
     Given the Buyer Agent has an authenticated connection
     When the Buyer Agent sends a sync_audiences request via <transport> with <invalid_input>
@@ -547,7 +547,7 @@ Feature: BR-UC-016 Sync Audiences
       | MCP       | invalid hashed_email format     | hashed_email with 32 chars instead of 64         |
       | MCP       | delete_missing=true no audiences | delete_missing=true without audiences array      |
 
-  @T-UC-016-ext-f @extension @ext-f @post-s3 @post-f4 @pending
+  @T-UC-016-ext-f @extension @ext-f @post-s3 @post-f4
   Scenario: AUDIENCE_TOO_SMALL -- per-audience status, not operation-level error
     When the Buyer Agent syncs an audience with 10 members on a platform requiring minimum 1000
     Then the audience result has action "created" or "updated"
@@ -560,7 +560,7 @@ Feature: BR-UC-016 Sync Audiences
     # POST-F4: Other audiences unaffected
     # --- Extension G: UNSUPPORTED_FEATURE ---
 
-  @T-UC-016-ext-g-error @extension @ext-g @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-016-ext-g-error @extension @ext-g @error @post-f1 @post-f2 @post-f3
   Scenario: UNSUPPORTED_FEATURE -- audience_targeting not declared
     Given the seller has NOT declared audience_targeting capability
     When the Buyer Agent sends a sync_audiences request
@@ -575,14 +575,14 @@ Feature: BR-UC-016 Sync Audiences
     # POST-F3: Context echoed with suggestion
     # --- Extension H: AUTH_REQUIRED ---
 
-  @T-UC-016-ext-h-valid @partition @boundary @auth @pending
+  @T-UC-016-ext-h-valid @partition @boundary @auth
   Scenario: Authentication valid -- valid_token (valid token present)
     Given the Buyer Agent sends a sync_audiences request with a valid non-expired bearer token
     When the system validates authentication
     Then the request proceeds to account resolution
     # BR-RULE-113 INV-1: valid token present
 
-  @T-UC-016-ext-h @extension @ext-h @error @post-f1 @post-f2 @post-f3 @partition @boundary @auth @pending
+  @T-UC-016-ext-h @extension @ext-h @error @post-f1 @post-f2 @post-f3 @partition @boundary @auth
   Scenario Outline: AUTH_REQUIRED -- <partition>
     Given the Buyer Agent sends a sync_audiences request with <auth_setup>
     When the system validates authentication
@@ -603,7 +603,7 @@ Feature: BR-UC-016 Sync Audiences
       | expired_token     | expired token     | an expired authentication token                 |
       | malformed_token   | malformed token   | a structurally invalid token "not-a-jwt"        |
 
-  @T-UC-016-ext-i @extension @ext-i @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-016-ext-i @extension @ext-i @error @post-f1 @post-f2 @post-f3
   Scenario Outline: RATE_LIMITED via <transport>
     Given the request rate for this tenant has been exceeded
     And the Buyer Agent has an authenticated connection via <transport>
@@ -625,7 +625,7 @@ Feature: BR-UC-016 Sync Audiences
       | MCP       |
       | REST      |
 
-  @T-UC-016-ext-j @extension @ext-j @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-016-ext-j @extension @ext-j @error @post-f1 @post-f2 @post-f3
   Scenario Outline: SERVICE_UNAVAILABLE via <transport>
     Given the ad platform is temporarily unreachable
     And the Buyer Agent has an authenticated connection via <transport>
@@ -646,14 +646,14 @@ Feature: BR-UC-016 Sync Audiences
       | MCP       |
       | REST      |
 
-  @T-UC-016-context-echo @cross-cutting @post-s7 @pending
+  @T-UC-016-context-echo @cross-cutting @post-s7
   Scenario: Context echo -- request context echoed in success response
     Given the Buyer Agent includes application context {"campaign_id": "c123"} in the request
     When the Buyer Agent sends a sync_audiences request with audiences
     Then the response includes context {"campaign_id": "c123"} unchanged
     # POST-S7: Application context echoed unchanged
 
-  @T-UC-016-context-echo-error @cross-cutting @post-f3 @pending
+  @T-UC-016-context-echo-error @cross-cutting @post-f3
   Scenario: Context echo -- request context echoed in error response
     Given the Buyer Agent includes application context {"session": "s456"} in the request
     And the account reference does not match any account
@@ -661,7 +661,7 @@ Feature: BR-UC-016 Sync Audiences
     Then the error response includes context {"session": "s456"} when possible
     # POST-F3: Application context echoed in error response
 
-  @T-UC-016-sandbox-happy @invariant @br-rule-209 @sandbox @pending
+  @T-UC-016-sandbox-happy @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account sync_audiences produces simulated results with sandbox flag
     Given the Buyer is authenticated with a valid principal_id
     And the request targets a sandbox account
@@ -675,7 +675,7 @@ Feature: BR-UC-016 Sync Audiences
     # BR-RULE-209 INV-3: real billing suppressed
     # BR-RULE-209 INV-4: response includes sandbox: true
 
-  @T-UC-016-sandbox-production @invariant @br-rule-209 @sandbox @pending
+  @T-UC-016-sandbox-production @invariant @br-rule-209 @sandbox
   Scenario: Production account sync_audiences response does not include sandbox flag
     Given the Buyer is authenticated with a valid principal_id
     And the request targets a production account
@@ -684,7 +684,7 @@ Feature: BR-UC-016 Sync Audiences
     And the response should not include a sandbox field
     # BR-RULE-209 INV-5: production account -> sandbox absent
 
-  @T-UC-016-sandbox-validation @invariant @br-rule-209 @sandbox @pending
+  @T-UC-016-sandbox-validation @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account with invalid audience returns real validation error
     Given the Buyer is authenticated with a valid principal_id
     And the request targets a sandbox account

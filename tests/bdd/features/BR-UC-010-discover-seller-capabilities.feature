@@ -1,4 +1,4 @@
-# Generated from adcp-req @ 8a219ece2b54628c33f1075d386b73082a0f4832 on 2026-03-20T11:43:42Z
+# Generated from adcp-req @ 8a219ece2b54628c33f1075d386b73082a0f4832 on 2026-03-20T12:00:24Z
 # DO NOT EDIT -- re-run: python scripts/compile_bdd.py
 
 Feature: BR-UC-010 Discover Seller Capabilities
@@ -29,7 +29,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Given a Seller Agent is operational and accepting requests
 
 
-  @T-UC-010-main-mcp @main-flow @mcp @post-s1 @post-s2 @post-s3 @post-s4 @post-s5 @post-s6 @post-s7 @post-s8 @post-s10 @post-s11 @partition @boundary @pending
+  @T-UC-010-main-mcp @main-flow @mcp @post-s1 @post-s2 @post-s3 @post-s4 @post-s5 @post-s6 @post-s7 @post-s8 @post-s10 @post-s11 @partition @boundary
   Scenario: not_provided — Not provided (no protocol filter), discover complete capabilities via MCP
     Given a tenant is resolvable from the request context
     And the tenant has an adapter with channels "display, social, ctv"
@@ -58,7 +58,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # POST-S10: Buyer knows pricing models
     # POST-S11: Buyer knows reporting capabilities
 
-  @T-UC-010-main-rest @main-flow @a2a @post-s1 @post-s2 @post-s3 @post-s4 @post-s5 @post-s6 @post-s7 @post-s8 @post-s10 @post-s11 @pending
+  @T-UC-010-main-rest @main-flow @a2a @post-s1 @post-s2 @post-s3 @post-s4 @post-s5 @post-s6 @post-s7 @post-s8 @post-s10 @post-s11
   Scenario: Discover complete capabilities via A2A
     Given a tenant is resolvable from the request context
     And the tenant has an adapter with channels "display, social, ctv"
@@ -78,7 +78,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the response should include last_updated as a valid timestamp
     # POST-S1 through POST-S8, POST-S10, POST-S11 verified (same as MCP path)
 
-  @T-UC-010-main-readonly @main-flow @post-f1 @pending
+  @T-UC-010-main-readonly @main-flow @post-f1
   Scenario: Capabilities discovery is read-only — no state change
     Given a tenant is resolvable from the request context
     And the system has known state before the request
@@ -86,7 +86,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Then the system state should be unchanged after the response
     # POST-F1: System state is unchanged (read-only operation)
 
-  @T-UC-010-main-timestamp @main-flow @post-s7 @pending
+  @T-UC-010-main-timestamp @main-flow @post-s7
   Scenario: Capabilities response includes last_updated for cache invalidation
     Given a tenant is resolvable from the request context
     And the tenant has full capabilities configured
@@ -94,7 +94,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Then the response should include last_updated as a valid ISO 8601 timestamp
     # POST-S7: Buyer knows when capabilities were last updated
 
-  @T-UC-010-pricing @main-flow @post-s10 @pending
+  @T-UC-010-pricing @main-flow @post-s10
   Scenario: Capabilities response includes supported pricing models
     Given a tenant is resolvable from the request context
     And the tenant has full capabilities configured
@@ -104,7 +104,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # POST-S10: Buyer knows supported pricing models across seller's portfolio
     # POST-S10: Buyer knows the supported pricing models
 
-  @T-UC-010-reporting @main-flow @post-s11 @pending
+  @T-UC-010-reporting @main-flow @post-s11
   Scenario: Capabilities response includes reporting capabilities
     Given a tenant is resolvable from the request context
     And the tenant has full capabilities configured
@@ -117,7 +117,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # POST-S11: Buyer knows seller-level reporting capabilities
     # POST-S11: Buyer knows reporting capabilities
 
-  @T-UC-010-audience-caps @main-flow @post-s12 @pending
+  @T-UC-010-audience-caps @main-flow @post-s12
   Scenario: Capabilities response includes audience targeting capabilities when feature enabled
     Given a tenant is resolvable from the request context
     And the tenant has full capabilities configured
@@ -131,7 +131,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # POST-S12: Buyer knows audience targeting capabilities
     # POST-S12: Buyer knows audience targeting capabilities
 
-  @T-UC-010-conversion-caps @main-flow @post-s13 @pending
+  @T-UC-010-conversion-caps @main-flow @post-s13
   Scenario: Capabilities response includes conversion tracking capabilities when feature enabled
     Given a tenant is resolvable from the request context
     And the tenant has full capabilities configured
@@ -146,7 +146,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # POST-S13: Buyer knows conversion tracking capabilities
     # POST-S13: Buyer knows conversion tracking capabilities
 
-  @T-UC-010-creative-caps @main-flow @post-s14 @pending
+  @T-UC-010-creative-caps @main-flow @post-s14
   Scenario: Capabilities response includes creative protocol when supported
     Given a tenant is resolvable from the request context
     And the tenant has full capabilities configured
@@ -157,7 +157,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # POST-S14: Buyer knows creative protocol capabilities
     # POST-S14: Buyer knows creative protocol capabilities
 
-  @T-UC-010-auth @auth @invariant @partition @boundary @post-s1 @post-s2 @pending
+  @T-UC-010-auth @auth @invariant @partition @boundary @post-s1 @post-s2
   Scenario Outline: Authentication policy for capabilities discovery
     Given a tenant is resolvable from the request context
     And the tenant has full capabilities configured
@@ -176,7 +176,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
       | invalid_token_mcp invalid token (MCP) | invalid     | MCP     | success            |
       | invalid_token_a2a invalid token (A2A) | invalid     | A2A     | AUTH_TOKEN_INVALID |
 
-  @T-UC-010-auth-data-identity @auth @invariant @pending
+  @T-UC-010-auth-data-identity @auth @invariant
   Scenario: Authentication state does not affect response data content
     Given a tenant is resolvable from the request context
     And the tenant has full capabilities configured
@@ -186,7 +186,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # BR-RULE-041 INV-4: Unauthenticated and authenticated callers receive identical data
     # INV-4: Response data identical regardless of auth state
 
-  @T-UC-010-ext-a-mcp @extension @ext-a @degradation @mcp @partition @boundary @pending
+  @T-UC-010-ext-a-mcp @extension @ext-a @degradation @mcp @partition @boundary
   Scenario: no_tenant — tenant absent, minimal capabilities via MCP
     Given no tenant can be resolved from the request context
     When the Buyer Agent calls get_adcp_capabilities MCP tool
@@ -202,7 +202,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # POST-S1: Buyer knows AdCP v3 (minimal)
     # POST-S2: Buyer knows media_buy protocol (minimal)
 
-  @T-UC-010-ext-a-a2a @extension @ext-a @degradation @a2a @partition @pending
+  @T-UC-010-ext-a-a2a @extension @ext-a @degradation @a2a @partition
   Scenario: no_tenant — minimal capabilities via A2A
     Given no tenant can be resolved from the request context
     When the Buyer Agent sends a get_adcp_capabilities skill request via A2A without token
@@ -212,7 +212,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # BR-RULE-052 INV-1: No tenant -> minimal response
     # POST-S1, POST-S2 (minimal)
 
-  @T-UC-010-ext-b-degradation @extension @ext-b @degradation @invariant @partition @boundary @pending
+  @T-UC-010-ext-b-degradation @extension @ext-b @degradation @invariant @partition @boundary
   Scenario Outline: Graceful degradation when dependencies fail
     Given a tenant is resolvable from the request context
     And the adapter is in <adapter_state> state
@@ -234,7 +234,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
       | no_principal adapter fails                                 | no_principal  | available | [display]         | from_db          |
       | adapter_fail adapter fails DB succeeds                     | unavailable   | empty     | [display]         | from_db_or_empty |
 
-  @T-UC-010-ext-b-schema-valid @extension @ext-b @degradation @invariant @pending
+  @T-UC-010-ext-b-schema-valid @extension @ext-b @degradation @invariant
   Scenario: Degraded response is always schema-valid
     Given a tenant is resolvable from the request context
     And the adapter is unavailable
@@ -245,7 +245,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And degradation warnings should be logged internally
     # BR-RULE-052 INV-5: Response remains schema-valid; failure logged, not propagated
 
-  @T-UC-010-degradation-account @extension @degradation @partition @boundary @post-s3 @pending
+  @T-UC-010-degradation-account @extension @degradation @partition @boundary @post-s3
   Scenario Outline: Account section presence depends on tenant resolution
     Given <tenant_condition>
     When the Buyer Agent calls get_adcp_capabilities MCP tool
@@ -258,7 +258,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
       | full_response tenant resolved → account section present     | a tenant is resolvable from the request context    | present       |
       | account_degraded                                            | a tenant is resolvable with partial account config | partial       |
 
-  @T-UC-010-degradation-sections @extension @degradation @partition @boundary @pending
+  @T-UC-010-degradation-sections @extension @degradation @partition @boundary
   Scenario Outline: Adapter-dependent sections absent when adapter fails
     Given a tenant is resolvable from the request context
     And the adapter is in <adapter_state> state
@@ -278,7 +278,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
       | full_response features.conversion_tracking=true AND adapter succeeds → conversion_tracking section present   | available     | conversion_tracking | true       | conversion_tracking  | present       |
       | conversion_tracking_absent features.conversion_tracking=false → conversion_tracking section absent           | available     | conversion_tracking | false      | conversion_tracking  | absent        |
 
-  @T-UC-010-degradation-creative @extension @degradation @partition @boundary @post-s14 @pending
+  @T-UC-010-degradation-creative @extension @degradation @partition @boundary @post-s14
   Scenario Outline: Creative section presence depends on protocol support
     Given a tenant is resolvable from the request context
     And the tenant has full capabilities configured
@@ -292,7 +292,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
       | creative_absent creative not in supported_protocols → creative section absent  | "creative" is NOT in supported_protocols  | absent         |
       | full_response creative in supported_protocols → creative section present       | "creative" is in supported_protocols      | present        |
 
-  @T-UC-010-ext-c-a2a @extension @ext-c @error @a2a @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-010-ext-c-a2a @extension @ext-c @error @a2a @post-f1 @post-f2 @post-f3
   Scenario: A2A request with invalid auth token — error returned
     Given a tenant is resolvable from the request context
     And the Buyer has an invalid authentication token
@@ -307,7 +307,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # POST-F1: No state change (read-only)
     # POST-F3: Suggestion included when possible (A2A ServerError may not support it)
 
-  @T-UC-010-ext-c-mcp @extension @ext-c @auth @mcp @degradation @pending
+  @T-UC-010-ext-c-mcp @extension @ext-c @auth @mcp @degradation
   Scenario: MCP request with invalid auth token — silently ignored
     Given a tenant is resolvable from the request context
     And the Buyer has an invalid authentication token
@@ -317,7 +317,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # BR-RULE-041 INV-3: MCP treats invalid token as absent
     # Degraded capabilities may result (no principal -> no adapter)
 
-  @T-UC-010-ext-d-filter @extension @ext-d @known-gap @boundary @partition @pending
+  @T-UC-010-ext-d-filter @extension @ext-d @known-gap @boundary @partition
   Scenario: media_buy (first enum value) — protocol filter provided but ignored
     Given a tenant is resolvable from the request context
     And the tenant has full capabilities configured
@@ -328,7 +328,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # @bva protocols: media_buy (first enum value)
     # @known-gap: Schema defines protocols filter but implementation ignores it
 
-  @T-UC-010-ext-d-all-protocols @extension @ext-d @known-gap @boundary @partition @pending
+  @T-UC-010-ext-d-all-protocols @extension @ext-d @known-gap @boundary @partition
   Scenario: signals governance sponsored_intelligence creative (last enum value) — all protocols in filter, still ignored
     Given a tenant is resolvable from the request context
     And the tenant has full capabilities configured
@@ -337,7 +337,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # @bva protocols: creative (last enum value)
     # @known-gap: Filter with all values behaves same as no filter
 
-  @T-UC-010-ext-d-invalid-value @extension @ext-d @known-gap @boundary @partition @pending
+  @T-UC-010-ext-d-invalid-value @extension @ext-d @known-gap @boundary @partition
   Scenario: unknown_protocol — filter with invalid enum value, Unknown string not in enum
     Given a tenant is resolvable from the request context
     And the tenant has full capabilities configured
@@ -348,7 +348,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # @bva protocols: Unknown string not in enum
     # @known-gap: Invalid filter value silently ignored
 
-  @T-UC-010-ext-d-empty @extension @ext-d @known-gap @boundary @partition @pending
+  @T-UC-010-ext-d-empty @extension @ext-d @known-gap @boundary @partition
   Scenario: empty_array — protocol filter with empty array, silently accepted
     Given a tenant is resolvable from the request context
     And the tenant has full capabilities configured
@@ -358,7 +358,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # @bva protocols: Empty array
     # @known-gap: Empty array violates schema minItems but implementation ignores filter
 
-  @T-UC-010-ext-e-mcp @context @mcp @post-s9 @invariant @partition @boundary @pending
+  @T-UC-010-ext-e-mcp @context @mcp @post-s9 @invariant @partition @boundary
   Scenario: context_provided — context echoed in capabilities response via MCP
     Given a tenant is resolvable from the request context
     And the tenant has full capabilities configured
@@ -367,7 +367,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # BR-RULE-043 INV-1: Request includes context -> response includes identical context
     # POST-S9: Application context echoed unchanged
 
-  @T-UC-010-ext-e-a2a @context @a2a @post-s9 @invariant @partition @boundary @pending
+  @T-UC-010-ext-e-a2a @context @a2a @post-s9 @invariant @partition @boundary
   Scenario: context_provided — context echoed via A2A, context with properties
     Given a tenant is resolvable from the request context
     And the Buyer is authenticated with a valid principal_id
@@ -376,7 +376,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # BR-RULE-043 INV-1: Request includes context -> response includes identical context
     # POST-S9: Application context echoed unchanged
 
-  @T-UC-010-ext-e-absent @context @invariant @partition @boundary @pending
+  @T-UC-010-ext-e-absent @context @invariant @partition @boundary
   Scenario: context_absent — context absent, no context in request means no context in response
     Given a tenant is resolvable from the request context
     And the tenant has full capabilities configured
@@ -385,7 +385,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # BR-RULE-043 INV-2: Request omits context -> response omits context
     # INV-2: Absence echoed as absence
 
-  @T-UC-010-ext-e-nested @context @invariant @boundary @partition @pending
+  @T-UC-010-ext-e-nested @context @invariant @boundary @partition
   Scenario: context_nested — deeply nested context object echoed unchanged
     Given a tenant is resolvable from the request context
     When the Buyer Agent calls get_adcp_capabilities MCP tool with context {"deep": {"nested": {"level": 3, "data": true}}}
@@ -393,7 +393,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # BR-RULE-043 INV-1: Context is opaque — echoed regardless of structure
     # Context is opaque — never parsed, modified, or validated
 
-  @T-UC-010-ext-e-empty @context @invariant @boundary @partition @pending
+  @T-UC-010-ext-e-empty @context @invariant @boundary @partition
   Scenario: context_empty_object — empty context echoed, context = {}
     Given a tenant is resolvable from the request context
     When the Buyer Agent calls get_adcp_capabilities MCP tool with context {}
@@ -401,7 +401,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # BR-RULE-043 INV-1: Even empty object is echoed
     # Empty context is a valid context — echoed as empty object
 
-  @T-UC-010-ext-e-gap @context @known-gap @pending
+  @T-UC-010-ext-e-gap @context @known-gap
   Scenario: Context echo implementation gap in capabilities endpoint
     Given a tenant is resolvable from the request context
     When the Buyer Agent calls get_adcp_capabilities MCP tool with context {"tracking": "id-456"}
@@ -411,7 +411,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # Schema supports context echo but implementation does not copy it
     # @known-gap: Implementation does not echo context (unlike properties.py and performance.py)
 
-  @T-UC-010-channel-mapping @channel @invariant @partition @boundary @pending
+  @T-UC-010-channel-mapping @channel @invariant @partition @boundary
   Scenario Outline: Channel name resolution from adapter to MediaChannel enum
     Given a tenant is resolvable from the request context
     And the adapter reports channels <adapter_channels>
@@ -431,7 +431,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
       | mixed_valid_invalid                          | display, hologram      | display              |
       | canonical_channels 0 channels from adapter   |                        | display              |
 
-  @T-UC-010-channel-all-canonical @channel @boundary @pending
+  @T-UC-010-channel-all-canonical @channel @boundary
   Scenario: All 18 canonical MediaChannel values are valid
     Given a tenant is resolvable from the request context
     And the adapter reports all 18 MediaChannel enum values
@@ -442,7 +442,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # streaming_audio, podcast, dooh, ooh, print, cinema, email, gaming,
     # retail_media, influencer, affiliate, product_placement
 
-  @T-UC-010-features @validation @post-s4 @pending
+  @T-UC-010-features @validation @post-s4
   Scenario: Capabilities response includes all 7 media-buy feature flags
     Given a tenant is resolvable from the request context
     And the tenant has full capabilities configured
@@ -457,7 +457,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # POST-S4: Buyer knows feature flags (7 total)
     # POST-S4: All 7 feature flags verified
 
-  @T-UC-010-features-partitions @partition @boundary @features @post-s4 @pending
+  @T-UC-010-features-partitions @partition @boundary @features @post-s4
   Scenario Outline: Feature flag configurations - <partition>
     Given a tenant is resolvable from the request context
     And the tenant features are configured as <feature_config>
@@ -476,7 +476,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
       | catalog_management_enabled catalog_management=true (enables sync_catalogs) | catalog_management=true                                                                                                                | catalog_management flag true                        |
       | sandbox_enabled sandbox=true (sandbox mode available)        | sandbox=true                                                                                                                           | sandbox flag true                                   |
 
-  @T-UC-010-features-boundaries @boundary @features @post-s4 @pending
+  @T-UC-010-features-boundaries @boundary @features @post-s4
   Scenario Outline: Feature flag boundary - <boundary_point>
     Given a tenant is resolvable from the request context
     And the tenant features are configured for <boundary_point>
@@ -491,7 +491,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
       | catalog_management=false (sync_catalogs unavailable)   | valid    |
       | sandbox=false (no sandbox mode)                        | valid    |
 
-  @T-UC-010-targeting @validation @post-s5 @pending
+  @T-UC-010-targeting @validation @post-s5
   Scenario: Capabilities response includes all targeting dimensions
     Given a tenant is resolvable from the request context
     And the adapter provides full targeting capabilities
@@ -510,7 +510,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # POST-S5: Buyer knows execution capabilities
     # POST-S5: Targeting capabilities verified (all dimensions)
 
-  @T-UC-010-targeting-partitions @partition @boundary @targeting @post-s5 @pending
+  @T-UC-010-targeting-partitions @partition @boundary @targeting @post-s5
   Scenario Outline: Targeting capability configurations - <partition>
     Given a tenant is resolvable from the request context
     And the adapter provides targeting as <targeting_config>
@@ -532,7 +532,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
       | geo_proximity_supported geo_proximity.radius=true (simple circle targeting)        | geo_proximity.radius=true, travel_time=true, geometry=false, transport_modes=[driving,walking]                   | proximity targeting available                          |
       | postal_areas_extended geo_postal_areas with ch_plz (Swiss 4-digit)                 | geo_postal_areas.de_plz=true, ch_plz=true, at_plz=true                                                          | extended postal areas including ch_plz and at_plz      |
 
-  @T-UC-010-targeting-boundaries @boundary @targeting @post-s5 @pending
+  @T-UC-010-targeting-boundaries @boundary @targeting @post-s5
   Scenario Outline: Targeting dimension boundary - <boundary_point>
     Given a tenant is resolvable from the request context
     And the adapter provides targeting for <boundary_point>
@@ -551,7 +551,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
       | geo_proximity.travel_time=true with transport_modes                       |
       | geo_proximity.geometry=true (buyer-provided GeoJSON)                      |
 
-  @T-UC-010-degradation-partitions @partition @boundary @degradation @pending
+  @T-UC-010-degradation-partitions @partition @boundary @degradation
   Scenario Outline: Degradation path - <partition>
     Given <precondition>
     When the Buyer Agent calls get_adcp_capabilities MCP tool

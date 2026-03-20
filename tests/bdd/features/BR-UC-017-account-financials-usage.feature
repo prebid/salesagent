@@ -1,4 +1,4 @@
-# Generated from adcp-req @ 8a219ece2b54628c33f1075d386b73082a0f4832 on 2026-03-20T11:43:42Z
+# Generated from adcp-req @ 8a219ece2b54628c33f1075d386b73082a0f4832 on 2026-03-20T12:00:24Z
 # DO NOT EDIT -- re-run: python scripts/compile_bdd.py
 
 Feature: BR-UC-017 Account Financials & Usage Reporting
@@ -37,7 +37,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And the Buyer Agent has an authenticated connection via MCP
 
 
-  @T-UC-017-main-fin @main-flow @get-financials @happy-path @post-s1 @post-s2 @post-s3 @post-s6 @post-s7 @pending
+  @T-UC-017-main-fin @main-flow @get-financials @happy-path @post-s1 @post-s2 @post-s3 @post-s6 @post-s7
   Scenario: Get account financials -- operator-billed account with full financial data
     Given the seller declares account_financials capability as true
     And an operator-billed account "acct_acme_001" exists
@@ -52,7 +52,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     # POST-S6: Buyer knows payment status
     # POST-S7: Buyer knows payment terms
 
-  @T-UC-017-main-fin-credit @main-flow @get-financials @happy-path @post-s4 @pending
+  @T-UC-017-main-fin-credit @main-flow @get-financials @happy-path @post-s4
   Scenario: Get account financials -- credit-based account includes credit section
     Given the seller declares account_financials capability as true
     And an operator-billed account "acct_credit_001" exists with credit-based payment terms (net_30)
@@ -61,7 +61,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And the response includes credit section with credit_limit and available_credit
     # POST-S4: Buyer knows credit position
 
-  @T-UC-017-main-fin-prepay @main-flow @get-financials @happy-path @post-s5 @pending
+  @T-UC-017-main-fin-prepay @main-flow @get-financials @happy-path @post-s5
   Scenario: Get account financials -- prepay account includes balance section
     Given the seller declares account_financials capability as true
     And an operator-billed account "acct_prepay_001" exists with prepay payment terms
@@ -70,7 +70,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And the response includes balance section with available funds
     # POST-S5: Buyer knows prepay balance
 
-  @T-UC-017-main-fin-invoices @main-flow @get-financials @happy-path @post-s8 @pending
+  @T-UC-017-main-fin-invoices @main-flow @get-financials @happy-path @post-s8
   Scenario: Get account financials -- response includes invoice history
     Given the seller declares account_financials capability as true
     And an operator-billed account "acct_invoice_001" exists with recent invoices
@@ -79,7 +79,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And the response includes invoices array with status, amounts, and due dates
     # POST-S8: Buyer can review recent invoices
 
-  @T-UC-017-main-usage @main-flow @report-usage @happy-path @post-s9 @post-s10 @post-s11 @post-s12 @pending
+  @T-UC-017-main-usage @main-flow @report-usage @happy-path @post-s9 @post-s10 @post-s11 @post-s12
   Scenario: Report usage -- all records accepted with valid data
     Given an operator-billed account "acct_001" exists
     And a valid reporting period from "2026-02-01T00:00:00Z" to "2026-02-28T23:59:59Z"
@@ -92,7 +92,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     # POST-S11: Seller can verify pricing options
     # POST-S12: Buyer knows accepted count
 
-  @T-UC-017-main-usage-pricing @main-flow @report-usage @happy-path @post-s11 @pending
+  @T-UC-017-main-usage-pricing @main-flow @report-usage @happy-path @post-s11
   Scenario: Report usage -- record with valid pricing_option_id accepted
     Given an operator-billed account "acct_001" exists
     And a pricing option "po_lux_auto_cpm" is known for account "acct_001"
@@ -100,7 +100,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Then the response contains accepted count of 1
     # POST-S11: Seller can verify correct pricing option and rate
 
-  @T-UC-017-main-usage-sandbox @main-flow @report-usage @happy-path @post-s14 @pending
+  @T-UC-017-main-usage-sandbox @main-flow @report-usage @happy-path @post-s14
   Scenario: Report usage -- sandbox account flags no billing
     Given a sandbox account "acct_sandbox_001" exists
     And a valid reporting period
@@ -109,7 +109,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And the response contains sandbox flag set to true
     # POST-S14: Buyer knows this is a sandbox (no billing occurred)
 
-  @T-UC-017-ext-a-cap @extension @ext-a @error @get-financials @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-017-ext-a-cap @extension @ext-a @error @get-financials @post-f1 @post-f2 @post-f3
   Scenario: Get account financials -- capability not enabled returns UNSUPPORTED_FEATURE
     Given the seller does not declare account_financials capability (false or absent)
     And an operator-billed account "acct_001" exists
@@ -123,7 +123,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     # POST-F2: Buyer knows error code UNSUPPORTED_FEATURE
     # POST-F3: Context echoed
 
-  @T-UC-017-ext-a-billing @extension @ext-a @error @get-financials @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-017-ext-a-billing @extension @ext-a @error @get-financials @post-f1 @post-f2 @post-f3
   Scenario: Get account financials -- agent-billed account returns UNSUPPORTED_FEATURE
     Given the seller declares account_financials capability as true
     And an agent-billed account "acct_agent_001" exists
@@ -137,7 +137,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     # POST-F2: Buyer knows error code UNSUPPORTED_FEATURE
     # POST-F3: Context echoed
 
-  @T-UC-017-ext-b-fin @extension @ext-b @error @get-financials @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-017-ext-b-fin @extension @ext-b @error @get-financials @post-f1 @post-f2 @post-f3
   Scenario: Get account financials -- unresolvable account returns ACCOUNT_NOT_FOUND
     Given the seller declares account_financials capability as true
     And no account with ID "acct_nonexistent" exists
@@ -151,7 +151,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     # POST-F2: Buyer knows error code ACCOUNT_NOT_FOUND
     # POST-F3: Context echoed
 
-  @T-UC-017-ext-b-usage @extension @ext-b @error @report-usage @post-f2 @post-f3 @pending
+  @T-UC-017-ext-b-usage @extension @ext-b @error @report-usage @post-f2 @post-f3
   Scenario: Report usage -- unresolvable account in usage record returns per-record ACCOUNT_NOT_FOUND
     Given a valid reporting period
     And no account with ID "acct_nonexistent" exists
@@ -165,7 +165,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     # POST-F2: Buyer knows error code ACCOUNT_NOT_FOUND
     # POST-F3: Suggestion provided
 
-  @T-UC-017-ext-c-missing @extension @ext-c @error @report-usage @post-f2 @post-s13 @pending
+  @T-UC-017-ext-c-missing @extension @ext-c @error @report-usage @post-f2 @post-s13
   Scenario: Report usage -- missing required field returns INVALID_USAGE_DATA
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
@@ -179,7 +179,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     # POST-F2: Buyer knows specific error
     # POST-S13: Buyer knows which record failed and why
 
-  @T-UC-017-ext-c-neg-cost @extension @ext-c @error @report-usage @post-f2 @post-s13 @pending
+  @T-UC-017-ext-c-neg-cost @extension @ext-c @error @report-usage @post-f2 @post-s13
   Scenario: Report usage -- negative vendor_cost returns INVALID_USAGE_DATA
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
@@ -193,7 +193,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     # POST-F2: Buyer knows specific error
     # POST-S13: Buyer knows which record failed and why
 
-  @T-UC-017-ext-c-currency @extension @ext-c @error @report-usage @post-f2 @post-s13 @pending
+  @T-UC-017-ext-c-currency @extension @ext-c @error @report-usage @post-f2 @post-s13
   Scenario: Report usage -- invalid currency format returns INVALID_USAGE_DATA
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
@@ -207,7 +207,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     # POST-F2: Buyer knows specific error
     # POST-S13: Buyer knows which record failed and why
 
-  @T-UC-017-ext-d @extension @ext-d @error @report-usage @post-f2 @post-s13 @pending
+  @T-UC-017-ext-d @extension @ext-d @error @report-usage @post-f2 @post-s13
   Scenario: Report usage -- unknown pricing_option_id returns INVALID_PRICING_OPTION
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
@@ -221,7 +221,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     # POST-F2: Buyer knows specific error
     # POST-S13: Buyer knows which record failed and why
 
-  @T-UC-017-ext-e @extension @ext-e @report-usage @post-f1 @post-s12 @pending
+  @T-UC-017-ext-e @extension @ext-e @report-usage @post-f1 @post-s12
   Scenario: Report usage -- duplicate idempotency_key returns original response
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
@@ -234,7 +234,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     # POST-F1: No state change (records already stored)
     # POST-S12: Buyer knows accepted count from original
 
-  @T-UC-017-ext-f-fin @extension @ext-f @error @get-financials @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-017-ext-f-fin @extension @ext-f @error @get-financials @post-f1 @post-f2 @post-f3
   Scenario: Get account financials -- missing required account field returns INVALID_REQUEST
     Given the seller declares account_financials capability as true
     When the Buyer Agent invokes get_account_financials without the required account field
@@ -248,7 +248,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     # POST-F2: Buyer knows specific error
     # POST-F3: Context echoed
 
-  @T-UC-017-ext-f-usage-period @extension @ext-f @error @report-usage @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-017-ext-f-usage-period @extension @ext-f @error @report-usage @post-f1 @post-f2 @post-f3
   Scenario: Report usage -- missing reporting_period returns INVALID_REQUEST
     When the Buyer Agent invokes report_usage without the required reporting_period field
     Then the operation should fail
@@ -260,7 +260,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     # POST-F2: Buyer knows specific error
     # POST-F3: Context echoed
 
-  @T-UC-017-ext-f-usage-empty @extension @ext-f @error @report-usage @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-017-ext-f-usage-empty @extension @ext-f @error @report-usage @post-f1 @post-f2 @post-f3
   Scenario: Report usage -- empty usage array returns INVALID_REQUEST
     Given a valid reporting period
     When the Buyer Agent invokes report_usage with an empty usage array
@@ -273,7 +273,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     # POST-F2: Buyer knows specific error
     # POST-F3: Context echoed
 
-  @T-UC-017-ext-g @extension @ext-g @report-usage @post-s9 @post-s12 @post-s13 @pending
+  @T-UC-017-ext-g @extension @ext-g @report-usage @post-s9 @post-s12 @post-s13
   Scenario: Report usage -- partial acceptance stores valid records and reports errors
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
@@ -289,7 +289,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     # POST-S12: Buyer knows accepted count is 2
     # POST-S13: Buyer knows record 1 failed with reason
 
-  @T-UC-017-ext-g-all-fail @extension @ext-g @report-usage @post-s12 @post-s13 @pending
+  @T-UC-017-ext-g-all-fail @extension @ext-g @report-usage @post-s12 @post-s13
   Scenario: Report usage -- all records invalid returns accepted 0 with errors
     Given a valid reporting period
     When the Buyer Agent submits 2 usage records both with missing vendor_cost
@@ -300,7 +300,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     # POST-S12: Buyer knows accepted count is 0
     # POST-S13: Buyer knows each record failed and why
 
-  @T-UC-017-r132-inv1 @invariant @br-rule-132 @get-financials @pending
+  @T-UC-017-r132-inv1 @invariant @br-rule-132 @get-financials
   Scenario: BR-RULE-132 INV-1 holds -- capability declared true enables get_account_financials
     Given the seller declares account_financials capability as true
     And an operator-billed account "acct_001" exists
@@ -308,7 +308,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Then the response contains the success variant
     # INV-1: Capability flag true -> task is available
 
-  @T-UC-017-r132-inv2 @invariant @br-rule-132 @get-financials @error @pending
+  @T-UC-017-r132-inv2 @invariant @br-rule-132 @get-financials @error
   Scenario: BR-RULE-132 INV-2 violated -- capability false returns UNSUPPORTED_FEATURE
     Given the seller declares account_financials capability as false
     When the Buyer Agent invokes get_account_financials with account "acct_001"
@@ -316,7 +316,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And the error should include "suggestion" field
     # INV-2: Capability flag false -> UNSUPPORTED_FEATURE
 
-  @T-UC-017-r132-inv3 @invariant @br-rule-132 @get-financials @error @pending
+  @T-UC-017-r132-inv3 @invariant @br-rule-132 @get-financials @error
   Scenario: BR-RULE-132 INV-3 holds -- UNSUPPORTED_FEATURE has correctable recovery
     Given the seller declares account_financials capability as false
     When the Buyer Agent invokes get_account_financials with account "acct_001"
@@ -326,7 +326,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And the suggestion should contain "capabilities"
     # INV-3: UNSUPPORTED_FEATURE recovery is correctable
 
-  @T-UC-017-r133-inv1 @invariant @br-rule-133 @get-financials @pending
+  @T-UC-017-r133-inv1 @invariant @br-rule-133 @get-financials
   Scenario: BR-RULE-133 INV-1 holds -- operator-billed account returns financial data
     Given the seller declares account_financials capability as true
     And an operator-billed account "acct_operator" exists
@@ -334,7 +334,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Then the response contains the success variant with financial data
     # INV-1: Operator billing -> financial data returned
 
-  @T-UC-017-r133-inv2 @invariant @br-rule-133 @get-financials @error @pending
+  @T-UC-017-r133-inv2 @invariant @br-rule-133 @get-financials @error
   Scenario: BR-RULE-133 INV-2 violated -- agent-billed account returns UNSUPPORTED_FEATURE
     Given the seller declares account_financials capability as true
     And an agent-billed account "acct_agent" exists
@@ -344,7 +344,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And the suggestion should contain "billing system"
     # INV-2: Agent billing -> UNSUPPORTED_FEATURE
 
-  @T-UC-017-r133-inv3 @invariant @br-rule-133 @get-financials @error @pending
+  @T-UC-017-r133-inv3 @invariant @br-rule-133 @get-financials @error
   Scenario: BR-RULE-133 INV-3 holds -- billing model mismatch returns correctable recovery
     Given the seller declares account_financials capability as true
     And an agent-billed account "acct_agent" exists
@@ -355,7 +355,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And the suggestion should contain "billing system"
     # INV-3: Recovery is correctable for billing model
 
-  @T-UC-017-r134-inv1 @invariant @br-rule-134 @get-financials @pending
+  @T-UC-017-r134-inv1 @invariant @br-rule-134 @get-financials
   Scenario: BR-RULE-134 INV-1 holds -- success response has financial fields, no errors
     Given the seller declares account_financials capability as true
     And an operator-billed account "acct_001" exists
@@ -364,7 +364,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And the response does not contain an errors field
     # INV-1: Success -> financial fields present, errors absent
 
-  @T-UC-017-r134-inv2 @invariant @br-rule-134 @get-financials @error @pending
+  @T-UC-017-r134-inv2 @invariant @br-rule-134 @get-financials @error
   Scenario: BR-RULE-134 INV-2 holds -- error response has errors array, no financial fields
     Given the seller declares account_financials capability as false
     When the Buyer Agent invokes get_account_financials with account "acct_001"
@@ -373,7 +373,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And the error should include "suggestion" field
     # INV-2: Error -> errors present, financial fields absent
 
-  @T-UC-017-r134-inv3 @invariant @br-rule-134 @get-financials @pending
+  @T-UC-017-r134-inv3 @invariant @br-rule-134 @get-financials
   Scenario: BR-RULE-134 INV-3 holds -- response is exactly one of success or error
     Given the seller declares account_financials capability as true
     And an operator-billed account "acct_001" exists
@@ -381,7 +381,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Then the response matches exactly one branch of the discriminated union
     # INV-3: Exactly one of success or error, never both, never neither
 
-  @T-UC-017-r135-inv1 @invariant @br-rule-135 @get-financials @pending
+  @T-UC-017-r135-inv1 @invariant @br-rule-135 @get-financials
   Scenario: BR-RULE-135 INV-1 holds -- omitted period defaults to current billing cycle
     Given the seller declares account_financials capability as true
     And an operator-billed account "acct_001" exists
@@ -389,7 +389,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Then the response period covers the current billing cycle
     # INV-1: Omitted period -> current billing cycle
 
-  @T-UC-017-r135-inv2 @invariant @br-rule-135 @get-financials @pending
+  @T-UC-017-r135-inv2 @invariant @br-rule-135 @get-financials
   Scenario: BR-RULE-135 INV-2 holds -- specified period may be adjusted to billing boundaries
     Given the seller declares account_financials capability as true
     And an operator-billed account "acct_001" exists with monthly billing cycles
@@ -398,7 +398,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And the response period reflects the seller's billing cycle boundaries
     # INV-2: Specified period -> adjusted to billing cycle overlap
 
-  @T-UC-017-r135-inv3 @invariant @br-rule-135 @get-financials @pending
+  @T-UC-017-r135-inv3 @invariant @br-rule-135 @get-financials
   Scenario: BR-RULE-135 INV-3 holds -- success response always includes period
     Given the seller declares account_financials capability as true
     And an operator-billed account "acct_001" exists
@@ -406,7 +406,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Then the response contains a period field with start and end dates
     # INV-3: Period always present on success
 
-  @T-UC-017-r136-inv1 @invariant @br-rule-136 @get-financials @pending
+  @T-UC-017-r136-inv1 @invariant @br-rule-136 @get-financials
   Scenario: BR-RULE-136 INV-1 holds -- success response guarantees four fields
     Given the seller declares account_financials capability as true
     And an operator-billed account "acct_001" exists
@@ -417,7 +417,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And the response contains timezone field
     # INV-1: account, currency, period, timezone always present on success
 
-  @T-UC-017-r136-inv2 @invariant @br-rule-136 @get-financials @pending
+  @T-UC-017-r136-inv2 @invariant @br-rule-136 @get-financials
   Scenario: BR-RULE-136 INV-2 holds -- optional fields may be absent on success
     Given the seller declares account_financials capability as true
     And an operator-billed account "acct_minimal" exists with a seller providing minimal data
@@ -426,7 +426,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And the response may omit spend, credit, balance, payment_status, payment_terms, and invoices
     # INV-2: Optional fields may be absent
 
-  @T-UC-017-r137-inv1 @invariant @br-rule-137 @get-financials @pending
+  @T-UC-017-r137-inv1 @invariant @br-rule-137 @get-financials
   Scenario: BR-RULE-137 INV-1 holds -- credit section present for credit-based account
     Given the seller declares account_financials capability as true
     And an operator-billed account "acct_credit" with net_30 payment terms
@@ -434,7 +434,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Then the response may include credit section with credit_limit and available_credit
     # INV-1: Credit-based terms -> credit section may be present
 
-  @T-UC-017-r137-inv2 @invariant @br-rule-137 @get-financials @pending
+  @T-UC-017-r137-inv2 @invariant @br-rule-137 @get-financials
   Scenario: BR-RULE-137 INV-2 holds -- credit section absent for prepay account
     Given the seller declares account_financials capability as true
     And an operator-billed account "acct_prepay" with prepay payment terms
@@ -442,7 +442,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Then the response does not contain a credit section
     # INV-2: Non-credit terms -> credit section absent
 
-  @T-UC-017-r137-inv3 @invariant @br-rule-137 @get-financials @pending
+  @T-UC-017-r137-inv3 @invariant @br-rule-137 @get-financials
   Scenario: BR-RULE-137 INV-3 holds -- credit section when present has required sub-fields
     Given the seller declares account_financials capability as true
     And an operator-billed account "acct_credit" with net_30 payment terms and seller provides credit data
@@ -451,7 +451,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And the credit section contains available_credit
     # INV-3: When present, credit_limit and available_credit required
 
-  @T-UC-017-r138-inv1 @invariant @br-rule-138 @get-financials @pending
+  @T-UC-017-r138-inv1 @invariant @br-rule-138 @get-financials
   Scenario: BR-RULE-138 INV-1 holds -- balance section present for prepay account
     Given the seller declares account_financials capability as true
     And an operator-billed account "acct_prepay" with prepay payment terms
@@ -459,7 +459,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Then the response may include balance section with available field
     # INV-1: Prepay terms -> balance section may be present
 
-  @T-UC-017-r138-inv2 @invariant @br-rule-138 @get-financials @pending
+  @T-UC-017-r138-inv2 @invariant @br-rule-138 @get-financials
   Scenario: BR-RULE-138 INV-2 holds -- balance section absent for credit-based account
     Given the seller declares account_financials capability as true
     And an operator-billed account "acct_credit" with net_30 payment terms
@@ -467,7 +467,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Then the response does not contain a balance section
     # INV-2: Non-prepay terms -> balance section absent
 
-  @T-UC-017-r138-inv3 @invariant @br-rule-138 @get-financials @pending
+  @T-UC-017-r138-inv3 @invariant @br-rule-138 @get-financials
   Scenario: BR-RULE-138 INV-3 holds -- balance section when present has available field
     Given the seller declares account_financials capability as true
     And an operator-billed account "acct_prepay" with prepay payment terms and seller provides balance data
@@ -475,7 +475,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Then the balance section contains available with value >= 0
     # INV-3: When present, available required
 
-  @T-UC-017-r139-inv1 @invariant @br-rule-139 @report-usage @pending
+  @T-UC-017-r139-inv1 @invariant @br-rule-139 @report-usage
   Scenario: BR-RULE-139 INV-1 holds -- mixed valid/invalid records partially accepted
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
@@ -484,7 +484,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And the response contains an errors array with 1 entry
     # INV-1: Mix of valid/invalid -> valid stored, invalid rejected
 
-  @T-UC-017-r139-inv2 @invariant @br-rule-139 @report-usage @pending
+  @T-UC-017-r139-inv2 @invariant @br-rule-139 @report-usage
   Scenario: BR-RULE-139 INV-2 holds -- all records valid means all accepted
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
@@ -493,7 +493,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And the response does not contain an errors array
     # INV-2: All valid -> accepted = total, errors absent
 
-  @T-UC-017-r139-inv3 @invariant @br-rule-139 @report-usage @pending
+  @T-UC-017-r139-inv3 @invariant @br-rule-139 @report-usage
   Scenario: BR-RULE-139 INV-3 holds -- all records invalid means accepted is 0
     Given a valid reporting period
     When the Buyer Agent submits 2 usage records both with missing account
@@ -501,7 +501,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And the response contains an errors array with 2 entries
     # INV-3: All invalid -> accepted = 0, errors for each
 
-  @T-UC-017-r139-inv4 @invariant @br-rule-139 @report-usage @pending
+  @T-UC-017-r139-inv4 @invariant @br-rule-139 @report-usage
   Scenario: BR-RULE-139 INV-4 holds -- accepted count always present in response
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
@@ -509,7 +509,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Then the response contains accepted count field with value >= 0
     # INV-4: accepted count always present
 
-  @T-UC-017-r140-inv1 @invariant @br-rule-140 @report-usage @pending
+  @T-UC-017-r140-inv1 @invariant @br-rule-140 @report-usage
   Scenario: BR-RULE-140 INV-1 holds -- duplicate key returns original response
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
@@ -519,7 +519,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And no records are re-processed
     # INV-1: Matching key -> original response without re-processing
 
-  @T-UC-017-r140-inv2 @invariant @br-rule-140 @report-usage @pending
+  @T-UC-017-r140-inv2 @invariant @br-rule-140 @report-usage
   Scenario: BR-RULE-140 INV-2 holds -- new key processed normally
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
@@ -529,7 +529,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And the idempotency_key is stored for future deduplication
     # INV-2: New key -> processed normally, key stored
 
-  @T-UC-017-r140-inv3 @invariant @br-rule-140 @report-usage @pending
+  @T-UC-017-r140-inv3 @invariant @br-rule-140 @report-usage
   Scenario: BR-RULE-140 INV-3 holds -- absent key means not idempotent
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
@@ -538,7 +538,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And resubmission would create duplicate records
     # INV-3: No key -> not idempotent
 
-  @T-UC-017-r141-inv1 @invariant @br-rule-141 @report-usage @pending
+  @T-UC-017-r141-inv1 @invariant @br-rule-141 @report-usage
   Scenario: BR-RULE-141 INV-1 holds -- each record carries its own account
     Given operator-billed accounts "acct_001" and "acct_002" exist
     And a valid reporting period
@@ -546,7 +546,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Then both records are accepted with correct account attribution
     # INV-1: Each record must include its own account reference
 
-  @T-UC-017-r141-inv2 @invariant @br-rule-141 @report-usage @pending
+  @T-UC-017-r141-inv2 @invariant @br-rule-141 @report-usage
   Scenario: BR-RULE-141 INV-2 holds -- single request spans multiple accounts
     Given operator-billed accounts "acct_001" and "acct_002" exist
     And a valid reporting period
@@ -554,7 +554,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Then the response contains accepted count of 2
     # INV-2: Single request may contain records for different accounts
 
-  @T-UC-017-r141-inv3 @invariant @br-rule-141 @report-usage @pending
+  @T-UC-017-r141-inv3 @invariant @br-rule-141 @report-usage
   Scenario: BR-RULE-141 INV-3 holds -- single request spans multiple campaigns
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
@@ -562,7 +562,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Then the response contains accepted count of 2
     # INV-3: Single request may contain records for different campaigns
 
-  @T-UC-017-r142-inv1 @invariant @br-rule-142 @report-usage @pending
+  @T-UC-017-r142-inv1 @invariant @br-rule-142 @report-usage
   Scenario: BR-RULE-142 INV-1 holds -- record with all three required fields accepted
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
@@ -570,7 +570,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Then the response contains accepted count of 1
     # INV-1: account, vendor_cost, currency present -> accepted
 
-  @T-UC-017-r142-inv4 @invariant @br-rule-142 @report-usage @error @pending
+  @T-UC-017-r142-inv4 @invariant @br-rule-142 @report-usage @error
   Scenario: BR-RULE-142 INV-4 violated -- missing required field rejected with INVALID_USAGE_DATA
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
@@ -582,7 +582,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And the suggestion should contain "required fields"
     # INV-4: Required field missing -> INVALID_USAGE_DATA
 
-  @T-UC-017-r143-inv1 @invariant @br-rule-143 @report-usage @pending
+  @T-UC-017-r143-inv1 @invariant @br-rule-143 @report-usage
   Scenario: BR-RULE-143 INV-1 holds -- valid pricing_option_id accepted
     Given an operator-billed account "acct_001" exists
     And a pricing option "po_lux_cpm" is known for account "acct_001"
@@ -591,7 +591,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Then the response contains accepted count of 1
     # INV-1: Valid pricing_option_id -> accepted
 
-  @T-UC-017-r143-inv2 @invariant @br-rule-143 @report-usage @error @pending
+  @T-UC-017-r143-inv2 @invariant @br-rule-143 @report-usage @error
   Scenario: BR-RULE-143 INV-2 violated -- unknown pricing_option_id rejected
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
@@ -600,7 +600,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And the error should include "suggestion" field
     # INV-2: Unknown pricing_option_id -> INVALID_PRICING_OPTION
 
-  @T-UC-017-r143-inv3 @invariant @br-rule-143 @report-usage @pending
+  @T-UC-017-r143-inv3 @invariant @br-rule-143 @report-usage
   Scenario: BR-RULE-143 INV-3 holds -- omitted pricing_option_id accepted without verification
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
@@ -608,7 +608,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Then the response contains accepted count of 1
     # INV-3: Omitted -> accepted without rate verification
 
-  @T-UC-017-r144-inv1 @invariant @br-rule-144 @report-usage @pending
+  @T-UC-017-r144-inv1 @invariant @br-rule-144 @report-usage
   Scenario: BR-RULE-144 INV-1 holds -- percent_of_media pricing with media_spend provided
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
@@ -617,7 +617,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Then the response contains accepted count of 1
     # INV-1: percent_of_media + media_spend -> accepted
 
-  @T-UC-017-r144-inv1-violated @invariant @br-rule-144 @report-usage @error @pending
+  @T-UC-017-r144-inv1-violated @invariant @br-rule-144 @report-usage @error
   Scenario: BR-RULE-144 INV-1 violated -- percent_of_media pricing without media_spend rejected
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
@@ -628,7 +628,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And the suggestion should contain "media_spend required for percent_of_media"
     # INV-1 violated: percent_of_media without media_spend
 
-  @T-UC-017-r144-inv2 @invariant @br-rule-144 @report-usage @pending
+  @T-UC-017-r144-inv2 @invariant @br-rule-144 @report-usage
   Scenario: BR-RULE-144 INV-2 holds -- non-percent pricing without media_spend accepted
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
@@ -637,7 +637,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Then the response contains accepted count of 1
     # INV-2: Non-percent model + no media_spend -> accepted
 
-  @T-UC-017-r145-inv1 @invariant @br-rule-145 @report-usage @pending
+  @T-UC-017-r145-inv1 @invariant @br-rule-145 @report-usage
   Scenario: BR-RULE-145 INV-1 holds -- sandbox account returns sandbox true, no billing
     Given a sandbox account "acct_sandbox" exists
     And a valid reporting period
@@ -646,7 +646,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And no billing occurs
     # INV-1: Sandbox account -> sandbox: true, no billing
 
-  @T-UC-017-r145-inv2 @invariant @br-rule-145 @report-usage @pending
+  @T-UC-017-r145-inv2 @invariant @br-rule-145 @report-usage
   Scenario: BR-RULE-145 INV-2 holds -- production account has no sandbox flag
     Given a production account "acct_prod" exists
     And a valid reporting period
@@ -654,7 +654,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Then the response does not contain a sandbox flag
     # INV-2: Production account -> sandbox flag absent
 
-  @T-UC-017-r145-inv3 @invariant @br-rule-145 @report-usage @pending
+  @T-UC-017-r145-inv3 @invariant @br-rule-145 @report-usage
   Scenario: BR-RULE-145 INV-3 holds -- sandbox records still validated normally
     Given a sandbox account "acct_sandbox" exists
     And a valid reporting period
@@ -664,7 +664,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And the response contains sandbox flag set to true
     # INV-3: Sandbox still validates records per normal rules
 
-  @T-UC-017-r043-inv1-fin @invariant @br-rule-043 @get-financials @context-echo @pending
+  @T-UC-017-r043-inv1-fin @invariant @br-rule-043 @get-financials @context-echo
   Scenario: BR-RULE-043 INV-1 holds -- context echoed on get_account_financials success
     Given the seller declares account_financials capability as true
     And an operator-billed account "acct_001" exists
@@ -672,7 +672,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Then the response contains context with trace_id "fin-001"
     # INV-1: Context sent -> context echoed in success
 
-  @T-UC-017-r043-inv1-usage @invariant @br-rule-043 @report-usage @context-echo @pending
+  @T-UC-017-r043-inv1-usage @invariant @br-rule-043 @report-usage @context-echo
   Scenario: BR-RULE-043 INV-1 holds -- context echoed on report_usage success
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
@@ -680,7 +680,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Then the response contains context with trace_id "usage-001"
     # INV-1: Context sent -> context echoed in success
 
-  @T-UC-017-r043-inv1-error @invariant @br-rule-043 @get-financials @context-echo @error @pending
+  @T-UC-017-r043-inv1-error @invariant @br-rule-043 @get-financials @context-echo @error
   Scenario: BR-RULE-043 INV-1 holds -- context echoed on get_account_financials error
     Given the seller declares account_financials capability as false
     When the Buyer Agent invokes get_account_financials with context {"trace_id": "err-001"}
@@ -688,7 +688,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And the error should include "suggestion" field
     # INV-1: Context echoed even on error (POST-F3)
 
-  @T-UC-017-r043-inv2-fin @invariant @br-rule-043 @get-financials @context-echo @pending
+  @T-UC-017-r043-inv2-fin @invariant @br-rule-043 @get-financials @context-echo
   Scenario: BR-RULE-043 INV-2 holds -- no context sent, no context in financials response
     Given the seller declares account_financials capability as true
     And an operator-billed account "acct_001" exists
@@ -696,7 +696,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Then the response does not contain a context field
     # INV-2: No context sent -> no context in response
 
-  @T-UC-017-r043-inv2-usage @invariant @br-rule-043 @report-usage @context-echo @pending
+  @T-UC-017-r043-inv2-usage @invariant @br-rule-043 @report-usage @context-echo
   Scenario: BR-RULE-043 INV-2 holds -- no context sent, no context in usage response
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
@@ -704,7 +704,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Then the response does not contain a context field
     # INV-2: No context sent -> no context in response
 
-  @T-UC-017-r142-inv2 @invariant @br-rule-142 @report-usage @pending
+  @T-UC-017-r142-inv2 @invariant @br-rule-142 @report-usage
   Scenario: BR-RULE-142 INV-2 holds -- vendor_cost >= 0 accepted
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
@@ -712,7 +712,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Then the response contains accepted count of 1
     # INV-2: vendor_cost >= 0 -> accepted
 
-  @T-UC-017-r142-inv2-violated @invariant @br-rule-142 @report-usage @error @pending
+  @T-UC-017-r142-inv2-violated @invariant @br-rule-142 @report-usage @error
   Scenario: BR-RULE-142 INV-2 violated -- vendor_cost negative rejected
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
@@ -721,7 +721,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And the error should include "suggestion" field
     # INV-2 violated: vendor_cost < 0 -> rejected
 
-  @T-UC-017-r142-inv3 @invariant @br-rule-142 @report-usage @pending
+  @T-UC-017-r142-inv3 @invariant @br-rule-142 @report-usage
   Scenario: BR-RULE-142 INV-3 holds -- valid ISO 4217 currency accepted
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
@@ -729,7 +729,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Then the response contains accepted count of 1
     # INV-3: Currency matches ^[A-Z]{3}$ -> accepted
 
-  @T-UC-017-r142-inv3-violated @invariant @br-rule-142 @report-usage @error @pending
+  @T-UC-017-r142-inv3-violated @invariant @br-rule-142 @report-usage @error
   Scenario: BR-RULE-142 INV-3 violated -- invalid currency format rejected
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
@@ -739,7 +739,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And the suggestion should contain "ISO 4217"
     # INV-3 violated: Currency doesn't match ^[A-Z]{3}$ -> rejected
 
-  @T-UC-017-r144-inv3 @invariant @br-rule-144 @report-usage @pending
+  @T-UC-017-r144-inv3 @invariant @br-rule-144 @report-usage
   Scenario: BR-RULE-144 INV-3 holds -- media_spend >= 0 accepted
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
@@ -747,7 +747,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Then the response contains accepted count of 1
     # INV-3: media_spend >= 0 -> accepted
 
-  @T-UC-017-r144-inv3-violated @invariant @br-rule-144 @report-usage @error @pending
+  @T-UC-017-r144-inv3-violated @invariant @br-rule-144 @report-usage @error
   Scenario: BR-RULE-144 INV-3 violated -- negative media_spend rejected
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
@@ -757,7 +757,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And the suggestion should contain "media_spend must be >= 0"
     # INV-3 violated: media_spend < 0 -> rejected
 
-  @T-UC-017-gap-impressions @extension @ext-c @error @report-usage @gap-fill @pending
+  @T-UC-017-gap-impressions @extension @ext-c @error @report-usage @gap-fill
   Scenario: Report usage -- negative impressions returns INVALID_USAGE_DATA
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
@@ -769,7 +769,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And the suggestion should contain "impressions must be >= 0"
     # PRE-B11 violation: impressions must be integer >= 0
 
-  @T-UC-017-gap-dup-error @extension @ext-e @report-usage @error @gap-fill @pending
+  @T-UC-017-gap-dup-error @extension @ext-e @report-usage @error @gap-fill
   Scenario: Report usage -- duplicate key with different payload returns DUPLICATE_REQUEST
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
@@ -780,7 +780,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And the suggestion should contain "use a new idempotency_key"
     # Gap fill: DUPLICATE_REQUEST error code needs explicit assertion
 
-  @T-UC-017-part-cap-gate @partition @cap-gate @get-financials @pending
+  @T-UC-017-part-cap-gate @partition @cap-gate @get-financials
   Scenario Outline: Capability gate partition -- <partition>
     Given an operator-billed account exists
     And the seller capability account_financials is <cap_state>
@@ -796,7 +796,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
       | capability_false   | false     | the error code is "UNSUPPORTED_FEATURE" with suggestion   |
       | capability_absent  | absent    | the error code is "UNSUPPORTED_FEATURE" with suggestion   |
 
-  @T-UC-017-bound-cap-gate @boundary @cap-gate @get-financials @pending
+  @T-UC-017-bound-cap-gate @boundary @cap-gate @get-financials
   Scenario Outline: Capability gate boundary -- <boundary_point>
     Given an operator-billed account exists
     And the seller capability account_financials matches the boundary condition
@@ -809,7 +809,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
       | capability=false    | the error code is "UNSUPPORTED_FEATURE" with suggestion  |
       | capability absent   | the error code is "UNSUPPORTED_FEATURE" with suggestion  |
 
-  @T-UC-017-part-operator @partition @operator-billed @get-financials @pending
+  @T-UC-017-part-operator @partition @operator-billed @get-financials
   Scenario Outline: Operator billing gate partition -- <partition>
     Given the seller declares account_financials capability as true
     And an account exists with billing type "<billing_type>"
@@ -824,7 +824,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
       | partition             | billing_type | outcome                                                        |
       | agent_billed_account  | agent        | the error code is "UNSUPPORTED_FEATURE" with suggestion        |
 
-  @T-UC-017-part-union @partition @financials-union @get-financials @pending
+  @T-UC-017-part-union @partition @financials-union @get-financials
   Scenario Outline: Financials response union partition -- <partition>
     Given the seller declares account_financials capability as true
     And a response scenario matching "<partition>"
@@ -840,7 +840,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
       | both_present     | schema validation fails (both financial data and errors)   |
       | neither_present  | schema validation fails (neither financial data nor errors) |
 
-  @T-UC-017-part-period @partition @billing-period @get-financials @pending
+  @T-UC-017-part-period @partition @billing-period @get-financials
   Scenario Outline: Billing period partition -- <partition>
     Given the seller declares account_financials capability as true
     And an operator-billed account exists
@@ -857,7 +857,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
       | partition       | period_input                  | outcome                                     |
       | partial_period  | period with start but no end  | the error code is "VALIDATION_ERROR" or "INVALID_REQUEST" |
 
-  @T-UC-017-part-guaranteed @partition @guaranteed-fields @get-financials @pending
+  @T-UC-017-part-guaranteed @partition @guaranteed-fields @get-financials
   Scenario Outline: Guaranteed fields partition -- <partition>
     Given the seller declares account_financials capability as true
     And an operator-billed account exists with seller providing "<detail_level>"
@@ -875,7 +875,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
       | missing_account   | no_account      | schema validation fails (account absent)         |
       | missing_currency  | no_currency     | schema validation fails (currency absent)        |
 
-  @T-UC-017-part-credit @partition @credit-conditionality @get-financials @pending
+  @T-UC-017-part-credit @partition @credit-conditionality @get-financials
   Scenario Outline: Credit conditionality partition -- <partition>
     Given the seller declares account_financials capability as true
     And an operator-billed account with "<payment_type>" payment terms
@@ -892,7 +892,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
       | partition              | payment_type | outcome                                                    |
       | credit_missing_limit   | net_30       | schema validation fails (credit section without credit_limit) |
 
-  @T-UC-017-part-balance @partition @balance-conditionality @get-financials @pending
+  @T-UC-017-part-balance @partition @balance-conditionality @get-financials
   Scenario Outline: Balance conditionality partition -- <partition>
     Given the seller declares account_financials capability as true
     And an operator-billed account with "<payment_type>" payment terms
@@ -909,7 +909,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
       | partition                | payment_type | outcome                                                     |
       | balance_missing_available | prepay       | schema validation fails (balance section without available)  |
 
-  @T-UC-017-part-partial @partition @partial-acceptance @report-usage @pending
+  @T-UC-017-part-partial @partition @partial-acceptance @report-usage
   Scenario Outline: Partial acceptance partition -- <partition>
     Given a valid reporting period
     And operator-billed accounts exist for usage records
@@ -926,7 +926,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
       | partition         | outcome                                             |
       | missing_accepted  | schema validation fails (no accepted count)          |
 
-  @T-UC-017-part-idempotency @partition @usage-idempotency @report-usage @pending
+  @T-UC-017-part-idempotency @partition @usage-idempotency @report-usage
   Scenario Outline: Idempotency partition -- <partition>
     Given a valid reporting period and operator-billed account exists
     When the Buyer Agent submits report_usage with <key_scenario>
@@ -942,7 +942,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
       | partition                    | key_scenario                           | outcome                                         |
       | reused_key_different_payload | same key with different request body   | DUPLICATE_REQUEST error with suggestion          |
 
-  @T-UC-017-part-self-contained @partition @self-contained-records @report-usage @pending
+  @T-UC-017-part-self-contained @partition @self-contained-records @report-usage
   Scenario Outline: Self-contained records partition -- <partition>
     Given a valid reporting period
     When the Buyer Agent submits usage records matching "<partition>"
@@ -958,7 +958,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
       | partition        | outcome                                          |
       | missing_account  | schema validation error (record without account)  |
 
-  @T-UC-017-part-required @partition @required-fields @report-usage @pending
+  @T-UC-017-part-required @partition @required-fields @report-usage
   Scenario Outline: Usage record required fields partition -- <partition>
     Given an operator-billed account exists
     And a valid reporting period
@@ -977,7 +977,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
       | invalid_currency_format | INVALID_USAGE_DATA error with suggestion          |
       | negative_vendor_cost   | INVALID_USAGE_DATA error with suggestion          |
 
-  @T-UC-017-part-pricing @partition @pricing-verification @report-usage @pending
+  @T-UC-017-part-pricing @partition @pricing-verification @report-usage
   Scenario Outline: Pricing option verification partition -- <partition>
     Given an operator-billed account exists
     And a valid reporting period
@@ -993,7 +993,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
       | partition       | outcome                                          |
       | unknown_option  | INVALID_PRICING_OPTION error with suggestion      |
 
-  @T-UC-017-part-media-spend @partition @media-spend-percent @report-usage @pending
+  @T-UC-017-part-media-spend @partition @media-spend-percent @report-usage
   Scenario Outline: Media spend conditional requirement partition -- <partition>
     Given an operator-billed account exists
     And a valid reporting period
@@ -1011,7 +1011,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
       | percent_model_without_spend    | INVALID_USAGE_DATA error with suggestion          |
       | negative_media_spend           | INVALID_USAGE_DATA error with suggestion          |
 
-  @T-UC-017-part-sandbox @partition @sandbox-usage @report-usage @pending
+  @T-UC-017-part-sandbox @partition @sandbox-usage @report-usage
   Scenario Outline: Sandbox mode partition -- <partition>
     Given a valid reporting period
     And an account matching "<partition>" scenario
@@ -1024,7 +1024,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
       | production_account  | accepted without sandbox flag                |
       | sandbox_with_errors | partial acceptance with sandbox: true         |
 
-  @T-UC-017-bound-operator @boundary @operator-billed @get-financials @pending
+  @T-UC-017-bound-operator @boundary @operator-billed @get-financials
   Scenario Outline: Operator billing gate boundary -- <boundary_point>
     Given the seller declares account_financials capability as true
     And an account matching the boundary condition
@@ -1036,7 +1036,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
       | operator-billed account  | the response contains the success variant    |
       | agent-billed account     | the error code is "UNSUPPORTED_FEATURE" with suggestion |
 
-  @T-UC-017-bound-union @boundary @financials-union @get-financials @pending
+  @T-UC-017-bound-union @boundary @financials-union @get-financials
   Scenario Outline: Financials union boundary -- <boundary_point>
     Given a response scenario matching the boundary condition
     Then <outcome>
@@ -1048,7 +1048,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
       | both account and errors present                          | schema validation fails                                      |
       | neither account/currency/period/timezone nor errors      | schema validation fails                                      |
 
-  @T-UC-017-bound-period @boundary @billing-period @get-financials @pending
+  @T-UC-017-bound-period @boundary @billing-period @get-financials
   Scenario Outline: Billing period boundary -- <boundary_point>
     Given the seller declares account_financials capability as true
     And an operator-billed account exists
@@ -1062,7 +1062,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
       | response period adjusted to billing boundaries  | valid response with adjusted period          |
       | period with only start (missing end)            | validation error                             |
 
-  @T-UC-017-bound-guaranteed @boundary @guaranteed-fields @get-financials @pending
+  @T-UC-017-bound-guaranteed @boundary @guaranteed-fields @get-financials
   Scenario Outline: Guaranteed fields boundary -- <boundary_point>
     Given the seller declares account_financials capability as true
     And a response scenario matching the boundary condition
@@ -1076,7 +1076,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
       | missing account (one guaranteed absent)           | schema validation fails                          |
       | missing currency (one guaranteed absent)          | schema validation fails                          |
 
-  @T-UC-017-bound-credit @boundary @credit-conditionality @get-financials @pending
+  @T-UC-017-bound-credit @boundary @credit-conditionality @get-financials
   Scenario Outline: Credit conditionality boundary -- <boundary_point>
     Given the seller declares account_financials capability as true
     And a response scenario matching the boundary condition
@@ -1091,7 +1091,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
       | utilization_percent at boundary 0                 | valid (minimum utilization)                  |
       | utilization_percent at boundary 100               | valid (maximum utilization)                  |
 
-  @T-UC-017-bound-balance @boundary @balance-conditionality @get-financials @pending
+  @T-UC-017-bound-balance @boundary @balance-conditionality @get-financials
   Scenario Outline: Balance conditionality boundary -- <boundary_point>
     Given the seller declares account_financials capability as true
     And a response scenario matching the boundary condition
@@ -1105,7 +1105,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
       | balance present but missing available       | schema validation fails                      |
       | available at boundary 0                     | valid (zero remaining balance)               |
 
-  @T-UC-017-bound-partial @boundary @partial-acceptance @report-usage @pending
+  @T-UC-017-bound-partial @boundary @partial-acceptance @report-usage
   Scenario Outline: Partial acceptance boundary -- <boundary_point>
     Given a valid reporting period
     And a response scenario matching the boundary condition
@@ -1118,7 +1118,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
       | accepted = 0, errors present           | valid (all rejected)                         |
       | accepted field missing                 | schema validation fails                      |
 
-  @T-UC-017-bound-idempotency @boundary @usage-idempotency @report-usage @pending
+  @T-UC-017-bound-idempotency @boundary @usage-idempotency @report-usage
   Scenario Outline: Idempotency boundary -- <boundary_point>
     Given a valid reporting period and operator-billed account exists
     When the Buyer Agent submits report_usage matching the boundary condition
@@ -1131,7 +1131,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
       | same key same payload (retry)          | original response returned                   |
       | same key different payload             | DUPLICATE_REQUEST error with suggestion       |
 
-  @T-UC-017-bound-self-contained @boundary @self-contained-records @report-usage @pending
+  @T-UC-017-bound-self-contained @boundary @self-contained-records @report-usage
   Scenario Outline: Self-contained records boundary -- <boundary_point>
     Given a valid reporting period
     When the Buyer Agent submits usage records matching the boundary condition
@@ -1144,7 +1144,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
       | records spanning two campaigns       | all accepted across campaigns                |
       | record missing account field         | validation error (account required per record) |
 
-  @T-UC-017-bound-required @boundary @required-fields @report-usage @pending
+  @T-UC-017-bound-required @boundary @required-fields @report-usage
   Scenario Outline: Usage record required fields boundary -- <boundary_point>
     Given an operator-billed account exists
     And a valid reporting period
@@ -1161,7 +1161,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
       | all three required fields present          | accepted                                          |
       | vendor_cost missing                        | INVALID_USAGE_DATA error with suggestion          |
 
-  @T-UC-017-bound-pricing @boundary @pricing-verification @report-usage @pending
+  @T-UC-017-bound-pricing @boundary @pricing-verification @report-usage
   Scenario Outline: Pricing option verification boundary -- <boundary_point>
     Given an operator-billed account exists
     And a valid reporting period
@@ -1174,7 +1174,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
       | pricing_option_id omitted                   | accepted (no rate verification)                  |
       | pricing_option_id not found on account      | INVALID_PRICING_OPTION error with suggestion      |
 
-  @T-UC-017-bound-media-spend @boundary @media-spend-percent @report-usage @pending
+  @T-UC-017-bound-media-spend @boundary @media-spend-percent @report-usage
   Scenario Outline: Media spend boundary -- <boundary_point>
     Given an operator-billed account exists
     And a valid reporting period
@@ -1189,7 +1189,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
       | percent_of_media without media_spend       | INVALID_USAGE_DATA error with suggestion          |
       | CPM model without media_spend              | accepted (media_spend not required)               |
 
-  @T-UC-017-bound-sandbox @boundary @sandbox-usage @report-usage @pending
+  @T-UC-017-bound-sandbox @boundary @sandbox-usage @report-usage
   Scenario Outline: Sandbox mode boundary -- <boundary_point>
     Given a valid reporting period
     And an account matching the boundary condition

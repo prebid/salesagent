@@ -1,4 +1,4 @@
-# Generated from adcp-req @ 8a219ece2b54628c33f1075d386b73082a0f4832 on 2026-03-20T11:43:42Z
+# Generated from adcp-req @ 8a219ece2b54628c33f1075d386b73082a0f4832 on 2026-03-20T12:00:24Z
 # DO NOT EDIT -- re-run: python scripts/compile_bdd.py
 
 Feature: BR-UC-004 Deliver Media Buy Metrics
@@ -28,7 +28,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the principal "buyer-001" exists in the tenant database
 
 
-  @T-UC-004-main @main-flow @polling @pending
+  @T-UC-004-main @main-flow @polling
   Scenario: Polling delivery metrics for a single media buy
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the ad server adapter has delivery data for "mb-001"
@@ -45,7 +45,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # POST-S5: Media buy status present
     # POST-S6: Unambiguous success (status=completed)
 
-  @T-UC-004-main-multi @main-flow @polling @post-s4 @pending
+  @T-UC-004-main-multi @main-flow @polling @post-s4
   Scenario: Polling delivery metrics for multiple media buys with aggregated totals
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And a media buy "mb-002" owned by "buyer-001" with status "active"
@@ -58,7 +58,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # POST-S1: Per-media-buy delivery data
     # POST-S4: Aggregated totals across media buys
 
-  @T-UC-004-identify-mode @invariant @BR-RULE-030 @identification @pending
+  @T-UC-004-identify-mode @invariant @BR-RULE-030 @identification
   Scenario Outline: Identification mode resolution - <mode>
     Given a media buy "mb-001" owned by "buyer-001" with buyer_ref "ref-001"
     And the ad server adapter has delivery data for "mb-001"
@@ -72,7 +72,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | buyer_refs only | buyer_refs=["ref-001"] | INV-2: resolves by buyer refs |
       | both provided | media_buy_ids=["mb-001"] buyer_refs=["ref-001"] | INV-3: media_buy_ids wins, buyer_refs ignored |
 
-  @T-UC-004-identify-fallback @invariant @BR-RULE-030 @identification @pending
+  @T-UC-004-identify-fallback @invariant @BR-RULE-030 @identification
   Scenario: Neither identifiers provided - returns all principal's media buys
     Given a media buy "mb-001" owned by "buyer-001"
     And a media buy "mb-002" owned by "buyer-001"
@@ -81,7 +81,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the response should include delivery data for "mb-001" and "mb-002"
     # BR-RULE-030 INV-4: neither provided -> all principal's buys
 
-  @T-UC-004-identify-partial @invariant @BR-RULE-030 @identification @pending
+  @T-UC-004-identify-partial @invariant @BR-RULE-030 @identification
   Scenario: Partial resolution - some IDs valid, some invalid
     Given a media buy "mb-001" owned by "buyer-001"
     And no media buy exists with id "mb-999"
@@ -91,7 +91,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the response should not include an error for "mb-999"
     # BR-RULE-030 INV-5: partial resolution, missing silently omitted
 
-  @T-UC-004-identify-zero @invariant @BR-RULE-030 @identification @pending
+  @T-UC-004-identify-zero @invariant @BR-RULE-030 @identification
   Scenario: Zero resolution - all IDs invalid returns empty array
     Given no media buy exists with id "mb-999" or "mb-998"
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-999", "mb-998"]
@@ -100,7 +100,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # BR-RULE-030 INV-6: zero resolution -> empty array, no error
     # NOTE: Tension with ext-c which says error. BR-030 (code-derived) takes precedence.
 
-  @T-UC-004-identify-fallback-empty @invariant @BR-RULE-030 @identification @pending
+  @T-UC-004-identify-fallback-empty @invariant @BR-RULE-030 @identification
   Scenario: Neither identifiers AND no media buys for principal - empty array
     Given the principal "buyer-001" has no media buys
     When the Buyer Agent requests delivery metrics without media_buy_ids or buyer_refs
@@ -108,7 +108,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the response status should be "completed"
     # BR-RULE-030 INV-4 counter-example: neither provided, no buys -> empty
 
-  @T-UC-004-identify-batch-ownership @invariant @ownership @BR-RULE-030 @identification @pending
+  @T-UC-004-identify-batch-ownership @invariant @ownership @BR-RULE-030 @identification
   Scenario: Batch request with mixed ownership - non-owned silently omitted
     Given a media buy "mb-001" owned by "buyer-001"
     And a media buy "mb-other" owned by "other-buyer"
@@ -119,7 +119,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And no error should be returned for "mb-other"
     # PRE-BIZ3 (ownership) + BR-RULE-030 INV-5: non-owned treated as not-found, partial results
 
-  @T-UC-004-identify-empty @invariant @BR-RULE-030 @error @boundary @pending
+  @T-UC-004-identify-empty @invariant @BR-RULE-030 @error @boundary
   Scenario: Empty array provided - schema rejects request
     When the Buyer Agent requests delivery metrics with media_buy_ids []
     Then the operation should fail
@@ -131,7 +131,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # POST-F2: Error explains what failed
     # POST-F3: Suggestion for recovery
 
-  @T-UC-004-identify-buyer-refs-empty @invariant @BR-RULE-030 @error @boundary @pending
+  @T-UC-004-identify-buyer-refs-empty @invariant @BR-RULE-030 @error @boundary
   Scenario: Empty buyer_refs array - schema rejects request
     When the Buyer Agent requests delivery metrics with buyer_refs []
     Then the operation should fail
@@ -140,7 +140,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the error should include "suggestion" field
     # Traces to BR-RULE-030 INV-1/INV-2 (schema minItems constraint on identification arrays)
 
-  @T-UC-004-filter @alternative @status-filter @pending
+  @T-UC-004-filter @alternative @status-filter
   Scenario Outline: Status filter - <filter_value>
     Given a media buy "mb-active" owned by "buyer-001" with status "active"
     And a media buy "mb-completed" owned by "buyer-001" with status "completed"
@@ -158,14 +158,14 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | rejected |
       | canceled |
 
-  @T-UC-004-filter-empty @alternative @status-filter @pending
+  @T-UC-004-filter-empty @alternative @status-filter
   Scenario: Status filter - no matches returns empty success
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     When the Buyer Agent requests delivery metrics with status_filter "completed"
     Then the response should have an empty media_buy_deliveries array
     And the response status should be "completed"
 
-  @T-UC-004-filter-invalid @alternative @status-filter @error @pending
+  @T-UC-004-filter-invalid @alternative @status-filter @error
   Scenario: Invalid status filter value - rejected
     Given a media buy "mb-001" owned by "buyer-001"
     When the Buyer Agent requests delivery metrics with status_filter "nonexistent_status"
@@ -178,7 +178,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # POST-F2: Error explains invalid filter
     # POST-F3: Suggestion lists valid values
 
-  @T-UC-004-filter-default @alternative @status-filter @pending
+  @T-UC-004-filter-default @alternative @status-filter
   Scenario: Default status filter is "active" when not specified
     Given a media buy "mb-active" owned by "buyer-001" with status "active"
     And a media buy "mb-completed" owned by "buyer-001" with status "completed"
@@ -186,7 +186,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the response should include delivery data for "mb-active" only
     # Constraint YAML: default "active"
 
-  @T-UC-004-filter-array @alternative @status-filter @pending
+  @T-UC-004-filter-array @alternative @status-filter
   Scenario: Status filter with array of multiple statuses
     Given a media buy "mb-active" owned by "buyer-001" with status "active"
     And a media buy "mb-paused" owned by "buyer-001" with status "paused"
@@ -196,7 +196,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the response should include delivery data for "mb-active" and "mb-paused"
     And the response should not include delivery data for "mb-completed"
 
-  @T-UC-004-daterange @alternative @date-range @pending
+  @T-UC-004-daterange @alternative @date-range
   Scenario: Custom date range used as reporting period
     Given a media buy "mb-001" owned by "buyer-001"
     And the ad server adapter has delivery data for "mb-001"
@@ -205,14 +205,14 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the response reporting_period end should be "2026-01-31"
     # POST-S3: Buyer knows the exact reporting period
 
-  @T-UC-004-daterange-start-only @alternative @date-range @pending
+  @T-UC-004-daterange-start-only @alternative @date-range
   Scenario: Only start_date provided - end defaults to current date
     Given a media buy "mb-001" owned by "buyer-001"
     And the ad server adapter has delivery data for "mb-001"
     When the Buyer Agent requests delivery metrics with start_date "2026-01-01" and no end_date
     Then the response reporting_period end should be today's date
 
-  @T-UC-004-daterange-end-only @alternative @date-range @pending
+  @T-UC-004-daterange-end-only @alternative @date-range
   Scenario: Only end_date provided - start defaults to media buy creation date
     Given a media buy "mb-001" owned by "buyer-001" created on "2025-12-01"
     And the ad server adapter has delivery data for "mb-001"
@@ -220,7 +220,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the response reporting_period start should be "2025-12-01"
     # NOTE: Schema says creation date default, code says 30 days ago (Gap G40)
 
-  @T-UC-004-daterange-invalid @extension @ext-e @error @invariant @BR-RULE-013 @date-range @pending
+  @T-UC-004-daterange-invalid @extension @ext-e @error @invariant @BR-RULE-013 @date-range
   Scenario: Invalid date range - start after end
     Given a media buy "mb-001" owned by "buyer-001"
     When the Buyer Agent requests delivery metrics with start_date "2026-02-01" and end_date "2026-01-01"
@@ -234,7 +234,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # POST-F3: Suggestion for recovery
     # BR-RULE-013 INV-3: end <= start -> rejected
 
-  @T-UC-004-daterange-equal @extension @ext-e @error @invariant @BR-RULE-013 @date-range @boundary @pending
+  @T-UC-004-daterange-equal @extension @ext-e @error @invariant @BR-RULE-013 @date-range @boundary
   Scenario: Invalid date range - start equals end (zero-length period)
     Given a media buy "mb-001" owned by "buyer-001"
     When the Buyer Agent requests delivery metrics with start_date "2026-01-15" and end_date "2026-01-15"
@@ -243,7 +243,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the error should include "suggestion" field
     # BR-RULE-013 INV-3: end <= start -> rejected (boundary: equal dates)
 
-  @T-UC-004-webhook-scheduled @alternative @webhook @post-s7 @pending
+  @T-UC-004-webhook-scheduled @alternative @webhook @post-s7
   Scenario: Scheduled webhook delivery at configured frequency
     Given a media buy "mb-001" with an active reporting_webhook configured
     And the reporting_frequency is "daily"
@@ -254,7 +254,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the payload should include the reporting_period
     # POST-S7: Buyer's endpoint receives periodic delivery reports
 
-  @T-UC-004-webhook-hmac @alternative @webhook @invariant @BR-RULE-029 @post-s8 @nfr @nfr-005 @pending
+  @T-UC-004-webhook-hmac @alternative @webhook @invariant @BR-RULE-029 @post-s8 @nfr @nfr-005
   Scenario: HMAC-SHA256 signed webhook payload
     Given a media buy "mb-001" with webhook authentication scheme "HMAC-SHA256"
     And the shared secret is a valid 32+ character string
@@ -266,7 +266,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # BR-RULE-029 INV-1: monotonically increasing sequence (signing is precondition)
     # Webhook auth: traces to SR-NFR-005
 
-  @T-UC-004-webhook-bearer @alternative @webhook @invariant @BR-RULE-029 @pending
+  @T-UC-004-webhook-bearer @alternative @webhook @invariant @BR-RULE-029
   Scenario: Bearer token webhook authentication
     Given a media buy "mb-001" with webhook authentication scheme "Bearer"
     And the bearer token is a valid 32+ character string
@@ -274,7 +274,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the request should include header "Authorization" with the bearer token
     # Webhook auth: traces to SR-NFR-005
 
-  @T-UC-004-webhook-notification-type @alternative @webhook @invariant @BR-RULE-029 @post-s9 @pending
+  @T-UC-004-webhook-notification-type @alternative @webhook @invariant @BR-RULE-029 @post-s9
   Scenario Outline: Webhook notification type - <type>
     Given a media buy "mb-001" with an active reporting_webhook
     When the system delivers a "<type>" webhook report for "mb-001"
@@ -290,7 +290,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | delayed | should |
       | adjusted | should |
 
-  @T-UC-004-webhook-sequence @alternative @webhook @invariant @BR-RULE-029 @post-s10 @pending
+  @T-UC-004-webhook-sequence @alternative @webhook @invariant @BR-RULE-029 @post-s10
   Scenario: Webhook sequence numbers are monotonically increasing
     Given a media buy "mb-001" with an active reporting_webhook
     When the system delivers three consecutive webhook reports for "mb-001"
@@ -299,14 +299,14 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # POST-S10: Buyer knows the sequence number for ordering
     # BR-RULE-029 INV-1: monotonically increasing per media buy stream
 
-  @T-UC-004-webhook-no-aggregated @alternative @webhook @pending
+  @T-UC-004-webhook-no-aggregated @alternative @webhook
   Scenario: Webhook payload does not include aggregated totals
     Given a media buy "mb-001" with an active reporting_webhook
     When the system delivers a webhook report for "mb-001"
     Then the payload should not include "aggregated_totals" field
     # UC-004 note: aggregated totals are polling-only (not webhook)
 
-  @T-UC-004-webhook-retry-5xx @async @extension @ext-g @webhook-reliability @invariant @BR-RULE-029 @nfr @nfr-005 @pending
+  @T-UC-004-webhook-retry-5xx @async @extension @ext-g @webhook-reliability @invariant @BR-RULE-029 @nfr @nfr-005
   Scenario: Webhook delivery retries on 5xx response
     Given a media buy "mb-001" with an active reporting_webhook
     And the webhook endpoint returns 500 Internal Server Error
@@ -316,7 +316,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # BR-RULE-029 INV-3: 5xx -> retry with exponential backoff
     # POST-F2: System knows the failure mode
 
-  @T-UC-004-webhook-retry-network @async @extension @ext-g @webhook-reliability @invariant @BR-RULE-029 @pending
+  @T-UC-004-webhook-retry-network @async @extension @ext-g @webhook-reliability @invariant @BR-RULE-029
   Scenario: Webhook delivery retries on network error
     Given a media buy "mb-001" with an active reporting_webhook
     And the webhook endpoint is unreachable (connection timeout)
@@ -324,7 +324,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the system should retry up to 3 times with exponential backoff
     # BR-RULE-029 INV-3: network error -> retry
 
-  @T-UC-004-webhook-no-retry-4xx @async @extension @ext-g @webhook-reliability @invariant @BR-RULE-029 @pending
+  @T-UC-004-webhook-no-retry-4xx @async @extension @ext-g @webhook-reliability @invariant @BR-RULE-029
   Scenario: Webhook delivery does not retry on 4xx response
     Given a media buy "mb-001" with an active reporting_webhook
     And the webhook endpoint returns 401 Unauthorized
@@ -334,7 +334,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the webhook should be marked as failed
     # BR-RULE-029 INV-4: 4xx -> no retry (client error)
 
-  @T-UC-004-webhook-circuit-open @async @extension @ext-g @webhook-reliability @nfr @nfr-005 @pending
+  @T-UC-004-webhook-circuit-open @async @extension @ext-g @webhook-reliability @nfr @nfr-005
   Scenario: Persistent webhook failures open circuit breaker
     Given a media buy "mb-001" with an active reporting_webhook
     And the webhook endpoint has failed 5 consecutive delivery attempts
@@ -343,7 +343,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And subsequent scheduled deliveries should be suppressed
     # POST-F2: System knows the webhook is persistently failing
 
-  @T-UC-004-webhook-circuit-halfopen @async @extension @ext-g @webhook-reliability @pending
+  @T-UC-004-webhook-circuit-halfopen @async @extension @ext-g @webhook-reliability
   Scenario: Circuit breaker half-open probe attempts recovery
     Given a media buy "mb-001" with circuit breaker in "OPEN" state
     And the circuit breaker timeout (60s) has elapsed
@@ -351,7 +351,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the circuit breaker should transition to "HALF_OPEN"
     And the system should attempt a single probe delivery
 
-  @T-UC-004-webhook-circuit-recovery @async @extension @ext-g @webhook-reliability @pending
+  @T-UC-004-webhook-circuit-recovery @async @extension @ext-g @webhook-reliability
   Scenario: Circuit breaker closes after successful recovery probes
     Given a media buy "mb-001" with circuit breaker in "HALF_OPEN" state
     And the webhook endpoint has recovered and returns 200
@@ -360,7 +360,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And normal scheduled deliveries should resume
     # POST-F3: System has recovery path
 
-  @T-UC-004-webhook-retry-success @async @extension @ext-g @webhook-reliability @pending
+  @T-UC-004-webhook-retry-success @async @extension @ext-g @webhook-reliability
   Scenario: Successful retry records delivery
     Given a media buy "mb-001" with an active reporting_webhook
     And the webhook endpoint fails on first attempt but succeeds on second
@@ -369,7 +369,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the circuit breaker state should remain healthy
     # POST-F3: System has recovery path (retry for transient)
 
-  @T-UC-004-webhook-creds-short @invariant @BR-RULE-029 @webhook @boundary @error @pending
+  @T-UC-004-webhook-creds-short @invariant @BR-RULE-029 @webhook @boundary @error
   Scenario: Webhook credentials too short - rejected at configuration
     Given a media buy webhook configuration with credentials of 31 characters
     When the system validates the webhook configuration
@@ -380,14 +380,14 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # Boundary: 31 chars (min-1)
     # POST-F3: Suggestion for recovery
 
-  @T-UC-004-webhook-creds-valid @invariant @BR-RULE-029 @webhook @boundary @pending
+  @T-UC-004-webhook-creds-valid @invariant @BR-RULE-029 @webhook @boundary
   Scenario: Webhook credentials at minimum length - accepted
     Given a media buy webhook configuration with credentials of 32 characters
     When the system validates the webhook configuration
     Then the configuration should be accepted
     # Boundary: 32 chars (min)
 
-  @T-UC-004-ext-a @extension @ext-a @error @nfr @nfr-001 @pending
+  @T-UC-004-ext-a @extension @ext-a @error @nfr @nfr-001
   Scenario: Authentication error - missing principal
     When the Buyer Agent sends a delivery metrics request without authentication
     Then the operation should fail
@@ -399,7 +399,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # POST-F2: Error explains authentication required
     # POST-F3: Suggestion to provide credentials
 
-  @T-UC-004-ext-b @extension @ext-b @error @pending
+  @T-UC-004-ext-b @extension @ext-b @error
   Scenario: Principal not found in tenant database
     Given an authenticated request with principal_id "unknown-buyer"
     And no principal "unknown-buyer" exists in the tenant database
@@ -413,7 +413,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # POST-F2: Error explains principal not found
     # POST-F3: Suggestion to verify account
 
-  @T-UC-004-ext-c @extension @ext-c @error @tension @pending
+  @T-UC-004-ext-c @extension @ext-c @error @tension
   Scenario: Media buy not found - nonexistent identifier
     Given no media buy exists with id "mb-nonexistent"
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-nonexistent"]
@@ -429,7 +429,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     #   ext-c triggers when single ID requested and not found.
     #   BR-030 describes batch behavior. See Pass 2 gap analysis.
 
-  @T-UC-004-ext-d @extension @ext-d @error @invariant @ownership @nfr @nfr-001 @pending
+  @T-UC-004-ext-d @extension @ext-d @error @invariant @ownership @nfr @nfr-001
   Scenario: Ownership mismatch - returns media_buy_not_found for security
     Given a media buy "mb-other" owned by "other-buyer"
     And an authenticated Buyer with principal_id "buyer-001"
@@ -444,7 +444,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # POST-F3: Suggestion to verify identifier
     # PRE-BIZ3: non-owner -> rejection masked as not_found
 
-  @T-UC-004-ext-f @extension @ext-f @error @pending
+  @T-UC-004-ext-f @extension @ext-f @error
   Scenario: Adapter error - ad server unavailable
     Given a media buy "mb-001" owned by "buyer-001"
     And the ad server adapter is unavailable
@@ -458,7 +458,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # POST-F2: Error explains adapter failure
     # POST-F3: Suggestion to retry
 
-  @T-UC-004-adapter-partial @edge-case @pending
+  @T-UC-004-adapter-partial @edge-case
   Scenario: Adapter partial failure - some media buys return data, others fail
     Given a media buy "mb-001" owned by "buyer-001"
     And a media buy "mb-002" owned by "buyer-001"
@@ -468,7 +468,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the response should indicate "mb-002" has partial_data or delayed metrics
     # Gap analysis: adapter fails for subset of media buys -- partial data indicator
 
-  @T-UC-004-empty-period @edge-case @pending
+  @T-UC-004-empty-period @edge-case
   Scenario: Media buy exists but no delivery data for requested period
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the ad server adapter has no delivery data for "mb-001" in the requested period
@@ -477,7 +477,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the response status should be "completed"
     # Gap analysis: valid media buy with no data -> success with empty/zero metrics
 
-  @T-UC-004-webhook-no-config @alternative @webhook @edge-case @pending
+  @T-UC-004-webhook-no-config @alternative @webhook @edge-case
   Scenario: Webhook fires for media buy without webhook configuration
     Given a media buy "mb-001" without a reporting_webhook configured
     When the webhook scheduler evaluates "mb-001"
@@ -485,7 +485,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And no delivery attempt should be made
     # PRE-BIZ6: webhook URL must be configured -- not configured -> skip
 
-  @T-UC-004-response-success @invariant @BR-RULE-018 @response @pending
+  @T-UC-004-response-success @invariant @BR-RULE-018 @response
   Scenario: Success response contains delivery data without errors field
     Given a media buy "mb-001" owned by "buyer-001"
     And the ad server adapter has delivery data for "mb-001"
@@ -494,7 +494,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the response should not contain "errors" field
     # BR-RULE-018 INV-1: success has data, no errors
 
-  @T-UC-004-response-error @invariant @BR-RULE-018 @response @error @pending
+  @T-UC-004-response-error @invariant @BR-RULE-018 @response @error
   Scenario: Error response contains errors array without delivery data
     When the Buyer Agent sends a delivery metrics request without authentication
     Then the response should contain "errors" field
@@ -504,7 +504,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # BR-RULE-018 INV-2: failure has errors, no data
     # POST-F3: Suggestion for recovery
 
-  @T-UC-004-dim-supported @invariant @BR-RULE-091 @reporting-dimensions @pending
+  @T-UC-004-dim-supported @invariant @BR-RULE-091 @reporting-dimensions
   Scenario: Buyer requests supported dimension - seller returns breakdown
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the seller supports reporting dimension "device_type"
@@ -513,7 +513,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the response packages should include "by_device_type" breakdown arrays
     # BR-RULE-091 INV-1: buyer includes dimension key -> seller returns corresponding by_* array
 
-  @T-UC-004-dim-unsupported @invariant @BR-RULE-091 @reporting-dimensions @pending
+  @T-UC-004-dim-unsupported @invariant @BR-RULE-091 @reporting-dimensions
   Scenario: Buyer requests unsupported dimension - silently omitted
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the seller does NOT support reporting dimension "audience"
@@ -523,7 +523,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And no error should be returned
     # BR-RULE-091 INV-2: unsupported dimension silently omitted (no error, no empty array)
 
-  @T-UC-004-dim-truncated @invariant @BR-RULE-091 @reporting-dimensions @pending
+  @T-UC-004-dim-truncated @invariant @BR-RULE-091 @reporting-dimensions
   Scenario: Breakdown truncated by limit - truncation flag set true
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the seller supports reporting dimension "geo"
@@ -533,7 +533,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And "by_geo_truncated" should be true
     # BR-RULE-091 INV-3: truncated by limit -> by_*_truncated = true
 
-  @T-UC-004-dim-complete @invariant @BR-RULE-091 @reporting-dimensions @pending
+  @T-UC-004-dim-complete @invariant @BR-RULE-091 @reporting-dimensions
   Scenario: Breakdown complete (not truncated) - truncation flag set false
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the seller supports reporting dimension "device_type"
@@ -543,7 +543,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And "by_device_type_truncated" should be false
     # BR-RULE-091 INV-4: complete (not truncated) -> by_*_truncated = false
 
-  @T-UC-004-dim-geo-system @invariant @BR-RULE-091 @reporting-dimensions @pending
+  @T-UC-004-dim-geo-system @invariant @BR-RULE-091 @reporting-dimensions
   Scenario: Geo with metro level includes classification system
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the seller supports reporting dimension "geo"
@@ -551,7 +551,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the response geo breakdown should use classification system "nielsen_dma"
     # BR-RULE-091 INV-5: geo_level=metro/postal_area -> system field specifies classification
 
-  @T-UC-004-dim-geo-postal @invariant @BR-RULE-091 @reporting-dimensions @pending
+  @T-UC-004-dim-geo-postal @invariant @BR-RULE-091 @reporting-dimensions
   Scenario: Geo with postal_area level includes classification system
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the seller supports reporting dimension "geo"
@@ -559,7 +559,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the response geo breakdown should use classification system "us_zip"
     # BR-RULE-091 INV-5: geo_level=postal_area -> system specifies classification
 
-  @T-UC-004-dim-sortby-fallback @invariant @BR-RULE-091 @reporting-dimensions @pending
+  @T-UC-004-dim-sortby-fallback @invariant @BR-RULE-091 @reporting-dimensions
   Scenario: sort_by metric not available - seller falls back to spend
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the seller supports reporting dimension "placement"
@@ -568,7 +568,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the response placement breakdown should be sorted by "spend" (fallback)
     # BR-RULE-091 INV-6: sort_by metric not reported -> falls back to 'spend'
 
-  @T-UC-004-dim-sortby-valid @invariant @BR-RULE-091 @reporting-dimensions @pending
+  @T-UC-004-dim-sortby-valid @invariant @BR-RULE-091 @reporting-dimensions
   Scenario: sort_by metric available - seller uses requested metric
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the seller supports reporting dimension "placement"
@@ -577,7 +577,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the response placement breakdown should be sorted by "clicks"
     # BR-RULE-091 INV-6 counter-example: sort_by metric reported -> uses requested metric
 
-  @T-UC-004-dim-multi @invariant @BR-RULE-091 @reporting-dimensions @pending
+  @T-UC-004-dim-multi @invariant @BR-RULE-091 @reporting-dimensions
   Scenario: Multiple dimensions requested simultaneously
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the seller supports reporting dimensions "geo" and "device_type"
@@ -587,7 +587,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the response packages should NOT include "by_audience"
     # BR-RULE-091 INV-1 + INV-2: supported returned, unsupported silently omitted
 
-  @T-UC-004-attr-supported @invariant @BR-RULE-092 @attribution @pending
+  @T-UC-004-attr-supported @invariant @BR-RULE-092 @attribution
   Scenario: Buyer requests custom attribution - seller applies and echoes
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the seller supports configurable attribution windows
@@ -598,7 +598,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # BR-RULE-092 INV-1: buyer provides -> seller applies requested lookback
     # BR-RULE-092 INV-3: response echoes applied attribution_window
 
-  @T-UC-004-attr-unsupported @invariant @BR-RULE-092 @attribution @pending
+  @T-UC-004-attr-unsupported @invariant @BR-RULE-092 @attribution
   Scenario: Seller ignores attribution request - returns platform default
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the seller does NOT support configurable attribution windows
@@ -608,7 +608,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And no error should be returned
     # BR-RULE-092 INV-2: seller ignores request, returns platform default
 
-  @T-UC-004-attr-echo @invariant @BR-RULE-092 @attribution @pending
+  @T-UC-004-attr-echo @invariant @BR-RULE-092 @attribution
   Scenario: Response always echoes applied attribution window with model
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the ad server adapter has delivery data for "mb-001"
@@ -616,7 +616,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the response attribution_window should include "model" field (required)
     # BR-RULE-092 INV-3: response MUST echo attribution_window with model
 
-  @T-UC-004-attr-omitted @invariant @BR-RULE-092 @attribution @pending
+  @T-UC-004-attr-omitted @invariant @BR-RULE-092 @attribution
   Scenario: Buyer omits attribution window - seller uses and echoes default
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the ad server adapter has delivery data for "mb-001"
@@ -624,7 +624,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the response should include attribution_window with the seller's platform default model
     # BR-RULE-092 INV-4: buyer omits -> seller uses and echoes platform default
 
-  @T-UC-004-attr-campaign-valid @invariant @BR-RULE-092 @attribution @pending
+  @T-UC-004-attr-campaign-valid @invariant @BR-RULE-092 @attribution
   Scenario: Campaign unit with interval 1 - valid
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the seller supports configurable attribution windows
@@ -633,7 +633,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the response should include attribution_window reflecting campaign-length window
     # BR-RULE-092 INV-5: unit=campaign, interval=1 -> valid (spans full campaign flight)
 
-  @T-UC-004-attr-campaign-invalid @invariant @BR-RULE-092 @attribution @error @pending
+  @T-UC-004-attr-campaign-invalid @invariant @BR-RULE-092 @attribution @error
   Scenario: Campaign unit with interval != 1 - rejected
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     When the Buyer Agent requests delivery metrics for "mb-001" with attribution_window {"post_click": {"interval": 2, "unit": "campaign"}}
@@ -646,7 +646,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # POST-F2: Error explains constraint
     # POST-F3: Suggestion for recovery
 
-  @T-UC-004-partition-reporting-dims @partition @reporting_dimensions @BR-RULE-091 @pending
+  @T-UC-004-partition-reporting-dims @partition @reporting_dimensions @BR-RULE-091
   Scenario Outline: Reporting dimensions partition - <partition>
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the ad server adapter has delivery data for "mb-001"
@@ -671,7 +671,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | limit_zero | {"geo": {"geo_level": "country", "limit": 0}} | error "INVALID_REQUEST" with suggestion |
       | limit_negative | {"device_type": {"limit": -1}} | error "INVALID_REQUEST" with suggestion |
 
-  @T-UC-004-boundary-reporting-dims @boundary @reporting_dimensions @BR-RULE-091 @pending
+  @T-UC-004-boundary-reporting-dims @boundary @reporting_dimensions @BR-RULE-091
   Scenario Outline: Reporting dimensions boundary - <boundary_point>
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the ad server adapter has delivery data for "mb-001"
@@ -695,7 +695,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | sort_by=unsupported_metric (seller falls back to spend) | {"placement": {"sort_by": "conversions"}} | valid |
       | limit negative | {"device_type": {"limit": -1}} | invalid |
 
-  @T-UC-004-partition-attribution @partition @attribution_window @BR-RULE-092 @pending
+  @T-UC-004-partition-attribution @partition @attribution_window @BR-RULE-092
   Scenario Outline: Attribution window partition - <partition>
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the ad server adapter has delivery data for "mb-001"
@@ -721,7 +721,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | invalid_model | {"model": "last_click"} | error "INVALID_REQUEST" with suggestion |
       | campaign_interval_not_one | {"post_click": {"interval": 2, "unit": "campaign"}} | error "INVALID_REQUEST" with suggestion |
 
-  @T-UC-004-boundary-attribution @boundary @attribution_window @BR-RULE-092 @pending
+  @T-UC-004-boundary-attribution @boundary @attribution_window @BR-RULE-092
   Scenario Outline: Attribution window boundary - <boundary_point>
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the ad server adapter has delivery data for "mb-001"
@@ -743,7 +743,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | model=last_click (not in enum) | {"model": "last_click"} | invalid |
       | seller ignores field (no configurable window support) | {"post_click": {"interval": 30, "unit": "days"}} | valid |
 
-  @T-UC-004-partition-daily-breakdown @partition @include_package_daily_breakdown @pending
+  @T-UC-004-partition-daily-breakdown @partition @include_package_daily_breakdown
   Scenario Outline: Include package daily breakdown partition - <partition>
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the ad server adapter has delivery data for "mb-001"
@@ -760,7 +760,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | partition | value | expected |
       | non_boolean | "yes" | error "INVALID_REQUEST" with suggestion |
 
-  @T-UC-004-boundary-daily-breakdown @boundary @include_package_daily_breakdown @pending
+  @T-UC-004-boundary-daily-breakdown @boundary @include_package_daily_breakdown
   Scenario Outline: Include package daily breakdown boundary - <boundary_point>
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the ad server adapter has delivery data for "mb-001"
@@ -774,7 +774,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | true (explicit) | true | valid |
       | string 'true' (non-boolean type) | "true" | invalid |
 
-  @T-UC-004-partition-account @partition @delivery_account @pending
+  @T-UC-004-partition-account @partition @delivery_account
   Scenario Outline: Delivery account partition - <partition>
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the ad server adapter has delivery data for "mb-001"
@@ -793,7 +793,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | account_not_found | {"account_id": "acc_nonexistent"} | error "ACCOUNT_NOT_FOUND" with suggestion |
       | empty_object | {} | error "INVALID_REQUEST" with suggestion |
 
-  @T-UC-004-boundary-account @boundary @delivery_account @pending
+  @T-UC-004-boundary-account @boundary @delivery_account
   Scenario Outline: Delivery account boundary - <boundary_point>
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the ad server adapter has delivery data for "mb-001"
@@ -809,7 +809,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | account_id present + not found | {"account_id": "acc_nonexistent"} | invalid |
       | empty object {} | {} | invalid |
 
-  @T-UC-004-partition-status-filter @partition @status_filter @pending
+  @T-UC-004-partition-status-filter @partition @status_filter
   Scenario Outline: Status filter partition - <partition>
     Given multiple media buys owned by "buyer-001" in various statuses
     When the Buyer Agent requests delivery metrics with status_filter "<partition_value>"
@@ -832,7 +832,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | unknown_value | failed | error "INVALID_REQUEST" with suggestion |
       | empty_array | [] | error "INVALID_REQUEST" with suggestion |
 
-  @T-UC-004-boundary-status-filter @boundary @status_filter @pending
+  @T-UC-004-boundary-status-filter @boundary @status_filter
   Scenario Outline: Status filter boundary - <boundary_point>
     Given multiple media buys owned by "buyer-001" in various statuses
     When the Buyer Agent requests delivery metrics at status_filter boundary "<boundary_value>"
@@ -849,7 +849,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | failed (not in AdCP enum, only internal) | failed | invalid |
       | [] (empty array, violates minItems) | [] | invalid |
 
-  @T-UC-004-partition-date-range @partition @delivery_date_range @BR-RULE-013 @pending
+  @T-UC-004-partition-date-range @partition @delivery_date_range @BR-RULE-013
   Scenario Outline: Delivery date range partition - <partition>
     Given a media buy "mb-001" owned by "buyer-001"
     When the Buyer Agent requests delivery metrics with date range "<partition>"
@@ -862,7 +862,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | start_equals_end   | invalid  |
       | start_after_end    | invalid  |
 
-  @T-UC-004-boundary-date-range @boundary @delivery_date_range @BR-RULE-013 @pending
+  @T-UC-004-boundary-date-range @boundary @delivery_date_range @BR-RULE-013
   Scenario Outline: Delivery date range boundary - <boundary_point>
     Given a media buy "mb-001" owned by "buyer-001"
     When the Buyer Agent requests delivery metrics at date boundary "<boundary_point>"
@@ -875,7 +875,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | start_date equals end_date           | invalid  |
       | start_date after end_date            | invalid  |
 
-  @T-UC-004-partition-credentials @partition @reporting_webhook @BR-RULE-029 @pending
+  @T-UC-004-partition-credentials @partition @reporting_webhook @BR-RULE-029
   Scenario Outline: Webhook credentials partition - <partition>
     Given a media buy "mb-001" with webhook delivery configured
     When the webhook is configured with credentials "<partition>"
@@ -889,7 +889,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | credentials_too_short   | invalid  |
       | unknown_scheme          | invalid  |
 
-  @T-UC-004-boundary-credentials @boundary @reporting_webhook @BR-RULE-029 @pending
+  @T-UC-004-boundary-credentials @boundary @reporting_webhook @BR-RULE-029
   Scenario Outline: Webhook credentials boundary - <boundary_point>
     Given a media buy "mb-001" with webhook delivery configured
     When the webhook credentials are at boundary "<boundary_point>"
@@ -903,7 +903,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | credentials = 31 chars (rejected)           | invalid  |
       | Unknown auth scheme not in enum             | invalid  |
 
-  @T-UC-004-partition-resolution @partition @media_buy_resolution @BR-RULE-030 @pending
+  @T-UC-004-partition-resolution @partition @media_buy_resolution @BR-RULE-030
   Scenario Outline: Media buy resolution partition - <partition>
     Given media buys owned by "buyer-001"
     When the Buyer Agent requests delivery metrics with resolution "<partition>"
@@ -919,7 +919,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | zero_resolution      | valid    |
       | empty_array          | invalid  |
 
-  @T-UC-004-boundary-resolution @boundary @media_buy_resolution @BR-RULE-030 @pending
+  @T-UC-004-boundary-resolution @boundary @media_buy_resolution @BR-RULE-030
   Scenario Outline: Media buy resolution boundary - <boundary_point>
     Given media buys owned by "buyer-001"
     When the Buyer Agent requests delivery metrics at resolution boundary "<boundary_point>"
@@ -935,7 +935,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | partial resolution (some missing)             | valid    |
       | zero resolution (empty result)                | valid    |
 
-  @T-UC-004-partition-ownership @partition @ownership @pending
+  @T-UC-004-partition-ownership @partition @ownership
   Scenario Outline: Principal ownership partition - <partition>
     Given a media buy "mb-001" with a known owner
     When the Buyer Agent requests delivery metrics with principal "<partition>"
@@ -946,7 +946,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | owner_matches   | valid    |
       | owner_mismatch  | invalid  |
 
-  @T-UC-004-boundary-ownership @boundary @ownership @pending
+  @T-UC-004-boundary-ownership @boundary @ownership
   Scenario Outline: Principal ownership boundary - <boundary_point>
     Given a media buy "mb-001" with a known owner
     When the Buyer Agent requests delivery metrics at ownership boundary "<boundary_point>"
@@ -957,7 +957,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | principal matches owner               | valid    |
       | principal differs from owner          | invalid  |
 
-  @T-UC-004-partition-sampling @partition @sampling_method @pending
+  @T-UC-004-partition-sampling @partition @sampling_method
   Scenario Outline: Sampling method partition - <partition>
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     When the Buyer Agent queries delivery artifacts with sampling method "<partition_value>"
@@ -975,7 +975,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | partition | partition_value | expected |
       | unknown_value | systematic | error "INVALID_REQUEST" with suggestion |
 
-  @T-UC-004-boundary-sampling @boundary @sampling_method @pending
+  @T-UC-004-boundary-sampling @boundary @sampling_method
   Scenario Outline: Sampling method boundary - <boundary_point>
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     When the Buyer Agent queries delivery artifacts at sampling boundary "<boundary_value>"
@@ -988,7 +988,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | Not provided (server default) | (omitted) | valid |
       | Unknown string not in enum | systematic | invalid |
 
-  @T-UC-004-sandbox-happy @invariant @br-rule-209 @sandbox @pending
+  @T-UC-004-sandbox-happy @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account receives simulated delivery metrics with sandbox flag
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the request targets a sandbox account
@@ -1002,7 +1002,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # BR-RULE-209 INV-3: real billing suppressed
     # BR-RULE-209 INV-4: response includes sandbox: true
 
-  @T-UC-004-sandbox-production @invariant @br-rule-209 @sandbox @pending
+  @T-UC-004-sandbox-production @invariant @br-rule-209 @sandbox
   Scenario: Production account delivery metrics response does not include sandbox flag
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the request targets a production account
@@ -1011,7 +1011,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the response should not include a sandbox field
     # BR-RULE-209 INV-5: production account -> sandbox absent
 
-  @T-UC-004-sandbox-validation @invariant @br-rule-209 @sandbox @pending
+  @T-UC-004-sandbox-validation @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account with invalid media buy ID returns real validation error
     Given the request targets a sandbox account
     When the Buyer Agent queries delivery metrics for a non-existent media buy

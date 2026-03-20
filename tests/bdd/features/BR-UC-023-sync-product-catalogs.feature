@@ -1,4 +1,4 @@
-# Generated from adcp-req @ 8a219ece2b54628c33f1075d386b73082a0f4832 on 2026-03-20T11:43:42Z
+# Generated from adcp-req @ 8a219ece2b54628c33f1075d386b73082a0f4832 on 2026-03-20T12:00:24Z
 # DO NOT EDIT -- re-run: python scripts/compile_bdd.py
 
 Feature: BR-UC-023 Sync Product Catalogs
@@ -37,7 +37,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the account reference resolves to a valid account
 
 
-  @T-UC-023-main @main-flow @post-s1 @post-s3 @post-s7 @pending
+  @T-UC-023-main @main-flow @post-s1 @post-s3 @post-s7
   Scenario Outline: Sync catalogs via <transport> -- new catalog created with upsert semantics
     Given the account has no catalog with catalog_id "feed-001"
     And the Buyer Agent has an authenticated connection via <transport>
@@ -58,7 +58,7 @@ Feature: BR-UC-023 Sync Product Catalogs
       | MCP       |
       | REST      |
 
-  @T-UC-023-main-update @main-flow @post-s1 @post-s3 @post-s4 @pending
+  @T-UC-023-main-update @main-flow @post-s1 @post-s3 @post-s4
   Scenario: Sync catalogs -- existing catalog updated with changes list
     Given the account has a catalog with catalog_id "feed-001" and name "Old Name"
     When the Buyer Agent sends a sync_catalogs request with catalogs:
@@ -70,7 +70,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     # POST-S1: Per-catalog action report (updated)
     # POST-S4: Changes list shows what was modified
 
-  @T-UC-023-main-mixed @main-flow @post-s1 @post-s3 @pending
+  @T-UC-023-main-mixed @main-flow @post-s1 @post-s3
   Scenario: Sync catalogs -- mixed upsert (create and update in one request)
     Given the account has a catalog with catalog_id "existing-feed" and type "product"
     And the account has no catalog with catalog_id "new-feed"
@@ -83,7 +83,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the catalog result for "new-feed" has action "created"
     # POST-S1: Per-catalog action reports for both catalogs
 
-  @T-UC-023-main-item-review @main-flow @post-s3 @post-s4 @pending
+  @T-UC-023-main-item-review @main-flow @post-s3 @post-s4
   Scenario: Sync catalogs -- platform performs item-level review
     Given the account has no catalog with catalog_id "reviewed-feed"
     When the Buyer Agent sends a sync_catalogs request with a product catalog "reviewed-feed" containing 100 inline items
@@ -96,7 +96,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     # POST-S3: Platform-assigned ID, item counts, review status
     # POST-S4: Item-level issues reported when present
 
-  @T-UC-023-main-partial @main-flow @post-s1 @post-f4 @pending
+  @T-UC-023-main-partial @main-flow @post-s1 @post-f4
   Scenario: Sync catalogs -- partial success with lenient validation mode
     Given the account has no existing catalogs
     When the Buyer Agent sends a sync_catalogs request with validation_mode "lenient" and catalogs:
@@ -110,7 +110,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     # POST-S1: Per-catalog action results
     # POST-F4: Individual failure does not prevent other catalogs from processing
 
-  @T-UC-023-main-scoped @main-flow @post-s1 @pending
+  @T-UC-023-main-scoped @main-flow @post-s1
   Scenario: Sync catalogs -- catalog_ids filter limits sync scope
     Given the account has catalogs "feed-A", "feed-B", and "feed-C"
     When the Buyer Agent sends a sync_catalogs request with catalog_ids ["feed-A"] and catalogs:
@@ -120,7 +120,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And catalogs "feed-B" and "feed-C" are unaffected
     # BR-RULE-172 INV-7: catalog_ids scopes sync to specified IDs
 
-  @T-UC-023-ext-a @extension @ext-a @happy-path @post-s2 @post-s7 @pending
+  @T-UC-023-ext-a @extension @ext-a @happy-path @post-s2 @post-s7
   Scenario Outline: Discovery-only mode via <transport> -- list all catalogs on account
     Given the account has 3 synced catalogs with various types
     And the Buyer Agent has an authenticated connection via <transport>
@@ -138,7 +138,7 @@ Feature: BR-UC-023 Sync Product Catalogs
       | MCP       |
       | REST      |
 
-  @T-UC-023-ext-a-empty @extension @ext-a @post-s2 @boundary @pending
+  @T-UC-023-ext-a-empty @extension @ext-a @post-s2 @boundary
   Scenario: Discovery-only mode -- empty account returns empty catalogs array
     Given the account has 0 catalogs
     When the Buyer Agent sends a sync_catalogs request with no catalogs array
@@ -146,7 +146,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the catalogs array is empty
     # BR-RULE-172 INV-3: catalogs omitted -> all account catalogs returned (empty)
 
-  @T-UC-023-ext-b @extension @ext-b @happy-path @post-s5 @post-f1 @post-s7 @pending
+  @T-UC-023-ext-b @extension @ext-b @happy-path @post-s5 @post-f1 @post-s7
   Scenario: Dry run mode -- preview sync changes without applying
     Given the account has a catalog with catalog_id "existing-feed"
     And the account has no catalog with catalog_id "new-feed"
@@ -163,7 +163,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     # POST-F1: System state unchanged (dry-run)
     # POST-S7: Application context echoed
 
-  @T-UC-023-ext-b-validation @extension @ext-b @happy-path @post-s5 @pending
+  @T-UC-023-ext-b-validation @extension @ext-b @happy-path @post-s5
   Scenario: Dry run mode -- validation errors reported without state change
     When the Buyer Agent sends a sync_catalogs request with dry_run true and catalogs:
     | catalog_id | type    | url                       | items            |
@@ -172,7 +172,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And no state changes are applied to the account
     # POST-S5: Validation errors visible in dry run preview
 
-  @T-UC-023-ext-c @extension @ext-c @happy-path @post-s1 @post-s6 @post-s7 @pending
+  @T-UC-023-ext-c @extension @ext-c @happy-path @post-s1 @post-s6 @post-s7
   Scenario: Delete missing -- purge buyer-managed catalogs not in request
     Given the account has buyer-managed catalogs "keep-feed" and "remove-feed"
     And the account has seller-managed catalog "seller-feed"
@@ -188,7 +188,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     # POST-S6: Buyer-managed catalogs not in request are purged
     # POST-S7: Context echoed
 
-  @T-UC-023-ext-c-seller-safe @extension @ext-c @invariant @BR-RULE-174 @pending
+  @T-UC-023-ext-c-seller-safe @extension @ext-c @invariant @BR-RULE-174
   Scenario: Delete missing -- seller-managed catalogs are never deleted
     Given the account has only seller-managed catalogs "seller-A" and "seller-B"
     And the account has no buyer-managed catalogs
@@ -199,7 +199,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And seller-managed catalogs "seller-A" and "seller-B" remain unchanged
     # BR-RULE-174 INV-3: Seller-managed catalogs are never deleted
 
-  @T-UC-023-ext-c-false @extension @ext-c @invariant @BR-RULE-174 @pending
+  @T-UC-023-ext-c-false @extension @ext-c @invariant @BR-RULE-174
   Scenario: Delete missing false -- no catalogs deleted
     Given the account has buyer-managed catalogs "feed-A" and "feed-B"
     When the Buyer Agent sends a sync_catalogs request with delete_missing false and catalogs:
@@ -209,7 +209,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And catalog "feed-B" remains on the account (not deleted)
     # BR-RULE-174 INV-4: delete_missing=false means no deletions
 
-  @T-UC-023-ext-d @extension @ext-d @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-023-ext-d @extension @ext-d @error @post-f1 @post-f2 @post-f3
   Scenario: Account not found -- account reference cannot be resolved
     Given the account reference "nonexistent_acct" does not match any account
     When the Buyer Agent sends a sync_catalogs request with account_id "nonexistent_acct"
@@ -223,7 +223,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     # POST-F2: Error code ACCOUNT_NOT_FOUND with terminal recovery
     # POST-F3: Context echoed
 
-  @T-UC-023-ext-d-brand @extension @ext-d @error @post-f2 @pending
+  @T-UC-023-ext-d-brand @extension @ext-d @error @post-f2
   Scenario: Account not found -- brand+operator natural key does not match
     Given no account matches brand "UnknownBrand" and operator "UnknownOp"
     When the Buyer Agent sends a sync_catalogs request with brand "UnknownBrand" and operator "UnknownOp"
@@ -234,7 +234,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the suggestion should contain "account"
     # POST-F2: Account not found via natural key
 
-  @T-UC-023-ext-e-catalogs-overflow @extension @ext-e @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-023-ext-e-catalogs-overflow @extension @ext-e @error @post-f1 @post-f2 @post-f3
   Scenario: Invalid request -- catalogs array exceeds maximum 50 items
     When the Buyer Agent sends a sync_catalogs request with 51 catalogs
     Then the operation should fail
@@ -247,7 +247,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     # POST-F2: Error identifies catalogs array size constraint
     # POST-F3: Context echoed
 
-  @T-UC-023-ext-e-catalogs-empty @extension @ext-e @error @post-f2 @pending
+  @T-UC-023-ext-e-catalogs-empty @extension @ext-e @error @post-f2
   Scenario: Invalid request -- catalogs array is empty
     When the Buyer Agent sends a sync_catalogs request with an empty catalogs array
     Then the operation should fail
@@ -257,7 +257,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the suggestion should contain "catalogs"
     # POST-F2: catalogs minItems=1 constraint violated
 
-  @T-UC-023-ext-e-delete-no-catalogs @extension @ext-e @error @post-f2 @pending
+  @T-UC-023-ext-e-delete-no-catalogs @extension @ext-e @error @post-f2
   Scenario: Invalid request -- delete_missing true without catalogs array
     When the Buyer Agent sends a sync_catalogs request with delete_missing true and no catalogs array
     Then the operation should fail
@@ -268,7 +268,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     # POST-F2: Schema conditional violation -- delete_missing requires catalogs
     # BR-RULE-174 INV-2
 
-  @T-UC-023-ext-e-url-items-both @extension @ext-e @error @post-f2 @pending
+  @T-UC-023-ext-e-url-items-both @extension @ext-e @error @post-f2
   Scenario: Invalid request -- catalog has both url and items (mutually exclusive)
     When the Buyer Agent sends a sync_catalogs request with catalogs:
     | catalog_id | type    | url                      | items              |
@@ -280,7 +280,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     # POST-F2: URL/items mutual exclusivity violated
     # BR-RULE-173 INV-3
 
-  @T-UC-023-ext-e-invalid-type @extension @ext-e @error @post-f2 @pending
+  @T-UC-023-ext-e-invalid-type @extension @ext-e @error @post-f2
   Scenario: Invalid request -- catalog type not in enum
     When the Buyer Agent sends a sync_catalogs request with catalogs:
     | catalog_id | type           |
@@ -292,7 +292,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     # POST-F2: Catalog type not in 13-value enum
     # BR-RULE-173 INV-2
 
-  @T-UC-023-ext-e-mapping-xor @extension @ext-e @error @post-f2 @pending
+  @T-UC-023-ext-e-mapping-xor @extension @ext-e @error @post-f2
   Scenario: Invalid request -- feed field mapping has both feed_field and value
     When the Buyer Agent sends a sync_catalogs request with a catalog having feed_field_mappings:
     | feed_field | value     | catalog_field |
@@ -304,7 +304,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     # POST-F2: Mapping feed_field XOR value constraint violated
     # BR-RULE-175 INV-2
 
-  @T-UC-023-ext-e-target-xor @extension @ext-e @error @post-f2 @pending
+  @T-UC-023-ext-e-target-xor @extension @ext-e @error @post-f2
   Scenario: Invalid request -- feed field mapping has both catalog_field and asset_group_id
     When the Buyer Agent sends a sync_catalogs request with a catalog having feed_field_mappings:
     | feed_field | catalog_field | asset_group_id    |
@@ -316,7 +316,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     # POST-F2: Mapping catalog_field XOR asset_group_id constraint violated
     # BR-RULE-175 INV-3
 
-  @T-UC-023-ext-e-gtin @extension @ext-e @error @post-f2 @pending
+  @T-UC-023-ext-e-gtin @extension @ext-e @error @post-f2
   Scenario: Invalid request -- GTIN with invalid format
     When the Buyer Agent sends a sync_catalogs request with a catalog having selectors:
     | gtins         |
@@ -328,7 +328,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     # POST-F2: GTIN pattern violated (must be 8-14 numeric digits)
     # BR-RULE-176 INV-3
 
-  @T-UC-023-ext-e-strict @extension @ext-e @error @post-f2 @pending
+  @T-UC-023-ext-e-strict @extension @ext-e @error @post-f2
   Scenario: Invalid request -- strict validation mode fails entire sync on any error
     When the Buyer Agent sends a sync_catalogs request with validation_mode "strict" and catalogs:
     | catalog_id | type    |
@@ -341,7 +341,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     # POST-F2: Strict mode -- single catalog error fails entire operation
     # BR-RULE-172 INV-5
 
-  @T-UC-023-ext-f @extension @ext-f @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-023-ext-f @extension @ext-f @error @post-f1 @post-f2 @post-f3
   Scenario: Unsupported feature -- catalog_management capability not declared
     Given the seller has NOT declared catalog_management capability
     When the Buyer Agent sends a sync_catalogs request with catalogs:
@@ -358,7 +358,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     # POST-F3: Context echoed
     # BR-RULE-132 INV-2: capability absent -> UNSUPPORTED_FEATURE
 
-  @T-UC-023-ext-g @extension @ext-g @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-023-ext-g @extension @ext-g @error @post-f1 @post-f2 @post-f3
   Scenario: Auth required -- authentication missing
     Given the Buyer has no authentication credentials
     When the Buyer Agent sends a sync_catalogs request
@@ -372,7 +372,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     # POST-F2: Error explains auth is required
     # POST-F3: Context echoed
 
-  @T-UC-023-ext-g-expired @extension @ext-g @error @post-f2 @pending
+  @T-UC-023-ext-g-expired @extension @ext-g @error @post-f2
   Scenario: Auth required -- token expired
     Given the Buyer Agent has an expired authentication token
     When the Buyer Agent sends a sync_catalogs request
@@ -383,7 +383,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the suggestion should contain "authentication" or "token"
     # POST-F2: Expired token treated as auth failure
 
-  @T-UC-023-ext-h @extension @ext-h @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-023-ext-h @extension @ext-h @error @post-f1 @post-f2 @post-f3
   Scenario: Rate limited -- request rate exceeded
     Given the Buyer Agent has exceeded the request rate for sync_catalogs
     When the Buyer Agent sends a sync_catalogs request
@@ -398,7 +398,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     # POST-F2: Rate limit exceeded with retry_after hint
     # POST-F3: Context echoed
 
-  @T-UC-023-ext-i @extension @ext-i @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-023-ext-i @extension @ext-i @error @post-f1 @post-f2 @post-f3
   Scenario: Service unavailable -- seller service temporarily down
     Given the seller service is experiencing a transient failure
     When the Buyer Agent sends a sync_catalogs request
@@ -413,7 +413,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     # POST-F2: Service unavailable with retry_after
     # POST-F3: Context echoed
 
-  @T-UC-023-ext-j-submitted @extension @ext-j @async @post-s8 @pending
+  @T-UC-023-ext-j-submitted @extension @ext-j @async @post-s8
   Scenario: Async lifecycle -- submitted acknowledgment for large sync
     Given the sync_catalogs operation requires async processing
     When the Buyer Agent sends a sync_catalogs request with 50 catalogs
@@ -422,7 +422,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     # POST-S8: Buyer receives submitted acknowledgment
     # BR-RULE-178 INV-1: sync operation queued
 
-  @T-UC-023-ext-j-working @extension @ext-j @async @post-s8 @pending
+  @T-UC-023-ext-j-working @extension @ext-j @async @post-s8
   Scenario: Async lifecycle -- working progress with catalog and item counts
     Given the sync_catalogs operation is in progress
     When the Buyer Agent receives an async progress update
@@ -434,7 +434,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     # POST-S8: Buyer receives progress updates
     # BR-RULE-178 INV-2: working state with progress fields
 
-  @T-UC-023-ext-j-input @extension @ext-j @async @post-s8 @pending
+  @T-UC-023-ext-j-input @extension @ext-j @async @post-s8
   Scenario Outline: Async lifecycle -- input required with reason <reason>
     Given the sync_catalogs operation is paused waiting for buyer input
     When the Buyer Agent receives an input-required notification with reason "<reason>"
@@ -451,7 +451,7 @@ Feature: BR-UC-023 Sync Product Catalogs
       | ITEM_REVIEW        |
       | FEED_ACCESS        |
 
-  @T-UC-023-ext-j-webhook @extension @ext-j @async @post-s8 @pending
+  @T-UC-023-ext-j-webhook @extension @ext-j @async @post-s8
   Scenario: Async lifecycle -- push notification config enables webhook delivery
     Given the Buyer Agent provides a push_notification_config with webhook URL
     When the Buyer Agent sends a sync_catalogs request that requires async processing
@@ -459,7 +459,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the webhook notification includes the task status
     # BR-RULE-178 INV-6: webhook sent on completion or input-required
 
-  @T-UC-023-partition-upsert @partition @upsert-semantics @pending
+  @T-UC-023-partition-upsert @partition @upsert-semantics
   Scenario Outline: Upsert semantics partition validation -- <partition>
     Given <setup>
     When the Buyer Agent sends a sync_catalogs request with <input>
@@ -484,7 +484,7 @@ Feature: BR-UC-023 Sync Product Catalogs
       | catalog_ids_exceed_max | the account has catalogs                             | catalog_ids with 51 IDs                                                                                | error "INVALID_REQUEST" with suggestion                                          |
       | strict_mode_any_error  | the account has no catalogs                          | validation_mode "strict" and catalogs with 1 valid + 1 invalid type                                    | error "INVALID_REQUEST" with suggestion -- entire sync fails                     |
 
-  @T-UC-023-boundary-upsert @boundary @upsert-semantics @pending
+  @T-UC-023-boundary-upsert @boundary @upsert-semantics
   Scenario Outline: Upsert semantics boundary validation -- <boundary_point>
     Given <setup>
     When the Buyer Agent sends a sync_catalogs request with <input>
@@ -507,7 +507,7 @@ Feature: BR-UC-023 Sync Product Catalogs
       | validation_mode=lenient                          | the account has no catalogs        | validation_mode "lenient"            | success, partial failures reported                       |
       | strict mode + one invalid catalog                | the account has no catalogs        | strict + 1 valid + 1 invalid catalog | error "INVALID_REQUEST" with suggestion                  |
 
-  @T-UC-023-partition-catalog-validation @partition @catalog-validation @pending
+  @T-UC-023-partition-catalog-validation @partition @catalog-validation
   Scenario Outline: Catalog validation partition -- <partition>
     When the Buyer Agent sends a sync_catalogs request with a catalog: <input>
     Then <outcome>
@@ -529,7 +529,7 @@ Feature: BR-UC-023 Sync Product Catalogs
       | items_empty_array          | type "offering" with items []                                                            | error "INVALID_REQUEST" with suggestion                              |
       | url_invalid_format         | type "product" with url "not-a-url" and feed_format "custom"                             | error "INVALID_REQUEST" with suggestion                              |
 
-  @T-UC-023-boundary-catalog-validation @boundary @catalog-validation @pending
+  @T-UC-023-boundary-catalog-validation @boundary @catalog-validation
   Scenario Outline: Catalog validation boundary -- <boundary_point>
     When the Buyer Agent sends a sync_catalogs request with a catalog: <input>
     Then <outcome>
@@ -548,7 +548,7 @@ Feature: BR-UC-023 Sync Product Catalogs
       | items with 1 element (minimum)        | type "offering" with items [1 item]                                      | catalog accepted                                     |
       | items with 0 elements                 | type "offering" with items []                                            | error "INVALID_REQUEST" with suggestion               |
 
-  @T-UC-023-partition-delete-missing @partition @delete-missing @pending
+  @T-UC-023-partition-delete-missing @partition @delete-missing
   Scenario Outline: Delete missing partition validation -- <partition>
     Given <setup>
     When the Buyer Agent sends a sync_catalogs request with <input>
@@ -564,7 +564,7 @@ Feature: BR-UC-023 Sync Product Catalogs
       | partition                | setup                                                | input                                          | outcome                                                  |
       | delete_without_catalogs  | the account has buyer-managed catalogs               | delete_missing true with no catalogs array      | error "INVALID_REQUEST" with suggestion                  |
 
-  @T-UC-023-boundary-delete-missing @boundary @delete-missing @pending
+  @T-UC-023-boundary-delete-missing @boundary @delete-missing
   Scenario Outline: Delete missing boundary validation -- <boundary_point>
     Given <setup>
     When the Buyer Agent sends a sync_catalogs request with <input>
@@ -578,7 +578,7 @@ Feature: BR-UC-023 Sync Product Catalogs
       | delete_missing omitted (default false)              | the account has buyer-managed catalogs             | catalogs provided, delete_missing omitted           | no deletions (default false)                         |
       | delete_missing=true with empty catalogs array       | the account has buyer-managed catalogs             | delete_missing true with catalogs []                | error "INVALID_REQUEST" with suggestion              |
 
-  @T-UC-023-partition-feed-management @partition @feed-management @pending
+  @T-UC-023-partition-feed-management @partition @feed-management
   Scenario Outline: Feed management partition validation -- <partition>
     When the Buyer Agent sends a sync_catalogs request with a catalog: <input>
     Then <outcome>
@@ -605,7 +605,7 @@ Feature: BR-UC-023 Sync Product Catalogs
       | divide_by_zero_or_negative      | mapping: feed_field "price" -> catalog_field "amount" transform "divide" by 0              | error "INVALID_REQUEST" with suggestion                  |
       | mappings_empty_array            | feed_field_mappings: []                                                                    | error "INVALID_REQUEST" with suggestion                  |
 
-  @T-UC-023-boundary-feed-management @boundary @feed-management @pending
+  @T-UC-023-boundary-feed-management @boundary @feed-management
   Scenario Outline: Feed management boundary validation -- <boundary_point>
     When the Buyer Agent sends a sync_catalogs request with a catalog: <input>
     Then <outcome>
@@ -628,7 +628,7 @@ Feature: BR-UC-023 Sync Product Catalogs
       | divide transform with by=0.01 (positive)       | mapping with transform "divide" by 0.01                                                       | valid division                                       |
       | divide transform with by=0 (zero)              | mapping with transform "divide" by 0                                                          | error "INVALID_REQUEST" with suggestion               |
 
-  @T-UC-023-partition-selectors @partition @selectors-attribution @pending
+  @T-UC-023-partition-selectors @partition @selectors-attribution
   Scenario Outline: Selectors and attribution partition validation -- <partition>
     When the Buyer Agent sends a sync_catalogs request with a catalog having selectors: <input>
     Then <outcome>
@@ -655,7 +655,7 @@ Feature: BR-UC-023 Sync Product Catalogs
       | conversion_events_duplicate  | conversion_events ["purchase", "purchase"]                    | error "INVALID_REQUEST" with suggestion                  |
       | unknown_content_id_type      | content_id_type "unknown_type"                                | error "INVALID_REQUEST" with suggestion                  |
 
-  @T-UC-023-boundary-selectors @boundary @selectors-attribution @pending
+  @T-UC-023-boundary-selectors @boundary @selectors-attribution
   Scenario Outline: Selectors and attribution boundary validation -- <boundary_point>
     When the Buyer Agent sends a sync_catalogs request with a catalog having selectors: <input>
     Then <outcome>
@@ -677,7 +677,7 @@ Feature: BR-UC-023 Sync Product Catalogs
       | content_id_type=app_id (last enum)         | content_id_type "app_id"                           | content ID type accepted                             |
       | content_id_type=unknown                    | content_id_type "nonexistent"                      | error "INVALID_REQUEST" with suggestion               |
 
-  @T-UC-023-partition-response @partition @sync-response @pending
+  @T-UC-023-partition-response @partition @sync-response
   Scenario Outline: Sync response structure partition validation -- <partition>
     Given <setup>
     When the Buyer Agent sends a sync_catalogs request
@@ -703,7 +703,7 @@ Feature: BR-UC-023 Sync Product Catalogs
       | missing_action           | N/A (required field on per-catalog result)              | never produced -- action is required on every result                             |
       | unknown_action           | N/A (enum constraint on action)                         | never produced -- action must be one of 5 enum values                            |
 
-  @T-UC-023-boundary-response @boundary @sync-response @pending
+  @T-UC-023-boundary-response @boundary @sync-response
   Scenario Outline: Sync response structure boundary validation -- <boundary_point>
     Given <setup>
     When <action>
@@ -724,7 +724,7 @@ Feature: BR-UC-023 Sync Product Catalogs
       | item_count=0 (minimum)                         | catalog with no items ingested                     | Buyer Agent syncs empty catalog                      | item_count 0 is valid                                |
       | Catalog result with item_issues array          | platform flags items                               | Buyer Agent syncs catalog with reviewed items        | item_issues array present with per-item details      |
 
-  @T-UC-023-partition-async @partition @async-lifecycle @pending
+  @T-UC-023-partition-async @partition @async-lifecycle
   Scenario Outline: Async lifecycle partition validation -- <partition>
     Given <setup>
     When <action>
@@ -748,7 +748,7 @@ Feature: BR-UC-023 Sync Product Catalogs
       | total_steps_zero           | sync in progress                                            | system reports total_steps 0                                        | invalid (minimum=1)                                  |
       | unknown_reason             | input required with unknown reason                          | system sends reason "UNKNOWN_REASON"                                | invalid (not in 4-value enum)                        |
 
-  @T-UC-023-boundary-async @boundary @async-lifecycle @pending
+  @T-UC-023-boundary-async @boundary @async-lifecycle
   Scenario Outline: Async lifecycle boundary validation -- <boundary_point>
     Given <setup>
     When <action>
@@ -769,21 +769,21 @@ Feature: BR-UC-023 Sync Product Catalogs
       | reason=UNKNOWN_REASON                       | N/A                                  | system sends input-required with UNKNOWN_REASON          | invalid (not in enum)                                |
       | submitted state (minimal payload)           | async processing queued              | Buyer Agent receives submitted acknowledgment            | valid submitted response with context                |
 
-  @T-UC-023-inv-172-1 @invariant @BR-RULE-172 @pending
+  @T-UC-023-inv-172-1 @invariant @BR-RULE-172
   Scenario: BR-RULE-172 INV-1 holds -- existing catalog matched by catalog_id is updated
     Given the account has a catalog with catalog_id "feed-001"
     When the Buyer Agent sends a sync_catalogs request with catalog_id "feed-001"
     Then the catalog result for "feed-001" has action "updated"
     # BR-RULE-172 INV-1: matching catalog_id -> update
 
-  @T-UC-023-inv-172-2 @invariant @BR-RULE-172 @pending
+  @T-UC-023-inv-172-2 @invariant @BR-RULE-172
   Scenario: BR-RULE-172 INV-2 holds -- unmatched catalog_id creates new catalog
     Given the account has no catalog with catalog_id "new-feed"
     When the Buyer Agent sends a sync_catalogs request with catalog_id "new-feed"
     Then the catalog result for "new-feed" has action "created"
     # BR-RULE-172 INV-2: no match -> create
 
-  @T-UC-023-inv-172-5 @invariant @BR-RULE-172 @error @pending
+  @T-UC-023-inv-172-5 @invariant @BR-RULE-172 @error
   Scenario: BR-RULE-172 INV-5 violated -- strict mode fails entire sync on any error
     When the Buyer Agent sends a sync_catalogs request with validation_mode "strict" and one invalid catalog
     Then the entire sync operation fails
@@ -792,7 +792,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the suggestion should contain "validation"
     # BR-RULE-172 INV-5: strict + any error -> entire sync fails
 
-  @T-UC-023-inv-172-6 @invariant @BR-RULE-172 @pending
+  @T-UC-023-inv-172-6 @invariant @BR-RULE-172
   Scenario: BR-RULE-172 INV-6 holds -- lenient mode processes valid catalogs despite errors
     When the Buyer Agent sends a sync_catalogs request with validation_mode "lenient" and catalogs:
     | catalog_id | type    |
@@ -802,7 +802,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the catalog result for "bad-feed" has action "failed"
     # BR-RULE-172 INV-6: lenient + errors -> valid catalogs still processed
 
-  @T-UC-023-inv-173-3 @invariant @BR-RULE-173 @error @pending
+  @T-UC-023-inv-173-3 @invariant @BR-RULE-173 @error
   Scenario: BR-RULE-173 INV-3 violated -- catalog has both url and items
     When the Buyer Agent syncs a catalog with both url "https://example.com/feed" and items [{"id":"1"}]
     Then the catalog is rejected
@@ -811,28 +811,28 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the suggestion should contain "url" or "items"
     # BR-RULE-173 INV-3: url + items -> rejected
 
-  @T-UC-023-inv-173-4 @invariant @BR-RULE-173 @pending
+  @T-UC-023-inv-173-4 @invariant @BR-RULE-173
   Scenario: BR-RULE-173 INV-4 holds -- catalog with url only fetches from external feed
     When the Buyer Agent syncs a catalog with type "product" and url "https://feeds.example.com/products.xml" and feed_format "google_merchant_center"
     Then the catalog is accepted for processing
     And the feed is fetched from the external URL
     # BR-RULE-173 INV-4: url only -> feed fetched
 
-  @T-UC-023-inv-173-5 @invariant @BR-RULE-173 @pending
+  @T-UC-023-inv-173-5 @invariant @BR-RULE-173
   Scenario: BR-RULE-173 INV-5 holds -- catalog with items only processes inline data
     When the Buyer Agent syncs a catalog with type "offering" and items [{"offering_id": "o1"}]
     Then the catalog is accepted for processing
     And inline items are processed directly
     # BR-RULE-173 INV-5: items only -> inline processing
 
-  @T-UC-023-inv-173-6 @invariant @BR-RULE-173 @pending
+  @T-UC-023-inv-173-6 @invariant @BR-RULE-173
   Scenario: BR-RULE-173 INV-6 holds -- catalog with neither url nor items is a reference
     When the Buyer Agent syncs a catalog with catalog_id "existing" and type "product" but no url or items
     Then the catalog is accepted as a reference
     And the platform uses the existing synced copy
     # BR-RULE-173 INV-6: neither url nor items -> catalog reference
 
-  @T-UC-023-inv-174-2 @invariant @BR-RULE-174 @error @pending
+  @T-UC-023-inv-174-2 @invariant @BR-RULE-174 @error
   Scenario: BR-RULE-174 INV-2 violated -- delete_missing true without catalogs
     When the Buyer Agent sends a sync_catalogs request with delete_missing true and no catalogs array
     Then the operation should fail
@@ -841,7 +841,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the suggestion should contain "catalogs"
     # BR-RULE-174 INV-2: delete_missing=true + catalogs omitted -> rejected
 
-  @T-UC-023-inv-175-2 @invariant @BR-RULE-175 @error @pending
+  @T-UC-023-inv-175-2 @invariant @BR-RULE-175 @error
   Scenario: BR-RULE-175 INV-2 violated -- mapping has both feed_field and value
     When the Buyer Agent syncs a catalog with a mapping having feed_field "name" and value "override"
     Then the mapping is rejected
@@ -850,7 +850,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the suggestion should contain "feed_field" or "value"
     # BR-RULE-175 INV-2: feed_field + value -> rejected
 
-  @T-UC-023-inv-175-3 @invariant @BR-RULE-175 @error @pending
+  @T-UC-023-inv-175-3 @invariant @BR-RULE-175 @error
   Scenario: BR-RULE-175 INV-3 violated -- mapping has both catalog_field and asset_group_id
     When the Buyer Agent syncs a catalog with a mapping having catalog_field "img" and asset_group_id "images"
     Then the mapping is rejected
@@ -859,7 +859,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the suggestion should contain "catalog_field" or "asset_group_id"
     # BR-RULE-175 INV-3: catalog_field + asset_group_id -> rejected
 
-  @T-UC-023-inv-175-4 @invariant @BR-RULE-175 @error @pending
+  @T-UC-023-inv-175-4 @invariant @BR-RULE-175 @error
   Scenario: BR-RULE-175 INV-4 violated -- divide transform with by <= 0
     When the Buyer Agent syncs a catalog with a mapping having transform "divide" and by 0
     Then the mapping is rejected
@@ -868,7 +868,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the suggestion should contain "divide" or "positive"
     # BR-RULE-175 INV-4: divide by <= 0 -> rejected
 
-  @T-UC-023-inv-175-5 @invariant @BR-RULE-175 @error @pending
+  @T-UC-023-inv-175-5 @invariant @BR-RULE-175 @error
   Scenario: BR-RULE-175 INV-5 violated -- feed_field_mappings present but empty
     When the Buyer Agent syncs a catalog with feed_field_mappings []
     Then the request is rejected
@@ -877,7 +877,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the suggestion should contain "mappings"
     # BR-RULE-175 INV-5: empty mappings array -> rejected
 
-  @T-UC-023-inv-176-2 @invariant @BR-RULE-176 @error @pending
+  @T-UC-023-inv-176-2 @invariant @BR-RULE-176 @error
   Scenario: BR-RULE-176 INV-2 violated -- GTIN fewer than 8 digits
     When the Buyer Agent syncs a catalog with gtins ["1234567"]
     Then the selector is rejected
@@ -886,7 +886,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the suggestion should contain "GTIN" or "digits"
     # BR-RULE-176 INV-2: GTIN < 8 digits -> rejected
 
-  @T-UC-023-inv-176-3 @invariant @BR-RULE-176 @error @pending
+  @T-UC-023-inv-176-3 @invariant @BR-RULE-176 @error
   Scenario: BR-RULE-176 INV-3 violated -- GTIN contains non-numeric characters
     When the Buyer Agent syncs a catalog with gtins ["0001300ABC040"]
     Then the selector is rejected
@@ -895,7 +895,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the suggestion should contain "GTIN" or "numeric"
     # BR-RULE-176 INV-3: non-numeric GTIN -> rejected
 
-  @T-UC-023-inv-176-5 @invariant @BR-RULE-176 @error @pending
+  @T-UC-023-inv-176-5 @invariant @BR-RULE-176 @error
   Scenario: BR-RULE-176 INV-5 violated -- conversion_events has duplicate event types
     When the Buyer Agent syncs a catalog with conversion_events ["purchase", "purchase"]
     Then the request is rejected
@@ -904,14 +904,14 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the suggestion should contain "unique" or "duplicate"
     # BR-RULE-176 INV-5: duplicate events -> rejected (uniqueItems)
 
-  @T-UC-023-inv-177-1 @invariant @BR-RULE-177 @pending
+  @T-UC-023-inv-177-1 @invariant @BR-RULE-177
   Scenario: BR-RULE-177 INV-1 holds -- success response has catalogs, no errors
     When the Buyer Agent sends a valid sync_catalogs request
     Then the response contains a catalogs array
     And the response does not contain an errors field
     # BR-RULE-177 INV-1: success -> catalogs present, errors absent
 
-  @T-UC-023-inv-177-2 @invariant @BR-RULE-177 @pending
+  @T-UC-023-inv-177-2 @invariant @BR-RULE-177
   Scenario: BR-RULE-177 INV-2 holds -- error response has errors, no catalogs
     Given the account reference does not match any account
     When the Buyer Agent sends a sync_catalogs request
@@ -919,7 +919,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the response does not contain catalogs, dry_run, or sandbox fields
     # BR-RULE-177 INV-2: error -> errors present, catalogs/dry_run/sandbox absent
 
-  @T-UC-023-inv-177-3 @invariant @BR-RULE-177 @pending
+  @T-UC-023-inv-177-3 @invariant @BR-RULE-177
   Scenario: BR-RULE-177 INV-3 holds -- individual catalog failure in partial success
     Given validation_mode is "lenient"
     When the Buyer Agent syncs 2 catalogs where one has an invalid type
@@ -928,14 +928,14 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the response is a SyncCatalogsSuccess (not an error response)
     # BR-RULE-177 INV-3: individual catalog fails while others succeed
 
-  @T-UC-023-inv-177-4 @invariant @BR-RULE-177 @pending
+  @T-UC-023-inv-177-4 @invariant @BR-RULE-177
   Scenario: BR-RULE-177 INV-4 holds -- per-catalog result has catalog_id and action
     When the Buyer Agent sends a valid sync_catalogs request
     Then every catalog result includes catalog_id
     And every catalog result includes action from enum [created, updated, unchanged, failed, deleted]
     # BR-RULE-177 INV-4: required fields present
 
-  @T-UC-023-inv-177-6 @invariant @BR-RULE-177 @pending
+  @T-UC-023-inv-177-6 @invariant @BR-RULE-177
   Scenario: BR-RULE-177 INV-6 holds -- updated catalog includes changes array
     Given the account has a catalog with catalog_id "feed-001" and name "Old"
     When the Buyer Agent syncs catalog "feed-001" with name "New"
@@ -943,35 +943,35 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the catalog result for "feed-001" has changes array listing modified fields
     # BR-RULE-177 INV-6: action=updated -> changes array present
 
-  @T-UC-023-inv-178-4 @invariant @BR-RULE-178 @pending
+  @T-UC-023-inv-178-4 @invariant @BR-RULE-178
   Scenario: BR-RULE-178 INV-4 holds -- working percentage between 0 and 100
     Given a sync_catalogs operation is in async working state
     When the system reports progress
     Then the percentage is between 0 and 100 inclusive
     # BR-RULE-178 INV-4: percentage range validated
 
-  @T-UC-023-inv-178-5 @invariant @BR-RULE-178 @pending
+  @T-UC-023-inv-178-5 @invariant @BR-RULE-178
   Scenario: BR-RULE-178 INV-5 holds -- input-required reason is valid enum value
     Given a sync_catalogs operation requires buyer input
     When the system sends an input-required notification
     Then the reason is one of APPROVAL_REQUIRED, FEED_VALIDATION, ITEM_REVIEW, FEED_ACCESS
     # BR-RULE-178 INV-5: reason from closed 4-value enum
 
-  @T-UC-023-inv-043-1 @invariant @BR-RULE-043 @pending
+  @T-UC-023-inv-043-1 @invariant @BR-RULE-043
   Scenario: BR-RULE-043 INV-1 holds -- context echoed on success
     Given the Buyer Agent includes context {"request_id": "req-123", "trace_id": "t-456"}
     When the Buyer Agent sends a sync_catalogs request
     Then the response includes context {"request_id": "req-123", "trace_id": "t-456"}
     # BR-RULE-043 INV-1: request context -> response context identical
 
-  @T-UC-023-inv-043-2 @invariant @BR-RULE-043 @pending
+  @T-UC-023-inv-043-2 @invariant @BR-RULE-043
   Scenario: BR-RULE-043 INV-2 holds -- context omitted when not provided
     Given the Buyer Agent does not include context in the request
     When the Buyer Agent sends a sync_catalogs request
     Then the response does not include a context field
     # BR-RULE-043 INV-2: no request context -> no response context
 
-  @T-UC-023-inv-043-error @invariant @BR-RULE-043 @error @pending
+  @T-UC-023-inv-043-error @invariant @BR-RULE-043 @error
   Scenario: BR-RULE-043 INV-1 holds on error -- context echoed in error response
     Given the Buyer Agent includes context {"request_id": "req-789"}
     And the account reference does not match any account
@@ -981,14 +981,14 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the suggestion should contain "account"
     # BR-RULE-043 INV-1: context echoed even on error path (POST-F3)
 
-  @T-UC-023-inv-132-1 @invariant @BR-RULE-132 @pending
+  @T-UC-023-inv-132-1 @invariant @BR-RULE-132
   Scenario: BR-RULE-132 INV-1 holds -- catalog_management true allows sync_catalogs
     Given the seller has declared catalog_management capability as true
     When the Buyer Agent sends a valid sync_catalogs request
     Then the request is accepted for processing
     # BR-RULE-132 INV-1: capability true -> task available
 
-  @T-UC-023-inv-132-2 @invariant @BR-RULE-132 @error @pending
+  @T-UC-023-inv-132-2 @invariant @BR-RULE-132 @error
   Scenario: BR-RULE-132 INV-2 violated -- catalog_management false returns UNSUPPORTED_FEATURE
     Given the seller has declared catalog_management capability as false
     When the Buyer Agent sends a sync_catalogs request
@@ -1000,7 +1000,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     # BR-RULE-132 INV-2: capability false -> UNSUPPORTED_FEATURE
     # BR-RULE-132 INV-3: recovery is correctable
 
-  @T-UC-023-sandbox-happy @invariant @br-rule-209 @sandbox @pending
+  @T-UC-023-sandbox-happy @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account sync_catalogs produces simulated results with sandbox flag
     Given the Buyer is authenticated with a valid principal_id
     And the seller has declared catalog_management capability as true
@@ -1015,7 +1015,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     # BR-RULE-209 INV-3: real billing suppressed
     # BR-RULE-209 INV-4: response includes sandbox: true
 
-  @T-UC-023-sandbox-production @invariant @br-rule-209 @sandbox @pending
+  @T-UC-023-sandbox-production @invariant @br-rule-209 @sandbox
   Scenario: Production account sync_catalogs response does not include sandbox flag
     Given the Buyer is authenticated with a valid principal_id
     And the seller has declared catalog_management capability as true
@@ -1025,7 +1025,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     And the response should not include a sandbox field
     # BR-RULE-209 INV-5: production account -> sandbox absent
 
-  @T-UC-023-sandbox-validation @invariant @br-rule-209 @sandbox @pending
+  @T-UC-023-sandbox-validation @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account with invalid catalog returns real validation error
     Given the Buyer is authenticated with a valid principal_id
     And the seller has declared catalog_management capability as true

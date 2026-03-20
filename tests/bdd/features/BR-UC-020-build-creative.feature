@@ -1,4 +1,4 @@
-# Generated from adcp-req @ 8a219ece2b54628c33f1075d386b73082a0f4832 on 2026-03-20T11:43:42Z
+# Generated from adcp-req @ 8a219ece2b54628c33f1075d386b73082a0f4832 on 2026-03-20T12:00:24Z
 # DO NOT EDIT -- re-run: python scripts/compile_bdd.py
 
 Feature: BR-UC-020 Build Creative
@@ -20,7 +20,7 @@ Feature: BR-UC-020 Build Creative
     And at least one creative agent is registered and reachable
 
 
-  @T-UC-020-main-rest @main-flow @rest @post-s1 @post-s2 @post-s3 @post-s4 @pending
+  @T-UC-020-main-rest @main-flow @rest @post-s1 @post-s2 @post-s3 @post-s4
   Scenario: Build creative via REST - pure generation with minimal request
     Given the Buyer has a target_format_id with agent_url "https://creative.example.com" and id "display_300x250"
     And the creative agent supports the requested format
@@ -35,7 +35,7 @@ Feature: BR-UC-020 Build Creative
     # POST-S3: All required assets present
     # POST-S4: Provenance metadata reflects AI generation
 
-  @T-UC-020-main-mcp @main-flow @mcp @post-s1 @post-s2 @post-s3 @post-s4 @pending
+  @T-UC-020-main-mcp @main-flow @mcp @post-s1 @post-s2 @post-s3 @post-s4
   Scenario: Build creative via MCP - pure generation with minimal request
     Given the Buyer has a target_format_id with agent_url "https://creative.example.com" and id "display_300x250"
     And the creative agent supports the requested format
@@ -50,7 +50,7 @@ Feature: BR-UC-020 Build Creative
     # POST-S3: All required assets present
     # POST-S4: Provenance metadata reflects AI generation
 
-  @T-UC-020-main-transform @main-flow @rest @post-s1 @post-s2 @pending
+  @T-UC-020-main-transform @main-flow @rest @post-s1 @post-s2
   Scenario: Build creative via REST - transformation mode
     Given the Buyer has an existing creative_manifest for format "display_728x90"
     And the Buyer has a target_format_id with agent_url "https://creative.example.com" and id "display_300x250"
@@ -61,7 +61,7 @@ Feature: BR-UC-020 Build Creative
     # POST-S1: Transformed manifest ready
     # POST-S2: Output format matches requested target
 
-  @T-UC-020-main-refine @main-flow @rest @post-s1 @pending
+  @T-UC-020-main-refine @main-flow @rest @post-s1
   Scenario: Build creative via REST - refinement mode
     Given the Buyer has a previously generated creative_manifest from build_creative
     And the Buyer has the same target_format_id used for the original generation
@@ -71,7 +71,7 @@ Feature: BR-UC-020 Build Creative
     And the output creative_manifest should reflect the refinement instructions
     # POST-S1: Refined manifest ready
 
-  @T-UC-020-main-brand @main-flow @rest @post-s1 @pending
+  @T-UC-020-main-brand @main-flow @rest @post-s1
   Scenario: Build creative with brand context resolved
     Given the Buyer has a target_format_id for a supported format
     And the Buyer Agent provides a brand reference with domain "acme-corp.com"
@@ -81,7 +81,7 @@ Feature: BR-UC-020 Build Creative
     And the output creative should reflect the resolved brand identity
     # POST-S1: Creative manifest generated with brand context
 
-  @T-UC-020-main-precedence @main-flow @rest @pending
+  @T-UC-020-main-precedence @main-flow @rest
   Scenario: Message takes precedence over brief asset on conflict
     Given the Buyer has a creative_manifest with a brief asset containing direction "use blue background"
     And the Buyer Agent provides message "use red background"
@@ -91,7 +91,7 @@ Feature: BR-UC-020 Build Creative
     And the message instruction should take precedence over the brief asset direction
     # BR-5: Message field takes precedence over brief asset on conflicts
 
-  @T-UC-020-ext-a-rest @extension @ext-a @error @rest @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-020-ext-a-rest @extension @ext-a @error @rest @post-f1 @post-f2 @post-f3
   Scenario: Format not supported - unregistered agent URL via REST
     Given the Buyer has a target_format_id with agent_url "https://unknown-agent.example.com" and id "display_300x250"
     And no creative agent is registered for "https://unknown-agent.example.com"
@@ -106,7 +106,7 @@ Feature: BR-UC-020 Build Creative
     # POST-F2: Error explains format is not available
     # POST-F3: Suggestion advises list_creative_formats for discovery
 
-  @T-UC-020-ext-a-mcp @extension @ext-a @error @mcp @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-020-ext-a-mcp @extension @ext-a @error @mcp @post-f1 @post-f2 @post-f3
   Scenario: Format not supported - unregistered agent URL via MCP
     Given the Buyer has a target_format_id with agent_url "https://unknown-agent.example.com" and id "display_300x250"
     And no creative agent is registered for "https://unknown-agent.example.com"
@@ -121,7 +121,7 @@ Feature: BR-UC-020 Build Creative
     # POST-F2: Error explains format is not available
     # POST-F3: Suggestion advises list_creative_formats for discovery
 
-  @T-UC-020-ext-a-unknown-format @extension @ext-a @error @rest @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-020-ext-a-unknown-format @extension @ext-a @error @rest @post-f1 @post-f2 @post-f3
   Scenario: Format not supported - agent registered but format id unknown
     Given the Buyer has a target_format_id with agent_url "https://creative.example.com" and id "nonexistent_format"
     And the creative agent at "https://creative.example.com" is registered but does not support format "nonexistent_format"
@@ -136,7 +136,7 @@ Feature: BR-UC-020 Build Creative
     # POST-F2: Error explains format id is not known by the agent
     # POST-F3: Suggestion advises list_creative_formats
 
-  @T-UC-020-ext-b-rest @extension @ext-b @error @rest @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-020-ext-b-rest @extension @ext-b @error @rest @post-f1 @post-f2 @post-f3
   Scenario: Invalid manifest - malformed creative_manifest via REST
     Given the Buyer has a target_format_id for a supported format
     And the Buyer Agent provides a creative_manifest that is structurally malformed (missing required format_id within it)
@@ -152,7 +152,7 @@ Feature: BR-UC-020 Build Creative
     # POST-F2: Error explains what is wrong with the manifest
     # POST-F3: Suggestion advises how to fix the manifest
 
-  @T-UC-020-ext-b-mcp @extension @ext-b @error @mcp @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-020-ext-b-mcp @extension @ext-b @error @mcp @post-f1 @post-f2 @post-f3
   Scenario: Invalid manifest - malformed creative_manifest via MCP
     Given the Buyer has a target_format_id for a supported format
     And the Buyer Agent provides a creative_manifest that is structurally malformed (missing required format_id within it)
@@ -168,7 +168,7 @@ Feature: BR-UC-020 Build Creative
     # POST-F2: Error explains what is wrong with the manifest
     # POST-F3: Suggestion advises how to fix the manifest
 
-  @T-UC-020-ext-b-incompatible @extension @ext-b @error @rest @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-020-ext-b-incompatible @extension @ext-b @error @rest @post-f1 @post-f2 @post-f3
   Scenario: Invalid manifest - assets incompatible with target format
     Given the Buyer has a target_format_id for a display format
     And the Buyer Agent provides a creative_manifest with assets that do not match the target format's input requirements
@@ -184,7 +184,7 @@ Feature: BR-UC-020 Build Creative
     # POST-F2: Error explains asset incompatibility
     # POST-F3: Suggestion advises providing compatible assets
 
-  @T-UC-020-ext-b-width-no-height @extension @ext-b @error @rest @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-020-ext-b-width-no-height @extension @ext-b @error @rest @post-f1 @post-f2 @post-f3
   Scenario: Invalid manifest - width provided without height in format_id
     Given the Buyer has a target_format_id with width 300 but no height
     When the Buyer Agent sends a build_creative request via A2A with the target_format_id
@@ -198,7 +198,7 @@ Feature: BR-UC-020 Build Creative
     # POST-F2: Error explains dimension co-dependency violation
     # POST-F3: Suggestion advises providing both dimensions
 
-  @T-UC-020-ext-c-rest @extension @ext-c @error @rest @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-020-ext-c-rest @extension @ext-c @error @rest @post-f1 @post-f2 @post-f3
   Scenario: Compliance unsatisfied - single disclosure unsatisfiable via REST
     Given the Buyer has a target_format_id for a format that does not support footer position
     And the Buyer Agent provides a creative_manifest with brief containing compliance.required_disclosures with position "footer"
@@ -215,7 +215,7 @@ Feature: BR-UC-020 Build Creative
     # POST-F2: Error identifies unsatisfied disclosure
     # POST-F3: Suggestion advises compatible format or position change
 
-  @T-UC-020-ext-c-mcp @extension @ext-c @error @mcp @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-020-ext-c-mcp @extension @ext-c @error @mcp @post-f1 @post-f2 @post-f3
   Scenario: Compliance unsatisfied - single disclosure unsatisfiable via MCP
     Given the Buyer has a target_format_id for a format that does not support footer position
     And the Buyer Agent provides a creative_manifest with brief containing compliance.required_disclosures with position "footer"
@@ -232,7 +232,7 @@ Feature: BR-UC-020 Build Creative
     # POST-F2: Error identifies unsatisfied disclosure
     # POST-F3: Suggestion advises compatible format or position change
 
-  @T-UC-020-ext-c-multiple @extension @ext-c @error @rest @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-020-ext-c-multiple @extension @ext-c @error @rest @post-f1 @post-f2 @post-f3
   Scenario: Compliance unsatisfied - multiple disclosures with one unsatisfiable
     Given the Buyer has a target_format_id for a format that supports "prominent" but not "footer" position
     And the Buyer Agent provides a creative_manifest with brief containing two required_disclosures
@@ -248,7 +248,7 @@ Feature: BR-UC-020 Build Creative
     # POST-F2: Error identifies the specific unsatisfied disclosure
     # POST-F3: Suggestion advises compatible format
 
-  @T-UC-020-ext-d-rest @extension @ext-d @error @rest @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-020-ext-d-rest @extension @ext-d @error @rest @post-f1 @post-f2 @post-f3
   Scenario: Creative agent unavailable - connection refused via REST
     Given the Buyer has a target_format_id for a registered format
     And the creative agent at the agent_url is unreachable (connection refused)
@@ -264,7 +264,7 @@ Feature: BR-UC-020 Build Creative
     # POST-F2: Error explains creative agent is temporarily unavailable
     # POST-F3: Suggestion advises retrying after delay
 
-  @T-UC-020-ext-d-mcp @extension @ext-d @error @mcp @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-020-ext-d-mcp @extension @ext-d @error @mcp @post-f1 @post-f2 @post-f3
   Scenario: Creative agent unavailable - connection refused via MCP
     Given the Buyer has a target_format_id for a registered format
     And the creative agent at the agent_url is unreachable (connection refused)
@@ -280,7 +280,7 @@ Feature: BR-UC-020 Build Creative
     # POST-F2: Error explains creative agent is temporarily unavailable
     # POST-F3: Suggestion advises retrying after delay
 
-  @T-UC-020-ext-d-timeout @extension @ext-d @error @rest @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-020-ext-d-timeout @extension @ext-d @error @rest @post-f1 @post-f2 @post-f3
   Scenario: Creative agent unavailable - timeout during delegation
     Given the Buyer has a target_format_id for a registered format
     And the creative agent at the agent_url times out (30s default)
@@ -296,7 +296,7 @@ Feature: BR-UC-020 Build Creative
     # POST-F2: Error explains timeout
     # POST-F3: Suggestion advises retrying
 
-  @T-UC-020-ext-d-malformed @extension @ext-d @error @rest @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-020-ext-d-malformed @extension @ext-d @error @rest @post-f1 @post-f2 @post-f3
   Scenario: Creative agent unavailable - non-parseable response from agent
     Given the Buyer has a target_format_id for a registered format
     And the creative agent returns a response that cannot be parsed as BuildCreativeResponse
@@ -311,14 +311,14 @@ Feature: BR-UC-020 Build Creative
     # POST-F2: Error explains malformed response
     # POST-F3: Suggestion advises retrying
 
-  @T-UC-020-inv-155-1-holds @invariant @BR-RULE-155 @pending
+  @T-UC-020-inv-155-1-holds @invariant @BR-RULE-155
   Scenario: BR-RULE-155 INV-1 holds - target_format_id present
     Given the Buyer provides a valid target_format_id with agent_url and id
     When the Buyer Agent sends a build_creative request
     Then the request should pass validation
     # BR-RULE-155 INV-1: target_format_id is present
 
-  @T-UC-020-inv-155-1-violated @invariant @BR-RULE-155 @error @pending
+  @T-UC-020-inv-155-1-violated @invariant @BR-RULE-155 @error
   Scenario: BR-RULE-155 INV-1 violated - target_format_id absent
     Given the Buyer omits target_format_id from the request
     When the Buyer Agent sends a build_creative request
@@ -329,7 +329,7 @@ Feature: BR-UC-020 Build Creative
     # POST-F3: Suggestion for recovery
     # BR-RULE-155 INV-1: target_format_id is absent -> rejected
 
-  @T-UC-020-inv-155-2-violated @invariant @BR-RULE-155 @error @pending
+  @T-UC-020-inv-155-2-violated @invariant @BR-RULE-155 @error
   Scenario: BR-RULE-155 INV-2 violated - agent_url absent in target_format_id
     Given the Buyer provides a target_format_id with id but no agent_url
     When the Buyer Agent sends a build_creative request
@@ -340,7 +340,7 @@ Feature: BR-UC-020 Build Creative
     # POST-F3: Suggestion for recovery
     # BR-RULE-155 INV-2: agent_url absent -> rejected
 
-  @T-UC-020-inv-155-3-violated @invariant @BR-RULE-155 @error @pending
+  @T-UC-020-inv-155-3-violated @invariant @BR-RULE-155 @error
   Scenario: BR-RULE-155 INV-3 violated - id absent in target_format_id
     Given the Buyer provides a target_format_id with agent_url but no id
     When the Buyer Agent sends a build_creative request
@@ -351,7 +351,7 @@ Feature: BR-UC-020 Build Creative
     # POST-F3: Suggestion for recovery
     # BR-RULE-155 INV-3: id absent -> rejected
 
-  @T-UC-020-inv-155-4-violated @invariant @BR-RULE-155 @error @pending
+  @T-UC-020-inv-155-4-violated @invariant @BR-RULE-155 @error
   Scenario: BR-RULE-155 INV-4 violated - width without height
     Given the Buyer provides a target_format_id with width 300 but no height
     When the Buyer Agent sends a build_creative request
@@ -363,7 +363,7 @@ Feature: BR-UC-020 Build Creative
     # POST-F3: Suggestion for recovery
     # BR-RULE-155 INV-4: width without height -> rejected
 
-  @T-UC-020-inv-155-4b-violated @invariant @BR-RULE-155 @error @pending
+  @T-UC-020-inv-155-4b-violated @invariant @BR-RULE-155 @error
   Scenario: BR-RULE-155 INV-4 violated - height without width
     Given the Buyer provides a target_format_id with height 250 but no width
     When the Buyer Agent sends a build_creative request
@@ -375,7 +375,7 @@ Feature: BR-UC-020 Build Creative
     # POST-F3: Suggestion for recovery
     # BR-RULE-155 INV-4: height without width -> rejected
 
-  @T-UC-020-inv-155-5-violated @invariant @BR-RULE-155 @error @pending
+  @T-UC-020-inv-155-5-violated @invariant @BR-RULE-155 @error
   Scenario: BR-RULE-155 INV-5 violated - id contains invalid characters
     Given the Buyer provides a target_format_id with id "display 300x250!"
     When the Buyer Agent sends a build_creative request
@@ -387,7 +387,7 @@ Feature: BR-UC-020 Build Creative
     # POST-F3: Suggestion for recovery
     # BR-RULE-155 INV-5: id outside [a-zA-Z0-9_-] -> rejected
 
-  @T-UC-020-inv-155-6-violated @invariant @BR-RULE-155 @error @pending
+  @T-UC-020-inv-155-6-violated @invariant @BR-RULE-155 @error
   Scenario: BR-RULE-155 INV-6 violated - dimension less than 1
     Given the Buyer provides a target_format_id with width 0 and height 250
     When the Buyer Agent sends a build_creative request
@@ -399,7 +399,7 @@ Feature: BR-UC-020 Build Creative
     # POST-F3: Suggestion for recovery
     # BR-RULE-155 INV-6: dimension < 1 -> rejected
 
-  @T-UC-020-inv-156-1-holds @invariant @BR-RULE-156 @pending
+  @T-UC-020-inv-156-1-holds @invariant @BR-RULE-156
   Scenario: BR-RULE-156 INV-1 holds - output format_id matches request
     Given the Buyer requests build_creative with target_format_id id "display_300x250" and agent_url "https://creative.example.com"
     And the creative agent successfully generates a creative
@@ -408,7 +408,7 @@ Feature: BR-UC-020 Build Creative
     And the output creative_manifest.format_id.agent_url should equal "https://creative.example.com"
     # BR-RULE-156 INV-1: successful response -> format_id equals target_format_id
 
-  @T-UC-020-inv-156-2-violated @invariant @BR-RULE-156 @error @pending
+  @T-UC-020-inv-156-2-violated @invariant @BR-RULE-156 @error
   Scenario: BR-RULE-156 INV-2 violated - output format id differs from request
     Given the Buyer requests build_creative with target_format_id id "display_300x250"
     And the creative agent produces output with format_id id "display_728x90" (wrong format)
@@ -421,7 +421,7 @@ Feature: BR-UC-020 Build Creative
     # POST-F3: Suggestion for recovery
     # BR-RULE-156 INV-2: output id differs -> system-level error
 
-  @T-UC-020-inv-156-3-violated @invariant @BR-RULE-156 @error @pending
+  @T-UC-020-inv-156-3-violated @invariant @BR-RULE-156 @error
   Scenario: BR-RULE-156 INV-3 violated - output agent_url differs from request
     Given the Buyer requests build_creative with target_format_id agent_url "https://creative.example.com"
     And the creative agent produces output with format_id agent_url "https://other-agent.example.com" (wrong agent)
@@ -434,7 +434,7 @@ Feature: BR-UC-020 Build Creative
     # POST-F3: Suggestion for recovery
     # BR-RULE-156 INV-3: output agent_url differs -> system-level error
 
-  @T-UC-020-inv-157-1-holds @invariant @BR-RULE-157 @pending
+  @T-UC-020-inv-157-1-holds @invariant @BR-RULE-157
   Scenario: BR-RULE-157 INV-1 holds - all disclosures satisfiable
     Given the Buyer has a brief asset with required_disclosures requiring position "prominent"
     And the target format supports "prominent" position
@@ -443,7 +443,7 @@ Feature: BR-UC-020 Build Creative
     And the creative should include the required disclosures in the output
     # BR-RULE-157 INV-1: all disclosures satisfiable -> generation proceeds
 
-  @T-UC-020-inv-157-2-violated @invariant @BR-RULE-157 @error @pending
+  @T-UC-020-inv-157-2-violated @invariant @BR-RULE-157 @error
   Scenario: BR-RULE-157 INV-2 violated - single disclosure unsatisfiable
     Given the Buyer has a brief asset with required_disclosures requiring position "footer"
     And the target format does not support "footer" position
@@ -455,7 +455,7 @@ Feature: BR-UC-020 Build Creative
     # POST-F3: Suggestion for recovery
     # BR-RULE-157 INV-2: any disclosure unsatisfiable -> entire request fails
 
-  @T-UC-020-inv-157-3-holds @invariant @BR-RULE-157 @pending
+  @T-UC-020-inv-157-3-holds @invariant @BR-RULE-157
   Scenario: BR-RULE-157 INV-3 holds - no brief asset, compliance check skipped
     Given the Buyer has a target_format_id for a supported format
     And the Buyer Agent does not provide a creative_manifest with a brief asset
@@ -463,7 +463,7 @@ Feature: BR-UC-020 Build Creative
     Then the response should be a successful BuildCreativeResponse
     # BR-RULE-157 INV-3: no brief -> compliance check not triggered
 
-  @T-UC-020-inv-157-4-violated @invariant @BR-RULE-157 @error @pending
+  @T-UC-020-inv-157-4-violated @invariant @BR-RULE-157 @error
   Scenario: BR-RULE-157 INV-4 - compliance failure error includes disclosure details
     Given the Buyer has a brief asset with required_disclosures requiring position "footer" with text "AI-generated content"
     And the target format does not support "footer" position
@@ -477,7 +477,7 @@ Feature: BR-UC-020 Build Creative
     # POST-F3: Suggestion for recovery
     # BR-RULE-157 INV-4: failure identifies specific unsatisfied disclosure
 
-  @T-UC-020-inv-158-1-holds @invariant @BR-RULE-158 @pending
+  @T-UC-020-inv-158-1-holds @invariant @BR-RULE-158
   Scenario: BR-RULE-158 INV-1 holds - brand domain resolvable
     Given the Buyer provides a brand reference with domain "acme-corp.com"
     And "acme-corp.com" hosts a valid /.well-known/brand.json
@@ -486,7 +486,7 @@ Feature: BR-UC-020 Build Creative
     And the response should be a successful BuildCreativeResponse
     # BR-RULE-158 INV-1: domain resolvable -> brand identity available
 
-  @T-UC-020-inv-158-2 @invariant @BR-RULE-158 @pending
+  @T-UC-020-inv-158-2 @invariant @BR-RULE-158
   Scenario: BR-RULE-158 INV-2 - brand domain not resolvable
     Given the Buyer provides a brand reference with domain "nonexistent-brand.example"
     And "nonexistent-brand.example" does not host /.well-known/brand.json
@@ -494,7 +494,7 @@ Feature: BR-UC-020 Build Creative
     Then generation may proceed without brand context or fail depending on creative agent requirements
     # BR-RULE-158 INV-2: domain not resolvable -> behavior depends on agent
 
-  @T-UC-020-inv-158-3-holds @invariant @BR-RULE-158 @pending
+  @T-UC-020-inv-158-3-holds @invariant @BR-RULE-158
   Scenario: BR-RULE-158 INV-3 holds - brand omitted
     Given the Buyer does not provide a brand reference
     When the Buyer Agent sends a build_creative request with only target_format_id
@@ -502,7 +502,7 @@ Feature: BR-UC-020 Build Creative
     And the creative should be generated without brand context
     # BR-RULE-158 INV-3: brand omitted -> proceeds without brand context
 
-  @T-UC-020-inv-158-4-holds @invariant @BR-RULE-158 @pending
+  @T-UC-020-inv-158-4-holds @invariant @BR-RULE-158
   Scenario: BR-RULE-158 INV-4 holds - house-of-brands resolution
     Given the Buyer provides a brand reference with domain "nova-brands.com" and brand_id "spark"
     And "nova-brands.com" hosts a brand portfolio including brand "spark"
@@ -511,14 +511,14 @@ Feature: BR-UC-020 Build Creative
     And the response should be a successful BuildCreativeResponse
     # BR-RULE-158 INV-4: domain + brand_id -> specific brand resolved
 
-  @T-UC-020-inv-159-1-holds @invariant @BR-RULE-159 @pending
+  @T-UC-020-inv-159-1-holds @invariant @BR-RULE-159
   Scenario: BR-RULE-159 INV-1 holds - successful response includes provenance
     Given a successful build_creative response is produced
     When the output creative_manifest is examined
     Then the creative_manifest should include a provenance object
     # BR-RULE-159 INV-1: successful build -> provenance metadata present
 
-  @T-UC-020-inv-159-1-violated @invariant @BR-RULE-159 @error @pending
+  @T-UC-020-inv-159-1-violated @invariant @BR-RULE-159 @error
   Scenario: BR-RULE-159 INV-1 violated - provenance absent on AI-generated output
     Given the creative agent returns a successful response without provenance metadata
     When the system validates the creative agent response
@@ -530,14 +530,14 @@ Feature: BR-UC-020 Build Creative
     # POST-F3: Suggestion for recovery
     # BR-RULE-159 INV-1: provenance absent on AI output -> error
 
-  @T-UC-020-inv-159-2-holds @invariant @BR-RULE-159 @pending
+  @T-UC-020-inv-159-2-holds @invariant @BR-RULE-159
   Scenario: BR-RULE-159 INV-2 holds - provenance includes ai_tool with name
     Given a successful build_creative response includes provenance with ai_tool
     When the provenance is examined
     Then the ai_tool should have a name identifying the AI system
     # BR-RULE-159 INV-2: ai_tool.name identifies the AI system
 
-  @T-UC-020-inv-159-2-violated @invariant @BR-RULE-159 @error @pending
+  @T-UC-020-inv-159-2-violated @invariant @BR-RULE-159 @error
   Scenario: BR-RULE-159 INV-2 violated - ai_tool present but name missing
     Given the creative agent returns provenance with ai_tool object but no name field
     When the system validates the creative agent response
@@ -549,7 +549,7 @@ Feature: BR-UC-020 Build Creative
     # POST-F3: Suggestion for recovery
     # BR-RULE-159 INV-2: ai_tool without name -> error
 
-  @T-UC-020-inv-159-3-holds @invariant @BR-RULE-159 @pending
+  @T-UC-020-inv-159-3-holds @invariant @BR-RULE-159
   Scenario: BR-RULE-159 INV-3 holds - disclosure.required with jurisdictions
     Given a successful build_creative response includes provenance with disclosure.required = true
     When the provenance is examined
@@ -557,7 +557,7 @@ Feature: BR-UC-020 Build Creative
     And the jurisdictions array should specify where AI disclosure obligations apply
     # BR-RULE-159 INV-3: disclosure.required=true -> jurisdictions present
 
-  @T-UC-020-inv-159-4-holds @invariant @BR-RULE-159 @pending
+  @T-UC-020-inv-159-4-holds @invariant @BR-RULE-159
   Scenario: BR-RULE-159 INV-4 holds - asset-level provenance replaces manifest-level
     Given a successful build_creative response has manifest-level provenance
     And an individual asset within the manifest has its own provenance
@@ -566,7 +566,7 @@ Feature: BR-UC-020 Build Creative
     And there should be no field-level merging between manifest and asset provenance
     # BR-RULE-159 INV-4: asset provenance replaces manifest provenance entirely
 
-  @T-UC-020-inv-018-1-holds @invariant @BR-RULE-018 @pending
+  @T-UC-020-inv-018-1-holds @invariant @BR-RULE-018
   Scenario: BR-RULE-018 INV-1 holds - successful response has no errors field
     Given the creative agent successfully generates a creative manifest
     When the build_creative response is received
@@ -574,7 +574,7 @@ Feature: BR-UC-020 Build Creative
     And the response should not contain an errors field
     # BR-RULE-018 INV-1: success -> no errors field
 
-  @T-UC-020-inv-018-2-holds @invariant @BR-RULE-018 @pending
+  @T-UC-020-inv-018-2-holds @invariant @BR-RULE-018
   Scenario: BR-RULE-018 INV-2 holds - error response has no success fields
     Given the build_creative request fails validation
     When the build_creative response is received
@@ -582,7 +582,7 @@ Feature: BR-UC-020 Build Creative
     And the response should not contain a creative_manifest field
     # BR-RULE-018 INV-2: failure -> errors array, no success fields
 
-  @T-UC-020-inv-018-3-violated @invariant @BR-RULE-018 @error @pending
+  @T-UC-020-inv-018-3-violated @invariant @BR-RULE-018 @error
   Scenario: BR-RULE-018 INV-3 violated - response with both success and error is invalid
     Given the creative agent returns a response with both creative_manifest and errors
     When the system validates the BuildCreativeResponse against schema
@@ -592,7 +592,7 @@ Feature: BR-UC-020 Build Creative
     # POST-F3: Suggestion for recovery
     # BR-RULE-018 INV-3: both success and error -> schema violation
 
-  @T-UC-020-partition-request @partition @build_creative_request_structure @pending
+  @T-UC-020-partition-request @partition @build_creative_request_structure
   Scenario Outline: Request structure validation - <partition>
     Given the Buyer prepares a build_creative request matching partition "<partition>"
     When the Buyer Agent sends the build_creative request
@@ -617,7 +617,7 @@ Feature: BR-UC-020 Build Creative
       | missing_agent_url          | operation should fail with error "AGENT_URL_REQUIRED" and suggestion                |
       | missing_format_id          | operation should fail with error "FORMAT_ID_REQUIRED" and suggestion                |
 
-  @T-UC-020-boundary-request @boundary @build_creative_request_structure @pending
+  @T-UC-020-boundary-request @boundary @build_creative_request_structure
   Scenario Outline: Request structure boundary - <boundary_point>
     Given the Buyer prepares a build_creative request at boundary "<boundary_point>"
     When the Buyer Agent sends the build_creative request
@@ -636,7 +636,7 @@ Feature: BR-UC-020 Build Creative
       | agent_url absent in target_format_id                     | operation should fail with error "AGENT_URL_REQUIRED" and suggestion                |
       | duration_ms=1 (minimum valid duration)                   | request should pass validation and produce a creative                               |
 
-  @T-UC-020-partition-output-format @partition @output_format_matching @pending
+  @T-UC-020-partition-output-format @partition @output_format_matching
   Scenario Outline: Output format matching validation - <partition>
     Given the Buyer sends a build_creative request with target_format_id
     And the creative agent produces a response matching partition "<partition>"
@@ -654,7 +654,7 @@ Feature: BR-UC-020 Build Creative
       | agent_url_mismatch    | operation should fail with error "FORMAT_MISMATCH" and suggestion          |
       | dimension_mismatch    | operation should fail with error "FORMAT_MISMATCH" and suggestion          |
 
-  @T-UC-020-boundary-output-format @boundary @output_format_matching @pending
+  @T-UC-020-boundary-output-format @boundary @output_format_matching
   Scenario Outline: Output format matching boundary - <boundary_point>
     Given the Buyer sends a build_creative request
     And the creative agent produces a response at boundary "<boundary_point>"
@@ -668,7 +668,7 @@ Feature: BR-UC-020 Build Creative
       | output format_id.agent_url differs from request                | operation should fail with error "FORMAT_MISMATCH" and suggestion         |
       | output format_id has different dimensions than requested       | operation should fail with error "FORMAT_MISMATCH" and suggestion         |
 
-  @T-UC-020-partition-compliance @partition @compliance_hard_fail @pending
+  @T-UC-020-partition-compliance @partition @compliance_hard_fail
   Scenario Outline: Compliance hard-fail validation - <partition>
     Given the Buyer prepares a build_creative request matching compliance partition "<partition>"
     When the Buyer Agent sends the build_creative request
@@ -686,7 +686,7 @@ Feature: BR-UC-020 Build Creative
       | multiple_disclosures_some_unsatisfied  | operation should fail with error "COMPLIANCE_UNSATISFIED" and suggestion         |
       | position_unsupported_by_format         | operation should fail with error "COMPLIANCE_UNSATISFIED" and suggestion         |
 
-  @T-UC-020-boundary-compliance @boundary @compliance_hard_fail @pending
+  @T-UC-020-boundary-compliance @boundary @compliance_hard_fail
   Scenario Outline: Compliance hard-fail boundary - <boundary_point>
     Given the Buyer prepares a build_creative request at compliance boundary "<boundary_point>"
     When the Buyer Agent sends the build_creative request
@@ -702,7 +702,7 @@ Feature: BR-UC-020 Build Creative
       | multiple disclosures, all satisfiable                 | request should succeed with all disclosures rendered                             |
       | multiple disclosures, one unsatisfiable               | operation should fail with error "COMPLIANCE_UNSATISFIED" and suggestion         |
 
-  @T-UC-020-partition-brand @partition @brand_resolution @pending
+  @T-UC-020-partition-brand @partition @brand_resolution
   Scenario Outline: Brand resolution validation - <partition>
     Given the Buyer prepares a build_creative request matching brand partition "<partition>"
     When the Buyer Agent sends the build_creative request
@@ -719,7 +719,7 @@ Feature: BR-UC-020 Build Creative
       | invalid_domain_pattern     | operation should fail with error "BRAND_DOMAIN_INVALID_FORMAT" and suggestion        |
       | domain_not_resolvable      | operation should fail with error "BRAND_NOT_FOUND" and suggestion                   |
 
-  @T-UC-020-boundary-brand @boundary @brand_resolution @pending
+  @T-UC-020-boundary-brand @boundary @brand_resolution
   Scenario Outline: Brand resolution boundary - <boundary_point>
     Given the Buyer prepares a build_creative request at brand boundary "<boundary_point>"
     When the Buyer Agent sends the build_creative request
@@ -733,7 +733,7 @@ Feature: BR-UC-020 Build Creative
       | brand with domain containing uppercase letters             | operation should fail with error "BRAND_DOMAIN_INVALID_FORMAT" and suggestion        |
       | brand with domain that has no /.well-known/brand.json      | operation should fail with error "BRAND_NOT_FOUND" and suggestion                   |
 
-  @T-UC-020-partition-provenance @partition @ai_provenance @pending
+  @T-UC-020-partition-provenance @partition @ai_provenance
   Scenario Outline: AI provenance validation - <partition>
     Given a build_creative response is produced matching provenance partition "<partition>"
     When the system validates the response
@@ -750,7 +750,7 @@ Feature: BR-UC-020 Build Creative
       | provenance_absent        | operation should fail with error "PROVENANCE_REQUIRED" and suggestion            |
       | ai_tool_missing_name     | operation should fail with error "AI_TOOL_NAME_REQUIRED" and suggestion          |
 
-  @T-UC-020-boundary-provenance @boundary @ai_provenance @pending
+  @T-UC-020-boundary-provenance @boundary @ai_provenance
   Scenario Outline: AI provenance boundary - <boundary_point>
     Given a build_creative response is produced at provenance boundary "<boundary_point>"
     When the system validates the response
@@ -763,7 +763,7 @@ Feature: BR-UC-020 Build Creative
       | provenance absent on AI-generated output                 | operation should fail with error "PROVENANCE_REQUIRED" and suggestion            |
       | ai_tool present but name missing                         | operation should fail with error "AI_TOOL_NAME_REQUIRED" and suggestion          |
 
-  @T-UC-020-sandbox-happy @invariant @br-rule-209 @sandbox @pending
+  @T-UC-020-sandbox-happy @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account build_creative produces simulated output with sandbox flag
     Given the request targets a sandbox account
     And a valid target_format_id referencing an available creative format
@@ -777,7 +777,7 @@ Feature: BR-UC-020 Build Creative
     # BR-RULE-209 INV-3: real billing suppressed
     # BR-RULE-209 INV-4: response includes sandbox: true
 
-  @T-UC-020-sandbox-production @invariant @br-rule-209 @sandbox @pending
+  @T-UC-020-sandbox-production @invariant @br-rule-209 @sandbox
   Scenario: Production account build_creative response does not include sandbox flag
     Given the request targets a production account
     And a valid target_format_id referencing an available creative format
@@ -786,7 +786,7 @@ Feature: BR-UC-020 Build Creative
     And the response should not include a sandbox field
     # BR-RULE-209 INV-5: production account -> sandbox absent
 
-  @T-UC-020-sandbox-validation @invariant @br-rule-209 @sandbox @pending
+  @T-UC-020-sandbox-validation @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account with invalid format returns real validation error
     Given the request targets a sandbox account
     When the Buyer Agent sends a build_creative request with invalid target_format_id

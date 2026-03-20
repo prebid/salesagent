@@ -1,4 +1,4 @@
-# Generated from adcp-req @ 8a219ece2b54628c33f1075d386b73082a0f4832 on 2026-03-20T11:43:42Z
+# Generated from adcp-req @ 8a219ece2b54628c33f1075d386b73082a0f4832 on 2026-03-20T12:00:24Z
 # DO NOT EDIT -- re-run: python scripts/compile_bdd.py
 
 Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
@@ -30,7 +30,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
     And the Buyer is authenticated with a valid principal_id
 
 
-  @T-UC-025-main-mcp @main-flow @mcp @post-s1 @pending
+  @T-UC-025-main-mcp @main-flow @mcp @post-s1
   Scenario: Feature discovery via MCP -- explicit properties mode
     Given the Buyer Agent has an authenticated connection
     And properties "example.com" and "news.example.com" are known and monitored
@@ -42,7 +42,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
     And the request context is echoed in the response
     # POST-S1: Buyer knows feature values with coverage status and metadata
 
-  @T-UC-025-main-rest @main-flow @rest @post-s1 @pending
+  @T-UC-025-main-rest @main-flow @rest @post-s1
   Scenario: Feature discovery via REST/A2A -- publisher domain mode
     Given the Buyer Agent has an authenticated connection
     And publisher "publisher.example.com" has 5 monitored properties
@@ -52,7 +52,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
     And the request context is echoed in the response
     # POST-S1: Buyer knows feature values for publisher's properties
 
-  @T-UC-025-main-transport @main-flow @post-s1 @pending
+  @T-UC-025-main-transport @main-flow @post-s1
   Scenario Outline: Feature discovery via <transport> -- both transports produce equivalent results
     Given the Buyer Agent has an authenticated connection
     And property "example.com" is known with feature consent_quality (binary, value true, confidence 0.95)
@@ -68,7 +68,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
       | MCP       |
       | REST      |
 
-  @T-UC-025-main-publisher-filters @main-flow @post-s1 @pending
+  @T-UC-025-main-publisher-filters @main-flow @post-s1
   Scenario: Feature discovery -- publisher domain mode with type and tag filters
     Given publisher "media.example.com" has properties of types website, mobile_app, and ctv_app
     And some properties are tagged "premium"
@@ -76,21 +76,21 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
     Then the response contains results only for website properties tagged premium
     # BR-RULE-189 INV-6: type/tag filters apply in publisher_domain mode
 
-  @T-UC-025-main-feature-filter @main-flow @post-s1 @pending
+  @T-UC-025-main-feature-filter @main-flow @post-s1
   Scenario: Feature discovery -- optional feature_ids filter returns subset of features
     Given property "example.com" is known with features consent_quality, carbon_score, and coppa_certified
     When the Buyer Agent sends get_property_features with properties ["example.com"] and feature_ids ["carbon_score"]
     Then the response result for "example.com" contains only carbon_score in the features map
     # BR-RULE-189 INV-5: feature_ids filter narrows returned features
 
-  @T-UC-025-main-all-features @main-flow @post-s1 @pending
+  @T-UC-025-main-all-features @main-flow @post-s1
   Scenario: Feature discovery -- feature_ids omitted returns all available features
     Given property "example.com" is known with features consent_quality, carbon_score, and coppa_certified
     When the Buyer Agent sends get_property_features with properties ["example.com"] without feature_ids
     Then the response result for "example.com" contains all 3 features in the features map
     # BR-RULE-189 INV-5: omitting feature_ids returns all features
 
-  @T-UC-025-feature-types @main-flow @invariant @BR-RULE-190 @post-s1 @pending
+  @T-UC-025-feature-types @main-flow @invariant @BR-RULE-190 @post-s1
   Scenario Outline: Feature value type matching -- <feature_type> feature returns <value_type> value
     Given property "example.com" has feature "<feature_id>" defined as <feature_type>
     And the feature value is <value>
@@ -104,7 +104,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
       | quantitative  | carbon_score     | number     | 42.5      |
       | categorical   | consent_tier     | string     | "tier_1"  |
 
-  @T-UC-025-coverage-status @main-flow @invariant @BR-RULE-190 @post-s1 @pending
+  @T-UC-025-coverage-status @main-flow @invariant @BR-RULE-190 @post-s1
   Scenario Outline: Coverage status classification -- <coverage_status>
     Given property "<property>" has coverage status "<coverage_status>"
     When the Buyer Agent sends get_property_features with properties ["<property>"]
@@ -118,7 +118,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
       | unmeasured.com   | not_covered     | empty or absent                  |
       | measuring.com    | pending         | empty or absent                  |
 
-  @T-UC-025-partial-success @main-flow @post-s1 @post-s2 @pending
+  @T-UC-025-partial-success @main-flow @post-s1 @post-s2
   Scenario: Partial success -- some properties succeed while others fail
     Given property "good.com" is known and monitored
     And property "unknown.com" is not recognized by the governance agent
@@ -132,7 +132,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
     # POST-S2: Buyer knows which properties failed and why
     # BR-RULE-190 INV-5, INV-6: error entries for unresolvable properties
 
-  @T-UC-025-delivery-mcp @main-flow @ext-a @mcp @post-s3 @post-s5 @post-s6 @pending
+  @T-UC-025-delivery-mcp @main-flow @ext-a @mcp @post-s3 @post-s5 @post-s6
   Scenario: Delivery validation via MCP -- validate records against property list
     Given the Buyer Agent has an authenticated connection
     And property list "pl-valid" exists and is accessible by the buyer
@@ -147,7 +147,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
     # POST-S5: Buyer knows violation details
     # POST-S6: Buyer knows validation timestamp
 
-  @T-UC-025-delivery-rest @main-flow @ext-b @rest @post-s3 @post-s6 @pending
+  @T-UC-025-delivery-rest @main-flow @ext-b @rest @post-s3 @post-s6
   Scenario: Delivery validation via REST/A2A -- same semantics as MCP
     Given the Buyer Agent has an authenticated connection
     And property list "pl-valid" exists and is accessible by the buyer
@@ -158,7 +158,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
     # POST-S3: Compliance status via REST
     # POST-S6: Validation timestamp and list resolution
 
-  @T-UC-025-delivery-transport @main-flow @ext-a @ext-b @post-s3 @pending
+  @T-UC-025-delivery-transport @main-flow @ext-a @ext-b @post-s3
   Scenario Outline: Delivery validation via <transport> -- equivalent results
     Given the Buyer Agent has an authenticated connection
     And property list "pl-valid" exists with property "example.com"
@@ -171,7 +171,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
       | MCP       |
       | REST      |
 
-  @T-UC-025-validation-statuses @main-flow @ext-a @invariant @BR-RULE-192 @post-s3 @pending
+  @T-UC-025-validation-statuses @main-flow @ext-a @invariant @BR-RULE-192 @post-s3
   Scenario Outline: Validation status classification -- <status>
     Given property list "pl-valid" exists and is accessible
     And the delivery record for "<property>" resolves to status "<status>"
@@ -188,7 +188,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
       | not_covered    | no-data.com      | no violations present                           |
       | unidentified   | custom-id-xyz    | no violations present                           |
 
-  @T-UC-025-violation-codes @main-flow @ext-a @post-s5 @pending
+  @T-UC-025-violation-codes @main-flow @ext-a @post-s5
   Scenario Outline: Violation code detail -- <violation_code>
     Given property list "pl-valid" exists and is accessible
     And the delivery record triggers violation "<violation_code>"
@@ -207,7 +207,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
       | channel_mismatch  |
       | feature_failed    |
 
-  @T-UC-025-feature-failed-detail @main-flow @ext-a @post-s5 @pending
+  @T-UC-025-feature-failed-detail @main-flow @ext-a @post-s5
   Scenario: Violation detail -- feature_failed includes feature_id and requirement
     Given property list "pl-valid" with feature requirement carbon_score min_value 50
     And the delivery record is for property "low-carbon.com" which has carbon_score 30
@@ -217,7 +217,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
     And the violation includes the requirement that was not met
     # POST-S5: Detailed violation with feature context
 
-  @T-UC-025-auth-check @main-flow @ext-a @post-s4 @pending
+  @T-UC-025-auth-check @main-flow @ext-a @post-s4
   Scenario: Supply path authorization -- records with sales_agent_url trigger auth check
     Given property list "pl-valid" exists and is accessible
     And the delivery record for "example.com" includes sales_agent_url "https://agent.example.com/.well-known/adcp"
@@ -230,7 +230,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
     # BR-RULE-191 INV-6: sales_agent_url triggers auth check
     # BR-RULE-192 INV-3: authorization_summary present when auth checks performed
 
-  @T-UC-025-auth-statuses @main-flow @ext-a @invariant @BR-RULE-192 @post-s4 @pending
+  @T-UC-025-auth-statuses @main-flow @ext-a @invariant @BR-RULE-192 @post-s4
   Scenario Outline: Authorization status classification -- <auth_status>
     Given property list "pl-valid" exists and is accessible
     And the delivery record includes sales_agent_url and authorization resolves to "<auth_status>"
@@ -244,7 +244,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
       | unauthorized |
       | unknown      |
 
-  @T-UC-025-auth-no-url @main-flow @ext-a @invariant @BR-RULE-192 @post-s4 @pending
+  @T-UC-025-auth-no-url @main-flow @ext-a @invariant @BR-RULE-192 @post-s4
   Scenario: No authorization check -- records without sales_agent_url skip auth
     Given property list "pl-valid" exists and is accessible
     And the delivery records do not include sales_agent_url
@@ -254,7 +254,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
     # BR-RULE-191 INV-7: no auth check without sales_agent_url
     # BR-RULE-192 INV-3: authorization_summary absent when no auth records
 
-  @T-UC-025-auth-mixed @main-flow @ext-a @post-s4 @pending
+  @T-UC-025-auth-mixed @main-flow @ext-a @post-s4
   Scenario: Mixed authorization -- some records with sales_agent_url, some without
     Given property list "pl-valid" exists and is accessible
     And record for "a.com" includes sales_agent_url
@@ -266,7 +266,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
     # BR-RULE-191 INV-6/7: per-record opt-in authorization
     # BR-RULE-192 INV-3: summary present because at least one record had URL
 
-  @T-UC-025-auth-independence @main-flow @ext-a @invariant @BR-RULE-192 @post-s3 @post-s4 @pending
+  @T-UC-025-auth-independence @main-flow @ext-a @invariant @BR-RULE-192 @post-s3 @post-s4
   Scenario: Authorization independent of compliance -- compliant but unauthorized
     Given property list "pl-valid" with property "legit.com"
     And the delivery record for "legit.com" includes sales_agent_url for an unauthorized agent
@@ -275,7 +275,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
     And the result has authorization status "unauthorized" (agent not in adagents.json)
     # BR-RULE-192: compliance and authorization are independent checks
 
-  @T-UC-025-summary-consistency @main-flow @ext-a @invariant @BR-RULE-192 @post-s3 @pending
+  @T-UC-025-summary-consistency @main-flow @ext-a @invariant @BR-RULE-192 @post-s3
   Scenario: Summary counters are internally consistent
     Given property list "pl-valid" exists and is accessible
     And 100 delivery records resolve to: 60 compliant, 25 non_compliant, 10 not_covered, 5 unidentified
@@ -286,7 +286,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
     # BR-RULE-192 INV-4: total_records consistency
     # BR-RULE-192 INV-5: total_impressions consistency
 
-  @T-UC-025-auth-summary-consistency @main-flow @ext-a @invariant @BR-RULE-192 @post-s4 @pending
+  @T-UC-025-auth-summary-consistency @main-flow @ext-a @invariant @BR-RULE-192 @post-s4
   Scenario: Authorization summary counters are internally consistent
     Given property list "pl-valid" exists and is accessible
     And 50 delivery records include sales_agent_url: 40 authorized, 7 unauthorized, 3 unknown
@@ -295,7 +295,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
     And records_checked equals authorized_records + unauthorized_records + unknown_records
     # BR-RULE-192 INV-6: authorization summary consistency
 
-  @T-UC-025-include-compliant @main-flow @ext-a @invariant @BR-RULE-192 @post-s3 @pending
+  @T-UC-025-include-compliant @main-flow @ext-a @invariant @BR-RULE-192 @post-s3
   Scenario Outline: Include compliant flag -- <flag_state>
     Given property list "pl-valid" with 10 records: 8 compliant, 2 non_compliant
     When the Buyer Agent validates delivery with include_compliant <flag_state>
@@ -309,7 +309,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
       | set to false        | 2              |
       | set to true         | 10             |
 
-  @T-UC-025-all-compliant-default @main-flow @ext-a @post-s3 @pending
+  @T-UC-025-all-compliant-default @main-flow @ext-a @post-s3
   Scenario: All compliant records with default filter -- results array empty
     Given property list "pl-valid" with all records compliant
     When the Buyer Agent validates delivery with include_compliant omitted
@@ -317,7 +317,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
     And the summary shows all records as compliant
     # BR-RULE-192 INV-7: all compliant + default filter = empty results
 
-  @T-UC-025-ext-c @extension @ext-c @error @post-s2 @pending
+  @T-UC-025-ext-c @extension @ext-c @error @post-s2
   Scenario: PROPERTY_NOT_FOUND -- unrecognized property in feature discovery
     Given property "unknown-domain.com" is not recognized by the governance agent
     And property "known.com" is known and monitored
@@ -331,7 +331,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
     # POST-S1: Other properties still return results (partial success)
     # POST-F3: Context echoed
 
-  @T-UC-025-ext-d @extension @ext-d @error @post-s2 @pending
+  @T-UC-025-ext-d @extension @ext-d @error @post-s2
   Scenario: PROPERTY_NOT_MONITORED -- recognized but unmonitored property
     Given property "known-unmonitored.com" is recognized but not monitored by the governance agent
     And property "monitored.com" is known and monitored
@@ -345,7 +345,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
     # POST-S1: Other properties still return results (partial success)
     # POST-F3: Context echoed
 
-  @T-UC-025-ext-e @extension @ext-e @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-025-ext-e @extension @ext-e @error @post-f1 @post-f2 @post-f3
   Scenario: LIST_NOT_FOUND -- property list does not exist
     Given list_id "pl-nonexistent" does not reference any existing property list
     When the Buyer Agent sends validate_property_delivery with list_id "pl-nonexistent"
@@ -358,7 +358,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
     # POST-F2: Error code LIST_NOT_FOUND
     # POST-F3: Application context echoed
 
-  @T-UC-025-ext-f @extension @ext-f @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-025-ext-f @extension @ext-f @error @post-f1 @post-f2 @post-f3
   Scenario: LIST_ACCESS_DENIED -- buyer lacks permission to access property list
     Given list_id "pl-other-tenant" exists but belongs to a different tenant
     When the Buyer Agent sends validate_property_delivery with list_id "pl-other-tenant"
@@ -371,7 +371,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
     # POST-F2: Error code LIST_ACCESS_DENIED
     # POST-F3: Application context echoed
 
-  @T-UC-025-ext-g @extension @ext-g @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-025-ext-g @extension @ext-g @error @post-f1 @post-f2 @post-f3
   Scenario Outline: RECORDS_REQUIRED -- records array <condition>
     Given property list "pl-valid" exists and is accessible
     When the Buyer Agent sends validate_property_delivery with list_id "pl-valid" and <records_state>
@@ -389,7 +389,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
       | missing         | no records field       |
       | empty array     | records as empty array |
 
-  @T-UC-025-ext-h @extension @ext-h @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-025-ext-h @extension @ext-h @error @post-f1 @post-f2 @post-f3
   Scenario: RECORDS_LIMIT_EXCEEDED -- records array exceeds 10,000 maximum
     Given property list "pl-valid" exists and is accessible
     When the Buyer Agent sends validate_property_delivery with list_id "pl-valid" and 10001 records
@@ -402,7 +402,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
     # POST-F2: Error code RECORDS_LIMIT_EXCEEDED
     # POST-F3: Application context echoed
 
-  @T-UC-025-ext-i @extension @ext-i @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-025-ext-i @extension @ext-i @error @post-f1 @post-f2 @post-f3
   Scenario Outline: PROPERTY_SELECTION_REQUIRED -- <condition>
     When the Buyer Agent sends get_property_features with <request_state>
     Then the operation should fail
@@ -420,7 +420,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
       | neither mode provided         | neither properties nor publisher_domain                       |
       | both modes provided           | both properties ["x.com"] and publisher_domain "x.com"        |
 
-  @T-UC-025-ext-j @extension @ext-j @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-025-ext-j @extension @ext-j @error @post-f1 @post-f2 @post-f3
   Scenario: PROPERTIES_LIMIT_EXCEEDED -- properties array exceeds 100 maximum
     When the Buyer Agent sends get_property_features with 101 properties
     Then the operation should fail
@@ -432,7 +432,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
     # POST-F2: Error code PROPERTIES_LIMIT_EXCEEDED
     # POST-F3: Application context echoed
 
-  @T-UC-025-partition-discovery @partition @discovery-request @pending
+  @T-UC-025-partition-discovery @partition @discovery-request
   Scenario Outline: Discovery request partition validation -- <partition>
     When the Buyer Agent sends get_property_features with <setup>
     Then <outcome>
@@ -457,7 +457,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
       | publisher_domain_empty    | publisher_domain as empty string ""                                | error "PUBLISHER_DOMAIN_REQUIRED" with suggestion              |
       | feature_ids_empty_array   | properties with feature_ids as empty array []                      | error "FEATURE_IDS_EMPTY" with suggestion                      |
 
-  @T-UC-025-boundary-discovery @boundary @discovery-request @pending
+  @T-UC-025-boundary-discovery @boundary @discovery-request
   Scenario Outline: Discovery request boundary validation -- <boundary_point>
     When the Buyer Agent sends get_property_features with <setup>
     Then <outcome>
@@ -482,7 +482,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
       | feature_ids empty array                          | properties with feature_ids as empty array                               | error "FEATURE_IDS_EMPTY" with suggestion            |
       | empty publisher_domain string                    | publisher_domain as ""                                                   | error "PUBLISHER_DOMAIN_REQUIRED" with suggestion    |
 
-  @T-UC-025-partition-feature-value @partition @feature-value @pending
+  @T-UC-025-partition-feature-value @partition @feature-value
   Scenario Outline: Feature value partition validation -- <partition>
     Given property "example.com" is configured as described
     When the Buyer Agent sends get_property_features with properties ["example.com"]
@@ -507,7 +507,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
       | confidence_above_one           | error "CONFIDENCE_OUT_OF_RANGE" with suggestion                 |
       | coverage_status_unknown        | error "COVERAGE_STATUS_INVALID" with suggestion                 |
 
-  @T-UC-025-boundary-feature-value @boundary @feature-value @pending
+  @T-UC-025-boundary-feature-value @boundary @feature-value
   Scenario Outline: Feature value boundary validation -- <boundary_point>
     Given property "example.com" is configured with boundary condition
     When the Buyer Agent sends get_property_features with properties ["example.com"]
@@ -534,7 +534,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
       | features map empty when covered                      | valid response                                      |
       | confidence omitted (optional)                        | valid response without confidence                   |
 
-  @T-UC-025-partition-delivery-request @partition @delivery-request @pending
+  @T-UC-025-partition-delivery-request @partition @delivery-request
   Scenario Outline: Delivery request partition validation -- <partition>
     When the Buyer Agent sends validate_property_delivery with <setup>
     Then <outcome>
@@ -559,7 +559,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
       | list_not_found        | list_id "pl-nonexistent" with valid records            | error "LIST_NOT_FOUND" with suggestion               |
       | list_access_denied    | list_id "pl-other-buyers" with valid records           | error "LIST_ACCESS_DENIED" with suggestion           |
 
-  @T-UC-025-boundary-delivery-request @boundary @delivery-request @pending
+  @T-UC-025-boundary-delivery-request @boundary @delivery-request
   Scenario Outline: Delivery request boundary validation -- <boundary_point>
     When the Buyer Agent sends validate_property_delivery with <setup>
     Then <outcome>
@@ -583,7 +583,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
       | sales_agent_url present on some records   | mixed records with and without sales_agent_url       | success with partial authorization summary           |
       | sales_agent_url absent from all records   | no sales_agent_url on any record                     | success without authorization summary                |
 
-  @T-UC-025-partition-delivery-response @partition @delivery-response @pending
+  @T-UC-025-partition-delivery-response @partition @delivery-response
   Scenario Outline: Delivery response partition validation -- <partition>
     Given property list "pl-valid" exists with appropriate test data
     When the Buyer Agent validates delivery triggering <condition>
@@ -608,7 +608,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
       | unknown_authorization_status        | authorization with unknown status             | error "AUTHORIZATION_STATUS_INVALID" with suggestion          |
       | authorization_summary_without_auth_records | auth summary present without auth records | error "AUTHORIZATION_SUMMARY_UNEXPECTED" with suggestion     |
 
-  @T-UC-025-boundary-delivery-response @boundary @delivery-response @pending
+  @T-UC-025-boundary-delivery-response @boundary @delivery-response
   Scenario Outline: Delivery response boundary validation -- <boundary_point>
     Given property list "pl-valid" exists with appropriate test data
     When the Buyer Agent validates delivery with <condition>
@@ -637,7 +637,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
       | aggregate present with score/grade/label               | agent provides aggregate                           | aggregate object in response                                |
       | aggregate absent                                       | agent does not provide aggregate                   | no aggregate in response                                    |
 
-  @T-UC-025-inv189-filters-ignored @invariant @BR-RULE-189 @pending
+  @T-UC-025-inv189-filters-ignored @invariant @BR-RULE-189
   Scenario: BR-RULE-189 INV-6 holds -- type/tag filters ignored in explicit properties mode
     Given property "example.com" is of type "website"
     When the Buyer Agent sends get_property_features with properties ["example.com"] and property_types ["mobile_app"]
@@ -645,7 +645,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
     And the property_types filter has no effect in explicit properties mode
     # BR-RULE-189 INV-6: filters ignored in properties mode
 
-  @T-UC-025-inv189-empty-properties @invariant @BR-RULE-189 @error @pending
+  @T-UC-025-inv189-empty-properties @invariant @BR-RULE-189 @error
   Scenario: BR-RULE-189 INV-3 violated -- properties array empty
     When the Buyer Agent sends get_property_features with properties []
     Then the operation should fail
@@ -654,7 +654,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
     And the suggestion should contain "at least one property"
     # BR-RULE-189 INV-3: minItems=1 enforced
 
-  @T-UC-025-inv190-type-mismatch @invariant @BR-RULE-190 @error @pending
+  @T-UC-025-inv190-type-mismatch @invariant @BR-RULE-190 @error
   Scenario Outline: BR-RULE-190 INV-1/2/3 violated -- value type mismatch <case>
     Given property "example.com" has feature "<feature_id>" defined as <definition_type>
     But the stored value is <wrong_value> (type <wrong_type>)
@@ -669,7 +669,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
       | string for binary feature   | coppa_cert   | binary          | "yes"       | string     |
       | boolean for quantitative    | carbon_score | quantitative    | true        | boolean    |
 
-  @T-UC-025-inv190-confidence @invariant @BR-RULE-190 @error @pending
+  @T-UC-025-inv190-confidence @invariant @BR-RULE-190 @error
   Scenario Outline: BR-RULE-190 INV-4 violated -- confidence <case>
     Given property "example.com" has a feature with confidence <confidence_value>
     When the Buyer Agent sends get_property_features with properties ["example.com"]
@@ -683,14 +683,14 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
       | below zero     | -0.1             |
       | above one      | 1.5              |
 
-  @T-UC-025-inv191-include-compliant-default @invariant @BR-RULE-191 @pending
+  @T-UC-025-inv191-include-compliant-default @invariant @BR-RULE-191
   Scenario: BR-RULE-191 INV-5 holds -- include_compliant defaults to false
     Given property list "pl-valid" with all records compliant
     When the Buyer Agent validates delivery without include_compliant parameter
     Then compliant records are excluded from the results array
     # BR-RULE-191 INV-5: default false excludes compliant records
 
-  @T-UC-025-inv191-auth-triggered @invariant @BR-RULE-191 @pending
+  @T-UC-025-inv191-auth-triggered @invariant @BR-RULE-191
   Scenario: BR-RULE-191 INV-6 holds -- sales_agent_url triggers authorization check
     Given property list "pl-valid" exists and is accessible
     And the delivery record includes sales_agent_url "https://agent.example.com"
@@ -698,7 +698,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
     Then the result includes an authorization field
     # BR-RULE-191 INV-6: authorization check triggered by URL presence
 
-  @T-UC-025-inv191-no-auth @invariant @BR-RULE-191 @pending
+  @T-UC-025-inv191-no-auth @invariant @BR-RULE-191
   Scenario: BR-RULE-191 INV-7 holds -- no sales_agent_url means no authorization summary
     Given property list "pl-valid" exists and is accessible
     And no delivery records include sales_agent_url
@@ -706,7 +706,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
     Then authorization_summary is absent from the response
     # BR-RULE-191 INV-7: no auth URLs means no auth summary
 
-  @T-UC-025-inv192-exclusive-status @invariant @BR-RULE-192 @pending
+  @T-UC-025-inv192-exclusive-status @invariant @BR-RULE-192
   Scenario: BR-RULE-192 INV-1 holds -- each record has exactly one validation status
     Given property list "pl-valid" with 4 records resolving to different statuses
     When the Buyer Agent validates delivery with those records
@@ -714,7 +714,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
     And no result has more than one status
     # BR-RULE-192 INV-1: mutually exclusive status
 
-  @T-UC-025-inv192-violations-required @invariant @BR-RULE-192 @pending
+  @T-UC-025-inv192-violations-required @invariant @BR-RULE-192
   Scenario: BR-RULE-192 INV-2 holds -- non_compliant records have violations
     Given property list "pl-valid" with a record that resolves to non_compliant
     When the Buyer Agent validates delivery with that record
@@ -722,7 +722,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
     And the violations array is present with at least one entry
     # BR-RULE-192 INV-2: violations required for non_compliant
 
-  @T-UC-025-inv192-violations-absent-compliant @invariant @BR-RULE-192 @pending
+  @T-UC-025-inv192-violations-absent-compliant @invariant @BR-RULE-192
   Scenario: BR-RULE-192 INV-2 counter-example -- compliant records have no violations
     Given property list "pl-valid" with a record that resolves to compliant
     When the Buyer Agent validates delivery with include_compliant true
@@ -730,7 +730,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
     And no violations field is present on the result
     # BR-RULE-192 INV-2 counter: compliant = no violations
 
-  @T-UC-025-inv192-auth-summary-present @invariant @BR-RULE-192 @pending
+  @T-UC-025-inv192-auth-summary-present @invariant @BR-RULE-192
   Scenario: BR-RULE-192 INV-3 holds -- authorization_summary present when auth checks performed
     Given property list "pl-valid" exists
     And at least one delivery record includes sales_agent_url
@@ -738,7 +738,7 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
     Then authorization_summary is present in the response
     # BR-RULE-192 INV-3: auth summary present
 
-  @T-UC-025-inv192-auth-summary-absent @invariant @BR-RULE-192 @pending
+  @T-UC-025-inv192-auth-summary-absent @invariant @BR-RULE-192
   Scenario: BR-RULE-192 INV-3 counter -- authorization_summary absent without auth records
     Given property list "pl-valid" exists
     And no delivery records include sales_agent_url
@@ -746,42 +746,42 @@ Feature: BR-UC-025 Discover Property Features & Validate Delivery Compliance
     Then authorization_summary is absent from the response
     # BR-RULE-192 INV-3 counter: no auth checks = no summary
 
-  @T-UC-025-inv192-counter-records @invariant @BR-RULE-192 @pending
+  @T-UC-025-inv192-counter-records @invariant @BR-RULE-192
   Scenario: BR-RULE-192 INV-4 holds -- total_records consistency
     Given property list "pl-valid" with mixed compliance records
     When the Buyer Agent validates delivery
     Then summary.total_records equals compliant_records + non_compliant_records + not_covered_records + unidentified_records
     # BR-RULE-192 INV-4: counter arithmetic
 
-  @T-UC-025-inv192-counter-impressions @invariant @BR-RULE-192 @pending
+  @T-UC-025-inv192-counter-impressions @invariant @BR-RULE-192
   Scenario: BR-RULE-192 INV-5 holds -- total_impressions consistency
     Given property list "pl-valid" with mixed compliance records and varying impression counts
     When the Buyer Agent validates delivery
     Then summary.total_impressions equals compliant_impressions + non_compliant_impressions + not_covered_impressions + unidentified_impressions
     # BR-RULE-192 INV-5: impression counter arithmetic
 
-  @T-UC-025-inv192-auth-counter @invariant @BR-RULE-192 @pending
+  @T-UC-025-inv192-auth-counter @invariant @BR-RULE-192
   Scenario: BR-RULE-192 INV-6 holds -- authorization summary counter consistency
     Given property list "pl-valid" with records that include sales_agent_url
     When the Buyer Agent validates delivery
     Then authorization_summary.records_checked equals authorized_records + unauthorized_records + unknown_records
     # BR-RULE-192 INV-6: auth counter arithmetic
 
-  @T-UC-025-inv192-filter-default @invariant @BR-RULE-192 @pending
+  @T-UC-025-inv192-filter-default @invariant @BR-RULE-192
   Scenario: BR-RULE-192 INV-7 holds -- default filter excludes compliant records
     Given property list "pl-valid" with 5 compliant and 3 non-compliant records
     When the Buyer Agent validates delivery with include_compliant omitted
     Then the results array contains only 3 non-compliant records
     # BR-RULE-192 INV-7: default filter behavior
 
-  @T-UC-025-inv192-filter-true @invariant @BR-RULE-192 @pending
+  @T-UC-025-inv192-filter-true @invariant @BR-RULE-192
   Scenario: BR-RULE-192 INV-7 holds -- include_compliant=true returns all records
     Given property list "pl-valid" with 5 compliant and 3 non-compliant records
     When the Buyer Agent validates delivery with include_compliant true
     Then the results array contains all 8 records
     # BR-RULE-192 INV-7: include_compliant=true returns everything
 
-  @T-UC-025-timestamps @main-flow @ext-a @post-s6 @pending
+  @T-UC-025-timestamps @main-flow @ext-a @post-s6
   Scenario: Delivery validation response includes timestamps
     Given property list "pl-valid" exists and was resolved at a known timestamp
     When the Buyer Agent validates delivery against "pl-valid"

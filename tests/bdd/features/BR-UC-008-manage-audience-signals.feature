@@ -1,4 +1,4 @@
-# Generated from adcp-req @ 8a219ece2b54628c33f1075d386b73082a0f4832 on 2026-03-20T11:43:42Z
+# Generated from adcp-req @ 8a219ece2b54628c33f1075d386b73082a0f4832 on 2026-03-20T12:00:24Z
 # DO NOT EDIT -- re-run: python scripts/compile_bdd.py
 
 @signals @BR-UC-008
@@ -28,7 +28,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And at least one signals agent is registered for the tenant
 
 
-  @T-UC-008-main-mcp @main-flow @mcp @pending
+  @T-UC-008-main-mcp @main-flow @mcp
   Scenario: Signal discovery via MCP tool call
     Given the Buyer provides a valid signal_spec "audience segments for auto intenders"
     And destinations includes "dv360"
@@ -52,7 +52,7 @@ Feature: BR-UC-008 Manage Audience Signals
     # POST-S6: Buyer receives signal_agent_segment_id
     # POST-S6a: Buyer knows value_type and categories/range
 
-  @T-UC-008-main-rest @main-flow @rest @a2a @pending
+  @T-UC-008-main-rest @main-flow @rest @a2a
   Scenario: Signal discovery via REST/A2A endpoint
     Given the Buyer provides a valid signal_spec "luxury travel"
     And destinations includes "trade-desk"
@@ -63,7 +63,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And the response is returned directly (no ToolResult wrapper)
     # POST-S1, POST-S2, POST-S3, POST-S4, POST-S5, POST-S6
 
-  @T-UC-008-main-sandbox @main-flow @pending
+  @T-UC-008-main-sandbox @main-flow
   Scenario: Sandbox mode indicated in get_signals response
     Given the Buyer provides a valid signal_spec "audience"
     And sandbox mode is active
@@ -71,21 +71,21 @@ Feature: BR-UC-008 Manage Audience Signals
     Then the response includes sandbox equals true
     # POST-S6b: Sandbox mode indicated when active
 
-  @T-UC-008-main-value-type-categorical @main-flow @pending
+  @T-UC-008-main-value-type-categorical @main-flow
   Scenario: Categorical signal includes categories
     Given the Buyer provides a valid signal_spec "interest categories"
     When the Buyer Agent sends a get_signals request
     Then categorical signals include a categories array
     # POST-S6a: Buyer knows value_type and categories
 
-  @T-UC-008-main-value-type-numeric @main-flow @pending
+  @T-UC-008-main-value-type-numeric @main-flow
   Scenario: Numeric signal includes range min/max
     Given the Buyer provides a valid signal_spec "income range"
     When the Buyer Agent sends a get_signals request
     Then numeric signals include a range object with min and max
     # POST-S6a: Buyer knows value_type and range
 
-  @T-UC-008-main-context-echo @main-flow @pending
+  @T-UC-008-main-context-echo @main-flow
   Scenario: Request context echoed in get_signals response
     Given the Buyer provides signal_spec "finance"
     And the request includes context {"trace_id": "abc-123"}
@@ -93,7 +93,7 @@ Feature: BR-UC-008 Manage Audience Signals
     Then the response context equals {"trace_id": "abc-123"}
     # POST-F3: Application context echoed
 
-  @T-UC-008-main-aggregation @main-flow @aggregation @pending
+  @T-UC-008-main-aggregation @main-flow @aggregation
   Scenario: Signals aggregated from multiple providers
     Given the tenant has 3 enabled signals agents
     And the Buyer Agent provides signal_spec "audience"
@@ -101,7 +101,7 @@ Feature: BR-UC-008 Manage Audience Signals
     Then the response contains signals from multiple data providers
     # POST-S1, POST-S4
 
-  @T-UC-008-main-filtered @main-flow @filtering @pending
+  @T-UC-008-main-filtered @main-flow @filtering
   Scenario: Signal discovery with all filters applied
     Given the Buyer provides signal_spec "audience"
     And filters include catalog_types ["marketplace"]
@@ -118,7 +118,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And all returned signals have coverage_percentage >= 75
     # POST-S1, POST-S2, POST-S3
 
-  @T-UC-008-ext-a @extension @rest @a2a @pending
+  @T-UC-008-ext-a @extension @rest @a2a
   Scenario: No matching signals via REST -- empty result
     Given the Buyer provides signal_spec "nonexistent_category_xyz"
     And the request includes context {"trace_id": "empty-search"}
@@ -129,7 +129,7 @@ Feature: BR-UC-008 Manage Audience Signals
     # POST-F1: System state unchanged (read-only)
     # POST-F3: Context echoed
 
-  @T-UC-008-ext-a-mcp @extension @mcp @pending
+  @T-UC-008-ext-a-mcp @extension @mcp
   Scenario: No matching signals via MCP -- empty result
     Given the Buyer provides signal_spec "nonexistent_category_xyz"
     When the Buyer Agent calls the get_signals MCP tool
@@ -137,7 +137,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And the response does not contain errors
     # POST-F1: System state unchanged (read-only)
 
-  @T-UC-008-ext-b-rest @extension @rest @a2a @activation @pending
+  @T-UC-008-ext-b-rest @extension @rest @a2a @activation
   Scenario: Successful signal activation via REST
     Given the Buyer is authenticated with a valid principal_id
     And the Buyer Agent provides signal_agent_segment_id "auto_intenders_q1_2025"
@@ -151,7 +151,7 @@ Feature: BR-UC-008 Manage Audience Signals
     # POST-S7: Signal activated on specified platforms
     # POST-S8: Buyer receives deployment results with activation keys
 
-  @T-UC-008-ext-b-mcp @extension @mcp @activation @pending
+  @T-UC-008-ext-b-mcp @extension @mcp @activation
   Scenario: Successful signal activation via MCP
     Given the Buyer is authenticated with a valid principal_id
     And the Buyer Agent provides signal_agent_segment_id "sports_content"
@@ -162,7 +162,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And the activation includes estimated_activation_duration_minutes of 15
     # POST-S7, POST-S8
 
-  @T-UC-008-ext-b-deactivate @extension @activation @pending
+  @T-UC-008-ext-b-deactivate @extension @activation
   Scenario: Signal deactivation removes segment from platforms
     Given the Buyer is authenticated with a valid principal_id
     And the Buyer Agent provides signal_agent_segment_id "auto_intenders_q1_2025"
@@ -173,7 +173,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And the response does not contain errors
     # POST-S7: Signal deactivated (action=deactivate)
 
-  @T-UC-008-ext-b-pricing-option @extension @activation @pending
+  @T-UC-008-ext-b-pricing-option @extension @activation
   Scenario: Activation with pricing_option_id records pricing commitment
     Given the Buyer is authenticated with a valid principal_id
     And the Buyer Agent provides signal_agent_segment_id "auto_intenders_q1_2025"
@@ -184,7 +184,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And the pricing commitment is recorded for billing verification
     # POST-S7, POST-S8
 
-  @T-UC-008-ext-b-sandbox @extension @activation @pending
+  @T-UC-008-ext-b-sandbox @extension @activation
   Scenario: Sandbox mode indicated in activation response
     Given the Buyer is authenticated with a valid principal_id
     And the Buyer Agent provides signal_agent_segment_id "auto_intenders_q1_2025"
@@ -194,7 +194,7 @@ Feature: BR-UC-008 Manage Audience Signals
     Then the response includes sandbox equals true
     # POST-S6b analog for activation
 
-  @T-UC-008-ext-b-context @extension @activation @pending
+  @T-UC-008-ext-b-context @extension @activation
   Scenario: Context echoed in successful activation response
     Given the Buyer is authenticated with a valid principal_id
     And the Buyer Agent provides signal_agent_segment_id "auto_intenders_q1_2025"
@@ -205,7 +205,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And the response contains deployments array (success variant)
     # POST-F3: Context echoed
 
-  @T-UC-008-ext-b-no-auth @extension @ext-b @activation @error @pending
+  @T-UC-008-ext-b-no-auth @extension @ext-b @activation @error
   Scenario: Activation rejected -- no authentication
     Given the Buyer has no authentication credentials
     And the Buyer Agent provides signal_agent_segment_id "auto_intenders_q1_2025"
@@ -217,7 +217,7 @@ Feature: BR-UC-008 Manage Audience Signals
     # POST-F1: System state unchanged
     # POST-F2: Buyer knows error
 
-  @T-UC-008-ext-c-rest @extension @ext-c @rest @a2a @activation @error @pending
+  @T-UC-008-ext-c-rest @extension @ext-c @rest @a2a @activation @error
   Scenario: Premium signal requires approval via REST
     Given the Buyer is authenticated with a valid principal_id
     And the Buyer Agent provides signal_agent_segment_id "premium_luxury_auto"
@@ -235,7 +235,7 @@ Feature: BR-UC-008 Manage Audience Signals
     # POST-F2: Buyer knows error code (APPROVAL_REQUIRED)
     # POST-F3: Context echoed
 
-  @T-UC-008-ext-c-mcp @extension @ext-c @mcp @activation @error @pending
+  @T-UC-008-ext-c-mcp @extension @ext-c @mcp @activation @error
   Scenario: Premium signal requires approval via MCP
     Given the Buyer is authenticated with a valid principal_id
     And the Buyer Agent provides signal_agent_segment_id "premium_exclusive_audience"
@@ -251,7 +251,7 @@ Feature: BR-UC-008 Manage Audience Signals
     # POST-F2: Buyer knows error code
     # POST-F3: Context echoed
 
-  @T-UC-008-ext-d-failed-rest @extension @ext-d @rest @a2a @activation @error @pending
+  @T-UC-008-ext-d-failed-rest @extension @ext-d @rest @a2a @activation @error
   Scenario: Activation fails -- provider unavailable via REST
     Given the Buyer is authenticated with a valid principal_id
     And the Buyer Agent provides signal_agent_segment_id "unavailable_provider_signal"
@@ -270,7 +270,7 @@ Feature: BR-UC-008 Manage Audience Signals
     # POST-F2: Buyer knows error code (ACTIVATION_FAILED)
     # POST-F3: Context echoed
 
-  @T-UC-008-ext-d-failed-mcp @extension @ext-d @mcp @activation @error @pending
+  @T-UC-008-ext-d-failed-mcp @extension @ext-d @mcp @activation @error
   Scenario: Activation fails -- provider unavailable via MCP
     Given the Buyer is authenticated with a valid principal_id
     And the Buyer Agent provides signal_agent_segment_id "unavailable_provider_signal"
@@ -283,7 +283,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And the suggestion should contain "retry later or contact support"
     # POST-F1, POST-F2
 
-  @T-UC-008-ext-d-error-rest @extension @ext-d @rest @a2a @activation @error @pending
+  @T-UC-008-ext-d-error-rest @extension @ext-d @rest @a2a @activation @error
   Scenario: Activation fails -- unexpected error via REST
     Given the Buyer is authenticated with a valid principal_id
     And the Buyer Agent provides signal_agent_segment_id "error_trigger_signal"
@@ -297,7 +297,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And the suggestion should contain "retry or contact support"
     # POST-F1, POST-F2
 
-  @T-UC-008-ext-d-error-mcp @extension @ext-d @mcp @activation @error @pending
+  @T-UC-008-ext-d-error-mcp @extension @ext-d @mcp @activation @error
   Scenario: Activation fails -- unexpected error via MCP
     Given the Buyer is authenticated with a valid principal_id
     And the Buyer Agent provides signal_agent_segment_id "error_trigger_signal"
@@ -310,7 +310,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And the suggestion should contain "retry or contact support"
     # POST-F1, POST-F2
 
-  @T-UC-008-ext-d-context @extension @ext-d @activation @error @pending
+  @T-UC-008-ext-d-context @extension @ext-d @activation @error
   Scenario: Context echoed even on activation failure
     Given the Buyer is authenticated with a valid principal_id
     And the Buyer Agent provides signal_agent_segment_id "premium_signal_xyz"
@@ -323,7 +323,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And the suggestion should contain "contact the Seller for approval"
     # POST-F3: Context echoed
 
-  @T-UC-008-graceful-degradation @main-flow @aggregation @pending
+  @T-UC-008-graceful-degradation @main-flow @aggregation
   Scenario: Graceful degradation when one signals agent fails
     Given the tenant has 3 enabled signals agents
     And one signals agent returns an error
@@ -333,14 +333,14 @@ Feature: BR-UC-008 Manage Audience Signals
     And the failing agent's error is logged but not returned to Buyer
     # POST-S1: Buyer still gets signals from healthy agents
 
-  @T-UC-008-inv-047-1-holds @invariant @BR-RULE-047 @pending
+  @T-UC-008-inv-047-1-holds @invariant @BR-RULE-047
   Scenario: INV-1 holds -- no filters returns all signals
     Given the Buyer provides signal_spec "audience"
     And no filters are specified
     When the Buyer Agent sends a get_signals request
     Then all available signals are returned
 
-  @T-UC-008-inv-047-2-holds @invariant @BR-RULE-047 @pending
+  @T-UC-008-inv-047-2-holds @invariant @BR-RULE-047
   Scenario: INV-2 holds -- multiple filters AND conjunction
     Given the Buyer provides signal_spec "audience"
     And filters include catalog_types ["marketplace"]
@@ -349,7 +349,7 @@ Feature: BR-UC-008 Manage Audience Signals
     Then all returned signals have signal_type "marketplace"
     And all returned signals have a cpm pricing_option with cpm <= 5.0
 
-  @T-UC-008-inv-047-2-violated @invariant @BR-RULE-047 @pending
+  @T-UC-008-inv-047-2-violated @invariant @BR-RULE-047
   Scenario: INV-2 violated -- signal fails one filter excluded even if passes others
     Given the Buyer provides signal_spec "audience"
     And filters include catalog_types ["marketplace"]
@@ -358,7 +358,7 @@ Feature: BR-UC-008 Manage Audience Signals
     When the Buyer Agent sends a get_signals request
     Then that signal is excluded because cpm exceeds max_cpm
 
-  @T-UC-008-inv-047-3-holds @invariant @BR-RULE-047 @pending
+  @T-UC-008-inv-047-3-holds @invariant @BR-RULE-047
   Scenario: INV-3 holds -- max_results limits result count
     Given the Buyer provides signal_spec "audience"
     And 10 signals match the criteria
@@ -366,7 +366,7 @@ Feature: BR-UC-008 Manage Audience Signals
     When the Buyer Agent sends a get_signals request
     Then the response contains exactly 3 signals
 
-  @T-UC-008-inv-047-3-violated @invariant @BR-RULE-047 @error @pending
+  @T-UC-008-inv-047-3-violated @invariant @BR-RULE-047 @error
   Scenario: INV-3 violated -- max_results below minimum
     Given the Buyer provides signal_spec "audience"
     And max_results is 0
@@ -375,7 +375,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And the error should include "suggestion" field
     And the suggestion should contain "max_results must be >= 1"
 
-  @T-UC-008-inv-048-1-holds @invariant @BR-RULE-048 @pending
+  @T-UC-008-inv-048-1-holds @invariant @BR-RULE-048
   Scenario: INV-1 holds -- premium signal detected by prefix
     Given the Buyer is authenticated with a valid principal_id
     And the Buyer Agent provides signal_agent_segment_id "premium_luxury_auto"
@@ -385,7 +385,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And the error should include "suggestion" field
     And the suggestion should contain "contact the Seller for approval"
 
-  @T-UC-008-inv-048-1-counter @invariant @BR-RULE-048 @pending
+  @T-UC-008-inv-048-1-counter @invariant @BR-RULE-048
   Scenario: INV-1 counter -- non-premium signal activates normally
     Given the Buyer is authenticated with a valid principal_id
     And the Buyer Agent provides signal_agent_segment_id "standard_auto_intenders"
@@ -394,7 +394,7 @@ Feature: BR-UC-008 Manage Audience Signals
     Then the response contains deployments array (success variant)
     And the response does not contain errors
 
-  @T-UC-008-inv-048-2-holds @invariant @BR-RULE-048 @pending
+  @T-UC-008-inv-048-2-holds @invariant @BR-RULE-048
   Scenario: INV-2 holds -- activation response atomic success
     Given the Buyer is authenticated with a valid principal_id
     And the Buyer Agent provides signal_agent_segment_id "auto_intenders_q1_2025"
@@ -403,7 +403,7 @@ Feature: BR-UC-008 Manage Audience Signals
     Then the response contains deployments array (success variant)
     And the response does not contain errors
 
-  @T-UC-008-inv-048-2-violated @invariant @BR-RULE-048 @error @pending
+  @T-UC-008-inv-048-2-violated @invariant @BR-RULE-048 @error
   Scenario: INV-2 holds -- activation response atomic error
     Given the Buyer is authenticated with a valid principal_id
     And the Buyer Agent provides signal_agent_segment_id "premium_luxury_auto"
@@ -414,7 +414,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And the error should include "suggestion" field
     And the suggestion should contain "contact the Seller for approval"
 
-  @T-UC-008-inv-050-1-holds @invariant @BR-RULE-050 @pending
+  @T-UC-008-inv-050-1-holds @invariant @BR-RULE-050
   Scenario: INV-1 holds -- catalog_types OR within filter
     Given the Buyer provides signal_spec "audience"
     And filters include catalog_types ["marketplace", "custom"]
@@ -424,7 +424,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And custom signals are returned
     And owned signals are excluded
 
-  @T-UC-008-inv-050-1-counter @invariant @BR-RULE-050 @pending
+  @T-UC-008-inv-050-1-counter @invariant @BR-RULE-050
   Scenario: INV-1 counter -- catalog_types omitted returns all types
     Given the Buyer provides signal_spec "audience"
     And no catalog_types filter is specified
@@ -432,7 +432,7 @@ Feature: BR-UC-008 Manage Audience Signals
     When the Buyer Agent sends a get_signals request
     Then signals of all types are returned
 
-  @T-UC-008-inv-050-2-holds @invariant @BR-RULE-050 @pending
+  @T-UC-008-inv-050-2-holds @invariant @BR-RULE-050
   Scenario: INV-2 holds -- data_providers OR within filter
     Given the Buyer provides signal_spec "audience"
     And filters include data_providers ["Nielsen", "LiveRamp"]
@@ -442,14 +442,14 @@ Feature: BR-UC-008 Manage Audience Signals
     And LiveRamp signals are returned
     And Oracle signals are excluded
 
-  @T-UC-008-inv-050-2-counter @invariant @BR-RULE-050 @pending
+  @T-UC-008-inv-050-2-counter @invariant @BR-RULE-050
   Scenario: INV-2 counter -- data_providers omitted returns all providers
     Given the Buyer provides signal_spec "audience"
     And no data_providers filter is specified
     When the Buyer Agent sends a get_signals request
     Then signals from all providers are returned
 
-  @T-UC-008-inv-050-3-holds @invariant @BR-RULE-050 @pending
+  @T-UC-008-inv-050-3-holds @invariant @BR-RULE-050
   Scenario: INV-3 holds -- max_cpm excludes expensive CPM signals
     Given the Buyer provides signal_spec "audience"
     And filters include max_cpm 3.0
@@ -459,7 +459,7 @@ Feature: BR-UC-008 Manage Audience Signals
     Then the signal with cpm 5.0 is excluded
     And the signal with cpm 2.0 is returned
 
-  @T-UC-008-inv-050-3-cross @invariant @BR-RULE-050 @pending
+  @T-UC-008-inv-050-3-cross @invariant @BR-RULE-050
   Scenario: INV-3 cross-model -- max_cpm does not affect percent_of_media signals
     Given the Buyer provides signal_spec "audience"
     And filters include max_cpm 1.0
@@ -467,7 +467,7 @@ Feature: BR-UC-008 Manage Audience Signals
     When the Buyer Agent sends a get_signals request
     Then that percent_of_media signal is returned (not affected by max_cpm)
 
-  @T-UC-008-inv-050-4-holds @invariant @BR-RULE-050 @pending
+  @T-UC-008-inv-050-4-holds @invariant @BR-RULE-050
   Scenario: INV-4 holds -- min_coverage_percentage excludes low coverage
     Given the Buyer provides signal_spec "audience"
     And filters include min_coverage_percentage 80
@@ -477,7 +477,7 @@ Feature: BR-UC-008 Manage Audience Signals
     Then the signal with coverage 50 is excluded
     And the signal with coverage 90 is returned
 
-  @T-UC-008-inv-050-4-counter @invariant @BR-RULE-050 @pending
+  @T-UC-008-inv-050-4-counter @invariant @BR-RULE-050
   Scenario: INV-4 counter -- min_coverage omitted returns all coverage levels
     Given the Buyer provides signal_spec "audience"
     And no min_coverage_percentage filter is specified
@@ -485,21 +485,21 @@ Feature: BR-UC-008 Manage Audience Signals
     When the Buyer Agent sends a get_signals request
     Then both signals are returned regardless of coverage
 
-  @T-UC-008-inv-050-5-holds @invariant @BR-RULE-050 @pending
+  @T-UC-008-inv-050-5-holds @invariant @BR-RULE-050
   Scenario: INV-5 holds -- signal_spec case-insensitive substring match
     Given the Buyer provides signal_spec "AUTO"
     And a signal exists with name "Auto Intenders Q1"
     When the Buyer Agent sends a get_signals request
     Then that signal is returned (case-insensitive match on name)
 
-  @T-UC-008-inv-050-5-desc @invariant @BR-RULE-050 @pending
+  @T-UC-008-inv-050-5-desc @invariant @BR-RULE-050
   Scenario: INV-5 holds -- signal_spec matches description field
     Given the Buyer provides signal_spec "luxury"
     And a signal exists with description "Luxury auto intenders 25-54"
     When the Buyer Agent sends a get_signals request
     Then that signal is returned (substring match on description)
 
-  @T-UC-008-inv-050-6-holds @invariant @BR-RULE-050 @pending
+  @T-UC-008-inv-050-6-holds @invariant @BR-RULE-050
   Scenario: INV-6 holds -- max_percent excludes high percent_of_media signals
     Given the Buyer provides signal_spec "audience"
     And filters include max_percent 15
@@ -509,7 +509,7 @@ Feature: BR-UC-008 Manage Audience Signals
     Then the signal with percent 25 is excluded (ALL percent_of_media options exceed threshold)
     And the signal with percent 10 is returned
 
-  @T-UC-008-inv-050-6-mixed @invariant @BR-RULE-050 @pending
+  @T-UC-008-inv-050-6-mixed @invariant @BR-RULE-050
   Scenario: INV-6 mixed -- signal with one percent option below threshold passes
     Given the Buyer provides signal_spec "audience"
     And filters include max_percent 15
@@ -517,7 +517,7 @@ Feature: BR-UC-008 Manage Audience Signals
     When the Buyer Agent sends a get_signals request
     Then that signal is returned (at least one option has percent <= max_percent)
 
-  @T-UC-008-inv-050-6-cross @invariant @BR-RULE-050 @pending
+  @T-UC-008-inv-050-6-cross @invariant @BR-RULE-050
   Scenario: INV-6 cross-model -- max_percent does not affect CPM or flat_fee signals
     Given the Buyer provides signal_spec "audience"
     And filters include max_percent 5
@@ -526,7 +526,7 @@ Feature: BR-UC-008 Manage Audience Signals
     When the Buyer Agent sends a get_signals request
     Then both signals are returned (not affected by max_percent)
 
-  @T-UC-008-partition-signal-spec @partition @signal-spec @pending
+  @T-UC-008-partition-signal-spec @partition @signal-spec
   Scenario Outline: Signal spec partition validation -- <partition>
     Given the Buyer provides signal_spec as <signal_spec_value>
     And signal_ids as <signal_ids_value>
@@ -545,7 +545,7 @@ Feature: BR-UC-008 Manage Audience Signals
       | neither_spec_nor_ids   | omitted              | omitted          | validation error (anyOf) |
       | spec_no_match          | "zzz_nonexistent"    | omitted          | empty signals array      |
 
-  @T-UC-008-partition-destinations @partition @destinations @pending
+  @T-UC-008-partition-destinations @partition @destinations
   Scenario Outline: Destinations partition validation -- <partition>
     Given the Buyer provides signal_spec "audience"
     And destinations is <destinations_value>
@@ -564,7 +564,7 @@ Feature: BR-UC-008 Manage Audience Signals
       | partition           | destinations_value | outcome          |
       | empty_destinations  | []                 | validation error |
 
-  @T-UC-008-partition-countries @partition @countries @pending
+  @T-UC-008-partition-countries @partition @countries
   Scenario Outline: Countries partition validation -- <partition>
     Given the Buyer provides signal_spec "audience"
     And countries is <countries_value>
@@ -583,7 +583,7 @@ Feature: BR-UC-008 Manage Audience Signals
       | invalid_country_code   | ["us"]          | validation error |
       | lowercase_country_code | ["gb"]          | validation error |
 
-  @T-UC-008-partition-catalog-types @partition @catalog-types @pending
+  @T-UC-008-partition-catalog-types @partition @catalog-types
   Scenario Outline: Catalog types filter partition validation -- <partition>
     Given the Buyer provides signal_spec "audience"
     And catalog_types filter is <filter_value>
@@ -601,7 +601,7 @@ Feature: BR-UC-008 Manage Audience Signals
       | partition    | filter_value | outcome                         |
       | invalid_type | ["premium"]  | validation error or empty result |
 
-  @T-UC-008-partition-data-providers @partition @data-providers @pending
+  @T-UC-008-partition-data-providers @partition @data-providers
   Scenario Outline: Data providers filter partition validation -- <partition>
     Given the Buyer provides signal_spec "audience"
     And data_providers filter is <filter_value>
@@ -618,7 +618,7 @@ Feature: BR-UC-008 Manage Audience Signals
       | partition            | filter_value          | outcome             |
       | no_matching_provider | ["NonExistentCo"]     | empty signals array |
 
-  @T-UC-008-partition-max-cpm @partition @max-cpm @pending
+  @T-UC-008-partition-max-cpm @partition @max-cpm
   Scenario Outline: Max CPM filter partition validation -- <partition>
     Given the Buyer provides signal_spec "audience"
     And max_cpm filter is <max_cpm_value>
@@ -636,7 +636,7 @@ Feature: BR-UC-008 Manage Audience Signals
       | partition    | max_cpm_value | outcome          |
       | cpm_negative | -1            | validation error |
 
-  @T-UC-008-partition-max-percent @partition @max-percent @pending
+  @T-UC-008-partition-max-percent @partition @max-percent
   Scenario Outline: Max percent filter partition validation -- <partition>
     Given the Buyer provides signal_spec "audience"
     And max_percent filter is <max_percent_value>
@@ -655,7 +655,7 @@ Feature: BR-UC-008 Manage Audience Signals
       | percent_negative  | -1                | validation error |
       | percent_over_100  | 101               | validation error |
 
-  @T-UC-008-partition-min-coverage @partition @min-coverage @pending
+  @T-UC-008-partition-min-coverage @partition @min-coverage
   Scenario Outline: Min coverage filter partition validation -- <partition>
     Given the Buyer provides signal_spec "audience"
     And min_coverage_percentage filter is <coverage_value>
@@ -674,7 +674,7 @@ Feature: BR-UC-008 Manage Audience Signals
       | coverage_negative | -1             | validation error |
       | coverage_over_100 | 101            | validation error |
 
-  @T-UC-008-partition-max-results @partition @max-results @pending
+  @T-UC-008-partition-max-results @partition @max-results
   Scenario Outline: Max results partition validation -- <partition>
     Given the Buyer provides signal_spec "audience"
     And max_results is <max_results_value>
@@ -693,7 +693,7 @@ Feature: BR-UC-008 Manage Audience Signals
       | limit_zero     | 0                 | validation error |
       | limit_negative | -1                | validation error |
 
-  @T-UC-008-partition-agent-segment-id @partition @agent-segment-id @activation @pending
+  @T-UC-008-partition-agent-segment-id @partition @agent-segment-id @activation
   Scenario Outline: Signal agent segment ID partition validation -- <partition>
     Given the Buyer authentication is <auth_state>
     And the Buyer Agent provides signal_agent_segment_id "<signal_id>"
@@ -712,7 +712,7 @@ Feature: BR-UC-008 Manage Audience Signals
       | provider_unavailable | authenticated   | unavailable_provider_signal | ACTIVATION_FAILED error   |
       | unexpected_error     | authenticated   | error_trigger_signal        | ACTIVATION_ERROR error    |
 
-  @T-UC-008-partition-pricing @partition @pricing @pending
+  @T-UC-008-partition-pricing @partition @pricing
   Scenario Outline: Signal pricing model partition validation -- <partition>
     Given the Buyer provides signal_spec "audience"
     When the Buyer Agent sends a get_signals request
@@ -737,7 +737,7 @@ Feature: BR-UC-008 Manage Audience Signals
       | flat_fee_invalid_period | flat_fee | period not in enum rejected         |
       | missing_currency       | any     | currency required by all models      |
 
-  @T-UC-008-partition-pricing-option @partition @pricing-option @pending
+  @T-UC-008-partition-pricing-option @partition @pricing-option
   Scenario Outline: Pricing option partition validation -- <partition>
     Given the Buyer provides signal_spec "audience"
     When the Buyer Agent sends a get_signals request
@@ -755,7 +755,7 @@ Feature: BR-UC-008 Manage Audience Signals
       | missing_pricing_option_id  | pricing_option_id absent (schema error)   |
       | missing_model_fields       | model fields absent (schema error)        |
 
-  @T-UC-008-boundary-signal-spec @boundary @signal-spec @pending
+  @T-UC-008-boundary-signal-spec @boundary @signal-spec
   Scenario Outline: Signal spec boundary validation -- <boundary_point>
     Given signal_spec is <signal_spec_value>
     And signal_ids is <signal_ids_value>
@@ -769,7 +769,7 @@ Feature: BR-UC-008 Manage Audience Signals
       | neither signal_spec nor signal_ids provided     | omitted           | omitted          | validation error         |
       | signal_spec matches no signals                  | "zzz_nonexistent" | omitted          | empty signals (no error) |
 
-  @T-UC-008-boundary-destinations @boundary @destinations @pending
+  @T-UC-008-boundary-destinations @boundary @destinations
   Scenario Outline: Destinations boundary validation -- <boundary_point>
     Given the Buyer provides signal_spec "audience"
     And destinations is <destinations_value>
@@ -783,7 +783,7 @@ Feature: BR-UC-008 Manage Audience Signals
       | destinations omitted      | omitted                                                  | valid request    |
       | 0 destinations (empty array) | []                                                    | validation error |
 
-  @T-UC-008-boundary-countries @boundary @countries @pending
+  @T-UC-008-boundary-countries @boundary @countries
   Scenario Outline: Countries boundary validation -- <boundary_point>
     Given the Buyer provides signal_spec "audience"
     And countries is <countries_value>
@@ -799,7 +799,7 @@ Feature: BR-UC-008 Manage Audience Signals
       | invalid country code (lowercase 'us')       | ["us"]          | validation error |
       | invalid country code (3 letters 'USA')      | ["USA"]         | validation error |
 
-  @T-UC-008-boundary-catalog-types @boundary @catalog-types @pending
+  @T-UC-008-boundary-catalog-types @boundary @catalog-types
   Scenario Outline: Catalog types filter boundary validation -- <boundary_point>
     Given the Buyer provides signal_spec "audience"
     And catalog_types filter is <filter_value>
@@ -813,7 +813,7 @@ Feature: BR-UC-008 Manage Audience Signals
       | filter omitted                | omitted                          | all catalog types                |
       | invalid type value            | ["premium"]                      | validation error or empty result |
 
-  @T-UC-008-boundary-data-providers @boundary @data-providers @pending
+  @T-UC-008-boundary-data-providers @boundary @data-providers
   Scenario Outline: Data providers filter boundary validation -- <boundary_point>
     Given the Buyer provides signal_spec "audience"
     And data_providers filter is <filter_value>
@@ -827,7 +827,7 @@ Feature: BR-UC-008 Manage Audience Signals
       | filter omitted              | omitted                | all providers            |
       | non-existent provider name  | ["NonExistentCo"]      | empty signals (no error) |
 
-  @T-UC-008-boundary-max-cpm @boundary @max-cpm @pending
+  @T-UC-008-boundary-max-cpm @boundary @max-cpm
   Scenario Outline: Max CPM filter boundary validation -- <boundary_point>
     Given the Buyer provides signal_spec "audience"
     And max_cpm filter is <value>
@@ -841,7 +841,7 @@ Feature: BR-UC-008 Manage Audience Signals
       | max_cpm omitted   | omitted | no price restriction   |
       | max_cpm = -1      | -1      | validation error       |
 
-  @T-UC-008-boundary-max-percent @boundary @max-percent @pending
+  @T-UC-008-boundary-max-percent @boundary @max-percent
   Scenario Outline: Max percent filter boundary validation -- <boundary_point>
     Given the Buyer provides signal_spec "audience"
     And max_percent filter is <value>
@@ -857,7 +857,7 @@ Feature: BR-UC-008 Manage Audience Signals
       | max_percent = -1     | -1      | validation error                  |
       | max_percent = 101    | 101     | validation error                  |
 
-  @T-UC-008-boundary-min-coverage @boundary @min-coverage @pending
+  @T-UC-008-boundary-min-coverage @boundary @min-coverage
   Scenario Outline: Min coverage filter boundary validation -- <boundary_point>
     Given the Buyer provides signal_spec "audience"
     And min_coverage_percentage is <value>
@@ -873,7 +873,7 @@ Feature: BR-UC-008 Manage Audience Signals
       | min_coverage = -1        | -1      | validation error   |
       | min_coverage = 101       | 101     | validation error   |
 
-  @T-UC-008-boundary-max-results @boundary @max-results @pending
+  @T-UC-008-boundary-max-results @boundary @max-results
   Scenario Outline: Max results boundary validation -- <boundary_point>
     Given the Buyer provides signal_spec "audience"
     And max_results is <value>
@@ -887,7 +887,7 @@ Feature: BR-UC-008 Manage Audience Signals
       | max_results omitted                  | omitted | all signals      |
       | max_results = 0                      | 0       | validation error |
 
-  @T-UC-008-boundary-agent-segment-id @boundary @agent-segment-id @activation @pending
+  @T-UC-008-boundary-agent-segment-id @boundary @agent-segment-id @activation
   Scenario Outline: Activation boundary validation -- <boundary_point>
     Given the Buyer authentication is <auth_state>
     And the Buyer Agent provides signal_agent_segment_id "<signal_id>"
@@ -902,7 +902,7 @@ Feature: BR-UC-008 Manage Audience Signals
       | activation without authentication          | unauthenticated | auto_intenders_q1_2025      | authentication error      |
       | provider unavailable during activation     | authenticated   | unavailable_provider_signal | ACTIVATION_FAILED error   |
 
-  @T-UC-008-boundary-pricing @boundary @pricing @pending
+  @T-UC-008-boundary-pricing @boundary @pricing
   Scenario Outline: Signal pricing boundary validation -- <boundary_point>
     Given the Buyer provides signal_spec "audience"
     When the Buyer Agent sends a get_signals request
@@ -919,7 +919,7 @@ Feature: BR-UC-008 Manage Audience Signals
       | model='cpm', cpm=-1, currency='USD'                                 | invalid          |
       | model='percent_of_media', percent=101, currency='USD'               | invalid          |
 
-  @T-UC-008-boundary-pricing-option @boundary @pricing-option @pending
+  @T-UC-008-boundary-pricing-option @boundary @pricing-option
   Scenario Outline: Pricing option boundary validation -- <boundary_point>
     Given the Buyer provides signal_spec "audience"
     When the Buyer Agent sends a get_signals request
@@ -932,7 +932,7 @@ Feature: BR-UC-008 Manage Audience Signals
       | pricing_option_id='opt-003', model='flat_fee', amount=500, period='monthly', currency='EUR' | valid |
       | No pricing_option_id                                                               | invalid |
 
-  @T-UC-008-gap-missing-segment-id @extension @ext-b @activation @error @pending
+  @T-UC-008-gap-missing-segment-id @extension @ext-b @activation @error
   Scenario: Activation rejected -- missing signal_agent_segment_id
     Given the Buyer is authenticated with a valid principal_id
     And no signal_agent_segment_id is provided
@@ -945,7 +945,7 @@ Feature: BR-UC-008 Manage Audience Signals
     # POST-F1: System state unchanged
     # POST-F2: Buyer knows error
 
-  @T-UC-008-gap-empty-activate-destinations @extension @ext-b @activation @error @pending
+  @T-UC-008-gap-empty-activate-destinations @extension @ext-b @activation @error
   Scenario: Activation rejected -- empty destinations array
     Given the Buyer is authenticated with a valid principal_id
     And the Buyer Agent provides signal_agent_segment_id "auto_intenders_q1_2025"
@@ -958,7 +958,7 @@ Feature: BR-UC-008 Manage Audience Signals
     # POST-F1: System state unchanged
     # POST-F2: Buyer knows error
 
-  @T-UC-008-gap-invalid-action @extension @ext-b @activation @error @pending
+  @T-UC-008-gap-invalid-action @extension @ext-b @activation @error
   Scenario: Activation rejected -- invalid action value
     Given the Buyer is authenticated with a valid principal_id
     And the Buyer Agent provides signal_agent_segment_id "auto_intenders_q1_2025"
@@ -972,7 +972,7 @@ Feature: BR-UC-008 Manage Audience Signals
     # POST-F1: System state unchanged
     # POST-F2: Buyer knows error
 
-  @T-UC-008-gap-default-action @extension @activation @pending
+  @T-UC-008-gap-default-action @extension @activation
   Scenario: Activation with omitted action defaults to activate
     Given the Buyer is authenticated with a valid principal_id
     And the Buyer Agent provides signal_agent_segment_id "auto_intenders_q1_2025"
@@ -983,7 +983,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And the signal is activated (not deactivated)
     # PRE-B8a: action default is "activate"
 
-  @T-UC-008-gap-flat-fee-max-cpm @invariant @BR-RULE-050 @pending
+  @T-UC-008-gap-flat-fee-max-cpm @invariant @BR-RULE-050
   Scenario: INV-3 cross-model -- max_cpm does not affect flat_fee signals
     Given the Buyer provides signal_spec "audience"
     And filters include max_cpm 1.0
@@ -991,7 +991,7 @@ Feature: BR-UC-008 Manage Audience Signals
     When the Buyer Agent sends a get_signals request
     Then that flat_fee signal is returned (not affected by max_cpm)
 
-  @T-UC-008-dep-spec-ids @dependency @pending
+  @T-UC-008-dep-spec-ids @dependency
   Scenario Outline: signal_spec and signal_ids dependency -- <case>
     Given signal_spec is <spec>
     And signal_ids is <ids>
@@ -1005,7 +1005,7 @@ Feature: BR-UC-008 Manage Audience Signals
       | both_provided       | "auto"           | ["sig_001"]  | valid (combined)         |
       | neither_provided    | omitted          | omitted      | validation error (anyOf) |
 
-  @T-UC-008-dep-destinations-countries @dependency @pending
+  @T-UC-008-dep-destinations-countries @dependency
   Scenario Outline: destinations and countries independence -- <case>
     Given the Buyer provides signal_spec "audience"
     And destinations is <destinations>

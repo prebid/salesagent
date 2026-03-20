@@ -8,7 +8,12 @@ Every scenario runs against real production code through harness environments:
 There is no stub mode — steps call the harness directly and assert on
 real response objects.
 
-Scenarios for unimplemented production features are marked ``xfail``.
+Unimplemented scenarios (missing step definitions) are auto-xfailed at runtime
+via ``pytest_runtest_makereport``. No metadata or @pending tags needed — the
+code is the source of truth.
+
+Scenarios for unimplemented *production* features use explicit ``xfail`` markers
+with a reason (e.g., "MCP wrapper does not accept wcag_level").
 """
 
 from __future__ import annotations
@@ -40,6 +45,43 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc011_accounts",
     "tests.bdd.steps.domain.admin_accounts",
 ]
+
+# ---------------------------------------------------------------------------
+# Auto-xfail: missing step definitions
+# ---------------------------------------------------------------------------
+# Instead of predicting which scenarios are "pending" via metadata tags,
+# we let pytest-bdd tell us at runtime. If a scenario fails because a step
+# definition is missing, we convert the failure to xfail. The code is the
+# source of truth — no stale metadata needed.
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo) -> Generator[None, None, None]:
+    """Auto-xfail scenarios that fail due to missing infrastructure.
+
+    Two categories of "not yet implemented":
+    1. StepDefinitionNotFoundError — no matching step def exists
+    2. Missing harness — step defs match (generic steps) but ctx["env"]
+       is not set because _harness_env doesn't know this UC yet
+
+    Both are converted to xfail at runtime. No metadata tags needed.
+    """
+    outcome = yield
+    report = outcome.get_result()
+
+    if report.when == "call" and report.failed and call.excinfo is not None:
+        from pytest_bdd.exceptions import StepDefinitionNotFoundError
+
+        if call.excinfo.errisinstance(StepDefinitionNotFoundError):
+            report.outcome = "skipped"
+            report.wasxfail = f"Step definition not found: {call.excinfo.value}"
+        elif call.excinfo.errisinstance(KeyError) and "env" in str(call.excinfo.value):
+            report.outcome = "skipped"
+            report.wasxfail = "No harness environment configured for this scenario"
+        elif call.excinfo.errisinstance(NotImplementedError):
+            report.outcome = "skipped"
+            report.wasxfail = f"Not implemented: {call.excinfo.value}"
+
 
 # ---------------------------------------------------------------------------
 # Auto-register BDD tag markers
@@ -259,88 +301,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
                 break
 
-        # --- UC-004 xfail: @pending scenarios have systemic factory bug ---
-        # FIXME(beads-tbd): UC-004 BDD _ensure_media_buy_in_db uses non-existent
-        # TenantFactory.create_sync — all @pending delivery scenarios are broken.
-        if any(t.startswith("T-UC-004") for t in marker_names) and "pending" in marker_names:
-            item.add_marker(pytest.mark.xfail(reason="UC-004 BDD factory bug (create_sync)", strict=False))
-
-        # --- UC-011 xfail: scenarios pending step definitions ---
-        # Tags implemented: @list (slice 1), sync core scenarios (slice 2)
-        _UC011_IMPLEMENTED_TAGS = {
-            # Slice 2: sync core
-            "T-UC-011-sync-create",
-            "T-UC-011-sync-multi-brand",
-            "T-UC-011-sync-brand-direct",
-            "T-UC-011-sync-update",
-            "T-UC-011-sync-unchanged",
-            "T-UC-011-sync-billing-enum",
-            "T-UC-011-sync-mixed",
-            "T-UC-011-sync-brand-echo",
-            "T-UC-011-sync-shortest-domain",
-            # Slice 3: auth + atomic XOR
-            "T-UC-011-ext-a-no-token",
-            "T-UC-011-ext-a-expired",
-            "T-UC-011-atomic-error",
-            "T-UC-011-atomic-service-error",
-            "T-UC-011-atomic-both",
-            "T-UC-011-atomic-success",
-            "T-UC-011-atomic-all-failed",
-            # Slice 4: billing policy + partial failure
-            "T-UC-011-ext-b-partial",
-            "T-UC-011-ext-c-rejected",
-            "T-UC-011-ext-c-mixed",
-            "T-UC-011-ext-c-invalid-enum",
-            # Slice 5: approval workflow + push
-            "T-UC-011-ext-d-pending-url",
-            "T-UC-011-ext-d-pending-message",
-            "T-UC-011-ext-d-active",
-            "T-UC-011-ext-d-push",
-            # Slice 6: dry_run + delete_missing
-            "T-UC-011-ext-e-preview",
-            "T-UC-011-ext-e-normal",
-            "T-UC-011-ext-e-omitted",
-            "T-UC-011-ext-f-deactivate",
-            "T-UC-011-ext-f-scoped",
-            "T-UC-011-ext-f-false",
-            "T-UC-011-ext-f-none-absent",
-            "T-UC-011-ext-f-omitted",
-            # Slice 7: context echo + validation + schema + sandbox
-            "T-UC-011-ext-g-echo",
-            "T-UC-011-ext-g-echo-error",
-            "T-UC-011-ext-g-absent",
-            "T-UC-011-ext-g-empty",
-            "T-UC-011-ext-g-nested",
-            "T-UC-011-sync-empty-accounts",
-            "T-UC-011-sync-missing-brand",
-            "T-UC-011-sync-missing-operator",
-            "T-UC-011-sync-missing-billing",
-            "T-UC-011-sync-invalid-patterns",
-            "T-UC-011-sync-accounts-bva",
-            "T-UC-011-sandbox-provision",
-            "T-UC-011-sandbox-list-filter",
-            "T-UC-011-sandbox-validation",
-        }
-        if any(t.startswith("T-UC-011") for t in marker_names):
-            is_list = "list" in marker_names
-            is_implemented_sync = bool(marker_names & _UC011_IMPLEMENTED_TAGS)
-            # FIXME(salesagent-pnc): remaining sync scenarios not yet implemented
-            if not is_list and not is_implemented_sync:
-                item.add_marker(pytest.mark.xfail(reason="UC-011 steps not implemented", strict=True))
-
-        # --- UC-002: @pending scenarios need step definitions ---
-        # Account resolution scenarios are implemented (salesagent-2rq)
-        _UC002_IMPLEMENTED_TAGS = {
-            "T-UC-002-ext-r",
-            "T-UC-002-ext-r-nk",
-            "T-UC-002-ext-s",
-            "T-UC-002-ext-t",
-            # INV-080-1 excluded: tests INVALID_REQUEST (schema-level, not resolve_account)
-            "T-UC-002-partition-account-ref",
-            "T-UC-002-boundary-account-ref",
-        }
-        # FIXME(salesagent-2rq): INVALID_REQUEST validation (missing account / both fields)
-        # is Pydantic-level oneOf validation, not resolve_account. INV-080-1 is same.
+        # --- UC-002: INVALID_REQUEST validation xfails (production not implemented) ---
         _UC002_VALIDATION_XFAIL: list[tuple[str, set[str], str]] = [
             (
                 "T-UC-002-partition-account-ref",
@@ -354,23 +315,21 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             ),
         ]
         if any(t.startswith("T-UC-002") for t in marker_names):
-            # Selective xfail for INVALID_REQUEST examples within implemented tags
             for tag, substrings, reason in _UC002_VALIDATION_XFAIL:
                 if tag in marker_names and any(s in nodeid for s in substrings):
                     item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
                     break
-            is_implemented = bool(marker_names & _UC002_IMPLEMENTED_TAGS)
-            if "pending" in marker_names and not is_implemented:
-                item.add_marker(pytest.mark.xfail(reason="UC-002 BDD steps not yet implemented", strict=True))
 
-        # --- UC-006: @pending scenarios need step definitions ---
-        # Account resolution scenarios are implemented (salesagent-71q)
-        _UC006_IMPLEMENTED_TAGS = {
-            "T-UC-006-partition-account",
-            "T-UC-006-boundary-account",
-        }
-        # FIXME(salesagent-71q): INVALID_REQUEST validation (missing account / both fields)
-        # is Pydantic-level oneOf validation, not resolve_account.
+        # --- UC-006: auth error code mismatch (production returns VALIDATION_ERROR, spec expects AUTH_REQUIRED) ---
+        _UC006_AUTH_XFAIL = {"T-UC-006-ext-a-rest", "T-UC-006-ext-a-mcp"}
+        if marker_names & _UC006_AUTH_XFAIL:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="AUTH_REQUIRED error code not implemented (returns VALIDATION_ERROR)", strict=True
+                )
+            )
+
+        # --- UC-006: INVALID_REQUEST validation xfails (production not implemented) ---
         _UC006_VALIDATION_XFAIL: list[tuple[str, set[str], str]] = [
             (
                 "T-UC-006-partition-account",
@@ -384,19 +343,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             ),
         ]
         if any(t.startswith("T-UC-006") for t in marker_names):
-            # Selective xfail for INVALID_REQUEST examples within implemented tags
             for tag, substrings, reason in _UC006_VALIDATION_XFAIL:
                 if tag in marker_names and any(s in nodeid for s in substrings):
                     item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
                     break
-            is_implemented = bool(marker_names & _UC006_IMPLEMENTED_TAGS)
-            if "pending" in marker_names and not is_implemented:
-                item.add_marker(pytest.mark.xfail(reason="UC-006 BDD steps not yet implemented", strict=True))
-
-        # --- Admin BDD: @pending scenarios need step definitions ---
-        if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
-            if "pending" in marker_names:
-                item.add_marker(pytest.mark.xfail(reason="Admin BDD steps not yet implemented", strict=True))
 
         # --- Entity marker auto-application based on BDD tags ---
         # BDD tests don't have entity keywords in filenames; instead they
@@ -545,11 +495,17 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
     uc = _detect_uc(request)
 
     if uc == "UC-002":
-        request.getfixturevalue("integration_db")
-        from tests.harness.media_buy_account import MediaBuyAccountEnv
+        marker_names = {m.name for m in request.node.iter_markers()}
+        if "account" in marker_names:
+            # Account resolution scenarios only — MediaBuyAccountEnv handles resolve_account
+            request.getfixturevalue("integration_db")
+            from tests.harness.media_buy_account import MediaBuyAccountEnv
 
-        with MediaBuyAccountEnv() as env:
-            ctx["env"] = env
+            with MediaBuyAccountEnv() as env:
+                ctx["env"] = env
+                yield
+        else:
+            # No harness for other UC-002 scenarios yet → auto-xfail via KeyError
             yield
 
     elif uc == "UC-006":

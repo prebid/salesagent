@@ -1,4 +1,4 @@
-# Generated from adcp-req @ 8a219ece2b54628c33f1075d386b73082a0f4832 on 2026-03-20T11:43:42Z
+# Generated from adcp-req @ 8a219ece2b54628c33f1075d386b73082a0f4832 on 2026-03-20T12:00:24Z
 # DO NOT EDIT -- re-run: python scripts/compile_bdd.py
 
 Feature: BR-UC-015 Track Conversions
@@ -41,7 +41,7 @@ Feature: BR-UC-015 Track Conversions
     And the Buyer is authenticated with a valid principal_id
 
 
-  @T-UC-015-001 @main-flow @happy-path @post-s2 @post-s9 @br-rule-105 @br-rule-106 @pending
+  @T-UC-015-001 @main-flow @happy-path @post-s2 @post-s9 @br-rule-105 @br-rule-106
   Scenario Outline: Discover event sources via <transport> -- returns all sources on account
     Given an account "acc_acme_001" has 2 buyer-managed and 1 seller-managed event sources
     And the Buyer Agent has an authenticated connection via <transport>
@@ -61,14 +61,14 @@ Feature: BR-UC-015 Track Conversions
       | MCP       |
       | REST      |
 
-  @T-UC-015-002 @main-flow @post-s2 @br-rule-105 @pending
+  @T-UC-015-002 @main-flow @post-s2 @br-rule-105
   Scenario: Discover event sources -- account with no sources returns empty array
     Given an account "acc_new_001" has 0 event sources
     When the Buyer Agent sends a sync_event_sources request with account "acc_new_001" and no event_sources
     Then the response contains an empty event_sources array
     And the response is not an error
 
-  @T-UC-015-003 @main-flow @post-s2 @br-rule-105 @pending
+  @T-UC-015-003 @main-flow @post-s2 @br-rule-105
   Scenario: Discover event sources -- seller-managed sources are read-only
     Given an account has a seller-managed event source "platform_pixel"
     When the Buyer Agent discovers event sources on the account
@@ -76,7 +76,7 @@ Feature: BR-UC-015 Track Conversions
     And the source "platform_pixel" has action "unchanged"
     # BR-RULE-105 INV-6: Seller-managed sources cannot be updated or deleted by buyer
 
-  @T-UC-015-ext-a-001 @extension @happy-path @post-s1 @post-s9 @br-rule-106 @pending
+  @T-UC-015-ext-a-001 @extension @happy-path @post-s1 @post-s9 @br-rule-106
   Scenario Outline: Sync event sources via <transport> -- upsert creates and updates sources
     Given an account "acc_acme_001" has a buyer-managed source "src_existing" with name "Old Pixel"
     And the Buyer Agent has an authenticated connection via <transport>
@@ -97,13 +97,13 @@ Feature: BR-UC-015 Track Conversions
       | MCP       |
       | REST      |
 
-  @T-UC-015-ext-a-002 @extension @post-s1 @br-rule-106 @pending
+  @T-UC-015-ext-a-002 @extension @post-s1 @br-rule-106
   Scenario: Sync event sources -- unchanged source retains action "unchanged"
     Given an account has a buyer-managed source "src_1" with name "Pixel" and event_types ["purchase"]
     When the Buyer Agent syncs event_sources with identical configuration for "src_1"
     Then the response contains event_sources with source "src_1" action "unchanged"
 
-  @T-UC-015-ext-a-003 @extension @post-s1 @br-rule-105 @pending
+  @T-UC-015-ext-a-003 @extension @post-s1 @br-rule-105
   Scenario: Sync event sources -- seller-managed sources not modified by buyer sync
     Given an account has a seller-managed source "platform_attribution" and a buyer-managed source "src_pixel"
     When the Buyer Agent syncs event_sources including only "src_pixel"
@@ -111,7 +111,7 @@ Feature: BR-UC-015 Track Conversions
     And "src_pixel" appears with managed_by "buyer"
     # BR-RULE-105 INV-6: Seller-managed sources are immutable by buyer
 
-  @T-UC-015-ext-b-001 @extension @happy-path @post-s3 @post-s4 @post-s9 @br-rule-112 @pending
+  @T-UC-015-ext-b-001 @extension @happy-path @post-s3 @post-s4 @post-s9 @br-rule-112
   Scenario Outline: Log conversion events via <transport> -- all events processed successfully
     Given an event source "src_web" is configured on the account
     And the Buyer Agent has an authenticated connection via <transport>
@@ -132,7 +132,7 @@ Feature: BR-UC-015 Track Conversions
       | MCP       |
       | REST      |
 
-  @T-UC-015-ext-b-002 @extension @post-s5 @br-rule-112 @pending
+  @T-UC-015-ext-b-002 @extension @post-s5 @br-rule-112
   Scenario: Log events -- partial failures reported per-event within success response
     Given an event source "src_web" is configured
     When the Buyer Agent logs 3 events where 1 has invalid event_type
@@ -144,7 +144,7 @@ Feature: BR-UC-015 Track Conversions
     # BR-RULE-112 INV-5: events_received = events_processed + partial_failures count
     # POST-S5: Buyer informed of partial failures
 
-  @T-UC-015-ext-b-003 @extension @post-s5 @br-rule-112 @pending
+  @T-UC-015-ext-b-003 @extension @post-s5 @br-rule-112
   Scenario: Log events -- all events fail per-event validation
     Given an event source "src_web" is configured
     When the Buyer Agent logs 3 events all with invalid event_type
@@ -154,7 +154,7 @@ Feature: BR-UC-015 Track Conversions
     And the response does NOT contain errors array
     # BR-RULE-112 INV-3: All per-event failures still uses success branch
 
-  @T-UC-015-ext-b-004 @extension @post-s6 @br-rule-112 @pending
+  @T-UC-015-ext-b-004 @extension @post-s6 @br-rule-112
   Scenario: Log events -- warnings included in success response
     Given an event source "src_web" is configured
     When the Buyer Agent logs events without user_match identifiers
@@ -162,7 +162,7 @@ Feature: BR-UC-015 Track Conversions
     And the match_quality score is low
     # POST-S6: Buyer informed of warnings (low match quality, missing recommended fields)
 
-  @T-UC-015-ext-b-005 @extension @br-rule-107 @pending
+  @T-UC-015-ext-b-005 @extension @br-rule-107
   Scenario: Log events -- duplicate events silently deduplicated
     Given an event source "src_web" is configured
     And an event with event_id "evt_001" type "purchase" was previously sent to "src_web"
@@ -172,7 +172,7 @@ Feature: BR-UC-015 Track Conversions
     And events_processed does not double-count
     # BR-RULE-107 INV-1: Duplicate triple is silently deduplicated
 
-  @T-UC-015-ext-b-006 @extension @br-rule-107 @pending
+  @T-UC-015-ext-b-006 @extension @br-rule-107
   Scenario: Log events -- same event_id with different event_type is distinct
     Given an event source "src_web" is configured
     When the Buyer Agent logs event_id "evt_001" with event_type "add_to_cart" to "src_web"
@@ -180,7 +180,7 @@ Feature: BR-UC-015 Track Conversions
     Then both events are processed as distinct conversions
     # BR-RULE-107 INV-2: Different event_type = distinct event
 
-  @T-UC-015-ext-b-007 @extension @br-rule-107 @pending
+  @T-UC-015-ext-b-007 @extension @br-rule-107
   Scenario: Log events -- same event_id to different event_source_ids is distinct
     Given event sources "src_web" and "src_app" are configured on the account
     When the Buyer Agent logs event_id "evt_001" type "purchase" to "src_web"
@@ -188,14 +188,14 @@ Feature: BR-UC-015 Track Conversions
     Then both events are processed as distinct conversions
     # BR-RULE-107 INV-3: Different event_source_id = distinct event
 
-  @T-UC-015-ext-b-008 @extension @br-rule-112 @pending
+  @T-UC-015-ext-b-008 @extension @br-rule-112
   Scenario: Log events -- match_quality score boundaries
     Given an event source "src_web" is configured
     When the Buyer Agent logs events with full user_match identifiers
     Then the match_quality value is between 0.0 and 1.0 inclusive
     # BR-RULE-112 INV-6: match_quality between 0.0 and 1.0
 
-  @T-UC-015-ext-c-001 @extension @happy-path @post-s7 @post-s3 @post-s9 @br-rule-111 @pending
+  @T-UC-015-ext-c-001 @extension @happy-path @post-s7 @post-s3 @post-s9 @br-rule-111
   Scenario Outline: Log test events via <transport> -- processed but isolated from production
     Given an event source "src_web" is configured
     And the Buyer Agent has an authenticated connection via <transport>
@@ -216,7 +216,7 @@ Feature: BR-UC-015 Track Conversions
       | MCP       |
       | REST      |
 
-  @T-UC-015-ext-c-002 @extension @br-rule-111 @pending
+  @T-UC-015-ext-c-002 @extension @br-rule-111
   Scenario: Log events without test_event_code -- treated as production
     Given an event source "src_web" is configured
     When the Buyer Agent logs events to "src_web" without test_event_code
@@ -224,7 +224,7 @@ Feature: BR-UC-015 Track Conversions
     And the events affect attribution and reporting
     # BR-RULE-111 INV-4: test_event_code absent = production events
 
-  @T-UC-015-ext-d-001 @extension @happy-path @post-s8 @post-s1 @post-s9 @br-rule-106 @pending
+  @T-UC-015-ext-d-001 @extension @happy-path @post-s8 @post-s1 @post-s9 @br-rule-106
   Scenario Outline: Clean sync via <transport> -- unlisted buyer sources deleted
     Given an account has buyer-managed sources "src_keep" and "src_remove"
     And the Buyer Agent has an authenticated connection via <transport>
@@ -242,7 +242,7 @@ Feature: BR-UC-015 Track Conversions
       | MCP       |
       | REST      |
 
-  @T-UC-015-ext-d-002 @extension @br-rule-106 @pending
+  @T-UC-015-ext-d-002 @extension @br-rule-106
   Scenario: Clean sync -- seller-managed sources never deleted
     Given an account has buyer-managed source "src_buyer" and seller-managed source "src_seller"
     When the Buyer Agent syncs event_sources with delete_missing true and only "src_buyer"
@@ -250,7 +250,7 @@ Feature: BR-UC-015 Track Conversions
     And "src_seller" is NOT deleted
     # BR-RULE-106 INV-4: Seller-managed source immune to delete_missing
 
-  @T-UC-015-ext-d-003 @extension @br-rule-106 @pending
+  @T-UC-015-ext-d-003 @extension @br-rule-106
   Scenario: Clean sync with empty account -- delete_missing removes all buyer sources
     Given an account has buyer-managed sources "src_a" and "src_b" and seller-managed source "src_platform"
     When the Buyer Agent syncs event_sources with delete_missing true and event_sources containing only a new source "src_new"
@@ -258,7 +258,7 @@ Feature: BR-UC-015 Track Conversions
     And "src_new" has action "created"
     And "src_platform" has action "unchanged" and managed_by "seller"
 
-  @T-UC-015-020 @extension @ext-e @error @post-f1 @post-f2 @post-f3 @post-f4 @pending
+  @T-UC-015-020 @extension @ext-e @error @post-f1 @post-f2 @post-f3 @post-f4
   Scenario Outline: Log events -- event source not found via <transport>
     Given no event source with id "nonexistent_src" is configured on the account
     And the Buyer Agent has an authenticated connection via <transport>
@@ -280,7 +280,7 @@ Feature: BR-UC-015 Track Conversions
       | MCP       |
       | REST      |
 
-  @T-UC-015-021 @extension @ext-f @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-015-021 @extension @ext-f @error @post-f1 @post-f2 @post-f3
   Scenario Outline: Sync event sources -- account not found via <transport>
     Given no account with id "nonexistent_acc" exists on the seller platform
     And the Buyer Agent has an authenticated connection via <transport>
@@ -301,7 +301,7 @@ Feature: BR-UC-015 Track Conversions
       | MCP       |
       | REST      |
 
-  @T-UC-015-022 @extension @ext-g @error @post-f2 @post-f3 @pending
+  @T-UC-015-022 @extension @ext-g @error @post-f2 @post-f3
   Scenario: Sync event sources -- invalid event type in event_types config
     Given an account "acc_1" exists
     When the Buyer Agent syncs event_sources with an event_types entry "nonstandard_type"
@@ -311,7 +311,7 @@ Feature: BR-UC-015 Track Conversions
     And the suggestion should contain "supported_event_types"
     # INVALID_EVENT_TYPE at sync level (operation-level error)
 
-  @T-UC-015-023 @extension @ext-g @error @post-f2 @post-f3 @pending
+  @T-UC-015-023 @extension @ext-g @error @post-f2 @post-f3
   Scenario: Log events -- invalid event_type in event is partial failure
     Given an event source "src_web" is configured
     When the Buyer Agent logs an event with event_type "nonstandard_type"
@@ -322,7 +322,7 @@ Feature: BR-UC-015 Track Conversions
     # INVALID_EVENT_TYPE at log level (partial failure)
     # --- Extension H: INVALID_EVENT_TIME ---
 
-  @T-UC-015-024 @extension @ext-h @error @post-f2 @post-f3 @post-s5 @pending
+  @T-UC-015-024 @extension @ext-h @error @post-f2 @post-f3 @post-s5
   Scenario: Log events -- event_time outside attribution window is partial failure
     Given an event source "src_web" is configured
     When the Buyer Agent logs an event with event_time far in the past (outside attribution window)
@@ -332,7 +332,7 @@ Feature: BR-UC-015 Track Conversions
     And the suggestion should contain "attribution window"
     # POST-S5: Partial failures reported per-event
 
-  @T-UC-015-025 @extension @ext-h @error @post-f2 @post-f3 @pending
+  @T-UC-015-025 @extension @ext-h @error @post-f2 @post-f3
   Scenario: Log events -- event_time in the future is partial failure
     Given an event source "src_web" is configured
     When the Buyer Agent logs an event with event_time far in the future
@@ -341,7 +341,7 @@ Feature: BR-UC-015 Track Conversions
     And the suggestion should contain "attribution window"
     # --- Extension I: BATCH_TOO_LARGE ---
 
-  @T-UC-015-026 @extension @ext-i @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-015-026 @extension @ext-i @error @post-f1 @post-f2 @post-f3
   Scenario Outline: Log events -- batch too large via <transport>
     Given an event source "src_web" is configured
     And the Buyer Agent has an authenticated connection via <transport>
@@ -364,7 +364,7 @@ Feature: BR-UC-015 Track Conversions
       | MCP       |
       | REST      |
 
-  @T-UC-015-027 @extension @ext-j @error @post-f2 @post-f3 @post-s5 @pending
+  @T-UC-015-027 @extension @ext-j @error @post-f2 @post-f3 @post-s5
   Scenario: Log events -- empty user_match is partial failure
     Given an event source "src_web" is configured
     When the Buyer Agent logs an event with user_match as empty object {}
@@ -375,7 +375,7 @@ Feature: BR-UC-015 Track Conversions
     # POST-S5: Partial failure reported
     # --- Extension K: DUPLICATE_EVENT_SOURCE_ID ---
 
-  @T-UC-015-028 @extension @ext-k @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-015-028 @extension @ext-k @error @post-f1 @post-f2 @post-f3
   Scenario Outline: Sync event sources -- duplicate event_source_id via <transport>
     Given an account "acc_1" exists
     And the Buyer Agent has an authenticated connection via <transport>
@@ -398,7 +398,7 @@ Feature: BR-UC-015 Track Conversions
       | MCP       |
       | REST      |
 
-  @T-UC-015-029 @extension @ext-l @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-015-029 @extension @ext-l @error @post-f1 @post-f2 @post-f3
   Scenario Outline: Conversion tracking -- rate limited via <transport>
     Given the Buyer Agent has exceeded the rate limit for conversion tracking
     And the Buyer Agent has an authenticated connection via <transport>
@@ -420,7 +420,7 @@ Feature: BR-UC-015 Track Conversions
       | REST      | sync_event_sources |
       | REST      | log_event          |
 
-  @T-UC-015-030 @partition @event_source_scoping @br-rule-105 @pending
+  @T-UC-015-030 @partition @event_source_scoping @br-rule-105
   Scenario Outline: Account reference partition validation - <partition>
     When the Buyer Agent sends a sync_event_sources request with account <account_value>
     Then <outcome>
@@ -436,7 +436,7 @@ Feature: BR-UC-015 Track Conversions
       | account_not_found     | {"account_id": "nonexistent_123"}                          | error "ACCOUNT_NOT_FOUND" with suggestion                |
       | account_invalid_ref   | {"account_id": "acc_1", "brand": {"domain": "x.com"}, "operator": "x.com"} | error "ACCOUNT_INVALID_FORMAT" with suggestion |
 
-  @T-UC-015-031 @boundary @event_source_scoping @br-rule-105 @pending
+  @T-UC-015-031 @boundary @event_source_scoping @br-rule-105
   Scenario Outline: Account reference boundary validation - <boundary_point>
     When the Buyer Agent sends a sync_event_sources request with account <account_value>
     Then <outcome>
@@ -451,7 +451,7 @@ Feature: BR-UC-015 Track Conversions
       | both account_id and brand+operator supplied  | {"account_id": "acc_1", "brand": {"domain": "x.com"}, "operator": "x.com"} | error "ACCOUNT_INVALID_FORMAT" with suggestion |
       | empty object for account                     | {}                                                        | error "ACCOUNT_INVALID_FORMAT" with suggestion           |
 
-  @T-UC-015-032 @partition @event_source_sync @br-rule-106 @pending
+  @T-UC-015-032 @partition @event_source_sync @br-rule-106
   Scenario Outline: Event source sync mode partition validation - <partition>
     Given an account "acc_1" exists with buyer-managed source "src_existing"
     When the Buyer Agent sends a sync_event_sources request with <sync_config>
@@ -469,7 +469,7 @@ Feature: BR-UC-015 Track Conversions
       | missing_event_source_id            | account and event_sources [{"name": "Pixel"}]                   | error "EVENT_SOURCE_ID_REQUIRED" with suggestion   |
       | duplicate_event_source_id_in_request | account and event_sources with two "src_1" entries             | error "EVENT_SOURCE_ID_EXISTS" with suggestion     |
 
-  @T-UC-015-033 @boundary @event_source_sync @br-rule-106 @pending
+  @T-UC-015-033 @boundary @event_source_sync @br-rule-106
   Scenario Outline: Event source sync boundary validation - <boundary_point>
     Given an account "acc_1" exists
     When the Buyer Agent sends a sync_event_sources request with <sync_config>
@@ -486,7 +486,7 @@ Feature: BR-UC-015 Track Conversions
       | two items with same event_source_id                                       | account and event_sources with two "src_dup" entries                         | error "EVENT_SOURCE_ID_EXISTS" with suggestion    |
       | delete_missing=true but event_sources omitted (discovery-only; delete_missing ignored) | account only, delete_missing true, no event_sources                 | response lists all sources (discovery-only)       |
 
-  @T-UC-015-034 @partition @event_dedup @br-rule-107 @pending
+  @T-UC-015-034 @partition @event_dedup @br-rule-107
   Scenario Outline: Event dedup partition validation - <partition>
     Given an event source "src_web" is configured
     When the Buyer Agent logs events with <event_config>
@@ -505,7 +505,7 @@ Feature: BR-UC-015 Track Conversions
       | empty_event_id    | event with event_id ""                                    | error "EVENT_ID_TOO_SHORT" with suggestion        |
       | event_id_too_long | event with event_id of 257 characters                     | error "EVENT_ID_TOO_LONG" with suggestion         |
 
-  @T-UC-015-035 @boundary @event_dedup @br-rule-107 @pending
+  @T-UC-015-035 @boundary @event_dedup @br-rule-107
   Scenario Outline: Event dedup boundary validation - <boundary_point>
     Given an event source "src_web" is configured
     When the Buyer Agent logs events with <event_config>
@@ -522,7 +522,7 @@ Feature: BR-UC-015 Track Conversions
       | same event_id + different event_type + same event_source_id  | event_id "evt_001" with types "add_to_cart" and "purchase"                 | both events processed as distinct             |
       | same event_id + same event_type + different event_source_id  | event_id "evt_001" type "purchase" to "src_web" and "src_app"              | both events processed as distinct             |
 
-  @T-UC-015-036 @partition @event_structure @br-rule-108 @pending
+  @T-UC-015-036 @partition @event_structure @br-rule-108
   Scenario Outline: Event structure partition validation - <partition>
     Given an event source "src_web" is configured
     When the Buyer Agent logs an event with <event_config>
@@ -544,7 +544,7 @@ Feature: BR-UC-015 Track Conversions
       | custom_type_no_name        | event_id "evt_1", event_type "custom", event_time "2026-01-15T14:30:00Z", no custom_event_name                   | error "CUSTOM_EVENT_NAME_REQUIRED" with suggestion    |
       | website_source_no_url      | event_id "evt_1", event_type "purchase", event_time "2026-01-15T14:30:00Z", action_source "website", no URL      | error "EVENT_SOURCE_URL_REQUIRED" with suggestion     |
 
-  @T-UC-015-037 @boundary @event_structure @br-rule-108 @pending
+  @T-UC-015-037 @boundary @event_structure @br-rule-108
   Scenario Outline: Event structure boundary validation - <boundary_point>
     Given an event source "src_web" is configured
     When the Buyer Agent logs an event with <event_config>
@@ -564,7 +564,7 @@ Feature: BR-UC-015 Track Conversions
       | event_type omitted                                     | event_id "evt_1", event_time "2026-01-15T14:30:00Z"                                                             | error "EVENT_TYPE_REQUIRED" with suggestion           |
       | event_time omitted                                     | event_id "evt_1", event_type "purchase"                                                                          | error "EVENT_TIME_REQUIRED" with suggestion           |
 
-  @T-UC-015-037b @boundary @event_type @br-rule-108 @pending
+  @T-UC-015-037b @boundary @event_type @br-rule-108
   Scenario Outline: Event type enum boundary validation - <boundary_point>
     Given an event source "src_web" is configured
     When the Buyer Agent logs an event with event_type <event_type_value> and required fields
@@ -576,7 +576,7 @@ Feature: BR-UC-015 Track Conversions
       | custom (last enum value)          | custom           | event processed (with custom_event_name provided)   |
       | Unknown string not in enum        | click            | error "EVENT_TYPE_INVALID_FORMAT" with suggestion   |
 
-  @T-UC-015-038 @partition @user_match_id @br-rule-109 @pending
+  @T-UC-015-038 @partition @user_match_id @br-rule-109
   Scenario Outline: User match identifier partition validation - <partition>
     Given an event source "src_web" is configured
     When the Buyer Agent logs an event with user_match <user_match_value>
@@ -600,7 +600,7 @@ Feature: BR-UC-015 Track Conversions
       | ua_without_ip                   | {"client_user_agent": "Mozilla/5.0..."} | error "USER_MATCH_REQUIRED" with suggestion            |
       | uids_empty_array                | {"uids": []}                         | error "USER_MATCH_REQUIRED" with suggestion               |
 
-  @T-UC-015-039 @boundary @user_match_id @br-rule-109 @pending
+  @T-UC-015-039 @boundary @user_match_id @br-rule-109
   Scenario Outline: User match identifier boundary validation - <boundary_point>
     Given an event source "src_web" is configured
     When the Buyer Agent logs an event with user_match <user_match_value>
@@ -623,7 +623,7 @@ Feature: BR-UC-015 Track Conversions
       | uids array empty                                        | {"uids": []}                                                                              | error "USER_MATCH_REQUIRED" with suggestion               |
       | user_match omitted from event                           | (omitted)                                                                                 | event processed (no attribution)                          |
 
-  @T-UC-015-040 @partition @batch_size @br-rule-110 @pending
+  @T-UC-015-040 @partition @batch_size @br-rule-110
   Scenario Outline: Batch size partition validation - <partition>
     Given an event source "src_web" is configured
     When the Buyer Agent logs <batch_config> to "src_web"
@@ -641,7 +641,7 @@ Feature: BR-UC-015 Track Conversions
       | missing_events  | a request with events omitted | error "EVENTS_REQUIRED" with suggestion      |
       | batch_too_large | a batch with 10001 events   | error "BATCH_TOO_LARGE" with suggestion        |
 
-  @T-UC-015-041 @boundary @batch_size @br-rule-110 @pending
+  @T-UC-015-041 @boundary @batch_size @br-rule-110
   Scenario Outline: Batch size boundary validation - <boundary_point>
     Given an event source "src_web" is configured
     When the Buyer Agent logs <batch_config> to "src_web"
@@ -655,7 +655,7 @@ Feature: BR-UC-015 Track Conversions
       | events array with 10,001 items (over max) | a batch with 10001 events  | error "BATCH_TOO_LARGE" with suggestion        |
       | events field omitted                    | a request with events omitted | error "EVENTS_REQUIRED" with suggestion        |
 
-  @T-UC-015-042 @partition @test_isolation @br-rule-111 @pending
+  @T-UC-015-042 @partition @test_isolation @br-rule-111
   Scenario Outline: Test event isolation partition validation - <partition>
     Given an event source "src_web" is configured
     When the Buyer Agent logs events to "src_web" with <test_config>
@@ -666,7 +666,7 @@ Feature: BR-UC-015 Track Conversions
       | production_mode  | test_event_code omitted            | events treated as production                    |
       | test_mode        | test_event_code "TEST_20260315"    | events isolated from production attribution     |
 
-  @T-UC-015-043 @boundary @test_isolation @br-rule-111 @pending
+  @T-UC-015-043 @boundary @test_isolation @br-rule-111
   Scenario Outline: Test event isolation boundary validation - <boundary_point>
     Given an event source "src_web" is configured
     When the Buyer Agent logs events to "src_web" with <test_config>
@@ -678,7 +678,7 @@ Feature: BR-UC-015 Track Conversions
       | test_event_code present with non-empty string       | test_event_code "TEST_SESSION"  | events isolated from production attribution     |
       | test_event_code present with short string (e.g. 'T') | test_event_code "T"           | events isolated from production attribution     |
 
-  @T-UC-015-044 @partition @partial_failure @br-rule-112 @pending
+  @T-UC-015-044 @partition @partial_failure @br-rule-112
   Scenario Outline: Partial failure response partition validation - <partition>
     Given an event source "src_web" is configured
     When the Buyer Agent logs events with <event_config>
@@ -695,7 +695,7 @@ Feature: BR-UC-015 Track Conversions
       | partition                       | event_config                                                  | outcome                                          |
       | mixed_success_and_errors        | (server-side constraint: response cannot mix success+errors)   | error "VALIDATION_ERROR" with suggestion          |
 
-  @T-UC-015-045 @boundary @partial_failure @br-rule-112 @pending
+  @T-UC-015-045 @boundary @partial_failure @br-rule-112
   Scenario Outline: Partial failure response boundary validation - <boundary_point>
     Given an event source "src_web" is configured
     When the Buyer Agent logs events with <event_config>
@@ -712,55 +712,55 @@ Feature: BR-UC-015 Track Conversions
       | match_quality = 0.0 (no matches)                                    | events without user_match                             | match_quality 0.0                                                       |
       | match_quality = 1.0 (all matched)                                   | events with complete user_match                       | match_quality 1.0                                                       |
 
-  @T-UC-015-046 @context-echo @post-s9 @post-f3 @pending
+  @T-UC-015-046 @context-echo @post-s9 @post-f3
   Scenario: Context echo -- sync_event_sources success includes context
     Given an account "acc_1" exists
     When the Buyer Agent sends a sync_event_sources request with context {"trace_id": "abc-123"}
     Then the response echoes context {"trace_id": "abc-123"} unchanged
 
-  @T-UC-015-047 @context-echo @post-s9 @post-f3 @pending
+  @T-UC-015-047 @context-echo @post-s9 @post-f3
   Scenario: Context echo -- log_event success includes context
     Given an event source "src_web" is configured
     When the Buyer Agent logs events with context {"correlation_id": "xyz-789"}
     Then the response echoes context {"correlation_id": "xyz-789"} unchanged
 
-  @T-UC-015-048 @context-echo @post-f3 @pending
+  @T-UC-015-048 @context-echo @post-f3
   Scenario: Context echo -- error response includes context when possible
     When the Buyer Agent sends a log_event request with invalid event_source_id and context {"trace_id": "err-001"}
     Then the error response echoes context {"trace_id": "err-001"}
 
-  @T-UC-015-049 @invariant @br-rule-105 @pending
+  @T-UC-015-049 @invariant @br-rule-105
   Scenario: BR-RULE-105 INV-3 holds -- account_id resolves account
     Given an account with account_id "acc_acme_001" exists
     When the Buyer Agent sends sync_event_sources with account {"account_id": "acc_acme_001"}
     Then the account is resolved and event sources are returned
 
-  @T-UC-015-050 @invariant @br-rule-105 @pending
+  @T-UC-015-050 @invariant @br-rule-105
   Scenario: BR-RULE-105 INV-4 holds -- brand+operator resolves account
     Given an account with brand "acme-corp.com" and operator "acme-corp.com" exists
     When the Buyer Agent sends sync_event_sources with account {"brand": {"domain": "acme-corp.com"}, "operator": "acme-corp.com"}
     Then the account is resolved and event sources are returned
 
-  @T-UC-015-051 @invariant @br-rule-105 @error @pending
+  @T-UC-015-051 @invariant @br-rule-105 @error
   Scenario: BR-RULE-105 INV-1 violated -- account omitted
     When the Buyer Agent sends sync_event_sources without account field
     Then the error code should be "ACCOUNT_REQUIRED"
     And the error should include "suggestion" field
 
-  @T-UC-015-052 @invariant @br-rule-105 @error @pending
+  @T-UC-015-052 @invariant @br-rule-105 @error
   Scenario: BR-RULE-105 INV-2 violated -- account does not resolve
     When the Buyer Agent sends sync_event_sources with account {"account_id": "nonexistent"}
     Then the error code should be "ACCOUNT_NOT_FOUND"
     And the error should include "suggestion" field
 
-  @T-UC-015-053 @invariant @br-rule-106 @pending
+  @T-UC-015-053 @invariant @br-rule-106
   Scenario: BR-RULE-106 INV-1 holds -- discovery-only when event_sources omitted
     Given an account "acc_1" has 2 buyer-managed event sources
     When the Buyer Agent sends sync_event_sources with account "acc_1" and no event_sources
     Then no sources are created, updated, or deleted
     And all sources have action "unchanged"
 
-  @T-UC-015-054 @invariant @br-rule-106 @pending
+  @T-UC-015-054 @invariant @br-rule-106
   Scenario: BR-RULE-106 INV-2 holds -- upsert creates and updates
     Given an account "acc_1" has buyer-managed source "src_existing"
     When the Buyer Agent syncs event_sources with [{"event_source_id": "src_existing"}, {"event_source_id": "src_new"}] and delete_missing false
@@ -768,26 +768,26 @@ Feature: BR-UC-015 Track Conversions
     And "src_new" has action "created"
     And no sources are deleted
 
-  @T-UC-015-055 @invariant @br-rule-106 @pending
+  @T-UC-015-055 @invariant @br-rule-106
   Scenario: BR-RULE-106 INV-3 holds -- clean sync deletes unlisted buyer sources
     Given an account "acc_1" has buyer-managed sources "src_keep" and "src_old"
     When the Buyer Agent syncs event_sources with [{"event_source_id": "src_keep"}] and delete_missing true
     Then "src_keep" has action "updated" or "unchanged"
     And "src_old" has action "deleted"
 
-  @T-UC-015-056 @invariant @br-rule-106 @error @pending
+  @T-UC-015-056 @invariant @br-rule-106 @error
   Scenario: BR-RULE-106 INV-5 violated -- empty event_sources array
     When the Buyer Agent syncs event_sources with account "acc_1" and event_sources []
     Then the error code should be "EVENT_SOURCES_REQUIRED"
     And the error should include "suggestion" field
 
-  @T-UC-015-057 @invariant @br-rule-106 @error @pending
+  @T-UC-015-057 @invariant @br-rule-106 @error
   Scenario: BR-RULE-106 INV-6 violated -- duplicate event_source_id
     When the Buyer Agent syncs event_sources with two entries having event_source_id "src_dup"
     Then the error code should be "DUPLICATE_EVENT_SOURCE_ID"
     And the error should include "suggestion" field
 
-  @T-UC-015-058 @invariant @br-rule-107 @error @pending
+  @T-UC-015-058 @invariant @br-rule-107 @error
   Scenario: BR-RULE-107 INV-4 violated -- event_id missing
     Given an event source "src_web" is configured
     When the Buyer Agent logs an event without event_id
@@ -795,7 +795,7 @@ Feature: BR-UC-015 Track Conversions
     And the error should include "suggestion" field
     And the suggestion should contain "event_id"
 
-  @T-UC-015-059 @invariant @br-rule-107 @error @pending
+  @T-UC-015-059 @invariant @br-rule-107 @error
   Scenario: BR-RULE-107 INV-5 violated -- event_id outside length bounds
     Given an event source "src_web" is configured
     When the Buyer Agent logs an event with event_id of 257 characters
@@ -803,7 +803,7 @@ Feature: BR-UC-015 Track Conversions
     And the error should include "suggestion" field
     And the suggestion should contain "256 characters"
 
-  @T-UC-015-060 @invariant @br-rule-108 @error @pending
+  @T-UC-015-060 @invariant @br-rule-108 @error
   Scenario: BR-RULE-108 INV-1 violated -- missing required event fields
     Given an event source "src_web" is configured
     When the Buyer Agent logs an event missing event_type
@@ -811,7 +811,7 @@ Feature: BR-UC-015 Track Conversions
     And the error should include "suggestion" field
     And the suggestion should contain "event_type"
 
-  @T-UC-015-061 @invariant @br-rule-108 @error @pending
+  @T-UC-015-061 @invariant @br-rule-108 @error
   Scenario: BR-RULE-108 INV-2 violated -- invalid event_type
     Given an event source "src_web" is configured
     When the Buyer Agent logs an event with event_type "nonstandard"
@@ -819,7 +819,7 @@ Feature: BR-UC-015 Track Conversions
     And the error should include "suggestion" field
     And the suggestion should contain "standard types"
 
-  @T-UC-015-062 @invariant @br-rule-108 @error @pending
+  @T-UC-015-062 @invariant @br-rule-108 @error
   Scenario: BR-RULE-108 INV-3 violated -- invalid event_time format
     Given an event source "src_web" is configured
     When the Buyer Agent logs an event with event_time "not-a-date"
@@ -827,7 +827,7 @@ Feature: BR-UC-015 Track Conversions
     And the error should include "suggestion" field
     And the suggestion should contain "ISO 8601"
 
-  @T-UC-015-063 @invariant @br-rule-108 @error @pending
+  @T-UC-015-063 @invariant @br-rule-108 @error
   Scenario: BR-RULE-108 INV-4 violated -- custom type without custom_event_name
     Given an event source "src_web" is configured
     When the Buyer Agent logs an event with event_type "custom" and no custom_event_name
@@ -835,7 +835,7 @@ Feature: BR-UC-015 Track Conversions
     And the error should include "suggestion" field
     And the suggestion should contain "custom_event_name"
 
-  @T-UC-015-064 @invariant @br-rule-108 @error @pending
+  @T-UC-015-064 @invariant @br-rule-108 @error
   Scenario: BR-RULE-108 INV-5 violated -- website source without URL
     Given an event source "src_web" is configured
     When the Buyer Agent logs an event with action_source "website" and no event_source_url
@@ -843,19 +843,19 @@ Feature: BR-UC-015 Track Conversions
     And the error should include "suggestion" field
     And the suggestion should contain "event_source_url"
 
-  @T-UC-015-065 @invariant @br-rule-108 @pending
+  @T-UC-015-065 @invariant @br-rule-108
   Scenario: BR-RULE-108 INV-6 holds -- custom event with name accepted
     Given an event source "src_web" is configured
     When the Buyer Agent logs an event with event_type "custom" and custom_event_name "product_demo"
     Then the event is processed successfully with custom classification
 
-  @T-UC-015-066 @invariant @br-rule-108 @pending
+  @T-UC-015-066 @invariant @br-rule-108
   Scenario: BR-RULE-108 INV-7 holds -- non-website source without URL accepted
     Given an event source "src_web" is configured
     When the Buyer Agent logs an event with action_source "app" and no event_source_url
     Then the event is processed successfully
 
-  @T-UC-015-067 @invariant @br-rule-109 @error @pending
+  @T-UC-015-067 @invariant @br-rule-109 @error
   Scenario: BR-RULE-109 INV-2 violated -- invalid hashed_email format
     Given an event source "src_web" is configured
     When the Buyer Agent logs an event with hashed_email "not-a-sha256-hash"
@@ -863,7 +863,7 @@ Feature: BR-UC-015 Track Conversions
     And the error should include "suggestion" field
     And the suggestion should contain "SHA-256"
 
-  @T-UC-015-068 @invariant @br-rule-109 @error @pending
+  @T-UC-015-068 @invariant @br-rule-109 @error
   Scenario: BR-RULE-109 INV-3 violated -- invalid hashed_phone format
     Given an event source "src_web" is configured
     When the Buyer Agent logs an event with hashed_phone "not-a-sha256-hash"
@@ -871,7 +871,7 @@ Feature: BR-UC-015 Track Conversions
     And the error should include "suggestion" field
     And the suggestion should contain "E.164"
 
-  @T-UC-015-069 @invariant @br-rule-109 @error @pending
+  @T-UC-015-069 @invariant @br-rule-109 @error
   Scenario: BR-RULE-109 INV-4 violated -- client_ip without client_user_agent
     Given an event source "src_web" is configured
     When the Buyer Agent logs an event with user_match {"client_ip": "203.0.113.50"}
@@ -879,48 +879,48 @@ Feature: BR-UC-015 Track Conversions
     And the error should include "suggestion" field
     And the suggestion should contain "client_ip"
 
-  @T-UC-015-070 @invariant @br-rule-109 @pending
+  @T-UC-015-070 @invariant @br-rule-109
   Scenario: BR-RULE-109 INV-5 holds -- user_match omitted, event accepted
     Given an event source "src_web" is configured
     When the Buyer Agent logs a valid event without user_match
     Then the event is processed successfully
     And the match_quality may be reduced
 
-  @T-UC-015-071 @invariant @br-rule-109 @pending
+  @T-UC-015-071 @invariant @br-rule-109
   Scenario: BR-RULE-109 INV-6 holds -- multiple identifiers improve match quality
     Given an event source "src_web" is configured
     When the Buyer Agent logs an event with hashed_email, click_id, and client_ip+client_user_agent
     Then the event is processed successfully
     And the match_quality is higher than single-identifier events
 
-  @T-UC-015-072 @invariant @br-rule-110 @pending
+  @T-UC-015-072 @invariant @br-rule-110
   Scenario: BR-RULE-110 INV-1 holds -- batch of 1 to 10000 accepted
     Given an event source "src_web" is configured
     When the Buyer Agent logs a batch of 100 valid events
     Then the response contains events_received 100
 
-  @T-UC-015-073 @invariant @br-rule-110 @error @pending
+  @T-UC-015-073 @invariant @br-rule-110 @error
   Scenario: BR-RULE-110 INV-2 violated -- empty or omitted events
     Given an event source "src_web" is configured
     When the Buyer Agent sends a log_event request with empty events array
     Then the error code should be "EVENTS_REQUIRED"
     And the error should include "suggestion" field
 
-  @T-UC-015-074 @invariant @br-rule-110 @error @pending
+  @T-UC-015-074 @invariant @br-rule-110 @error
   Scenario: BR-RULE-110 INV-3 violated -- batch exceeds 10000
     Given an event source "src_web" is configured
     When the Buyer Agent logs a batch of 10001 events
     Then the error code should be "BATCH_TOO_LARGE"
     And the error should include "suggestion" field
 
-  @T-UC-015-075 @invariant @br-rule-111 @pending
+  @T-UC-015-075 @invariant @br-rule-111
   Scenario: BR-RULE-111 INV-2 holds -- test events validated identically
     Given an event source "src_web" is configured
     When the Buyer Agent logs a test event with invalid event_type and test_event_code "TEST_001"
     Then the event appears in partial_failures with code "INVALID_EVENT_TYPE"
     And the validation is identical to production events
 
-  @T-UC-015-076 @invariant @br-rule-111 @pending
+  @T-UC-015-076 @invariant @br-rule-111
   Scenario: BR-RULE-111 INV-3 holds -- test events do not affect production
     Given an event source "src_web" is configured
     When the Buyer Agent logs valid events with test_event_code "TEST_001"
@@ -929,20 +929,20 @@ Feature: BR-UC-015 Track Conversions
     And production reporting is not affected
     And production optimization signals are not affected
 
-  @T-UC-015-077 @invariant @br-rule-112 @pending
+  @T-UC-015-077 @invariant @br-rule-112
   Scenario: BR-RULE-112 INV-1 holds -- success branch structure
     Given an event source "src_web" is configured
     When the Buyer Agent logs valid events
     Then the response contains events_received and events_processed
     And the response does NOT contain errors array
 
-  @T-UC-015-078 @invariant @br-rule-112 @pending
+  @T-UC-015-078 @invariant @br-rule-112
   Scenario: BR-RULE-112 INV-2 holds -- error branch structure
     When the Buyer Agent logs events to nonexistent event_source_id
     Then the response contains errors array
     And the response does NOT contain events_received or events_processed
 
-  @T-UC-015-079 @invariant @br-rule-112 @pending
+  @T-UC-015-079 @invariant @br-rule-112
   Scenario: BR-RULE-112 INV-5 holds -- events_received = events_processed + partial_failures
     Given an event source "src_web" is configured
     When the Buyer Agent logs 10 events where 3 have invalid structure
@@ -951,7 +951,7 @@ Feature: BR-UC-015 Track Conversions
     And partial_failures has 3 entries
     And events_received equals events_processed plus partial_failures count
 
-  @T-UC-015-sandbox-happy @invariant @br-rule-209 @sandbox @pending
+  @T-UC-015-sandbox-happy @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account log_event produces simulated processing with sandbox flag
     Given an event source "src_web" is configured
     And the request targets a sandbox account
@@ -964,7 +964,7 @@ Feature: BR-UC-015 Track Conversions
     # BR-RULE-209 INV-3: real billing suppressed
     # BR-RULE-209 INV-4: response includes sandbox: true
 
-  @T-UC-015-sandbox-production @invariant @br-rule-209 @sandbox @pending
+  @T-UC-015-sandbox-production @invariant @br-rule-209 @sandbox
   Scenario: Production account log_event response does not include sandbox flag
     Given an event source "src_web" is configured
     And the request targets a production account
@@ -972,7 +972,7 @@ Feature: BR-UC-015 Track Conversions
     Then the response should not include a sandbox field
     # BR-RULE-209 INV-5: production account -> sandbox absent
 
-  @T-UC-015-sandbox-validation @invariant @br-rule-209 @sandbox @pending
+  @T-UC-015-sandbox-validation @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account with invalid event returns real validation error
     And the request targets a sandbox account
     When the Buyer Agent logs events with missing required event_type

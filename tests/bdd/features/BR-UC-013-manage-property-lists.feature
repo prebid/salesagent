@@ -1,4 +1,4 @@
-# Generated from adcp-req @ 8a219ece2b54628c33f1075d386b73082a0f4832 on 2026-03-20T11:43:42Z
+# Generated from adcp-req @ 8a219ece2b54628c33f1075d386b73082a0f4832 on 2026-03-20T12:00:24Z
 # DO NOT EDIT -- re-run: python scripts/compile_bdd.py
 
 Feature: BR-UC-013 Manage Property Lists
@@ -34,7 +34,7 @@ Feature: BR-UC-013 Manage Property Lists
     And the Buyer is authenticated with a valid principal_id
 
 
-  @T-UC-013-001 @list @happy-path @post-s3 @post-s6 @br-rule-078 @pending
+  @T-UC-013-001 @list @happy-path @post-s3 @post-s6 @br-rule-078
   Scenario Outline: List property lists via <transport> -- returns all tenant lists
     Given the tenant has 3 property lists with different names
     And the Buyer Agent has an authenticated connection via <transport>
@@ -50,7 +50,7 @@ Feature: BR-UC-013 Manage Property Lists
       | MCP       |
       | REST      |
 
-  @T-UC-013-002 @list @no-filter @post-s3 @partition @boundary @br-rule-078 @pending
+  @T-UC-013-002 @list @no-filter @post-s3 @partition @boundary @br-rule-078
   Scenario: List property lists -- no filters returns all tenant lists
     Given the tenant has 5 property lists
     When the Buyer Agent sends a list_property_lists request with no filters
@@ -58,7 +58,7 @@ Feature: BR-UC-013 Manage Property Lists
     # BR-RULE-078 INV-1: No filter parameters -> all property lists for tenant returned
     # @bva boundary: name_contains filter with empty string (equivalent to no filter)
 
-  @T-UC-013-003 @list @filter @post-s3 @partition @br-rule-078 @pending
+  @T-UC-013-003 @list @filter @post-s3 @partition @br-rule-078
   Scenario: List property lists -- principal filter returns only owned lists
     Given the tenant has a property list owned by principal "agent-alpha"
     And the tenant has a property list owned by principal "agent-beta"
@@ -67,7 +67,7 @@ Feature: BR-UC-013 Manage Property Lists
     And the list is owned by principal "agent-alpha"
     # BR-RULE-078 INV-2: principal filter -> exact match on owner
 
-  @T-UC-013-004 @list @filter @post-s3 @partition @br-rule-078 @pending
+  @T-UC-013-004 @list @filter @post-s3 @partition @br-rule-078
   Scenario: List property lists -- name_contains filter returns substring matches
     Given the tenant has a property list named "Q4 Travel Inclusion"
     And the tenant has a property list named "TRAVEL Exclusion List"
@@ -78,7 +78,7 @@ Feature: BR-UC-013 Manage Property Lists
     # BR-RULE-078 INV-3: name_contains -> case-insensitive substring match
     # @bva boundary: name_contains filter with substring
 
-  @T-UC-013-005 @list @filter @post-s3 @partition @br-rule-078 @pending
+  @T-UC-013-005 @list @filter @post-s3 @partition @br-rule-078
   Scenario: List property lists -- combined principal and name_contains filters
     Given the tenant has a property list "Travel A" owned by "agent-alpha"
     And the tenant has a property list "Travel B" owned by "agent-beta"
@@ -88,7 +88,7 @@ Feature: BR-UC-013 Manage Property Lists
     And the list is "Travel A"
     # DR-5: principal AND name_contains filters applied together
 
-  @T-UC-013-006 @list @filter @post-s3 @partition @br-rule-078 @pending
+  @T-UC-013-006 @list @filter @post-s3 @partition @br-rule-078
   Scenario Outline: List property lists -- <filter_type> with no match returns empty
     Given the tenant has 3 property lists owned by principal "agent-alpha" with names containing "Sports"
     When the Buyer Agent filters by <filter_field> "<filter_value>"
@@ -101,7 +101,7 @@ Feature: BR-UC-013 Manage Property Lists
       | principal_no_match | principal     | agent-unknown |
       | name_no_match      | name_contains | Travel        |
 
-  @T-UC-013-007 @list @post-s3 @boundary @br-rule-078 @pending
+  @T-UC-013-007 @list @post-s3 @boundary @br-rule-078
   Scenario: List property lists -- tenant with zero lists returns empty array
     Given the tenant has 0 property lists
     When the Buyer Agent sends a list_property_lists request with no filters
@@ -109,7 +109,7 @@ Feature: BR-UC-013 Manage Property Lists
     And the response is not an error
     # Boundary: empty state for list operation
 
-  @T-UC-013-008 @list @tenant @post-s3 @br-rule-071 @pending
+  @T-UC-013-008 @list @tenant @post-s3 @br-rule-071
   Scenario: List property lists -- only own tenant lists returned
     Given tenant-A has 3 property lists
     And tenant-B has 2 property lists
@@ -118,7 +118,7 @@ Feature: BR-UC-013 Manage Property Lists
     And no lists from tenant-B appear in the response
     # BR-RULE-071 INV-1: All operations scoped to authenticated tenant
 
-  @T-UC-013-009 @create @happy-path @post-s1 @post-s7 @post-s6 @br-rule-074 @pending
+  @T-UC-013-009 @create @happy-path @post-s1 @post-s7 @post-s6 @br-rule-074
   Scenario Outline: Create property list via <transport> -- returns list_id and auth_token
     When the Buyer Agent creates a property list via <transport> with:
     | name | My Programmatic TV List |
@@ -135,14 +135,14 @@ Feature: BR-UC-013 Manage Property Lists
       | MCP       |
       | REST      |
 
-  @T-UC-013-010 @create @tenant @post-s1 @br-rule-071 @pending
+  @T-UC-013-010 @create @tenant @post-s1 @br-rule-071
   Scenario: Create property list -- list is scoped to creating tenant
     When the Buyer Agent authenticated as tenant-A creates a property list with name "Tenant A List"
     Then the list is stored under tenant-A
     And a list_property_lists request from tenant-B does not include this list
     # BR-RULE-071 INV-3: Created list associated with creating principal's tenant
 
-  @T-UC-013-011 @create @post-s1 @pending
+  @T-UC-013-011 @create @post-s1
   Scenario: Create property list -- duplicate name is allowed
     Given the tenant has a property list with name "My Travel List"
     When the Buyer Agent creates a property list with name "My Travel List"
@@ -188,7 +188,7 @@ Feature: BR-UC-013 Manage Property Lists
       | identifiers    | single identifiers entry with non-empty array      | [{"selection_type": "identifiers", "identifiers": [{"type": "domain", "value": "example.com"}]}]                                                                              |
       | mixed_sources  | multiple mixed source types                        | [{"selection_type": "publisher_tags", "publisher_domain": "a.com", "tags": ["t1"]}, {"selection_type": "identifiers", "identifiers": [{"type": "domain", "value": "b.com"}]}] |
 
-  @T-UC-013-014 @create @ext-a @validation @error @partition @boundary @br-rule-072 @post-f1 @post-f2 @pending
+  @T-UC-013-014 @create @ext-a @validation @error @partition @boundary @br-rule-072 @post-f1 @post-f2
   Scenario Outline: Create property list -- base_properties <source_type> is rejected
     When the Buyer Agent creates a property list with name "Invalid Source" and base_properties <source_value>
     Then the error code should be "<error_code>"
@@ -234,7 +234,7 @@ Feature: BR-UC-013 Manage Property Lists
       | country_1char         | country code 1 character (too short)            | {"countries_all": ["U"], "channels_any": ["display"]}          | FILTERS_INVALID_COUNTRY_CODE |
       | invalid_channel       | unknown channel value                           | {"countries_all": ["US"], "channels_any": ["unknown_channel"]} | FILTERS_INVALID_CHANNEL      |
 
-  @T-UC-013-017 @create @ext-a @validation @error @boundary @br-rule-075 @post-f1 @post-f2 @pending
+  @T-UC-013-017 @create @ext-a @validation @error @boundary @br-rule-075 @post-f1 @post-f2
   Scenario: Create property list -- webhook_url on create is rejected
     When the Buyer Agent creates a property list with name "Webhook Test" and webhook_url "https://example.com/hook"
     Then the error code should be "WEBHOOK_URL_NOT_ALLOWED_ON_CREATE"
@@ -242,7 +242,7 @@ Feature: BR-UC-013 Manage Property Lists
     # BR-RULE-075 INV-3: webhook_url in create request -> rejected
     # @bva boundary: webhook_url provided in create request (schema violation)
 
-  @T-UC-013-018 @get @happy-path @partition @post-s2 @post-s6 @pending
+  @T-UC-013-018 @get @happy-path @partition @post-s2 @post-s6
   Scenario Outline: Get property list via <transport> -- returns full configuration and resolved identifiers
     Given an existing property list "list-abc" with base_properties and filters
     And the Buyer Agent has an authenticated connection via <transport>
@@ -261,7 +261,7 @@ Feature: BR-UC-013 Manage Property Lists
       | MCP       | existing_own_list |
       | REST      | existing_own_list |
 
-  @T-UC-013-019 @get @resolution @partition @boundary @br-rule-077 @pending
+  @T-UC-013-019 @get @resolution @partition @boundary @br-rule-077
   Scenario Outline: Get property list -- resolve <resolve_state> triggers identifier resolution
     Given an existing property list "list-abc" with base_properties matching 50 identifiers
     When the Buyer Agent sends a get_property_list request for "list-abc" <resolve_param>
@@ -274,7 +274,7 @@ Feature: BR-UC-013 Manage Property Lists
       | resolve_true_explicit  | resolve=true (explicit)               | with resolve=true          |
       | omitted_default        | resolve absent (defaults to true)     | without specifying resolve |
 
-  @T-UC-013-021 @get @resolution @partition @boundary @br-rule-077 @pending
+  @T-UC-013-021 @get @resolution @partition @boundary @br-rule-077
   Scenario: Get property list -- resolve=false returns metadata only
     Given an existing property list "list-abc"
     When the Buyer Agent sends a get_property_list request for "list-abc" with resolve=false
@@ -283,7 +283,7 @@ Feature: BR-UC-013 Manage Property Lists
     # BR-RULE-077 INV-2: resolve=false -> no identifiers returned
     # @bva boundary: resolve=false (metadata-only)
 
-  @T-UC-013-022 @get @ext-b @resolution @error @partition @boundary @br-rule-077 @post-f2 @pending
+  @T-UC-013-022 @get @ext-b @resolution @error @partition @boundary @br-rule-077 @post-f2
   Scenario: Get property list -- resolve as non-boolean is rejected
     Given an existing property list "list-abc"
     When the Buyer Agent sends a get_property_list request for "list-abc" with resolve="yes"
@@ -291,7 +291,7 @@ Feature: BR-UC-013 Manage Property Lists
     And the error should include "suggestion" field
     # @bva boundary: resolve as string 'true' (type mismatch)
 
-  @T-UC-013-023 @get @resolution @pagination @br-rule-077 @pending
+  @T-UC-013-023 @get @resolution @pagination @br-rule-077
   Scenario: Get property list -- pagination with resolve=false has no effect
     Given an existing property list "list-abc"
     When the Buyer Agent sends a get_property_list request for "list-abc" with resolve=false and pagination {"max_results": 100}
@@ -302,7 +302,7 @@ Feature: BR-UC-013 Manage Property Lists
     # @bva boundary: pagination with resolve=false (no-op)
     # --- Get: resolution filter semantics ---
 
-  @T-UC-013-024 @get @resolution @br-rule-073 @pending
+  @T-UC-013-024 @get @resolution @br-rule-073
   Scenario: Get property list -- resolution applies AND on countries_all, OR on channels_any
     Given an existing property list with filters {"countries_all": ["US", "CA"], "channels_any": ["display", "video"]}
     And the property catalog has property P1 with data for US and CA supporting display
@@ -314,7 +314,7 @@ Feature: BR-UC-013 Manage Property Lists
     # BR-RULE-073 INV-2+3: countries_all = AND logic, channels_any = OR logic
     # P2 fails countries_all (missing CA); P3 fails channels_any (social not in [display,video])
 
-  @T-UC-013-025 @get @resolution @br-rule-072 @pending
+  @T-UC-013-025 @get @resolution @br-rule-072
   Scenario: Get property list -- base_properties narrows resolution scope
     Given an existing property list with base_properties [{"selection_type": "publisher_tags", "publisher_domain": "a.com", "tags": ["sports"]}] and no filters
     And the property catalog has properties from "a.com" tagged "sports" (P1, P2)
@@ -324,7 +324,7 @@ Feature: BR-UC-013 Manage Property Lists
     And the resolved identifiers do not include P3
     # BR-RULE-072 INV-1: base_properties present -> only specified sources; absent -> entire catalog
 
-  @T-UC-013-026 @get @resolution @br-rule-072 @br-rule-073 @pending
+  @T-UC-013-026 @get @resolution @br-rule-072 @br-rule-073
   Scenario: Get property list -- absent base_properties and filters means unconstrained resolution
     Given an existing property list with no base_properties and no filters
     And the property catalog has 100 properties across various countries and channels
@@ -333,7 +333,7 @@ Feature: BR-UC-013 Manage Property Lists
     # BR-RULE-072 INV-1: Absent base_properties -> entire catalog
     # BR-RULE-073 INV-4: Absent filters -> no country/channel constraints
 
-  @T-UC-013-028 @get @resolution @boundary @br-rule-077 @pending
+  @T-UC-013-028 @get @resolution @boundary @br-rule-077
   Scenario: Get property list -- resolution returns empty when no properties match
     Given an existing property list with filters {"countries_all": ["ZZ"], "channels_any": ["display"]}
     And no properties in the catalog have data for country "ZZ"
@@ -359,7 +359,7 @@ Feature: BR-UC-013 Manage Property Lists
       | max_results_default | max_results=1000 (default)                                 | {"max_results": 1000}  | 1000         |
       | max_results_max     | max_results=10000 (maximum)                                | {"max_results": 10000} | 10000        |
 
-  @T-UC-013-030 @get @pagination @partition @boundary @post-s2 @br-rule-077 @pending
+  @T-UC-013-030 @get @pagination @partition @boundary @post-s2 @br-rule-077
   Scenario Outline: Get property list -- <pagination_state> retrieves next page of identifiers
     Given an existing property list "list-abc" with base_properties matching 2500 identifiers
     When the Buyer Agent sends a get_property_list request for "list-abc" with pagination {"max_results": 1000}
@@ -388,7 +388,7 @@ Feature: BR-UC-013 Manage Property Lists
       | max_results_exceeded | max_results=10001 (above maximum) | {"max_results": 10001}            | PAGINATION_MAX_RESULTS_EXCEEDED |
       | invalid_cursor       | invalid cursor value             | {"cursor": "invalid-cursor-value"} | PAGINATION_INVALID_CURSOR       |
 
-  @T-UC-013-032 @update @happy-path @post-s4 @post-s6 @pending
+  @T-UC-013-032 @update @happy-path @post-s4 @post-s6
   Scenario Outline: Update property list via <transport> -- returns updated list
     Given an existing property list "list-abc" with name "Original Name"
     And the Buyer Agent has an authenticated connection via <transport>
@@ -403,7 +403,7 @@ Feature: BR-UC-013 Manage Property Lists
       | MCP       |
       | REST      |
 
-  @T-UC-013-033 @update @post-s4 @br-rule-075 @pending
+  @T-UC-013-033 @update @post-s4 @br-rule-075
   Scenario: Update property list -- provided field completely replaces existing value
     Given an existing property list "list-abc" with base_properties [{"selection_type": "publisher_tags", "publisher_domain": "old.com", "tags": ["old"]}]
     When the Buyer Agent updates property list "list-abc" with base_properties [{"selection_type": "identifiers", "identifiers": [{"type": "domain", "value": "new.com"}]}]
@@ -411,7 +411,7 @@ Feature: BR-UC-013 Manage Property Lists
     And no trace of the old publisher_tags entry remains
     # BR-RULE-075 INV-1: Full replacement semantics
 
-  @T-UC-013-034 @update @post-s4 @br-rule-075 @pending
+  @T-UC-013-034 @update @post-s4 @br-rule-075
   Scenario: Update property list -- omitted fields retain existing values (including no-op)
     Given an existing property list "list-abc" with name "Original" and description "Keep this"
     When the Buyer Agent updates property list "list-abc" with name "Changed" and no description field
@@ -436,7 +436,7 @@ Feature: BR-UC-013 Manage Property Lists
       | change_url      | webhook_url changed to a different valid URI via update          | https://old.com | https://new.example.com/hook | https://new.example.com/hook |
       | clear_via_empty | webhook_url set to empty string in update (removes webhook)     | https://old.com |                              | (not set)                    |
 
-  @T-UC-013-037 @update @ext-c @validation @error @boundary @br-rule-075 @post-f2 @pending
+  @T-UC-013-037 @update @ext-c @validation @error @boundary @br-rule-075 @post-f2
   Scenario: Update property list -- webhook_url with invalid URI format is rejected
     Given an existing property list "list-abc"
     When the Buyer Agent updates property list "list-abc" with webhook_url "not-a-uri"
@@ -458,7 +458,7 @@ Feature: BR-UC-013 Manage Property Lists
       | base_properties | unknown_selection_type | [{"selection_type": "unknown"}]                         | BASE_PROPERTIES_INVALID_SOURCE_TYPE |
       | filters         | countries_empty_array  | {"countries_all": [], "channels_any": ["display"]}      | FILTERS_COUNTRIES_REQUIRED          |
 
-  @T-UC-013-039 @delete @happy-path @post-s5 @post-s6 @pending
+  @T-UC-013-039 @delete @happy-path @post-s5 @post-s6
   Scenario Outline: Delete property list via <transport> -- confirms deletion
     Given an existing property list "list-abc" not referenced by any media buy
     And the Buyer Agent has an authenticated connection via <transport>
@@ -473,7 +473,7 @@ Feature: BR-UC-013 Manage Property Lists
       | MCP       |
       | REST      |
 
-  @T-UC-013-040 @delete @ext-d @post-s5 @br-rule-076 @pending
+  @T-UC-013-040 @delete @ext-d @post-s5 @br-rule-076
   Scenario: Delete property list -- list is no longer retrievable; repeat delete returns LIST_NOT_FOUND
     Given an existing property list "list-abc" not referenced by any media buy
     When the Buyer Agent deletes property list "list-abc"
@@ -487,7 +487,7 @@ Feature: BR-UC-013 Manage Property Lists
     # Verify retrieval fails
     # Verify idempotency: second delete also returns LIST_NOT_FOUND
 
-  @T-UC-013-042 @error @ext-e @partition @post-f1 @post-f2 @post-f4 @br-rule-076 @pending
+  @T-UC-013-042 @error @ext-e @partition @post-f1 @post-f2 @post-f4 @br-rule-076
   Scenario Outline: <operation> property list -- LIST_NOT_FOUND when list_id does not exist
     When the Buyer Agent sends a <operation> request for nonexistent list_id "list-does-not-exist"
     Then the error code should be "LIST_NOT_FOUND"
@@ -503,7 +503,7 @@ Feature: BR-UC-013 Manage Property Lists
       | get       | nonexistent_list_id |
       | delete    | nonexistent_list_id |
 
-  @T-UC-013-043 @error @ext-e @tenant @post-f1 @post-f4 @br-rule-071 @pending
+  @T-UC-013-043 @error @ext-e @tenant @post-f1 @post-f4 @br-rule-071
   Scenario: Get property list -- cross-tenant list_id appears as LIST_NOT_FOUND
     Given tenant-B has a property list "list-tenant-b"
     When the Buyer Agent authenticated as tenant-A sends a get request for "list-tenant-b"
@@ -513,7 +513,7 @@ Feature: BR-UC-013 Manage Property Lists
     # BR-RULE-071 INV-2: Cross-tenant access returns NOT_FOUND (not ACCESS_DENIED)
     # @bva boundary: list_id of a list in another tenant (same ID, different tenant)
 
-  @T-UC-013-044 @error @ext-e @context-echo @post-f3 @br-rule-043 @pending
+  @T-UC-013-044 @error @ext-e @context-echo @post-f3 @br-rule-043
   Scenario: Get property list -- LIST_NOT_FOUND still echoes context
     When the Buyer Agent sends a get_property_list request for "list-nonexistent" with context {"trace_id": "abc123"}
     Then the error code should be "LIST_NOT_FOUND"
@@ -522,7 +522,7 @@ Feature: BR-UC-013 Manage Property Lists
     # POST-F3: Application context echoed even on error
     # --- Extension F: LIST_ACCESS_DENIED ---
 
-  @T-UC-013-045 @error @ext-f @post-f1 @post-f2 @br-rule-070 @pending
+  @T-UC-013-045 @error @ext-f @post-f1 @post-f2 @br-rule-070
   Scenario Outline: <operation> property list -- LIST_ACCESS_DENIED when principal lacks permission
     Given an existing property list "list-restricted" with restricted access
     When an unauthorized principal sends a <operation> request for "list-restricted"
@@ -535,7 +535,7 @@ Feature: BR-UC-013 Manage Property Lists
       | get       |
       | update    |
 
-  @T-UC-013-047 @error @ext-g @delete @post-f1 @post-f2 @br-rule-076 @pending
+  @T-UC-013-047 @error @ext-g @delete @post-f1 @post-f2 @br-rule-076
   Scenario: Delete property list -- LIST_IN_USE when referenced by active media buy
     Given an existing property list "list-active" referenced by an active media buy
     When the Buyer Agent deletes property list "list-active"
@@ -549,7 +549,7 @@ Feature: BR-UC-013 Manage Property Lists
     # Note: POST-F3 context echo on error is tested by T-UC-013-044 (LIST_NOT_FOUND).
     # Same echo behavior applies to LIST_ACCESS_DENIED and LIST_IN_USE per BR-RULE-043.
 
-  @T-UC-013-050 @auth @error @post-f1 @post-f2 @br-rule-070 @pending
+  @T-UC-013-050 @auth @error @post-f1 @post-f2 @br-rule-070
   Scenario Outline: <operation> property list -- unauthenticated request rejected
     When an unauthenticated Buyer Agent sends a <operation> property list request
     Then the error code should be "LIST_ACCESS_DENIED"
@@ -563,7 +563,7 @@ Feature: BR-UC-013 Manage Property Lists
       | list      |
       | get       |
 
-  @T-UC-013-051 @auth @error @post-f1 @post-f2 @br-rule-070 @pending
+  @T-UC-013-051 @auth @error @post-f1 @post-f2 @br-rule-070
   Scenario Outline: <operation> property list -- valid credentials but unresolvable tenant
     Given no tenant can be resolved from the request context
     When the Buyer Agent sends a <operation> property list request
@@ -579,7 +579,7 @@ Feature: BR-UC-013 Manage Property Lists
       | list      |
       | delete    |
 
-  @T-UC-013-052 @auth @br-rule-070 @pending
+  @T-UC-013-052 @auth @br-rule-070
   Scenario Outline: Reference property list -- auth_token <token_state> for seller resolution
     Given a property list "list-abc" with auth_token "correct-token"
     When a seller references "list-abc" with auth_token <provided_token>
@@ -591,14 +591,14 @@ Feature: BR-UC-013 Manage Property Lists
       | correct     | "correct-token" | the seller can fetch the list for resolution    |
       | mismatch    | "wrong-token"   | the seller cannot fetch the list for resolution |
 
-  @T-UC-013-053 @auth @error @br-rule-070 @post-f2 @pending
+  @T-UC-013-053 @auth @error @br-rule-070 @post-f2
   Scenario: Reference property list -- auth_token missing when seller tries to resolve
     Given a property list "list-abc" exists and requires an auth_token for seller resolution
     When a seller references "list-abc" without providing an auth_token
     Then the error code should be "AUTH_TOKEN_MISSING"
     And the error should include "suggestion" field
 
-  @T-UC-013-054 @auth @post-s7 @br-rule-074 @pending
+  @T-UC-013-054 @auth @post-s7 @br-rule-074
   Scenario Outline: <operation> property list -- auth_token absent from non-create response
     Given an existing property list "list-abc"
     When the Buyer Agent sends a <operation>_property_list request for "list-abc"
@@ -613,7 +613,7 @@ Feature: BR-UC-013 Manage Property Lists
       | update    |
       | delete    |
 
-  @T-UC-013-055 @list @auth @post-s7 @br-rule-074 @pending
+  @T-UC-013-055 @list @auth @post-s7 @br-rule-074
   Scenario: List property lists -- auth_token absent from list response items
     Given the tenant has 3 property lists
     When the Buyer Agent sends a list_property_lists request
@@ -623,7 +623,7 @@ Feature: BR-UC-013 Manage Property Lists
     # not a testable scenario. The auth_token absence from get/update/delete is verified by T-UC-013-054.
     # Lost token requires list recreation -- this is a protocol-level documentation point.
 
-  @T-UC-013-057 @context-echo @post-s6 @br-rule-043 @pending
+  @T-UC-013-057 @context-echo @post-s6 @br-rule-043
   Scenario Outline: <operation> property list -- context present is echoed unchanged
     When the Buyer Agent sends a <operation> property list request with context {"trace_id": "t-001", "campaign": "q4"}
     Then the response context is {"trace_id": "t-001", "campaign": "q4"}
@@ -635,14 +635,14 @@ Feature: BR-UC-013 Manage Property Lists
       | list      |
       | get       |
 
-  @T-UC-013-057b @context-echo @post-s6 @br-rule-043 @pending
+  @T-UC-013-057b @context-echo @post-s6 @br-rule-043
   Scenario: Create property list -- context absent means context omitted from response
     When the Buyer Agent sends a create property list request without context
     Then the response does not contain a context field
     # BR-RULE-043 INV-2: No context in request -> no context in response
     # Note: Error-path context echo covered in Group 6 (T-UC-013-044).
 
-  @T-UC-013-058 @create @error @post-f1 @pending
+  @T-UC-013-058 @create @error @post-f1
   Scenario: Create property list -- failed create does not persist any list
     When the Buyer Agent creates a property list with name (absent)
     Then the error code should be "NAME_REQUIRED"
@@ -650,7 +650,7 @@ Feature: BR-UC-013 Manage Property Lists
     When the Buyer Agent sends a list_property_lists request
     Then no new list was added
 
-  @T-UC-013-059 @update @error @post-f1 @pending
+  @T-UC-013-059 @update @error @post-f1
   Scenario: Update property list -- failed update does not modify list state
     Given an existing property list "list-abc" with name "Original"
     When the Buyer Agent updates property list "list-abc" with filters {"countries_all": [], "channels_any": ["display"]}
@@ -661,14 +661,14 @@ Feature: BR-UC-013 Manage Property Lists
     And no fields were modified
     # Note: POST-F1 for delete covered by T-UC-013-047 (list persists after LIST_IN_USE)
 
-  @T-UC-013-060 @precondition @pending
+  @T-UC-013-060 @precondition
   Scenario: Any operation -- Seller Agent unavailable returns connection error
     Given the Seller Agent is not operational
     When the Buyer Agent sends a list_property_lists request
     Then the request fails with a connection or service unavailable error
     # PRE-C1 violation
 
-  @T-UC-013-061 @precondition @pending
+  @T-UC-013-061 @precondition
   Scenario Outline: <transport> operation -- without established connection fails
     Given a Seller Agent is operational and accepting requests
     But the Buyer Agent has not established a <transport> connection
@@ -681,7 +681,7 @@ Feature: BR-UC-013 Manage Property Lists
       | MCP       |
       | A2A       |
 
-  @T-UC-013-062 @create @get @update @delete @lifecycle @pending
+  @T-UC-013-062 @create @get @update @delete @lifecycle
   Scenario: Property list CRUD lifecycle -- create, get, update, get, delete
     When the Buyer Agent creates a property list with name "Lifecycle Test" and base_properties [{"selection_type": "identifiers", "identifiers": [{"type": "domain", "value": "example.com"}]}]
     Then the response contains a generated list_id

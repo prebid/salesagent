@@ -590,14 +590,10 @@ def _transform_scenario_tags(
         elif status in ("stale", "conflict"):
             if "@skip" not in output_tags:
                 output_tags.append("@skip")
-        elif status == "new":
-            # Known scenario but not yet mapped to an obligation — still pending
-            if "@pending" not in output_tags:
-                output_tags.append("@pending")
+        # status=new: no tag needed — pytest_runtest_makereport auto-xfails
+        # scenarios with missing step definitions at runtime
     else:
-        # New scenario — add @pending tag and create a new mapping entry
-        if "@pending" not in output_tags:
-            output_tags.append("@pending")
+        # New scenario — create a mapping entry (no @pending tag needed)
         business_rules = _extract_business_rules(scenario.tags)
         new_mapping = {
             "adcp_scenario_id": scenario_id,
