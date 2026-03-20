@@ -43,61 +43,29 @@ class A2ADispatcher:
 
 
 class RestDispatcher:
-    """Dispatch via FastAPI TestClient → route → _raw() → _impl()."""
+    """Dispatch via FastAPI TestClient → route → _raw() → _impl().
+
+    Identity flows through kwargs to env.call_rest() → _run_rest_request(),
+    which pops it and configures the FastAPI auth dep override per-request.
+    """
 
     def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
         try:
-            client = env.get_rest_client()
-            body = env.build_rest_body(**kwargs)
-            endpoint = env.REST_ENDPOINT  # type: ignore[attr-defined]
-            response = client.post(endpoint, json=body)
-
-            if response.status_code >= 400:
-                error = env.parse_rest_error(response.status_code, response.json())
-                return TransportResult(
-                    error=error,
-                    envelope={
-                        "transport": "rest",
-                        "status_code": response.status_code,
-                        "content_type": response.headers.get("content-type", ""),
-                    },
-                    raw_response=response,
-                )
-
-            payload = env.parse_rest_response(response.json())
-            return TransportResult(
-                payload=payload,
-                envelope={
-                    "transport": "rest",
-                    "status_code": response.status_code,
-                    "content_type": response.headers.get("content-type", ""),
-                },
-                raw_response=response,
-            )
+            payload = env.call_rest(**kwargs)
         except Exception as exc:
             return TransportResult(error=exc)
-
-
-_MCP_SENTINEL = object()
+        return TransportResult(payload=payload, envelope={"transport": "rest"})
 
 
 class McpDispatcher:
     """Dispatch via mock Context → async MCP wrapper → _impl().
 
-    The MCP wrapper is async, so this dispatcher uses asyncio.run()
-    to bridge from the sync dispatch() interface. The env.call_mcp()
-    method handles Context mocking and ToolResult extraction.
+    Identity flows through kwargs to env.call_mcp() → _run_mcp_wrapper(),
+    which pops it and configures the mock Context.
     """
 
     def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
         try:
-            # MCP wrappers get identity from ctx.get_state(), not kwargs.
-            # Extract identity and pass it as _mcp_identity so _run_mcp_wrapper
-            # can set the mock Context's get_state to return this identity
-            # instead of the default. This enables multi-agent and no-auth scenarios.
-            identity = kwargs.pop("identity", _MCP_SENTINEL)
-            if identity is not _MCP_SENTINEL:
-                kwargs["_mcp_identity"] = identity
             payload = env.call_mcp(**kwargs)
         except Exception as exc:
             return TransportResult(error=exc)

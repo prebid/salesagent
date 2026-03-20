@@ -143,7 +143,7 @@ def _list_accounts_impl(
 ) -> ListAccountsResponse:
     """List accounts accessible to the authenticated agent.
 
-    Per BR-RULE-055: works without auth, returns empty array for unauthenticated.
+    Per BR-RULE-055: requires authentication, raises AUTH_TOKEN_INVALID if missing.
     Per BR-RULE-054: returns only accounts accessible to the agent.
 
     Args:
@@ -158,12 +158,11 @@ def _list_accounts_impl(
 
     _validate_list_request(req)
 
-    # BR-RULE-055: unauthenticated → empty response
+    # BR-RULE-055 INV-3: unauthenticated → auth error (consistent with sync_accounts)
     if identity is None or identity.tenant_id is None:
-        return ListAccountsResponse(
-            accounts=[],
-            context=req.context,
-        )
+        from src.core.exceptions import AdCPAuthenticationError
+
+        raise AdCPAuthenticationError("Authentication required for list_accounts")
 
     tenant_id = identity.tenant_id
     principal_id = identity.principal_id

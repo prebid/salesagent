@@ -1,4 +1,4 @@
-# Generated from adcp-req @ bd801586c630f4d09c3d3162c3c6fd8d0a8b53c6 on 2026-03-20T01:32:25Z
+# Generated from adcp-req @ bd0ac526cf247a14d5dab4cfa7b03a8bd431d965 on 2026-03-20T10:33:32Z
 # DO NOT EDIT -- re-run: python scripts/compile_bdd.py
 
 Feature: BR-UC-011 Manage Accounts
@@ -68,11 +68,12 @@ Feature: BR-UC-011 Manage Accounts
     # @bva accounts (response): 0 accounts visible
 
   @T-UC-011-list-unauth @list @auth @partition @boundary
-  Scenario: List accounts without authentication returns empty (no token on list)
+  Scenario: List accounts without authentication returns auth error (no token on list)
     Given the Buyer Agent has an unauthenticated connection
     When the Buyer Agent sends a list_accounts request without an authentication token
-    Then the response contains an empty accounts array
-    And the response is not an error
+    Then the response is an error variant with no accounts array
+    And the error code is "AUTH_TOKEN_INVALID"
+    And the error message describes the authentication requirement
     # @bva authentication (account operations): no token on list
 
   @T-UC-011-list-pagination @list @pagination @post-s4

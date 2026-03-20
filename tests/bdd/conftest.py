@@ -215,23 +215,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                         item.add_marker(pytest.mark.xfail(reason=reason, strict=strict))
                     break
 
-        # FIXME(salesagent-4ud): REST no-auth/multi-agent scenarios — TestClient auth
-        # dep override is per-client (always returns valid identity), not per-request.
-        # These 5 scenarios need request-level auth simulation to work through REST.
-        if is_rest and any(t.startswith("T-UC-011") for t in marker_names):
-            _REST_INFRA_TAGS = {
-                "T-UC-011-ext-a-no-token",
-                "T-UC-011-ext-a-expired",
-                "T-UC-011-ext-f-scoped",  # multi-agent delete_missing
-                "T-UC-011-ext-g-echo-error",  # context echo error path
-                "T-UC-011-atomic-error",  # error variant
-            }
-            if marker_names & _REST_INFRA_TAGS:
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="REST TestClient auth override is per-client, not per-request", strict=True
-                    )
-                )
+        # UC-011 REST: per-request auth implemented (salesagent-xms)
 
         # FIXME(salesagent-9d5): UC-006 REST — account resolution through CreativeSyncEnv
         # REST route for sync_creatives exists but account kwarg may not be
