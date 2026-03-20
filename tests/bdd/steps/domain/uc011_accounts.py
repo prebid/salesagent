@@ -1502,17 +1502,9 @@ def when_request_with_context(ctx: dict, operation: str, ctx_json: str) -> None:
     context_obj = ContextObject.model_validate(context_data)
 
     if operation == "list_accounts":
-        # TRANSPORT-BYPASS: cross-cutting list under sync env
         from src.core.schemas.account import ListAccountsRequest
-        from src.core.tools.accounts import _list_accounts_impl
 
         req = ListAccountsRequest(context=context_obj)
-        env = ctx["env"]
-        env._commit_factory_data()
-        try:
-            ctx["response"] = _list_accounts_impl(req=req, identity=env.identity)
-        except Exception as exc:
-            ctx["error"] = exc
     else:
         from src.core.schemas.account import SyncAccountsRequest
 
@@ -1522,14 +1514,14 @@ def when_request_with_context(ctx: dict, operation: str, ctx_json: str) -> None:
             context=context_obj,
         )
 
-        kwargs: dict[str, Any] = {}
-        if "force_identity" in ctx:
-            kwargs["identity"] = ctx["force_identity"]
+    dispatch_kwargs: dict[str, Any] = {}
+    if "force_identity" in ctx:
+        dispatch_kwargs["identity"] = ctx["force_identity"]
 
-        try:
-            dispatch_request(ctx, req=req, **kwargs)
-        except Exception as exc:
-            ctx["error"] = exc
+    try:
+        dispatch_request(ctx, req=req, **dispatch_kwargs)
+    except Exception as exc:
+        ctx["error"] = exc
 
 
 # ── When: input validation requests ────────────────────────────────────

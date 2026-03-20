@@ -213,6 +213,13 @@ class BaseTestEnv:
         - identity is ResolvedIdentity → Context returns it (valid token)
         - identity absent → uses default self.identity_for(Transport.MCP)
 
+        Context extraction (mirrors production FastMCP parameter dispatch):
+        In production, FastMCP extracts ``context`` from the tool schema
+        and passes it as a separate kwarg to the MCP wrapper. When the
+        harness receives a ``req`` object with ``req.context`` set, we
+        extract it and pass it as a separate ``context`` kwarg to exercise
+        the MCP wrapper's context merge branch (``if context is not None``).
+
         Subclass call_mcp() should do any pre-processing (enum coercion,
         kwarg popping) then delegate here.
         """
@@ -229,6 +236,13 @@ class BaseTestEnv:
         _NO_OVERRIDE = object()
         identity = kwargs.pop("identity", _NO_OVERRIDE)
         mcp_identity = self.identity_for(Transport.MCP) if identity is _NO_OVERRIDE else identity
+
+        # Extract context from req if present and no explicit context kwarg.
+        # Mirrors FastMCP behavior: tool parameters are passed as separate kwargs.
+        if "context" not in kwargs:
+            req = kwargs.get("req")
+            if req is not None and hasattr(req, "context") and req.context is not None:
+                kwargs["context"] = req.context
 
         mock_ctx = MagicMock(spec=Context)
         mock_ctx.get_state = AsyncMock(return_value=mcp_identity)
