@@ -134,7 +134,10 @@ class DeliveryPollMixin:
 
         # Pop identity — it's injected by call_via for transport dispatch
         # but is not a GetMediaBuyDeliveryRequest field.
-        identity = extra.pop("identity", None) or self.identity  # type: ignore[attr-defined]
+        # Use sentinel to distinguish "not provided" from "explicitly None".
+        _no_identity = object()
+        raw_identity = extra.pop("identity", _no_identity)
+        identity = self.identity if raw_identity is _no_identity else raw_identity  # type: ignore[attr-defined]
 
         kwargs: dict[str, Any] = {}
         if media_buy_ids is not None:

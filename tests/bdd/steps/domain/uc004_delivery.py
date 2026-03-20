@@ -479,17 +479,46 @@ def when_request_end_only(ctx: dict, end: str) -> None:
 
 @when("the Buyer Agent requests delivery metrics")
 def when_request_delivery_default(ctx: dict) -> None:
-    """Request delivery metrics (generic, uses ctx media_buys)."""
+    """Request delivery metrics (generic, uses ctx media_buys).
+
+    Respects ctx["principal_id"] override for scenarios like 'principal not found'.
+    """
     media_buys = ctx.get("media_buys", {})
     mb_ids = list(media_buys.keys()) or None
-    dispatch_request(ctx, media_buy_ids=mb_ids)
+    kwargs: dict = {}
+    if mb_ids:
+        kwargs["media_buy_ids"] = mb_ids
+    # Override identity if ctx has a custom principal_id (e.g. "unknown-buyer")
+    if "principal_id" in ctx:
+        from src.core.resolved_identity import ResolvedIdentity
+
+        env = ctx["env"]
+        kwargs["identity"] = ResolvedIdentity(
+            principal_id=ctx["principal_id"],
+            tenant_id=env._tenant_id,
+            protocol="impl",
+        )
+    dispatch_request(ctx, **kwargs)
 
 
 @when("the Buyer Agent sends a delivery metrics request without authentication")
 def when_request_no_auth(ctx: dict) -> None:
-    """Request delivery metrics without authentication."""
+    """Request delivery metrics with missing principal (authenticated but no principal_id).
+
+    The feature scenario 'Authentication error - missing principal' expects the
+    principal_id_missing error code, which requires identity to exist but have
+    no principal_id. identity=None would trigger a different error (VALIDATION_ERROR).
+    """
+    from src.core.resolved_identity import ResolvedIdentity
+
     ctx["has_auth"] = False
-    dispatch_request(ctx)
+    env = ctx["env"]
+    no_principal = ResolvedIdentity(
+        principal_id=None,
+        tenant_id=env._tenant_id,
+        protocol="mcp",
+    )
+    dispatch_request(ctx, identity=no_principal)
 
 
 # ── Webhook When steps ─────────────────────────────────────────────
@@ -791,7 +820,7 @@ def when_query_nonexistent(ctx: dict) -> None:
     dispatch_request(ctx, media_buy_ids=["mb-nonexistent"])
 
 
-@when(parsers.parse('the Buyer Agent requests delivery metrics for media_buy_ids ["{mb_id}"]'))
+@when(parsers.re(r'the Buyer Agent requests delivery metrics for media_buy_ids \["(?P<mb_id>[^"]+)"\]$'))
 def when_request_single_id_quoted(ctx: dict, mb_id: str) -> None:
     """Request for a single media buy ID (quoted format)."""
     ctx.setdefault("id_format", "quoted")
@@ -815,17 +844,7 @@ def when_request_without_field(ctx: dict, mb_id: str, field: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-@then(parsers.parse('the response should include delivery data for "{mb_id}"'))
-def then_includes_delivery_data(ctx: dict, mb_id: str) -> None:
-    """Assert response includes delivery data for the given media buy."""
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
-    deliveries = getattr(resp, "media_buy_deliveries", None) or []
-    mb_ids = [d.media_buy_id for d in deliveries]
-    assert mb_id in mb_ids, f"Expected delivery data for '{mb_id}', got: {mb_ids}"
-
-
-@then(parsers.parse('the response should include delivery data for "{mb_id1}" and "{mb_id2}"'))
+@then(parsers.re(r'the response should include delivery data for "(?P<mb_id1>[^"]+)" and "(?P<mb_id2>[^"]+)"'))
 def then_includes_delivery_data_both(ctx: dict, mb_id1: str, mb_id2: str) -> None:
     """Assert response includes delivery data for both media buys."""
     resp = ctx.get("response")
@@ -834,6 +853,16 @@ def then_includes_delivery_data_both(ctx: dict, mb_id1: str, mb_id2: str) -> Non
     mb_ids = [d.media_buy_id for d in deliveries]
     assert mb_id1 in mb_ids, f"Expected delivery data for '{mb_id1}', got: {mb_ids}"
     assert mb_id2 in mb_ids, f"Expected delivery data for '{mb_id2}', got: {mb_ids}"
+
+
+@then(parsers.re(r'the response should include delivery data for "(?P<mb_id>[^"]+)"$'))
+def then_includes_delivery_data(ctx: dict, mb_id: str) -> None:
+    """Assert response includes delivery data for the given media buy."""
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response but none found"
+    deliveries = getattr(resp, "media_buy_deliveries", None) or []
+    mb_ids = [d.media_buy_id for d in deliveries]
+    assert mb_id in mb_ids, f"Expected delivery data for '{mb_id}', got: {mb_ids}"
 
 
 @then(parsers.parse('the response should include delivery data for "{mb_id}" only'))
