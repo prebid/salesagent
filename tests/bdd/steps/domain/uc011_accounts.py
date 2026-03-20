@@ -80,13 +80,16 @@ def _find_account_by_brand(resp: Any, domain: str, brand_id: str | None = None) 
     raise AssertionError(f"No account found for domain '{domain}'{suffix}. Available: {domains}")
 
 
-def _sync_pre_create(ctx: dict, brand_domain: str, operator: str, billing: str) -> None:
-    """Pre-create an account via sync so it exists for update/unchanged tests."""
+def _sync_pre_create(ctx: dict, brand_domain: str, operator: str, billing: str, **extra: Any) -> None:
+    """Pre-create an account via sync so it exists for update/unchanged tests.
+
+    Extra kwargs (e.g., payment_terms, governance_agents) are merged into the account entry.
+    """
     from src.core.schemas.account import SyncAccountsRequest
 
-    req = SyncAccountsRequest(
-        accounts=[{"brand": {"domain": brand_domain}, "operator": operator, "billing": billing}],
-    )
+    entry: dict[str, Any] = {"brand": {"domain": brand_domain}, "operator": operator, "billing": billing}
+    entry.update(extra)
+    req = SyncAccountsRequest(accounts=[entry])
     dispatch_request(ctx, req=req)
     # Clear response so the next When step's response is fresh
     ctx.pop("response", None)
@@ -243,6 +246,24 @@ def given_existing_account(ctx: dict, domain: str, billing: str) -> None:
     """Pre-create an account via sync_accounts so it exists for update/unchanged scenarios."""
     _setup_tenant_and_principal(ctx)
     _sync_pre_create(ctx, brand_domain=domain, operator=domain, billing=billing)
+
+
+@given(parsers.parse('an account for brand domain "{domain}" already exists with payment_terms "{pt}"'))
+def given_existing_account_payment_terms(ctx: dict, domain: str, pt: str) -> None:
+    """Pre-create an account with specific payment_terms via sync_accounts."""
+    _setup_tenant_and_principal(ctx)
+    _sync_pre_create(ctx, brand_domain=domain, operator=domain, billing="operator", payment_terms=pt)
+
+
+@given(
+    parsers.parse(
+        'an account for brand domain "{domain}" already exists with billing "{billing}" and payment_terms "{pt}"'
+    )
+)
+def given_existing_account_billing_and_pt(ctx: dict, domain: str, billing: str, pt: str) -> None:
+    """Pre-create an account with specific billing and payment_terms via sync_accounts."""
+    _setup_tenant_and_principal(ctx)
+    _sync_pre_create(ctx, brand_domain=domain, operator=domain, billing=billing, payment_terms=pt)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -649,6 +670,41 @@ def when_sync_accounts_with_table(ctx: dict, datatable: Any) -> None:
     try:
         req = SyncAccountsRequest(accounts=accounts)
         dispatch_request(ctx, req=req, **kwargs)
+    except Exception as exc:
+        ctx["error"] = exc
+
+
+@when(parsers.parse('the Buyer Agent sends a sync_accounts request with governance_agents for brand "{domain}"'))
+def when_sync_with_governance_agents(ctx: dict, domain: str) -> None:
+    """Send sync_accounts with governance_agents for a brand domain.
+
+    Constructs a valid GovernanceAgent entry (url + authentication) and
+    dispatches through the standard transport pipeline.
+    """
+    from src.core.schemas.account import SyncAccountsRequest
+
+    governance_agents = [
+        {
+            "url": "https://governance.example.com/check",
+            "authentication": {
+                "schemes": ["Bearer"],
+                "credentials": "governance-token-" + "x" * 32,
+            },
+            "categories": ["budget_authority", "strategic_alignment"],
+        }
+    ]
+    try:
+        req = SyncAccountsRequest(
+            accounts=[
+                {
+                    "brand": {"domain": domain},
+                    "operator": domain,
+                    "billing": "operator",
+                    "governance_agents": governance_agents,
+                }
+            ],
+        )
+        dispatch_request(ctx, req=req)
     except Exception as exc:
         ctx["error"] = exc
 
@@ -1841,3 +1897,54 @@ def then_error_has_fix_suggestion(ctx: dict) -> None:
         assert has_field, f"Expected suggestion/recovery in error: {error}"
         return
     raise AssertionError("No error found — expected suggestion field")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# THEN steps — governance_agents + dry-run update assertions
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@then(parsers.parse('the governance_agents are stored for brand domain "{domain}"'))
+def then_governance_agents_stored(ctx: dict, domain: str) -> None:
+    """Assert governance_agents were persisted in the DB for the given brand domain."""
+    from src.core.database.database_session import get_db_session
+    from src.core.database.repositories.account import AccountRepository
+
+    tenant = ctx["tenant"]
+    principal = ctx["principal"]
+    with get_db_session() as session:
+        repo = AccountRepository(session, tenant.tenant_id)
+        accounts = repo.list_by_principal(principal.principal_id)
+        matching = [a for a in accounts if a.brand and a.brand.domain == domain]
+        assert len(matching) == 1, f"Expected 1 account for {domain}, got {len(matching)}"
+        account = matching[0]
+        assert account.governance_agents is not None, f"Expected governance_agents to be stored for {domain}, got None"
+        assert len(account.governance_agents) > 0, (
+            f"Expected non-empty governance_agents for {domain}, got {account.governance_agents}"
+        )
+
+
+@then(parsers.parse('no accounts were actually modified for brand domain "{domain}"'))
+def then_no_modifications_for_domain(ctx: dict, domain: str) -> None:
+    """Assert a dry-run did not modify the existing account's billing in the DB.
+
+    Verifies that the pre-existing account retains its original billing value
+    despite the dry-run response reporting action='updated'.
+    """
+    from src.core.database.database_session import get_db_session
+    from src.core.database.repositories.account import AccountRepository
+
+    tenant = ctx["tenant"]
+    principal = ctx["principal"]
+    with get_db_session() as session:
+        repo = AccountRepository(session, tenant.tenant_id)
+        accounts = repo.list_by_principal(principal.principal_id)
+        matching = [a for a in accounts if a.brand and a.brand.domain == domain]
+        assert len(matching) == 1, f"Expected 1 pre-existing account for {domain}, got {len(matching)}"
+        # The dry-run scenario syncs with billing='agent' but the pre-existing account
+        # was created with billing='operator'. If dry_run worked, DB still has 'operator'.
+        account = matching[0]
+        assert account.billing == "operator", (
+            f"Expected billing='operator' (unchanged by dry-run) for {domain}, "
+            f"got billing='{account.billing}' — dry_run failed to prevent DB writes"
+        )

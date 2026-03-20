@@ -638,3 +638,61 @@ Feature: BR-UC-011 Manage Accounts
     # BR-RULE-209 INV-7: sandbox validation errors are real
     # POST-F3: suggestion field present
 
+  @T-UC-011-sync-update-billing @sync @upsert @partition
+  Scenario: Sync update billing on existing account
+    Given the Buyer Agent has an authenticated connection
+    And an account for brand domain "acme-corp.com" already exists with billing "operator"
+    When the Buyer Agent sends a sync_accounts request with:
+    | brand.domain    | operator      | billing |
+    | acme-corp.com   | acme-corp.com | agent   |
+    Then the account for brand domain "acme-corp.com" has action "updated"
+    And the account billing is "agent"
+
+  @T-UC-011-sync-update-payment-terms @sync @upsert @partition
+  Scenario: Sync update payment_terms on existing account
+    Given the Buyer Agent has an authenticated connection
+    And an account for brand domain "acme-corp.com" already exists with payment_terms "net_30"
+    When the Buyer Agent sends a sync_accounts request with:
+    | brand.domain    | operator      | billing  | payment_terms |
+    | acme-corp.com   | acme-corp.com | operator | net_60        |
+    Then the account for brand domain "acme-corp.com" has action "updated"
+
+  @T-UC-011-sync-governance @sync @governance @partition
+  Scenario: Sync new account with governance_agents stores data correctly
+    Given the Buyer Agent has an authenticated connection
+    When the Buyer Agent sends a sync_accounts request with governance_agents for brand "governed.com"
+    Then the account for brand domain "governed.com" has action "created"
+    And the governance_agents are stored for brand domain "governed.com"
+
+  @T-UC-011-sync-unchanged-full @sync @upsert @partition
+  Scenario: Sync existing account with identical values is unchanged
+    Given the Buyer Agent has an authenticated connection
+    And an account for brand domain "stable.com" already exists with billing "agent" and payment_terms "net_30"
+    When the Buyer Agent sends a sync_accounts request with:
+    | brand.domain | operator  | billing | payment_terms |
+    | stable.com   | stable.com | agent   | net_30        |
+    Then the account for brand domain "stable.com" has action "unchanged"
+
+  @T-UC-011-dryrun-update @sync @dry-run @upsert @partition
+  Scenario: Dry-run detects billing change on existing account
+    Given the Buyer Agent has an authenticated connection
+    And an account for brand domain "preview.com" already exists with billing "operator"
+    When the Buyer Agent sends a sync_accounts request with dry_run true and:
+    | brand.domain | operator    | billing |
+    | preview.com  | preview.com | agent   |
+    Then the response is a success variant
+    And the response includes dry_run true
+    And the account for brand domain "preview.com" has action "updated"
+    And no accounts were actually modified for brand domain "preview.com"
+
+  @T-UC-011-dryrun-unchanged @sync @dry-run @upsert @partition
+  Scenario: Dry-run with no changes reports unchanged
+    Given the Buyer Agent has an authenticated connection
+    And an account for brand domain "steady.com" already exists with billing "operator"
+    When the Buyer Agent sends a sync_accounts request with dry_run true and:
+    | brand.domain | operator   | billing  |
+    | steady.com   | steady.com | operator |
+    Then the response is a success variant
+    And the response includes dry_run true
+    And the account for brand domain "steady.com" has action "unchanged"
+
