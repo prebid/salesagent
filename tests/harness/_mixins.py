@@ -132,6 +132,10 @@ class DeliveryPollMixin:
         """Call _get_media_buy_delivery_impl with the given parameters."""
         self._commit_factory_data()  # type: ignore[attr-defined]
 
+        # Pop identity — it's injected by call_via for transport dispatch
+        # but is not a GetMediaBuyDeliveryRequest field.
+        identity = extra.pop("identity", None) or self.identity  # type: ignore[attr-defined]
+
         kwargs: dict[str, Any] = {}
         if media_buy_ids is not None:
             kwargs["media_buy_ids"] = media_buy_ids
@@ -146,7 +150,7 @@ class DeliveryPollMixin:
         kwargs.update(extra)
 
         req = GetMediaBuyDeliveryRequest(**kwargs)
-        return _get_media_buy_delivery_impl(req, self.identity)  # type: ignore[attr-defined]
+        return _get_media_buy_delivery_impl(req, identity)
 
     @staticmethod
     def _make_default_adapter_response() -> AdapterGetMediaBuyDeliveryResponse:

@@ -166,6 +166,32 @@ class TestDeliveryPollEnvContract:
             with pytest.raises(ValidationError):
                 env.set_adapter_response("mb_001", impressions=-100)
 
+    def test_call_impl_accepts_identity_kwarg(self):
+        """call_impl must handle identity kwarg from dispatcher without error.
+
+        When dispatched via call_via → ImplDispatcher, identity is injected
+        as a kwarg. call_impl must pop it before building the request (identity
+        is not a GetMediaBuyDeliveryRequest field) and pass it to _impl separately.
+        """
+        from tests.factories.principal import PrincipalFactory
+
+        with DeliveryPollEnv() as env:
+            env.add_buy(media_buy_id="mb_001")
+            env.set_adapter_response("mb_001", impressions=5000)
+
+            # Simulate what call_via does: inject identity as kwarg
+            custom_identity = PrincipalFactory.make_identity(
+                principal_id="custom_agent",
+                tenant_id="test_tenant",
+            )
+            response = env.call_impl(
+                media_buy_ids=["mb_001"],
+                identity=custom_identity,
+            )
+
+            assert isinstance(response, GetMediaBuyDeliveryResponse)
+            assert len(response.media_buy_deliveries) >= 1
+
     def test_custom_date_range(self):
         """start_date/end_date parameters flow through to the request."""
         with DeliveryPollEnv() as env:
