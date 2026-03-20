@@ -4826,6 +4826,12 @@ mappings:
       upstream_refs: ["BR-UC-011"]
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-011-list-malformed-cursor"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011"]
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-011-list-status-all"
       adcp_feature: "BR-UC-011-manage-accounts.feature"
       obligation_id: null

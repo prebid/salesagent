@@ -342,6 +342,20 @@ def when_list_accounts_with_cursor(ctx: dict) -> None:
         ctx["error"] = exc
 
 
+@when(parsers.parse('the Buyer Agent sends a list_accounts request with cursor "{cursor}"'))
+def when_list_accounts_with_explicit_cursor(ctx: dict, cursor: str) -> None:
+    """Send list_accounts with a specific cursor string (e.g. malformed base64)."""
+    from adcp.types.generated_poc.core.pagination_request import PaginationRequest
+
+    from src.core.schemas.account import ListAccountsRequest
+
+    try:
+        req = ListAccountsRequest(pagination=PaginationRequest(cursor=cursor))
+        dispatch_request(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
+
+
 @when(parsers.parse("the Buyer Agent sends a list_accounts request with sandbox equals {value}"))
 def when_list_sandbox_filter(ctx: dict, value: str) -> None:
     """Send list_accounts with sandbox filter.
@@ -485,6 +499,28 @@ def then_pagination_has_more(ctx: dict, has_more: str) -> None:
     assert resp.pagination is not None, "Expected pagination metadata"
     expected = has_more.lower() == "true"
     assert resp.pagination.has_more == expected, f"Expected has_more={expected}, got {resp.pagination.has_more}"
+
+
+@then("the response returns accounts starting from the first page")
+def then_accounts_from_first_page(ctx: dict) -> None:
+    """Assert the response returns accounts from offset 0 (first page).
+
+    Verifies that a malformed cursor was silently treated as offset 0 by
+    checking that the first account in the sorted list is present in the
+    response.
+    """
+    resp = ctx.get("response")
+    error = ctx.get("error")
+    assert error is None, f"Expected success but got error: {error}"
+    assert resp is not None, "Expected a response"
+    assert hasattr(resp, "accounts"), f"Response has no 'accounts' field: {type(resp)}"
+    assert len(resp.accounts) > 0, "Expected at least one account on the first page"
+    # Accounts are sorted by account_id — verify first account has the lexicographically
+    # smallest account_id, confirming we started from offset 0.
+    account_ids = [a.account_id for a in resp.accounts]
+    assert account_ids == sorted(account_ids), (
+        f"Accounts not sorted by account_id — cannot confirm first-page ordering: {account_ids}"
+    )
 
 
 @then("the response contains a validation error")

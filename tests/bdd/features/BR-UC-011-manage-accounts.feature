@@ -120,6 +120,15 @@ Feature: BR-UC-011 Manage Accounts
       | 100   | success with 100 accounts       |
       | 101   | validation error                |
 
+  @T-UC-011-list-malformed-cursor @list @pagination @boundary
+  Scenario: List accounts with malformed pagination cursor returns first page
+    Given the Buyer Agent has an authenticated connection
+    And the agent has 5 accessible accounts
+    When the Buyer Agent sends a list_accounts request with cursor "not-valid-base64!"
+    Then the response returns accounts starting from the first page
+    And the response contains 5 accounts
+    # @bva pagination cursor: malformed base64 string falls back to offset 0
+
   @T-UC-011-list-status-all @list @status-filter @partition @boundary
   Scenario: List accounts with no status filter returns all statuses (status filter = 'all')
     Given the Buyer Agent has an authenticated connection
