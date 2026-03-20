@@ -1442,12 +1442,12 @@ def _ensure_media_buy_in_db(
 
     # Ensure tenant exists
     if "db_tenant" not in ctx:
-        ctx["db_tenant"] = TenantFactory.create_sync(tenant_id=ctx.get("tenant_id", "test_tenant"))
+        ctx["db_tenant"] = TenantFactory(tenant_id=ctx.get("tenant_id", "test_tenant"))
 
     # Ensure principal exists
     principal_key = f"db_principal_{owner}"
     if principal_key not in ctx:
-        ctx[principal_key] = PrincipalFactory.create_sync(
+        ctx[principal_key] = PrincipalFactory(
             tenant=ctx["db_tenant"],
             principal_id=owner,
         )
@@ -1462,7 +1462,7 @@ def _ensure_media_buy_in_db(
     if buyer_ref:
         mb_kwargs["buyer_ref"] = buyer_ref
 
-    MediaBuyFactory.create_sync(**mb_kwargs)
+    MediaBuyFactory(**mb_kwargs)
 
 
 def _parse_request_params(params_str: str) -> dict[str, Any]:
