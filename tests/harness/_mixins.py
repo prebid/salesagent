@@ -14,8 +14,6 @@ from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import MagicMock
 
-from adcp import GetProductsRequest as GetProductsRequestGenerated
-
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
     AdapterPackageDelivery,
@@ -25,6 +23,7 @@ from src.core.schemas import (
     GetProductsResponse,
     ReportingPeriod,
 )
+from src.core.schemas import GetProductsRequest as GetProductsRequestGenerated
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from src.core.tools.products import _get_products_impl
 from src.core.webhook_delivery import WebhookDelivery, deliver_webhook_with_retry

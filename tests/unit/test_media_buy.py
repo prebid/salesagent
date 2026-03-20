@@ -580,18 +580,18 @@ class TestCreateMediaBuyValidation:
         assert dumped.get("ext") is not None
         assert dumped["ext"]["custom_key"] == "custom_value"
 
-    def test_account_id_accepted_at_boundary(self):
-        """UC-002-V07: account_id field accepted by schema but ignored in validation.
+    def test_account_accepted_at_boundary(self):
+        """UC-002-V07: account field accepted by schema (AccountReference).
 
-        Spec: CONFIRMED -- create-media-buy-request.json has account_id as optional property
-        https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/create-media-buy-request.json
+        Spec: CONFIRMED -- adcp 3.9: create-media-buy-request.json uses 'account'
+        (AccountReference) instead of 'account_id' (string).
         Priority: P1
         Type: unit
         Source: UC-002, salesagent-7gnv
         Covers: UC-002-UPG-06
         """
-        req = _make_request(account_id="acc_123")
-        assert req.account_id == "acc_123"
+        req = _make_request(account={"account_id": "acc_123"})
+        assert req.account is not None
 
     def test_zero_budget_rejected(self):
         """UC-002-V08: total budget <= 0 rejected.

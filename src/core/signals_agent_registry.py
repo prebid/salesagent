@@ -31,12 +31,9 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from adcp import ADCPMultiAgentClient, PlatformDestination
+from adcp import ADCPMultiAgentClient, GetSignalsRequest, PlatformDestination
 from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPError, ADCPTimeoutError
 from adcp.types import DeliverTo
-from adcp.types import GetSignalsRequest as AdcpGetSignalsRequest
-
-from src.core.schemas import GetSignalsRequest
 
 logger = logging.getLogger(__name__)
 
@@ -171,18 +168,16 @@ class SignalsAgentRegistry:
                 ],
             )
 
-            # Create typed request (GetSignalsRequest1: signal_spec required variant)
+            # Create typed request (adcp 3.9: GetSignalsRequest is a plain BaseModel)
             request = GetSignalsRequest(
                 signal_spec=signal_spec,
-                deliver_to=deliver_to,
             )
 
             logger.info(f"[TIMING] Calling agent {agent.name} for tenant {tenant_id}, brief: {brief[:50]}...")
             call_start = time.time()
 
-            # Call agent — wrap in adcp RootModel (GetSignalsRequest is a
-            # RootModel[GS1|GS2] union; our GetSignalsRequest is the GS1 variant)
-            result = await client.agent(agent.name).get_signals(AdcpGetSignalsRequest(request))
+            # Call agent
+            result = await client.agent(agent.name).get_signals(request)
 
             call_duration = time.time() - call_start
             logger.info(f"[TIMING] Agent call completed in {call_duration:.2f}s, status: {result.status}")

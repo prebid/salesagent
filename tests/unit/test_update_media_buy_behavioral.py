@@ -1431,7 +1431,7 @@ class TestUC003UpdateCreativeIds:
 
         Covers: UC-003-ALT-UPDATE-CREATIVE-IDS-09
         """
-        from adcp.types.generated_poc.media_buy.list_creatives_response import (
+        from adcp.types.generated_poc.creative.list_creatives_response import (
             Creative as LibraryCreative,
         )
 
