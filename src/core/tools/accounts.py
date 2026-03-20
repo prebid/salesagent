@@ -19,9 +19,6 @@ import uuid
 from datetime import UTC
 from typing import Any, cast
 
-from adcp.types.generated_poc.account.list_accounts_request import (
-    Status as ListAccountsStatus,
-)
 from adcp.types.generated_poc.account.sync_accounts_response import (
     Account as SyncResponseAccount,
 )
@@ -68,36 +65,6 @@ def _db_account_to_schema(db_account: DBAccount) -> Account:
         sandbox=db_account.sandbox,
         ext=db_account.ext,
     )
-
-
-_MAX_RESULTS_UPPER = 100
-_MAX_RESULTS_LOWER = 1
-
-
-def _validate_list_request(req: ListAccountsRequest) -> None:
-    """Validate list_accounts request parameters.
-
-    Raises AdCPValidationError for invalid status or pagination bounds.
-    """
-    # Validate status enum if provided (raw string check for unknown values)
-    status_val = getattr(req, "status", None)
-    if status_val is not None:
-        valid_statuses = {s.value for s in ListAccountsStatus}
-        raw = status_val.value if hasattr(status_val, "value") else str(status_val)
-        if raw not in valid_statuses:
-            raise AdCPValidationError(
-                f"Invalid status filter: '{raw}'. Valid values: {', '.join(sorted(valid_statuses))}"
-            )
-
-    # Validate pagination bounds
-    pagination = getattr(req, "pagination", None)
-    if pagination is not None:
-        max_results = getattr(pagination, "max_results", None)
-        if max_results is not None:
-            if max_results < _MAX_RESULTS_LOWER or max_results > _MAX_RESULTS_UPPER:
-                raise AdCPValidationError(
-                    f"max_results must be between {_MAX_RESULTS_LOWER} and {_MAX_RESULTS_UPPER}, got {max_results}."
-                )
 
 
 def _encode_cursor(offset: int) -> str:
@@ -155,8 +122,6 @@ def _list_accounts_impl(
     """
     if req is None:
         req = ListAccountsRequest()
-
-    _validate_list_request(req)
 
     # BR-RULE-055 INV-3: unauthenticated → auth error (consistent with sync_accounts)
     if identity is None or identity.tenant_id is None:
