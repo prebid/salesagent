@@ -73,16 +73,19 @@ class DeliveryPollEnv(DeliveryPollMixin, IntegrationEnv):
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert kwargs to GetMediaBuyDeliveryBody shape for REST POST."""
-        body: dict[str, Any] = {}
-        if "media_buy_ids" in kwargs and kwargs["media_buy_ids"] is not None:
-            body["media_buy_ids"] = kwargs["media_buy_ids"]
-        if "buyer_refs" in kwargs and kwargs["buyer_refs"] is not None:
-            body["buyer_refs"] = kwargs["buyer_refs"]
-        if "start_date" in kwargs and kwargs["start_date"] is not None:
-            body["start_date"] = kwargs["start_date"]
-        if "end_date" in kwargs and kwargs["end_date"] is not None:
-            body["end_date"] = kwargs["end_date"]
-        return body
+        # Forward all request fields that the REST body accepts
+        _BODY_FIELDS = (
+            "media_buy_ids",
+            "buyer_refs",
+            "status_filter",
+            "start_date",
+            "end_date",
+            "reporting_dimensions",
+            "attribution_window",
+            "include_package_daily_breakdown",
+            "account",
+        )
+        return {k: kwargs[k] for k in _BODY_FIELDS if k in kwargs and kwargs[k] is not None}
 
     def parse_rest_response(self, data: dict[str, Any]) -> GetMediaBuyDeliveryResponse:
         """Parse REST JSON into GetMediaBuyDeliveryResponse."""

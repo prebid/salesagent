@@ -192,6 +192,28 @@ class TestDeliveryPollEnvContract:
             assert isinstance(response, GetMediaBuyDeliveryResponse)
             assert len(response.media_buy_deliveries) >= 1
 
+    def test_wrappers_accept_adcp_request_params(self):
+        """A2A/MCP wrappers must accept all GetMediaBuyDeliveryRequest params.
+
+        BDD scenarios dispatch with reporting_dimensions, attribution_window,
+        include_package_daily_breakdown, etc. The wrappers must accept these
+        params and forward to the request — not reject with TypeError.
+        """
+        from src.core.tools.media_buy_delivery import get_media_buy_delivery_raw
+
+        with DeliveryPollEnv() as env:
+            env.add_buy(media_buy_id="mb_001")
+            env.set_adapter_response("mb_001", impressions=5000)
+
+            # include_package_daily_breakdown is a simple bool — no schema complexity
+            response = get_media_buy_delivery_raw(
+                media_buy_ids=["mb_001"],
+                include_package_daily_breakdown=True,
+                identity=env.identity,
+            )
+
+            assert isinstance(response, GetMediaBuyDeliveryResponse)
+
     def test_custom_date_range(self):
         """start_date/end_date parameters flow through to the request."""
         with DeliveryPollEnv() as env:

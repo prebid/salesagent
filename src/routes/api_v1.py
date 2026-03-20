@@ -97,8 +97,13 @@ class UpdateMediaBuyBody(BaseModel):
 class GetMediaBuyDeliveryBody(BaseModel):
     media_buy_ids: list[str] | None = None
     buyer_refs: list[str] | None = None
+    status_filter: Any = None
     start_date: str | None = None
     end_date: str | None = None
+    reporting_dimensions: dict | None = None
+    attribution_window: dict | None = None
+    include_package_daily_breakdown: bool | None = None
+    account: dict | None = None
     adcp_version: str = "1.0.0"
 
 
@@ -265,11 +270,26 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
 async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, identity: ResolvedIdentity = require_auth):
     """Get delivery metrics for media buys (auth required)."""
     try:
+        # Handle account resolution at boundary
+        if body.account is not None:
+            from adcp.types import AccountReference as LibraryAccountReference
+
+            from src.core.transport_helpers import enrich_identity_with_account
+
+            account_ref = LibraryAccountReference(**body.account)
+            enriched = enrich_identity_with_account(identity, account_ref)
+            assert enriched is not None  # identity is non-None (from require_auth)
+            identity = enriched
+
         response = media_buy_delivery_module.get_media_buy_delivery_raw(
             media_buy_ids=body.media_buy_ids,
             buyer_refs=body.buyer_refs,
+            status_filter=body.status_filter,
             start_date=body.start_date,
             end_date=body.end_date,
+            reporting_dimensions=body.reporting_dimensions,
+            attribution_window=body.attribution_window,
+            include_package_daily_breakdown=body.include_package_daily_breakdown,
             identity=identity,
         )
     except ToolError as e:

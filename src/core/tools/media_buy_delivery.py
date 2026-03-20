@@ -565,6 +565,10 @@ async def get_media_buy_delivery(
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
+    reporting_dimensions: dict | None = None,
+    attribution_window: dict | None = None,
+    include_package_daily_breakdown: bool | None = None,
+    account: dict | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
 ):
@@ -578,6 +582,10 @@ async def get_media_buy_delivery(
         status_filter: Filter by status - single status or array of MediaBuyStatus enums (optional)
         start_date: Start date for reporting period in YYYY-MM-DD format (optional)
         end_date: End date for reporting period in YYYY-MM-DD format (optional)
+        reporting_dimensions: Reporting breakdown dimensions (optional)
+        attribution_window: Attribution window configuration (optional)
+        include_package_daily_breakdown: Include daily breakdown per package (optional)
+        account: Account reference for multi-account scenarios (optional)
         context: Application level context object (ContextObject)
         ctx: FastMCP context (automatically provided)
 
@@ -585,6 +593,15 @@ async def get_media_buy_delivery(
         ToolResult with GetMediaBuyDeliveryResponse data
     """
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
+
+    # Handle account resolution at boundary (same as sync_creatives pattern)
+    if account is not None and identity is not None:
+        from adcp.types import AccountReference as LibraryAccountReference
+
+        from src.core.transport_helpers import enrich_identity_with_account
+
+        account_ref = LibraryAccountReference(**account) if isinstance(account, dict) else account
+        identity = enrich_identity_with_account(identity, account_ref)
 
     # Create AdCP-compliant request object
     try:
@@ -594,6 +611,9 @@ async def get_media_buy_delivery(
             status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
             start_date=start_date,
             end_date=end_date,
+            reporting_dimensions=reporting_dimensions,
+            attribution_window=attribution_window,
+            include_package_daily_breakdown=include_package_daily_breakdown,
             context=cast(ContextObject | None, context),
         )
 
@@ -610,6 +630,10 @@ def get_media_buy_delivery_raw(
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
+    reporting_dimensions: dict | None = None,
+    attribution_window: dict | None = None,
+    include_package_daily_breakdown: bool | None = None,
+    account: dict | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
@@ -622,6 +646,10 @@ def get_media_buy_delivery_raw(
         status_filter: Filter by status - single status or array of MediaBuyStatus enums (optional)
         start_date: Start date for reporting period in YYYY-MM-DD format (optional)
         end_date: End date for reporting period in YYYY-MM-DD format (optional)
+        reporting_dimensions: Reporting breakdown dimensions (optional)
+        attribution_window: Attribution window configuration (optional)
+        include_package_daily_breakdown: Include daily breakdown per package (optional)
+        account: Account reference for multi-account scenarios (optional)
         context: Application level context (ContextObject)
         ctx: Context for authentication
         identity: Pre-resolved identity (preferred over ctx)
@@ -634,6 +662,15 @@ def get_media_buy_delivery_raw(
 
         identity = resolve_identity_from_context(ctx)
 
+    # Handle account resolution at boundary (same as sync_creatives pattern)
+    if account is not None and identity is not None:
+        from adcp.types import AccountReference as LibraryAccountReference
+
+        from src.core.transport_helpers import enrich_identity_with_account
+
+        account_ref = LibraryAccountReference(**account) if isinstance(account, dict) else account
+        identity = enrich_identity_with_account(identity, account_ref)
+
     # Create request object
     req = GetMediaBuyDeliveryRequest(
         media_buy_ids=media_buy_ids,
@@ -641,6 +678,9 @@ def get_media_buy_delivery_raw(
         status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
         start_date=start_date,
         end_date=end_date,
+        reporting_dimensions=reporting_dimensions,
+        attribution_window=attribution_window,
+        include_package_daily_breakdown=include_package_daily_breakdown,
         context=cast(ContextObject | None, context),
     )
 
