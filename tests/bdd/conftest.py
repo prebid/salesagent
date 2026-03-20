@@ -216,7 +216,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     break
 
         # FIXME(salesagent-9d5): UC-011 REST — no REST routes exist for accounts yet.
-        # strict=False because some error-path scenarios pass vacuously (the REST
+        # strict=False because error-path scenarios pass vacuously (the REST
         # NotImplementedError triggers the error branch which matches the expected outcome).
         if is_rest and any(t.startswith("T-UC-011") for t in marker_names):
             item.add_marker(pytest.mark.xfail(reason="No REST routes for accounts", strict=False))

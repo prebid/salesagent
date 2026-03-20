@@ -32,8 +32,19 @@ def dispatch_request(ctx: dict, *, identity: Any = _SENTINEL, **kwargs: Any) -> 
     if transport is not None:
         from tests.harness.transport import Transport
 
-        if isinstance(transport, str):
-            transport_map = {"MCP": Transport.MCP, "A2A": Transport.A2A, "REST": Transport.REST}
+        if isinstance(transport, Transport):
+            pass  # Already a Transport enum — use as-is
+        elif isinstance(transport, str):
+            transport_map = {
+                "MCP": Transport.MCP,
+                "mcp": Transport.MCP,
+                "A2A": Transport.A2A,
+                "a2a": Transport.A2A,
+                "REST": Transport.REST,
+                "rest": Transport.REST,
+                "IMPL": Transport.IMPL,
+                "impl": Transport.IMPL,
+            }
             transport = transport_map.get(transport, Transport.IMPL)
         try:
             result = env.call_via(transport, **kwargs)
