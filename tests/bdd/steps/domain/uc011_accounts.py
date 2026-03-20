@@ -98,18 +98,26 @@ def _sync_pre_create(ctx: dict, brand_domain: str, operator: str, billing: str) 
 # ═══════════════════════════════════════════════════════════════════════
 
 
+@given("the Buyer Agent has an authenticated connection")
 @given(parsers.parse("the Buyer Agent has an authenticated connection via {transport}"))
-def given_authenticated_connection(ctx: dict, transport: str) -> None:
-    """Set up authenticated connection via the specified transport."""
-    ctx["transport"] = transport
+def given_authenticated_connection(ctx: dict, transport: str | None = None) -> None:
+    """Set up authenticated connection.
+
+    The transport arg is accepted but ignored — pytest_generate_tests
+    controls which transport is used for dispatch.
+    """
     ctx["has_auth"] = True
     _setup_tenant_and_principal(ctx)
 
 
+@given("the Buyer Agent has an unauthenticated connection")
 @given(parsers.parse("the Buyer Agent has an unauthenticated connection via {transport}"))
-def given_unauthenticated(ctx: dict, transport: str) -> None:
-    """Set up unauthenticated connection via the specified transport."""
-    ctx["transport"] = transport
+def given_unauthenticated(ctx: dict, transport: str | None = None) -> None:
+    """Set up unauthenticated connection.
+
+    The transport arg is accepted but ignored — pytest_generate_tests
+    controls which transport is used for dispatch.
+    """
     ctx["has_auth"] = False
     # Call dispatch_request with identity=None to trigger auth error
     ctx["force_identity"] = None
@@ -118,7 +126,6 @@ def given_unauthenticated(ctx: dict, transport: str) -> None:
 @given("the Buyer Agent has an A2A connection with an expired token")
 def given_expired_token(ctx: dict) -> None:
     """Set up A2A connection with an expired/invalid token."""
-    ctx["transport"] = "A2A"
     ctx["has_auth"] = False
     ctx["force_identity"] = None
 
@@ -244,9 +251,15 @@ def given_existing_account(ctx: dict, domain: str, billing: str) -> None:
 
 
 @when(parsers.parse("the Buyer Agent sends a list_accounts request via {transport}"))
-def when_list_accounts_via_transport(ctx: dict, transport: str) -> None:
-    """Send list_accounts request via specified transport."""
-    ctx["transport"] = transport
+def when_list_accounts_via_transport(ctx: dict, transport: str | None = None) -> None:
+    """Send list_accounts request.
+
+    The transport arg is accepted but ignored — pytest_generate_tests
+    controls which transport is used for dispatch via ctx["transport"].
+    This step only matches the "via {transport}" variant from pre-compiled
+    feature files. The plain "sends a list_accounts request" is matched
+    by when_list_accounts_unfiltered.
+    """
     dispatch_request(ctx)
 
 
@@ -267,6 +280,7 @@ def when_list_accounts_unfiltered(ctx: dict) -> None:
 
     env = ctx["env"]
     if isinstance(env, AccountSyncEnv):
+        # TRANSPORT-BYPASS: cross-cutting list under sync env
         from src.core.tools.accounts import _list_accounts_impl
 
         env._commit_factory_data()
@@ -293,11 +307,7 @@ def when_list_accounts_status_filter(ctx: dict, status: str) -> None:
 @when("the Buyer Agent sends a list_accounts request without an authentication token")
 def when_list_accounts_no_auth(ctx: dict) -> None:
     """Send list_accounts without authentication."""
-    env = ctx["env"]
-    try:
-        ctx["response"] = env.call_impl(identity=None)
-    except Exception as exc:
-        ctx["error"] = exc
+    dispatch_request(ctx, identity=None)
 
 
 @when(parsers.parse("the Buyer Agent sends a list_accounts request with max_results {value:d}"))
@@ -336,19 +346,26 @@ def when_list_accounts_with_cursor(ctx: dict) -> None:
 def when_list_sandbox_filter(ctx: dict, value: str) -> None:
     """Send list_accounts with sandbox filter.
 
-    May run under AccountSyncEnv (sandbox tag), so calls _list_accounts_impl
-    directly rather than relying on env.call_impl().
+    May run under AccountSyncEnv (sandbox tag). For cross-cutting scenarios
+    that need list dispatch on a sync env, calls _list_accounts_impl directly.
     """
     from src.core.schemas.account import ListAccountsRequest
-    from src.core.tools.accounts import _list_accounts_impl
+    from tests.harness.account_sync import AccountSyncEnv
 
     env = ctx["env"]
-    env._commit_factory_data()
     req = ListAccountsRequest(sandbox=value.lower() == "true")
-    try:
-        ctx["response"] = _list_accounts_impl(req=req, identity=env.identity)
-    except Exception as exc:
-        ctx["error"] = exc
+    if isinstance(env, AccountSyncEnv):
+        # Cross-cutting: sync env can't dispatch list requests
+        # TRANSPORT-BYPASS: sandbox list under sync env
+        from src.core.tools.accounts import _list_accounts_impl
+
+        env._commit_factory_data()
+        try:
+            ctx["response"] = _list_accounts_impl(req=req, identity=env.identity)
+        except Exception as exc:
+            ctx["error"] = exc
+    else:
+        dispatch_request(ctx, req=req)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1122,18 +1139,15 @@ def _make_identity_for_agent(ctx: dict, agent_name: str) -> Any:
 def given_agent_a_synced(ctx: dict, d: str) -> None:
     """Pre-create an account under agent A's identity."""
     _setup_tenant_and_principal(ctx)
-    agent_a = _create_agent(ctx, "A")
+    _create_agent(ctx, "A")
     identity_a = _make_identity_for_agent(ctx, "A")
-    env = ctx["env"]
     from src.core.schemas.account import SyncAccountsRequest
 
     req = SyncAccountsRequest(
         accounts=[{"brand": {"domain": d}, "operator": d, "billing": "operator"}],
     )
-    try:
-        env.call_impl(req=req, identity=identity_a)
-    except Exception:
-        pass  # Swallow — we just want the DB state
+    dispatch_request(ctx, req=req, identity=identity_a)
+    # Clear response so the next When step's response is fresh
     ctx.pop("response", None)
     ctx.pop("error", None)
 
@@ -1144,16 +1158,12 @@ def given_agent_b_synced(ctx: dict, d: str) -> None:
     _setup_tenant_and_principal(ctx)
     _create_agent(ctx, "B")
     identity_b = _make_identity_for_agent(ctx, "B")
-    env = ctx["env"]
     from src.core.schemas.account import SyncAccountsRequest
 
     req = SyncAccountsRequest(
         accounts=[{"brand": {"domain": d}, "operator": d, "billing": "operator"}],
     )
-    try:
-        env.call_impl(req=req, identity=identity_b)
-    except Exception:
-        pass
+    dispatch_request(ctx, req=req, identity=identity_b)
     ctx.pop("response", None)
     ctx.pop("error", None)
 
@@ -1231,8 +1241,7 @@ def when_agent_a_sync_delete_missing(ctx: dict, datatable: Any) -> None:
             accounts=accounts,
             delete_missing=True,
         )
-        env = ctx["env"]
-        ctx["response"] = env.call_impl(req=req, identity=identity_a)
+        dispatch_request(ctx, req=req, identity=identity_a)
     except Exception as exc:
         ctx["error"] = exc
 
@@ -1457,6 +1466,7 @@ def when_request_with_context(ctx: dict, operation: str, ctx_json: str) -> None:
     context_obj = ContextObject.model_validate(context_data)
 
     if operation == "list_accounts":
+        # TRANSPORT-BYPASS: cross-cutting list under sync env
         from src.core.schemas.account import ListAccountsRequest
         from src.core.tools.accounts import _list_accounts_impl
 

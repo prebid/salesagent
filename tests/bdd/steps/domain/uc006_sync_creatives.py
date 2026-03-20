@@ -4,9 +4,10 @@ Focuses on account partition/boundary scenarios that test resolve_account()
 in the sync_creatives context. The account resolution logic is shared with
 UC-002 (create_media_buy) — same resolve_account(), same exceptions.
 
-Steps delegate to MediaBuyAccountEnv which calls resolve_account() with real DB.
+Steps dispatch through CreativeSyncEnv which exercises sync_creatives wrappers
+(MCP/A2A/REST) that call enrich_identity_with_account() → resolve_account().
 
-beads: salesagent-71q
+beads: salesagent-71q, salesagent-99w
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import json
 
 from pytest_bdd import given, parsers, then, when
 
+from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -135,12 +137,25 @@ def _setup_account_by_natural_key(brand_domain: str, operator: str, tenant: obje
 # ═══════════════════════════════════════════════════════════════════════
 
 
+@when("the Buyer Agent syncs the creative")
 @when("the Buyer Agent syncs the creative via the REST/A2A endpoint")
+@when("the Buyer Agent syncs the creative via the MCP tool")
 def when_sync_creative(ctx: dict) -> None:
-    """Send the sync_creatives request and capture the result or error."""
-    from tests.bdd.steps.generic._account_resolution import resolve_account_or_error
+    """Send sync_creatives request with account reference through transport dispatch.
 
-    resolve_account_or_error(ctx)
+    The wrappers call enrich_identity_with_account() → resolve_account(),
+    exercising the full account resolution chain across all transports.
+
+    Pre-resolution validation (missing/invalid account_ref) is handled via
+    the shared validate_account_ref() helper.
+    """
+    from tests.bdd.steps.generic._account_resolution import validate_account_ref
+
+    account_ref = validate_account_ref(ctx)
+    if account_ref is None:
+        return  # ctx["error"] already set
+
+    dispatch_request(ctx, account=account_ref, creatives=[])
 
 
 def _ensure_tenant_principal(ctx: dict, env: object) -> None:
@@ -157,10 +172,18 @@ def _ensure_tenant_principal(ctx: dict, env: object) -> None:
 
 @then("the request should proceed with resolved account")
 def then_proceed_with_resolved_account(ctx: dict) -> None:
-    """Assert account resolution succeeded — resolved_account_id is in ctx."""
+    """Assert account resolution succeeded — sync_creatives returned a response.
+
+    When dispatched through transport wrappers, successful account resolution
+    means the wrapper called enrich_identity_with_account() without error
+    and the _impl returned a SyncCreativesResponse.
+    """
+    from src.core.schemas import SyncCreativesResponse
+
     assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
-    assert "resolved_account_id" in ctx, "Expected resolved_account_id in ctx"
-    assert ctx["resolved_account_id"], "Expected non-empty resolved account ID"
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response (SyncCreativesResponse)"
+    assert isinstance(resp, SyncCreativesResponse), f"Expected SyncCreativesResponse, got {type(resp).__name__}"
 
 
 @then(parsers.parse("the error should be {error_code} with suggestion"))

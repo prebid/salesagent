@@ -1,4 +1,4 @@
-# Generated from adcp-req @ bd801586c630f4d09c3d3162c3c6fd8d0a8b53c6 on 2026-03-18T22:50:27Z
+# Generated from adcp-req @ bd801586c630f4d09c3d3162c3c6fd8d0a8b53c6 on 2026-03-20T01:32:25Z
 # DO NOT EDIT -- re-run: python scripts/compile_bdd.py
 
 Feature: BR-UC-011 Manage Accounts
@@ -26,11 +26,11 @@ Feature: BR-UC-011 Manage Accounts
     And a tenant is resolvable from the request context
 
 
-  @T-UC-011-list-main @list @happy-path @post-s1 @post-s2 @post-s3 @partition @boundary @pending
-  Scenario Outline: List accounts via <transport> (authenticated_with_accounts)
-    Given the Buyer Agent has an authenticated connection via <transport>
+  @T-UC-011-list-main @list @happy-path @post-s1 @post-s2 @post-s3 @partition @boundary
+  Scenario: List accounts (authenticated_with_accounts)
+    Given the Buyer Agent has an authenticated connection
     And the agent has 3 accessible accounts with statuses "active", "pending_approval", "suspended"
-    When the Buyer Agent sends a list_accounts request via <transport>
+    When the Buyer Agent sends a list_accounts request
     Then the response contains an accounts array with 3 items
     And each account includes account_id, name, status, advertiser, rate_card, and payment_terms
     And the accounts are only those accessible to the authenticated agent
@@ -40,14 +40,9 @@ Feature: BR-UC-011 Manage Accounts
     # POST-S2: Buyer knows each account's status
     # POST-S3: Buyer knows advertiser, billing, rate card, payment terms
 
-    Examples:
-      | transport |
-      | MCP       |
-      | A2A       |
-
-  @T-UC-011-list-status-filter @list @status-filter @partition @boundary @pending
+  @T-UC-011-list-status-filter @list @status-filter @partition @boundary
   Scenario Outline: List accounts filtered by status <status> (status_filter_match)
-    Given the Buyer Agent has an authenticated connection via MCP
+    Given the Buyer Agent has an authenticated connection
     And the agent has accounts with statuses "active", "pending_approval", "suspended", "closed"
     When the Buyer Agent sends a list_accounts request with status filter "<status>"
     Then the response contains only accounts with status "<status>"
@@ -63,26 +58,26 @@ Feature: BR-UC-011 Manage Accounts
       | suspended          |
       | closed             |
 
-  @T-UC-011-list-no-accounts @list @empty-result @partition @boundary @pending
+  @T-UC-011-list-no-accounts @list @empty-result @partition @boundary
   Scenario: List accounts returns empty when authenticated agent has no accounts (0 accounts visible)
-    Given the Buyer Agent has an authenticated connection via MCP
+    Given the Buyer Agent has an authenticated connection
     And the agent has no accessible accounts
     When the Buyer Agent sends a list_accounts request
     Then the response contains an empty accounts array
     And the response is not an error
     # @bva accounts (response): 0 accounts visible
 
-  @T-UC-011-list-unauth @list @auth @partition @boundary @pending
+  @T-UC-011-list-unauth @list @auth @partition @boundary
   Scenario: List accounts without authentication returns empty (no token on list)
-    Given the Buyer Agent has an unauthenticated connection via MCP
+    Given the Buyer Agent has an unauthenticated connection
     When the Buyer Agent sends a list_accounts request without an authentication token
     Then the response contains an empty accounts array
     And the response is not an error
     # @bva authentication (account operations): no token on list
 
-  @T-UC-011-list-pagination @list @pagination @post-s4 @pending
+  @T-UC-011-list-pagination @list @pagination @post-s4
   Scenario: List accounts with pagination
-    Given the Buyer Agent has an authenticated connection via MCP
+    Given the Buyer Agent has an authenticated connection
     And the agent has 120 accessible accounts
     When the Buyer Agent sends a list_accounts request with max_results 50
     Then the response contains 50 accounts
@@ -92,26 +87,26 @@ Feature: BR-UC-011 Manage Accounts
     And the response includes pagination metadata with has_more true
     # POST-S4: Buyer can paginate through accounts
 
-  @T-UC-011-list-status-filter-no-match @list @status-filter @empty-result @partition @boundary @pending
+  @T-UC-011-list-status-filter-no-match @list @status-filter @empty-result @partition @boundary
   Scenario: List accounts with status filter returns empty when no matches (status filter = specific value with no matches)
-    Given the Buyer Agent has an authenticated connection via MCP
+    Given the Buyer Agent has an authenticated connection
     And the agent has accounts with statuses "active", "active", "active"
     When the Buyer Agent sends a list_accounts request with status filter "suspended"
     Then the response contains an empty accounts array
     And the response is not an error
     # @bva accounts (response): status filter = specific value with no matches
 
-  @T-UC-011-list-invalid-status @list @validation @partition @boundary @pending
+  @T-UC-011-list-invalid-status @list @validation @partition @boundary
   Scenario: List accounts with unknown status value not in enum
-    Given the Buyer Agent has an authenticated connection via MCP
+    Given the Buyer Agent has an authenticated connection
     When the Buyer Agent sends a list_accounts request with status filter "unknown_status"
     Then the response contains a validation error
     And the error indicates the status value is not recognized
     # @bva status: Unknown string not in enum
 
-  @T-UC-011-list-pagination-bva @list @pagination @bva @partition @boundary @pending
+  @T-UC-011-list-pagination-bva @list @pagination @bva @partition @boundary
   Scenario Outline: List accounts pagination boundary - max_results <value>
-    Given the Buyer Agent has an authenticated connection via MCP
+    Given the Buyer Agent has an authenticated connection
     And the agent has 200 accessible accounts
     When the Buyer Agent sends a list_accounts request with max_results <value>
     Then the response has outcome "<outcome>"
@@ -124,18 +119,18 @@ Feature: BR-UC-011 Manage Accounts
       | 100   | success with 100 accounts       |
       | 101   | validation error                |
 
-  @T-UC-011-list-status-all @list @status-filter @partition @boundary @pending
+  @T-UC-011-list-status-all @list @status-filter @partition @boundary
   Scenario: List accounts with no status filter returns all statuses (status filter = 'all')
-    Given the Buyer Agent has an authenticated connection via MCP
+    Given the Buyer Agent has an authenticated connection
     And the agent has accounts with statuses "active", "pending_approval", "suspended", "closed"
     When the Buyer Agent sends a list_accounts request without a status filter
     Then the response contains accounts with all statuses
     And the result set is identical to requesting without any filter
     # @bva accounts (response): status filter = 'all'
 
-  @T-UC-011-sync-create @sync @happy-path @post-s5 @post-s6 @partition @boundary @pending
+  @T-UC-011-sync-create @sync @happy-path @post-s5 @post-s6 @partition @boundary
   Scenario: Sync new account -- single_brand_domain, all_created (1 account, all same action)
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     When the Buyer Agent sends a sync_accounts request with:
     | brand.domain    | operator        | billing  |
     | acme-corp.com   | acme-corp.com   | operator |
@@ -151,9 +146,9 @@ Feature: BR-UC-011 Manage Accounts
     # POST-S5: Buyer knows the seller-assigned account_id
     # POST-S6: Buyer knows the action taken per account
 
-  @T-UC-011-sync-multi-brand @sync @brand-identity @partition @boundary @pending
+  @T-UC-011-sync-multi-brand @sync @brand-identity @partition @boundary
   Scenario: Sync multi_brand_domain with brand_id and operator (brand with domain + brand_id)
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     When the Buyer Agent sends a sync_accounts request with:
     | brand.domain    | brand.brand_id | operator        | billing  |
     | nova-brands.com | spark          | pinnacle-media.com | operator |
@@ -165,9 +160,9 @@ Feature: BR-UC-011 Manage Accounts
     # @bva brand (brand-ref): multi_brand_domain -- brand with domain + brand_id (multi brand)
     # @bva brand (brand-ref): brand with domain + brand_id + operator
 
-  @T-UC-011-sync-brand-direct @sync @brand-identity @partition @boundary @pending
+  @T-UC-011-sync-brand-direct @sync @brand-identity @partition @boundary
   Scenario: Sync brand_direct -- brand operating own seat (operator is brand's domain)
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     When the Buyer Agent sends a sync_accounts request with:
     | brand.domain    | operator        | billing  |
     | acme-corp.com   | acme-corp.com   | operator |
@@ -176,9 +171,9 @@ Feature: BR-UC-011 Manage Accounts
     And the account billing is "operator"
     # @bva brand (brand-ref): brand_direct -- brand operating own seat
 
-  @T-UC-011-sync-update @sync @upsert @partition @pending
+  @T-UC-011-sync-update @sync @upsert @partition
   Scenario: Sync updates existing account -- all_updated
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     And an account for brand domain "acme-corp.com" already exists with billing "operator"
     When the Buyer Agent sends a sync_accounts request with:
     | brand.domain    | operator      | billing |
@@ -186,18 +181,18 @@ Feature: BR-UC-011 Manage Accounts
     Then the account for brand domain "acme-corp.com" has action "updated"
     And the account billing is "agent"
 
-  @T-UC-011-sync-unchanged @sync @upsert @partition @pending
+  @T-UC-011-sync-unchanged @sync @upsert @partition
   Scenario: Sync unchanged account is idempotent -- all_unchanged
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     And an account for brand domain "acme-corp.com" already exists with billing "operator"
     When the Buyer Agent sends a sync_accounts request with:
     | brand.domain    | operator      | billing  |
     | acme-corp.com   | acme-corp.com | operator |
     Then the account for brand domain "acme-corp.com" has action "unchanged"
 
-  @T-UC-011-sync-billing-enum @sync @billing @post-s7 @partition @boundary @pending
+  @T-UC-011-sync-billing-enum @sync @billing @post-s7 @partition @boundary
   Scenario Outline: Sync with billing model <billing> -- <partition_name>
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     When the Buyer Agent sends a sync_accounts request with:
     | brand.domain    | operator      | billing   |
     | acme-corp.com   | acme-corp.com | <billing> |
@@ -210,9 +205,9 @@ Feature: BR-UC-011 Manage Accounts
       | operator | operator_honored | billing = operator            |
       | agent    | agent_honored    | billing = agent               |
 
-  @T-UC-011-sync-mixed @sync @upsert @partition @pending
+  @T-UC-011-sync-mixed @sync @upsert @partition
   Scenario: Sync mixed_results -- created and updated in same request (all different actions)
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     And an account for brand domain "existing-brand.com" already exists with billing "operator"
     When the Buyer Agent sends a sync_accounts request with:
     | brand.domain        | operator            | billing  |
@@ -221,9 +216,9 @@ Feature: BR-UC-011 Manage Accounts
     Then the account for brand domain "new-brand.com" has action "created"
     And the account for brand domain "existing-brand.com" has action "updated"
 
-  @T-UC-011-sync-brand-echo @sync @invariant @partition @pending
+  @T-UC-011-sync-brand-echo @sync @invariant @partition
   Scenario: Sync echoes brand from request in per-account result (brand echo)
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     When the Buyer Agent sends a sync_accounts request with:
     | brand.domain    | brand.brand_id | operator        | billing  |
     | nova-brands.com | spark          | pinnacle-media.com | operator |
@@ -231,18 +226,18 @@ Feature: BR-UC-011 Manage Accounts
     # BR-RULE-056 INV-4: Request includes brand for an account -> response echoes same brand value
     # BR-RULE-058 INV-3: Account is processed -> response echoes brand (brand-ref) from request
 
-  @T-UC-011-sync-shortest-domain @sync @brand-identity @partition @boundary @pending
+  @T-UC-011-sync-shortest-domain @sync @brand-identity @partition @boundary
   Scenario: Sync with shortest valid domain (e.g., 'a.b')
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     When the Buyer Agent sends a sync_accounts request with:
     | brand.domain | operator | billing  |
     | a.b          | a.b      | operator |
     Then the account for brand domain "a.b" has action "created"
     # @bva brand (brand-ref): shortest valid domain (e.g., 'a.b')
 
-  @T-UC-011-ext-a-no-token @sync @ext-a @auth @error @post-f1 @post-f2 @partition @boundary @pending
+  @T-UC-011-ext-a-no-token @sync @ext-a @auth @error @post-f1 @post-f2 @partition @boundary
   Scenario: Sync without authentication -- sync_no_token returns error_auth (no token on sync)
-    Given the Buyer Agent has an unauthenticated connection via A2A
+    Given the Buyer Agent has an unauthenticated connection
     When the Buyer Agent sends a sync_accounts request with:
     | brand.domain    | operator      | billing  |
     | acme-corp.com   | acme-corp.com | operator |
@@ -255,7 +250,7 @@ Feature: BR-UC-011 Manage Accounts
     # POST-F1: System state unchanged
     # POST-F2: Buyer knows what failed
 
-  @T-UC-011-ext-a-expired @sync @ext-a @auth @error @partition @boundary @pending
+  @T-UC-011-ext-a-expired @sync @ext-a @auth @error @partition @boundary
   Scenario: Sync with expired token -- sync_invalid_token returns AUTH_TOKEN_INVALID (invalid token on sync)
     Given the Buyer Agent has an A2A connection with an expired token
     When the Buyer Agent sends a sync_accounts request with:
@@ -266,9 +261,9 @@ Feature: BR-UC-011 Manage Accounts
     And the error should include "suggestion" field with remediation guidance
     # @bva authentication (account operations): invalid token on sync
 
-  @T-UC-011-ext-b-partial @sync @partial-failure @invariant @partition @boundary @pending
+  @T-UC-011-ext-b-partial @sync @partial-failure @invariant @partition @boundary
   Scenario: Sync partial_failure -- success_partial_failure with action=failed (action=failed with errors)
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     When the Buyer Agent sends a sync_accounts request with:
     | brand.domain        | operator            | billing  |
     | acme-corp.com       | acme-corp.com       | operator |
@@ -279,9 +274,9 @@ Feature: BR-UC-011 Manage Accounts
     And the failed account includes a per-account errors array
     And the response does not contain an operation-level errors field
 
-  @T-UC-011-ext-c-rejected @sync @ext-c @billing @error @partition @boundary @pending
+  @T-UC-011-ext-c-rejected @sync @ext-c @billing @error @partition @boundary
   Scenario: Seller rejects unsupported billing -- billing_rejected (billing = unsupported value for seller)
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     And the seller does not support "operator" billing
     When the Buyer Agent sends a sync_accounts request with:
     | brand.domain    | operator      | billing  |
@@ -295,9 +290,9 @@ Feature: BR-UC-011 Manage Accounts
     # BR-RULE-059 INV-2: Request includes billing model the seller does not support -> action=failed, status=rejected, BILLING_NOT_SUPPORTED
     # POST-F2: Buyer knows what failed and the specific error code
 
-  @T-UC-011-ext-c-mixed @sync @ext-c @billing @partial-failure @partition @pending
+  @T-UC-011-ext-c-mixed @sync @ext-c @billing @partial-failure @partition
   Scenario: Billing rejection is per-account -- other accounts still succeed
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     And the seller supports "agent" billing but not "operator" billing
     When the Buyer Agent sends a sync_accounts request with:
     | brand.domain      | operator          | billing  |
@@ -310,18 +305,18 @@ Feature: BR-UC-011 Manage Accounts
     And the error should include "suggestion" field with remediation guidance
     # BR-RULE-059 INV-2 + BR-RULE-057 INV-1: rejected billing produces per-account failure within success variant
 
-  @T-UC-011-ext-c-invalid-enum @sync @billing @validation @partition @boundary @pending
+  @T-UC-011-ext-c-invalid-enum @sync @billing @validation @partition @boundary
   Scenario: Billing value not in enum -- invalid_billing_value (billing = invalid string)
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     When the Buyer Agent sends a sync_accounts request with:
     | brand.domain    | operator      | billing  |
     | acme-corp.com   | acme-corp.com | prepaid  |
     Then the account processing fails with a validation error for billing
     # @bva billing: billing = invalid string
 
-  @T-UC-011-ext-d-pending-url @sync @approval @post-s8 @partition @boundary @pending
+  @T-UC-011-ext-d-pending-url @sync @approval @post-s8 @partition @boundary
   Scenario: Account pending_with_url -- setup with url + message + expires_at (status = pending_approval with setup)
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     And the seller requires credit review for new accounts
     When the Buyer Agent sends a sync_accounts request with:
     | brand.domain    | operator      | billing  |
@@ -334,9 +329,9 @@ Feature: BR-UC-011 Manage Accounts
     And the setup object includes an expires_at timestamp
     # POST-S8: Buyer receives setup information
 
-  @T-UC-011-ext-d-pending-message @sync @approval @partition @boundary @pending
+  @T-UC-011-ext-d-pending-message @sync @approval @partition @boundary
   Scenario: Account pending_message_only -- setup with message only
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     And the seller requires legal review for new accounts
     When the Buyer Agent sends a sync_accounts request with:
     | brand.domain    | operator      | billing  |
@@ -345,9 +340,9 @@ Feature: BR-UC-011 Manage Accounts
     And the setup object includes a message
     And the setup object does not include a URL
 
-  @T-UC-011-ext-d-active @sync @approval @partition @boundary @pending
+  @T-UC-011-ext-d-active @sync @approval @partition @boundary
   Scenario: Account immediately active -- active_no_setup (status = active (no setup))
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     And the seller auto-approves new accounts
     When the Buyer Agent sends a sync_accounts request with:
     | brand.domain    | operator      | billing  |
@@ -355,9 +350,9 @@ Feature: BR-UC-011 Manage Accounts
     Then the account has status "active"
     And the account does not include a setup object
 
-  @T-UC-011-ext-d-push @sync @push-notification @partition @pending
+  @T-UC-011-ext-d-push @sync @push-notification @partition
   Scenario: Push notification for async status changes -- with_push_notification
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     When the Buyer Agent sends a sync_accounts request with:
     | brand.domain    | operator      | billing  |
     | acme-corp.com   | acme-corp.com | operator |
@@ -366,9 +361,9 @@ Feature: BR-UC-011 Manage Accounts
     And when the account transitions from "pending_approval" to "active"
     Then a push notification is sent to "https://agent.com/webhooks"
 
-  @T-UC-011-ext-e-preview @sync @dry-run @post-s10 @partition @boundary @pending
+  @T-UC-011-ext-e-preview @sync @dry-run @post-s10 @partition @boundary
   Scenario: dry_run_true returns preview -- success_dry_run (dry_run = true)
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     When the Buyer Agent sends a sync_accounts request with dry_run true and:
     | brand.domain    | operator      | billing  |
     | acme-corp.com   | acme-corp.com | operator |
@@ -378,27 +373,27 @@ Feature: BR-UC-011 Manage Accounts
     And no accounts were actually created or modified on the seller
     # POST-S10: Buyer receives dry-run preview
 
-  @T-UC-011-ext-e-normal @sync @dry-run @partition @boundary @pending
+  @T-UC-011-ext-e-normal @sync @dry-run @partition @boundary
   Scenario: dry_run_false -- normal sync applies changes (dry_run = false)
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     When the Buyer Agent sends a sync_accounts request with dry_run false and:
     | brand.domain    | operator      | billing  |
     | acme-corp.com   | acme-corp.com | operator |
     Then the response does not include a dry_run field
     And the account was actually created on the seller
 
-  @T-UC-011-ext-e-omitted @sync @dry-run @partition @boundary @pending
+  @T-UC-011-ext-e-omitted @sync @dry-run @partition @boundary
   Scenario: dry_run_omitted -- default behavior applies changes (dry_run omitted)
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     When the Buyer Agent sends a sync_accounts request with:
     | brand.domain    | operator      | billing  |
     | acme-corp.com   | acme-corp.com | operator |
     Then the response does not include a dry_run field
     And the account was actually created on the seller
 
-  @T-UC-011-ext-f-deactivate @sync @delete-missing @post-s9 @partition @boundary @pending
+  @T-UC-011-ext-f-deactivate @sync @delete-missing @post-s9 @partition @boundary
   Scenario: delete_missing_true deactivates absent accounts (delete_missing = true with absent accounts)
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     And the agent previously synced accounts for brand domain "acme-corp.com" and "old-brand.com"
     When the Buyer Agent sends a sync_accounts request with delete_missing true and:
     | brand.domain    | operator      | billing  |
@@ -407,9 +402,9 @@ Feature: BR-UC-011 Manage Accounts
     And the account for brand domain "acme-corp.com" has action "unchanged" or "updated"
     # POST-S9: Buyer knows which accounts were deactivated
 
-  @T-UC-011-ext-f-scoped @sync @delete-missing @agent-scoped @pending
+  @T-UC-011-ext-f-scoped @sync @delete-missing @agent-scoped
   Scenario: Delete missing scoped to authenticated agent only
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     And agent A previously synced accounts for brand domain "brand-a.com"
     And agent B previously synced accounts for brand domain "brand-b.com"
     When agent A sends a sync_accounts request with delete_missing true and:
@@ -418,9 +413,9 @@ Feature: BR-UC-011 Manage Accounts
     Then agent B's account for brand domain "brand-b.com" is not affected
     And only agent A's absent accounts are deactivated
 
-  @T-UC-011-ext-f-false @sync @delete-missing @partition @boundary @pending
+  @T-UC-011-ext-f-false @sync @delete-missing @partition @boundary
   Scenario: delete_missing_false preserves absent accounts (delete_missing = false with absent accounts)
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     And the agent previously synced accounts for brand domain "acme-corp.com" and "old-brand.com"
     When the Buyer Agent sends a sync_accounts request with delete_missing false and:
     | brand.domain    | operator      | billing  |
@@ -428,9 +423,9 @@ Feature: BR-UC-011 Manage Accounts
     Then brand domain "old-brand.com" remains in its current state
     And only the included accounts are processed
 
-  @T-UC-011-ext-f-none-absent @sync @delete-missing @partition @boundary @pending
+  @T-UC-011-ext-f-none-absent @sync @delete-missing @partition @boundary
   Scenario: delete_missing_none_absent -- true with no absent accounts (delete_missing = true with no absent accounts)
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     And the agent previously synced accounts for brand domain "acme-corp.com" only
     When the Buyer Agent sends a sync_accounts request with delete_missing true and:
     | brand.domain    | operator      | billing  |
@@ -438,9 +433,9 @@ Feature: BR-UC-011 Manage Accounts
     Then no accounts are deactivated
     And the account for brand domain "acme-corp.com" is processed normally
 
-  @T-UC-011-ext-f-omitted @sync @delete-missing @partition @boundary @pending
+  @T-UC-011-ext-f-omitted @sync @delete-missing @partition @boundary
   Scenario: delete_missing_omitted -- default preserves accounts (delete_missing omitted)
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     And the agent previously synced accounts for brand domain "acme-corp.com" and "old-brand.com"
     When the Buyer Agent sends a sync_accounts request without delete_missing and:
     | brand.domain    | operator      | billing  |
@@ -448,7 +443,7 @@ Feature: BR-UC-011 Manage Accounts
     Then brand domain "old-brand.com" remains in its current state
     And only the included accounts are processed
 
-  @T-UC-011-ext-g-echo @context-echo @post-f3 @partition @boundary @pending
+  @T-UC-011-ext-g-echo @context-echo @post-f3 @partition @boundary
   Scenario Outline: context_provided -- context echoed in <operation> response (context with properties)
     Given the Buyer is authenticated with a valid principal_id
     When the Buyer Agent sends a <operation> request with context {"session_id": "abc-123", "trace": "xyz-789"}
@@ -461,65 +456,65 @@ Feature: BR-UC-011 Manage Accounts
       | list_accounts  |
       | sync_accounts  |
 
-  @T-UC-011-ext-g-echo-error @context-echo @error @post-f3 @pending
+  @T-UC-011-ext-g-echo-error @context-echo @error @post-f3
   Scenario: Context echoed in sync error response
-    Given the Buyer Agent has an unauthenticated connection via A2A
+    Given the Buyer Agent has an unauthenticated connection
     When the Buyer Agent sends a sync_accounts request with context {"trace": "err-001"}
     Then the response is an error variant with AUTH_TOKEN_INVALID
     And the response includes context {"trace": "err-001"}
     And the error should include "suggestion" field with remediation guidance
     # POST-F3: Context echoed even on error path
 
-  @T-UC-011-ext-g-absent @context-echo @partition @boundary @pending
+  @T-UC-011-ext-g-absent @context-echo @partition @boundary
   Scenario: context_absent -- context omitted from response (context absent)
-    Given the Buyer Agent has an authenticated connection via MCP
+    Given the Buyer Agent has an authenticated connection
     When the Buyer Agent sends a list_accounts request without a context object
     Then the response does not include a context field
 
-  @T-UC-011-ext-g-empty @context-echo @partition @boundary @pending
+  @T-UC-011-ext-g-empty @context-echo @partition @boundary
   Scenario: context_empty_object -- empty context echoed unchanged (context = {})
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     When the Buyer Agent sends a sync_accounts request with context {}
     Then the response includes context {}
 
-  @T-UC-011-ext-g-nested @context-echo @partition @boundary @pending
+  @T-UC-011-ext-g-nested @context-echo @partition @boundary
   Scenario: context_nested -- deeply nested context echoed unchanged (context with properties)
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     When the Buyer Agent sends a sync_accounts request with context {"deep": {"nested": {"level": 3}}, "array": [1, 2, 3]}
     Then the response includes context {"deep": {"nested": {"level": 3}}, "array": [1, 2, 3]}
     And the context is identical to what was sent
 
-  @T-UC-011-sync-empty-accounts @sync @validation @partition @boundary @pending
+  @T-UC-011-sync-empty-accounts @sync @validation @partition @boundary
   Scenario: Sync with empty_accounts array rejected (0 accounts)
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     When the Buyer Agent sends a sync_accounts request with an empty accounts array
     Then the response is an error variant
     And the error indicates accounts array must not be empty
 
-  @T-UC-011-sync-missing-brand @sync @validation @partition @boundary @pending
+  @T-UC-011-sync-missing-brand @sync @validation @partition @boundary
   Scenario: Sync account with no_domain -- missing brand domain rejected
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     When the Buyer Agent sends a sync_accounts request with an account that has no brand domain field
     Then the account has action "failed"
     And the per-account error indicates brand domain is required
     # @bva brand (brand-ref): missing domain in brand-ref
 
-  @T-UC-011-sync-missing-operator @sync @validation @partition @boundary @pending
+  @T-UC-011-sync-missing-operator @sync @validation @partition @boundary
   Scenario: Sync account with missing operator -- operator is required
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     When the Buyer Agent sends a sync_accounts request with an account that has no operator field
     Then the account has action "failed"
     And the per-account error indicates operator is required
 
-  @T-UC-011-sync-missing-billing @sync @validation @partition @boundary @pending
+  @T-UC-011-sync-missing-billing @sync @validation @partition @boundary
   Scenario: Sync account with missing billing -- billing is required
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     When the Buyer Agent sends a sync_accounts request with an account that has no billing field
     Then the account processing fails with a validation error for billing
 
-  @T-UC-011-sync-invalid-patterns @sync @validation @patterns @partition @boundary @pending
+  @T-UC-011-sync-invalid-patterns @sync @validation @patterns @partition @boundary
   Scenario Outline: Sync with invalid pattern -- <field> "<value>" (<partition_name>)
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     When the Buyer Agent sends a sync_accounts request with <field> set to "<value>"
     Then the account processing fails with a validation error for <field>
     # @bva brand (brand-ref): invalid patterns -- uppercase domain, invalid brand_id_pattern
@@ -532,9 +527,9 @@ Feature: BR-UC-011 Manage Accounts
       | brand.brand_id | UPPERCASE     | invalid_brand_id_pattern   |
       | operator       | NOT A DOMAIN  | invalid_domain_pattern     |
 
-  @T-UC-011-sync-accounts-bva @sync @validation @bva @partition @boundary @pending
+  @T-UC-011-sync-accounts-bva @sync @validation @bva @partition @boundary
   Scenario Outline: Sync accounts array boundary -- <count> accounts (<boundary_desc>)
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     When the Buyer Agent sends a sync_accounts request with <count> accounts
     Then the response has outcome "<outcome>"
 
@@ -544,9 +539,9 @@ Feature: BR-UC-011 Manage Accounts
       | 1000  | success with per-account results      | 1000 accounts (maximum)            |
       | 1001  | validation error for exceeding limit  | 1001 accounts (exceeds maxItems)   |
 
-  @T-UC-011-atomic-success @sync @atomic @partition @boundary @pending
+  @T-UC-011-atomic-success @sync @atomic @partition @boundary
   Scenario: success_all_ok -- accounts present, no operation-level errors (success with 0 per-account failures)
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     When the Buyer Agent sends a sync_accounts request with:
     | brand.domain    | operator      | billing  |
     | acme-corp.com   | acme-corp.com | operator |
@@ -554,9 +549,9 @@ Feature: BR-UC-011 Manage Accounts
     And the response does not contain an operation-level errors array
     And the response is the success variant of oneOf
 
-  @T-UC-011-atomic-all-failed @sync @atomic @partition @boundary @pending
+  @T-UC-011-atomic-all-failed @sync @atomic @partition @boundary
   Scenario: success with all per-account failures -- still success variant (success with all per-account failures)
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     And the seller does not support any of the requested billing models
     When the Buyer Agent sends a sync_accounts request with:
     | brand.domain    | operator      | billing  |
@@ -565,9 +560,9 @@ Feature: BR-UC-011 Manage Accounts
     And all accounts have action "failed"
     And the response does not contain an operation-level errors array
 
-  @T-UC-011-atomic-error @sync @atomic @error @partition @boundary @pending
+  @T-UC-011-atomic-error @sync @atomic @error @partition @boundary
   Scenario: Error variant -- errors present, no accounts or dry_run (error with exactly 1 error)
-    Given the Buyer Agent has an unauthenticated connection via A2A
+    Given the Buyer Agent has an unauthenticated connection
     When the Buyer Agent sends a sync_accounts request with:
     | brand.domain    | operator      | billing  |
     | acme-corp.com   | acme-corp.com | operator |
@@ -577,9 +572,9 @@ Feature: BR-UC-011 Manage Accounts
     And the response is the error variant of oneOf
     And the error should include "suggestion" field with remediation guidance
 
-  @T-UC-011-atomic-service-error @sync @atomic @error @partition @boundary @pending
+  @T-UC-011-atomic-service-error @sync @atomic @error @partition @boundary
   Scenario: error_service -- service-level failure (error with multiple errors)
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     And the seller system is experiencing an internal failure
     When the Buyer Agent sends a sync_accounts request with:
     | brand.domain    | operator      | billing  |
@@ -589,15 +584,15 @@ Feature: BR-UC-011 Manage Accounts
     And each error includes code and message
     And the error should include "suggestion" field with remediation guidance
 
-  @T-UC-011-atomic-both @sync @atomic @partition @boundary @pending
+  @T-UC-011-atomic-both @sync @atomic @partition @boundary
   Scenario: Schema prohibits both_present -- accounts and errors never coexist (both accounts and errors present)
     Given the sync_accounts response schema uses oneOf
     Then a response with both accounts and errors arrays is invalid
     And a response with neither_present is also invalid (neither accounts nor errors present)
 
-  @T-UC-011-sandbox-provision @invariant @br-rule-209 @sandbox @pending
+  @T-UC-011-sandbox-provision @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account provisioned via sync_accounts with sandbox flag
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     And the seller declares features.sandbox equals true in capabilities
     When the Buyer Agent sends a sync_accounts request with:
     | brand.domain  | operator      | billing  | sandbox |
@@ -609,9 +604,9 @@ Feature: BR-UC-011 Manage Accounts
     # BR-RULE-209 INV-6: seller with features.sandbox: true supports sandbox provisioning
     # BR-RULE-209 INV-2: real ad platform calls suppressed for sandbox account
 
-  @T-UC-011-sandbox-list-filter @invariant @br-rule-209 @sandbox @pending
+  @T-UC-011-sandbox-list-filter @invariant @br-rule-209 @sandbox
   Scenario: List accounts with sandbox filter returns only sandbox accounts
-    Given the Buyer Agent has an authenticated connection via MCP
+    Given the Buyer Agent has an authenticated connection
     And both sandbox and production accounts exist for the Buyer
     When the Buyer Agent sends a list_accounts request with sandbox equals true
     Then the response should contain "accounts" array
@@ -619,9 +614,9 @@ Feature: BR-UC-011 Manage Accounts
     And the response should not include production accounts
     # BR-RULE-209 INV-4: sandbox accounts identifiable via sandbox: true
 
-  @T-UC-011-sandbox-validation @invariant @br-rule-209 @sandbox @pending
+  @T-UC-011-sandbox-validation @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account provisioning with invalid billing returns real validation error
-    Given the Buyer Agent has an authenticated connection via A2A
+    Given the Buyer Agent has an authenticated connection
     And the seller declares features.sandbox equals true in capabilities
     When the Buyer Agent sends a sync_accounts request with:
     | brand.domain  | operator      | billing       | sandbox |

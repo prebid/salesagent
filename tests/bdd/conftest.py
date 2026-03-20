@@ -215,6 +215,18 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                         item.add_marker(pytest.mark.xfail(reason=reason, strict=strict))
                     break
 
+        # FIXME(salesagent-9d5): UC-011 REST — no REST routes exist for accounts yet.
+        # strict=False because some error-path scenarios pass vacuously (the REST
+        # NotImplementedError triggers the error branch which matches the expected outcome).
+        if is_rest and any(t.startswith("T-UC-011") for t in marker_names):
+            item.add_marker(pytest.mark.xfail(reason="No REST routes for accounts", strict=False))
+
+        # FIXME(salesagent-9d5): UC-006 REST — account resolution through CreativeSyncEnv
+        # REST route for sync_creatives exists but account kwarg may not be
+        # forwarded at the route level (SyncCreativesBody doesn't have account field)
+        if is_rest and any(t.startswith("T-UC-006") for t in marker_names) and "account" in marker_names:
+            item.add_marker(pytest.mark.xfail(reason="REST route doesn't forward account param", strict=False))
+
         # Transport-specific xfails: REST drops all filter params
         if is_rest:
             for tag in _REST_XFAIL_TAGS:
@@ -417,6 +429,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 # These scenarios must NOT be multiplied — they have explicit When steps.
 _TRANSPORT_SPECIFIC_TAGS = {"rest", "mcp", "a2a"}
 
+# UC + tag combinations that should run IMPL-only (no 4-way parametrization).
+# UC-002 @account: MediaBuyAccountEnv tests resolve_account() directly — no
+# transport wrappers exist for the create_media_buy account resolution path.
+_IMPL_ONLY: set[tuple[str, str]] = {
+    ("UC-002", "account"),
+}
+
 # Admin scenarios have their own transport (Flask test_client / requests.Session).
 # They must NOT be parametrized across MCP/A2A/REST/IMPL API transports.
 _ADMIN_TAG_PREFIX = "T-ADMIN-"
@@ -445,6 +464,12 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     # Admin scenarios use Flask test_client, not API transports
     if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
         return
+
+    # IMPL-only scenarios: harness has no transport wrappers for this path
+    for uc_prefix, required_tag in _IMPL_ONLY:
+        tag_prefix = f"T-{uc_prefix}-"
+        if any(t.startswith(tag_prefix) for t in marker_names) and required_tag in marker_names:
+            return
 
     metafunc.parametrize(
         "ctx",
@@ -532,13 +557,14 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             yield
 
     elif uc == "UC-006":
-        # Account resolution scenarios reuse MediaBuyAccountEnv — same resolve_account()
         marker_names = {m.name for m in request.node.iter_markers()}
         if "account" in marker_names:
+            # Account resolution through CreativeSyncEnv — exercises the full
+            # sync_creatives transport wrappers which call enrich_identity_with_account()
             request.getfixturevalue("integration_db")
-            from tests.harness.media_buy_account import MediaBuyAccountEnv
+            from tests.harness.creative_sync import CreativeSyncEnv
 
-            with MediaBuyAccountEnv() as env:
+            with CreativeSyncEnv() as env:
                 ctx["env"] = env
                 yield
         else:
