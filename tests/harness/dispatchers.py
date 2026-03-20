@@ -45,16 +45,32 @@ class A2ADispatcher:
 class RestDispatcher:
     """Dispatch via FastAPI TestClient → route → _raw() → _impl().
 
-    Identity flows through kwargs to env.call_rest() → _run_rest_request(),
-    which pops it and configures the FastAPI auth dep override per-request.
+    Identity flows through kwargs to env._run_rest_request(), which pops it
+    and configures the FastAPI auth dep override per-request.
+
+    Unlike other dispatchers, REST includes HTTP metadata in the envelope
+    (status_code, content_type) since tests may assert on these.
     """
 
     def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
         try:
-            payload = env.call_rest(**kwargs)
+            endpoint = env.REST_ENDPOINT  # type: ignore[attr-defined]
+            response = env._run_rest_request(endpoint, **kwargs)
+
+            envelope = {
+                "transport": "rest",
+                "status_code": response.status_code,
+                "content_type": response.headers.get("content-type", ""),
+            }
+
+            if response.status_code >= 400:
+                error = env.parse_rest_error(response.status_code, response.json())
+                return TransportResult(error=error, envelope=envelope, raw_response=response)
+
+            payload = env.parse_rest_response(response.json())
+            return TransportResult(payload=payload, envelope=envelope, raw_response=response)
         except Exception as exc:
             return TransportResult(error=exc)
-        return TransportResult(payload=payload, envelope={"transport": "rest"})
 
 
 class McpDispatcher:

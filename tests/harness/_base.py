@@ -483,16 +483,23 @@ class IntegrationEnv(BaseTestEnv):
         return tenant, principal
 
     def get_rest_client(self) -> Any:
-        """Return FastAPI TestClient (cached, lazily created).
+        """Return FastAPI TestClient with default auth dep override.
 
-        Auth dep overrides are set per-request in ``_run_rest_request``,
-        not here. The client is transport-neutral.
+        The default dep override returns ``self.identity_for(Transport.REST)``.
+        ``_run_rest_request`` overrides this per-request for multi-agent and
+        no-auth scenarios. Direct callers of ``get_rest_client()`` get the
+        default identity.
         """
         if self._rest_client is None:
             from starlette.testclient import TestClient
 
             from src.app import app
+            from src.core.auth_context import _require_auth_dep, _resolve_auth_dep
+            from tests.harness.transport import Transport
 
+            rest_identity = self.identity_for(Transport.REST)
+            app.dependency_overrides[_require_auth_dep] = lambda: rest_identity
+            app.dependency_overrides[_resolve_auth_dep] = lambda: rest_identity
             self._rest_client = TestClient(app)
 
         return self._rest_client

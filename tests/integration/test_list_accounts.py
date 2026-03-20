@@ -68,11 +68,13 @@ class TestListAccountsAgentScoping:
 
 
 class TestListAccountsUnauthenticated:
-    """BR-RULE-055: unauthenticated list_accounts returns empty array."""
+    """BR-RULE-055 INV-3: unauthenticated list_accounts raises AUTH_TOKEN_INVALID."""
 
-    def test_unauthenticated_returns_empty(self, integration_db):
+    def test_unauthenticated_returns_auth_error(self, integration_db):
+        import pytest
+
+        from src.core.exceptions import AdCPAuthenticationError
         from src.core.tools.accounts import _list_accounts_impl
 
-        response = _list_accounts_impl(identity=None)
-
-        assert len(response.accounts) == 0
+        with pytest.raises(AdCPAuthenticationError, match="Authentication required"):
+            _list_accounts_impl(identity=None)
