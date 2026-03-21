@@ -2,7 +2,7 @@
 
 ## Source
 
-- Requirement: [UC-004: Deliver Media Buy Metrics](adcp-req/docs/requirements/use-cases/UC-004-deliver-media-buy-metrics/BR-UC-004.md)
+- Requirement: UC-004: Deliver Media Buy Metrics (adcp-req/docs/requirements/use-cases/UC-004-deliver-media-buy-metrics/BR-UC-004.md)
 - Files analyzed: BR-UC-004.md, BR-UC-004-main-mcp.md, BR-UC-004-ext-a through BR-UC-004-ext-g, BR-UC-004-alt-webhook.md, BR-UC-004-alt-filtered.md, BR-UC-004-alt-date-range.md
 - Business Rules: BR-RULE-013, BR-RULE-018, BR-RULE-029, BR-RULE-030
 

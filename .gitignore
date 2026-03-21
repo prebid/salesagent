@@ -141,7 +141,11 @@ test-results/
 .claude/agents/review-*.md
 .claude/commands/code-review.md
 .claude/skills/code-review/
+.claude/reports
 .perles/
+
+# Private local rules (agent tooling, personal workflows)
+.claude/rules/private/
 
 # One-off presentation drafts
 docs/TRANSFORMATION_PRESENTATION.md

@@ -13,9 +13,10 @@ Usage:
 import sys
 from pathlib import Path
 
-from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+
+from alembic import command
 
 
 def get_heads(alembic_cfg: Config) -> list[str]:

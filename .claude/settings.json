@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "test -d .agent-index && echo '[agent-index] .pyi stubs present — use ast-grep for live queries' || echo '[agent-index] run: uv run python scripts/gen-agent-index.py'"
+          }
+        ]
+      }
+    ]
+  }
+}

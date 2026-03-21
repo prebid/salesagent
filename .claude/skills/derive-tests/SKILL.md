@@ -63,16 +63,8 @@ Check if a harness exists for the target domain:
 ls tests/harness/*.py
 ```
 
-Map obligation prefix to required harness:
-
-| Prefix | Required Harness | Env Class |
-|--------|-----------------|-----------|
-| UC-004 (delivery poll) | `tests/harness/delivery_poll.py` | `DeliveryPollEnv` |
-| UC-004 (webhook) | `tests/harness/delivery_webhook.py` | `WebhookEnv` |
-| UC-004 (circuit breaker) | `tests/harness/delivery_circuit_breaker.py` | `CircuitBreakerEnv` |
-| UC-006 (creative sync) | `tests/harness/creative_sync.py` | `CreativeSyncEnv` |
-| UC-006 (creative list) | `tests/harness/creative_list.py` | `CreativeListEnv` |
-| UC-006 (creative formats) | `tests/harness/creative_formats.py` | `CreativeFormatsEnv` |
+Map obligation prefix to required harness. For the complete, auto-generated list
+of all env classes with their methods, read `.agent-index/harness/envs.pyi`.
 
 **If harness missing: STOP IMMEDIATELY.** Print:
 ```
@@ -510,8 +502,10 @@ Use `/obligation-test` when:
 
 ## See Also
 
+- `.agent-index/harness/envs.pyi` — all domain env classes with methods (auto-generated)
+- `.agent-index/harness/base.pyi` — BaseTestEnv + IntegrationEnv interface (auto-generated)
+- `.agent-index/factories.pyi` — all factory_boy factories + helpers (auto-generated)
 - `tests/harness/_base.py` — BaseTestEnv + IntegrationEnv base classes
 - `tests/harness/_mixins.py` — Domain mixins (DeliveryPollMixin, WebhookMixin, CircuitBreakerMixin)
-- `tests/factories/` — factory_boy model factories (auto-bound by IntegrationEnv)
 - `tests/harness/test_harness_*.py` — Gold standard usage examples
 - `/obligation-test` — Fallback for domains without harness

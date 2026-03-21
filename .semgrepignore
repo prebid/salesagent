@@ -1,0 +1,8 @@
+# Override semgrep defaults to NOT exclude tests/ (we scan BDD steps).
+# Only ignore typical non-code directories.
+.git/
+node_modules/
+vendor/
+build/
+dist/
+*.min.js

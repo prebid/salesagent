@@ -86,7 +86,7 @@ def then_no_real_api_calls(ctx: dict) -> None:
     The harness patches ``get_creative_agent_registry`` — if production
     code called it, it got the mock and no real API calls occurred.
     """
-    env = ctx.get("env")
+    env = ctx["env"]
     assert env is not None, "Expected harness env in ctx — without the harness, real API calls could occur"
     registry_mock = env.mock.get("registry")
     assert registry_mock is not None, "Registry mock not configured in harness"

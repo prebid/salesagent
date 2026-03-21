@@ -151,43 +151,38 @@ def given_media_buys_owned_by(ctx: dict, owner: str) -> None:
 def given_adapter_has_data(ctx: dict, mb_id: str) -> None:
     """Configure adapter mock to return delivery data for the media buy."""
     env = ctx["env"]
-    if hasattr(env, "set_adapter_response"):
-        env.set_adapter_response(media_buy_id=mb_id)
+    env.set_adapter_response(media_buy_id=mb_id)
 
 
 @given("the ad server adapter has delivery data for both media buys")
 def given_adapter_has_data_both(ctx: dict) -> None:
     """Configure adapter mock to return data for both media buys."""
     env = ctx["env"]
-    if hasattr(env, "set_adapter_response"):
-        media_buys = ctx.get("media_buys", {})
-        for mb_id in list(media_buys.keys())[:2]:
-            env.set_adapter_response(media_buy_id=mb_id)
+    media_buys = ctx.get("media_buys", {})
+    for mb_id in list(media_buys.keys())[:2]:
+        env.set_adapter_response(media_buy_id=mb_id)
 
 
 @given("the ad server adapter has delivery data for all media buys")
 def given_adapter_has_data_all(ctx: dict) -> None:
     """Configure adapter mock to return data for all media buys."""
     env = ctx["env"]
-    if hasattr(env, "set_adapter_response"):
-        for mb_id in ctx.get("media_buys", {}):
-            env.set_adapter_response(media_buy_id=mb_id)
+    for mb_id in ctx.get("media_buys", {}):
+        env.set_adapter_response(media_buy_id=mb_id)
 
 
 @given("the ad server adapter is unavailable")
 def given_adapter_unavailable(ctx: dict) -> None:
     """Configure adapter to raise an error."""
     env = ctx["env"]
-    if hasattr(env, "set_adapter_error"):
-        env.set_adapter_error(ConnectionError("Ad server adapter is unavailable"))
+    env.set_adapter_error(ConnectionError("Ad server adapter is unavailable"))
 
 
 @given(parsers.parse('the ad server adapter returns data for "{mb_id1}" but errors for "{mb_id2}"'))
 def given_adapter_partial_data(ctx: dict, mb_id1: str, mb_id2: str) -> None:
     """Configure adapter for partial success: data for one, error for another."""
     env = ctx["env"]
-    if hasattr(env, "set_adapter_response"):
-        env.set_adapter_response(media_buy_id=mb_id1)
+    env.set_adapter_response(media_buy_id=mb_id1)
     # mb_id2 has no response registered — will raise KeyError from the mixin
 
 
@@ -195,8 +190,7 @@ def given_adapter_partial_data(ctx: dict, mb_id1: str, mb_id2: str) -> None:
 def given_adapter_no_data_period(ctx: dict, mb_id: str) -> None:
     """Configure adapter to return zero data for the media buy."""
     env = ctx["env"]
-    if hasattr(env, "set_adapter_response"):
-        env.set_adapter_response(media_buy_id=mb_id, impressions=0, spend=0.0)
+    env.set_adapter_response(media_buy_id=mb_id, impressions=0, spend=0.0)
 
 
 # ── Webhook configuration steps ─────────────────────────────────────
@@ -275,25 +269,22 @@ def given_webhook_creds_length(ctx: dict, n: int) -> None:
 @given(parsers.parse("the webhook endpoint returns {status_code:d} {reason}"))
 def given_webhook_returns_status(ctx: dict, status_code: int, reason: str) -> None:
     """Configure webhook endpoint to return specific status."""
-    env = ctx.get("env")
-    if hasattr(env, "set_http_status"):
-        env.set_http_status(status_code, reason)
+    env = ctx["env"]
+    env.set_http_status(status_code, reason)
 
 
 @given("the webhook endpoint is unreachable (connection timeout)")
 def given_webhook_unreachable(ctx: dict) -> None:
     """Configure webhook endpoint to timeout."""
-    env = ctx.get("env")
-    if hasattr(env, "set_http_status"):
-        env.mock["post"].side_effect = ConnectionError("Connection timeout")
+    env = ctx["env"]
+    env.mock["post"].side_effect = ConnectionError("Connection timeout")
 
 
 @given(parsers.parse("the webhook endpoint returns {status_code:d} Unauthorized"))
 def given_webhook_unauthorized(ctx: dict, status_code: int) -> None:
     """Configure webhook endpoint to return auth error."""
-    env = ctx.get("env")
-    if hasattr(env, "set_http_status"):
-        env.set_http_status(status_code, "Unauthorized")
+    env = ctx["env"]
+    env.set_http_status(status_code, "Unauthorized")
 
 
 @given(parsers.parse("the webhook endpoint has failed {n:d} consecutive delivery attempts"))
@@ -317,17 +308,15 @@ def given_circuit_breaker_timeout(ctx: dict) -> None:
 @given("the webhook endpoint has recovered and returns 200")
 def given_webhook_recovered(ctx: dict) -> None:
     """Webhook endpoint is healthy again."""
-    env = ctx.get("env")
-    if hasattr(env, "set_http_status"):
-        env.set_http_status(200, "OK")
+    env = ctx["env"]
+    env.set_http_status(200, "OK")
 
 
 @given("the webhook endpoint fails on first attempt but succeeds on second")
 def given_webhook_flaky(ctx: dict) -> None:
     """Configure webhook to fail then succeed."""
-    env = ctx.get("env")
-    if hasattr(env, "set_http_sequence"):
-        env.set_http_sequence([(500, "Error"), (200, "OK")])
+    env = ctx["env"]
+    env.set_http_sequence([(500, "Error"), (200, "OK")])
 
 
 # ── Reporting dimensions / attribution / seller capabilities ──────
@@ -527,74 +516,66 @@ def when_request_no_auth(ctx: dict) -> None:
 @when(parsers.parse('the webhook scheduler fires for "{mb_id}"'))
 def when_webhook_fires(ctx: dict, mb_id: str) -> None:
     """Webhook scheduler fires for a media buy."""
-    env = ctx.get("env")
-    if hasattr(env, "call_deliver"):
-        try:
-            ctx["webhook_result"] = env.call_deliver(media_buy_id=mb_id)
-        except Exception as exc:
-            ctx["error"] = exc
-    else:
-        ctx["webhook_scheduled"] = mb_id
+    env = ctx["env"]
+    try:
+        ctx["webhook_result"] = env.call_deliver(media_buy_id=mb_id)
+    except Exception as exc:
+        ctx["error"] = exc
 
 
 @when(parsers.parse('the system delivers a webhook report for "{mb_id}"'))
 def when_deliver_webhook(ctx: dict, mb_id: str) -> None:
     """System delivers a webhook report."""
-    env = ctx.get("env")
-    if hasattr(env, "call_deliver"):
-        try:
-            ctx["webhook_result"] = env.call_deliver(media_buy_id=mb_id)
-        except Exception as exc:
-            ctx["error"] = exc
+    env = ctx["env"]
+    try:
+        ctx["webhook_result"] = env.call_deliver(media_buy_id=mb_id)
+    except Exception as exc:
+        ctx["error"] = exc
 
 
 @when(parsers.parse('the system delivers a "{report_type}" webhook report for "{mb_id}"'))
 def when_deliver_typed_webhook(ctx: dict, report_type: str, mb_id: str) -> None:
     """System delivers a typed webhook report."""
     ctx["report_type"] = report_type
-    env = ctx.get("env")
-    if hasattr(env, "call_deliver"):
-        try:
-            ctx["webhook_result"] = env.call_deliver(media_buy_id=mb_id)
-        except Exception as exc:
-            ctx["error"] = exc
+    env = ctx["env"]
+    try:
+        ctx["webhook_result"] = env.call_deliver(media_buy_id=mb_id)
+    except Exception as exc:
+        ctx["error"] = exc
 
 
 @when(parsers.parse('the system delivers three consecutive webhook reports for "{mb_id}"'))
 def when_deliver_three_reports(ctx: dict, mb_id: str) -> None:
     """Deliver three consecutive webhook reports."""
     ctx["webhook_reports"] = []
-    env = ctx.get("env")
-    if hasattr(env, "call_deliver"):
-        for _ in range(3):
-            try:
-                result = env.call_deliver(media_buy_id=mb_id)
-                ctx["webhook_reports"].append(result)
-            except Exception as exc:
-                ctx["error"] = exc
-                break
+    env = ctx["env"]
+    for _ in range(3):
+        try:
+            result = env.call_deliver(media_buy_id=mb_id)
+            ctx["webhook_reports"].append(result)
+        except Exception as exc:
+            ctx["error"] = exc
+            break
 
 
 @when("the system attempts to deliver a webhook report")
 def when_attempt_webhook(ctx: dict) -> None:
     """System attempts webhook delivery."""
-    env = ctx.get("env")
-    if hasattr(env, "call_deliver"):
-        try:
-            ctx["webhook_result"] = env.call_deliver()
-        except Exception as exc:
-            ctx["error"] = exc
+    env = ctx["env"]
+    try:
+        ctx["webhook_result"] = env.call_deliver()
+    except Exception as exc:
+        ctx["error"] = exc
 
 
 @when("the system evaluates the circuit breaker state")
 def when_evaluate_circuit_breaker(ctx: dict) -> None:
     """Evaluate circuit breaker state."""
-    env = ctx.get("env")
-    if hasattr(env, "call_impl"):
-        try:
-            ctx["circuit_result"] = env.call_impl()
-        except Exception as exc:
-            ctx["error"] = exc
+    env = ctx["env"]
+    try:
+        ctx["circuit_result"] = env.call_impl()
+    except Exception as exc:
+        ctx["error"] = exc
 
 
 @when(parsers.parse("the system delivers {n:d} successful probe reports"))
@@ -606,12 +587,11 @@ def when_deliver_probe_reports(ctx: dict, n: int) -> None:
 @when("the system delivers a webhook report with retry")
 def when_deliver_with_retry(ctx: dict) -> None:
     """System delivers webhook with retry on failure."""
-    env = ctx.get("env")
-    if hasattr(env, "call_send"):
-        try:
-            ctx["webhook_result"] = env.call_send()
-        except Exception as exc:
-            ctx["error"] = exc
+    env = ctx["env"]
+    try:
+        ctx["webhook_result"] = env.call_send()
+    except Exception as exc:
+        ctx["error"] = exc
 
 
 @when("the system validates the webhook configuration")
@@ -1063,11 +1043,8 @@ def then_period_end_today(ctx: dict) -> None:
 @then("the system should POST a delivery report to the configured webhook URL")
 def then_webhook_post(ctx: dict) -> None:
     """Assert webhook POST was made."""
-    env = ctx.get("env")
-    if hasattr(env, "mock") and "post" in env.mock:
-        assert env.mock["post"].called, "Expected webhook POST but none was made"
-    else:
-        assert ctx.get("webhook_result") is not None, "No webhook result"
+    env = ctx["env"]
+    assert env.mock["post"].called, "Expected webhook POST but none was made"
 
 
 @then(parsers.parse('the payload should include delivery metrics for "{mb_id}"'))
@@ -1118,10 +1095,9 @@ def then_no_aggregated_in_payload(ctx: dict) -> None:
 @then("the system should retry up to 3 times")
 def then_retry_3_times(ctx: dict) -> None:
     """Assert retry count."""
-    env = ctx.get("env")
-    if hasattr(env, "mock") and "post" in env.mock:
-        call_count = env.mock["post"].call_count
-        assert call_count <= 4, f"Expected at most 4 calls (1+3 retries), got {call_count}"
+    env = ctx["env"]
+    call_count = env.mock["post"].call_count
+    assert call_count <= 4, f"Expected at most 4 calls (1+3 retries), got {call_count}"
 
 
 @then("retries should use exponential backoff (1s, 2s, 4s + jitter)")
@@ -1139,9 +1115,8 @@ def then_retry_with_backoff(ctx: dict) -> None:
 @then("the system should not retry the delivery")
 def then_no_retry(ctx: dict) -> None:
     """Assert no retry was attempted."""
-    env = ctx.get("env")
-    if hasattr(env, "mock") and "post" in env.mock:
-        assert env.mock["post"].call_count <= 1, "Expected no retries"
+    env = ctx["env"]
+    assert env.mock["post"].call_count <= 1, "Expected no retries"
 
 
 @then("the system should log the authentication rejection")
@@ -1299,9 +1274,8 @@ def then_skip_no_webhook(ctx: dict, mb_id: str) -> None:
 @then("no delivery attempt should be made")
 def then_no_delivery_attempt(ctx: dict) -> None:
     """Assert no delivery attempt was made."""
-    env = ctx.get("env")
-    if hasattr(env, "mock") and "post" in env.mock:
-        assert not env.mock["post"].called, "Expected no delivery attempt"
+    env = ctx["env"]
+    assert not env.mock["post"].called, "Expected no delivery attempt"
 
 
 # ── Reporting dimension assertions ─────────────────────────────────
@@ -1443,6 +1417,124 @@ def then_no_billing(ctx: dict) -> None:
     _pending(ctx, "then_no_billing")
 
 
+# ── Partition/boundary outcome assertions ─────────────────────────────
+
+
+def _assert_valid_content(ctx: dict, field: str) -> None:
+    """Per-field content assertion for 'valid' partition/boundary outcomes."""
+    resp = ctx["response"]
+
+    if field in ("status_filter", "filter"):
+        deliveries = getattr(resp, "media_buy_deliveries", None) or []
+        request_params = ctx.get("request_params", {})
+        requested_filter = request_params.get("status_filter")
+        if requested_filter and deliveries:
+            for d in deliveries:
+                actual_status = getattr(d, "status", None)
+                if actual_status:
+                    assert actual_status in requested_filter, (
+                        f"Status filter violation: got status '{actual_status}' but filter requested {requested_filter}"
+                    )
+
+    elif field == "resolution":
+        deliveries = getattr(resp, "media_buy_deliveries", None) or []
+        request_params = ctx.get("request_params", {})
+        requested_ids = request_params.get("media_buy_ids")
+        if requested_ids and deliveries:
+            returned_ids = {getattr(d, "media_buy_id", None) for d in deliveries}
+            for req_id in requested_ids:
+                assert req_id in returned_ids, (
+                    f"Resolution violation: requested media_buy_id '{req_id}' not in response: {returned_ids}"
+                )
+
+    elif field in ("reporting_dimensions", "reporting dimensions"):
+        deliveries = getattr(resp, "media_buy_deliveries", None) or []
+        assert len(deliveries) > 0, f"Valid {field}: expected non-empty deliveries"
+
+    elif field in ("attribution_window", "attribution window"):
+        resp_dict = resp.model_dump() if hasattr(resp, "model_dump") else {}
+        if isinstance(resp_dict, dict):
+            aw = resp_dict.get("attribution_window")
+            if aw is not None:
+                assert "model" in aw, f"Valid {field}: attribution_window missing 'model'"
+
+    elif field in ("daily_breakdown", "daily breakdown", "include_package_daily_breakdown"):
+        deliveries = getattr(resp, "media_buy_deliveries", None) or []
+        assert len(deliveries) > 0, f"Valid {field}: expected non-empty deliveries"
+
+    elif field == "account":
+        deliveries = getattr(resp, "media_buy_deliveries", None) or []
+        assert len(deliveries) > 0, f"Valid {field}: expected non-empty deliveries"
+
+    elif field in ("date_range", "date range"):
+        period = getattr(resp, "reporting_period", None)
+        if period is not None:
+            start = getattr(period, "start", None)
+            end = getattr(period, "end", None)
+            assert start is not None, f"Valid {field}: reporting_period.start is None"
+            assert end is not None, f"Valid {field}: reporting_period.end is None"
+
+    elif field == "ownership":
+        deliveries = getattr(resp, "media_buy_deliveries", None) or []
+        assert len(deliveries) > 0, f"Valid {field}: expected non-empty deliveries"
+
+
+def _assert_partition_or_boundary(ctx: dict, expected: str, field: str = "unknown") -> None:
+    """Assert partition/boundary outcome with field-aware content validation."""
+    expected = expected.strip()
+
+    if expected == "valid":
+        assert "error" not in ctx, f"Expected valid {field} result but got error: {ctx.get('error')}"
+        assert "response" in ctx, f"Expected response for valid {field} but none found"
+        _assert_valid_content(ctx, field)
+    elif expected == "invalid":
+        from pydantic import ValidationError
+
+        from src.core.exceptions import AdCPError
+
+        assert "error" in ctx, f"Expected invalid {field} result but operation succeeded"
+        error = ctx["error"]
+        assert isinstance(error, (AdCPError, ValidationError)), (
+            f"Expected AdCPError/ValidationError for invalid {field}, got {type(error).__name__}: {error}"
+        )
+    else:
+        m = re.match(r'error "(.+?)" with suggestion', expected)
+        if m:
+            from src.core.exceptions import AdCPError
+
+            code = m.group(1)
+            assert "error" in ctx, f"Expected error '{code}' for {field} but operation succeeded"
+            error = ctx["error"]
+            assert isinstance(error, AdCPError), f"Expected AdCPError for {field}, got {type(error).__name__}: {error}"
+            assert error.error_code == code, f"Expected error code '{code}' for {field}, got '{error.error_code}'"
+            suggestion = (error.details or {}).get("suggestion")
+            assert suggestion, f"Expected suggestion in error for {field}, got details: {error.details}"
+        else:
+            raise AssertionError(f"Unexpected expected value '{expected}' for {field}")
+
+
+@then(parsers.re(r"the (?P<field>.+) validation should result in (?P<expected>.+)"))
+@then(parsers.re(r"the (?P<field>.+) handling should result in (?P<expected>.+)"))
+@then(parsers.re(r"the (?P<field>.+) check should result in (?P<expected>.+)"))
+@then(parsers.re(r"the (?P<field>.+) check should be (?P<expected>.+)"))
+@then(parsers.re(r"the (?P<field>ownership|resolution) should be (?P<expected>.+)"))
+def then_partition_or_boundary_outcome(ctx: dict, field: str, expected: str) -> None:
+    """Partition/boundary test: assert outcome matches expected for the given field."""
+    _assert_partition_or_boundary(ctx, expected, field)
+
+
+@then(parsers.re(r"the filter should result in (?P<expected>.+)"))
+def then_filter_result(ctx: dict, expected: str) -> None:
+    """Partition test: status_filter outcome."""
+    _assert_partition_or_boundary(ctx, expected, "status_filter")
+
+
+@then(parsers.re(r"the resolution should result in (?P<expected>.+)"))
+def then_resolution_result(ctx: dict, expected: str) -> None:
+    """Partition test: resolution outcome."""
+    _assert_partition_or_boundary(ctx, expected, "resolution")
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Helpers — internal
 # ═══════════════════════════════════════════════════════════════════════
@@ -1460,7 +1552,7 @@ def _ensure_media_buy_in_db(
     Uses the env's integration DB session. If the env doesn't support
     DB operations (unit harness), this is a no-op — ctx state is enough.
     """
-    env = ctx.get("env")
+    env = ctx["env"]
     if env is None or not hasattr(env, "_session"):
         return
 

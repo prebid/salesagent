@@ -100,10 +100,10 @@ class GetMediaBuyDeliveryBody(BaseModel):
     status_filter: Any = None
     start_date: str | None = None
     end_date: str | None = None
-    reporting_dimensions: dict | None = None
-    attribution_window: dict | None = None
+    reporting_dimensions: dict[str, Any] | None = None
+    attribution_window: dict[str, Any] | None = None
     include_package_daily_breakdown: bool | None = None
-    account: dict | None = None
+    account: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
 
 

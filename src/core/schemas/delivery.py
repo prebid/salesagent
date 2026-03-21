@@ -80,8 +80,27 @@ class GetMediaBuyDeliveryRequest(LibraryGetMediaBuyDeliveryRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # account, reporting_dimensions, include_package_daily_breakdown, attribution_window:
-    # all inherited from library (were local extensions, now in adcp spec)
+    # account_id: inherited from library (was local, now in adcp library)
+
+    # --- Salesagent extensions (NOT in adcp spec/library) ---
+    # TODO(salesagent-jz3y): Move these to ext field or propose as spec additions.
+    # These fields are salesagent-specific extensions not present in the adcp spec.
+    account: dict[str, Any] | None = Field(
+        None,
+        description="Filter delivery data to a specific account (salesagent extension, not in adcp spec)",
+    )
+    reporting_dimensions: dict[str, Any] | None = Field(
+        None,
+        description="Request dimensional breakdowns (salesagent extension, not in adcp spec)",
+    )
+    include_package_daily_breakdown: bool | None = Field(
+        None,
+        description="Include daily_breakdown arrays within each package (salesagent extension, not in adcp spec)",
+    )
+    attribution_window: dict[str, Any] | None = Field(
+        None,
+        description="Attribution window for conversion metrics (salesagent extension; adcp spec has this on response only)",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +135,15 @@ class DeliveryTotals(SalesAgentBaseModel):
     viewability: float | None = Field(None, ge=0, le=1, description="Viewability percentage as 0.0-1.0 (if applicable)")
 
 
+class PlacementBreakdown(SalesAgentBaseModel):
+    """Delivery metrics for a single placement within a package."""
+
+    placement_id: str = Field(description="Placement identifier")
+    impressions: float = Field(ge=0, description="Placement impressions")
+    spend: float = Field(ge=0, description="Placement spend")
+    clicks: float | None = Field(None, ge=0, description="Placement clicks")
+
+
 class PackageDelivery(SalesAgentBaseModel):
     """Metrics broken down by package.
 
@@ -144,6 +172,10 @@ class PackageDelivery(SalesAgentBaseModel):
         None,
         pattern=r"^[A-Z]{3}$",
         description="ISO 4217 currency code for this package during delivery (e.g., USD, EUR, GBP)",
+    )
+    by_placement: list[PlacementBreakdown] | None = Field(
+        None,
+        description="Placement-level delivery breakdown (populated when reporting_dimensions includes 'placement')",
     )
 
 
@@ -324,6 +356,7 @@ class AdapterPackageDelivery(SalesAgentBaseModel):
     package_id: str
     impressions: int
     spend: float
+    by_placement: list[dict[str, Any]] | None = None
 
 
 class AdapterGetMediaBuyDeliveryResponse(NestedModelSerializerMixin, SalesAgentBaseModel):

@@ -2,7 +2,7 @@
 
 ## Source
 
-- Requirement: [UC-003: Update Media Buy](adcp-req/docs/requirements/use-cases/UC-003-update-media-buy/UC-003.md)
+- Requirement: UC-003: Update Media Buy (adcp-req/docs/requirements/use-cases/UC-003-update-media-buy/UC-003.md)
 - Files analyzed: UC-003.md, UC-003-main-mcp.md, UC-003-ext-a through UC-003-ext-o, UC-003-alt-pause.md, UC-003-alt-timing.md, UC-003-alt-budget.md, UC-003-alt-creative-ids.md, UC-003-alt-creatives-inline.md, UC-003-alt-creative-assignments.md, UC-003-alt-targeting.md, UC-003-alt-manual.md
 - Business Rules: BR-RULE-008, BR-RULE-012, BR-RULE-013, BR-RULE-017, BR-RULE-018, BR-RULE-020, BR-RULE-021, BR-RULE-022, BR-RULE-024, BR-RULE-026, BR-RULE-028
 

@@ -224,6 +224,12 @@ def generate_example_value(field_type: str, field_name: str = "", field_spec: di
             # Handle common date pattern: YYYY-MM-DD
             if pattern == r"^\d{4}-\d{2}-\d{2}$":
                 return "2025-02-01"
+            # Handle domain patterns (lowercase alphanumeric + hyphens + dots)
+            if "a-z0-9" in pattern and "\\." in pattern:
+                return "example.com"
+            # Handle lowercase identifier patterns (e.g., brand_id: ^[a-z0-9_]+$)
+            if "a-z0-9" in pattern:
+                return "test_value"
 
         # Special cases for known field patterns
         if "date" in field_name.lower():
@@ -268,6 +274,16 @@ def generate_example_value(field_type: str, field_name: str = "", field_spec: di
                                 "format": "display_300x250",
                             }
                         ]
+                    # Resolve the ref to check if it's an enum or simple type
+                    try:
+                        ref_schema = load_json_schema(ref)
+                        if "enum" in ref_schema:
+                            return [ref_schema["enum"][0]]
+                        ref_type = ref_schema.get("type", "object")
+                        if ref_type != "object":
+                            return [generate_example_value(ref_type, field_name, ref_schema)]
+                    except Exception:
+                        pass
                     # For other refs, return minimal object
                     return [{}]
 
