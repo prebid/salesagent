@@ -259,6 +259,20 @@ class CircuitBreakerMixin:
         mock_response.status_code = status_code
         self.mock["client"].return_value.__enter__.return_value.post.return_value = mock_response  # type: ignore[attr-defined]
 
+    def set_http_status(self, code: int, text: str = "") -> None:
+        """Alias for set_http_response — BDD steps use this name consistently."""
+        self.set_http_response(code)
+
+    def set_http_sequence(self, responses: list[tuple[int, str]]) -> None:
+        """Configure httpx Client to return a sequence of responses."""
+        mocks = []
+        for code, text in responses:
+            r = MagicMock()
+            r.status_code = code
+            r.text = text
+            mocks.append(r)
+        self.mock["client"].return_value.__enter__.return_value.post.side_effect = mocks  # type: ignore[attr-defined]
+
     def call_send(
         self,
         media_buy_id: str = "mb_001",
