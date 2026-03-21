@@ -45,6 +45,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc002_create_media_buy",
     "tests.bdd.steps.domain.uc003_update_media_buy",
     "tests.bdd.steps.domain.uc019_query_media_buys",
+    "tests.bdd.steps.domain.uc026_package_media_buy",
     "tests.bdd.steps.domain.uc006_sync_creatives",
     "tests.bdd.steps.domain.uc011_accounts",
     "tests.bdd.steps.domain.admin_accounts",
@@ -588,6 +589,8 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
         return "UC-003"
     if any(t.startswith("T-UC-019") for t in marker_names):
         return "UC-019"
+    if any(t.startswith("T-UC-026") for t in marker_names):
+        return "UC-026"
     if any(t.startswith("T-UC-006") for t in marker_names):
         return "UC-006"
     if any(t.startswith("T-UC-005") for t in marker_names):
@@ -685,6 +688,41 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             ctx["env"] = env
             ctx["tenant"] = tenant
             ctx["principal"] = principal
+            yield
+
+    elif uc == "UC-026":
+        # UC-026 package_media_buy — uses MediaBuyCreateEnv with product "prod-1"
+        request.getfixturevalue("integration_db")
+        from tests.harness.media_buy_create import MediaBuyCreateEnv
+
+        with MediaBuyCreateEnv() as env:
+            from tests.factories import (
+                PricingOptionFactory,
+                ProductFactory,
+                PropertyTagFactory,
+                PublisherPartnerFactory,
+            )
+
+            tenant, principal = env.setup_default_data()
+            if "_" in (tenant.subdomain or ""):
+                tenant.subdomain = tenant.subdomain.replace("_", "-")
+            PropertyTagFactory(tenant=tenant, tag_id="all_inventory", name="All Inventory")
+            PublisherPartnerFactory(tenant=tenant, publisher_domain="testpublisher.example.com")
+            product = ProductFactory(
+                tenant=tenant,
+                product_id="prod-1",
+                property_tags=["all_inventory"],
+                format_ids=[
+                    {"agent_url": "https://creative.adcontextprotocol.org", "id": "banner-300x250"},
+                    {"agent_url": "https://creative.adcontextprotocol.org", "id": "banner-728x90"},
+                ],
+            )
+            PricingOptionFactory(product=product, pricing_model="cpm", currency="USD", is_fixed=True)
+            env._commit_factory_data()
+            ctx["env"] = env
+            ctx["tenant"] = tenant
+            ctx["principal"] = principal
+            ctx["default_product"] = product
             yield
 
     elif uc == "UC-006":
