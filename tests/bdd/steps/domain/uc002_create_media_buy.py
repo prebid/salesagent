@@ -14,6 +14,18 @@ from pytest_bdd import given, parsers, then, when
 
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 
+
+def _maybe_init_request_kwargs(ctx: dict) -> None:
+    """Initialize request_kwargs if env is MediaBuyCreateEnv (not account-only)."""
+    from tests.harness.media_buy_create import MediaBuyCreateEnv
+
+    env = ctx.get("env")
+    if isinstance(env, MediaBuyCreateEnv):
+        from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
+
+        _ensure_request_defaults(ctx)
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — request setup and account state
 # ═══════════════════════════════════════════════════════════════════════
@@ -52,12 +64,14 @@ def given_request_without_account(ctx: dict) -> None:
 def given_request_with_creative_assignments(ctx: dict) -> None:
     """Set up a create_media_buy request with creative assignments (account is implicit)."""
     ctx.setdefault("account_ref", None)
+    _maybe_init_request_kwargs(ctx)
 
 
 @given("a valid create_media_buy request")
 def given_valid_request(ctx: dict) -> None:
     """Set up a generic valid create_media_buy request (account populated separately)."""
     ctx.setdefault("account_ref", None)
+    _maybe_init_request_kwargs(ctx)
 
 
 @given(parsers.parse('a valid create_media_buy request with account "{account_id}"'))
@@ -67,6 +81,9 @@ def given_request_with_account(ctx: dict, account_id: str) -> None:
 
     ctx["account_ref"] = AccountReference(root=AccountReference1(account_id=account_id))
     ctx["request_account_id"] = account_id
+    _maybe_init_request_kwargs(ctx)
+    if "request_kwargs" in ctx:
+        ctx["request_kwargs"]["account"] = ctx["account_ref"]
 
 
 @given("the account_id does not exist in the seller's account store")
@@ -383,10 +400,54 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
 
 @when("the Buyer Agent sends the create_media_buy request")
 def when_send_create_media_buy(ctx: dict) -> None:
-    """Send the create_media_buy request and capture the result or error."""
-    from tests.bdd.steps.generic._account_resolution import resolve_account_or_error
+    """Send the create_media_buy request and capture the result or error.
 
-    resolve_account_or_error(ctx)
+    Two dispatch paths:
+    - MediaBuyAccountEnv: account resolution only (resolve_account_or_error)
+    - MediaBuyCreateEnv: full create_media_buy through all transports
+    """
+    from tests.harness.media_buy_create import MediaBuyCreateEnv
+
+    env = ctx["env"]
+    if isinstance(env, MediaBuyCreateEnv):
+        _dispatch_create_media_buy(ctx)
+    else:
+        from tests.bdd.steps.generic._account_resolution import resolve_account_or_error
+
+        resolve_account_or_error(ctx)
+
+
+def _dispatch_create_media_buy(ctx: dict) -> None:
+    """Build CreateMediaBuyRequest from ctx and dispatch through harness."""
+    from tests.bdd.steps.generic._dispatch import dispatch_request
+
+    request_kwargs = ctx.get("request_kwargs", {})
+
+    # Build the request object
+    from src.core.schemas import CreateMediaBuyRequest
+
+    req = CreateMediaBuyRequest(**request_kwargs)
+
+    # Check for no-auth scenario
+    if ctx.get("has_auth") is False:
+        dispatch_request(ctx, req=req, identity=None)
+    else:
+        dispatch_request(ctx, req=req)
+
+    # Post-process: CreateMediaBuyResult wraps errors in response, not as exceptions.
+    # Promote error results to ctx["error"] so generic Then steps can find them.
+    resp = ctx.get("response")
+    if resp is not None and hasattr(resp, "status") and hasattr(resp, "response"):
+        from src.core.schemas._base import CreateMediaBuyError as CMBError
+
+        if isinstance(resp.response, CMBError) and resp.response.errors:
+            # Promote first error from the errors list — it has .code, .message, .recovery
+            ctx["error"] = resp.response.errors[0]
+            ctx["error_response"] = resp.response  # Keep full error response for multi-error checks
+            del ctx["response"]
+        elif resp.status == "failed":
+            ctx["error"] = resp
+            del ctx["response"]
 
 
 def _ensure_tenant_principal(ctx: dict, env: object) -> None:

@@ -39,6 +39,8 @@ pytest_plugins = [
     "tests.bdd.steps.generic.then_success",
     "tests.bdd.steps.generic.then_error",
     "tests.bdd.steps.generic.then_payload",
+    "tests.bdd.steps.generic.given_media_buy",
+    "tests.bdd.steps.generic.then_media_buy",
     "tests.bdd.steps.domain.uc004_delivery",
     "tests.bdd.steps.domain.uc002_create_media_buy",
     "tests.bdd.steps.domain.uc006_sync_creatives",
@@ -640,8 +642,18 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 ctx["env"] = env
                 yield
         else:
-            # No harness for other UC-002 scenarios yet → auto-xfail via KeyError
-            yield
+            # Non-account UC-002 scenarios → MediaBuyCreateEnv with full data chain
+            request.getfixturevalue("integration_db")
+            from tests.harness.media_buy_create import MediaBuyCreateEnv
+
+            with MediaBuyCreateEnv() as env:
+                tenant, principal, product, pricing_option = env.setup_media_buy_data()
+                ctx["env"] = env
+                ctx["tenant"] = tenant
+                ctx["principal"] = principal
+                ctx["default_product"] = product
+                ctx["default_pricing_option"] = pricing_option
+                yield
 
     elif uc == "UC-006":
         marker_names = {m.name for m in request.node.iter_markers()}
