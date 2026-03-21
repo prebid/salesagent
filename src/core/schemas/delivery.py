@@ -82,24 +82,11 @@ class GetMediaBuyDeliveryRequest(LibraryGetMediaBuyDeliveryRequest):
 
     # account_id: inherited from library (was local, now in adcp library)
 
-    # --- Salesagent extensions (NOT in adcp spec/library) ---
-    # TODO(salesagent-jz3y): Move these to ext field or propose as spec additions.
-    # These fields are salesagent-specific extensions not present in the adcp spec.
-    account: dict[str, Any] | None = Field(
-        None,
-        description="Filter delivery data to a specific account (salesagent extension, not in adcp spec)",
-    )
-    reporting_dimensions: dict[str, Any] | None = Field(
-        None,
-        description="Request dimensional breakdowns (salesagent extension, not in adcp spec)",
-    )
+    # account, reporting_dimensions, attribution_window: now typed in adcp library (3.10+)
+    # include_package_daily_breakdown: salesagent-only extension
     include_package_daily_breakdown: bool | None = Field(
         None,
         description="Include daily_breakdown arrays within each package (salesagent extension, not in adcp spec)",
-    )
-    attribution_window: dict[str, Any] | None = Field(
-        None,
-        description="Attribution window for conversion metrics (salesagent extension; adcp spec has this on response only)",
     )
 
 

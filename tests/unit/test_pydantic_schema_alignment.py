@@ -72,8 +72,12 @@ KNOWN_SCHEMA_LIBRARY_MISMATCHES: dict[str, set[str]] = {
         "reporting_dimensions",  # Schema defines it, library doesn't have it yet
     },
     "/schemas/latest/media-buy/sync-creatives-request.json": {
-        "account",  # Schema says 'account' (object), library uses 'account_id' (string)
+        "account_id",  # Spec says 'account_id', library maps to 'account' (AccountReference)
         "idempotency_key",  # Schema defines request deduplication key, library doesn't have it yet
+    },
+    "/schemas/latest/media-buy/list-creatives-request.json": {
+        "include_performance",  # adcp 3.10 spec field, not yet in library
+        "include_sub_assets",  # adcp 3.10 spec field, not yet in library
     },
 }
 

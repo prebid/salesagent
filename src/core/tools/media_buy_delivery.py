@@ -395,7 +395,7 @@ def _get_media_buy_delivery_impl(
                         # Build placement breakdown if reporting_dimensions includes "placement"
                         placement_breakdown = None
                         placement_dim = (
-                            (req.reporting_dimensions or {}).get("placement") if req.reporting_dimensions else None
+                            getattr(req.reporting_dimensions, "placement", None) if req.reporting_dimensions else None
                         )
                         if placement_dim is not None and raw_placements:
                             placement_breakdown = [PlacementBreakdown(**p) for p in raw_placements]

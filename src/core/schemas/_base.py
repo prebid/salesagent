@@ -2258,19 +2258,6 @@ class ListAuthorizedPropertiesResponse(NestedModelSerializerMixin, SalesAgentBas
 # When the project migrates to adcp >=3.6.0, these can be replaced with library imports.
 
 
-class DeliveryStatus(str, Enum):
-    """Operational delivery state of a package.
-
-    Used by Snapshot (get_media_buys types). The delivery.py module defines
-    a superset of this enum with additional values for delivery responses.
-    """
-
-    delivering = "delivering"
-    not_delivering = "not_delivering"
-    completed = "completed"
-    budget_exhausted = "budget_exhausted"
-
-
 class SnapshotUnavailableReason(str, Enum):
     """Reason why a delivery snapshot is not available."""
 
@@ -2301,8 +2288,8 @@ class Snapshot(SalesAgentBaseModel):
     pacing_index: float | None = Field(
         default=None, ge=0.0, description="Current delivery pace relative to expected (1.0 = on track)"
     )
-    delivery_status: DeliveryStatus | None = Field(
-        default=None, description="Operational delivery state of this package"
+    delivery_status: Any = Field(
+        default=None, description="Operational delivery state of this package (DeliveryStatus enum)"
     )
     currency: str | None = Field(default=None, description="ISO 4217 currency code for spend in this snapshot")
 
