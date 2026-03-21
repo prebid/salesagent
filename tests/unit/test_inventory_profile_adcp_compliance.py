@@ -61,9 +61,9 @@ def test_profile_formats_match_adcp_format_id_schema():
 def test_profile_publisher_properties_match_adcp_property_schema():
     """Test that profile publisher_properties match AdCP Property schema.
 
-    adcp 3.6.0: Property schema changed:
-    - New required fields: identifier (str), type (enum)
-    - Old fields removed: property_type, name, identifiers, publisher_domain, tags
+    adcp 3.10: Property schema requires:
+    - property_type (PropertyType enum), name (str), identifiers (list of {type, value})
+    - Optional: property_id, tags, supported_channels, publisher_domain
     """
     # Create profile with various property configurations using new schema
     profile = InventoryProfile(
@@ -81,18 +81,19 @@ def test_profile_publisher_properties_match_adcp_property_schema():
         ],
         publisher_properties=[
             {
-                "identifier": "example.com",
-                "type": "website",
+                "property_type": "website",
+                "name": "Example Website",
+                "identifiers": [{"type": "domain", "value": "example.com"}],
             },
             {
-                "identifier": "com.another.app",
-                "type": "mobile_app",
-                "store": "google",
+                "property_type": "mobile_app",
+                "name": "Another App",
+                "identifiers": [{"type": "google_play_id", "value": "com.another.app"}],
             },
             {
-                "identifier": "roku123",
-                "type": "ctv_app",
-                "store": "roku",
+                "property_type": "ctv_app",
+                "name": "Roku App",
+                "identifiers": [{"type": "roku_store_id", "value": "roku123"}],
             },
         ],
     )
@@ -101,15 +102,18 @@ def test_profile_publisher_properties_match_adcp_property_schema():
     assert len(profile.publisher_properties) == 3
 
     for prop_dict in profile.publisher_properties:
-        # adcp 3.6.0: required fields are identifier and type
-        assert "identifier" in prop_dict, "Property must have identifier"
-        assert "type" in prop_dict, "Property must have type"
-        assert isinstance(prop_dict["identifier"], str), "identifier must be string"
-        assert isinstance(prop_dict["type"], str), "type must be string"
+        # adcp 3.10: required fields are property_type, name, identifiers
+        assert "property_type" in prop_dict, "Property must have property_type"
+        assert "name" in prop_dict, "Property must have name"
+        assert "identifiers" in prop_dict, "Property must have identifiers"
+        assert isinstance(prop_dict["property_type"], str), "property_type must be string"
+        assert isinstance(prop_dict["name"], str), "name must be string"
+        assert isinstance(prop_dict["identifiers"], list), "identifiers must be a list"
 
         # Validate using Pydantic schema
         property_obj = Property(**prop_dict)
-        assert property_obj.identifier == prop_dict["identifier"]
+        assert property_obj.name == prop_dict["name"]
+        assert property_obj.property_type.value == prop_dict["property_type"]
 
 
 def test_product_with_profile_passes_adcp_validation():
@@ -136,8 +140,9 @@ def test_product_with_profile_passes_adcp_validation():
         ],
         publisher_properties=[
             {
-                "identifier": "example.com",
-                "type": "website",
+                "property_type": "website",
+                "name": "Example Website",
+                "identifiers": [{"type": "domain", "value": "example.com"}],
             }
         ],
     )
@@ -173,9 +178,10 @@ def test_product_with_profile_passes_adcp_validation():
     # Validate effective_properties match AdCP Property schema
     assert len(effective_properties) == 1
     for prop_dict in effective_properties:
-        # adcp 3.6.0: validate using new Pydantic Property schema
+        # adcp 3.10: validate using new Pydantic Property schema
         property_obj = Property(**prop_dict)
-        assert property_obj.identifier == "example.com"
+        assert property_obj.name == "Example Website"
+        assert property_obj.identifiers[0].value == "example.com"
 
     # Create ProductSchema from product data
     # This simulates what happens when product is serialized for AdCP API
@@ -225,31 +231,36 @@ def test_profile_formats_validation_rejects_invalid_structure():
 
 
 def test_profile_properties_validation_rejects_invalid_structure():
-    """Test that profile properties validation rejects invalid Property structures."""
+    """Test that profile properties validation rejects invalid Property structures.
+
+    adcp 3.10: Property requires property_type (enum), name (str),
+    identifiers (list of {type, value} with min_length=1).
+    """
     # Test invalid property structures
     invalid_properties = [
-        {"publisher_domain": "example.com"},  # Missing required fields
+        {"publisher_domain": "example.com"},  # Missing all required fields
         {
-            "publisher_domain": "example.com",
             "name": "Test",
             "identifiers": [{"type": "domain", "value": "example.com"}],
         },  # Missing property_type
         {
             "property_type": "website",
-            "publisher_domain": "example.com",
             "identifiers": [{"type": "domain", "value": "example.com"}],
         },  # Missing name
         {
             "property_type": "website",
             "name": "Test",
-            "publisher_domain": "example.com",
         },  # Missing identifiers
         {
             "property_type": "invalid_type",
             "name": "Test",
             "identifiers": [{"type": "domain", "value": "example.com"}],
-            "publisher_domain": "example.com",
-        },  # Invalid property_type
+        },  # Invalid property_type enum value
+        {
+            "property_type": "website",
+            "name": "Test",
+            "identifiers": [],
+        },  # Empty identifiers (min_length=1)
     ]
 
     for invalid_property in invalid_properties:

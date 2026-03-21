@@ -43,7 +43,7 @@ class TestExceptionHierarchy:
         exc = AdCPAuthenticationError("bad token")
         assert isinstance(exc, AdCPError)
         assert exc.status_code == 401
-        assert exc.error_code == "AUTHENTICATION_ERROR"
+        assert exc.error_code == "AUTH_TOKEN_INVALID"
 
     def test_authorization_error(self):
         """AdCPAuthorizationError must have status_code=403."""
@@ -288,7 +288,7 @@ class TestFastAPIExceptionHandlers:
         response = client.get("/test-exc/auth")
         assert response.status_code == 401
         body = response.json()
-        assert body["error_code"] == "AUTHENTICATION_ERROR"
+        assert body["error_code"] == "AUTH_TOKEN_INVALID"
 
     def test_not_found_error_returns_404(self):
         """AdCPNotFoundError raised in a route must return 404."""

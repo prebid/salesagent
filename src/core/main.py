@@ -279,6 +279,7 @@ def get_strategy_manager(context: Context | None) -> StrategyManager:
 # Tools are imported and then registered with MCP manually (no decorators in tool modules)
 # Import error logging wrapper for centralized error visibility
 from src.core.tool_error_logging import with_error_logging
+from src.core.tools.accounts import list_accounts, sync_accounts
 from src.core.tools.capabilities import get_adcp_capabilities
 from src.core.tools.creative_formats import list_creative_formats
 from src.core.tools.creatives import list_creatives, sync_creatives
@@ -294,6 +295,8 @@ from src.core.tools.task_management import complete_task, get_task, list_tasks
 # Register tools with MCP (must be done after imports to avoid circular dependency)
 # This breaks the circular import: tool modules no longer import mcp from main.py
 # Tools are wrapped with error logging to ensure errors appear in activity feed
+mcp.tool()(with_error_logging(list_accounts))
+mcp.tool()(with_error_logging(sync_accounts))
 mcp.tool()(with_error_logging(get_adcp_capabilities))
 mcp.tool()(with_error_logging(get_products))
 mcp.tool()(with_error_logging(list_creative_formats))

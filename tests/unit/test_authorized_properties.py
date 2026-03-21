@@ -68,100 +68,98 @@ class TestProperty:
     """
 
     def test_property_with_minimal_fields(self):
-        """Test property with only required fields (identifier and type)."""
+        """Test property with only required fields (adcp 3.10: property_type, name, identifiers)."""
         property_obj = Property(
-            identifier="example.com",
-            type="website",
+            property_type="website",
+            name="Example Website",
+            identifiers=[{"type": "domain", "value": "example.com"}],
         )
 
-        assert property_obj.identifier == "example.com"
-        assert property_obj.primary is False  # Default value
-        assert property_obj.region is None
-        assert property_obj.store is None
+        assert property_obj.name == "Example Website"
+        assert property_obj.property_id is None  # Optional
+        assert property_obj.tags is None
+        assert property_obj.supported_channels is None
 
     def test_property_with_all_fields(self):
         """Test property with all optional fields."""
         property_obj = Property(
-            identifier="com.example.app",
-            type="mobile_app",
-            primary=True,
-            store="apple",
-            region="US",
+            property_type="mobile_app",
+            name="Example App",
+            identifiers=[{"type": "bundle_id", "value": "com.example.app"}],
+            property_id="prop_123",
+            tags=["premium", "news"],
+            publisher_domain="example.com",
         )
 
-        assert property_obj.identifier == "com.example.app"
-        assert property_obj.primary is True
-        assert property_obj.region == "US"
+        assert property_obj.name == "Example App"
+        assert property_obj.property_id.root == "prop_123"
+        assert len(property_obj.tags) == 2
 
     def test_property_model_dump_omits_none_fields(self):
         """Test that model_dump omits None optional fields (AdCP spec compliance)."""
         property_obj = Property(
-            identifier="example.com",
-            type="website",
-            # region and store not set (None)
+            property_type="website",
+            name="Example",
+            identifiers=[{"type": "domain", "value": "example.com"}],
         )
 
-        data = property_obj.model_dump()
-        # Per AdCP spec, optional fields with None values should be omitted
-        assert "region" not in data or data.get("region") is None
-        assert "store" not in data or data.get("store") is None
+        data = property_obj.model_dump(exclude_none=True)
+        # Optional fields with None values should be omitted
+        assert "tags" not in data
+        assert "supported_channels" not in data
 
         # Required fields must always be present
-        assert "identifier" in data
-        assert "type" in data
+        assert "property_type" in data
+        assert "name" in data
+        assert "identifiers" in data
 
-    def test_property_requires_identifier_and_type(self):
-        """Test that property requires identifier and type."""
+    def test_property_requires_property_type_name_identifiers(self):
+        """Test that property requires property_type, name, and identifiers (adcp 3.10)."""
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError):
-            Property()  # Missing both required fields
+            Property()  # Missing all required fields
 
     def test_invalid_property_type(self):
         """Test that invalid property type raises validation error."""
         with pytest.raises(ValueError):
             Property(
-                identifier="example.com",
-                type="invalid_type",
+                property_type="invalid_type",
+                name="Bad",
+                identifiers=[{"type": "domain", "value": "example.com"}],
             )
 
     def test_property_adcp_compliance(self):
-        """Test that Property complies with AdCP property schema (adcp 3.6.0)."""
-        # Create property with required fields
+        """Test that Property complies with AdCP property schema (adcp 3.10)."""
         property_obj = Property(
-            identifier="example.com",
-            type="website",
+            property_type="website",
+            name="Example Website",
+            identifiers=[{"type": "domain", "value": "example.com"}],
         )
 
-        # Test AdCP-compliant response (mode="json" serializes enums to strings)
         adcp_response = property_obj.model_dump(mode="json")
 
         # Verify required AdCP fields present and non-null
-        required_fields = ["identifier", "type"]
+        required_fields = ["property_type", "name", "identifiers"]
         for field in required_fields:
             assert field in adcp_response
             assert adcp_response[field] is not None
 
-        # Verify property type is valid enum value (as string after json serialization)
+        # Verify property type is valid enum value
         valid_types = ["website", "mobile_app", "ctv_app", "desktop_app", "dooh", "podcast", "radio", "streaming_audio"]
-        assert adcp_response["type"] in valid_types
+        assert adcp_response["property_type"] in valid_types
 
-        # primary field has a default value
-        assert "primary" in adcp_response
-        assert adcp_response["primary"] is False
-
-        # Test with mobile_app and optional store
+        # Test with mobile_app
         app_property = Property(
-            identifier="com.example.app",
-            type="mobile_app",
-            primary=True,
-            store="google",
+            property_type="mobile_app",
+            name="Example App",
+            identifiers=[{"type": "bundle_id", "value": "com.example.app"}],
+            publisher_domain="example.com",
         )
         app_response = app_property.model_dump(mode="json")
-        assert app_response["identifier"] == "com.example.app"
-        assert app_response["type"] == "mobile_app"
-        assert app_response["primary"] is True
-        assert app_response["store"] == "google"
+        assert app_response["property_type"] == "mobile_app"
+        assert app_response["name"] == "Example App"
+        assert app_response["publisher_domain"] == "example.com"
 
 
 class TestListAuthorizedPropertiesResponse:

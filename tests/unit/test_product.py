@@ -49,8 +49,7 @@ class TestProductPreconditions:
 
         with ProductEnv() as env:
             # Bypass the harness identity by calling impl directly
-            from adcp import GetProductsRequest as GetProductsRequestGenerated
-
+            from src.core.schemas import GetProductsRequest as GetProductsRequestGenerated
             from src.core.tools.products import _get_products_impl
 
             req = GetProductsRequestGenerated(brief="test", brand={"domain": "test.com"})

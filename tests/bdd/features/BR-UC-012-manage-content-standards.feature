@@ -1,4 +1,4 @@
-# Generated from adcp-req @ bd801586c630f4d09c3d3162c3c6fd8d0a8b53c6 on 2026-03-20T01:32:25Z
+# Generated from adcp-req @ 8a219ece2b54628c33f1075d386b73082a0f4832 on 2026-03-20T12:00:24Z
 # DO NOT EDIT -- re-run: python scripts/compile_bdd.py
 
 Feature: BR-UC-012 Manage Content Standards
@@ -25,7 +25,7 @@ Feature: BR-UC-012 Manage Content Standards
     And the Buyer is authenticated with a valid principal_id
 
 
-  @T-UC-012-list-main @list @happy-path @post-s3 @post-s6 @pending
+  @T-UC-012-list-main @list @happy-path @post-s3 @post-s6
   Scenario Outline: List content standards via <transport> - returns matching standards
     Given the tenant has 3 content standards with different scopes
     And the Buyer Agent has an authenticated connection via <transport>
@@ -41,7 +41,6 @@ Feature: BR-UC-012 Manage Content Standards
       | MCP       |
       | REST      |
 
-  @pending
   @list @no-filter @post-s3 @partition @boundary
   Scenario: List content standards - no filters (empty request) returns all tenant standards
     Given the tenant has 5 content standards
@@ -49,7 +48,6 @@ Feature: BR-UC-012 Manage Content Standards
     Then the response contains a standards array with 5 items
     # BR-RULE-068 INV-5: No filter parameters → all standards returned
 
-  @pending
   @list @filter @channels @post-s3 @partition
   Scenario: List with channels filter uses OR logic within dimension
     Given the tenant has a standard scoped to "display" channel
@@ -60,7 +58,6 @@ Feature: BR-UC-012 Manage Content Standards
     And the podcast standard is not included
     # BR-RULE-068 INV-1: Multiple channels in filter → match ANY
 
-  @pending
   @list @filter @languages @post-s3 @partition
   Scenario: List with languages filter uses OR logic within dimension
     Given the tenant has a standard scoped to language "en"
@@ -70,7 +67,6 @@ Feature: BR-UC-012 Manage Content Standards
     Then the response contains 2 standards (en and de)
     # BR-RULE-068 INV-2: Multiple languages → match ANY
 
-  @pending
   @list @filter @countries @post-s3 @partition
   Scenario: List with countries filter uses OR logic within dimension
     Given the tenant has a standard scoped to countries ["US", "GB"]
@@ -80,7 +76,6 @@ Feature: BR-UC-012 Manage Content Standards
     And the DE-only standard is not included
     # BR-RULE-068 INV-3: Multiple countries → match ANY
 
-  @pending
   @list @filter @cross-dimension @post-s3 @partition
   Scenario: List with multiple filter dimensions uses AND logic between dimensions
     Given the tenant has a standard scoped to channel "display" and language "en"
@@ -90,14 +85,13 @@ Feature: BR-UC-012 Manage Content Standards
     # BR-RULE-068 INV-4: Multiple dimensions → must match ALL
     # Neither standard matches both dimensions
 
-  @T-UC-012-list-empty-result @list @empty-result @partition @pending
+  @T-UC-012-list-empty-result @list @empty-result @partition
   Scenario: List with non-matching filters returns empty array
     Given the tenant has a standard scoped to channel "display"
     When the Buyer Agent filters by channels ["podcast"]
     Then the response contains an empty standards array
     And the response is not an error
 
-  @pending
   @list @filter @partition @boundary
   Scenario Outline: List content standards - filter combination <combination>
     Given the tenant has content standards with various scopes
@@ -115,7 +109,7 @@ Feature: BR-UC-012 Manage Content Standards
       | single_language  | languages=["en"]                                        | languages with 1 value                     |
       | multi_channel    | channels=["display","olv","social","search","ctv","linear_tv","radio","streaming_audio","podcast","dooh","ooh","print","cinema","email","gaming","retail_media","influencer","affiliate"] | channels with all 18 enum values |
 
-  @T-UC-012-ext-a-create @create @happy-path @post-s1 @post-s6 @pending
+  @T-UC-012-ext-a-create @create @happy-path @post-s1 @post-s6
   Scenario Outline: Create content standard via <transport> - returns standards_id
     Given no existing content standard for this scope
     When the Buyer Agent creates a content standard via <transport> with:
@@ -131,7 +125,6 @@ Feature: BR-UC-012 Manage Content Standards
       | MCP       |
       | REST      |
 
-  @pending
   @create @scope @partition @boundary
   Scenario Outline: Create content standard - scope <scope_type> is valid
     Given no existing content standard for this scope
@@ -147,7 +140,6 @@ Feature: BR-UC-012 Manage Content Standards
       | no_channels    | {"countries_all": ["DE"], "languages_any": ["de"]}                                   | countries_all with 1 ISO code                     |
       | all_channels   | {"channels_any": ["display","olv","social","search","ctv","linear_tv","radio","streaming_audio","podcast","dooh","ooh","print","cinema","email","gaming","retail_media","influencer","affiliate"], "languages_any": ["en"]} | channels_any with all 18 enum values |
 
-  @pending
   @create @scope @error @partition @boundary @post-f2 @post-f3
   Scenario Outline: Create content standard - scope <scope_type> is rejected
     When the Buyer Agent creates a content standard with scope <scope_value> and policy "Safe content only"
@@ -163,7 +155,6 @@ Feature: BR-UC-012 Manage Content Standards
       | missing_languages  | {"countries_all": ["US"]}        | LANGUAGES_REQUIRED | scope without languages_any key             |
       | invalid_channel    | {"channels_any": ["not_a_channel"], "languages_any": ["en"]} | CHANNEL_INVALID | channels_any with unknown enum value |
 
-  @pending
   @create @policy @partition @boundary @post-f2 @post-f3
   Scenario Outline: Create content standard - policy <policy_type>
     Given no existing content standard for this scope
@@ -177,7 +168,6 @@ Feature: BR-UC-012 Manage Content Standards
       | missing_on_create| (absent)                                                         | the error code should be "POLICY_REQUIRED"   | policy absent on create                   |
       | empty_string     |                                                                  | the error code should be "POLICY_REQUIRED"   | policy empty string on create             |
 
-  @pending
   @create @calibration @partition @boundary
   Scenario Outline: Create content standard - calibration exemplars <exemplar_type>
     Given no existing content standard for this scope
@@ -195,7 +185,6 @@ Feature: BR-UC-012 Manage Content Standards
       | absent              | (not provided)                                                                      | the response contains a generated standards_id | calibration_exemplars absent                      |
       | empty_object        | {}                                                                                  | the response contains a generated standards_id | calibration_exemplars empty object {}             |
 
-  @pending
   @create @calibration @error @partition @boundary @post-f2 @post-f3
   Scenario Outline: Create content standard - invalid calibration exemplar <exemplar_type>
     When the Buyer Agent creates a content standard with calibration_exemplars <exemplar_value>
@@ -211,7 +200,7 @@ Feature: BR-UC-012 Manage Content Standards
       | url_invalid_uri         | {"pass": [{"type": "url", "value": "not-a-url"}]}     | URL ref with non-URI value        |
       | artifact_missing_assets | {"pass": [{"property_id": "p1", "artifact_id": "a1"}]} | artifact missing required assets  |
 
-  @T-UC-012-ext-b-get @get @happy-path @post-s2 @post-s6 @pending
+  @T-UC-012-ext-b-get @get @happy-path @post-s2 @post-s6
   Scenario: Get content standard by ID - returns full configuration
     Given an existing content standard with standards_id "std_abc123"
     When the Buyer Agent sends a get_content_standards request for "std_abc123"
@@ -219,7 +208,6 @@ Feature: BR-UC-012 Manage Content Standards
     And the request context is echoed in the response
     # POST-S2: Buyer retrieves full content standard by ID
 
-  @pending
   @get @standards-id @partition @boundary @post-f2 @post-f3
   Scenario Outline: Get content standard - standards_id <id_type>
     When the Buyer Agent sends a get_content_standards request for standards_id <id_value>
@@ -232,7 +220,7 @@ Feature: BR-UC-012 Manage Content Standards
       | not_found        | nonexistent_id        | the error code should be "STANDARDS_NOT_FOUND"        | standards_id not found in tenant            |
       | wrong_tenant     | other_tenant_standard | the error code should be "STANDARDS_NOT_FOUND"        | standards_id exists in different tenant     |
 
-  @T-UC-012-get-pricing-options @get @pricing-options @partition @boundary @pending
+  @T-UC-012-get-pricing-options @get @pricing-options @partition @boundary
   Scenario: Get content standard - response includes pricing_options when seller provides them
     Given an existing content standard with standards_id "std_priced" that has pricing_options
     When the Buyer Agent sends a get_content_standards request for "std_priced"
@@ -240,7 +228,7 @@ Feature: BR-UC-012 Manage Content Standards
     And each pricing option includes pricing_option_id and pricing_model
     # pricing_options is seller-supplied on the content standard model
 
-  @T-UC-012-ext-c-update @update @happy-path @post-s4 @post-s6 @pending
+  @T-UC-012-ext-c-update @update @happy-path @post-s4 @post-s6
   Scenario Outline: Update content standard via <transport> - success branch (success: true, standards_id)
     Given an existing content standard with standards_id "std_abc123"
     When the Buyer Agent updates the content standard via <transport> with new policy "Updated brand safety policy"
@@ -258,7 +246,6 @@ Feature: BR-UC-012 Manage Content Standards
       | MCP       |
       | REST      |
 
-  @pending
   @update @partial @post-s4 @partition @boundary
   Scenario: Update content standard - policy present on update (replaces existing), partial update preserves unchanged fields
     Given an existing content standard with scope {"languages_any": ["en"], "channels_any": ["display"]} and policy "Original policy"
@@ -269,7 +256,7 @@ Feature: BR-UC-012 Manage Content Standards
     # BR-RULE-066 INV-2: Only provided fields are changed
     # BR-RULE-066 INV-3: standards_id stable across versions
 
-  @T-UC-012-update-scope-only @update @partial @post-s4 @partition @boundary @pending
+  @T-UC-012-update-scope-only @update @partial @post-s4 @partition @boundary
   Scenario: Update content standard - update_omitted: policy omitted on update, scope change preserves policy
     Given an existing content standard with policy "Keep this policy"
     When the Buyer Agent updates the scope to {"languages_any": ["en", "de"]}
@@ -277,14 +264,14 @@ Feature: BR-UC-012 Manage Content Standards
     And the policy remains "Keep this policy"
     # BR-RULE-066 INV-2: Unchanged fields carried forward
 
-  @T-UC-012-update-no-changes @update @edge-case @partition @pending
+  @T-UC-012-update-no-changes @update @edge-case @partition
   Scenario: Update content standard - no fields changed still returns success branch
     Given an existing content standard with standards_id "std_abc123"
     When the Buyer Agent sends an update request with only standards_id and no other fields
     Then the response success field is true
     And the response contains standards_id "std_abc123"
 
-  @T-UC-012-update-scope-conflict @update @scope-conflict @error @post-s7 @post-f1 @post-f2 @post-f3 @post-f4 @pending
+  @T-UC-012-update-scope-conflict @update @scope-conflict @error @post-s7 @post-f1 @post-f2 @post-f3 @post-f4
   Scenario: Update content standard - scope change triggers SCOPE_CONFLICT via error branch (success: false)
     Given an existing content standard "std_001" with scope {"languages_any": ["en"]}
     And another existing content standard "std_002" with scope {"languages_any": ["de"]}
@@ -299,7 +286,7 @@ Feature: BR-UC-012 Manage Content Standards
     # POST-F1: System state unchanged
     # POST-F4: conflicting_standards_id returned
 
-  @T-UC-012-update-scope-valid @update @scope @error @partition @boundary @post-f2 @post-f3 @pending
+  @T-UC-012-update-scope-valid @update @scope @error @partition @boundary @post-f2 @post-f3
   Scenario: Update content standard - scope languages_any validation on update
     Given an existing content standard with standards_id "std_abc123"
     When the Buyer Agent updates the scope to {"languages_any": []}
@@ -309,7 +296,7 @@ Feature: BR-UC-012 Manage Content Standards
     And the error should include "suggestion"
     # BR-RULE-064 INV-5: Update languages_any must satisfy minItems:1
 
-  @T-UC-012-update-not-found @update @error @post-f2 @post-f3 @pending
+  @T-UC-012-update-not-found @update @error @post-f2 @post-f3
   Scenario: Update content standard - standards_id not found
     When the Buyer Agent sends an update for non-existent standards_id "nonexistent_id"
     Then the error code should be "STANDARDS_NOT_FOUND"
@@ -317,7 +304,7 @@ Feature: BR-UC-012 Manage Content Standards
     # POST-F2: Buyer knows what failed
     # POST-F3: Suggestion present
 
-  @T-UC-012-update-exemplars @update @calibration @partition @pending
+  @T-UC-012-update-exemplars @update @calibration @partition
   Scenario: Update content standard - add calibration exemplars to existing standard
     Given an existing content standard without calibration exemplars
     When the Buyer Agent updates with calibration_exemplars {"pass": [{"type": "url", "value": "https://example.com/safe"}]}
@@ -325,7 +312,7 @@ Feature: BR-UC-012 Manage Content Standards
     And a new version of the standard is created
     # BR-RULE-069: Exemplar polymorphism applies to update too
 
-  @T-UC-012-update-success-branch @update @oneOf @post-s4 @pending
+  @T-UC-012-update-success-branch @update @oneOf @post-s4
   Scenario: Update response success branch requires success:true and standards_id
     Given an existing content standard with standards_id "std_xyz"
     When the Buyer Agent updates the policy to "New policy text"
@@ -335,7 +322,7 @@ Feature: BR-UC-012 Manage Content Standards
     # Response schema: oneOf success branch requires ["success", "standards_id"]
     # BR-RULE-066 INV-3: success returns same standards_id
 
-  @T-UC-012-update-error-branch @update @oneOf @error @post-f1 @post-f2 @pending
+  @T-UC-012-update-error-branch @update @oneOf @error @post-f1 @post-f2
   Scenario: Update response error branch requires success:false and errors array (minItems:1)
     Given an existing content standard "std_err" with scope {"languages_any": ["en"]}
     And another existing content standard "std_conflict" with scope {"languages_any": ["fr"]}
@@ -348,7 +335,7 @@ Feature: BR-UC-012 Manage Content Standards
     # POST-F1: System state unchanged
     # POST-F2: Buyer knows what failed
 
-  @T-UC-012-ext-d-delete @delete @happy-path @post-s5 @post-s6 @pending
+  @T-UC-012-ext-d-delete @delete @happy-path @post-s5 @post-s6
   Scenario: Delete content standard - unreferenced standard removed
     Given an existing content standard "std_obsolete" with no active media buy references
     When the Buyer Agent deletes "std_obsolete"
@@ -359,7 +346,7 @@ Feature: BR-UC-012 Manage Content Standards
     # POST-S5: Buyer deleted obsolete standard
     # POST-S6: Context echoed
 
-  @T-UC-012-delete-in-use @delete @in-use @error @ext-g @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-012-delete-in-use @delete @in-use @error @ext-g @post-f1 @post-f2 @post-f3
   Scenario: Delete content standard - blocked when referenced by active media buy
     Given an existing content standard "std_active" referenced by 2 active media buys
     When the Buyer Agent attempts to delete "std_active"
@@ -371,20 +358,20 @@ Feature: BR-UC-012 Manage Content Standards
     # POST-F2: Buyer knows what failed
     # POST-F3: Suggestion present
 
-  @T-UC-012-delete-inactive-refs @delete @inactive-refs @partition @pending
+  @T-UC-012-delete-inactive-refs @delete @inactive-refs @partition
   Scenario: Delete content standard - allowed when only inactive buys reference it
     Given an existing content standard "std_old" referenced only by completed media buys
     When the Buyer Agent deletes "std_old"
     Then the deletion succeeds
     # BR-RULE-067 INV-3: Only ACTIVE buys block deletion
 
-  @T-UC-012-delete-not-found @delete @error @post-f2 @post-f3 @pending
+  @T-UC-012-delete-not-found @delete @error @post-f2 @post-f3
   Scenario: Delete content standard - standards_id not found
     When the Buyer Agent attempts to delete non-existent standards_id "nonexistent_id"
     Then the error code should be "STANDARDS_NOT_FOUND"
     And the error should include "suggestion"
 
-  @T-UC-012-delete-unchanged @delete @error @post-f1 @pending
+  @T-UC-012-delete-unchanged @delete @error @post-f1
   Scenario: Failed delete does not modify system state
     Given an existing content standard "std_active" referenced by active media buys
     When the Buyer Agent attempts to delete "std_active"
@@ -393,7 +380,7 @@ Feature: BR-UC-012 Manage Content Standards
     And the content standard "std_active" still exists with unchanged data
     # POST-F1: System state unchanged on failure
 
-  @T-UC-012-not-found-operations @not-found @error @ext-e @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-012-not-found-operations @not-found @error @ext-e @post-f1 @post-f2 @post-f3
   Scenario Outline: STANDARDS_NOT_FOUND on <operation> with non-existent ID
     When the Buyer Agent sends a <operation> request for standards_id "nonexistent_id"
     Then the error code should be "STANDARDS_NOT_FOUND"
@@ -410,14 +397,13 @@ Feature: BR-UC-012 Manage Content Standards
       | update_content_standards |
       | delete_content_standards |
 
-  @T-UC-012-not-found-wrong-tenant @not-found @tenant-isolation @partition @post-f2 @pending
+  @T-UC-012-not-found-wrong-tenant @not-found @tenant-isolation @partition @post-f2
   Scenario: STANDARDS_NOT_FOUND when standards_id belongs to different tenant
     Given a content standard "std_other" exists in tenant "other_tenant"
     When the Buyer Agent in tenant "my_tenant" requests get_content_standards for "std_other"
     Then the error code should be "STANDARDS_NOT_FOUND"
     # Tenant isolation: cannot see other tenant's standards
 
-  @pending
   @scope-conflict @create @error @ext-f @partition @post-s7 @post-f1 @post-f2 @post-f3 @post-f4
   Scenario: Create content standard - scope_overlap triggers SCOPE_CONFLICT with error branch (success: false)
     Given an existing content standard "std_existing" with scope {"languages_any": ["en"], "channels_any": ["display"]}
@@ -433,14 +419,14 @@ Feature: BR-UC-012 Manage Content Standards
     # POST-F1: System state unchanged
     # POST-F4: conflicting_standards_id returned
 
-  @T-UC-012-scope-no-conflict @scope-conflict @create @partition @pending
+  @T-UC-012-scope-no-conflict @scope-conflict @create @partition
   Scenario: Create content standard - non-overlapping scope proceeds normally (success: true)
     Given an existing content standard with scope {"languages_any": ["en"]}
     When the Buyer Agent creates a content standard with scope {"languages_any": ["de"]}
     Then the response contains a generated standards_id
     # BR-RULE-065 INV-3: No overlap → proceeds via success branch
 
-  @T-UC-012-scope-conflict-update @scope-conflict @update @error @ext-f @post-s7 @post-f1 @post-f2 @post-f3 @post-f4 @pending
+  @T-UC-012-scope-conflict-update @scope-conflict @update @error @ext-f @post-s7 @post-f1 @post-f2 @post-f3 @post-f4
   Scenario: Update content standard - scope change triggers SCOPE_CONFLICT with error branch (success: false)
     Given an existing content standard "std_a" with scope {"languages_any": ["en"]}
     And another existing content standard "std_b" with scope {"languages_any": ["de"]}
@@ -455,7 +441,7 @@ Feature: BR-UC-012 Manage Content Standards
     # POST-F1: System state unchanged
     # POST-F4: conflicting_standards_id returned
 
-  @T-UC-012-scope-no-conflict-update @scope-conflict @update @partition @pending
+  @T-UC-012-scope-no-conflict-update @scope-conflict @update @partition
   Scenario: Update content standard - non-overlapping scope change proceeds (success: true)
     Given an existing content standard "std_c" with scope {"languages_any": ["en"]}
     And another existing content standard "std_d" with scope {"languages_any": ["de"]}
@@ -464,7 +450,7 @@ Feature: BR-UC-012 Manage Content Standards
     And the response contains standards_id "std_c"
     # BR-RULE-065 INV-3: No overlap → success branch
 
-  @T-UC-012-auth-required @auth @error @post-f2 @pending
+  @T-UC-012-auth-required @auth @error @post-f2
   Scenario Outline: Authentication required for <operation>
     Given the Buyer has no authentication credentials
     When the Buyer Agent sends a <operation> request
@@ -482,7 +468,7 @@ Feature: BR-UC-012 Manage Content Standards
       | update_content_standards |
       | delete_content_standards |
 
-  @T-UC-012-auth-invalid @auth @error @post-f2 @pending
+  @T-UC-012-auth-invalid @auth @error @post-f2
   Scenario: Authentication - expired token rejected
     Given the Buyer Agent has an expired authentication token
     When the Buyer Agent sends a list_content_standards request
@@ -490,7 +476,7 @@ Feature: BR-UC-012 Manage Content Standards
     And the error should include "suggestion"
     # BR-RULE-063 INV-3: Invalid/expired token → rejected
 
-  @T-UC-012-context-echo-success @context-echo @post-s6 @pending
+  @T-UC-012-context-echo-success @context-echo @post-s6
   Scenario Outline: Context echoed in <operation> success response
     Given a valid request with context {"trace_id": "abc-123", "session": "s1"}
     When the Buyer Agent sends a successful <operation> request
@@ -506,7 +492,7 @@ Feature: BR-UC-012 Manage Content Standards
       | update_content_standards |
       | delete_content_standards |
 
-  @T-UC-012-context-echo-error @context-echo @error @post-f3 @pending
+  @T-UC-012-context-echo-error @context-echo @error @post-f3
   Scenario Outline: Context echoed in <error_type> error response
     Given a request with context {"trace_id": "err-456"}
     When the request triggers <error_type> error
@@ -521,13 +507,13 @@ Feature: BR-UC-012 Manage Content Standards
       | SCOPE_CONFLICT      |
       | STANDARDS_IN_USE    |
 
-  @T-UC-012-context-omitted @context-echo @partition @pending
+  @T-UC-012-context-omitted @context-echo @partition
   Scenario: Context omitted in request - response omits context
     When the Buyer Agent sends a list_content_standards request without context
     Then the response does not include a context field
     # BR-RULE-043 INV-2: No context → no context in response
 
-  @T-UC-012-scope-countries-and @scope @countries-and @boundary @pending
+  @T-UC-012-scope-countries-and @scope @countries-and @boundary
   Scenario: Scope countries_all uses AND logic - standard applies in ALL listed countries
     Given a content standard with countries_all ["US", "GB"]
     Then the standard applies when the evaluation context is US
@@ -535,13 +521,12 @@ Feature: BR-UC-012 Manage Content Standards
     And the standard applies in ALL listed countries simultaneously
     # BR-RULE-064 INV-2: countries_all → AND
 
-  @T-UC-012-list-channel-invalid @list @filter @error @boundary @post-f2 @post-f3 @pending
+  @T-UC-012-list-channel-invalid @list @filter @error @boundary @post-f2 @post-f3
   Scenario: List content standards - channels with unknown enum value in filter
     When the Buyer Agent filters by channels ["fake_channel"]
     Then the error code should be "CHANNEL_INVALID"
     And the error should include "suggestion"
 
-  @pending
   @pricing-options @partition @boundary
   Scenario Outline: Content standard pricing_options - <partition>
     Given an existing content standard with pricing_options <pricing_value>
@@ -556,7 +541,6 @@ Feature: BR-UC-012 Manage Content Standards
       | multiple_options  | [{"pricing_option_id": "cs_cpm_usd", "pricing_model": "cpm"}, {"pricing_option_id": "cs_flat_usd", "pricing_model": "flat_rate"}] | the response contains pricing_options with 2 items    | pricing_options with multiple models                 |
       | multi_currency    | [{"pricing_option_id": "cs_cpm_usd", "pricing_model": "cpm", "currency": "USD"}, {"pricing_option_id": "cs_cpm_eur", "pricing_model": "cpm", "currency": "EUR"}] | the response contains pricing_options with 2 items | --                                                   |
 
-  @pending
   @pricing-options @error @partition @boundary @post-f2
   Scenario: Content standard pricing_options - empty_array violates minItems:1 — pricing_options with 0 items (empty array)
     Given a content standard where pricing_options is set to an empty array []
@@ -566,7 +550,7 @@ Feature: BR-UC-012 Manage Content Standards
     # pricing_options when present must have minItems: 1
     # POST-F2: Buyer knows what failed
 
-  @T-UC-012-pricing-options-list @pricing-options @list @partition @pending
+  @T-UC-012-pricing-options-list @pricing-options @list @partition
   Scenario: List content standards - response includes pricing_options on standards that have them
     Given the tenant has a standard with pricing_options and a standard without pricing_options
     When the Buyer Agent sends a list_content_standards request

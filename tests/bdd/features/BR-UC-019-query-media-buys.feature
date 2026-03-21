@@ -1,4 +1,4 @@
-# Generated from adcp-req @ bd801586c630f4d09c3d3162c3c6fd8d0a8b53c6 on 2026-03-20T01:32:25Z
+# Generated from adcp-req @ 8a219ece2b54628c33f1075d386b73082a0f4832 on 2026-03-20T12:00:24Z
 # DO NOT EDIT -- re-run: python scripts/compile_bdd.py
 
 Feature: BR-UC-019 Query Media Buys
@@ -23,7 +23,7 @@ Feature: BR-UC-019 Query Media Buys
     And the principal "buyer-001" exists in the tenant database
 
 
-  @T-UC-019-main-rest @main-flow @rest @pending
+  @T-UC-019-main-rest @main-flow @rest
   Scenario: Query media buys via REST with default filters
     Given the principal "buyer-001" owns media buy "mb-001" with start_date "2026-03-01" and end_date "2026-03-31"
     And today is "2026-03-15"
@@ -37,7 +37,7 @@ Feature: BR-UC-019 Query Media Buys
     # POST-S3: Creative approval state present
     # POST-S6: Buyer refs present for correlation
 
-  @T-UC-019-main-mcp @main-flow @mcp @pending
+  @T-UC-019-main-mcp @main-flow @mcp
   Scenario: Query media buys via MCP with default filters
     Given the principal "buyer-001" owns media buy "mb-001" with start_date "2026-03-01" and end_date "2026-03-31"
     And today is "2026-03-15"
@@ -51,7 +51,7 @@ Feature: BR-UC-019 Query Media Buys
     # POST-S3: Creative approval state present
     # POST-S6: Buyer refs present for correlation
 
-  @T-UC-019-main-filter-ids @main-flow @filtering @pending
+  @T-UC-019-main-filter-ids @main-flow @filtering
   Scenario: Query media buys by specific media_buy_ids
     Given the principal "buyer-001" owns media buys "mb-001", "mb-002", and "mb-003"
     When the Buyer Agent sends a get_media_buys request with media_buy_ids ["mb-001", "mb-003"]
@@ -59,7 +59,7 @@ Feature: BR-UC-019 Query Media Buys
     And the response should not include media buy "mb-002"
     # POST-S1: Status present for each requested buy
 
-  @T-UC-019-main-filter-refs @main-flow @filtering @pending
+  @T-UC-019-main-filter-refs @main-flow @filtering
   Scenario: Query media buys by buyer_refs
     Given the principal "buyer-001" owns media buy "mb-001" with buyer_ref "campaign-alpha"
     And the principal "buyer-001" owns media buy "mb-002" with buyer_ref "campaign-beta"
@@ -68,7 +68,7 @@ Feature: BR-UC-019 Query Media Buys
     And the response should not include media buy "mb-002"
     # POST-S6: buyer_ref used for filtering and correlation
 
-  @T-UC-019-main-snapshot @main-flow @snapshot @pending
+  @T-UC-019-main-snapshot @main-flow @snapshot
   Scenario: Query media buys with delivery snapshots requested and available
     Given the principal "buyer-001" owns media buy "mb-001" with an active package "pkg-001"
     And the ad platform adapter supports realtime reporting
@@ -78,7 +78,7 @@ Feature: BR-UC-019 Query Media Buys
     And the snapshot should include as_of, staleness_seconds, impressions, and spend
     # POST-S4: Near-real-time delivery metrics present per package
 
-  @T-UC-019-main-no-results @main-flow @pending
+  @T-UC-019-main-no-results @main-flow
   Scenario: Query returns empty results when principal has no matching media buys
     Given the principal "buyer-001" owns no media buys
     When the Buyer Agent sends a get_media_buys request with no filters
@@ -86,7 +86,7 @@ Feature: BR-UC-019 Query Media Buys
     And no error should be present in the response
     # POST-S1: Empty result is valid (no matching buys)
 
-  @T-UC-019-ext-a @extension @ext-a @error @pending
+  @T-UC-019-ext-a @extension @ext-a @error
   Scenario: Authentication required - identity missing from request
     Given the Buyer has no authentication credentials
     When the Buyer Agent sends a get_media_buys request without authentication
@@ -99,7 +99,7 @@ Feature: BR-UC-019 Query Media Buys
     # POST-F2: Error explains authentication is missing
     # POST-F3: Recovery classification indicates how to fix
 
-  @T-UC-019-ext-b @extension @ext-b @error @pending
+  @T-UC-019-ext-b @extension @ext-b @error
   Scenario: Principal ID missing - identity resolved but principal_id absent
     Given an authenticated identity with no principal_id
     When the Buyer Agent sends a get_media_buys request
@@ -112,7 +112,7 @@ Feature: BR-UC-019 Query Media Buys
     # POST-F2: Error explains principal_id is missing
     # POST-F3: Buyer can infer corrective action
 
-  @T-UC-019-ext-c @extension @ext-c @error @pending
+  @T-UC-019-ext-c @extension @ext-c @error
   Scenario: Principal not found - principal_id not in registry
     Given an authenticated Buyer with principal_id "buyer-unknown"
     And the principal "buyer-unknown" does not exist in the tenant database
@@ -126,7 +126,7 @@ Feature: BR-UC-019 Query Media Buys
     # POST-F2: Error explains principal was not found
     # POST-F3: Buyer can infer corrective action
 
-  @T-UC-019-ext-d @extension @ext-d @error @pending
+  @T-UC-019-ext-d @extension @ext-d @error
   Scenario: Request validation failed - invalid parameter values
     Given an authenticated Buyer with principal_id "buyer-001"
     When the Buyer Agent sends a get_media_buys request with invalid parameter types
@@ -139,7 +139,7 @@ Feature: BR-UC-019 Query Media Buys
     # POST-F2: Error identifies which fields failed validation
     # POST-F3: Per-field details enable targeted correction
 
-  @T-UC-019-ext-e @extension @ext-e @error @pending
+  @T-UC-019-ext-e @extension @ext-e @error
   Scenario: Account filter not supported - account_id provided but not implemented
     Given an authenticated Buyer with principal_id "buyer-001"
     When the Buyer Agent sends a get_media_buys request with account_id "acc-001"
@@ -152,7 +152,7 @@ Feature: BR-UC-019 Query Media Buys
     # POST-F2: Error explains account filtering is not supported
     # POST-F3: Recovery is correctable -- omit account_id and retry
 
-  @T-UC-019-partition-status @partition @status @pending
+  @T-UC-019-partition-status @partition @status
   Scenario Outline: Status computation from flight dates - <partition>
     Given the principal "buyer-001" owns media buy "mb-001" with start_date "<start>" and end_date "<end>"
     And today is "<today>"
@@ -167,7 +167,7 @@ Feature: BR-UC-019 Query Media Buys
       | post_flight        | 2026-04-01 | 2026-03-01 | 2026-03-31 | completed            |
       | single_day_flight  | 2026-03-15 | 2026-03-15 | 2026-03-15 | active               |
 
-  @T-UC-019-partition-status-invalid @partition @status @error @pending
+  @T-UC-019-partition-status-invalid @partition @status @error
   Scenario Outline: Status computation with missing dates - <partition>
     Given the principal "buyer-001" owns media buy "mb-001" with <date_condition>
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
@@ -181,7 +181,7 @@ Feature: BR-UC-019 Query Media Buys
       | missing_start_date | no start_time and no start_date         |
       | missing_end_date   | no end_time and no end_date             |
 
-  @T-UC-019-boundary-status @boundary @status @pending
+  @T-UC-019-boundary-status @boundary @status
   Scenario Outline: Status computation boundary - <boundary_point>
     Given the principal "buyer-001" owns media buy "mb-001" with start_date "<start>" and end_date "<end>"
     And today is "<today>"
@@ -199,7 +199,7 @@ Feature: BR-UC-019 Query Media Buys
       | start_date equals end_date and today is day before        | 2026-03-14 | 2026-03-15 | 2026-03-15 | pending_activation |
       | start_date equals end_date and today is day after         | 2026-03-16 | 2026-03-15 | 2026-03-15 | completed          |
 
-  @T-UC-019-inv-150-4 @invariant @BR-RULE-150 @pending
+  @T-UC-019-inv-150-4 @invariant @BR-RULE-150
   Scenario: INV-4 holds - start_time takes precedence over start_date
     Given the principal "buyer-001" owns media buy "mb-001" with start_date "2026-03-15" and start_time "2026-03-10T00:00:00Z" and end_date "2026-03-31"
     And today is "2026-03-12"
@@ -207,7 +207,7 @@ Feature: BR-UC-019 Query Media Buys
     Then the media buy "mb-001" should have status "active"
     # BR-RULE-150 INV-4: start_time.date() (2026-03-10) used instead of start_date (2026-03-15)
 
-  @T-UC-019-inv-150-5 @invariant @BR-RULE-150 @pending
+  @T-UC-019-inv-150-5 @invariant @BR-RULE-150
   Scenario: INV-5 holds - end_time takes precedence over end_date
     Given the principal "buyer-001" owns media buy "mb-001" with start_date "2026-03-01" and end_date "2026-03-31" and end_time "2026-03-25T23:59:59Z"
     And today is "2026-03-28"
@@ -215,7 +215,7 @@ Feature: BR-UC-019 Query Media Buys
     Then the media buy "mb-001" should have status "completed"
     # BR-RULE-150 INV-5: end_time.date() (2026-03-25) used instead of end_date (2026-03-31)
 
-  @T-UC-019-partition-status-filter @partition @status_filter @pending
+  @T-UC-019-partition-status-filter @partition @status_filter
   Scenario Outline: Default status filter behavior - <partition>
     Given the principal "buyer-001" owns media buys in various statuses
     When the Buyer Agent sends a get_media_buys request with <filter_config>
@@ -229,7 +229,7 @@ Feature: BR-UC-019 Query Media Buys
       | multiple_statuses  | status_filter ["active", "pending_activation"]            | media buys with either status are returned                       |
       | all_statuses       | all six status values in status_filter                    | media buys in any status are returned                            |
 
-  @T-UC-019-partition-status-filter-invalid @partition @status_filter @error @pending
+  @T-UC-019-partition-status-filter-invalid @partition @status_filter @error
   Scenario Outline: Invalid status filter values - <partition>
     Given an authenticated Buyer with principal_id "buyer-001"
     When the Buyer Agent sends a get_media_buys request with <invalid_filter>
@@ -243,7 +243,7 @@ Feature: BR-UC-019 Query Media Buys
       | unknown_status_value   | status_filter "expired"             | STATUS_FILTER_INVALID_VALUE  | pending_activation, active             |
       | empty_array            | status_filter as empty array []     | STATUS_FILTER_EMPTY          | at least one status value              |
 
-  @T-UC-019-boundary-status-filter @boundary @status_filter @pending
+  @T-UC-019-boundary-status-filter @boundary @status_filter
   Scenario Outline: Status filter boundary - <boundary_point>
     Given the principal "buyer-001" owns media buys in various statuses
     When the Buyer Agent sends a get_media_buys request with <filter_config>
@@ -260,7 +260,7 @@ Feature: BR-UC-019 Query Media Buys
       | unknown enum value as string                | status_filter "expired"                                | error "STATUS_FILTER_INVALID_VALUE" with suggestion             |
       | array with mix of valid and unknown values  | status_filter ["active", "expired"]                    | error "STATUS_FILTER_INVALID_VALUE" with suggestion             |
 
-  @T-UC-019-partition-approval @partition @approval_status @pending
+  @T-UC-019-partition-approval @partition @approval_status
   Scenario Outline: Creative approval status mapping - <partition>
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
     And package "pkg-001" has a creative assignment with creative_id "<creative_id>"
@@ -278,7 +278,7 @@ Feature: BR-UC-019 Query Media Buys
       | pending_review_explicit  | cr-004      | submitted       |                                              | pending_review    | rejection_reason should be absent                   |
       | pending_review_catchall  | cr-005      | processing      |                                              | pending_review    | rejection_reason should be absent                   |
 
-  @T-UC-019-partition-approval-invalid @partition @approval_status @pending
+  @T-UC-019-partition-approval-invalid @partition @approval_status
   Scenario: Creative approval mapping - no_creative_found (silent skip)
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
     And package "pkg-001" has a creative assignment referencing creative_id "cr-999"
@@ -288,7 +288,7 @@ Feature: BR-UC-019 Query Media Buys
     And no error should be raised for the missing creative
     # BR-RULE-152 INV-4: Nonexistent creative silently omitted from approvals
 
-  @T-UC-019-boundary-approval @boundary @approval_status @pending
+  @T-UC-019-boundary-approval @boundary @approval_status
   Scenario Outline: Creative approval status boundary - <boundary_point>
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
     And package "pkg-001" has a creative assignment with creative_id "cr-001"
@@ -307,7 +307,7 @@ Feature: BR-UC-019 Query Media Buys
       | creative.status is 'APPROVED' (case mismatch)    | internal status "APPROVED"                     | approval_status should be "pending_review"                                   |
       | creative not found for assignment                 | a nonexistent creative_id                      | the approval entry should be silently omitted                                |
 
-  @T-UC-019-inv-152-5 @invariant @BR-RULE-152 @pending
+  @T-UC-019-inv-152-5 @invariant @BR-RULE-152
   Scenario: INV-5 holds - rejection_reason absent when not rejected
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
     And package "pkg-001" has a creative with internal status "approved"
@@ -316,7 +316,7 @@ Feature: BR-UC-019 Query Media Buys
     And rejection_reason should not be present in the approval entry
     # BR-RULE-152 INV-5: rejection_reason is absent when approval_status is not rejected
 
-  @T-UC-019-partition-snapshot @partition @include_snapshot @pending
+  @T-UC-019-partition-snapshot @partition @include_snapshot
   Scenario Outline: Snapshot availability - <partition>
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
     And <adapter_condition>
@@ -331,7 +331,7 @@ Feature: BR-UC-019 Query Media Buys
       | snapshot_supported_but_unavailable | the adapter supports realtime reporting but no data for pkg-001  | include_snapshot true       | package "pkg-001" should have snapshot_unavailable_reason "SNAPSHOT_TEMPORARILY_UNAVAILABLE"     |
       | snapshot_unsupported               | the adapter does not support realtime reporting                  | include_snapshot true       | package "pkg-001" should have snapshot_unavailable_reason "SNAPSHOT_UNSUPPORTED"                 |
 
-  @T-UC-019-boundary-snapshot @boundary @include_snapshot @pending
+  @T-UC-019-boundary-snapshot @boundary @include_snapshot
   Scenario Outline: Snapshot availability boundary - <boundary_point>
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
     And <adapter_condition>
@@ -349,7 +349,7 @@ Feature: BR-UC-019 Query Media Buys
       | include_snapshot true, all packages have snapshot                        | the adapter supports realtime reporting and data for all pkgs    | include_snapshot true       | all packages should include snapshots                                                        |
       | include_snapshot true, mixed — some packages have snapshot, some do not  | the adapter supports reporting, data for pkg-001 but not pkg-002 | include_snapshot true       | pkg-001 has snapshot, pkg-002 has SNAPSHOT_TEMPORARILY_UNAVAILABLE                           |
 
-  @T-UC-019-inv-153-5 @invariant @BR-RULE-153 @pending
+  @T-UC-019-inv-153-5 @invariant @BR-RULE-153
   Scenario: INV-5 holds - snapshot includes required fields when returned
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
     And the ad platform adapter supports realtime reporting
@@ -361,7 +361,7 @@ Feature: BR-UC-019 Query Media Buys
     And the snapshot should include "spend" amount
     # BR-RULE-153 INV-5: Required snapshot fields verified
 
-  @T-UC-019-partition-principal @partition @principal_id @pending
+  @T-UC-019-partition-principal @partition @principal_id
   Scenario Outline: Principal scoping - <partition>
     Given <principal_setup>
     When the Buyer Agent sends a get_media_buys request
@@ -373,7 +373,7 @@ Feature: BR-UC-019 Query Media Buys
       | principal_with_media_buys      | an authenticated principal "buyer-001" who owns 3 media buys                       | the response should include 3 media buys                    |
       | principal_with_no_media_buys   | an authenticated principal "buyer-002" who owns no media buys                      | the response should include an empty media_buys array       |
 
-  @T-UC-019-partition-principal-invalid @partition @principal_id @error @pending
+  @T-UC-019-partition-principal-invalid @partition @principal_id @error
   Scenario Outline: Principal scoping failures - <partition>
     Given <principal_setup>
     When the Buyer Agent sends a get_media_buys request
@@ -388,7 +388,7 @@ Feature: BR-UC-019 Query Media Buys
       | principal_not_found    | an authenticated principal "buyer-unknown" not in registry | the response should include an empty media_buys array with error "principal_not_found"  | register                  |
       | identity_missing       | no authentication context                             | the operation should fail with error code "AUTH_REQUIRED"                         | authentication            |
 
-  @T-UC-019-boundary-principal @boundary @principal_id @pending
+  @T-UC-019-boundary-principal @boundary @principal_id
   Scenario Outline: Principal scoping boundary - <boundary_point>
     Given <principal_setup>
     When the Buyer Agent sends a get_media_buys request
@@ -404,7 +404,7 @@ Feature: BR-UC-019 Query Media Buys
       | principal_id not in registry            | an authenticated principal "buyer-ghost" not in registry              | empty media_buys with error "principal_not_found"                                |
       | identity not resolved (no auth)         | no authentication context                                             | error "AUTH_REQUIRED" with suggestion                                            |
 
-  @T-UC-019-inv-154-tenant @invariant @BR-RULE-154 @pending
+  @T-UC-019-inv-154-tenant @invariant @BR-RULE-154
   Scenario: INV-1 and INV-5 hold - two-layer isolation prevents cross-principal access
     Given an authenticated principal "buyer-001" who owns media buy "mb-001"
     And an authenticated principal "buyer-002" who owns media buy "mb-002"
@@ -414,7 +414,7 @@ Feature: BR-UC-019 Query Media Buys
     # BR-RULE-154 INV-1: Database scoped to tenant
     # BR-RULE-154 INV-5: Results filtered to principal only
 
-  @T-UC-019-inv-150-1 @invariant @BR-RULE-150 @pending
+  @T-UC-019-inv-150-1 @invariant @BR-RULE-150
   Scenario: INV-1 holds - pre-flight media buy has pending_activation status
     Given the principal "buyer-001" owns media buy "mb-001" with start_date "2026-04-01" and end_date "2026-04-30"
     And today is "2026-03-15"
@@ -422,7 +422,7 @@ Feature: BR-UC-019 Query Media Buys
     Then the response should include media buy "mb-001" with status "pending_activation"
     # BR-RULE-150 INV-1: today < start_date yields pending_activation
 
-  @T-UC-019-inv-150-2 @invariant @BR-RULE-150 @pending
+  @T-UC-019-inv-150-2 @invariant @BR-RULE-150
   Scenario: INV-2 holds - in-flight media buy has active status
     Given the principal "buyer-001" owns media buy "mb-001" with start_date "2026-03-01" and end_date "2026-03-31"
     And today is "2026-03-15"
@@ -430,7 +430,7 @@ Feature: BR-UC-019 Query Media Buys
     Then the response should include media buy "mb-001" with status "active"
     # BR-RULE-150 INV-2: start_date <= today <= end_date yields active
 
-  @T-UC-019-inv-150-3 @invariant @BR-RULE-150 @pending
+  @T-UC-019-inv-150-3 @invariant @BR-RULE-150
   Scenario: INV-3 holds - post-flight media buy has completed status
     Given the principal "buyer-001" owns media buy "mb-001" with start_date "2026-02-01" and end_date "2026-02-28"
     And today is "2026-03-15"
@@ -438,7 +438,7 @@ Feature: BR-UC-019 Query Media Buys
     Then the response should include media buy "mb-001" with status "completed"
     # BR-RULE-150 INV-3: today > end_date yields completed
 
-  @T-UC-019-inv-151-1 @invariant @BR-RULE-151 @pending
+  @T-UC-019-inv-151-1 @invariant @BR-RULE-151
   Scenario: INV-1 holds - default filter returns only active media buys
     Given the principal "buyer-001" owns active media buy "mb-001" and completed media buy "mb-002"
     When the Buyer Agent sends a get_media_buys request with no status_filter
@@ -446,7 +446,7 @@ Feature: BR-UC-019 Query Media Buys
     And the response should not include media buy "mb-002"
     # BR-RULE-151 INV-1: null status_filter defaults to {active}
 
-  @T-UC-019-inv-151-4 @invariant @BR-RULE-151 @error @pending
+  @T-UC-019-inv-151-4 @invariant @BR-RULE-151 @error
   Scenario: INV-4 violated - unknown status value rejected
     Given an authenticated Buyer with principal_id "buyer-001"
     When the Buyer Agent sends a get_media_buys request with status_filter "expired"
@@ -456,7 +456,7 @@ Feature: BR-UC-019 Query Media Buys
     And the suggestion should contain "pending_activation, active"
     # BR-RULE-151 INV-4: Unknown status value rejected with suggestion
 
-  @T-UC-019-inv-152-1 @invariant @BR-RULE-152 @pending
+  @T-UC-019-inv-152-1 @invariant @BR-RULE-152
   Scenario: INV-1 holds - approved creative maps to approved
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
     And package "pkg-001" has a creative with internal status "approved"
@@ -464,7 +464,7 @@ Feature: BR-UC-019 Query Media Buys
     Then the creative approval should have approval_status "approved"
     # BR-RULE-152 INV-1: approved maps to approved
 
-  @T-UC-019-inv-152-2 @invariant @BR-RULE-152 @pending
+  @T-UC-019-inv-152-2 @invariant @BR-RULE-152
   Scenario: INV-2 holds - rejected creative maps to rejected with reason
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
     And package "pkg-001" has a creative with internal status "rejected" and rejection_reason "Text overlaps safe zone"
@@ -473,7 +473,7 @@ Feature: BR-UC-019 Query Media Buys
     And the rejection_reason should be "Text overlaps safe zone"
     # BR-RULE-152 INV-2: rejected maps to rejected with reason
 
-  @T-UC-019-inv-152-3 @invariant @BR-RULE-152 @pending
+  @T-UC-019-inv-152-3 @invariant @BR-RULE-152
   Scenario: INV-3 holds - unrecognized internal status maps to pending_review
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
     And package "pkg-001" has a creative with internal status "in_review"
@@ -481,7 +481,7 @@ Feature: BR-UC-019 Query Media Buys
     Then the creative approval should have approval_status "pending_review"
     # BR-RULE-152 INV-3: Catch-all maps unknown status to pending_review
 
-  @T-UC-019-inv-153-1 @invariant @BR-RULE-153 @pending
+  @T-UC-019-inv-153-1 @invariant @BR-RULE-153
   Scenario: INV-1 holds - no snapshot fields when not requested
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
     When the Buyer Agent sends a get_media_buys request with include_snapshot false
@@ -489,7 +489,7 @@ Feature: BR-UC-019 Query Media Buys
     And package "pkg-001" should not have a snapshot_unavailable_reason field
     # BR-RULE-153 INV-1: Snapshot not requested means no snapshot fields
 
-  @T-UC-019-inv-153-3 @invariant @BR-RULE-153 @error @pending
+  @T-UC-019-inv-153-3 @invariant @BR-RULE-153 @error
   Scenario: INV-3 holds - unsupported adapter sets SNAPSHOT_UNSUPPORTED for all packages
     Given the principal "buyer-001" owns media buy "mb-001" with packages "pkg-001" and "pkg-002"
     And the ad platform adapter does not support realtime reporting
@@ -500,7 +500,7 @@ Feature: BR-UC-019 Query Media Buys
     And the suggestion should contain "adapter" or "realtime" or "reporting"
     # BR-RULE-153 INV-3: All packages get SNAPSHOT_UNSUPPORTED
 
-  @T-UC-019-inv-153-4 @invariant @BR-RULE-153 @pending
+  @T-UC-019-inv-153-4 @invariant @BR-RULE-153
   Scenario: INV-4 holds - temporarily unavailable when adapter supports but no data
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
     And the ad platform adapter supports realtime reporting
@@ -509,7 +509,7 @@ Feature: BR-UC-019 Query Media Buys
     Then package "pkg-001" should have snapshot_unavailable_reason "SNAPSHOT_TEMPORARILY_UNAVAILABLE"
     # BR-RULE-153 INV-4: Package without data gets TEMPORARILY_UNAVAILABLE
 
-  @T-UC-019-sandbox-happy @invariant @br-rule-209 @sandbox @pending
+  @T-UC-019-sandbox-happy @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account get_media_buys returns simulated results with sandbox flag
     Given the principal "buyer-001" owns media buy "mb-001"
     And the request targets a sandbox account
@@ -521,7 +521,7 @@ Feature: BR-UC-019 Query Media Buys
     # BR-RULE-209 INV-2: real ad platform calls suppressed
     # BR-RULE-209 INV-4: response includes sandbox: true
 
-  @T-UC-019-sandbox-production @invariant @br-rule-209 @sandbox @pending
+  @T-UC-019-sandbox-production @invariant @br-rule-209 @sandbox
   Scenario: Production account get_media_buys response does not include sandbox flag
     Given the principal "buyer-001" owns media buy "mb-001"
     And the request targets a production account
@@ -530,7 +530,7 @@ Feature: BR-UC-019 Query Media Buys
     And the response should not include a sandbox field
     # BR-RULE-209 INV-5: production account -> sandbox absent
 
-  @T-UC-019-sandbox-validation @invariant @br-rule-209 @sandbox @pending
+  @T-UC-019-sandbox-validation @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account with invalid request returns real validation error
     And the request targets a sandbox account
     When the Buyer Agent sends a get_media_buys request with invalid status filter

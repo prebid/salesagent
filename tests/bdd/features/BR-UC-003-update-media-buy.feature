@@ -1,4 +1,4 @@
-# Generated from adcp-req @ bd801586c630f4d09c3d3162c3c6fd8d0a8b53c6 on 2026-03-20T01:32:25Z
+# Generated from adcp-req @ 8a219ece2b54628c33f1075d386b73082a0f4832 on 2026-03-20T12:00:24Z
 # DO NOT EDIT -- re-run: python scripts/compile_bdd.py
 
 @analysis-2026-03-09 @schema-v3.0.0-rc.1
@@ -28,7 +28,7 @@ Feature: BR-UC-003 Update Media Buy
     And the media buy is in "active" status
 
 
-  @T-UC-003-main @main-flow @post-s1 @post-s2 @post-s3 @post-s4 @post-s5 @post-s6 @pending
+  @T-UC-003-main @main-flow @post-s1 @post-s2 @post-s3 @post-s4 @post-s5 @post-s6
   Scenario: Package budget update -- auto-applied via media_buy_id
     Given the tenant is configured for auto-approval
     And a valid update_media_buy request with:
@@ -55,7 +55,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-S5: Buyer knows request completed successfully (status "completed")
     # POST-S6: Buyer knows sandbox mode (sandbox flag present)
 
-  @T-UC-003-main-buyer-ref @main-flow @identification @post-s1 @post-s4 @post-s5 @pending
+  @T-UC-003-main-buyer-ref @main-flow @identification @post-s1 @post-s4 @post-s5
   Scenario: Package budget update -- identified by buyer_ref
     Given the tenant is configured for auto-approval
     And a valid update_media_buy request with:
@@ -76,7 +76,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-S4: Unambiguous success
     # POST-S5: Request completed
 
-  @T-UC-003-alt-pause @alt-flow @pause @post-s1 @post-s4 @post-s5 @post-s6 @pending
+  @T-UC-003-alt-pause @alt-flow @pause @post-s1 @post-s4 @post-s5 @post-s6
   Scenario: Pause campaign -- auto-applied
     Given the tenant is configured for auto-approval
     And the media buy is in "active" status
@@ -94,7 +94,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-S5: Request completed
     # POST-S6: Sandbox flag present
 
-  @T-UC-003-alt-resume @alt-flow @resume @post-s1 @post-s4 @post-s5 @pending
+  @T-UC-003-alt-resume @alt-flow @resume @post-s1 @post-s4 @post-s5
   Scenario: Resume campaign -- auto-applied
     Given the tenant is configured for auto-approval
     And the media buy is in "paused" status
@@ -109,7 +109,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-S4: Unambiguous success
     # POST-S5: Request completed
 
-  @T-UC-003-alt-timing @alt-flow @timing @post-s1 @post-s3 @post-s4 @post-s5 @pending
+  @T-UC-003-alt-timing @alt-flow @timing @post-s1 @post-s3 @post-s4 @post-s5
   Scenario: Update timing -- extend end_time
     Given the tenant is configured for auto-approval
     And a valid update_media_buy request with:
@@ -125,7 +125,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-S4: Unambiguous success
     # POST-S5: Request completed
 
-  @T-UC-003-alt-timing-asap @alt-flow @timing @post-s1 @post-s4 @pending
+  @T-UC-003-alt-timing-asap @alt-flow @timing @post-s1 @post-s4
   Scenario: Update timing -- start_time as "asap"
     Given the tenant is configured for auto-approval
     And a valid update_media_buy request with:
@@ -138,7 +138,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-S1: Buyer knows start_time updated to current UTC time
     # POST-S4: Unambiguous success
 
-  @T-UC-003-alt-budget @alt-flow @budget @post-s1 @post-s4 @post-s5 @pending
+  @T-UC-003-alt-budget @alt-flow @budget @post-s1 @post-s4 @post-s5
   Scenario: Update campaign-level budget
     Given the tenant is configured for auto-approval
     And a valid update_media_buy request with:
@@ -153,7 +153,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-S4: Unambiguous success
     # POST-S5: Request completed
 
-  @T-UC-003-alt-creative-assignments @alt-flow @creatives @post-s1 @post-s2 @post-s4 @post-s5 @pending
+  @T-UC-003-alt-creative-assignments @alt-flow @creatives @post-s1 @post-s2 @post-s4 @post-s5
   Scenario: Update creative assignments -- replacement semantics
     Given the tenant is configured for auto-approval
     And a valid update_media_buy request with:
@@ -178,7 +178,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-S4: Unambiguous success
     # POST-S5: Request completed
 
-  @T-UC-003-alt-creatives-inline @alt-flow @creatives-inline @post-s1 @post-s2 @post-s4 @pending
+  @T-UC-003-alt-creatives-inline @alt-flow @creatives-inline @post-s1 @post-s2 @post-s4
   Scenario: Upload inline creatives and assign to package
     Given the tenant is configured for auto-approval
     And a valid update_media_buy request with:
@@ -196,7 +196,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-S2: Buyer sees affected packages
     # POST-S4: Unambiguous success
 
-  @T-UC-003-alt-targeting @alt-flow @targeting @post-s1 @post-s2 @post-s4 @post-s5 @pending
+  @T-UC-003-alt-targeting @alt-flow @targeting @post-s1 @post-s2 @post-s4 @post-s5
   Scenario: Update targeting overlay -- replacement semantics
     Given the tenant is configured for auto-approval
     And a valid update_media_buy request with:
@@ -215,7 +215,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-S4: Unambiguous success
     # POST-S5: Request completed
 
-  @T-UC-003-alt-optimization-goals @alt-flow @optimization-goals @post-s1 @post-s2 @post-s4 @post-s5 @pending
+  @T-UC-003-alt-optimization-goals @alt-flow @optimization-goals @post-s1 @post-s2 @post-s4 @post-s5
   Scenario: Update optimization goals -- replacement semantics
     Given the tenant is configured for auto-approval
     And a valid update_media_buy request with:
@@ -234,7 +234,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-S4: Unambiguous success
     # POST-S5: Request completed
 
-  @T-UC-003-alt-keyword-ops @alt-flow @keyword-ops @post-s1 @post-s2 @post-s4 @post-s5 @pending
+  @T-UC-003-alt-keyword-ops @alt-flow @keyword-ops @post-s1 @post-s2 @post-s4 @post-s5
   Scenario: Add keyword targets incrementally
     Given the tenant is configured for auto-approval
     And a valid update_media_buy request with:
@@ -254,7 +254,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-S4: Unambiguous success
     # POST-S5: Request completed
 
-  @T-UC-003-alt-keyword-remove @alt-flow @keyword-ops @post-s1 @post-s2 @pending
+  @T-UC-003-alt-keyword-remove @alt-flow @keyword-ops @post-s1 @post-s2
   Scenario: Remove keyword targets incrementally
     Given the tenant is configured for auto-approval
     And a valid update_media_buy request with:
@@ -270,7 +270,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-S1: Buyer knows keywords removed
     # POST-S2: Buyer sees affected packages
 
-  @T-UC-003-alt-negative-keywords @alt-flow @keyword-ops @post-s1 @pending
+  @T-UC-003-alt-negative-keywords @alt-flow @keyword-ops @post-s1
   Scenario: Add and remove negative keywords incrementally
     Given the tenant is configured for auto-approval
     And a valid update_media_buy request with:
@@ -287,7 +287,7 @@ Feature: BR-UC-003 Update Media Buy
     Then the response status should be "completed"
     # POST-S1: Buyer knows negative keywords updated
 
-  @T-UC-003-alt-manual @alt-flow @manual-approval @post-s7 @post-s8 @pending
+  @T-UC-003-alt-manual @alt-flow @manual-approval @post-s7 @post-s8
   Scenario: Update requires manual approval -- pending state
     Given the tenant is configured for manual approval
     And a valid update_media_buy request with:
@@ -305,7 +305,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-S7: Buyer knows update awaiting seller approval (status "submitted")
     # POST-S8: implementation_date is null (pending approval)
 
-  @T-UC-003-partial-update @invariant @BR-RULE-022 @pending
+  @T-UC-003-partial-update @invariant @BR-RULE-022
   Scenario: Partial update -- omitted fields remain unchanged
     Given the tenant is configured for auto-approval
     And the existing media buy has start_time "2026-04-01T00:00:00Z" and end_time "2026-06-30T23:59:59Z"
@@ -324,7 +324,7 @@ Feature: BR-UC-003 Update Media Buy
     # BR-RULE-022 INV-1: Field present → updated
     # BR-RULE-022 INV-2: Field omitted → unchanged
 
-  @T-UC-003-empty-update @invariant @BR-RULE-022 @error @pending
+  @T-UC-003-empty-update @invariant @BR-RULE-022 @error
   Scenario: Empty update -- no updatable fields specified
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -340,7 +340,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F2: Error code explains failure
     # POST-F3: Suggestion for recovery
 
-  @T-UC-003-idempotency-valid @invariant @BR-RULE-081 @pending
+  @T-UC-003-idempotency-valid @invariant @BR-RULE-081
   Scenario: Idempotency key -- valid key accepted
     Given the tenant is configured for auto-approval
     And a valid update_media_buy request with:
@@ -356,7 +356,7 @@ Feature: BR-UC-003 Update Media Buy
     Then the response status should be "completed"
     # BR-RULE-081 INV-2: Key 8-255 chars accepted
 
-  @T-UC-003-idempotency-absent @invariant @BR-RULE-081 @pending
+  @T-UC-003-idempotency-absent @invariant @BR-RULE-081
   Scenario: Idempotency key -- absent, proceeds without protection
     Given the tenant is configured for auto-approval
     And a valid update_media_buy request with:
@@ -372,7 +372,7 @@ Feature: BR-UC-003 Update Media Buy
     Then the response status should be "completed"
     # BR-RULE-081 INV-1: Key absent → proceeds without idempotency
 
-  @T-UC-003-atomic-success @invariant @BR-RULE-018 @pending
+  @T-UC-003-atomic-success @invariant @BR-RULE-018
   Scenario: Atomic response -- success has no errors field
     Given the tenant is configured for auto-approval
     And a valid update_media_buy request with:
@@ -388,7 +388,7 @@ Feature: BR-UC-003 Update Media Buy
     And the response should NOT contain an "errors" field
     # BR-RULE-018 INV-1: Success → no errors field
 
-  @T-UC-003-atomic-error @invariant @BR-RULE-018 @pending
+  @T-UC-003-atomic-error @invariant @BR-RULE-018
   Scenario: Atomic response -- error has no success fields
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -401,7 +401,7 @@ Feature: BR-UC-003 Update Media Buy
     And the response should NOT contain "affected_packages" field
     # BR-RULE-018 INV-2: Error → no success fields
 
-  @T-UC-003-approval-auto @invariant @BR-RULE-017 @pending
+  @T-UC-003-approval-auto @invariant @BR-RULE-017
   Scenario: Approval workflow -- both flags false, auto-approved
     Given the tenant human_review_required is false
     And the adapter manual_approval_required is false
@@ -417,7 +417,7 @@ Feature: BR-UC-003 Update Media Buy
     Then the response status should be "completed"
     # BR-RULE-017 INV-1: Both false → auto-approved
 
-  @T-UC-003-approval-tenant @invariant @BR-RULE-017 @pending
+  @T-UC-003-approval-tenant @invariant @BR-RULE-017
   Scenario: Approval workflow -- tenant requires manual review
     Given the tenant human_review_required is true
     And a valid update_media_buy request with:
@@ -433,7 +433,7 @@ Feature: BR-UC-003 Update Media Buy
     And the response should contain implementation_date that is null
     # BR-RULE-017 INV-2: Tenant flag true → manual approval
 
-  @T-UC-003-approval-adapter @invariant @BR-RULE-017 @pending
+  @T-UC-003-approval-adapter @invariant @BR-RULE-017
   Scenario: Approval workflow -- adapter requires manual review
     Given the tenant human_review_required is false
     And the adapter manual_approval_required is true
@@ -450,7 +450,7 @@ Feature: BR-UC-003 Update Media Buy
     And the response should contain implementation_date that is null
     # BR-RULE-017 INV-3: Adapter flag true → manual approval
 
-  @T-UC-003-adapter-success @invariant @BR-RULE-020 @pending
+  @T-UC-003-adapter-success @invariant @BR-RULE-020
   Scenario: Adapter atomicity -- success persists changes
     Given the tenant is configured for auto-approval
     And the ad server adapter returns success
@@ -467,7 +467,7 @@ Feature: BR-UC-003 Update Media Buy
     And the package budget should be persisted as 5000
     # BR-RULE-020 INV-1: Adapter success → changes persisted
 
-  @T-UC-003-adapter-failure @invariant @BR-RULE-020 @error @pending
+  @T-UC-003-adapter-failure @invariant @BR-RULE-020 @error
   Scenario: Adapter atomicity -- failure rolls back all changes
     Given the tenant is configured for auto-approval
     And the ad server adapter returns an error
@@ -487,7 +487,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F1: System state unchanged
     # POST-F3: Suggestion present
 
-  @T-UC-003-creative-replace @invariant @BR-RULE-024 @pending
+  @T-UC-003-creative-replace @invariant @BR-RULE-024
   Scenario: Creative replacement -- new set replaces existing
     Given the tenant is configured for auto-approval
     And the package "pkg_001" has existing creative assignments [cr_old_1, cr_old_2]
@@ -508,7 +508,7 @@ Feature: BR-UC-003 Update Media Buy
     And the old assignments [cr_old_1, cr_old_2] should be removed
     # BR-RULE-024 INV-2: creative_assignments provided → replaces all existing
 
-  @T-UC-003-ext-a @extension @ext-a @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-003-ext-a @extension @ext-a @error @post-f1 @post-f2 @post-f3
   Scenario: Authentication error -- no principal in context
     Given the Buyer has no authentication credentials
     And a valid update_media_buy request with:
@@ -524,7 +524,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F2: Error explains authentication failed
     # POST-F3: Suggestion to obtain valid credentials
 
-  @T-UC-003-ext-a-unknown @extension @ext-a @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-003-ext-a-unknown @extension @ext-a @error @post-f1 @post-f2 @post-f3
   Scenario: Authentication error -- principal not found in database
     Given the Buyer is authenticated as principal "unknown_principal"
     And the principal "unknown_principal" does not exist in the database
@@ -539,7 +539,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F2: Error explains principal not found
     # POST-F3: Suggestion for recovery
 
-  @T-UC-003-ext-b @extension @ext-b @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-003-ext-b @extension @ext-b @error @post-f1 @post-f2 @post-f3
   Scenario: Media buy not found -- by media_buy_id
     Given a valid update_media_buy request with:
     | field        | value         |
@@ -554,7 +554,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F2: Error explains media buy not found
     # POST-F3: Suggestion to verify ID
 
-  @T-UC-003-ext-b-buyer-ref @extension @ext-b @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-003-ext-b-buyer-ref @extension @ext-b @error @post-f1 @post-f2 @post-f3
   Scenario: Media buy not found -- by buyer_ref
     Given a valid update_media_buy request with:
     | field     | value            |
@@ -568,7 +568,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F2: Error explains media buy not found
     # POST-F3: Suggestion for recovery
 
-  @T-UC-003-ext-c @extension @ext-c @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-003-ext-c @extension @ext-c @error @post-f1 @post-f2 @post-f3
   Scenario: Ownership mismatch -- principal does not own media buy
     Given the Buyer is authenticated as principal "principal_other"
     And the media buy "mb_existing" is owned by principal "principal_owner"
@@ -583,7 +583,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F2: Error explains ownership mismatch
     # POST-F3: Suggestion for recovery
 
-  @T-UC-003-ext-d @extension @ext-d @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-003-ext-d @extension @ext-d @error @post-f1 @post-f2 @post-f3
   Scenario: Budget validation -- campaign budget zero
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -599,7 +599,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F2: Error code BUDGET_TOO_LOW
     # POST-F3: Suggestion to provide positive budget
 
-  @T-UC-003-ext-d-negative @extension @ext-d @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-003-ext-d-negative @extension @ext-d @error @post-f1 @post-f2 @post-f3
   Scenario: Budget validation -- campaign budget negative
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -613,7 +613,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F2: Error code BUDGET_TOO_LOW
     # POST-F3: Suggestion for recovery
 
-  @T-UC-003-ext-e @extension @ext-e @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-003-ext-e @extension @ext-e @error @post-f1 @post-f2 @post-f3
   Scenario: Date range invalid -- end_time before start_time
     Given the existing media buy has start_time "2026-04-01T00:00:00Z"
     And a valid update_media_buy request with:
@@ -629,7 +629,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F2: Error explains date range invalid
     # POST-F3: Suggestion for recovery
 
-  @T-UC-003-ext-e-equal @extension @ext-e @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-003-ext-e-equal @extension @ext-e @error @post-f1 @post-f2 @post-f3
   Scenario: Date range invalid -- end_time equals start_time
     Given the existing media buy has start_time "2026-04-01T00:00:00Z"
     And a valid update_media_buy request with:
@@ -643,7 +643,7 @@ Feature: BR-UC-003 Update Media Buy
     # BR-RULE-013 INV-3: end_time <= start_time rejected
     # POST-F3: Suggestion for recovery
 
-  @T-UC-003-ext-f @extension @ext-f @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-003-ext-f @extension @ext-f @error @post-f1 @post-f2 @post-f3
   Scenario: Currency not supported -- tenant does not support media buy currency
     Given the existing media buy uses currency "JPY"
     And the tenant does not have "JPY" in CurrencyLimit table
@@ -663,7 +663,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F2: Error explains unsupported currency
     # POST-F3: Suggestion for recovery
 
-  @T-UC-003-ext-g @extension @ext-g @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-003-ext-g @extension @ext-g @error @post-f1 @post-f2 @post-f3
   Scenario: Daily spend cap exceeded -- updated budget exceeds daily max
     Given the tenant has max_daily_package_spend of 1000
     And the media buy flight is 10 days
@@ -685,7 +685,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F2: Error explains daily cap exceeded
     # POST-F3: Suggestion for recovery
 
-  @T-UC-003-ext-h @extension @ext-h @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-003-ext-h @extension @ext-h @error @post-f1 @post-f2 @post-f3
   Scenario: Missing package ID -- package update without identifier
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -700,7 +700,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F2: Error explains missing package identifier
     # POST-F3: Suggestion for recovery
 
-  @T-UC-003-ext-i @extension @ext-i @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-003-ext-i @extension @ext-i @error @post-f1 @post-f2 @post-f3
   Scenario: Creative not found -- referenced creative_id not in library
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -721,7 +721,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F2: Error explains creative not found
     # POST-F3: Suggestion for recovery
 
-  @T-UC-003-ext-j-error @extension @ext-j @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-003-ext-j-error @extension @ext-j @error @post-f1 @post-f2 @post-f3
   Scenario: Creative validation -- creative in error state
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -742,7 +742,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F1: System state unchanged
     # POST-F3: Suggestion for recovery
 
-  @T-UC-003-ext-j-rejected @extension @ext-j @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-003-ext-j-rejected @extension @ext-j @error @post-f1 @post-f2 @post-f3
   Scenario: Creative validation -- creative in rejected state
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -762,7 +762,7 @@ Feature: BR-UC-003 Update Media Buy
     # BR-RULE-026 INV-3: creative in rejected state → rejected
     # POST-F3: Suggestion for recovery
 
-  @T-UC-003-ext-j-format @extension @ext-j @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-003-ext-j-format @extension @ext-j @error @post-f1 @post-f2 @post-f3
   Scenario: Creative validation -- format incompatible with product
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -782,7 +782,7 @@ Feature: BR-UC-003 Update Media Buy
     # BR-RULE-026 INV-4: format mismatch → rejected
     # POST-F3: Suggestion for recovery
 
-  @T-UC-003-ext-k @extension @ext-k @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-003-ext-k @extension @ext-k @error @post-f1 @post-f2 @post-f3
   Scenario: Creative sync failure -- inline creative upload fails
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -798,7 +798,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F2: Error explains sync failure
     # POST-F3: Suggestion to retry
 
-  @T-UC-003-ext-l @extension @ext-l @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-003-ext-l @extension @ext-l @error @post-f1 @post-f2 @post-f3
   Scenario: Package not found -- package_id not in media buy
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -817,7 +817,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F2: Error explains package not found
     # POST-F3: Suggestion for recovery
 
-  @T-UC-003-ext-m @extension @ext-m @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-003-ext-m @extension @ext-m @error @post-f1 @post-f2 @post-f3
   Scenario: Invalid placement IDs -- placement not valid for product
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -838,7 +838,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F1: System state unchanged
     # POST-F3: Suggestion for recovery
 
-  @T-UC-003-ext-m-unsupported @extension @ext-m @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-003-ext-m-unsupported @extension @ext-m @error @post-f1 @post-f2 @post-f3
   Scenario: Invalid placement IDs -- product does not support placement targeting
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -858,7 +858,7 @@ Feature: BR-UC-003 Update Media Buy
     # BR-RULE-028 INV-3: product doesn't support placement targeting → rejected
     # POST-F3: Suggestion for recovery
 
-  @T-UC-003-ext-n @extension @ext-n @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-003-ext-n @extension @ext-n @error @post-f1 @post-f2 @post-f3
   Scenario: Insufficient privileges -- admin-only action without admin role
     Given the Buyer does not have admin privileges
     And the update operation requires admin privileges
@@ -873,7 +873,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F2: Error explains insufficient privileges
     # POST-F3: Suggestion for recovery
 
-  @T-UC-003-ext-o @extension @ext-o @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-003-ext-o @extension @ext-o @error @post-f1 @post-f2 @post-f3
   Scenario: Adapter failure -- ad server returns error
     Given the tenant is configured for auto-approval
     And the ad server adapter returns an error during update
@@ -893,7 +893,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F1: System state unchanged
     # POST-F3: Suggestion for recovery
 
-  @T-UC-003-ext-p-short @extension @ext-p @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-003-ext-p-short @extension @ext-p @error @post-f1 @post-f2 @post-f3
   Scenario: Idempotency key too short -- below 8 characters
     Given a valid update_media_buy request with:
     | field           | value       |
@@ -909,7 +909,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F2: Error explains key too short
     # POST-F3: Suggestion for recovery
 
-  @T-UC-003-ext-p-long @extension @ext-p @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-003-ext-p-long @extension @ext-p @error @post-f1 @post-f2 @post-f3
   Scenario: Idempotency key too long -- above 255 characters
     Given a valid update_media_buy request with:
     | field           | value                    |
@@ -924,7 +924,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F1: System state unchanged
     # POST-F3: Suggestion for recovery
 
-  @T-UC-003-ext-q-rejected @extension @ext-q @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-003-ext-q-rejected @extension @ext-q @error @post-f1 @post-f2 @post-f3
   Scenario: Terminal status rejection -- media buy status is "rejected"
     Given the media buy is in "rejected" status
     And a valid update_media_buy request with:
@@ -944,7 +944,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F2: Error code INVALID_STATUS
     # POST-F3: Suggestion to create new media buy
 
-  @T-UC-003-ext-q-canceled @extension @ext-q @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-003-ext-q-canceled @extension @ext-q @error @post-f1 @post-f2 @post-f3
   Scenario: Terminal status rejection -- media buy status is "canceled"
     Given the media buy is in "canceled" status
     And a valid update_media_buy request with:
@@ -963,7 +963,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F2: Error explains terminal status
     # POST-F3: Suggestion for recovery
 
-  @T-UC-003-ext-q-completed @extension @ext-q @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-003-ext-q-completed @extension @ext-q @error @post-f1 @post-f2 @post-f3
   Scenario: Terminal status rejection -- media buy status is "completed"
     Given the media buy is in "completed" status
     And a valid update_media_buy request with:
@@ -981,7 +981,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F2: Error explains terminal status
     # POST-F3: Suggestion for recovery
 
-  @T-UC-003-ext-r-keyword @extension @ext-r @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-003-ext-r-keyword @extension @ext-r @error @post-f1 @post-f2 @post-f3
   Scenario: Keyword operation conflict -- keyword_targets_add with targeting_overlay.keyword_targets
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -1000,7 +1000,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F1: System state unchanged
     # POST-F3: Suggestion for recovery
 
-  @T-UC-003-ext-r-negative @extension @ext-r @error @post-f1 @post-f2 @post-f3 @pending
+  @T-UC-003-ext-r-negative @extension @ext-r @error @post-f1 @post-f2 @post-f3
   Scenario: Keyword operation conflict -- negative_keywords_add with targeting_overlay.negative_keywords
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -1018,7 +1018,7 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F1: System state unchanged
     # POST-F3: Suggestion for recovery
 
-  @T-UC-003-ext-r-cross-ok @invariant @BR-RULE-083 @pending
+  @T-UC-003-ext-r-cross-ok @invariant @BR-RULE-083
   Scenario: Keyword operations -- cross-dimension mixing is valid
     Given the tenant is configured for auto-approval
     And a valid update_media_buy request with:
@@ -1033,7 +1033,7 @@ Feature: BR-UC-003 Update Media Buy
     Then the response status should be "completed"
     # BR-RULE-083 INV-3: cross-dimension mixing (keyword_targets_add + overlay.negative_keywords) → accepted
 
-  @T-UC-003-ext-r-cross-ok-2 @invariant @BR-RULE-083 @pending
+  @T-UC-003-ext-r-cross-ok-2 @invariant @BR-RULE-083
   Scenario: Keyword operations -- negative_keywords_add with targeting_overlay.keyword_targets is valid
     Given the tenant is configured for auto-approval
     And a valid update_media_buy request with:
@@ -1048,7 +1048,7 @@ Feature: BR-UC-003 Update Media Buy
     Then the response status should be "completed"
     # BR-RULE-083 INV-4: cross-dimension mixing (negative_keywords_add + overlay.keyword_targets) → accepted
 
-  @T-UC-003-partition-idempotency-key @partition @idempotency_key @pending
+  @T-UC-003-partition-idempotency-key @partition @idempotency_key
   Scenario Outline: Idempotency key partition validation - <partition>
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -1077,7 +1077,7 @@ Feature: BR-UC-003 Update Media Buy
       | too_short      | abc1234        | error "INVALID_REQUEST" with suggestion               |
       | too_long       | <256 chars>    | error "INVALID_REQUEST" with suggestion               |
 
-  @T-UC-003-boundary-idempotency-key @boundary @idempotency_key @pending
+  @T-UC-003-boundary-idempotency-key @boundary @idempotency_key
   Scenario Outline: Idempotency key boundary validation - <boundary_point>
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -1103,7 +1103,7 @@ Feature: BR-UC-003 Update Media Buy
       | length 255 (max, inclusive)     | <255 char string>   | success                                |
       | length 256 (max + 1)           | <256 char string>   | error "INVALID_REQUEST" with suggestion |
 
-  @T-UC-003-partition-media-buy-status @partition @media_buy_status @pending
+  @T-UC-003-partition-media-buy-status @partition @media_buy_status
   Scenario Outline: Media buy status partition validation - <partition>
     Given the media buy is in "<status>" status
     And a valid update_media_buy request with:
@@ -1130,7 +1130,7 @@ Feature: BR-UC-003 Update Media Buy
       | terminal_canceled    | canceled   | error "INVALID_STATUS" with suggestion        |
       | terminal_completed   | completed  | error "INVALID_STATUS" with suggestion        |
 
-  @T-UC-003-boundary-media-buy-status @boundary @media_buy_status @pending
+  @T-UC-003-boundary-media-buy-status @boundary @media_buy_status
   Scenario Outline: Media buy status boundary validation - <boundary_point>
     Given the media buy is in "<status>" status
     And a valid update_media_buy request with:
@@ -1154,7 +1154,7 @@ Feature: BR-UC-003 Update Media Buy
       | canceled (terminal, update blocked)       | canceled             | error "INVALID_STATUS" with suggestion   |
       | completed (terminal, update blocked)      | completed            | error "INVALID_STATUS" with suggestion   |
 
-  @T-UC-003-partition-budget-amount @partition @budget_amount @pending
+  @T-UC-003-partition-budget-amount @partition @budget_amount
   Scenario Outline: Budget amount partition validation - <partition>
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -1178,7 +1178,7 @@ Feature: BR-UC-003 Update Media Buy
       | zero_amount     | 0      | error "BUDGET_TOO_LOW" with suggestion        |
       | negative_amount | -50    | error "BUDGET_TOO_LOW" with suggestion        |
 
-  @T-UC-003-boundary-budget-amount @boundary @budget_amount @pending
+  @T-UC-003-boundary-budget-amount @boundary @budget_amount
   Scenario Outline: Budget amount boundary validation - <boundary_point>
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -1198,7 +1198,7 @@ Feature: BR-UC-003 Update Media Buy
       | amount = 0.01 (minimum positive) | 0.01  | success                                      |
       | amount negative                 | -1     | error "BUDGET_TOO_LOW" with suggestion        |
 
-  @T-UC-003-partition-daily-spend-cap @partition @daily_spend_cap @pending
+  @T-UC-003-partition-daily-spend-cap @partition @daily_spend_cap
   Scenario Outline: Daily spend cap partition validation - <partition>
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -1224,7 +1224,7 @@ Feature: BR-UC-003 Update Media Buy
       | partition    | budget | cap_config | flight_days | outcome                                      |
       | exceeds_cap  | 50000  | 1000       | 10          | error "BUDGET_TOO_LOW" with suggestion        |
 
-  @T-UC-003-boundary-daily-spend-cap @boundary @daily_spend_cap @pending
+  @T-UC-003-boundary-daily-spend-cap @boundary @daily_spend_cap
   Scenario Outline: Daily spend cap boundary validation - <boundary_point>
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -1247,7 +1247,7 @@ Feature: BR-UC-003 Update Media Buy
       | cap not configured (skipped)         | 99999  | not set    | 10          | success                                      |
       | flight duration 0 days (floor to 1)  | 500    | 1000       | 0           | success                                      |
 
-  @T-UC-003-partition-media-buy-identification @partition @media_buy_identification @pending
+  @T-UC-003-partition-media-buy-identification @partition @media_buy_identification
   Scenario Outline: Media buy identification partition validation - <partition>
     Given a valid update_media_buy request with identification: <id_config>
     And the request includes 1 package update with:
@@ -1269,7 +1269,7 @@ Feature: BR-UC-003 Update Media Buy
       | both_provided   | media_buy_id=mb_existing,buyer_ref=my_ref_01 | error "INVALID_REQUEST" with suggestion       |
       | neither_provided | <none>                                      | error "INVALID_REQUEST" with suggestion       |
 
-  @T-UC-003-boundary-media-buy-identification @boundary @media_buy_identification @pending
+  @T-UC-003-boundary-media-buy-identification @boundary @media_buy_identification
   Scenario Outline: Media buy identification boundary validation - <boundary_point>
     Given a valid update_media_buy request with identification: <id_config>
     And the request includes 1 package update with:
@@ -1288,7 +1288,7 @@ Feature: BR-UC-003 Update Media Buy
       | both identifiers (ambiguous)         | media_buy_id=mb_existing,buyer_ref=my_ref_01 | error "INVALID_REQUEST" with suggestion  |
       | neither identifier (missing)         | <none>                                       | error "INVALID_REQUEST" with suggestion  |
 
-  @T-UC-003-partition-frequency-cap-suppress @partition @frequency_cap_suppress @pending
+  @T-UC-003-partition-frequency-cap-suppress @partition @frequency_cap_suppress
   Scenario Outline: Frequency cap suppress partition validation - <partition>
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -1326,7 +1326,7 @@ Feature: BR-UC-003 Update Media Buy
       | wrong_type_suppress          | "60"                                   | error with suggestion                        |
       | suppress_minutes_negative    | {"suppress_minutes": -1}               | error with suggestion                        |
 
-  @T-UC-003-boundary-frequency-cap-suppress @boundary @frequency_cap_suppress @pending
+  @T-UC-003-boundary-frequency-cap-suppress @boundary @frequency_cap_suppress
   Scenario Outline: Frequency cap suppress boundary validation - <boundary_point>
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -1361,7 +1361,7 @@ Feature: BR-UC-003 Update Media Buy
       | suppress is string '60' (wrong type)                             | "60"                                                                                                                          | error with suggestion    |
       | suppress = {} (missing both fields)                              | {"suppress": {}}                                                                                                              | error with suggestion    |
 
-  @T-UC-003-partition-optimization-goals @partition @optimization_goals @pending
+  @T-UC-003-partition-optimization-goals @partition @optimization_goals
   Scenario Outline: Optimization goals partition validation - <partition>
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -1407,7 +1407,7 @@ Feature: BR-UC-003 Update Media Buy
       | view_duration_zero     | [{"kind": "metric", "metric": "completed_views", "view_duration_seconds": 0}]                                       | error with suggestion                        |
       | event_source_id_empty  | [{"kind": "event", "event_sources": [{"event_source_id": "", "event_type": "purchase"}]}]                            | error with suggestion                        |
 
-  @T-UC-003-boundary-optimization-goals @boundary @optimization_goals @pending
+  @T-UC-003-boundary-optimization-goals @boundary @optimization_goals
   Scenario Outline: Optimization goals boundary validation - <boundary_point>
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -1445,7 +1445,7 @@ Feature: BR-UC-003 Update Media Buy
       | optimization_goals present — replaces all               | [{"kind": "metric", "metric": "clicks"}]                                                                                                                                            | success                  |
       | optimization_goals omitted — preserves existing         | <not provided>                                                                                                                                                                       | success                  |
 
-  @T-UC-003-partition-keyword-targets-add @partition @keyword_targets_add @pending
+  @T-UC-003-partition-keyword-targets-add @partition @keyword_targets_add
   Scenario Outline: Keyword targets add partition validation - <partition>
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -1482,7 +1482,7 @@ Feature: BR-UC-003 Update Media Buy
       | negative_bid_price     | [{"keyword": "shoes", "match_type": "exact", "bid_price": -1.00}] | error with suggestion   |
       | conflict_with_overlay  | <with targeting_overlay.keyword_targets present>                  | error with suggestion    |
 
-  @T-UC-003-boundary-keyword-targets-add @boundary @keyword_targets_add @pending
+  @T-UC-003-boundary-keyword-targets-add @boundary @keyword_targets_add
   Scenario Outline: Keyword targets add boundary validation - <boundary_point>
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -1513,7 +1513,7 @@ Feature: BR-UC-003 Update Media Buy
       | keyword_targets_add WITHOUT targeting_overlay.keyword_targets             | [{"keyword": "shoes", "match_type": "broad"}]                                 | success                  |
       | keyword_targets_add WITH targeting_overlay.negative_keywords (cross-dimension) | [{"keyword": "shoes", "match_type": "broad"}]                           | success                  |
 
-  @T-UC-003-partition-keyword-targets-remove @partition @keyword_targets_remove @pending
+  @T-UC-003-partition-keyword-targets-remove @partition @keyword_targets_remove
   Scenario Outline: Keyword targets remove partition validation - <partition>
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -1546,7 +1546,7 @@ Feature: BR-UC-003 Update Media Buy
       | invalid_match_type     | [{"keyword": "shoes", "match_type": "fuzzy"}]                    | error with suggestion    |
       | conflict_with_overlay  | <with targeting_overlay.keyword_targets present>                  | error with suggestion    |
 
-  @T-UC-003-boundary-keyword-targets-remove @boundary @keyword_targets_remove @pending
+  @T-UC-003-boundary-keyword-targets-remove @boundary @keyword_targets_remove
   Scenario Outline: Keyword targets remove boundary validation - <boundary_point>
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -1575,7 +1575,7 @@ Feature: BR-UC-003 Update Media Buy
       | remove pair that exists in current list                                       | [{"keyword": "shoes", "match_type": "broad"}]        | success                  |
       | remove pair that does NOT exist in current list (no-op)                       | [{"keyword": "nonexistent", "match_type": "exact"}]  | success                  |
 
-  @T-UC-003-partition-negative-keywords-add @partition @negative_keywords_add @pending
+  @T-UC-003-partition-negative-keywords-add @partition @negative_keywords_add
   Scenario Outline: Negative keywords add partition validation - <partition>
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -1608,7 +1608,7 @@ Feature: BR-UC-003 Update Media Buy
       | invalid_match_type     | [{"keyword": "cheap", "match_type": "fuzzy"}]                    | error with suggestion    |
       | conflict_with_overlay  | <with targeting_overlay.negative_keywords present>                | error with suggestion    |
 
-  @T-UC-003-boundary-negative-keywords-add @boundary @negative_keywords_add @pending
+  @T-UC-003-boundary-negative-keywords-add @boundary @negative_keywords_add
   Scenario Outline: Negative keywords add boundary validation - <boundary_point>
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -1637,7 +1637,7 @@ Feature: BR-UC-003 Update Media Buy
       | add pair that already exists in list (duplicate no-op)                          | [{"keyword": "cheap", "match_type": "broad"}]          | success                  |
       | negative_keywords_add WITH targeting_overlay.keyword_targets (cross-dimension)  | [{"keyword": "cheap", "match_type": "broad"}]          | success                  |
 
-  @T-UC-003-partition-negative-keywords-remove @partition @negative_keywords_remove @pending
+  @T-UC-003-partition-negative-keywords-remove @partition @negative_keywords_remove
   Scenario Outline: Negative keywords remove partition validation - <partition>
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -1670,7 +1670,7 @@ Feature: BR-UC-003 Update Media Buy
       | invalid_match_type     | [{"keyword": "cheap", "match_type": "fuzzy"}]                      | error with suggestion    |
       | conflict_with_overlay  | <with targeting_overlay.negative_keywords present>                  | error with suggestion    |
 
-  @T-UC-003-boundary-negative-keywords-remove @boundary @negative_keywords_remove @pending
+  @T-UC-003-boundary-negative-keywords-remove @boundary @negative_keywords_remove
   Scenario Outline: Negative keywords remove boundary validation - <boundary_point>
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -1699,7 +1699,7 @@ Feature: BR-UC-003 Update Media Buy
       | remove pair that exists in current list                                             | [{"keyword": "cheap", "match_type": "broad"}]           | success                  |
       | remove pair that does NOT exist in current list (no-op)                             | [{"keyword": "nonexistent", "match_type": "exact"}]     | success                  |
 
-  @T-UC-003-partition-targeting-overlay @partition @targeting_overlay @pending
+  @T-UC-003-partition-targeting-overlay @partition @targeting_overlay
   Scenario Outline: Targeting overlay partition validation - <partition>
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -1738,7 +1738,7 @@ Feature: BR-UC-003 Update Media Buy
       | frequency_cap_missing_fields | {"frequency_cap": {"max_impressions": 3}}                                              | error "INVALID_REQUEST" with suggestion       |
       | keyword_duplicate            | {"keyword_targets": [{"keyword": "shoes", "match_type": "broad"}, {"keyword": "shoes", "match_type": "broad"}]} | error "INVALID_REQUEST" with suggestion |
 
-  @T-UC-003-boundary-targeting-overlay @boundary @targeting_overlay @pending
+  @T-UC-003-boundary-targeting-overlay @boundary @targeting_overlay
   Scenario Outline: Targeting overlay boundary validation - <boundary_point>
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -1771,7 +1771,7 @@ Feature: BR-UC-003 Update Media Buy
       | keyword_targets with unique tuples           | {"keyword_targets": [{"keyword": "shoes", "match_type": "broad"}]}                     | success                                  |
       | keyword_targets with duplicate (keyword, match_type) | {"keyword_targets": [{"keyword": "shoes", "match_type": "broad"}, {"keyword": "shoes", "match_type": "broad"}]} | error "INVALID_REQUEST" with suggestion |
 
-  @T-UC-003-partition-start-time @partition @start_time @pending
+  @T-UC-003-partition-start-time @partition @start_time
   Scenario Outline: Start time partition validation - <partition>
     Given a valid update_media_buy request with:
     | field        | value        |
@@ -1792,7 +1792,7 @@ Feature: BR-UC-003 Update Media Buy
       | past_datetime      | 2020-01-01T00:00:00Z | error with suggestion    |
       | wrong_case_asap    | ASAP                 | error with suggestion    |
 
-  @T-UC-003-boundary-start-time @boundary @start_time @pending
+  @T-UC-003-boundary-start-time @boundary @start_time
   Scenario Outline: Start time boundary validation - <boundary_point>
     Given a valid update_media_buy request with:
     | field        | value        |
@@ -1810,7 +1810,7 @@ Feature: BR-UC-003 Update Media Buy
       | 'ASAP' wrong case       | ASAP                     | error with suggestion    |
       | absent (null)           |                          | error with suggestion    |
 
-  @T-UC-003-partition-end-time @partition @end_time @pending
+  @T-UC-003-partition-end-time @partition @end_time
   Scenario Outline: End time partition validation - <partition>
     Given the existing media buy has start_time "2026-04-01T00:00:00Z"
     And a valid update_media_buy request with:
@@ -1829,7 +1829,7 @@ Feature: BR-UC-003 Update Media Buy
       | equal_to_start     | 2026-04-01T00:00:00Z     | error with suggestion    |
       | before_start       | 2026-03-15T00:00:00Z     | error with suggestion    |
 
-  @T-UC-003-boundary-end-time @boundary @end_time @pending
+  @T-UC-003-boundary-end-time @boundary @end_time
   Scenario Outline: End time boundary validation - <boundary_point>
     Given the existing media buy has start_time "2026-04-01T00:00:00Z"
     And a valid update_media_buy request with:
@@ -1846,7 +1846,7 @@ Feature: BR-UC-003 Update Media Buy
       | end_time before start_time       | 2026-03-15T00:00:00Z     | error with suggestion    |
       | absent (null)                    |                          | error with suggestion    |
 
-  @T-UC-003-partition-approval-workflow @partition @approval_workflow @pending
+  @T-UC-003-partition-approval-workflow @partition @approval_workflow
   Scenario Outline: Approval workflow partition validation - <partition>
     Given the tenant human_review_required is <tenant_flag>
     And the adapter manual_approval_required is <adapter_flag>
@@ -1867,7 +1867,7 @@ Feature: BR-UC-003 Update Media Buy
       | pending_human_review       | true        | false        | success (submitted)      |
       | pending_adapter_approval   | false       | true         | success (submitted)      |
 
-  @T-UC-003-boundary-approval-workflow @boundary @approval_workflow @pending
+  @T-UC-003-boundary-approval-workflow @boundary @approval_workflow
   Scenario Outline: Approval workflow boundary validation - <boundary_point>
     Given the tenant human_review_required is <tenant_flag>
     And the adapter manual_approval_required is <adapter_flag>
@@ -1888,7 +1888,7 @@ Feature: BR-UC-003 Update Media Buy
       | tenant flag true (pending)         | true        | false        | success (submitted)      |
       | adapter flag true (pending)        | false       | true         | success (submitted)      |
 
-  @T-UC-003-partition-creative-replacement @partition @creative_replacement @pending
+  @T-UC-003-partition-creative-replacement @partition @creative_replacement
   Scenario Outline: Creative replacement partition validation - <partition>
     Given the tenant is configured for auto-approval
     And the package "pkg_001" has existing creative assignments [cr_old_1, cr_old_2]
@@ -1910,7 +1910,7 @@ Feature: BR-UC-003 Update Media Buy
       | add_new_creative             | creative_ids=[cr_old_1, cr_old_2, cr_new_3]       | success |
       | remove_existing_creative     | creative_ids=[cr_old_1]                           | success |
 
-  @T-UC-003-boundary-creative-replacement @boundary @creative_replacement @pending
+  @T-UC-003-boundary-creative-replacement @boundary @creative_replacement
   Scenario Outline: Creative replacement boundary validation - <boundary_point>
     Given the tenant is configured for auto-approval
     And the package "pkg_001" has existing creative assignments [cr_old_1, cr_old_2]
@@ -1932,7 +1932,7 @@ Feature: BR-UC-003 Update Media Buy
       | new creative added (not in existing)       | creative_ids=[cr_old_1, cr_old_2, cr_new_3]       | success |
       | existing creative removed (not in new)     | creative_ids=[cr_old_1]                           | success |
 
-  @T-UC-003-partition-creative-state @partition @creative_state_validation @pending
+  @T-UC-003-partition-creative-state @partition @creative_state_validation
   Scenario Outline: Creative state validation partition - <partition>
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -1955,7 +1955,7 @@ Feature: BR-UC-003 Update Media Buy
       | error_state          | error           | error "CREATIVE_REJECTED" with suggestion       |
       | format_incompatible  | wrong_format    | error "CREATIVE_REJECTED" with suggestion       |
 
-  @T-UC-003-boundary-creative-state @boundary @creative_state_validation @pending
+  @T-UC-003-boundary-creative-state @boundary @creative_state_validation
   Scenario Outline: Creative state validation boundary - <boundary_point>
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -1975,7 +1975,7 @@ Feature: BR-UC-003 Update Media Buy
       | creative in error state                     | error           | error "CREATIVE_REJECTED" with suggestion       |
       | format incompatible with product            | wrong_format    | error "CREATIVE_REJECTED" with suggestion       |
 
-  @T-UC-003-partition-placement-id @partition @placement_id_validation @pending
+  @T-UC-003-partition-placement-id @partition @placement_id_validation
   Scenario Outline: Placement ID validation partition - <partition>
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -1999,7 +1999,7 @@ Feature: BR-UC-003 Update Media Buy
       | invalid_placement_id         | placement_ids=[plc_invalid] (not in product)  | error "invalid_placement_ids" with suggestion     |
       | product_no_placement_support | placement_ids=[plc_a] (product unsupported)   | error "invalid_placement_ids" with suggestion     |
 
-  @T-UC-003-boundary-placement-id @boundary @placement_id_validation @pending
+  @T-UC-003-boundary-placement-id @boundary @placement_id_validation
   Scenario Outline: Placement ID validation boundary - <boundary_point>
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -2019,7 +2019,7 @@ Feature: BR-UC-003 Update Media Buy
       | no placement IDs (untargeted)        | no placement_ids specified                    | success                                      |
       | product without placement support    | placement_ids=[plc_a] (product unsupported)   | error "invalid_placement_ids" with suggestion |
 
-  @T-UC-003-partition-adapter-dispatch @partition @adapter_dispatch @pending
+  @T-UC-003-partition-adapter-dispatch @partition @adapter_dispatch
   Scenario Outline: Adapter dispatch partition validation - <partition>
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -2039,7 +2039,7 @@ Feature: BR-UC-003 Update Media Buy
       | partition     | update_fields                    | outcome                                 |
       | empty_update  | no updatable fields in request   | error "EMPTY_UPDATE" with suggestion    |
 
-  @T-UC-003-boundary-adapter-dispatch @boundary @adapter_dispatch @pending
+  @T-UC-003-boundary-adapter-dispatch @boundary @adapter_dispatch
   Scenario Outline: Adapter dispatch boundary validation - <boundary_point>
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -2056,7 +2056,7 @@ Feature: BR-UC-003 Update Media Buy
       | request with all updatable fields           | packages with all updatable fields     | success                                 |
       | request with zero updatable fields          | no updatable fields in request         | error "EMPTY_UPDATE" with suggestion    |
 
-  @T-UC-003-partition-persistence-timing @partition @persistence_timing @pending
+  @T-UC-003-partition-persistence-timing @partition @persistence_timing
   Scenario Outline: Persistence timing partition validation - <partition>
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -2077,7 +2077,7 @@ Feature: BR-UC-003 Update Media Buy
       | partition                       | approval_mode  | adapter_result   | outcome                          |
       | auto_approve_adapter_failure    | auto-approval  | returns error    | error "ADAPTER_ERROR" — no records persisted |
 
-  @T-UC-003-boundary-persistence-timing @boundary @persistence_timing @pending
+  @T-UC-003-boundary-persistence-timing @boundary @persistence_timing
   Scenario Outline: Persistence timing boundary validation - <boundary_point>
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -2095,7 +2095,7 @@ Feature: BR-UC-003 Update Media Buy
       | adapter returns error (auto-approval)       | auto-approval  | returns error    | error "ADAPTER_ERROR" — no records persisted  |
       | manual approval detected (pending state)    | manual         | not yet called   | success with pending status                   |
 
-  @T-UC-003-partition-principal-ownership @partition @principal_ownership @pending
+  @T-UC-003-partition-principal-ownership @partition @principal_ownership
   Scenario Outline: Principal ownership partition validation - <partition>
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -2113,7 +2113,7 @@ Feature: BR-UC-003 Update Media Buy
       | partition       | owner       | principal   | outcome                                        |
       | owner_mismatch  | buyer_001   | buyer_999   | error "PERMISSION_DENIED" with suggestion      |
 
-  @T-UC-003-boundary-principal-ownership @boundary @principal_ownership @pending
+  @T-UC-003-boundary-principal-ownership @boundary @principal_ownership
   Scenario Outline: Principal ownership boundary validation - <boundary_point>
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -2128,7 +2128,7 @@ Feature: BR-UC-003 Update Media Buy
       | principal matches owner           | buyer_001   | buyer_001   | success                                        |
       | principal differs from owner      | buyer_001   | buyer_999   | error "PERMISSION_DENIED" with suggestion      |
 
-  @T-UC-003-partition-immutable-fields @partition @immutable_fields @pending
+  @T-UC-003-partition-immutable-fields @partition @immutable_fields
   Scenario Outline: Immutable fields partition validation - <partition>
     Given a valid update_media_buy request with:
     | field        | value       |
@@ -2148,7 +2148,7 @@ Feature: BR-UC-003 Update Media Buy
       | format_ids_attempted           | format_ids=[fmt_new] (immutable)            | error "SCHEMA_VALIDATION_ERROR" — rejected   |
       | pricing_option_id_attempted    | pricing_option_id=po_new (immutable)        | error "SCHEMA_VALIDATION_ERROR" — rejected   |
 
-  @T-UC-003-boundary-immutable-fields @boundary @immutable_fields @pending
+  @T-UC-003-boundary-immutable-fields @boundary @immutable_fields
   Scenario Outline: Immutable fields boundary validation - <boundary_point>
     Given a valid update_media_buy request with:
     | field        | value       |
