@@ -1,5 +1,7 @@
 #!/bin/bash
-set -euo pipefail
+set -uo pipefail
+# Note: NOT using set -e — we handle errors explicitly per-command.
+# pipefail is kept for safety but individual pipes use || true where needed.
 
 # =============================================================================
 # bdd-pipeline.sh — Process BDD step wiring tasks via claude -p
@@ -54,13 +56,13 @@ GIT_INSTRUCTION="IMPORTANT: Do NOT run git push or bd sync. The pipeline handles
 # === Discover tasks from epic if none specified ===
 if [ ${#TASKS[@]} -eq 0 ] && [ -n "$EPIC" ]; then
   echo "Discovering tasks from epic salesagent-$EPIC..."
-  TASK_LIST=$(bd show "$EPIC" 2>/dev/null | grep "↳ ○" | awk '{print $3}' | sed 's/://')
+  TASK_LIST=$(bd show "$EPIC" 2>/dev/null | grep "↳ ○" | awk '{print $3}' | sed 's/://' || true)
 
   for TASK_ID in $TASK_LIST; do
     TASK_ID="${TASK_ID#salesagent-}"
     if [ -n "$UC_FILTER" ]; then
-      TITLE=$(bd show "$TASK_ID" 2>/dev/null | head -1 || echo "")
-      if echo "$TITLE" | grep -qi "$UC_FILTER"; then
+      TITLE=$(bd show "$TASK_ID" 2>/dev/null | head -1 || true)
+      if echo "$TITLE" | grep -qi "$UC_FILTER" 2>/dev/null; then
         TASKS+=("$TASK_ID")
       fi
     else
@@ -87,7 +89,7 @@ echo ""
 if [ "$DRY_RUN" = true ]; then
   echo "DRY RUN — would process $TOTAL tasks:"
   for T in "${TASKS[@]}"; do
-    TITLE=$(bd show "$T" 2>/dev/null | head -1 | sed 's/^[^·]*· //' | sed 's/ *\[.*//')
+    TITLE=$(bd show "$T" 2>/dev/null | head -1 | sed 's/^[^·]*· //' | sed 's/ *\[.*//' || true)
     echo "  - $T: ${TITLE:-???}"
   done
   exit 0
@@ -115,7 +117,7 @@ while [ "$TASK_INDEX" -lt "$TOTAL" ] && [ "$PIPELINE_HALT" = false ]; do
   while [ "$TASK_INDEX" -lt "$BATCH_END" ]; do
     TASK_ID="${TASKS[$TASK_INDEX]}"
     LOG="$LOGDIR/task-$TASK_ID.log"
-    TITLE=$(bd show "$TASK_ID" 2>/dev/null | head -1 | sed 's/^[^·]*· //' | sed 's/ *\[.*//')
+    TITLE=$(bd show "$TASK_ID" 2>/dev/null | head -1 | sed 's/^[^·]*· //' | sed 's/ *\[.*//' || true)
 
     echo ""
     echo "[$(( TASK_INDEX + 1 ))/$TOTAL] $TASK_ID: ${TITLE:-???}"
@@ -133,9 +135,10 @@ Context: BDD step wiring task. Wire step definitions for the scenarios in the ta
 If production code doesn't implement expected behavior (spec-production gap), record the gap in task notes and move on. Goal is to wire steps that exercise real production code.
 
 $GIT_INSTRUCTION" \
-      > "$LOG" 2>&1
+      > "$LOG" 2>&1 || true
 
-    if [ $? -eq 0 ]; then
+    # Check if task was closed (success indicator)
+    if grep -q "Closed" "$LOG" 2>/dev/null; then
       echo "  [done]"
       BATCH_COMPLETED=$((BATCH_COMPLETED + 1))
     else
@@ -251,10 +254,10 @@ Write EXACTLY one line to stdout — either:
   STOP: <brief reason explaining what needs fixing>
 
 Nothing else. No markdown, no explanation. Just the verdict line." \
-    > "$EVAL_LOG" 2>&1
+    > "$EVAL_LOG" 2>&1 || true
 
   # Extract verdict (last non-empty line that starts with CONTINUE or STOP)
-  VERDICT=$(grep -E "^(CONTINUE|STOP):" "$EVAL_LOG" | tail -1 || echo "STOP: evaluator produced no verdict")
+  VERDICT=$(grep -E "^(CONTINUE|STOP):" "$EVAL_LOG" 2>/dev/null | tail -1 || echo "STOP: evaluator produced no verdict")
   echo "$VERDICT" > "$EVAL_VERDICT"
   echo "  Verdict: $VERDICT"
 
