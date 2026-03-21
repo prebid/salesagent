@@ -1,7 +1,7 @@
 """MediaBuyListEnv — integration test environment for _get_media_buys_impl.
 
 Minimal harness — list operation has no adapter calls, just DB queries.
-Patches only audit logger.
+No patches needed (pure DB read).
 
 Requires: integration_db fixture + existing media buys in the DB.
 
@@ -11,7 +11,6 @@ beads: salesagent-4n0
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import MagicMock
 
 from src.core.schemas._base import GetMediaBuysRequest, GetMediaBuysResponse
 from tests.harness._base import IntegrationEnv
@@ -20,20 +19,15 @@ from tests.harness._base import IntegrationEnv
 class MediaBuyListEnv(IntegrationEnv):
     """Integration test environment for _get_media_buys_impl.
 
-    Minimal patches — list is read-only, no adapter calls.
+    No patches — list is read-only, no external service calls.
     """
 
-    EXTERNAL_PATCHES = {
-        "audit": "src.core.tools.media_buy_list.get_audit_logger",
-    }
+    EXTERNAL_PATCHES: dict[str, str] = {}
     # No REST endpoint for get_media_buys (MCP + A2A only)
     REST_ENDPOINT = ""
 
     def _configure_mocks(self) -> None:
-        """Set up happy-path defaults."""
-        mock_audit = MagicMock()
-        mock_audit.log_operation.return_value = None
-        self.mock["audit"].return_value = mock_audit
+        """No mocks needed for read-only list operation."""
 
     def call_impl(self, **kwargs: Any) -> GetMediaBuysResponse:
         """Call _get_media_buys_impl with real DB."""

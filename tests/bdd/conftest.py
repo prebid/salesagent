@@ -44,6 +44,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc004_delivery",
     "tests.bdd.steps.domain.uc002_create_media_buy",
     "tests.bdd.steps.domain.uc003_update_media_buy",
+    "tests.bdd.steps.domain.uc019_query_media_buys",
     "tests.bdd.steps.domain.uc006_sync_creatives",
     "tests.bdd.steps.domain.uc011_accounts",
     "tests.bdd.steps.domain.admin_accounts",
@@ -585,6 +586,8 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
         return "UC-002"
     if any(t.startswith("T-UC-003") for t in marker_names):
         return "UC-003"
+    if any(t.startswith("T-UC-019") for t in marker_names):
+        return "UC-019"
     if any(t.startswith("T-UC-006") for t in marker_names):
         return "UC-006"
     if any(t.startswith("T-UC-005") for t in marker_names):
@@ -670,6 +673,18 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             ctx["principal"] = principal
             ctx["existing_media_buy"] = media_buy
             ctx["existing_package"] = package
+            yield
+
+    elif uc == "UC-019":
+        # UC-019 query_media_buys — minimal harness, media buys seeded by Given steps
+        request.getfixturevalue("integration_db")
+        from tests.harness.media_buy_list import MediaBuyListEnv
+
+        with MediaBuyListEnv() as env:
+            tenant, principal = env.setup_default_data()
+            ctx["env"] = env
+            ctx["tenant"] = tenant
+            ctx["principal"] = principal
             yield
 
     elif uc == "UC-006":

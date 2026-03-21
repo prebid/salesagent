@@ -770,7 +770,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             # Get the Principal object (needed for adapter)
             from src.core.auth import get_principal_object
 
-            principal = get_principal_object(media_buy.principal_id)
+            principal = get_principal_object(media_buy.principal_id, tenant_id=tenant_id)
             if not principal:
                 error_msg = f"Principal {media_buy.principal_id} not found"
                 logger.error(f"[APPROVAL] {error_msg}")
