@@ -437,6 +437,102 @@ def given_bid_below_floor(ctx: dict, bid: float, floor: float) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Pricing XOR invariant — BR-RULE-006 (inv-006-1..4)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given("a package pricing option has fixed_price set and floor_price null")
+def given_fixed_price_only(ctx: dict) -> None:
+    """Ensure the package references a fixed pricing option (default state).
+
+    The default PricingOption from setup_media_buy_data() is already
+    is_fixed=True with rate=5.00 — this maps to fixed_price=5.00, floor_price=None.
+    """
+    # Default state — no mutation needed. Assert the default PO is fixed.
+    po = ctx.get("default_pricing_option")
+    assert po is not None, "No default_pricing_option in ctx — Given step ordering error"
+    assert po.is_fixed, "Default pricing option should be fixed"
+
+
+@given("a package pricing option has floor_price set and fixed_price null")
+def given_floor_price_only(ctx: dict) -> None:
+    """Create an auction pricing option with floor_price (no fixed_price)."""
+    env = ctx["env"]
+    auction_po = PricingOptionFactory(
+        product=ctx["default_product"],
+        pricing_model="cpm",
+        currency="USD",
+        is_fixed=False,
+        price_guidance={"floor": 2.0},
+    )
+    env._commit_factory_data()
+    kwargs = _ensure_request_defaults(ctx)
+    if kwargs.get("packages"):
+        kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(auction_po)
+
+
+@given("the package has a bid_price above the floor")
+def given_bid_above_floor(ctx: dict) -> None:
+    """Set bid_price above the pricing option's floor price."""
+    kwargs = _ensure_request_defaults(ctx)
+    if kwargs.get("packages"):
+        kwargs["packages"][0]["bid_price"] = 5.0  # Above default floor of 2.0
+
+
+@given("a package pricing option has both fixed_price and floor_price set")
+@given("But a package pricing option has both fixed_price and floor_price set")
+def given_both_fixed_and_floor(ctx: dict) -> None:
+    """Create a malformed pricing option with both fixed and auction characteristics.
+
+    ORM: is_fixed=True (→ fixed_price from rate) AND price_guidance with floor
+    (→ floor_price). This violates BR-RULE-006 XOR invariant.
+
+    SPEC-PRODUCTION GAP: Production's _validate_pricing_model_selection works at
+    the ORM level (is_fixed + rate + price_guidance) and does not enforce the
+    schema-level XOR invariant during create_media_buy. The operation may succeed.
+    """
+    env = ctx["env"]
+    malformed_po = PricingOptionFactory(
+        product=ctx["default_product"],
+        pricing_model="cpm",
+        currency="USD",
+        is_fixed=True,
+        rate=5.00,
+        price_guidance={"floor": 2.0},  # Both rate AND floor — violates XOR
+    )
+    env._commit_factory_data()
+    kwargs = _ensure_request_defaults(ctx)
+    if kwargs.get("packages"):
+        kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(malformed_po)
+
+
+@given("a package pricing option has neither fixed_price nor floor_price")
+@given("But a package pricing option has neither fixed_price nor floor_price")
+def given_neither_fixed_nor_floor(ctx: dict) -> None:
+    """Create a malformed pricing option with no fixed_price and no floor_price.
+
+    ORM: is_fixed=True but rate=None — the pricing option exists but has no usable
+    price. This violates BR-RULE-006 which requires exactly one of fixed/floor.
+
+    Production catches this as "has is_fixed=true but no rate specified" in
+    _validate_pricing_model_selection (PRICING_ERROR).
+    """
+    env = ctx["env"]
+    malformed_po = PricingOptionFactory(
+        product=ctx["default_product"],
+        pricing_model="cpm",
+        currency="USD",
+        is_fixed=True,
+        rate=None,  # No rate → no fixed_price
+        price_guidance=None,  # No floor → no floor_price
+    )
+    env._commit_factory_data()
+    kwargs = _ensure_request_defaults(ctx)
+    if kwargs.get("packages"):
+        kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(malformed_po)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Proposal-related request construction
 # ═══════════════════════════════════════════════════════════════════════
 

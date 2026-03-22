@@ -21,6 +21,16 @@ def then_response_succeeds(ctx: dict) -> None:
     assert resp is not None, "Expected a response but none found"
 
 
+@then("the pricing validation should pass")
+def then_pricing_validation_passes(ctx: dict) -> None:
+    """Assert pricing validation passed — no error, response has media_buy_id."""
+    assert "error" not in ctx, f"Expected pricing validation to pass but got error: {ctx.get('error')}"
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response but none found (pricing validation may have failed silently)"
+    media_buy_id = _get_response_field(resp, "media_buy_id")
+    assert media_buy_id, "Expected media_buy_id in response — pricing validation passed but no media buy created"
+
+
 @then(parsers.parse('the response should include a "{field}"'))
 def then_response_includes_field(ctx: dict, field: str) -> None:
     """Assert response includes the specified field with a non-None value."""

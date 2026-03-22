@@ -182,6 +182,11 @@ _XFAIL_TAGS: dict[str, str] = {
     # proposal_id exists on adcp library CreateMediaBuyRequest but production code
     # never reads it — no proposal store, no allocation derivation, no budget distribution.
     "T-UC-002-alt-proposal": "proposal-based creation not implemented in production — spec-production gap",
+    # FIXME(salesagent-9vgz.23): pricing XOR invariant not enforced during create_media_buy
+    # Schema-level validate_pricing_option() enforces XOR but _validate_pricing_model_selection()
+    # works at ORM level (is_fixed + rate + price_guidance) and doesn't check for both/neither.
+    "T-UC-002-inv-006-3": "pricing XOR invariant (both set) not validated in create flow — spec-production gap",
+    "T-UC-002-inv-006-4": "pricing XOR invariant (neither set) error lacks suggestion field — spec-production gap",
 }
 
 # FIXME(beads-dul): Selective xfail for parametrized scenarios where only
