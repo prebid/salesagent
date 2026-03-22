@@ -162,7 +162,7 @@ class MediaBuyCreateEnv(IntegrationEnv):
 
             step_id = f"test_step_{uuid.uuid4().hex[:8]}"
             # Get the context_id from the most recent context
-            ctx_id = kwargs.get("context_id") or args[0] if args else None
+            ctx_id = kwargs.get("context_id") or (args[0] if args else None)
             if ctx_id is None:
                 # Fallback: create a context too
                 ctx = _create_real_context()
