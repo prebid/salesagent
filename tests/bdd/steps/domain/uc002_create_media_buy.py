@@ -562,3 +562,128 @@ def when_seller_rejects_media_buy(ctx: dict, reason: str) -> None:
     # Store rejection_reason on existing_media_buy so Then steps can find it.
     # MediaBuy model lacks a rejection_reason column — we set it dynamically.
     media_buy.rejection_reason = reason  # type: ignore[attr-defined]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GIVEN steps — creative validation error injection (ext-o, ext-p, ext-q)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given(parsers.parse('a package creative_assignment references creative_id "{creative_id}"'))
+@given(parsers.parse('But a package creative_assignment references creative_id "{creative_id}"'))
+def given_package_references_creative_id(ctx: dict, creative_id: str) -> None:
+    """Add creative_id to the first package's creative_ids list.
+
+    For ext-o: the creative_id won't exist in DB, triggering CREATIVES_NOT_FOUND.
+    """
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
+
+    kwargs = _ensure_request_defaults(ctx)
+    if kwargs.get("packages"):
+        pkg = kwargs["packages"][0]
+        existing = pkg.get("creative_ids") or []
+        existing.append(creative_id)
+        pkg["creative_ids"] = existing
+
+
+@given("a creative's format_id does not match any of the product's supported format_ids")
+@given("But a creative's format_id does not match any of the product's supported format_ids")
+def given_creative_format_mismatch(ctx: dict) -> None:
+    """Create a creative with a format that doesn't match the product's format_ids.
+
+    For ext-p: creates a creative with format "video_640x480" while the product
+    only supports "display_300x250", triggering CREATIVE_FORMAT_MISMATCH.
+    """
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
+    from tests.factories.creative import CreativeFactory
+    from tests.helpers.adcp_factories import create_test_format
+
+    env = ctx["env"]
+    kwargs = _ensure_request_defaults(ctx)
+    # Use a display format (not video) to avoid Assets/Assets5 discriminated union
+    # bug in extract_media_url_and_dimensions. display_728x90 is a valid display format
+    # but not in the product's accepted formats (display_300x250).
+    creative = CreativeFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        creative_id="cr-mismatched-format",
+        format="display_728x90",  # Mismatched — product accepts display_300x250
+        status="approved",
+        data={
+            "assets": {
+                "primary": {
+                    "url": "https://cdn.example.com/leaderboard.png",
+                    "width": 728,
+                    "height": 90,
+                }
+            }
+        },
+    )
+    env._commit_factory_data()
+    # Register the mismatched format spec so pre-validation recognizes it
+    # (without this, _get_format_spec_sync returns None → "unknown format" error
+    # instead of the specific CREATIVE_FORMAT_MISMATCH we want to test)
+    env._format_specs["display_728x90"] = create_test_format(
+        format_id="display_728x90",
+        name="Display 728x90 Leaderboard",
+        type="display",
+    )
+    # Add the creative_id to the first package
+    if kwargs.get("packages"):
+        pkg = kwargs["packages"][0]
+        existing = pkg.get("creative_ids") or []
+        existing.append(creative.creative_id)
+        pkg["creative_ids"] = existing
+
+
+@given("a valid create_media_buy request with inline creatives that passes all validation")
+def given_request_with_inline_creatives(ctx: dict) -> None:
+    """Set up a request with creative_ids referencing existing approved creatives.
+
+    For ext-q: creatives exist and format-match the product, so validation passes.
+    The upload step (adapter.add_creative_assets) is where failure will be injected.
+    Creative data must include proper assets (matching format spec's asset_id="primary")
+    with URL and dimensions so pre-validation passes.
+    """
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
+    from tests.factories.creative import CreativeFactory
+
+    env = ctx["env"]
+    kwargs = _ensure_request_defaults(ctx)
+    # Create a creative that matches the product's format_ids with proper asset data
+    creative = CreativeFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        creative_id="cr-upload-test",
+        agent_url="https://creative.adcontextprotocol.org",
+        format="display_300x250",  # Matches product format
+        status="approved",
+        data={
+            "assets": {
+                "primary": {
+                    "url": "https://cdn.example.com/creative.png",
+                    "width": 300,
+                    "height": 250,
+                }
+            }
+        },
+    )
+    env._commit_factory_data()
+    if kwargs.get("packages"):
+        pkg = kwargs["packages"][0]
+        existing = pkg.get("creative_ids") or []
+        existing.append(creative.creative_id)
+        pkg["creative_ids"] = existing
+
+
+@given("the ad server rejects the creative upload")
+@given("But the ad server rejects the creative upload")
+def given_ad_server_rejects_upload(ctx: dict) -> None:
+    """Configure the mock adapter to fail on creative upload.
+
+    For ext-q: adapter.add_creative_assets raises a non-AdCPError exception,
+    which production code catches and wraps as CREATIVE_UPLOAD_FAILED.
+    """
+    env = ctx["env"]
+    mock_adapter = env.mock["adapter"].return_value
+    mock_adapter.add_creative_assets.side_effect = Exception("Ad server rejected creative: invalid asset dimensions")

@@ -20,6 +20,24 @@ from src.core.schemas._base import CreateMediaBuyError, CreateMediaBuyResult, Cr
 from tests.harness._base import IntegrationEnv
 
 
+def _restore_creative_ids(req: CreateMediaBuyRequest, flat: dict[str, Any]) -> None:
+    """Re-inject creative_ids stripped by model_dump(exclude=True).
+
+    PackageRequest.creative_ids is an internal field with exclude=True,
+    so model_dump drops it. Transport wrappers (A2A, MCP, REST) need it
+    in the flat dict so the re-parsed request preserves creative assignments.
+    """
+    if not req.packages:
+        return
+    flat_pkgs = flat.get("packages")
+    if not flat_pkgs:
+        return
+    for i, pkg in enumerate(req.packages):
+        cids = getattr(pkg, "creative_ids", None)
+        if cids and i < len(flat_pkgs):
+            flat_pkgs[i]["creative_ids"] = cids
+
+
 class MediaBuyCreateEnv(IntegrationEnv):
     """Integration test environment for _create_media_buy_impl.
 
@@ -33,6 +51,7 @@ class MediaBuyCreateEnv(IntegrationEnv):
         "slack": "src.core.tools.media_buy_create.get_slack_notifier",
         "context_mgr": "src.core.tools.media_buy_create.get_context_manager",
         "setup_check": "src.core.tools.media_buy_create.validate_setup_complete",
+        "format_spec": "src.core.tools.media_buy_create._get_format_spec_sync",
     }
     REST_ENDPOINT = "/api/v1/media-buys"
 
@@ -192,6 +211,24 @@ class MediaBuyCreateEnv(IntegrationEnv):
         # Setup checklist: pass by default
         self.mock["setup_check"].return_value = None
 
+        # Format spec: mock _get_format_spec_sync to avoid asyncio.run() inside
+        # running event loop. Returns a valid format keyed by format_id. Tests
+        # for format mismatch (ext-p) override via mock["format_spec"].side_effect.
+        from tests.helpers.adcp_factories import create_test_format
+
+        self._format_specs: dict[str, Any] = {
+            "display_300x250": create_test_format(
+                format_id="display_300x250",
+                name="Display 300x250",
+                type="display",
+            ),
+        }
+
+        def _format_spec_side_effect(agent_url: str, format_id: str) -> Any:
+            return self._format_specs.get(format_id)
+
+        self.mock["format_spec"].side_effect = _format_spec_side_effect
+
     def call_impl(self, **kwargs: Any) -> CreateMediaBuyResult:
         """Call _create_media_buy_impl with real DB."""
         from src.core.tools.media_buy_create import _create_media_buy_impl
@@ -219,6 +256,8 @@ class MediaBuyCreateEnv(IntegrationEnv):
             # A2A wrapper doesn't accept these fields directly
             for key in ("account", "proposal_id", "total_budget"):
                 flat.pop(key, None)
+            # Preserve creative_ids — exclude=True strips them from model_dump
+            _restore_creative_ids(req, flat)
             flat.update(kwargs)
             kwargs = flat
         return asyncio.run(create_media_buy_raw(**kwargs))
@@ -242,6 +281,8 @@ class MediaBuyCreateEnv(IntegrationEnv):
             flat = req.model_dump(mode="json", exclude_none=True)
             for key in ("account", "proposal_id", "total_budget"):
                 flat.pop(key, None)
+            # Preserve creative_ids — exclude=True strips them from model_dump
+            _restore_creative_ids(req, flat)
             flat.update(kwargs)
             kwargs = flat
 
@@ -259,7 +300,10 @@ class MediaBuyCreateEnv(IntegrationEnv):
         kwargs.pop("identity", None)
         req = kwargs.pop("req", None)
         if req is not None:
-            return req.model_dump(mode="json", exclude_none=True)
+            body = req.model_dump(mode="json", exclude_none=True)
+            # Preserve creative_ids — exclude=True strips them from model_dump
+            _restore_creative_ids(req, body)
+            return body
         return kwargs
 
     def parse_rest_response(self, data: dict[str, Any]) -> CreateMediaBuyResult:
