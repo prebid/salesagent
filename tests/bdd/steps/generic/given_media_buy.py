@@ -644,10 +644,25 @@ def given_adapter_success(ctx: dict) -> None:
     }
 
 
+@given("a create_media_buy request")
+def given_bare_create_request(ctx: dict) -> None:
+    """Set up a bare create_media_buy request with valid defaults."""
+    _ensure_request_defaults(ctx)
+
+
 @given(parsers.parse("a valid create_media_buy request that passes all validation"))
 def given_request_passes_validation(ctx: dict) -> None:
     """Set up a request that passes all validation checks."""
     _ensure_request_defaults(ctx)
+
+
+@given("a create_media_buy request that fails validation")
+def given_request_fails_validation(ctx: dict) -> None:
+    """Set up a request that will fail validation (nonexistent product)."""
+    _ensure_request_defaults(ctx)
+    # Override with a product_id that doesn't exist in the tenant — triggers PRODUCT_NOT_FOUND
+    for pkg in ctx["request_kwargs"].get("packages", []):
+        pkg["product_id"] = "nonexistent-product-id"
 
 
 @given(parsers.parse('a media buy exists in "{state}" state'))

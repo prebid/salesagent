@@ -697,6 +697,30 @@ def given_ad_server_rejects_upload(ctx: dict) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# GIVEN steps — transient error injection (inv-018-4)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given(parsers.parse("the system returns a transient error ({error_type})"))
+def given_transient_error(ctx: dict, error_type: str) -> None:
+    """Configure mock adapter to raise a transient error (e.g., RATE_LIMITED).
+
+    Sets the adapter mock's create_media_buy side_effect to an AdCPRateLimitError
+    with retry_after in details, so the error flows through dispatch as a real
+    transient error with recovery hints.
+    """
+    from src.core.exceptions import AdCPRateLimitError
+
+    env = ctx["env"]
+    mock_adapter = env.mock["adapter"].return_value
+    mock_adapter.create_media_buy.side_effect = AdCPRateLimitError(
+        f"{error_type}: too many requests",
+        details={"retry_after": 30, "error_code": error_type},
+        recovery="transient",
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — optimization goal error injection (ext-u, ext-u-event)
 # ═══════════════════════════════════════════════════════════════════════
 

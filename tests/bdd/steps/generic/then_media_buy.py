@@ -359,6 +359,91 @@ def then_response_includes_resolved_start_time(ctx: dict) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Atomic response shape assertions (BR-RULE-018)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@then("the response should have success fields")
+def then_response_has_success_fields(ctx: dict) -> None:
+    """Assert response contains success-only fields (media_buy_id, packages)."""
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a success response but none found"
+    media_buy_id = _get_response_field(resp, "media_buy_id")
+    assert media_buy_id, f"Expected media_buy_id in success response, got: {media_buy_id}"
+    packages = _get_response_field(resp, "packages")
+    assert packages is not None, "Expected packages in success response"
+
+
+@then('the response should NOT have an "errors" field')
+def then_response_no_errors_field(ctx: dict) -> None:
+    """Assert the success response has no errors field."""
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    # Check the inner response (unwrap CreateMediaBuyResult)
+    inner = getattr(resp, "response", resp)
+    errors = getattr(inner, "errors", None)
+    assert not errors, f"Expected no errors on success response, got: {errors}"
+
+
+@then('the response should have an "errors" array')
+def then_response_has_errors_array(ctx: dict) -> None:
+    """Assert the response contains a non-empty errors array."""
+    error_response = ctx.get("error_response")
+    assert error_response is not None, (
+        "Expected error_response in ctx (dispatch promotes errors from CreateMediaBuyError)"
+    )
+    errors = getattr(error_response, "errors", None)
+    assert errors and len(errors) > 0, f"Expected non-empty errors array, got: {errors}"
+
+
+@then("the response should NOT have success fields (media_buy_id, packages)")
+def then_response_no_success_fields(ctx: dict) -> None:
+    """Assert the error response has no success fields (media_buy_id, packages)."""
+    # On error path, ctx["response"] is deleted by dispatch — only ctx["error_response"] remains
+    resp = ctx.get("response")
+    if resp is not None:
+        raise AssertionError("Expected no success response, but ctx['response'] is present")
+    error_response = ctx.get("error_response")
+    if error_response is not None:
+        media_buy_id = getattr(error_response, "media_buy_id", None)
+        assert not media_buy_id, f"Expected no media_buy_id on error response, got: {media_buy_id}"
+        packages = getattr(error_response, "packages", None)
+        assert not packages, f"Expected no packages on error response, got: {packages}"
+
+
+@then('each error should include "suggestion" field')
+def then_each_error_has_suggestion(ctx: dict) -> None:
+    """Assert every error in the errors array includes a suggestion field."""
+    error_response = ctx.get("error_response")
+    assert error_response is not None, "Expected error_response in ctx"
+    errors = getattr(error_response, "errors", [])
+    assert errors, "Expected non-empty errors array"
+    for i, err in enumerate(errors):
+        suggestion = getattr(err, "suggestion", None)
+        assert suggestion, f"Error[{i}] missing 'suggestion' field: {err}"
+
+
+@then('the error should include "retry_after" field')
+def then_error_has_retry_after(ctx: dict) -> None:
+    """Assert the error includes a retry_after hint (transient error recovery)."""
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    # AdCPError stores retry_after in details dict
+    from src.core.exceptions import AdCPError
+
+    if isinstance(error, AdCPError):
+        assert error.details is not None, "Expected error details with retry_after"
+        assert "retry_after" in error.details, f"Expected 'retry_after' in error details, got: {error.details}"
+        assert error.details["retry_after"], "Expected non-zero retry_after value"
+    else:
+        # adcp.types.Error model — check for retry_after attribute
+        retry_after = getattr(error, "retry_after", None)
+        if retry_after is None and hasattr(error, "details"):
+            retry_after = (error.details or {}).get("retry_after")
+        assert retry_after, f"Expected retry_after on error, got: {error}"
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Helpers
 # ═══════════════════════════════════════════════════════════════════════
 
