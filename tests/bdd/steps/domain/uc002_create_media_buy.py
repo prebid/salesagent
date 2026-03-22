@@ -537,26 +537,57 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
     if outcome.startswith("account resolution succeeds"):
         assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
         assert "resolved_account_id" in ctx, "Expected resolved_account_id in ctx"
+    elif outcome.endswith("validation passes"):
+        # Success outcome: "budget validation passes", "pricing validation passes", etc.
+        assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
+        resp = ctx.get("response")
+        assert resp is not None, "Expected a response for success outcome"
     elif outcome.startswith("error "):
-        assert "error" in ctx, f"Expected an error for outcome: {outcome}"
-        from src.core.exceptions import AdCPError
-
-        error = ctx["error"]
-        # Parse expected: "error CODE recovery_hint" or "error CODE with suggestion"
-        parts = outcome[6:].strip().split()
-        expected_code = parts[0]
-        if isinstance(error, AdCPError):
-            assert error.error_code == expected_code, f"Expected error code '{expected_code}', got '{error.error_code}'"
-        # Check recovery hint if specified
-        if len(parts) >= 2 and parts[1] in ("terminal", "correctable", "transient"):
-            if isinstance(error, AdCPError):
-                assert error.recovery == parts[1], f"Expected recovery '{parts[1]}', got '{error.recovery}'"
-        # Check "with suggestion" if specified
-        if "with suggestion" in outcome.lower() or "with" in parts:
-            if isinstance(error, AdCPError) and error.details:
-                assert "suggestion" in error.details, f"Expected suggestion in details: {error.details}"
+        _assert_error_outcome(ctx, outcome)
     else:
         raise ValueError(f"Unknown outcome: {outcome}")
+
+
+def _assert_error_outcome(ctx: dict, outcome: str) -> None:
+    """Assert error outcome, supporting both AdCPError exceptions and Error pydantic models."""
+    from src.core.exceptions import AdCPError
+
+    assert "error" in ctx, f"Expected an error for outcome: {outcome}"
+    error = ctx["error"]
+
+    # Parse expected: "error CODE recovery_hint" or "error CODE with suggestion"
+    parts = outcome[6:].strip().split()
+    expected_code = parts[0]
+
+    # Extract error code from either AdCPError exception or Error pydantic model
+    if isinstance(error, AdCPError):
+        actual_code = error.error_code
+    elif hasattr(error, "code"):
+        actual_code = error.code
+    else:
+        raise AssertionError(f"Error has no code attribute: {type(error).__name__}: {error}")
+    assert actual_code == expected_code, f"Expected error code '{expected_code}', got '{actual_code}'"
+
+    # Check recovery hint if specified
+    if len(parts) >= 2 and parts[1] in ("terminal", "correctable", "transient"):
+        if isinstance(error, AdCPError):
+            actual_recovery = error.recovery
+        elif hasattr(error, "recovery"):
+            actual_recovery = str(error.recovery) if error.recovery is not None else None
+        else:
+            actual_recovery = None
+        assert actual_recovery == parts[1], f"Expected recovery '{parts[1]}', got '{actual_recovery}'"
+
+    # Check "with suggestion" if specified
+    if "with suggestion" in outcome.lower():
+        if isinstance(error, AdCPError):
+            assert error.details and "suggestion" in error.details, (
+                f"Expected suggestion in details: {getattr(error, 'details', None)}"
+            )
+        elif hasattr(error, "suggestion"):
+            assert error.suggestion is not None, f"Expected suggestion field on error, got None. Error: {error}"
+        else:
+            raise AssertionError(f"Error has no suggestion attribute: {type(error).__name__}")
 
 
 # ═══════════════════════════════════════════════════════════════════════

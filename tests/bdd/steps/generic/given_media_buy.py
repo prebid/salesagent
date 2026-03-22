@@ -321,6 +321,14 @@ def given_zero_budget(ctx: dict) -> None:
         pkg["budget"] = 0
 
 
+@given(parsers.parse("a package budget is set to {value}"))
+def given_package_budget_set_to(ctx: dict, value: str) -> None:
+    """Set first package budget to the given value (supports float)."""
+    kwargs = _ensure_request_defaults(ctx)
+    if kwargs.get("packages"):
+        kwargs["packages"][0]["budget"] = float(value)
+
+
 @given(parsers.parse('a package references product_id "{product_id}" which does not exist'))
 @given(parsers.parse('But a package references product_id "{product_id}" which does not exist'))
 def given_nonexistent_product(ctx: dict, product_id: str) -> None:
