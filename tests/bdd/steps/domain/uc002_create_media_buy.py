@@ -687,3 +687,44 @@ def given_ad_server_rejects_upload(ctx: dict) -> None:
     env = ctx["env"]
     mock_adapter = env.mock["adapter"].return_value
     mock_adapter.add_creative_assets.side_effect = Exception("Ad server rejected creative: invalid asset dimensions")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GIVEN steps — optimization goal error injection (ext-u, ext-u-event)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given(parsers.parse('a package has optimization_goal with kind "{kind}" and metric "{metric}" not in supported set'))
+@given(
+    parsers.parse('But a package has optimization_goal with kind "{kind}" and metric "{metric}" not in supported set')
+)
+def given_unsupported_optimization_metric(ctx: dict, kind: str, metric: str) -> None:
+    """Add an optimization_goal with an unsupported metric to the first package.
+
+    SPEC-PRODUCTION GAP: optimization_goals is not in adcp v3.6.0 or production
+    schemas. PackageRequest(extra='forbid') will reject this field with a generic
+    Pydantic validation error, not the spec-expected UNSUPPORTED_FEATURE.
+    """
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
+
+    kwargs = _ensure_request_defaults(ctx)
+    if kwargs.get("packages"):
+        kwargs["packages"][0]["optimization_goals"] = [{"kind": kind, "metric": metric, "priority": 1}]
+
+
+@given('a package has optimization_goal with kind "event" and unregistered event_source_id')
+@given('But a package has optimization_goal with kind "event" and unregistered event_source_id')
+def given_unregistered_event_source(ctx: dict) -> None:
+    """Add an optimization_goal with an unregistered event_source_id to the first package.
+
+    SPEC-PRODUCTION GAP: optimization_goals is not in adcp v3.6.0 or production
+    schemas. PackageRequest(extra='forbid') will reject this field with a generic
+    Pydantic validation error, not the spec-expected INVALID_REQUEST.
+    """
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
+
+    kwargs = _ensure_request_defaults(ctx)
+    if kwargs.get("packages"):
+        kwargs["packages"][0]["optimization_goals"] = [
+            {"kind": "event", "event_source_id": "evt-unregistered-999", "priority": 1}
+        ]

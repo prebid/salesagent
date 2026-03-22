@@ -162,6 +162,17 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-002-ext-n": "pricing validation returns generic validation_error, not PRICING_ERROR",
     "T-UC-002-ext-n-bid": "pricing validation returns generic validation_error, not PRICING_ERROR",
     "T-UC-002-ext-n-floor": "pricing validation returns generic validation_error, not PRICING_ERROR",
+    # FIXME(salesagent-9vgz.15): production errors lack suggestion field
+    # AdCPNotFoundError/AdCPValidationError/AdCPAdapterError raised with details={"error_code": ...}
+    # but no details["suggestion"]. Spec requires suggestion for buyer remediation.
+    "T-UC-002-ext-o": "CREATIVES_NOT_FOUND error lacks suggestion field",
+    "T-UC-002-ext-p": "CREATIVE_FORMAT_MISMATCH error lacks suggestion field",
+    "T-UC-002-ext-q": "CREATIVE_UPLOAD_FAILED error lacks suggestion field",
+    # FIXME(salesagent-9vgz.17): optimization_goals not in adcp v3.6.0 or production schemas
+    # PackageRequest(extra='forbid') rejects the field with generic validation error,
+    # not spec-expected UNSUPPORTED_FEATURE / INVALID_REQUEST with structured codes.
+    "T-UC-002-ext-u": "optimization_goals not in production schemas — spec-production gap",
+    "T-UC-002-ext-u-event": "optimization_goals not in production schemas — spec-production gap",
 }
 
 # FIXME(beads-dul): Selective xfail for parametrized scenarios where only
