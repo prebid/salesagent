@@ -150,6 +150,14 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-005-ext-b-input-empty": "specific validation error codes not implemented",
     "T-UC-005-ext-b-input-invalid": "specific validation error codes not implemented",
     "T-UC-005-ext-b-input-noid": "specific validation error codes not implemented",
+    # FIXME(salesagent-9vgz.4): currency validation not implemented in production
+    # Production code accepts any currency on pricing options without checking
+    # against the tenant's CurrencyLimit table. Spec expects UNSUPPORTED_FEATURE error.
+    "T-UC-002-ext-d": "currency validation against CurrencyLimit not implemented — spec-production gap",
+    # FIXME(salesagent-9vgz.4): duplicate product_id error lacks suggestion field
+    # Production correctly detects duplicate product_ids and raises ValueError with
+    # good message, but the error is not a structured AdCPError — no suggestion field.
+    "T-UC-002-ext-e": "duplicate product_id error lacks suggestion field — spec-production gap",
     # FIXME(salesagent-9vgz.10): production returns validation_error, spec expects BUDGET_TOO_LOW
     "T-UC-002-ext-k": "daily spend cap returns generic validation_error, not BUDGET_TOO_LOW",
     # FIXME(salesagent-9vgz.10): proposal validation not implemented in production

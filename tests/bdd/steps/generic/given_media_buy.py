@@ -362,7 +362,7 @@ def given_unsupported_currency(ctx: dict, currency: str) -> None:
     )
     env._commit_factory_data()
     if kwargs.get("packages"):
-        kwargs["packages"][0]["pricing_option_id"] = po.pricing_option_id
+        kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(po)
 
 
 @given(parsers.parse('both packages reference the same product_id "{product_id}"'))
