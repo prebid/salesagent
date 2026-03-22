@@ -948,7 +948,11 @@ def then_response_has_creative_assignments(ctx: dict) -> None:
     media_buy_id = _get_response_field_from_resp(resp, "media_buy_id")
     assert media_buy_id, "No media_buy_id in response — media buy not created"
     status = _get_response_field_from_resp(resp, "status")
-    assert status is not None, "No status in response"
+    # Inline creative uploads trigger pending_activation (creatives synced but
+    # not yet approved by creative agent) or completed (auto-approved tenant).
+    assert status in ("pending_activation", "completed", "activating"), (
+        f"Expected activation-related status, got '{status}'"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1015,7 +1019,8 @@ def then_budget_distributed_per_allocations(ctx: dict) -> None:
     if isinstance(total_budget, dict):
         expected_total = total_budget.get("amount", 0)
     else:
-        expected_total = 0
+        expected_total = getattr(total_budget, "amount", None)
+        assert expected_total is not None, f"Cannot extract amount from total_budget: {total_budget!r}"
     budget_sum = sum((p.get("budget", 0) if isinstance(p, dict) else getattr(p, "budget", 0) or 0) for p in packages)
     assert abs(budget_sum - expected_total) < 0.01, f"Expected budget sum {expected_total}, got {budget_sum}"
 
@@ -1032,7 +1037,7 @@ def then_response_has_derived_packages(ctx: dict) -> None:
     media_buy_id = _get_response_field_from_resp(resp, "media_buy_id")
     assert media_buy_id, "No media_buy_id in response"
     packages = _get_response_field_from_resp(resp, "packages")
-    assert packages is not None, "No packages in response"
+    assert packages is not None and len(packages) > 0, "No derived packages in response"
 
 
 # ═══════════════════════════════════════════════════════════════════════
