@@ -371,7 +371,14 @@ class BaseTestEnv:
         }
         error_cls = STATUS_TO_ERROR.get(status_code, Exception)
         message = data.get("message", data.get("error", str(data)))
-        return error_cls(message)
+        details = data.get("details")
+        recovery = data.get("recovery")
+        error_kwargs: dict[str, Any] = {}
+        if details is not None:
+            error_kwargs["details"] = details
+        if recovery is not None:
+            error_kwargs["recovery"] = recovery
+        return error_cls(message, **error_kwargs)
 
     def get_rest_client(self) -> Any:
         """Return FastAPI TestClient with auth dependency overridden.

@@ -419,14 +419,21 @@ def when_send_create_media_buy(ctx: dict) -> None:
 
 def _dispatch_create_media_buy(ctx: dict) -> None:
     """Build CreateMediaBuyRequest from ctx and dispatch through harness."""
+    from pydantic import ValidationError
+
     from tests.bdd.steps.generic._dispatch import dispatch_request
 
     request_kwargs = ctx.get("request_kwargs", {})
 
-    # Build the request object
+    # Build the request object — may raise ValidationError for malformed inputs
+    # (e.g., start_time="ASAP" violates Literal["asap"] | AwareDatetime)
     from src.core.schemas import CreateMediaBuyRequest
 
-    req = CreateMediaBuyRequest(**request_kwargs)
+    try:
+        req = CreateMediaBuyRequest(**request_kwargs)
+    except ValidationError as exc:
+        ctx["error"] = exc
+        return
 
     # Check for no-auth scenario
     if ctx.get("has_auth") is False:

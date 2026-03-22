@@ -24,6 +24,11 @@ def _get_error_code(error: object) -> str:
     from src.core.exceptions import AdCPError
 
     if isinstance(error, AdCPError):
+        # Production code often stores the specific error code in details["error_code"]
+        # (e.g., CREATIVES_NOT_FOUND, CREATIVE_FORMAT_MISMATCH) while the exception
+        # class has a generic code (NOT_FOUND, VALIDATION_ERROR). Prefer the specific code.
+        if error.details and "error_code" in error.details:
+            return error.details["error_code"]
         return error.error_code
     # adcp.types.Error model (from partial success response.errors)
     if hasattr(error, "code") and not isinstance(error, Exception):
@@ -59,7 +64,11 @@ def _get_error_dict(error: Exception) -> dict:
         d = error.to_dict()
         # AdCPError.to_dict() has: error_code, message, recovery, details
         # Map to the assertion vocabulary used in feature files
-        d["code"] = d.get("error_code", "")
+        # Prefer specific code from details["error_code"] over generic class code
+        if error.details and "error_code" in error.details:
+            d["code"] = error.details["error_code"]
+        else:
+            d["code"] = d.get("error_code", "")
         if error.details and "suggestion" in error.details:
             d["suggestion"] = error.details["suggestion"]
         return d

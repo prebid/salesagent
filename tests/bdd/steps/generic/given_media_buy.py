@@ -172,6 +172,14 @@ def given_request_with_start_time(ctx: dict, value: str) -> None:
     kwargs["start_time"] = value
 
 
+@given(parsers.parse("a valid create_media_buy request with total budget {amount:d}"))
+def given_request_with_total_budget(ctx: dict, amount: int) -> None:
+    """Set up request with a specific total budget amount on the first package."""
+    kwargs = _ensure_request_defaults(ctx)
+    if kwargs.get("packages"):
+        kwargs["packages"][0]["budget"] = float(amount)
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Package construction
 # ═══════════════════════════════════════════════════════════════════════

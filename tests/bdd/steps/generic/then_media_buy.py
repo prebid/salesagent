@@ -31,6 +31,26 @@ def then_pricing_validation_passes(ctx: dict) -> None:
     assert media_buy_id, "Expected media_buy_id in response — pricing validation passed but no media buy created"
 
 
+@then("the budget validation should pass")
+def then_budget_validation_passes(ctx: dict) -> None:
+    """Assert budget validation passed — no error, response has media_buy_id."""
+    assert "error" not in ctx, f"Expected budget validation to pass but got error: {ctx.get('error')}"
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response but none found (budget validation may have failed silently)"
+    media_buy_id = _get_response_field(resp, "media_buy_id")
+    assert media_buy_id, "Expected media_buy_id in response — budget validation passed but no media buy created"
+
+
+@then("the date validation should pass")
+def then_date_validation_passes(ctx: dict) -> None:
+    """Assert date validation passed — no error, response has media_buy_id."""
+    assert "error" not in ctx, f"Expected date validation to pass but got error: {ctx.get('error')}"
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response but none found (date validation may have failed silently)"
+    media_buy_id = _get_response_field(resp, "media_buy_id")
+    assert media_buy_id, "Expected media_buy_id in response — date validation passed but no media buy created"
+
+
 @then(parsers.parse('the response should include a "{field}"'))
 def then_response_includes_field(ctx: dict, field: str) -> None:
     """Assert response includes the specified field with a non-None value."""
