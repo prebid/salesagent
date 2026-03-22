@@ -100,6 +100,7 @@ TASK_INDEX=0
 TOTAL_COMPLETED=0
 TOTAL_FAILED=0
 PIPELINE_HALT=false
+PIPELINE_START=$(date +%s)
 
 while [ "$TASK_INDEX" -lt "$TOTAL" ] && [ "$PIPELINE_HALT" = false ]; do
 
@@ -131,6 +132,7 @@ while [ "$TASK_INDEX" -lt "$TOTAL" ] && [ "$PIPELINE_HALT" = false ]; do
 
     echo ""
     echo "[$(( TASK_INDEX + 1 ))/$TOTAL] $TASK_ID: ${TITLE:-???}"
+    TASK_START=$(date +%s)
 
     $CLAUDE "/dev-practices:execute $TASK_ID
 
@@ -147,17 +149,30 @@ If production code doesn't implement expected behavior (spec-production gap), re
 $GIT_INSTRUCTION" \
       > "$LOG" 2>&1 || true
 
-    # Check if the beads task was actually closed (not log content — ask beads directly)
+    # Report timing
+    TASK_END=$(date +%s)
+    ELAPSED=$(( TASK_END - TASK_START ))
+    ELAPSED_MIN=$(( ELAPSED / 60 ))
+    ELAPSED_SEC=$(( ELAPSED % 60 ))
+    LOG_SIZE=$(wc -c < "$LOG" 2>/dev/null | tr -d ' ' || echo "0")
+    LOG_KB=$(( LOG_SIZE / 1024 ))
+
+    # Check if the beads task was actually closed (ask beads directly)
     TASK_STATUS=$(bd show "$TASK_ID" 2>/dev/null | head -1 | grep -o "CLOSED" || true)
     if [ "$TASK_STATUS" = "CLOSED" ]; then
-      echo "  [done]"
+      echo "  ✓ done (${ELAPSED_MIN}m${ELAPSED_SEC}s, ${LOG_KB}KB log)"
       BATCH_COMPLETED=$((BATCH_COMPLETED + 1))
     else
-      echo "  [FAIL] — check $LOG"
+      echo "  ✗ FAIL (${ELAPSED_MIN}m${ELAPSED_SEC}s, ${LOG_KB}KB log) — check $LOG"
       BATCH_FAILED=$((BATCH_FAILED + 1))
     fi
 
     TASK_INDEX=$((TASK_INDEX + 1))
+
+    # Running progress line
+    PIPELINE_ELAPSED=$(( $(date +%s) - PIPELINE_START ))
+    PIPELINE_MIN=$(( PIPELINE_ELAPSED / 60 ))
+    echo "  ── progress: $((TOTAL_COMPLETED + TOTAL_FAILED + BATCH_COMPLETED + BATCH_FAILED))/$TOTAL done, ${PIPELINE_MIN}m elapsed ──"
   done
 
   TOTAL_COMPLETED=$((TOTAL_COMPLETED + BATCH_COMPLETED))
