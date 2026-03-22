@@ -119,6 +119,16 @@ while [ "$TASK_INDEX" -lt "$TOTAL" ] && [ "$PIPELINE_HALT" = false ]; do
     LOG="$LOGDIR/task-$TASK_ID.log"
     TITLE=$(bd show "$TASK_ID" 2>/dev/null | head -1 | sed 's/^[^·]*· //' | sed 's/ *\[.*//' || true)
 
+    # Skip already-closed tasks
+    ALREADY_CLOSED=$(bd show "$TASK_ID" 2>/dev/null | head -1 | grep -o "CLOSED" || true)
+    if [ "$ALREADY_CLOSED" = "CLOSED" ]; then
+      echo ""
+      echo "[$(( TASK_INDEX + 1 ))/$TOTAL] $TASK_ID: ${TITLE:-???} [SKIP — already closed]"
+      BATCH_COMPLETED=$((BATCH_COMPLETED + 1))
+      TASK_INDEX=$((TASK_INDEX + 1))
+      continue
+    fi
+
     echo ""
     echo "[$(( TASK_INDEX + 1 ))/$TOTAL] $TASK_ID: ${TITLE:-???}"
 
@@ -137,8 +147,9 @@ If production code doesn't implement expected behavior (spec-production gap), re
 $GIT_INSTRUCTION" \
       > "$LOG" 2>&1 || true
 
-    # Check if task was closed (success indicator)
-    if grep -q "Closed" "$LOG" 2>/dev/null; then
+    # Check if the beads task was actually closed (not log content — ask beads directly)
+    TASK_STATUS=$(bd show "$TASK_ID" 2>/dev/null | head -1 | grep -o "CLOSED" || true)
+    if [ "$TASK_STATUS" = "CLOSED" ]; then
       echo "  [done]"
       BATCH_COMPLETED=$((BATCH_COMPLETED + 1))
     else
@@ -290,8 +301,8 @@ if [ "$TOTAL_FAILED" -gt 0 ]; then
   echo "Failed tasks:"
   for LOG in "$LOGDIR"/task-*.log; do
     TASK=$(basename "$LOG" .log | sed 's/task-//')
-    # Check if task was actually closed
-    if ! grep -q "Closed" "$LOG" 2>/dev/null; then
+    TSTATUS=$(bd show "$TASK" 2>/dev/null | head -1 | grep -o "CLOSED" || true)
+    if [ "$TSTATUS" != "CLOSED" ]; then
       echo "  - $TASK → $LOG"
     fi
   done
