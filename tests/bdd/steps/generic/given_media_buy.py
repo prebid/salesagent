@@ -84,6 +84,13 @@ def given_tenant_manual_approval(ctx: dict) -> None:
         env._commit_factory_data()
         env._identity_cache.clear()
         env._tenant_overrides["human_review_required"] = True
+        # Production code checks: manual_approval_required AND
+        # "create_media_buy" in adapter.manual_approval_operations.
+        # The mock adapter defaults to manual_approval_operations=[],
+        # so we must also configure the adapter mock for manual approval.
+        adapter_mock = env.mock["adapter"].return_value
+        adapter_mock.manual_approval_required = True
+        adapter_mock.manual_approval_operations = {"create_media_buy", "update_media_buy"}
 
 
 @given(parsers.parse("the tenant has max_daily_package_spend configured at {amount:d}"))

@@ -277,6 +277,17 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     item.add_marker(pytest.mark.xfail(reason="REST endpoint drops filter params", strict=True))
                     break
 
+        # FIXME(salesagent-9vgz.1): UC-002 alt-manual: workflow_step_id is exclude=True
+        # in CreateMediaBuySuccess schema, so MCP/REST serialization drops it.
+        # impl/a2a return raw Pydantic objects where the field is still accessible.
+        if (is_mcp or is_rest) and "T-UC-002-alt-manual" in marker_names:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="workflow_step_id excluded from MCP/REST serialization (exclude=True)",
+                    strict=True,
+                )
+            )
+
         # --- UC-005: disclosure/asset scenarios with partial impl ---
         # FIXME(beads-dul): disclosure_positions and brief/catalog asset types
         # partially implemented — some transport variants pass, others fail.

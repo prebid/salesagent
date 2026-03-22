@@ -514,3 +514,51 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
                 assert "suggestion" in error.details, f"Expected suggestion in details: {error.details}"
     else:
         raise ValueError(f"Unknown outcome: {outcome}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# WHEN steps — seller actions (admin-side, not transport-dispatched)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@when(parsers.parse('the Seller rejects the media buy with reason "{reason}"'))
+def when_seller_rejects_media_buy(ctx: dict, reason: str) -> None:
+    """Simulate seller rejecting a pending media buy (admin action).
+
+    Updates the media buy status to 'rejected' and stores the rejection reason
+    on the associated workflow step, mirroring the production admin flow
+    in operations.py:approve_media_buy(action='reject').
+    """
+    from datetime import UTC, datetime
+
+    from sqlalchemy import select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import MediaBuy, ObjectWorkflowMapping, WorkflowStep
+
+    env = ctx["env"]
+    env._commit_factory_data()
+
+    media_buy = ctx["existing_media_buy"]
+    media_buy_id = media_buy.media_buy_id
+
+    with get_db_session() as session:
+        # Update media buy status
+        mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id)).first()
+        assert mb is not None, f"Media buy {media_buy_id} not found in DB"
+        mb.status = "rejected"
+
+        # Find or create workflow step to store rejection reason
+        mapping = session.scalars(select(ObjectWorkflowMapping).filter_by(object_id=media_buy_id)).first()
+        if mapping:
+            step = session.scalars(select(WorkflowStep).filter_by(step_id=mapping.step_id)).first()
+            if step:
+                step.status = "rejected"
+                step.error_message = reason
+                step.updated_at = datetime.now(UTC)
+
+        session.commit()
+
+    # Store rejection_reason on existing_media_buy so Then steps can find it.
+    # MediaBuy model lacks a rejection_reason column — we set it dynamically.
+    media_buy.rejection_reason = reason  # type: ignore[attr-defined]

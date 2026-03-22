@@ -20,7 +20,7 @@ def then_response_status(ctx: dict, status: str) -> None:
     - UC-004 (GetMediaBuyDeliveryResponse): has explicit status field
     """
     resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
+    assert resp is not None, f"Expected a response but none found (error={ctx.get('error')!r})"
 
     # If response has an explicit status field, check it directly
     if hasattr(resp, "status"):
