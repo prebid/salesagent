@@ -268,6 +268,79 @@ def then_media_buy_persisted_with_status(ctx: dict, status: str) -> None:
         assert mb.status == status, f"Expected status '{status}', got '{mb.status}'"
 
 
+@then("the package records should be persisted")
+def then_package_records_persisted(ctx: dict) -> None:
+    """Assert media buy packages were persisted in the database."""
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response to check package persistence"
+    media_buy_id = _get_response_field(resp, "media_buy_id")
+    assert media_buy_id, "No media_buy_id in response to verify package persistence"
+
+    from sqlalchemy import func, select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import MediaPackage
+
+    with get_db_session() as session:
+        count = session.scalar(select(func.count()).select_from(MediaPackage).filter_by(media_buy_id=media_buy_id))
+        assert count and count > 0, f"No package records found for media buy {media_buy_id}"
+
+
+@then("no package records should be persisted")
+def then_no_package_records_persisted(ctx: dict) -> None:
+    """Assert no package records were created for the tenant."""
+    from sqlalchemy import func, select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import MediaBuy, MediaPackage
+
+    tenant = ctx.get("tenant")
+    assert tenant is not None, "No tenant in ctx"
+    with get_db_session() as session:
+        count = session.scalar(
+            select(func.count())
+            .select_from(MediaPackage)
+            .join(MediaBuy, MediaPackage.media_buy_id == MediaBuy.media_buy_id)
+            .filter(MediaBuy.tenant_id == tenant.tenant_id)
+        )
+        # Allow existing packages created by Given steps
+        existing_count = 0
+        if ctx.get("existing_media_buy"):
+            existing_mb = ctx["existing_media_buy"]
+            existing_count = len(getattr(existing_mb, "packages", []) or [])
+        assert count == existing_count, f"Expected {existing_count} package record(s) in DB, found {count}"
+
+
+@then("the creative assignment records should be persisted")
+def then_creative_assignment_records_persisted(ctx: dict) -> None:
+    """Assert creative assignment records were persisted in the database.
+
+    Only asserts if the request included creative_ids in its packages.
+    If no creative_ids were requested, this step passes (no assignments expected).
+    """
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response to check creative assignment persistence"
+    media_buy_id = _get_response_field(resp, "media_buy_id")
+    assert media_buy_id, "No media_buy_id in response"
+
+    # Check if the request included creative_ids
+    request_kwargs = ctx.get("request_kwargs", {})
+    has_creative_ids = any(pkg.get("creative_ids") for pkg in request_kwargs.get("packages", []))
+    if not has_creative_ids:
+        return  # No creative assignments expected
+
+    from sqlalchemy import func, select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import CreativeAssignment
+
+    with get_db_session() as session:
+        count = session.scalar(
+            select(func.count()).select_from(CreativeAssignment).filter_by(media_buy_id=media_buy_id)
+        )
+        assert count and count > 0, f"No creative assignment records found for media buy {media_buy_id}"
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Response field rejection
 # ═══════════════════════════════════════════════════════════════════════

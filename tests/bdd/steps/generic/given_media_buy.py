@@ -77,6 +77,7 @@ def given_tenant_auto_approval(ctx: dict) -> None:
 
 @given(parsers.parse('the tenant has "human_review_required" set to true'))
 @given("tenant human_review_required is true")
+@given("approval path is manual")
 def given_tenant_manual_approval(ctx: dict) -> None:
     """Configure tenant for manual approval."""
     tenant = ctx.get("tenant")
@@ -634,14 +635,20 @@ def given_adapter_error(ctx: dict) -> None:
 
 @given("the ad server adapter returns success")
 def given_adapter_success(ctx: dict) -> None:
-    """Ensure adapter returns success (reset any error injection)."""
+    """Ensure adapter returns success (reset any error injection).
+
+    Restores the original side_effect callback from harness configuration.
+    The harness stores the original callback as ``_original_create_side_effect``
+    on the mock adapter so it can be restored after error injection.
+    """
     env = ctx["env"]
     mock_adapter = env.mock["adapter"].return_value
-    mock_adapter.create_media_buy.side_effect = None
-    mock_adapter.create_media_buy.return_value = {
-        "platform_order_id": "mock_order_001",
-        "platform_line_item_ids": {},
-    }
+    original = getattr(mock_adapter, "_original_create_side_effect", None)
+    if original is not None:
+        mock_adapter.create_media_buy.side_effect = original
+    else:
+        # Fallback: just clear error injection; return_value may already be set
+        mock_adapter.create_media_buy.side_effect = None
 
 
 @given("a create_media_buy request")

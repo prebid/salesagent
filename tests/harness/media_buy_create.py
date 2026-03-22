@@ -130,6 +130,8 @@ class MediaBuyCreateEnv(IntegrationEnv):
             )
 
         mock_adapter.create_media_buy.side_effect = _adapter_create_response
+        # Save original side_effect so Given steps can restore it after error injection
+        mock_adapter._original_create_side_effect = _adapter_create_response
         mock_adapter.validate_media_buy_request.return_value = None
         mock_adapter.add_creative_assets.return_value = None
         mock_adapter.associate_creatives.return_value = None
