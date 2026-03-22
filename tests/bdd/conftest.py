@@ -150,6 +150,11 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-005-ext-b-input-empty": "specific validation error codes not implemented",
     "T-UC-005-ext-b-input-invalid": "specific validation error codes not implemented",
     "T-UC-005-ext-b-input-noid": "specific validation error codes not implemented",
+    # FIXME(salesagent-9vgz.10): production returns validation_error, spec expects BUDGET_TOO_LOW
+    "T-UC-002-ext-k": "daily spend cap returns generic validation_error, not BUDGET_TOO_LOW",
+    # FIXME(salesagent-9vgz.10): proposal validation not implemented in production
+    "T-UC-002-ext-l": "proposal_id validation not implemented in production",
+    "T-UC-002-ext-m": "proposal budget guidance not implemented in production",
 }
 
 # FIXME(beads-dul): Selective xfail for parametrized scenarios where only

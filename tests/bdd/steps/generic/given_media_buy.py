@@ -95,12 +95,23 @@ def given_tenant_manual_approval(ctx: dict) -> None:
 
 @given(parsers.parse("the tenant has max_daily_package_spend configured at {amount:d}"))
 def given_tenant_max_daily_spend(ctx: dict, amount: int) -> None:
-    """Configure tenant max daily package spend."""
+    """Configure tenant max daily package spend on the CurrencyLimit (USD)."""
+    from decimal import Decimal
+
+    from sqlalchemy import select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import CurrencyLimit
+
     tenant = ctx.get("tenant")
-    if tenant:
-        tenant.max_daily_package_spend = amount
-        env = ctx["env"]
-        env._commit_factory_data()
+    assert tenant is not None, "No tenant in ctx — Given step ordering error"
+    env = ctx["env"]
+    env._commit_factory_data()
+    with get_db_session() as session:
+        cl = session.scalars(select(CurrencyLimit).filter_by(tenant_id=tenant.tenant_id, currency_code="USD")).first()
+        assert cl is not None, f"No CurrencyLimit(USD) for tenant {tenant.tenant_id}"
+        cl.max_daily_package_spend = Decimal(str(amount))
+        session.commit()
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -376,6 +387,49 @@ def given_high_daily_spend(ctx: dict, budget: int, days: int, daily: int) -> Non
     kwargs["end_time"] = _future(1 + days).isoformat()
     if kwargs.get("packages"):
         kwargs["packages"][0]["budget"] = float(budget)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Proposal-related request construction
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given(parsers.parse('a valid create_media_buy request with proposal_id "{proposal_id}"'))
+def given_request_with_proposal_id(ctx: dict, proposal_id: str) -> None:
+    """Set up a create_media_buy request referencing a proposal_id."""
+    kwargs = _ensure_request_defaults(ctx)
+    kwargs["proposal_id"] = proposal_id
+
+
+@given(parsers.parse("a valid create_media_buy request with proposal_id and total_budget amount {amount:d}"))
+def given_request_with_proposal_and_budget(ctx: dict, amount: int) -> None:
+    """Set up a create_media_buy request with proposal_id and total_budget."""
+    kwargs = _ensure_request_defaults(ctx)
+    kwargs["proposal_id"] = f"prop-{uuid.uuid4().hex[:8]}"
+    kwargs["total_budget"] = {"amount": float(amount), "currency": "USD"}
+
+
+@given(parsers.parse('proposal "{proposal_id}" does not exist or has expired'))
+@given(parsers.parse('But proposal "{proposal_id}" does not exist or has expired'))
+def given_proposal_not_exists(ctx: dict, proposal_id: str) -> None:
+    """Mark that the referenced proposal does not exist.
+
+    SPEC-PRODUCTION GAP: Production has no proposal store — proposal_id is
+    accepted but never validated. This step is a no-op; the scenario will
+    xfail at the Then assertion because production won't raise PROPOSAL_EXPIRED.
+    """
+    ctx["expected_proposal_missing"] = proposal_id
+
+
+@given(parsers.parse("the proposal's total_budget_guidance.min is {amount:d}"))
+@given(parsers.parse("But the proposal's total_budget_guidance.min is {amount:d}"))
+def given_proposal_budget_guidance_min(ctx: dict, amount: int) -> None:
+    """Set expected proposal budget guidance minimum.
+
+    SPEC-PRODUCTION GAP: Production has no proposal budget guidance.
+    This step records the expected minimum but production won't validate against it.
+    """
+    ctx["expected_budget_guidance_min"] = amount
 
 
 # ═══════════════════════════════════════════════════════════════════════

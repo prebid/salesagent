@@ -153,7 +153,9 @@ class MediaBuyCreateEnv(IntegrationEnv):
             mock_context.context_id = ctx_id
             return mock_context
 
-        mock_ctx_mgr.get_or_create_context.side_effect = _create_real_context
+        # Production calls create_context() + get_context(), not get_or_create_context()
+        mock_ctx_mgr.create_context.side_effect = _create_real_context
+        mock_ctx_mgr.get_context.return_value = None  # No pre-existing context
 
         def _create_real_step(*args: Any, **kwargs: Any) -> MagicMock:
             """Create a real WorkflowStep row so ObjectWorkflowMapping FK succeeds."""
