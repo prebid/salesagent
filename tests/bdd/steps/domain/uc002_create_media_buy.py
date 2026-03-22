@@ -733,6 +733,168 @@ def given_ad_server_rejects_upload(ctx: dict) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# GIVEN steps — creative assignment validation (inv-026-1, inv-026-2, inv-026-4)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given("all referenced creatives exist in valid state with compatible formats")
+def given_creatives_valid_and_compatible(ctx: dict) -> None:
+    """Create approved creatives with format matching the product's accepted formats.
+
+    For inv-026-1: creatives are valid (status=approved) and format-compatible
+    (display_300x250 matches default product), so creative assignment should proceed.
+    """
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
+    from tests.factories.creative import CreativeFactory
+
+    env = ctx["env"]
+    kwargs = _ensure_request_defaults(ctx)
+    creative = CreativeFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        creative_id="cr-valid-compatible",
+        format="display_300x250",  # Matches default product format
+        status="approved",
+        data={
+            "assets": {
+                "primary": {
+                    "url": "https://cdn.example.com/valid-creative.png",
+                    "width": 300,
+                    "height": 250,
+                }
+            }
+        },
+    )
+    env._commit_factory_data()
+    if kwargs.get("packages"):
+        pkg = kwargs["packages"][0]
+        existing = pkg.get("creative_ids") or []
+        existing.append(creative.creative_id)
+        pkg["creative_ids"] = existing
+
+
+@given('a referenced creative is in "error" state')
+@given('But a referenced creative is in "error" state')
+def given_creative_in_error_state(ctx: dict) -> None:
+    """Create a creative with status=error to trigger BR-RULE-026 rejection.
+
+    For inv-026-2: production code in _validate_creatives_before_adapter_call
+    rejects creatives in "error" or "rejected" state with INVALID_CREATIVES.
+    """
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
+    from tests.factories.creative import CreativeFactory
+
+    env = ctx["env"]
+    kwargs = _ensure_request_defaults(ctx)
+    creative = CreativeFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        creative_id="cr-error-state",
+        format="display_300x250",  # Format is fine — status is the problem
+        status="error",
+        data={
+            "assets": {
+                "primary": {
+                    "url": "https://cdn.example.com/error-creative.png",
+                    "width": 300,
+                    "height": 250,
+                }
+            }
+        },
+    )
+    env._commit_factory_data()
+    if kwargs.get("packages"):
+        pkg = kwargs["packages"][0]
+        existing = pkg.get("creative_ids") or []
+        existing.append(creative.creative_id)
+        pkg["creative_ids"] = existing
+
+
+@given("a creative format is incompatible with the product's supported formats")
+@given("But a creative format is incompatible with the product's supported formats")
+def given_creative_format_incompatible(ctx: dict) -> None:
+    """Create a creative whose format doesn't match the product's accepted formats.
+
+    For inv-026-4: creative has format display_728x90 but product only accepts
+    display_300x250, triggering INVALID_CREATIVES during pre-validation.
+    Reuses the same pattern as given_creative_format_mismatch (ext-p) but with
+    different Gherkin text.
+    """
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
+    from tests.factories.creative import CreativeFactory
+    from tests.helpers.adcp_factories import create_test_format
+
+    env = ctx["env"]
+    kwargs = _ensure_request_defaults(ctx)
+    creative = CreativeFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        creative_id="cr-incompatible-format",
+        format="display_728x90",  # Mismatched — product accepts display_300x250
+        status="approved",
+        data={
+            "assets": {
+                "primary": {
+                    "url": "https://cdn.example.com/leaderboard.png",
+                    "width": 728,
+                    "height": 90,
+                }
+            }
+        },
+    )
+    env._commit_factory_data()
+    # Register the mismatched format spec so pre-validation recognizes it
+    env._format_specs["display_728x90"] = create_test_format(
+        format_id="display_728x90",
+        name="Display 728x90 Leaderboard",
+        type="display",
+    )
+    if kwargs.get("packages"):
+        pkg = kwargs["packages"][0]
+        existing = pkg.get("creative_ids") or []
+        existing.append(creative.creative_id)
+        pkg["creative_ids"] = existing
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# THEN steps — creative assignment success (inv-026-1)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@then("the creative assignment should proceed")
+def then_creative_assignment_proceeds(ctx: dict) -> None:
+    """Assert creative assignment succeeded — response is success with creative assignments persisted.
+
+    For inv-026-1: valid creatives with compatible formats should result in a
+    successful create_media_buy with creative assignment records in the database.
+    """
+    assert "error" not in ctx, f"Expected creative assignment to proceed but got error: {ctx.get('error')}"
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response but none found"
+
+    # Verify creative assignments were persisted
+    media_buy_id = None
+    if hasattr(resp, "media_buy_id"):
+        media_buy_id = resp.media_buy_id
+    elif hasattr(resp, "response") and hasattr(resp.response, "media_buy_id"):
+        media_buy_id = resp.response.media_buy_id
+    assert media_buy_id, "No media_buy_id in response — creative assignment did not produce a media buy"
+
+    from sqlalchemy import func, select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import CreativeAssignment
+
+    with get_db_session() as session:
+        count = session.scalar(
+            select(func.count()).select_from(CreativeAssignment).filter_by(media_buy_id=media_buy_id)
+        )
+        assert count and count > 0, (
+            f"No creative assignment records found for media buy {media_buy_id} — expected creatives to be assigned"
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — transient error injection (inv-018-4)
 # ═══════════════════════════════════════════════════════════════════════
 

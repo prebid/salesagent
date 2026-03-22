@@ -176,6 +176,8 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-002-ext-o": "CREATIVES_NOT_FOUND error lacks suggestion field",
     "T-UC-002-ext-p": "CREATIVE_FORMAT_MISMATCH error lacks suggestion field",
     "T-UC-002-ext-q": "CREATIVE_UPLOAD_FAILED error lacks suggestion field",
+    "T-UC-002-inv-026-2": "INVALID_CREATIVES error lacks suggestion field",
+    "T-UC-002-inv-026-4": "INVALID_CREATIVES error lacks suggestion field",
     # FIXME(salesagent-9vgz.17): optimization_goals not in adcp v3.6.0 or production schemas
     # PackageRequest(extra='forbid') rejects the field with generic validation error,
     # not spec-expected UNSUPPORTED_FEATURE / INVALID_REQUEST with structured codes.
