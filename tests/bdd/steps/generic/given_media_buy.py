@@ -389,6 +389,53 @@ def given_high_daily_spend(ctx: dict, budget: int, days: int, daily: int) -> Non
         kwargs["packages"][0]["budget"] = float(budget)
 
 
+@given(parsers.parse('a package references pricing_option_id "{po_id}" not found on the product'))
+@given(parsers.parse('But a package references pricing_option_id "{po_id}" not found on the product'))
+def given_nonexistent_pricing_option(ctx: dict, po_id: str) -> None:
+    """Override first package pricing_option_id to a non-existent value."""
+    kwargs = _ensure_request_defaults(ctx)
+    if kwargs.get("packages"):
+        kwargs["packages"][0]["pricing_option_id"] = po_id
+
+
+@given("a package selects an auction pricing option but provides no bid_price")
+@given("But a package selects an auction pricing option but provides no bid_price")
+def given_auction_no_bid_price(ctx: dict) -> None:
+    """Create an auction pricing option on the product and omit bid_price."""
+    env = ctx["env"]
+    auction_po = PricingOptionFactory(
+        product=ctx["default_product"],
+        pricing_model="cpm",
+        currency="USD",
+        is_fixed=False,
+        price_guidance={"floor": 1.0},
+    )
+    env._commit_factory_data()
+    kwargs = _ensure_request_defaults(ctx)
+    if kwargs.get("packages"):
+        kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(auction_po)
+        kwargs["packages"][0].pop("bid_price", None)
+
+
+@given(parsers.parse("a package has bid_price {bid:g} but floor_price is {floor:g}"))
+@given(parsers.parse("But a package has bid_price {bid:g} but floor_price is {floor:g}"))
+def given_bid_below_floor(ctx: dict, bid: float, floor: float) -> None:
+    """Create an auction pricing option with floor and set bid below it."""
+    env = ctx["env"]
+    auction_po = PricingOptionFactory(
+        product=ctx["default_product"],
+        pricing_model="cpm",
+        currency="USD",
+        is_fixed=False,
+        price_guidance={"floor": floor},
+    )
+    env._commit_factory_data()
+    kwargs = _ensure_request_defaults(ctx)
+    if kwargs.get("packages"):
+        kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(auction_po)
+        kwargs["packages"][0]["bid_price"] = bid
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Proposal-related request construction
 # ═══════════════════════════════════════════════════════════════════════

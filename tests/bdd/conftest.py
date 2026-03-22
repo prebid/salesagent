@@ -155,6 +155,13 @@ _XFAIL_TAGS: dict[str, str] = {
     # FIXME(salesagent-9vgz.10): proposal validation not implemented in production
     "T-UC-002-ext-l": "proposal_id validation not implemented in production",
     "T-UC-002-ext-m": "proposal budget guidance not implemented in production",
+    # FIXME(salesagent-9vgz.13): pricing validation returns generic validation_error, not PRICING_ERROR
+    # AdCPValidationError(details={"error_code": "PRICING_ERROR"}) is raised but then caught
+    # and re-raised as ValueError(str(e)) at media_buy_create.py:1741-1743, losing the structured
+    # error code. The outer handler converts it to Error(code="validation_error").
+    "T-UC-002-ext-n": "pricing validation returns generic validation_error, not PRICING_ERROR",
+    "T-UC-002-ext-n-bid": "pricing validation returns generic validation_error, not PRICING_ERROR",
+    "T-UC-002-ext-n-floor": "pricing validation returns generic validation_error, not PRICING_ERROR",
 }
 
 # FIXME(beads-dul): Selective xfail for parametrized scenarios where only
