@@ -62,6 +62,7 @@ def _ensure_request_defaults(ctx: dict) -> dict[str, Any]:
 
 
 @given("the tenant is configured for auto-approval")
+@given("tenant human_review_required is false")
 def given_tenant_auto_approval(ctx: dict) -> None:
     """Configure tenant for auto-approval (human_review_required=False)."""
     tenant = ctx.get("tenant")
@@ -75,6 +76,7 @@ def given_tenant_auto_approval(ctx: dict) -> None:
 
 
 @given(parsers.parse('the tenant has "human_review_required" set to true'))
+@given("tenant human_review_required is true")
 def given_tenant_manual_approval(ctx: dict) -> None:
     """Configure tenant for manual approval."""
     tenant = ctx.get("tenant")
@@ -91,6 +93,32 @@ def given_tenant_manual_approval(ctx: dict) -> None:
         adapter_mock = env.mock["adapter"].return_value
         adapter_mock.manual_approval_required = True
         adapter_mock.manual_approval_operations = {"create_media_buy", "update_media_buy"}
+
+
+@given("adapter manual_approval_required is false")
+def given_adapter_no_manual_approval(ctx: dict) -> None:
+    """Configure adapter for auto-approval (manual_approval_required=False).
+
+    This is the default state for MediaBuyCreateEnv, but explicitly set it
+    to be clear in the scenario.
+    """
+    env = ctx["env"]
+    adapter_mock = env.mock["adapter"].return_value
+    adapter_mock.manual_approval_required = False
+    adapter_mock.manual_approval_operations = []
+
+
+@given("adapter manual_approval_required is true")
+def given_adapter_manual_approval(ctx: dict) -> None:
+    """Configure adapter to require manual approval.
+
+    Sets manual_approval_required=True and includes 'create_media_buy' in
+    manual_approval_operations — both are needed for the approval gate.
+    """
+    env = ctx["env"]
+    adapter_mock = env.mock["adapter"].return_value
+    adapter_mock.manual_approval_required = True
+    adapter_mock.manual_approval_operations = {"create_media_buy", "update_media_buy"}
 
 
 @given(parsers.parse("the tenant has max_daily_package_spend configured at {amount:d}"))

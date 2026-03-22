@@ -94,6 +94,64 @@ def then_packages_have_details(ctx: dict) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Approval workflow assertions (BR-RULE-017)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@then("the approval path should be auto-approved")
+def then_approval_auto(ctx: dict) -> None:
+    """Assert the response indicates auto-approval (task status 'completed').
+
+    Production: auto-approved → adapter called synchronously → status=completed.
+    """
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response but none found"
+    status = _get_response_field(resp, "status")
+    assert status == "completed", f"Expected auto-approval (status='completed'), got '{status}'"
+
+
+@then("the media buy should proceed to adapter execution")
+def then_adapter_executed(ctx: dict) -> None:
+    """Assert the adapter's create_media_buy was called (auto-approval path)."""
+    env = ctx["env"]
+    adapter_mock = env.mock["adapter"].return_value
+    assert adapter_mock.create_media_buy.called, (
+        "Expected adapter.create_media_buy to be called (auto-approval path), but it was not called"
+    )
+
+
+@then("the approval path should be manual")
+def then_approval_manual(ctx: dict) -> None:
+    """Assert the response indicates manual approval (task status 'submitted').
+
+    Production: manual approval → DB status=pending_approval, task status=submitted.
+    """
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response but none found"
+    status = _get_response_field(resp, "status")
+    assert status == "submitted", f"Expected manual approval (status='submitted'), got '{status}'"
+
+
+@then("the media buy should enter pending state")
+def then_pending_state(ctx: dict) -> None:
+    """Assert the media buy was persisted with status 'pending_approval' in DB."""
+    from sqlalchemy import select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import MediaBuy
+
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response to find media_buy_id"
+    media_buy_id = _get_response_field(resp, "media_buy_id")
+    assert media_buy_id, "No media_buy_id in response"
+
+    with get_db_session() as session:
+        mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id)).first()
+        assert mb is not None, f"Media buy {media_buy_id} not found in DB"
+        assert mb.status == "pending_approval", f"Expected DB status 'pending_approval', got '{mb.status}'"
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Status and workflow assertions
 # ═══════════════════════════════════════════════════════════════════════
 
