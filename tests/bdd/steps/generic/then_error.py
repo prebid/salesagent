@@ -9,6 +9,8 @@ an operation fails. Errors are real exceptions from production code:
 
 from __future__ import annotations
 
+from typing import Any
+
 from pytest_bdd import parsers, then
 
 # ── Helpers ─────────────────────────────────────────────────────────
@@ -56,8 +58,8 @@ def _get_error_message(error: object) -> str:
     return str(error)
 
 
-def _get_error_dict(error: Exception) -> dict:
-    """Convert exception to dict for field-presence checks."""
+def _get_error_dict(error: object) -> dict:
+    """Convert exception or Error model to dict for field-presence checks."""
     from src.core.exceptions import AdCPError
 
     if isinstance(error, AdCPError):
@@ -71,6 +73,14 @@ def _get_error_dict(error: Exception) -> dict:
             d["code"] = d.get("error_code", "")
         if error.details and "suggestion" in error.details:
             d["suggestion"] = error.details["suggestion"]
+        return d
+    # adcp.types.Error model (from response.errors promotion in When steps)
+    if hasattr(error, "code") and hasattr(error, "message") and not isinstance(error, Exception):
+        d: dict[str, Any] = {"code": error.code, "message": error.message}
+        if getattr(error, "suggestion", None):
+            d["suggestion"] = error.suggestion
+        if getattr(error, "recovery", None):
+            d["recovery"] = error.recovery
         return d
     return {"code": _get_error_code(error), "message": _get_error_message(error)}
 
@@ -220,8 +230,13 @@ def then_error_recovery(ctx: dict, recovery: str) -> None:
 
     if isinstance(error, AdCPError):
         assert error.recovery == recovery, f"Expected recovery '{recovery}', got '{error.recovery}'"
+    elif hasattr(error, "recovery") and not isinstance(error, Exception):
+        # adcp.types.Error model (from response.errors promotion)
+        # recovery may be a Recovery enum — compare by .value
+        actual = error.recovery.value if hasattr(error.recovery, "value") else str(error.recovery)
+        assert actual == recovery, f"Expected recovery '{recovery}', got '{actual}'"
     else:
-        raise AssertionError(f"Cannot check recovery on non-AdCPError: {type(error).__name__}")
+        raise AssertionError(f"Cannot check recovery on {type(error).__name__}: no recovery attribute")
 
 
 @then('the error should include a "suggestion" field')

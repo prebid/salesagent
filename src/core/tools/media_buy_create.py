@@ -53,6 +53,21 @@ logger = logging.getLogger(__name__)
 console = Console()
 
 
+class _StructuredValidationError(ValueError):
+    """ValueError subclass carrying AdCP-standard error metadata.
+
+    Used within _create_media_buy_impl to propagate specific error codes
+    (BUDGET_TOO_LOW, PRODUCT_NOT_FOUND, INVALID_REQUEST) through the
+    catch-all at the end of the validation block.
+    """
+
+    def __init__(self, message: str, *, code: str, recovery: str = "correctable", suggestion: str | None = None):
+        super().__init__(message)
+        self.code = code
+        self.recovery = recovery
+        self.suggestion = suggestion
+
+
 def validate_agent_url(url: str | None) -> bool:
     """Validate agent_url is a valid HTTP(S) URL per AdCP spec.
 
@@ -1490,7 +1505,11 @@ async def _create_media_buy_impl(
         total_budget = req.get_total_budget()
         if total_budget <= 0:
             error_msg = f"Invalid budget: {total_budget}. Budget must be positive."
-            raise ValueError(error_msg)
+            raise _StructuredValidationError(
+                error_msg,
+                code="BUDGET_TOO_LOW",
+                suggestion="Set each package budget to a positive amount.",
+            )
 
         # 2. DateTime validation
         now = datetime.now(UTC)
@@ -1521,7 +1540,11 @@ async def _create_media_buy_impl(
 
             if computed_start_time < now:
                 error_msg = f"Invalid start time: {req.start_time}. Start time cannot be in the past."
-                raise ValueError(error_msg)
+                raise _StructuredValidationError(
+                    error_msg,
+                    code="INVALID_REQUEST",
+                    suggestion="Use a future datetime or 'asap' for immediate start.",
+                )
 
         # Validate end_time
         if req.end_time is None:
@@ -1535,7 +1558,11 @@ async def _create_media_buy_impl(
 
         if computed_end_time <= computed_start_time:
             error_msg = f"Invalid time range: end time ({req.end_time}) must be after start time ({req.start_time})."
-            raise ValueError(error_msg)
+            raise _StructuredValidationError(
+                error_msg,
+                code="INVALID_REQUEST",
+                suggestion="Set end_time to a datetime after start_time.",
+            )
 
         # Assign computed times to local variables for use throughout the function
         start_time_val = computed_start_time
@@ -1605,7 +1632,11 @@ async def _create_media_buy_impl(
             missing_product_ids = set(product_ids) - set(product_map.keys())
             if missing_product_ids:
                 error_msg = f"Product(s) not found: {', '.join(sorted(missing_product_ids))}"
-                raise ValueError(error_msg)
+                raise _StructuredValidationError(
+                    error_msg,
+                    code="PRODUCT_NOT_FOUND",
+                    suggestion="Check available products with get_products.",
+                )
 
             # Resolve legacy pricing_option_id values to actual product pricing_option_ids
             # This happens when using the legacy product_ids parameter (auto-converted to packages)
@@ -1896,10 +1927,27 @@ async def _create_media_buy_impl(
         if step:
             ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=str(e))
 
+        # Extract structured error metadata if available
+        if isinstance(e, _StructuredValidationError):
+            error_code = e.code
+            suggestion = e.suggestion
+            recovery = e.recovery
+        else:
+            error_code = "validation_error"
+            suggestion = None
+            recovery = None
+
         # Return error response with failed status
         return CreateMediaBuyResult(
             response=CreateMediaBuyError(
-                errors=[Error(code="validation_error", message=str(e), details=None)],
+                errors=[
+                    Error(
+                        code=error_code,
+                        message=str(e),
+                        suggestion=suggestion,
+                        recovery=recovery,
+                    )
+                ],
                 context=req.context,
             ),
             status=AdcpTaskStatus.failed.value,
