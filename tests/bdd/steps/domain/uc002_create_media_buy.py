@@ -728,3 +728,46 @@ def given_unregistered_event_source(ctx: dict) -> None:
         kwargs["packages"][0]["optimization_goals"] = [
             {"kind": "event", "event_source_id": "evt-unregistered-999", "priority": 1}
         ]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GIVEN steps — catalog validation error injection (ext-v, ext-v-notfound)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given(parsers.parse('a package has two catalogs both with type "{catalog_type}"'))
+@given(parsers.parse('But a package has two catalogs both with type "{catalog_type}"'))
+def given_duplicate_catalog_types(ctx: dict, catalog_type: str) -> None:
+    """Add two catalogs with the same type to the first package.
+
+    SPEC-PRODUCTION GAP: Production code accepts catalogs (field is in adcp
+    library PackageRequest) but never validates duplicate types. The request
+    succeeds silently instead of returning INVALID_REQUEST.
+    """
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
+
+    kwargs = _ensure_request_defaults(ctx)
+    if kwargs.get("packages"):
+        kwargs["packages"][0]["catalogs"] = [
+            {"type": catalog_type, "url": "https://example.com/feed-a.xml"},
+            {"type": catalog_type, "url": "https://example.com/feed-b.xml"},
+        ]
+
+
+@given(parsers.parse('a package references catalog_id "{catalog_id}" not found in synced catalogs'))
+@given(parsers.parse('But a package references catalog_id "{catalog_id}" not found in synced catalogs'))
+def given_catalog_id_not_found(ctx: dict, catalog_id: str) -> None:
+    """Add a catalog with a nonexistent catalog_id to the first package.
+
+    SPEC-PRODUCTION GAP: Production code accepts catalogs (field is in adcp
+    library PackageRequest) but never validates catalog_id existence against
+    synced catalogs. The request succeeds silently instead of returning
+    INVALID_REQUEST.
+    """
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
+
+    kwargs = _ensure_request_defaults(ctx)
+    if kwargs.get("packages"):
+        kwargs["packages"][0]["catalogs"] = [
+            {"type": "product", "catalog_id": catalog_id, "url": "https://example.com/feed.xml"},
+        ]

@@ -173,6 +173,11 @@ _XFAIL_TAGS: dict[str, str] = {
     # not spec-expected UNSUPPORTED_FEATURE / INVALID_REQUEST with structured codes.
     "T-UC-002-ext-u": "optimization_goals not in production schemas — spec-production gap",
     "T-UC-002-ext-u-event": "optimization_goals not in production schemas — spec-production gap",
+    # FIXME(salesagent-9vgz.19): catalog validation not implemented in production
+    # PackageRequest accepts catalogs (inherited from adcp library) but production
+    # code never validates duplicate types or catalog_id existence.
+    "T-UC-002-ext-v": "catalog validation not implemented in production — spec-production gap",
+    "T-UC-002-ext-v-notfound": "catalog validation not implemented in production — spec-production gap",
 }
 
 # FIXME(beads-dul): Selective xfail for parametrized scenarios where only
