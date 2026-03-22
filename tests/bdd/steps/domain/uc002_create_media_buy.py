@@ -771,3 +771,280 @@ def given_catalog_id_not_found(ctx: dict, catalog_id: str) -> None:
         kwargs["packages"][0]["catalogs"] = [
             {"type": "product", "catalog_id": catalog_id, "url": "https://example.com/feed.xml"},
         ]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GIVEN steps — inline creatives (alt-creatives scenario)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given('the request includes packages with inline "creatives" array')
+def given_request_with_inline_creatives_array(ctx: dict) -> None:
+    """Build inline CreativeAsset objects on the first package's creatives field.
+
+    Creates a CreativeAsset with valid format_id, name, and assets.
+    Uses display_300x250_image which matches the creative agent registry's
+    mock format list (ADCP_TESTING=true).
+
+    Also patches the creative agent registry so _sync_creatives_impl doesn't
+    make real HTTP calls to the creative agent (preview_creative). This is the
+    same pattern used by CreativeSyncEnv.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
+    from tests.helpers.adcp_factories import create_test_format
+
+    env = ctx["env"]
+    kwargs = _ensure_request_defaults(ctx)
+    # Register format spec so _get_format_spec_sync mock recognizes it.
+    env._format_specs["display_300x250_image"] = create_test_format(
+        format_id="display_300x250_image",
+        name="Medium Rectangle",
+        type="display",
+    )
+    # Patch creative agent registry for inline creative processing.
+    # _sync_creatives_impl calls preview_creative on the external agent;
+    # we mock it to avoid real HTTP calls (same pattern as CreativeSyncEnv).
+    mock_registry = MagicMock()
+    mock_registry.list_all_formats.return_value = []
+    mock_registry.get_format = AsyncMock(return_value={"id": "display_300x250_image", "name": "Medium Rectangle"})
+    mock_registry.preview_creative = AsyncMock(return_value={})
+    mock_registry.build_creative = AsyncMock(return_value={})
+    registry_patcher = patch(
+        "src.core.creative_agent_registry.get_creative_agent_registry",
+        return_value=mock_registry,
+    )
+    registry_patcher.start()
+    env._patchers.append(registry_patcher)
+    # Also patch run_async_in_sync_context used by _sync for format validation
+    run_async_patcher = patch(
+        "src.core.tools.creatives._sync.run_async_in_sync_context",
+        side_effect=lambda coro: [],
+    )
+    run_async_patcher.start()
+    env._patchers.append(run_async_patcher)
+
+    # Update product format_ids to match the mock format registry's ID
+    # (display_300x250_image instead of display_300x250)
+    product = ctx.get("default_product")
+    if product:
+        product.format_ids = [
+            {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
+        ]
+        env._commit_factory_data()
+
+    if kwargs.get("packages"):
+        kwargs["packages"][0]["creatives"] = [
+            {
+                "creative_id": "cr-inline-001",
+                "name": "Inline Banner 300x250",
+                "format_id": {
+                    "agent_url": "https://creative.adcontextprotocol.org",
+                    "id": "display_300x250_image",
+                },
+                "assets": {
+                    "primary": {
+                        "url": "https://cdn.example.com/inline-banner.png",
+                        "width": 300,
+                        "height": 250,
+                    }
+                },
+            }
+        ]
+
+
+@given("each creative has a valid format_id, name, and assets with URL and dimensions")
+def given_creatives_have_valid_fields(ctx: dict) -> None:
+    """Assert the inline creatives already have required fields.
+
+    The previous Given step builds valid CreativeAssets — this step confirms
+    the precondition without modifying state.
+    """
+    kwargs = ctx.get("request_kwargs", {})
+    packages = kwargs.get("packages", [])
+    for pkg in packages:
+        for creative in pkg.get("creatives", []):
+            assert "format_id" in creative, "Creative missing format_id"
+            assert "name" in creative, "Creative missing name"
+            assert "assets" in creative, "Creative missing assets"
+            for asset in creative["assets"].values():
+                if isinstance(asset, dict):
+                    assert "url" in asset, f"Asset missing url: {asset}"
+
+
+@given("the creative agent has the referenced formats registered")
+def given_creative_agent_formats_registered(ctx: dict) -> None:
+    """Ensure the harness format_specs registry has entries for all referenced formats.
+
+    The display_300x250 format is registered by the 'inline creatives array'
+    Given step. This step verifies it's present.
+    """
+    env = ctx["env"]
+    kwargs = ctx.get("request_kwargs", {})
+    for pkg in kwargs.get("packages", []):
+        for creative in pkg.get("creatives", []):
+            fmt_id = creative.get("format_id", {})
+            fid = fmt_id.get("id") if isinstance(fmt_id, dict) else None
+            if fid:
+                assert fid in env._format_specs, (
+                    f"Format {fid} not registered in harness — available: {list(env._format_specs.keys())}"
+                )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# THEN steps — inline creatives assertions (alt-creatives scenario)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@then("the system should upload the creatives to the creative library")
+def then_creatives_uploaded_to_library(ctx: dict) -> None:
+    """Assert inline creatives were synced to the DB creative library.
+
+    Production calls process_and_upload_package_creatives → _sync_creatives_impl
+    which persists creatives to the database. Verify by checking the DB.
+    """
+    from sqlalchemy import func, select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import Creative as CreativeModel
+
+    tenant = ctx["tenant"]
+    with get_db_session() as session:
+        count = session.scalar(select(func.count()).select_from(CreativeModel).filter_by(tenant_id=tenant.tenant_id))
+        assert count is not None and count > 0, f"Expected creatives in DB for tenant {tenant.tenant_id}, found {count}"
+
+
+@then("the system should assign the uploaded creatives to packages")
+def then_creatives_assigned_to_packages(ctx: dict) -> None:
+    """Assert creative assignments exist for the created media buy packages.
+
+    Production creates CreativeAssignment records linking creatives to packages.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import CreativeAssignment
+
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    media_buy_id = _get_response_field_from_resp(resp, "media_buy_id")
+    assert media_buy_id, "No media_buy_id in response"
+
+    with get_db_session() as session:
+        assignments = session.scalars(select(CreativeAssignment).filter_by(media_buy_id=media_buy_id)).all()
+        assert len(assignments) > 0, f"Expected creative assignments for media_buy {media_buy_id}, found none"
+
+
+@then("the response should include the created media buy with creative assignments")
+def then_response_has_creative_assignments(ctx: dict) -> None:
+    """Assert the response includes a created media buy.
+
+    The response should be a success with a media_buy_id. Creative assignments
+    are verified by the preceding Then steps (DB check).
+    """
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    media_buy_id = _get_response_field_from_resp(resp, "media_buy_id")
+    assert media_buy_id, "No media_buy_id in response — media buy not created"
+    status = _get_response_field_from_resp(resp, "status")
+    assert status is not None, "No status in response"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GIVEN steps — proposal-based creation (alt-proposal scenario)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given(parsers.parse('proposal "{proposal_id}" exists and has not expired'))
+def given_proposal_exists(ctx: dict, proposal_id: str) -> None:
+    """Record that a proposal exists (spec-production gap: no proposal store).
+
+    SPEC-PRODUCTION GAP: Production has no proposal store. proposal_id is
+    accepted on CreateMediaBuyRequest (from adcp library) but never validated.
+    This step records the expected proposal for Then-step assertions.
+    """
+    ctx["expected_proposal_id"] = proposal_id
+
+
+@given(parsers.parse("the proposal has {count:d} product allocations"))
+def given_proposal_allocations(ctx: dict, count: int) -> None:
+    """Record expected proposal allocations (spec-production gap).
+
+    SPEC-PRODUCTION GAP: Production has no proposal allocation mechanism.
+    This step records the expected allocation count for Then-step assertions.
+    """
+    ctx["expected_proposal_allocations"] = count
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# THEN steps — proposal-based creation assertions (alt-proposal scenario)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@then("the system should derive packages from proposal allocations")
+def then_packages_derived_from_proposal(ctx: dict) -> None:
+    """Assert packages were derived from proposal allocations.
+
+    SPEC-PRODUCTION GAP: Production does not derive packages from proposals.
+    proposal_id is accepted but never processed.
+    """
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    packages = _get_response_field_from_resp(resp, "packages")
+    expected = ctx.get("expected_proposal_allocations", 0)
+    assert packages is not None and len(packages) == expected, (
+        f"Expected {expected} packages derived from proposal, got {len(packages) if packages else 0}"
+    )
+
+
+@then("the total_budget should be distributed per allocation percentages")
+def then_budget_distributed_per_allocations(ctx: dict) -> None:
+    """Assert total budget was distributed across packages.
+
+    SPEC-PRODUCTION GAP: Production does not distribute budget per proposal
+    allocations. Packages retain their individual budgets as submitted.
+    """
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    packages = _get_response_field_from_resp(resp, "packages")
+    assert packages is not None and len(packages) > 0, "No packages in response"
+    # Verify budget sum matches total_budget from request
+    kwargs = ctx.get("request_kwargs", {})
+    total_budget = kwargs.get("total_budget", {})
+    if isinstance(total_budget, dict):
+        expected_total = total_budget.get("amount", 0)
+    else:
+        expected_total = 0
+    budget_sum = sum((p.get("budget", 0) if isinstance(p, dict) else getattr(p, "budget", 0) or 0) for p in packages)
+    assert abs(budget_sum - expected_total) < 0.01, f"Expected budget sum {expected_total}, got {budget_sum}"
+
+
+@then("the response should include the created media buy with derived packages")
+def then_response_has_derived_packages(ctx: dict) -> None:
+    """Assert response has a media buy with packages from proposal.
+
+    SPEC-PRODUCTION GAP: Production does not derive packages from proposals.
+    This asserts the response has a media_buy_id and packages array.
+    """
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    media_buy_id = _get_response_field_from_resp(resp, "media_buy_id")
+    assert media_buy_id, "No media_buy_id in response"
+    packages = _get_response_field_from_resp(resp, "packages")
+    assert packages is not None, "No packages in response"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Helpers (local to this module)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _get_response_field_from_resp(resp: object, field: str) -> object:
+    """Extract a field from a response, handling wrapper types.
+
+    Delegates to the shared helper in then_media_buy to avoid duplication.
+    """
+    from tests.bdd.steps.generic.then_media_buy import _get_response_field
+
+    return _get_response_field(resp, field)

@@ -178,6 +178,10 @@ _XFAIL_TAGS: dict[str, str] = {
     # code never validates duplicate types or catalog_id existence.
     "T-UC-002-ext-v": "catalog validation not implemented in production — spec-production gap",
     "T-UC-002-ext-v-notfound": "catalog validation not implemented in production — spec-production gap",
+    # FIXME(salesagent-9vgz.2): proposal-based creation not implemented in production
+    # proposal_id exists on adcp library CreateMediaBuyRequest but production code
+    # never reads it — no proposal store, no allocation derivation, no budget distribution.
+    "T-UC-002-alt-proposal": "proposal-based creation not implemented in production — spec-production gap",
 }
 
 # FIXME(beads-dul): Selective xfail for parametrized scenarios where only
