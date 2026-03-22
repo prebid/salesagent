@@ -60,6 +60,23 @@ def given_request_without_account(ctx: dict) -> None:
     ctx["account_absent"] = True
 
 
+@given("a create_media_buy request with account_id that does not exist")
+def given_request_account_not_exists(ctx: dict) -> None:
+    """Set up a request referencing a nonexistent account_id.
+
+    The account resolution layer (enrich_identity_with_account) will raise
+    AdCPAccountNotFoundError — a terminal error with code ACCOUNT_NOT_FOUND.
+    No 'the account exists and is active' step should follow this Given.
+    """
+    from adcp.types.generated_poc.core.account_ref import AccountReference, AccountReference1
+
+    ctx["account_ref"] = AccountReference(root=AccountReference1(account_id="acc-does-not-exist"))
+    ctx["request_account_id"] = "acc-does-not-exist"
+    _maybe_init_request_kwargs(ctx)
+    if "request_kwargs" in ctx:
+        ctx["request_kwargs"]["account"] = ctx["account_ref"]
+
+
 @given("a valid create_media_buy request with creative assignments")
 def given_request_with_creative_assignments(ctx: dict) -> None:
     """Set up a create_media_buy request with creative assignments (account is implicit)."""
@@ -435,8 +452,27 @@ def _dispatch_create_media_buy(ctx: dict) -> None:
         ctx["error"] = exc
         return
 
-    # Check for no-auth scenario
-    if ctx.get("has_auth") is False:
+    # Account resolution — mirrors transport boundary behavior.
+    # Production wrappers call enrich_identity_with_account(identity, req.account)
+    # before _impl. The harness's call_a2a/call_mcp don't propagate account through
+    # flat kwargs, so we resolve here (pre-dispatch) for all transports.
+    if req.account is not None:
+        from src.core.transport_helpers import enrich_identity_with_account
+
+        env = ctx["env"]
+        env._commit_factory_data()
+        try:
+            enriched = enrich_identity_with_account(env.identity, req.account)
+        except Exception as exc:
+            ctx["error"] = exc
+            return
+        if enriched is not None:
+            dispatch_request(ctx, req=req, identity=enriched)
+        elif ctx.get("has_auth") is False:
+            dispatch_request(ctx, req=req, identity=None)
+        else:
+            dispatch_request(ctx, req=req)
+    elif ctx.get("has_auth") is False:
         dispatch_request(ctx, req=req, identity=None)
     else:
         dispatch_request(ctx, req=req)

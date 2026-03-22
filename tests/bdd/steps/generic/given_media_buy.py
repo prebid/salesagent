@@ -665,6 +665,18 @@ def given_request_fails_validation(ctx: dict) -> None:
         pkg["product_id"] = "nonexistent-product-id"
 
 
+@given("a create_media_buy request that fails with a correctable error")
+def given_request_correctable_error(ctx: dict) -> None:
+    """Set up a request that triggers a correctable validation error.
+
+    Uses a nonexistent product_id to trigger PRODUCT_NOT_FOUND, which is a
+    _StructuredValidationError with recovery="correctable" and a suggestion.
+    """
+    _ensure_request_defaults(ctx)
+    for pkg in ctx["request_kwargs"].get("packages", []):
+        pkg["product_id"] = "nonexistent-correctable-product"
+
+
 @given(parsers.parse('a media buy exists in "{state}" state'))
 def given_existing_media_buy(ctx: dict, state: str) -> None:
     """Create a media buy in the specified state in the database."""

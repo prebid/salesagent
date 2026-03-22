@@ -61,11 +61,20 @@ class _StructuredValidationError(ValueError):
     catch-all at the end of the validation block.
     """
 
-    def __init__(self, message: str, *, code: str, recovery: str = "correctable", suggestion: str | None = None):
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str,
+        recovery: str = "correctable",
+        suggestion: str | None = None,
+        field: str | None = None,
+    ):
         super().__init__(message)
         self.code = code
         self.recovery = recovery
         self.suggestion = suggestion
+        self.field = field
 
 
 def validate_agent_url(url: str | None) -> bool:
@@ -1636,6 +1645,7 @@ async def _create_media_buy_impl(
                     error_msg,
                     code="PRODUCT_NOT_FOUND",
                     suggestion="Check available products with get_products.",
+                    field="packages[].product_id",
                 )
 
             # Resolve legacy pricing_option_id values to actual product pricing_option_ids
@@ -1932,10 +1942,12 @@ async def _create_media_buy_impl(
             error_code = e.code
             suggestion = e.suggestion
             recovery = e.recovery
+            field = e.field
         else:
             error_code = "validation_error"
             suggestion = None
             recovery = None
+            field = None
 
         # Return error response with failed status
         return CreateMediaBuyResult(
@@ -1946,6 +1958,7 @@ async def _create_media_buy_impl(
                         message=str(e),
                         suggestion=suggestion,
                         recovery=recovery,
+                        field=field,
                     )
                 ],
                 context=req.context,

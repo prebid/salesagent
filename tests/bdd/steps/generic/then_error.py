@@ -250,6 +250,26 @@ def then_error_has_suggestion(ctx: dict) -> None:
     assert d["suggestion"], "Expected non-empty suggestion"
 
 
+@then('the error should include "field" field')
+def then_error_has_field(ctx: dict) -> None:
+    """Assert error includes a non-None field path.
+
+    The adcp Error model has ``field: str | None`` indicating which request
+    field caused the error (e.g. 'packages[0].product_id').
+    """
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    # adcp.types.Error model (from response.errors promotion)
+    field_val = getattr(error, "field", None)
+    if field_val is None:
+        # AdCPError may store field in details
+        from src.core.exceptions import AdCPError
+
+        if isinstance(error, AdCPError) and error.details:
+            field_val = error.details.get("field")
+    assert field_val is not None, f"Expected 'field' on error, got None. Error: {error}"
+
+
 @then("the error should include a suggestion for how to fix the issue")
 def then_error_has_fix_suggestion(ctx: dict) -> None:
     """Assert error includes an actionable suggestion for fixing the issue.
