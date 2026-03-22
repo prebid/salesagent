@@ -960,6 +960,93 @@ def given_unregistered_event_source(ctx: dict) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# GIVEN steps — optimization goal invariant injection (inv-087-5,6,7)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given("a package has two optimization goals with the same priority value")
+@given("But a package has two optimization goals with the same priority value")
+def given_duplicate_optimization_priority(ctx: dict) -> None:
+    """Add two optimization_goals with identical priority values to trigger inv-087-5.
+
+    SPEC-PRODUCTION GAP: optimization_goals is not in adcp v3.6.0 or production
+    schemas. PackageRequest(extra='forbid') will reject this field with a generic
+    Pydantic validation error, not the spec-expected INVALID_REQUEST for duplicate
+    priority values.
+    """
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
+
+    kwargs = _ensure_request_defaults(ctx)
+    if kwargs.get("packages"):
+        kwargs["packages"][0]["optimization_goals"] = [
+            {"kind": "metric", "metric": "viewability", "priority": 1},
+            {"kind": "metric", "metric": "ctr", "priority": 1},
+        ]
+
+
+@given("a package has optimization_goals as an empty array")
+@given("But a package has optimization_goals as an empty array")
+def given_empty_optimization_goals(ctx: dict) -> None:
+    """Set optimization_goals to an empty array to trigger inv-087-6.
+
+    SPEC-PRODUCTION GAP: optimization_goals is not in adcp v3.6.0 or production
+    schemas. PackageRequest(extra='forbid') will reject this field with a generic
+    Pydantic validation error, not the spec-expected INVALID_REQUEST for empty array.
+    """
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
+
+    kwargs = _ensure_request_defaults(ctx)
+    if kwargs.get("packages"):
+        kwargs["packages"][0]["optimization_goals"] = []
+
+
+@given(parsers.parse('a package has an event kind optimization goal with target kind "{target_kind}"'))
+@given(parsers.parse('But a package has an event kind optimization goal with target kind "{target_kind}"'))
+def given_event_optimization_with_target(ctx: dict, target_kind: str) -> None:
+    """Add an event-kind optimization_goal with specified target_kind for inv-087-7.
+
+    SPEC-PRODUCTION GAP: optimization_goals is not in adcp v3.6.0 or production
+    schemas. PackageRequest(extra='forbid') will reject this field with a generic
+    Pydantic validation error, not the spec-expected INVALID_REQUEST for missing
+    value_field on event source.
+    """
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
+
+    kwargs = _ensure_request_defaults(ctx)
+    if kwargs.get("packages"):
+        kwargs["packages"][0]["optimization_goals"] = [
+            {
+                "kind": "event",
+                "event_source_id": "evt-src-001",
+                "target": {"kind": target_kind, "value": 5.0},
+                "priority": 1,
+            }
+        ]
+        # Also set up event_sources without value_field (companion step may override)
+        kwargs["packages"][0].setdefault("event_sources", [{"event_source_id": "evt-src-001", "name": "conversions"}])
+
+
+@given("no event_sources entry has value_field set")
+@given("And no event_sources entry has value_field set")
+def given_no_value_field_on_event_sources(ctx: dict) -> None:
+    """Ensure no event_sources entry has value_field set for inv-087-7.
+
+    SPEC-PRODUCTION GAP: optimization_goals and event_sources are not in adcp v3.6.0
+    or production schemas. PackageRequest(extra='forbid') will reject these fields.
+    """
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
+
+    kwargs = _ensure_request_defaults(ctx)
+    if kwargs.get("packages"):
+        pkg = kwargs["packages"][0]
+        # Ensure event_sources exist but none have value_field
+        event_sources = pkg.get("event_sources", [{"event_source_id": "evt-src-001", "name": "conversions"}])
+        for es in event_sources:
+            es.pop("value_field", None)
+        pkg["event_sources"] = event_sources
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — catalog validation error injection (ext-v, ext-v-notfound)
 # ═══════════════════════════════════════════════════════════════════════
 
