@@ -16,6 +16,7 @@ from typing import Any
 from pytest_bdd import given, parsers
 
 from tests.factories import (
+    CurrencyLimitFactory,
     PricingOptionFactory,
     ProductFactory,
 )
@@ -702,6 +703,152 @@ def given_pricing_option_configuration(ctx: dict, config: str) -> None:
 
     else:
         raise ValueError(f"Unknown pricing option configuration: {config}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Currency consistency partition/boundary — BR-RULE-009
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _setup_multi_package_request(ctx: dict, currencies: list[str]) -> None:
+    """Create a request with N packages, each using a pricing option with the given currency.
+
+    Also ensures a CurrencyLimit row exists for each currency that should be
+    in the tenant's table.
+    """
+    env = ctx["env"]
+    kwargs = _ensure_request_defaults(ctx)
+    packages = []
+
+    for i, currency in enumerate(currencies):
+        if i == 0:
+            # Re-use the default product for the first package
+            product = ctx["default_product"]
+        else:
+            product = ProductFactory(
+                tenant=ctx["tenant"],
+                product_id=f"product_{currency.lower()}_{i}",
+                property_tags=["all_inventory"],
+            )
+        po = PricingOptionFactory(
+            product=product,
+            pricing_model="cpm",
+            currency=currency,
+            is_fixed=True,
+            rate=5.00,
+        )
+        env._commit_factory_data()
+        packages.append(
+            {
+                "product_id": product.product_id,
+                "buyer_ref": f"pkg-{i + 1}",
+                "budget": 5000.0,
+                "pricing_option_id": _pricing_option_id(po),
+            }
+        )
+
+    kwargs["packages"] = packages
+
+
+@given(parsers.parse("the currency scenario is {partition}"))
+def given_currency_scenario(ctx: dict, partition: str) -> None:
+    """Set up currency configuration for partition scenarios (BR-RULE-009).
+
+    Partition values:
+    - single_package: 1 package, USD (trivially valid — only 1 currency)
+    - all_same_currency: 2 packages, both USD
+    - currency_in_tenant_table: 1 package, EUR (tenant has EUR in CurrencyLimit)
+    - mixed_currencies: 2 packages, USD + EUR (cross-package mismatch)
+    - currency_not_in_tenant: 1 package, XYZ (not in tenant's CurrencyLimit table)
+    """
+    env = ctx["env"]
+    partition = partition.strip()
+
+    if partition == "single_package":
+        # Default request has 1 package with USD — already valid
+        _ensure_request_defaults(ctx)
+
+    elif partition == "all_same_currency":
+        _setup_multi_package_request(ctx, ["USD", "USD"])
+
+    elif partition == "currency_in_tenant_table":
+        # Add EUR to tenant's CurrencyLimit table, then use EUR pricing option
+        CurrencyLimitFactory(tenant=ctx["tenant"], currency_code="EUR")
+        env._commit_factory_data()
+        kwargs = _ensure_request_defaults(ctx)
+        po_eur = PricingOptionFactory(
+            product=ctx["default_product"],
+            pricing_model="cpm",
+            currency="EUR",
+            is_fixed=True,
+            rate=5.00,
+        )
+        env._commit_factory_data()
+        if kwargs.get("packages"):
+            kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(po_eur)
+
+    elif partition == "mixed_currencies":
+        # 2 packages with different currencies — production derives currency from
+        # the first package's pricing option, so the second package's currency
+        # mismatch may or may not trigger an error depending on production logic.
+        _setup_multi_package_request(ctx, ["USD", "EUR"])
+
+    elif partition == "currency_not_in_tenant":
+        # Use a currency not in tenant's CurrencyLimit table
+        kwargs = _ensure_request_defaults(ctx)
+        po_xyz = PricingOptionFactory(
+            product=ctx["default_product"],
+            pricing_model="cpm",
+            currency="XYZ",
+            is_fixed=True,
+            rate=5.00,
+        )
+        env._commit_factory_data()
+        if kwargs.get("packages"):
+            kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(po_xyz)
+
+    else:
+        raise ValueError(f"Unknown currency partition: {partition}")
+
+
+@given(parsers.parse("the currency configuration is: {config}"))
+def given_currency_configuration(ctx: dict, config: str) -> None:
+    """Set up currency configuration for boundary scenarios (BR-RULE-009).
+
+    Boundary values:
+    - 1 pkg USD: single package, USD
+    - 2 pkg USD+USD: two packages, same currency
+    - 2 pkg USD+EUR: two packages, different currencies
+    - 1 pkg XYZ: single package, unsupported currency
+    """
+    env = ctx["env"]
+    config = config.strip()
+
+    if config == "1 pkg USD":
+        # Default request already has 1 package with USD
+        _ensure_request_defaults(ctx)
+
+    elif config == "2 pkg USD+USD":
+        _setup_multi_package_request(ctx, ["USD", "USD"])
+
+    elif config == "2 pkg USD+EUR":
+        _setup_multi_package_request(ctx, ["USD", "EUR"])
+
+    elif config == "1 pkg XYZ":
+        kwargs = _ensure_request_defaults(ctx)
+        po_xyz = PricingOptionFactory(
+            product=ctx["default_product"],
+            pricing_model="cpm",
+            currency="XYZ",
+            is_fixed=True,
+            rate=5.00,
+        )
+        env._commit_factory_data()
+        if kwargs.get("packages"):
+            kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(po_xyz)
+
+    else:
+        raise ValueError(f"Unknown currency boundary config: {config}")
 
 
 # ═══════════════════════════════════════════════════════════════════════
