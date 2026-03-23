@@ -919,8 +919,10 @@ def then_includes_delivery_data_only(ctx: dict, mb_id: str) -> None:
 def then_excludes_delivery_data(ctx: dict, mb_id: str) -> None:
     """Assert response does NOT include delivery data for the media buy."""
     resp = ctx.get("response")
-    if resp is None:
-        return  # No response at all = not included
+    assert resp is not None, (
+        "Expected a successful response to verify exclusion of delivery data, "
+        f"but got no response (error: {ctx.get('error')})"
+    )
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
     mb_ids = [d.media_buy_id for d in deliveries]
     assert mb_id not in mb_ids, f"Expected no delivery data for '{mb_id}', but found it"
@@ -930,8 +932,10 @@ def then_excludes_delivery_data(ctx: dict, mb_id: str) -> None:
 def then_no_delivery_data(ctx: dict, mb_id: str) -> None:
     """Assert response does not include delivery data for the media buy."""
     resp = ctx.get("response")
-    if resp is None:
-        return
+    assert resp is not None, (
+        "Expected a successful response to verify absence of delivery data, "
+        f"but got no response (error: {ctx.get('error')})"
+    )
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
     mb_ids = [d.media_buy_id for d in deliveries]
     assert mb_id not in mb_ids, f"Expected no delivery data for '{mb_id}'"
@@ -962,11 +966,12 @@ def then_has_metrics(ctx: dict) -> None:
     assert isinstance(totals.spend, (int, float)), f"Expected numeric spend, got {type(totals.spend).__name__}"
     # clicks is optional per schema but step text claims it should be included
     assert totals.clicks is not None, "Totals missing clicks (step expects impressions, spend, and clicks)"
+    assert isinstance(totals.clicks, (int, float)), f"Expected numeric clicks, got {type(totals.clicks).__name__}"
 
 
 @then("the delivery data should include package-level breakdowns")
 def then_has_packages(ctx: dict) -> None:
-    """Assert delivery data includes package-level breakdowns."""
+    """Assert delivery data includes package-level breakdowns with valid content."""
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
@@ -975,17 +980,40 @@ def then_has_packages(ctx: dict) -> None:
     packages = getattr(d, "by_package", None)
     assert packages is not None, "Delivery data missing by_package"
     assert len(packages) > 0, "Package breakdown is empty"
+    # Validate each package has required content: package_id and totals
+    for i, pkg in enumerate(packages):
+        pkg_id = getattr(pkg, "package_id", None)
+        assert pkg_id is not None, f"Package [{i}] missing package_id"
+        pkg_totals = getattr(pkg, "totals", None)
+        assert pkg_totals is not None, f"Package [{i}] (id={pkg_id}) missing totals"
+        assert isinstance(getattr(pkg_totals, "impressions", None), (int, float)), (
+            f"Package [{i}] (id={pkg_id}) totals.impressions is not numeric"
+        )
 
 
 @then("the response should include the reporting period start and end dates")
 def then_has_reporting_period(ctx: dict) -> None:
-    """Assert response includes reporting period (top-level, per AdCP spec)."""
+    """Assert response includes reporting period with parseable date values."""
+    from datetime import date, datetime
+
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     period = getattr(resp, "reporting_period", None)
     assert period is not None, "Response missing reporting_period"
     assert period.start is not None, "Reporting period start is None"
     assert period.end is not None, "Reporting period end is None"
+    # Verify start and end contain actual date values, not arbitrary non-None objects
+    start_str = str(period.start)[:10]
+    end_str = str(period.end)[:10]
+    try:
+        start_date = date.fromisoformat(start_str) if not isinstance(period.start, (date, datetime)) else period.start
+    except ValueError:
+        raise AssertionError(f"Reporting period start is not a valid date: {period.start!r}")
+    try:
+        end_date = date.fromisoformat(end_str) if not isinstance(period.end, (date, datetime)) else period.end
+    except ValueError:
+        raise AssertionError(f"Reporting period end is not a valid date: {period.end!r}")
+    assert end_date >= start_date, f"Reporting period end ({end_str}) is before start ({start_str})"
 
 
 @then(parsers.parse('the response should include the media buy status "{status}"'))
@@ -1002,7 +1030,7 @@ def then_has_mb_status(ctx: dict, status: str) -> None:
 
 @then("the response should include aggregated totals across both media buys")
 def then_has_aggregated_totals(ctx: dict) -> None:
-    """Assert response includes aggregated totals."""
+    """Assert response includes aggregated totals with core metrics."""
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     agg = getattr(resp, "aggregated_totals", None)
@@ -1012,10 +1040,17 @@ def then_has_aggregated_totals(ctx: dict) -> None:
     assert len(deliveries) >= 2, (
         f"Step claims 'across both media buys' but only {len(deliveries)} deliveries in response"
     )
-    # Verify aggregated totals contain at least one numeric metric
-    agg_dict = agg.model_dump() if hasattr(agg, "model_dump") else vars(agg)
-    numeric_fields = {k: v for k, v in agg_dict.items() if isinstance(v, (int, float)) and v != 0}
-    assert len(numeric_fields) > 0, f"aggregated_totals has no non-zero numeric fields: {agg_dict}"
+    # Verify aggregated totals contain specific core metrics (impressions and spend)
+    agg_impressions = getattr(agg, "impressions", None)
+    assert agg_impressions is not None, (
+        f"aggregated_totals missing 'impressions' — available attrs: {[k for k in dir(agg) if not k.startswith('_')]}"
+    )
+    assert isinstance(agg_impressions, (int, float)), (
+        f"aggregated_totals.impressions is not numeric: {type(agg_impressions).__name__}"
+    )
+    agg_spend = getattr(agg, "spend", None)
+    assert agg_spend is not None, "aggregated_totals missing 'spend'"
+    assert isinstance(agg_spend, (int, float)), f"aggregated_totals.spend is not numeric: {type(agg_spend).__name__}"
 
 
 @then("the aggregated impressions should equal the sum of individual impressions")
@@ -1044,44 +1079,48 @@ def then_aggregated_spend(ctx: dict) -> None:
     assert agg_spend == individual_sum, f"Aggregated spend {agg_spend} != sum {individual_sum}"
 
 
-@then(parsers.parse('the response should not include an error for "{mb_id}"'))
-def then_no_error_for_mb(ctx: dict, mb_id: str) -> None:
-    """Assert no error was returned for a specific media buy ID."""
-    assert "error" in ctx or "response" in ctx, "Neither error nor response in ctx — test setup failed"
-    # If a general error occurred, check it's not about this specific mb_id
+def _assert_no_error_for_mb(ctx: dict, mb_id: str) -> None:
+    """Shared: assert no error was returned for a specific media buy ID.
+
+    Checks three layers:
+    1. Top-level ctx["error"] exception must not mention the mb_id
+    2. Response-level errors list must not reference the mb_id
+    3. Per-delivery error field for this mb_id must be None
+    """
+    resp = ctx.get("response")
     error = ctx.get("error")
+    assert resp is not None or error is not None, "Neither error nor response in ctx — test setup failed"
+    # If a general error occurred, check it's not about this specific mb_id
     if error is not None:
         error_msg = str(error).lower()
         assert mb_id.lower() not in error_msg, f"Error mentions '{mb_id}': {error}"
-    # If response exists, verify delivery for this mb_id has no error
-    resp = ctx.get("response")
+    # If response exists, check response-level errors list and per-delivery errors
     if resp is not None:
+        # Check response-level errors array (e.g. resp.errors)
+        resp_errors = getattr(resp, "errors", None)
+        if resp_errors:
+            for err in resp_errors:
+                err_str = str(err).lower()
+                assert mb_id.lower() not in err_str, f"Response-level errors list mentions '{mb_id}': {err}"
+        # Check per-delivery error field
         deliveries = getattr(resp, "media_buy_deliveries", None) or []
         for d in deliveries:
             d_id = getattr(d, "media_buy_id", None)
             if d_id == mb_id:
                 d_error = getattr(d, "error", None)
                 assert d_error is None, f"Delivery for '{mb_id}' has error: {d_error}"
+
+
+@then(parsers.parse('the response should not include an error for "{mb_id}"'))
+def then_no_error_for_mb(ctx: dict, mb_id: str) -> None:
+    """Assert no error was returned for a specific media buy ID."""
+    _assert_no_error_for_mb(ctx, mb_id)
 
 
 @then(parsers.parse('no error should be returned for "{mb_id}"'))
 def then_no_error_for_mb_alt(ctx: dict, mb_id: str) -> None:
     """Assert no error was returned for a specific media buy ID (alt phrasing)."""
-    assert "error" in ctx or "response" in ctx, "Neither error nor response in ctx — test setup failed"
-    # If a general error occurred, check it's not about this specific mb_id
-    error = ctx.get("error")
-    if error is not None:
-        error_msg = str(error).lower()
-        assert mb_id.lower() not in error_msg, f"Error mentions '{mb_id}': {error}"
-    # If response exists, verify delivery for this mb_id has no error
-    resp = ctx.get("response")
-    if resp is not None:
-        deliveries = getattr(resp, "media_buy_deliveries", None) or []
-        for d in deliveries:
-            d_id = getattr(d, "media_buy_id", None)
-            if d_id == mb_id:
-                d_error = getattr(d, "error", None)
-                assert d_error is None, f"Delivery for '{mb_id}' has error: {d_error}"
+    _assert_no_error_for_mb(ctx, mb_id)
 
 
 @then(parsers.parse('the response should include only media buys with status "{status}"'))
@@ -1671,13 +1710,23 @@ def then_skip_no_webhook(ctx: dict, mb_id: str) -> None:
     env = ctx["env"]
     post_mock = env.mock["post"]
     # Check that no POST call was made containing this mb_id in its payload
-    for call in post_mock.call_args_list:
+    for call_idx, call in enumerate(post_mock.call_args_list):
         call_payload = call.kwargs.get("json") or (call[1].get("json", {}) if len(call) > 1 else {})
-        payload_mb_id = call_payload.get("media_buy_id", "")
-        assert payload_mb_id != mb_id, (
-            f"Expected no webhook POST for '{mb_id}', but found POST with media_buy_id='{payload_mb_id}' in payload"
-        )
-    # Also verify the webhook config shows this mb_id as inactive/missing
+        # Check top-level media_buy_id
+        if call_payload.get("media_buy_id") == mb_id:
+            raise AssertionError(
+                f"Expected no webhook POST for '{mb_id}', but call [{call_idx}] has media_buy_id='{mb_id}'"
+            )
+        # Check nested media_buy_deliveries (webhook payloads nest deliveries)
+        deliveries = call_payload.get("media_buy_deliveries", [])
+        for d in deliveries:
+            d_mb_id = d.get("media_buy_id") if isinstance(d, dict) else getattr(d, "media_buy_id", None)
+            if d_mb_id == mb_id:
+                raise AssertionError(
+                    f"Expected no webhook POST for '{mb_id}', "
+                    f"but call [{call_idx}] payload media_buy_deliveries contains '{mb_id}'"
+                )
+    # Verify the webhook config shows this mb_id as inactive/missing
     wh_config = ctx.get("webhook_config", {}).get(mb_id, {})
     assert not wh_config.get("active", False), (
         f"Expected webhook for '{mb_id}' to be inactive, but config shows active=True"
