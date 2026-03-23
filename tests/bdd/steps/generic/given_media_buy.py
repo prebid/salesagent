@@ -356,6 +356,24 @@ def given_end_before_start(ctx: dict) -> None:
     kwargs["end_time"] = _future(1).isoformat()
 
 
+@given(parsers.parse("the start_time is {value}"))
+@given(parsers.parse("start_time is {value}"))
+def given_start_time_value(ctx: dict, value: str) -> None:
+    """Set or remove start_time on the request (unquoted table value).
+
+    Handles partition/boundary scenarios:
+    - 'null' → remove start_time (absent)
+    - 'asap' → set literal 'asap'
+    - datetime string → set directly
+    """
+    kwargs = _ensure_request_defaults(ctx)
+    value = value.strip()
+    if value == "null":
+        kwargs.pop("start_time", None)
+    else:
+        kwargs["start_time"] = value
+
+
 @given(parsers.parse('the packages use currency "{currency}" which is not in the tenant\'s CurrencyLimit table'))
 @given(parsers.parse('But the packages use currency "{currency}" which is not in the tenant\'s CurrencyLimit table'))
 def given_unsupported_currency(ctx: dict, currency: str) -> None:
