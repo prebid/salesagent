@@ -173,15 +173,21 @@ $(echo "$PROD_FILES" | sed 's/^/- /')" --allow-empty
     ELAPSED_MIN=$(( ELAPSED / 60 ))
     ELAPSED_SEC=$(( ELAPSED % 60 ))
     LOG_SIZE=$(wc -c < "$LOG" 2>/dev/null | tr -d ' ' || echo "0")
-    LOG_KB=$(( LOG_SIZE / 1024 ))
+    if [ "$LOG_SIZE" -ge 1048576 ]; then
+      LOG_DISPLAY="$(( LOG_SIZE / 1048576 ))MB"
+    elif [ "$LOG_SIZE" -ge 1024 ]; then
+      LOG_DISPLAY="$(( LOG_SIZE / 1024 ))KB"
+    else
+      LOG_DISPLAY="${LOG_SIZE}B"
+    fi
 
     # Check if the beads task was actually closed (ask beads directly)
     TASK_STATUS=$(bd show "$TASK_ID" 2>/dev/null | head -1 | grep -o "CLOSED" || true)
     if [ "$TASK_STATUS" = "CLOSED" ]; then
-      echo "  ✓ done (${ELAPSED_MIN}m${ELAPSED_SEC}s, ${LOG_KB}KB log)"
+      echo "  ✓ done (${ELAPSED_MIN}m${ELAPSED_SEC}s, ${LOG_DISPLAY} log)"
       BATCH_COMPLETED=$((BATCH_COMPLETED + 1))
     else
-      echo "  ✗ FAIL (${ELAPSED_MIN}m${ELAPSED_SEC}s, ${LOG_KB}KB log) — check $LOG"
+      echo "  ✗ FAIL (${ELAPSED_MIN}m${ELAPSED_SEC}s, ${LOG_DISPLAY} log) — check $LOG"
       BATCH_FAILED=$((BATCH_FAILED + 1))
     fi
 
