@@ -187,7 +187,7 @@ def validate_unknown_targeting_fields(targeting_obj: Any) -> list[str]:
     model_extra = getattr(targeting_obj, "model_extra", None)
     if not model_extra:
         return []
-    return [f"Unknown targeting field '{key}'" for key in model_extra]
+    return [f"{key} is not a recognized targeting field" for key in model_extra]
 
 
 def validate_overlay_targeting(targeting: Targeting) -> list[str]:

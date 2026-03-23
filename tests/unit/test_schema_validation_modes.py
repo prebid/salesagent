@@ -61,19 +61,9 @@ class TestBuyerModelRejectsExtraInDev:
         with pytest.raises(ValidationError, match="bogus"):
             PackageRequest(**_VALID_PACKAGE_DATA, bogus="injected")
 
-    def test_targeting_captures_extra_in_model_extra(self):
-        """Targeting uses extra='allow' — unknown fields land in model_extra.
-
-        Business-logic validator (validate_unknown_targeting_fields) inspects
-        model_extra and raises INVALID_REQUEST with an actionable suggestion.
-        Pydantic-level rejection was bypassed because extra='forbid' in test
-        and extra='ignore' in prod both prevented the validator from running.
-        """
-        t = Targeting(geo_country_any_of=["US"], bogus="injected")
-        assert "bogus" in (t.model_extra or {}), "Unknown field should land in model_extra"
-        # Verify model_dump strips the extra field
-        dumped = t.model_dump()
-        assert "bogus" not in dumped, "Extra fields should be stripped from model_dump()"
+    def test_targeting_rejects_extra(self):
+        with pytest.raises(ValidationError, match="bogus"):
+            Targeting(geo_country_any_of=["US"], bogus="injected")
 
     def test_creative_rejects_extra(self):
         with pytest.raises(ValidationError, match="bogus"):
@@ -110,12 +100,8 @@ class TestNestedModelRejectsExtraInDev:
         with pytest.raises(ValidationError, match="bogus_pkg_field"):
             CreateMediaBuyRequest(**data)
 
-    def test_nested_targeting_captures_extra(self):
-        """Bogus field on targeting_overlay within a package lands in model_extra.
-
-        With Targeting extra='allow', unknown fields are captured (not rejected)
-        so validate_unknown_targeting_fields() can produce INVALID_REQUEST.
-        """
+    def test_nested_targeting_rejects_extra(self):
+        """Bogus field on targeting_overlay within a package is rejected."""
         data = {
             **_VALID_CMR_DATA,
             "packages": [
@@ -128,10 +114,8 @@ class TestNestedModelRejectsExtraInDev:
                 }
             ],
         }
-        req = CreateMediaBuyRequest(**data)
-        targeting = req.packages[0].targeting_overlay
-        assert targeting is not None
-        assert "bogus_targeting" in (targeting.model_extra or {})
+        with pytest.raises(ValidationError, match="bogus_targeting"):
+            CreateMediaBuyRequest(**data)
 
 
 class TestExtFieldAccepted:

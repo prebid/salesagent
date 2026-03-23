@@ -150,6 +150,11 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-005-ext-b-input-empty": "specific validation error codes not implemented",
     "T-UC-005-ext-b-input-invalid": "specific validation error codes not implemented",
     "T-UC-005-ext-b-input-noid": "specific validation error codes not implemented",
+    # FIXME(salesagent-9vgz.5): unknown targeting field caught at wrong layer
+    # Targeting uses extra=get_pydantic_extra_mode(): 'forbid' in dev (ValidationError at parse time),
+    # 'ignore' in prod (field silently dropped). Neither produces INVALID_REQUEST.
+    # Spec expects business-logic validation with INVALID_REQUEST code and suggestion field.
+    "T-UC-002-ext-f": "unknown targeting field caught by Pydantic (VALIDATION_ERROR), not business logic (INVALID_REQUEST) — spec-production gap",
     # FIXME(salesagent-9vgz.4): currency validation not implemented in production
     # Production code accepts any currency on pricing options without checking
     # against the tenant's CurrencyLimit table. Spec expects UNSUPPORTED_FEATURE error.
