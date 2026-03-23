@@ -1121,7 +1121,7 @@ class Principal(SalesAgentBaseModel):
 
     def get_adapter_id(self, adapter_name: str) -> str | None:
         """Get the adapter-specific ID for this principal."""
-        from src.core.utils.adapter_mapping import resolve_adapter_id
+        from src.core.platform_mappings import resolve_adapter_id
 
         return resolve_adapter_id(self.platform_mappings, adapter_name)
 

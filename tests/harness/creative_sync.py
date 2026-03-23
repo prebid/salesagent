@@ -168,12 +168,23 @@ class CreativeSyncEnv(IntegrationEnv):
 
         Accepts all _sync_creatives_impl kwargs. The 'identity' kwarg
         defaults to self.identity if not provided.
+
+        If 'account' is present, resolves it via enrich_identity_with_account
+        (same as the transport wrappers do) before calling _impl.
         """
         from src.core.tools.creatives._sync import _sync_creatives_impl
 
         self._commit_factory_data()
         kwargs.setdefault("identity", self.identity)
         kwargs.setdefault("creatives", [])
+
+        # Handle account kwarg — resolve at boundary, same as wrappers
+        account = kwargs.pop("account", None)
+        if account is not None:
+            from src.core.transport_helpers import enrich_identity_with_account
+
+            kwargs["identity"] = enrich_identity_with_account(kwargs["identity"], account)
+
         return _sync_creatives_impl(**kwargs)
 
     def call_a2a(self, **kwargs: Any) -> SyncCreativesResponse:
@@ -219,6 +230,9 @@ class CreativeSyncEnv(IntegrationEnv):
             body["dry_run"] = kwargs["dry_run"]
         if "validation_mode" in kwargs:
             body["validation_mode"] = kwargs["validation_mode"]
+        if "account" in kwargs and kwargs["account"] is not None:
+            account = kwargs["account"]
+            body["account"] = account.model_dump(mode="json") if hasattr(account, "model_dump") else account
         return body
 
     def parse_rest_response(self, data: dict[str, Any]) -> SyncCreativesResponse:

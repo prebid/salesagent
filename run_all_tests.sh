@@ -4,7 +4,7 @@
 # Prerequisites: tox + tox-uv (install: uv tool install tox --with tox-uv)
 #
 # Usage:
-#   ./run_all_tests.sh           # Docker + all 5 suites via tox (default)
+#   ./run_all_tests.sh           # Docker + all 6 suites via tox (default)
 #   ./run_all_tests.sh quick     # No Docker: unit + integration + integration_v2
 #   ./run_all_tests.sh ci tests/integration/test_file.py -k test_name
 
@@ -84,7 +84,7 @@ elif [ "$MODE" = "ci" ]; then
         set -e
         [ "$TOX_RC" -ne 0 ] && FAILURES="targeted"
     else
-        echo -e "${BLUE}Running all 5 suites in parallel via tox...${NC}"
+        echo -e "${BLUE}Running all 6 suites in parallel via tox...${NC}"
         set +e
         tox -p -o > >(tee "$RESULTS_DIR/tox.log") 2>&1
         TOX_RC=$?
@@ -100,7 +100,7 @@ elif [ "$MODE" = "ci" ]; then
     fi
 else
     echo "Usage: ./run_all_tests.sh [quick|ci]"
-    echo "  ci (default) — Docker + all 5 suites via tox"
+    echo "  ci (default) — Docker + all 6 suites via tox"
     echo "  quick        — no Docker: unit + integration + integration_v2"
     exit 1
 fi

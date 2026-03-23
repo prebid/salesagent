@@ -10,6 +10,7 @@ by tool domain.
 """
 
 # Re-export raw functions from tool modules
+from src.core.tools.accounts import list_accounts_raw, sync_accounts_raw
 from src.core.tools.capabilities import get_adcp_capabilities_raw
 from src.core.tools.creative_formats import list_creative_formats_raw
 from src.core.tools.creatives import list_creatives_raw, sync_creatives_raw
@@ -24,6 +25,8 @@ from src.core.tools.properties import list_authorized_properties_raw
 # Signals tools removed - should come from dedicated signals agents, not sales agent
 
 __all__ = [
+    "list_accounts_raw",
+    "sync_accounts_raw",
     "get_adcp_capabilities_raw",
     "get_products_raw",
     "create_media_buy_raw",

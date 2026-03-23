@@ -2107,6 +2107,7 @@ async def _create_media_buy_impl(
                     order_name=f"{req.buyer_ref} - {start_time.strftime('%Y-%m-%d')}",
                     package_id_map=package_id_map,
                     by_alias=True,
+                    account_id=identity.account_id if identity else None,
                     created_at=datetime.now(UTC),
                 )
                 logger.info(f"✅ Created media buy {media_buy_id} with status=pending_approval")
@@ -2982,6 +2983,7 @@ async def _create_media_buy_impl(
                 status=media_buy_status,
                 campaign_objective=getattr(req, "campaign_objective", "") or "",
                 kpi_goal=getattr(req, "kpi_goal", "") or "",
+                account_id=identity.account_id if identity else None,
             )
             # UoW auto-commits on clean exit
 
@@ -3803,6 +3805,12 @@ async def create_media_buy(
     # Read identity and context_id pre-resolved by MCPAuthMiddleware
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     _ctx_id = (await ctx.get_state("context_id")) if isinstance(ctx, Context) else None
+
+    # Resolve account at transport boundary (before _impl)
+    from src.core.transport_helpers import enrich_identity_with_account
+
+    identity = enrich_identity_with_account(identity, req.account)
+
     # Serialize PushNotificationConfig model to dict for _impl (which accepts dict|None)
     pnc_dict = push_notification_config.model_dump() if push_notification_config else None
     result = await _create_media_buy_impl(
@@ -3893,6 +3901,11 @@ async def create_media_buy_raw(
         from src.core.transport_helpers import resolve_identity_from_context
 
         identity = resolve_identity_from_context(ctx, require_valid_token=True)
+
+    # Resolve account at transport boundary (before _impl)
+    from src.core.transport_helpers import enrich_identity_with_account
+
+    identity = enrich_identity_with_account(identity, req.account)
 
     # FIXME(salesagent-v0kb): boundary-completeness — context_id not passed to _impl
     return await _create_media_buy_impl(

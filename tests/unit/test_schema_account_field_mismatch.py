@@ -55,9 +55,15 @@ class TestAccountFieldMismatch:
         assert req.account.account_id == "acc_123"
 
     def test_get_media_buy_delivery_model_accepts_account_field(self):
-        """Model accepts 'account' as dict (local override, not yet AccountReference)."""
+        """Model accepts 'account' as dict (salesagent extension override).
+
+        GetMediaBuyDeliveryRequest overrides account as dict[str, Any] | None
+        (salesagent-specific extension). Account resolution happens at the
+        transport boundary (enrich_identity_with_account), not in the schema.
+        """
         req = GetMediaBuyDeliveryRequest(account={"account_id": "acc_123"})
-        assert req.account == {"account_id": "acc_123"}
+        assert isinstance(req.account, dict)
+        assert req.account["account_id"] == "acc_123"
 
     def test_status_filter_schema_type_vs_model_type(self):
         """Schema defines status_filter as oneOf[enum-string, array-of-enum],

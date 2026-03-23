@@ -69,7 +69,7 @@ class AdCPAuthenticationError(AdCPError):
     """Missing or invalid authentication credentials (401)."""
 
     status_code = 401
-    error_code = "AUTHENTICATION_ERROR"
+    error_code = "AUTH_TOKEN_INVALID"
 
 
 class AdCPAuthorizationError(AdCPError):
@@ -86,12 +86,46 @@ class AdCPNotFoundError(AdCPError):
     error_code = "NOT_FOUND"
 
 
+class AdCPAccountNotFoundError(AdCPNotFoundError):
+    """Account not found by ID or natural key (404, ACCOUNT_NOT_FOUND)."""
+
+    error_code = "ACCOUNT_NOT_FOUND"
+
+
+class AdCPAccountSetupRequiredError(AdCPError):
+    """Account exists but requires setup before use (422, ACCOUNT_SETUP_REQUIRED)."""
+
+    status_code = 422
+    error_code = "ACCOUNT_SETUP_REQUIRED"
+    recovery: RecoveryHint = "correctable"
+
+
+class AdCPAccountSuspendedError(AdCPError):
+    """Account is suspended and cannot be used (403, ACCOUNT_SUSPENDED)."""
+
+    status_code = 403
+    error_code = "ACCOUNT_SUSPENDED"
+
+
+class AdCPAccountPaymentRequiredError(AdCPError):
+    """Account has outstanding payment requirements (402, ACCOUNT_PAYMENT_REQUIRED)."""
+
+    status_code = 402
+    error_code = "ACCOUNT_PAYMENT_REQUIRED"
+
+
 class AdCPConflictError(AdCPError):
     """Resource conflict, e.g. duplicate idempotency key (409)."""
 
     status_code = 409
     error_code = "CONFLICT"
     recovery: RecoveryHint = "correctable"
+
+
+class AdCPAccountAmbiguousError(AdCPConflictError):
+    """Natural key matches multiple accounts (409, ACCOUNT_AMBIGUOUS)."""
+
+    error_code = "ACCOUNT_AMBIGUOUS"
 
 
 class AdCPGoneError(AdCPError):

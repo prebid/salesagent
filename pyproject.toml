@@ -105,6 +105,7 @@ dev = [
     "pytest-bdd>=7.0.0",
     "semgrep>=1.50.0",
     "pylint>=4.0.5",
+    "pytest-bdd>=7.0.0",
     # Security patches for transitive dev dependencies
     "black>=26.3.1",  # GHSA-3936-cmfr-pm3m
 ]
