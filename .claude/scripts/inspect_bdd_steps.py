@@ -99,16 +99,23 @@ def _get_decorator_step_type(decorator: ast.expr) -> str | None:
     return None
 
 
-def extract_bdd_steps(directory: Path) -> list[BddStepInfo]:
+def extract_bdd_steps(directory: Path, files: list[Path] | None = None) -> list[BddStepInfo]:
     """Extract all BDD step functions from Python files in directory.
 
     Walks all .py files recursively, finds functions decorated with
     @given, @when, or @then (from pytest_bdd), and extracts their
     step text and source code.
+
+    If ``files`` is provided, only those specific files are scanned.
     """
     results: list[BddStepInfo] = []
 
-    for py_file in sorted(directory.rglob("*.py")):
+    if files:
+        py_files = sorted(files)
+    else:
+        py_files = sorted(directory.rglob("*.py"))
+
+    for py_file in py_files:
         try:
             source = py_file.read_text()
         except (OSError, UnicodeDecodeError):
@@ -470,6 +477,18 @@ def main() -> None:
         default=True,
         help="Only inspect Then steps (default: true)",
     )
+    parser.add_argument(
+        "--files",
+        nargs="+",
+        type=Path,
+        default=None,
+        help="Specific step files to inspect (overrides --steps-dir)",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Also write machine-readable JSON alongside the markdown report",
+    )
     args = parser.parse_args()
 
     # Determine output path
@@ -477,8 +496,12 @@ def main() -> None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M")
         args.output = Path(f".claude/reports/bdd-step-audit-{timestamp}.md")
 
-    print(f"Scanning {args.steps_dir} for BDD step functions...")
-    all_steps = extract_bdd_steps(args.steps_dir)
+    if args.files:
+        print(f"Scanning {len(args.files)} specific files for BDD step functions...")
+        all_steps = extract_bdd_steps(args.steps_dir, files=args.files)
+    else:
+        print(f"Scanning {args.steps_dir} for BDD step functions...")
+        all_steps = extract_bdd_steps(args.steps_dir)
     print(f"  Found {len(all_steps)} step functions total")
 
     # Filter to Then steps for assertion completeness
@@ -505,6 +528,25 @@ def main() -> None:
     # Generate report
     generate_report(all_steps, triage_results, deep_results, args.output)
     print(f"\nReport written to {args.output}")
+
+    # JSON output for machine consumption (pipeline integration)
+    if args.json:
+        import json
+
+        json_path = args.output.with_suffix(".json")
+        findings = []
+        for r in flagged:
+            findings.append(
+                {
+                    "function": r.step.function_name,
+                    "file": r.step.file_path,
+                    "line": r.step.line_number,
+                    "step_text": r.step.step_text,
+                    "reason": r.reason,
+                }
+            )
+        json_path.write_text(json.dumps(findings, indent=2))
+        print(f"JSON written to {json_path}")
 
 
 if __name__ == "__main__":

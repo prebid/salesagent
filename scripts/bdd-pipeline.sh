@@ -170,55 +170,77 @@ $(echo "$PROD_FILES" | sed 's/^/- /')" --allow-empty
     # --- Inspect: strengthen weak assertions in changed step files ---
     CHANGED_STEPS=$(git diff --name-only "$PRE_HEAD" HEAD -- 'tests/bdd/steps/' || true)
     if [ -n "$CHANGED_STEPS" ]; then
-      INSPECT_LOG="$LOGDIR/inspect-$TASK_ID.log"
+      INSPECT_REPORT="$LOGDIR/inspect-$TASK_ID.json"
+      INSPECT_MD="$LOGDIR/inspect-$TASK_ID.md"
       echo "  🔍 inspecting assertions..."
 
-      # Find which Gherkin scenarios reference these steps (for context)
-      STEP_FILES_ARG=$(echo "$CHANGED_STEPS" | tr '\n' ' ')
+      # Phase 1: Run the inspect script on changed files only → JSON report
+      STEP_FILES_ARGS=""
+      for SF in $CHANGED_STEPS; do
+        STEP_FILES_ARGS="$STEP_FILES_ARGS $SF"
+      done
+      python3 .claude/scripts/inspect_bdd_steps.py \
+        --pass1-only --json \
+        --files $STEP_FILES_ARGS \
+        --output "$INSPECT_MD" \
+        > "$LOGDIR/inspect-scan-$TASK_ID.log" 2>&1 || true
 
-      $CLAUDE "You are a BDD assertion quality inspector. Review the CHANGED step definitions below and strengthen any weak Then-step assertions.
+      # Phase 2: Parse FLAGs and fix each one
+      FLAG_COUNT=0
+      FIX_COUNT=0
+      if [ -f "$INSPECT_REPORT" ]; then
+        FLAG_COUNT=$(python3 -c "import json; print(len(json.load(open('$INSPECT_REPORT'))))" 2>/dev/null || echo "0")
+      fi
 
-## Changed step files (just wired by task $TASK_ID):
-$CHANGED_STEPS
+      if [ "$FLAG_COUNT" -gt 0 ]; then
+        echo "  ⚠ $FLAG_COUNT weak assertions found — fixing..."
 
-## Rules for strong assertions
+        # Feed each finding to a fix agent
+        FIX_LOG="$LOGDIR/inspect-fix-$TASK_ID.log"
+        FINDINGS=$(cat "$INSPECT_REPORT")
 
-1. **Success outcomes** ('passes', 'accepted', 'skipped'): MUST assert at minimum:
-   - \`response is not None\` (existence)
-   - \`media_buy_id\` is present in response (proves persistence)
-   - For time-related outcomes: verify the time field value matches input or expected transformation
-   - For validation-pass outcomes: verify response.status is a valid creation status
+        $CLAUDE "You are a BDD assertion fixer. The inspector found $FLAG_COUNT weak Then-step assertions in files just modified by task $TASK_ID.
 
-2. **Error outcomes**: MUST assert:
-   - Error code matches expected (already good if using _assert_error_outcome)
-   - Recovery hint if specified
-   - Suggestion field if specified
+## Findings (from inspect_bdd_steps.py)
+$FINDINGS
 
-3. **NEVER weaken existing assertions** to make tests pass. If production doesn't match, xfail.
+## Fix rules
 
-4. **NEVER modify production code.** Only touch files under tests/.
-
-5. Read the Gherkin scenarios that use these steps (in tests/bdd/features/) to understand the INTENT of each assertion.
-
-6. Run \`make quality\` after changes to verify nothing breaks.
-
-## What to do
-- Read the changed step files
-- For each Then step or assertion helper, check if it asserts enough for what the step text claims
-- If weak: add the missing assertions
-- If a new assertion would fail because production doesn't match spec: xfail with a SPEC-PRODUCTION GAP note
-- Commit your changes with message: 'fix(bdd): strengthen assertions for $TASK_ID'
+1. For each finding, read the step function AND the Gherkin scenario(s) that use it (in tests/bdd/features/).
+2. Strengthen the assertion to match what the step text claims:
+   - Success outcomes ('passes', 'accepted', 'skipped'): assert media_buy_id present, status is valid
+   - Time outcomes: verify the time field value matches input or expected transformation
+   - Error outcomes: verify error code, recovery, suggestion as claimed
+3. If a strengthened assertion would fail because production doesn't match spec: use pytest.xfail() with a SPEC-PRODUCTION GAP note. NEVER weaken assertions.
+4. NEVER modify production code. Only files under tests/.
+5. Run make quality after all fixes.
+6. Commit: 'fix(bdd): strengthen assertions for $TASK_ID'
 
 $GIT_INSTRUCTION" \
-        > "$INSPECT_LOG" 2>&1 || true
+          > "$FIX_LOG" 2>&1 || true
 
-      INSPECT_SIZE=$(wc -c < "$INSPECT_LOG" 2>/dev/null | tr -d ' ' || echo "0")
-      # Check if inspector made commits
-      INSPECT_HEAD=$(git rev-parse HEAD)
-      if [ "$INSPECT_HEAD" != "$POST_HEAD" ]; then
-        echo "  ✅ assertions strengthened"
+        # Phase 3: Re-inspect to verify fixes
+        REINSPECT_REPORT="$LOGDIR/reinspect-$TASK_ID.json"
+        REINSPECT_MD="$LOGDIR/reinspect-$TASK_ID.md"
+        python3 .claude/scripts/inspect_bdd_steps.py \
+          --pass1-only --json \
+          --files $STEP_FILES_ARGS \
+          --output "$REINSPECT_MD" \
+          > "$LOGDIR/reinspect-scan-$TASK_ID.log" 2>&1 || true
+
+        REMAINING=0
+        if [ -f "$REINSPECT_REPORT" ]; then
+          REMAINING=$(python3 -c "import json; print(len(json.load(open('$REINSPECT_REPORT'))))" 2>/dev/null || echo "0")
+        fi
+
+        if [ "$REMAINING" -eq 0 ]; then
+          echo "  ✅ all $FLAG_COUNT assertions strengthened"
+        else
+          echo "  ⚠ $REMAINING/$FLAG_COUNT assertions still weak (see $REINSPECT_MD)"
+          echo "$TASK_ID: $REMAINING remaining" >> "$LOGDIR/weak-assertions.log"
+        fi
       else
-        echo "  ── assertions OK (no changes)"
+        echo "  ── assertions OK (0 flags)"
       fi
     fi
 
@@ -408,6 +430,13 @@ if [ -f "$LOGDIR/prod-violations.log" ]; then
   echo ""
   echo "⚠ Production file violations ($VIOLATION_COUNT files reverted):"
   sort -u "$LOGDIR/prod-violations.log" | sed 's/^/  - /'
+fi
+
+# Print weak assertion residuals if any
+if [ -f "$LOGDIR/weak-assertions.log" ]; then
+  echo ""
+  echo "⚠ Remaining weak assertions (inspector couldn't fix):"
+  cat "$LOGDIR/weak-assertions.log" | sed 's/^/  - /'
 fi
 
 # Print all verdicts
