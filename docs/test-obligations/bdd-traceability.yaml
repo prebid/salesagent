@@ -953,3 +953,65 @@ mappings:
       upstream_refs: ["BR-UC-005-main-mcp", "BR-RULE-209"]
       business_rules: ["BR-RULE-209"]
       status: mapped
+
+  ADMIN-ACCOUNTS:
+    - adcp_scenario_id: "T-ADMIN-ACCT-001"
+      adcp_feature: "BR-ADMIN-ACCOUNTS.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-ADMIN-ACCT-002"
+      adcp_feature: "BR-ADMIN-ACCOUNTS.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-ADMIN-ACCT-003"
+      adcp_feature: "BR-ADMIN-ACCOUNTS.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-ADMIN-ACCT-004"
+      adcp_feature: "BR-ADMIN-ACCOUNTS.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-ADMIN-ACCT-005"
+      adcp_feature: "BR-ADMIN-ACCOUNTS.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-ADMIN-ACCT-006"
+      adcp_feature: "BR-ADMIN-ACCOUNTS.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-ADMIN-ACCT-007"
+      adcp_feature: "BR-ADMIN-ACCOUNTS.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-ADMIN-ACCT-008"
+      adcp_feature: "BR-ADMIN-ACCOUNTS.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-ADMIN-ACCT-009"
+      adcp_feature: "BR-ADMIN-ACCOUNTS.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-ADMIN-ACCT-010"
+      adcp_feature: "BR-ADMIN-ACCOUNTS.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
