@@ -112,6 +112,7 @@ from src.core.schemas import (
 )
 from src.core.testing_hooks import AdCPTestContext, TestingContext, apply_testing_hooks
 from src.core.tool_context import ToolContext
+from src.core.tools.financial_validation import validate_max_daily_package_spend, validate_min_package_budget
 
 # Import get_product_catalog from main (after refactor)
 from src.core.validation_helpers import format_validation_error
@@ -1628,7 +1629,7 @@ async def _create_media_buy_impl(
                             )
 
             # Get currency from product pricing options (per AdCP spec)
-            request_currency = None
+            request_currency: str | None = None
 
             # First, try to get currency from first package's pricing option
             if req.packages and len(req.packages) > 0:
@@ -1808,12 +1809,18 @@ async def _create_media_buy_impl(
                                         package_min_spend = Decimal(str(currency_limit.min_package_budget))
 
                                 # Validate if minimum spend is set
-                                if package_min_spend and package_budget < package_min_spend:
-                                    error_msg = (
-                                        f"Package budget ({package_budget} {package_currency}) does not meet minimum spend requirement "
-                                        f"({package_min_spend} {package_currency}) for products in this package"
+                                min_budget_error: str | None = (
+                                    validate_min_package_budget(
+                                        package_budget=package_budget,
+                                        min_package_budget=package_min_spend,
+                                        currency=package_currency,
+                                        context="for products in this package",
                                     )
-                                    raise ValueError(error_msg)
+                                    if package_min_spend
+                                    else None
+                                )
+                                if min_budget_error:
+                                    raise ValueError(min_budget_error)
                     else:
                         # Legacy mode: single total_budget for all products
                         applicable_min_spends = list(product_min_spends.values())
@@ -1821,12 +1828,15 @@ async def _create_media_buy_impl(
                             required_min_spend = max(applicable_min_spends)
                             budget_decimal = Decimal(str(total_budget))
 
-                            if budget_decimal < required_min_spend:
-                                error_msg = (
-                                    f"Total budget ({total_budget} {request_currency}) does not meet minimum spend requirement "
-                                    f"({required_min_spend} {request_currency}) for the selected products"
-                                )
-                                raise ValueError(error_msg)
+                            legacy_min_budget_error: str | None = validate_min_package_budget(
+                                package_budget=budget_decimal,
+                                min_package_budget=required_min_spend,
+                                currency=request_currency,
+                                subject="Total",
+                                context="for the selected products",
+                            )
+                            if legacy_min_budget_error:
+                                raise ValueError(legacy_min_budget_error)
 
             # Validate maximum daily spend per package (if set)
             # This is per-package to prevent buyers from splitting large budgets across many packages
@@ -1845,27 +1855,30 @@ async def _create_media_buy_impl(
                             continue
                         # Package.budget is now always float | None (per AdCP spec)
                         package_budget = Decimal(str(package.budget))
-                        package_daily_budget = package_budget / Decimal(str(flight_days))
-
-                        if package_daily_budget > currency_limit.max_daily_package_spend:
-                            error_msg = (
-                                f"Package daily budget ({package_daily_budget} {request_currency}) exceeds "
-                                f"maximum daily spend per package ({currency_limit.max_daily_package_spend} {request_currency}). "
-                                f"This protects against accidental large budgets and prevents GAM line item proliferation."
-                            )
-                            raise ValueError(error_msg)
+                        daily_package_spend_error: str | None = validate_max_daily_package_spend(
+                            package_budget=package_budget,
+                            flight_days=flight_days,
+                            max_daily_spend=Decimal(str(currency_limit.max_daily_package_spend)),
+                            currency=request_currency,
+                            limit_label="maximum daily spend per package",
+                            context="This protects against accidental large budgets and prevents GAM line item proliferation.",
+                        )
+                        if daily_package_spend_error:
+                            raise ValueError(daily_package_spend_error)
                 else:
                     # Legacy mode: validate total budget
-                    legacy_daily_budget: Decimal = Decimal(str(total_budget)) / Decimal(str(flight_days))
-                    max_daily_spend: Decimal = Decimal(str(currency_limit.max_daily_package_spend))
+                    legacy_daily_spend_error: str | None = validate_max_daily_package_spend(
+                        package_budget=Decimal(str(total_budget)),
+                        flight_days=flight_days,
+                        max_daily_spend=Decimal(str(currency_limit.max_daily_package_spend)),
+                        currency=request_currency,
+                        subject="Daily",
+                        limit_label="maximum daily spend",
+                        context="This protects against accidental large budgets.",
+                    )
 
-                    if legacy_daily_budget > max_daily_spend:
-                        error_msg = (
-                            f"Daily budget ({legacy_daily_budget} {request_currency}) exceeds maximum daily spend "
-                            f"({currency_limit.max_daily_package_spend} {request_currency}). "
-                            f"This protects against accidental large budgets."
-                        )
-                        raise ValueError(error_msg)
+                    if legacy_daily_spend_error:
+                        raise ValueError(legacy_daily_spend_error)
 
         # Validate targeting doesn't use managed-only dimensions (targeting_overlay is at package level per AdCP spec)
         if req.packages:

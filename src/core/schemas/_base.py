@@ -1627,7 +1627,9 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest1):
     # Override packages to use our extended type with creative_ids
     packages: list[AdCPPackageUpdate] | None = None  # type: ignore[assignment]
     # Campaign-level budget (not in library spec — convenience field)
-    budget: Budget | None = None
+    # Bare float is accepted so transport wrappers can preserve existing DB currency
+    # when the caller updates only the amount.
+    budget: Budget | float | None = None
     # Internal testing field
     today: date | None = Field(None, exclude=True, description="For testing/simulation only - not part of AdCP spec")
 

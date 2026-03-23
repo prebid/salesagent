@@ -35,6 +35,7 @@ from sqlalchemy.orm import Session
 
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories.creative import CreativeAssignmentRepository, CreativeRepository
+from src.core.database.repositories.currency_limit import CurrencyLimitRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.product import ProductRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
@@ -117,7 +118,8 @@ class BaseUoW:
 class MediaBuyUoW(BaseUoW):
     """Unit of Work for MediaBuy operations.
 
-    Wraps a database session and provides a tenant-scoped MediaBuyRepository.
+    Wraps a database session and provides tenant-scoped repositories for
+    media buys and related data (currency limits).
     Auto-commits on clean exit, rolls back on exception.
 
     Args:
@@ -125,13 +127,16 @@ class MediaBuyUoW(BaseUoW):
     """
 
     media_buys: MediaBuyRepository | None
+    currency_limits: CurrencyLimitRepository | None
 
     def _init_repos(self) -> None:
         assert self._session is not None
         self.media_buys = MediaBuyRepository(self._session, self._tenant_id)
+        self.currency_limits = CurrencyLimitRepository(self._session, self._tenant_id)
 
     def _clear_repos(self) -> None:
         self.media_buys = None
+        self.currency_limits = None
 
 
 class ProductUoW(BaseUoW):
