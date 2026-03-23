@@ -72,17 +72,21 @@ def then_response_field_matches(ctx: dict, field: str, value: str) -> None:
 
 @then("the response should include packages with allocations")
 def then_response_has_packages(ctx: dict) -> None:
-    """Assert response includes packages array."""
+    """Assert response includes packages array with allocated packages (product_id assigned)."""
     resp = ctx.get("response")
     assert resp is not None, "Expected a response but none found"
     packages = _get_response_field(resp, "packages")
     assert packages is not None, "Expected 'packages' in response"
     assert len(packages) > 0, "Expected at least one package in response"
+    # "with allocations" means each package has a product_id (allocation to a product)
+    for i, pkg in enumerate(packages):
+        pkg_dict = pkg if isinstance(pkg, dict) else (pkg.model_dump() if hasattr(pkg, "model_dump") else vars(pkg))
+        assert pkg_dict.get("product_id"), f"Package {i} missing product_id — not allocated"
 
 
 @then("each package should include product_id, budget, and pricing details")
 def then_packages_have_details(ctx: dict) -> None:
-    """Assert each package has required fields."""
+    """Assert each package has product_id, budget, AND pricing details."""
     resp = ctx.get("response")
     assert resp is not None, "Expected a response but none found"
     packages = _get_response_field(resp, "packages")
@@ -91,6 +95,8 @@ def then_packages_have_details(ctx: dict) -> None:
         pkg_dict = pkg if isinstance(pkg, dict) else (pkg.model_dump() if hasattr(pkg, "model_dump") else vars(pkg))
         assert "product_id" in pkg_dict, f"Package {i} missing product_id"
         assert "budget" in pkg_dict, f"Package {i} missing budget"
+        # Step text claims "pricing details" — verify pricing_option_id is present
+        assert pkg_dict.get("pricing_option_id"), f"Package {i} missing pricing_option_id (pricing details)"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -112,12 +118,17 @@ def then_approval_auto(ctx: dict) -> None:
 
 @then("the media buy should proceed to adapter execution")
 def then_adapter_executed(ctx: dict) -> None:
-    """Assert the adapter's create_media_buy was called (auto-approval path)."""
+    """Assert the adapter's create_media_buy was called exactly once (auto-approval path)."""
     env = ctx["env"]
     adapter_mock = env.mock["adapter"].return_value
-    assert adapter_mock.create_media_buy.called, (
-        "Expected adapter.create_media_buy to be called (auto-approval path), but it was not called"
+    assert adapter_mock.create_media_buy.call_count == 1, (
+        f"Expected adapter.create_media_buy to be called exactly once (auto-approval path), "
+        f"but it was called {adapter_mock.create_media_buy.call_count} time(s)"
     )
+    # Verify the adapter received a request argument (not called with empty args)
+    call_args = adapter_mock.create_media_buy.call_args
+    assert call_args is not None, "adapter.create_media_buy was called but call_args is None"
+    assert len(call_args.args) > 0 or len(call_args.kwargs) > 0, "adapter.create_media_buy was called with no arguments"
 
 
 @then("the approval path should be manual")
@@ -189,10 +200,15 @@ def then_media_buy_status(ctx: dict, status: str) -> None:
 
 @then("a Slack notification should be sent to the Seller")
 def then_slack_notification_sent(ctx: dict) -> None:
-    """Assert Slack notifier was called."""
+    """Assert Slack notifier was called with event details indicating seller notification."""
     env = ctx["env"]
     mock_slack = env.mock["slack"].return_value
     assert mock_slack.notify_media_buy_event.called, "Expected Slack notification to be sent"
+    # Verify the notification includes an event_type (first positional arg or kwarg)
+    call_args = mock_slack.notify_media_buy_event.call_args
+    assert call_args is not None, "Slack notify_media_buy_event called but call_args is None"
+    event_type = call_args.args[0] if call_args.args else call_args.kwargs.get("event_type")
+    assert event_type, "Slack notification missing event_type argument"
 
 
 @then("the Buyer should be notified via webhook")
@@ -233,7 +249,7 @@ def then_no_media_buy_persisted(ctx: dict) -> None:
 @then("the media buy record should be persisted in the database")
 @then("the media buy record should be persisted")
 def then_media_buy_persisted(ctx: dict) -> None:
-    """Assert a media buy was persisted in the database."""
+    """Assert a media buy was persisted in the database with correct field values."""
     resp = ctx.get("response")
     assert resp is not None, "Expected a response to check persistence"
     media_buy_id = _get_response_field(resp, "media_buy_id")
@@ -247,6 +263,11 @@ def then_media_buy_persisted(ctx: dict) -> None:
     with get_db_session() as session:
         mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id)).first()
         assert mb is not None, f"Media buy {media_buy_id} not found in database"
+        # Verify key field values are populated (not just existence)
+        tenant = ctx.get("tenant")
+        if tenant is not None:
+            assert mb.tenant_id == tenant.tenant_id, f"Expected tenant_id '{tenant.tenant_id}', got '{mb.tenant_id}'"
+        assert mb.status is not None, f"Media buy {media_buy_id} persisted with no status"
 
 
 @then(parsers.parse('the media buy record should be persisted with status "{status}"'))
@@ -270,7 +291,7 @@ def then_media_buy_persisted_with_status(ctx: dict, status: str) -> None:
 
 @then("the package records should be persisted")
 def then_package_records_persisted(ctx: dict) -> None:
-    """Assert media buy packages were persisted in the database."""
+    """Assert media buy packages were persisted in the database with correct count."""
     resp = ctx.get("response")
     assert resp is not None, "Expected a response to check package persistence"
     media_buy_id = _get_response_field(resp, "media_buy_id")
@@ -284,6 +305,13 @@ def then_package_records_persisted(ctx: dict) -> None:
     with get_db_session() as session:
         count = session.scalar(select(func.count()).select_from(MediaPackage).filter_by(media_buy_id=media_buy_id))
         assert count and count > 0, f"No package records found for media buy {media_buy_id}"
+        # Verify count matches the number of packages in the request
+        request_kwargs = ctx.get("request_kwargs", {})
+        expected_count = len(request_kwargs.get("packages", []))
+        if expected_count > 0:
+            assert count == expected_count, (
+                f"Expected {expected_count} package record(s) for media buy {media_buy_id}, found {count}"
+            )
 
 
 @then("no package records should be persisted")
@@ -388,11 +416,31 @@ def then_start_time_resolved_to_utc(ctx: dict) -> None:
 
 @then("the campaign should be immediately activating")
 def then_campaign_immediately_activating(ctx: dict) -> None:
-    """Assert the response status indicates immediate activation (auto-approved)."""
+    """Assert the campaign is immediately activating: auto-approved AND start_time near now."""
+    from datetime import UTC, datetime
+
+    from sqlalchemy import select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import MediaBuy
+
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
+    # Auto-approved means status == "completed"
     status = _get_response_field(resp, "status")
     assert status == "completed", f"Expected 'completed' for immediate activation, got '{status}'"
+    # "Immediately activating" also means start_time is near-now (ASAP resolved)
+    media_buy_id = _get_response_field(resp, "media_buy_id")
+    assert media_buy_id, "No media_buy_id in response"
+    with get_db_session() as session:
+        mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id)).first()
+        assert mb is not None, f"Media buy {media_buy_id} not found in DB"
+        assert mb.start_time is not None, "start_time not set — campaign cannot be 'immediately activating'"
+        now = datetime.now(UTC)
+        delta = abs((mb.start_time - now).total_seconds())
+        assert delta < 60, (
+            f"start_time {mb.start_time} is {delta}s from now — expected within 60s for 'immediately activating'"
+        )
 
 
 @then('the response should include resolved start_time (not literal "asap")')

@@ -156,7 +156,8 @@ def then_response_has_media_buy_id(ctx: dict) -> None:
     """Assert response contains a media_buy_id (any value)."""
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
-    assert getattr(resp, "media_buy_id", None), "Expected media_buy_id in response"
+    actual = getattr(resp, "media_buy_id", None)
+    assert actual is not None, f"Expected media_buy_id in response, got {actual!r}"
 
 
 @then("the response should contain buyer_ref")
@@ -178,15 +179,15 @@ def then_response_buyer_ref(ctx: dict, buyer_ref: str) -> None:
 
 @then("the response should contain an implementation_date that is not null")
 def then_implementation_date_not_null(ctx: dict) -> None:
-    """Assert response has a non-null implementation_date.
+    """Assert response has a non-null implementation_date."""
+    import pytest
 
-    Note: production may not set implementation_date yet (spec gap).
-    We verify the response exists and has the field, even if None.
-    """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
-    # implementation_date may not be set by production code yet
-    assert hasattr(resp, "implementation_date") or True, "Response has no implementation_date field"
+    assert hasattr(resp, "implementation_date"), "Response has no implementation_date field"
+    impl_date = resp.implementation_date
+    if impl_date is None:
+        pytest.xfail("SPEC-PRODUCTION GAP: implementation_date is None — production does not set it yet")
 
 
 @then(parsers.parse('the response should contain affected_packages including "{package_id}"'))
@@ -204,6 +205,8 @@ def then_affected_packages_include(ctx: dict, package_id: str) -> None:
 @then(parsers.parse("the affected package should show the updated budget of {budget:d}"))
 def then_affected_package_budget(ctx: dict, budget: int) -> None:
     """Assert the affected package shows the updated budget."""
+    import pytest
+
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     affected = getattr(resp, "affected_packages", None) or []
@@ -212,20 +215,24 @@ def then_affected_package_budget(ctx: dict, budget: int) -> None:
     actual_budget = getattr(pkg, "budget", None)
     if actual_budget is None and isinstance(pkg, dict):
         actual_budget = pkg.get("budget")
-    # Budget may be approximate — check it's in the right ballpark
-    if actual_budget is not None:
-        assert float(actual_budget) == float(budget), f"Expected budget {budget}, got {actual_budget}"
+    if actual_budget is None:
+        pytest.xfail("SPEC-PRODUCTION GAP: affected package budget is None — production may not echo budget yet")
+    assert float(actual_budget) == float(budget), f"Expected budget {budget}, got {actual_budget}"
 
 
 @then("the response envelope should include a sandbox flag")
 def then_response_has_sandbox(ctx: dict) -> None:
     """Assert response includes sandbox information."""
-    # The sandbox flag is set at the protocol envelope level.
-    # In test mode with mock adapter, sandbox=True is expected.
+    import pytest
+
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
-    # Sandbox is set by the adapter — mock adapter defaults to sandbox mode
-    ctx.setdefault("sandbox_checked", True)
+    # sandbox may live on the response directly or on a wrapper envelope
+    sandbox = getattr(resp, "sandbox", None)
+    if sandbox is None and hasattr(resp, "model_dump"):
+        sandbox = resp.model_dump().get("sandbox")
+    if sandbox is None:
+        pytest.xfail("SPEC-PRODUCTION GAP: sandbox flag not present on response — may be envelope-level only")
 
 
 @then('the response should NOT contain an "errors" field')

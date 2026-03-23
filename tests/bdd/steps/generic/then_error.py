@@ -146,11 +146,18 @@ def then_suggestion_contains(ctx: dict, text: str) -> None:
 
 @then("the error message should indicate tenant context could not be determined")
 def then_error_tenant_context(ctx: dict) -> None:
-    """Assert error message mentions tenant context."""
+    """Assert error message indicates tenant context could not be determined."""
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
     msg = _get_error_message(error).lower()
     assert "tenant" in msg, f"Expected 'tenant' in error message: {_get_error_message(error)}"
+    # "could not be determined" requires more than just mentioning "tenant" —
+    # the message must indicate a resolution/determination failure
+    context_keywords = ("context", "resolve", "determine", "identify", "required", "missing", "not found")
+    assert any(kw in msg for kw in context_keywords), (
+        f"Expected tenant context determination failure message "
+        f"(context/resolve/determine/required/missing), got: {_get_error_message(error)}"
+    )
 
 
 @then("the error message should indicate which parameters are invalid")
@@ -183,12 +190,14 @@ def then_error_invalid_disclosure(ctx: dict, value: str) -> None:
 
 @then("the error message should indicate at least 1 item is required")
 def then_error_min_items(ctx: dict) -> None:
-    """Assert error message mentions minimum items requirement."""
+    """Assert error message mentions minimum items requirement (not just generic 'required')."""
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
     msg = _get_error_message(error).lower()
-    assert "at least 1" in msg or "required" in msg or "ensure this" in msg, (
-        f"Expected min-items message: {_get_error_message(error)}"
+    # Must specifically indicate a minimum-items constraint, not just any "required" field
+    min_items_patterns = ("at least 1", "at least one", "min_length", "empty", "ensure this", "too_short")
+    assert any(pattern in msg for pattern in min_items_patterns), (
+        f"Expected min-items message (at least 1/empty/min_length/too_short), got: {_get_error_message(error)}"
     )
 
 
@@ -297,31 +306,50 @@ def then_error_has_fix_suggestion(ctx: dict) -> None:
 
 @then("the suggestion should advise providing authentication credentials")
 def then_suggestion_auth(ctx: dict) -> None:
-    """Assert suggestion mentions authentication credentials."""
-    d = _get_error_dict(ctx.get("error"))
+    """Assert suggestion advises providing authentication credentials (not just mentioning 'auth')."""
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    d = _get_error_dict(error)
     suggestion = (d.get("suggestion") or "").lower()
-    assert "credential" in suggestion or "auth" in suggestion, f"Expected auth suggestion: {d.get('suggestion')}"
+    assert suggestion, "Expected non-empty suggestion"
+    # Must mention credentials/authentication AND an action word (provide/include/use/supply)
+    has_auth_concept = "credential" in suggestion or "authenticat" in suggestion or "token" in suggestion
+    has_action = any(word in suggestion for word in ("provide", "include", "use", "supply", "set", "pass"))
+    assert has_auth_concept and has_action, (
+        f"Expected suggestion to advise providing authentication credentials, got: {d.get('suggestion')}"
+    )
 
 
 @then("the suggestion should provide valid parameter values")
 def then_suggestion_valid_values(ctx: dict) -> None:
-    """Assert suggestion references valid parameter values, not just generic text."""
-    d = _get_error_dict(ctx.get("error"))
+    """Assert suggestion references valid parameter values with actionable guidance."""
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    d = _get_error_dict(error)
     suggestion = d.get("suggestion", "")
     assert suggestion, "Expected non-empty suggestion"
     suggestion_lower = suggestion.lower()
-    assert any(kw in suggestion_lower for kw in ("valid", "allowed", "values", "accepted", "supported")), (
-        f"Expected suggestion to reference valid parameter values, got: {suggestion}"
+    # Must reference validity AND provide actionable guidance (use/try/provide/check)
+    has_value_ref = any(kw in suggestion_lower for kw in ("valid", "allowed", "values", "accepted", "supported"))
+    has_action = any(word in suggestion_lower for word in ("use", "try", "provide", "check", "specify"))
+    assert has_value_ref and has_action, (
+        f"Expected suggestion to provide valid parameter values with actionable guidance, got: {suggestion}"
     )
 
 
 @then("the suggestion should advise using valid DisclosurePosition enum values")
 def then_suggestion_disclosure_enum(ctx: dict) -> None:
-    """Assert suggestion mentions valid DisclosurePosition values."""
-    d = _get_error_dict(ctx.get("error"))
+    """Assert suggestion mentions valid DisclosurePosition values specifically."""
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    d = _get_error_dict(error)
     suggestion = (d.get("suggestion") or "").lower()
-    assert "disclosureposition" in suggestion or "enum" in suggestion or "valid" in suggestion, (
-        f"Expected DisclosurePosition suggestion: {d.get('suggestion')}"
+    assert suggestion, "Expected non-empty suggestion"
+    # Must reference disclosure positions specifically (not just generic "valid")
+    has_disclosure_ref = "disclosureposition" in suggestion or "disclosure" in suggestion or "position" in suggestion
+    has_enum_or_values = "enum" in suggestion or "valid" in suggestion or "values" in suggestion
+    assert has_disclosure_ref and has_enum_or_values, (
+        f"Expected DisclosurePosition enum values suggestion, got: {d.get('suggestion')}"
     )
 
 
@@ -345,10 +373,18 @@ def then_suggestion_remove_dupes(ctx: dict) -> None:
 
 @then("the suggestion should advise providing at least one FormatId or omitting the filter")
 def then_suggestion_format_id_or_omit(ctx: dict) -> None:
-    """Assert suggestion advises providing FormatId or omitting."""
-    d = _get_error_dict(ctx.get("error"))
+    """Assert suggestion advises providing FormatId or omitting the filter."""
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    d = _get_error_dict(error)
     suggestion = (d.get("suggestion") or "").lower()
-    assert "formatid" in suggestion or "omit" in suggestion, f"Expected FormatId/omit suggestion: {d.get('suggestion')}"
+    assert suggestion, "Expected non-empty suggestion"
+    # Must reference FormatId/format AND either omit or provide guidance
+    has_format_ref = "formatid" in suggestion or "format_id" in suggestion or "format id" in suggestion
+    has_action = "omit" in suggestion or "provide" in suggestion or "include" in suggestion
+    assert has_format_ref and has_action, (
+        f"Expected suggestion about FormatId with omit/provide guidance, got: {d.get('suggestion')}"
+    )
 
 
 @then("the suggestion should advise including agent_url (URI) and id fields")

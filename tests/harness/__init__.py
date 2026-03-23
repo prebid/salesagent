@@ -54,6 +54,9 @@ from tests.harness.delivery_circuit_breaker import CircuitBreakerEnv
 from tests.harness.delivery_poll import DeliveryPollEnv
 from tests.harness.delivery_webhook import WebhookEnv
 
+# Media buy update env
+from tests.harness.media_buy_update import MediaBuyUpdateEnv
+
 # Product env
 from tests.harness.product import ProductEnv
 
@@ -75,6 +78,8 @@ __all__ = [
     "CircuitBreakerEnv",
     "DeliveryPollEnv",
     "WebhookEnv",
+    # Media buy update env
+    "MediaBuyUpdateEnv",
     # Product env
     "ProductEnv",
     # Transport

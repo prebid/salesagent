@@ -6,6 +6,50 @@ Auth setup mode allows test credentials to work per-tenant:
 - Once disabled, only SSO works
 """
 
+# --- Test Source-of-Truth Audit ---
+# Audited: 2026-03-18
+#
+# DECISION_BACKED (7/17 tests):
+#   test_auth_setup_mode_defaults_to_true_in_schema — product decision: "New tenants start
+#       with auth_setup_mode=True" (file module docstring)
+#   test_disable_setup_mode_requires_sso_enabled    — product decision: setup mode can only
+#       be disabled after SSO is configured (module docstring + endpoint logic comment)
+#   test_disable_setup_mode_allowed_with_sso        — same
+#   test_test_auth_allowed_when_both_enabled        — F-02 fix: BOTH env var AND
+#       auth_setup_mode=True required; documented in auth.py "# Require BOTH"
+#   test_test_auth_blocked_when_env_var_only        — F-02 regression: env var alone was the
+#       vulnerable case; documented in auth.py comment
+#   test_test_auth_blocked_when_setup_mode_only     — F-02 fix: auth_setup_mode alone must
+#       not grant access
+#   test_test_auth_blocked_when_both_disabled       — F-02 fix: neither condition → blocked
+#   test_migration_file_exists                      — deployment dependency: migration must
+#       exist for auth_setup_mode column to be present in production DB
+#
+# CHARACTERIZATION (3/17 tests):
+#   test_tenant_has_auth_setup_mode_field           — locks: Tenant ORM model has this
+#       attribute; no external spec defines internal model shape
+#   test_auth_setup_mode_is_boolean                 — locks: column python_type is bool;
+#       internal schema detail
+#   test_migration_has_correct_revision             — locks: revision ID and down_revision
+#       chain; internal migration structure
+#
+# SUSPECT (7/17 tests — reconstruct production logic without calling the endpoint):
+#   test_enable_setup_mode_always_allowed           — tests MagicMock attribute assignment
+#       only; a broken endpoint would not fail this test
+#   test_login_uses_tenant_auth_setup_mode          — copies tenant_login() conditional into
+#       test body; endpoint changes would not break this
+#   test_login_env_var_overrides_to_enable          — same pattern
+#   test_login_respects_disabled_setup_mode         — same pattern
+#   test_list_users_passes_auth_setup_mode          — builds context dict manually; endpoint
+#       changes would not break this
+#   test_list_users_handles_no_auth_config          — same pattern
+#
+# Action: The 6 SUSPECT endpoint-logic-reconstruction tests (TestSetupModeLogic,
+#   TestTenantLoginLogic, TestUsersEndpointConfig) should be replaced with tests that call
+#   the actual Flask endpoints, following the same pattern used in TestTestAuthEndpoint.
+#   This was the same issue flagged for TestSuperAdminCredentialPath in PR #1141.
+# ---
+
 import os
 from unittest.mock import MagicMock, patch
 
@@ -75,6 +119,8 @@ class TestSetupModeLogic:
         tenant.auth_setup_mode = False
         assert tenant.auth_setup_mode is False
 
+    # SUSPECT: tests MagicMock attribute assignment only — a broken enable_setup_mode
+    # endpoint would not fail this test. Replace with an endpoint-level test.
     def test_enable_setup_mode_always_allowed(self):
         """Should always allow re-enabling setup mode."""
         tenant = MagicMock()
@@ -85,43 +131,67 @@ class TestSetupModeLogic:
         assert tenant.auth_setup_mode is True
 
 
-class TestTestAuthEndpointLogic:
-    """Tests for the /test/auth endpoint logic with setup mode."""
+class TestTestAuthEndpoint:
+    """Endpoint-level tests for the /test/auth gate.
 
-    def test_test_auth_allowed_with_env_var(self):
-        """Test auth should be allowed when ADCP_AUTH_TEST_MODE=true."""
-        with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
-            env_test_mode = os.environ.get("ADCP_AUTH_TEST_MODE", "").lower() == "true"
-            tenant_setup_mode = False
+    F-02 fix: test auth now requires BOTH ADCP_AUTH_TEST_MODE=true AND
+    the tenant's auth_setup_mode=True. These tests exercise the actual
+    Flask endpoint so a gate change in auth.py would cause a real failure.
+    """
 
-            # Should NOT abort (allow access)
-            should_abort = not env_test_mode and not tenant_setup_mode
-            assert should_abort is False
+    def test_test_auth_allowed_when_both_enabled(self, make_auth_test_client):
+        """POST /test/auth returns 302 when env var and tenant setup mode are both on."""
+        with make_auth_test_client(auth_setup_mode=True) as (client, _):
+            with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true", "PRODUCTION": "", "ENVIRONMENT": ""}):
+                response = client.post(
+                    "/test/auth",
+                    data={"email": "test_super_admin@example.com", "password": "test123", "tenant_id": "default"},
+                )
 
-    def test_test_auth_allowed_with_tenant_setup_mode(self):
-        """Test auth should be allowed when tenant has auth_setup_mode=True."""
-        with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": ""}):
-            env_test_mode = os.environ.get("ADCP_AUTH_TEST_MODE", "").lower() == "true"
-            tenant_setup_mode = True  # Tenant is in setup mode
+        assert response.status_code == 302
 
-            # Should NOT abort (allow access)
-            should_abort = not env_test_mode and not tenant_setup_mode
-            assert should_abort is False
+    def test_test_auth_blocked_when_env_var_only(self, make_auth_test_client):
+        """POST /test/auth returns 404 when env var is set but tenant has disabled setup mode.
 
-    def test_test_auth_blocked_when_both_disabled(self):
-        """Test auth should 404 when both env var and setup mode are off."""
-        with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": ""}):
-            env_test_mode = os.environ.get("ADCP_AUTH_TEST_MODE", "").lower() == "true"
-            tenant_setup_mode = False  # Tenant disabled setup mode
+        F-02 regression: this was the vulnerable case before the fix.
+        """
+        with make_auth_test_client(auth_setup_mode=False) as (client, _):
+            with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true", "PRODUCTION": "", "ENVIRONMENT": ""}):
+                response = client.post(
+                    "/test/auth",
+                    data={"email": "test_super_admin@example.com", "password": "test123", "tenant_id": "default"},
+                )
 
-            # SHOULD abort (deny access)
-            should_abort = not env_test_mode and not tenant_setup_mode
-            assert should_abort is True
+        assert response.status_code == 404
+
+    def test_test_auth_blocked_when_setup_mode_only(self, make_auth_test_client):
+        """POST /test/auth returns 404 when tenant is in setup mode but env var is not set."""
+        with make_auth_test_client(auth_setup_mode=True) as (client, _):
+            with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "", "PRODUCTION": "", "ENVIRONMENT": ""}):
+                response = client.post(
+                    "/test/auth",
+                    data={"email": "test_super_admin@example.com", "password": "test123", "tenant_id": "default"},
+                )
+
+        assert response.status_code == 404
+
+    def test_test_auth_blocked_when_both_disabled(self, make_auth_test_client):
+        """POST /test/auth returns 404 when both env var and tenant setup mode are off."""
+        with make_auth_test_client(auth_setup_mode=False) as (client, _):
+            with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "", "PRODUCTION": "", "ENVIRONMENT": ""}):
+                response = client.post(
+                    "/test/auth",
+                    data={"email": "test_super_admin@example.com", "password": "test123", "tenant_id": "default"},
+                )
+
+        assert response.status_code == 404
 
 
 class TestTenantLoginLogic:
     """Tests for tenant login page respecting setup mode."""
 
+    # SUSPECT: copies tenant_login() conditional expression into test body — a change to the
+    # actual login route would not break this test. Replace with a GET /login endpoint test.
     def test_login_uses_tenant_auth_setup_mode(self):
         """Tenant login should use tenant's auth_setup_mode field."""
         tenant = MagicMock()
@@ -132,6 +202,8 @@ class TestTenantLoginLogic:
         test_mode = tenant.auth_setup_mode if hasattr(tenant, "auth_setup_mode") else True
         assert test_mode is True
 
+    # SUSPECT: copies tenant_login() conditional into test body — endpoint changes would not
+    # break this. Replace with endpoint test.
     def test_login_env_var_overrides_to_enable(self):
         """Env var ADCP_AUTH_TEST_MODE=true should override to enable test mode."""
         tenant = MagicMock()
@@ -145,6 +217,8 @@ class TestTenantLoginLogic:
 
             assert test_mode is True
 
+    # SUSPECT: copies tenant_login() conditional into test body — endpoint changes would not
+    # break this. Replace with endpoint test.
     def test_login_respects_disabled_setup_mode(self):
         """Tenant login should respect disabled setup mode when no env override."""
         tenant = MagicMock()
@@ -188,6 +262,8 @@ class TestMigration:
 class TestUsersEndpointConfig:
     """Tests for the users page template context."""
 
+    # SUSPECT: builds template context dict manually instead of calling list_users — endpoint
+    # changes would not break this. Replace with a GET endpoint test checking rendered HTML.
     def test_list_users_passes_auth_setup_mode(self):
         """list_users endpoint should pass auth_setup_mode to template."""
         # The endpoint passes these to the template:
@@ -208,6 +284,8 @@ class TestUsersEndpointConfig:
         assert context["auth_setup_mode"] is True
         assert context["oidc_enabled"] is True
 
+    # SUSPECT: builds template context dict manually — endpoint changes would not break this.
+    # Replace with endpoint test.
     def test_list_users_handles_no_auth_config(self):
         """list_users should handle case when no auth config exists."""
         tenant = MagicMock()

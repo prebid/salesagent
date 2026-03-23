@@ -195,6 +195,14 @@ def when_query_no_auth(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
+def _assert_pkg_field_present(pkg: Any, field: str) -> None:
+    """Assert a field is present (not None) on a package object or dict."""
+    if isinstance(pkg, dict):
+        assert field in pkg and pkg[field] is not None, f"Package missing {field}"
+    else:
+        assert getattr(pkg, field, None) is not None, f"Package missing {field}"
+
+
 def _get_media_buys(ctx: dict) -> list:
     """Extract media_buys list from response."""
     resp = ctx.get("response")
@@ -225,35 +233,65 @@ def then_response_includes_mb_with_status(ctx: dict, mb_id: str, status: str) ->
     "each media buy should include package-level details with budget, bid_price, product_id, flight dates, and paused state"
 )
 def then_package_details(ctx: dict) -> None:
-    """Assert each media buy has package-level details."""
+    """Assert each media buy has package-level details including all claimed fields."""
+    import pytest
+
     buys = _get_media_buys(ctx)
     assert len(buys) > 0, "No media buys in response to check"
     for buy in buys:
         packages = getattr(buy, "packages", None) or []
-        # Packages may be empty if no packages were created
         if packages:
             for pkg in packages:
                 assert getattr(pkg, "package_id", None) is not None, "Package missing package_id"
+                # Step text claims: budget, bid_price, product_id, flight dates, paused
+                _assert_pkg_field_present(pkg, "product_id")
+                _assert_pkg_field_present(pkg, "budget")
+                # bid_price may be None for fixed-price options — verify field exists
+                assert hasattr(pkg, "bid_price") or (isinstance(pkg, dict) and "bid_price" in pkg), (
+                    "Package missing bid_price field"
+                )
+                # paused must be a boolean, not absent
+                paused = getattr(pkg, "paused", None) if not isinstance(pkg, dict) else pkg.get("paused")
+                if paused is None:
+                    pytest.xfail("SPEC-PRODUCTION GAP: paused field not present on package")
+                assert isinstance(paused, bool), f"Expected paused to be bool, got {type(paused)}"
 
 
 @then("each package should include creative approval state when creatives are assigned")
 def then_creative_approval_state(ctx: dict) -> None:
-    """Assert packages include creative approval state when applicable."""
-    # Creative approvals are only present when creatives are assigned.
-    # This is a declarative check — creative assignments weren't set up
-    # in the main flow, so we verify the field exists (may be empty).
+    """Assert packages include creative_approval_state field when applicable.
+
+    Creative approvals are only present when creatives are assigned.
+    The scenario's Given steps do not assign creatives, so the field may be
+    None/empty -- but it must exist on the schema.
+    """
+    import pytest
+
     buys = _get_media_buys(ctx)
     assert len(buys) > 0, "No media buys in response"
-    ctx.setdefault("creative_approval_checked", True)
+    for buy in buys:
+        for pkg in getattr(buy, "packages", []) or []:
+            has_field = hasattr(pkg, "creative_approval_state") or (
+                isinstance(pkg, dict) and "creative_approval_state" in pkg
+            )
+            if not has_field:
+                pytest.xfail("SPEC-PRODUCTION GAP: creative_approval_state field not present on package schema")
 
 
 @then("each media buy should include buyer_ref and buyer_campaign_ref for correlation")
 def then_buyer_refs_for_correlation(ctx: dict) -> None:
-    """Assert each media buy includes correlation fields."""
+    """Assert each media buy includes buyer_ref and buyer_campaign_ref."""
+    import pytest
+
     buys = _get_media_buys(ctx)
     assert len(buys) > 0, "No media buys in response"
     for buy in buys:
-        assert getattr(buy, "buyer_ref", None) is not None, f"Missing buyer_ref on {getattr(buy, 'media_buy_id', '?')}"
+        mb_id = getattr(buy, "media_buy_id", "?")
+        assert getattr(buy, "buyer_ref", None) is not None, f"Missing buyer_ref on {mb_id}"
+        # Step text also claims buyer_campaign_ref
+        has_bcr = hasattr(buy, "buyer_campaign_ref") or (isinstance(buy, dict) and "buyer_campaign_ref" in buy)
+        if not has_bcr:
+            pytest.xfail("SPEC-PRODUCTION GAP: buyer_campaign_ref field not present on media buy schema")
 
 
 @then(parsers.parse('the response should include media buys "{mb1}" and "{mb2}"'))
@@ -296,16 +334,25 @@ def then_package_has_snapshot(ctx: dict, pkg_id: str) -> None:
 
 @then("the snapshot should include as_of, staleness_seconds, impressions, and spend")
 def then_snapshot_fields(ctx: dict) -> None:
-    """Assert snapshot has required fields."""
+    """Assert snapshot has all 4 claimed fields: as_of, staleness_seconds, impressions, spend."""
+    import pytest
+
     buys = _get_media_buys(ctx)
     for buy in buys:
         for pkg in getattr(buy, "packages", []) or []:
             snapshot = getattr(pkg, "snapshot", None)
             if snapshot is not None:
                 assert getattr(snapshot, "as_of", None) is not None, "Snapshot missing as_of"
+                # Step text claims staleness_seconds, impressions, and spend too
+                if getattr(snapshot, "staleness_seconds", None) is None:
+                    pytest.xfail("SPEC-PRODUCTION GAP: snapshot missing staleness_seconds")
+                if getattr(snapshot, "impressions", None) is None:
+                    pytest.xfail("SPEC-PRODUCTION GAP: snapshot missing impressions")
+                if getattr(snapshot, "spend", None) is None:
+                    pytest.xfail("SPEC-PRODUCTION GAP: snapshot missing spend")
                 return
-    # If no snapshots found, the adapter may not support them
-    ctx.setdefault("snapshot_fields_checked", True)
+    # This step only runs after then_package_has_snapshot, so a snapshot must exist
+    raise AssertionError("No snapshot found on any package — expected at least one")
 
 
 @then("the response should include an empty media_buys array")
@@ -356,8 +403,8 @@ def then_error_recovery_terminal(ctx: dict) -> None:
     assert error is not None, "Expected an error"
     from src.core.exceptions import AdCPError
 
-    if isinstance(error, AdCPError):
-        assert error.recovery == "terminal", f"Expected terminal recovery, got '{error.recovery}'"
+    assert isinstance(error, AdCPError), f"Expected AdCPError with recovery field, got {type(error).__name__}: {error}"
+    assert error.recovery == "terminal", f"Expected terminal recovery, got '{error.recovery}'"
 
 
 @then(parsers.parse('the suggestion should contain "{text1}" or "{text2}"'))
@@ -367,8 +414,9 @@ def then_suggestion_contains_either(ctx: dict, text1: str, text2: str) -> None:
     assert error is not None, "Expected an error"
     from src.core.exceptions import AdCPError
 
-    if isinstance(error, AdCPError) and error.details:
-        suggestion = str(error.details.get("suggestion", "")).lower()
-        assert text1.lower() in suggestion or text2.lower() in suggestion, (
-            f"Expected '{text1}' or '{text2}' in suggestion: {error.details.get('suggestion')}"
-        )
+    assert isinstance(error, AdCPError), f"Expected AdCPError with details, got {type(error).__name__}: {error}"
+    assert error.details is not None, "Expected error.details to contain a suggestion, got None"
+    suggestion = str(error.details.get("suggestion", "")).lower()
+    assert text1.lower() in suggestion or text2.lower() in suggestion, (
+        f"Expected '{text1}' or '{text2}' in suggestion: {error.details.get('suggestion')}"
+    )

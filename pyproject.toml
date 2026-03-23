@@ -52,6 +52,7 @@ dependencies = [
     "cryptography>=46.0.5",  # GHSA-r6ph-v2qm-q3c2
     "pillow>=12.1.1",  # GHSA-cfh3-3jmp-rvhc
     "python-multipart>=0.0.22",  # GHSA-wp53-j4wj-2cfg
+    "pyasn1>=0.6.3",  # GHSA-jr27-m4p2-rc6r
 ]
 
 

@@ -173,11 +173,14 @@ def then_package_buyer_ref(ctx: dict, buyer_ref: str) -> None:
 @then(parsers.parse("the package should contain budget {budget:d}"))
 def then_package_budget(ctx: dict, budget: int) -> None:
     """Assert first package has the expected budget."""
+    import pytest
+
     packages = _get_packages(ctx)
     pkg = packages[0]
     actual = _pkg_field(pkg, "budget")
-    if actual is not None:
-        assert float(actual) == float(budget), f"Expected budget {budget}, got {actual}"
+    if actual is None:
+        pytest.xfail("SPEC-PRODUCTION GAP: package budget is None — production may not echo budget yet")
+    assert float(actual) == float(budget), f"Expected budget {budget}, got {actual}"
 
 
 @then(parsers.parse('the package should contain pricing_option_id "{pricing_option_id}"'))
@@ -186,22 +189,30 @@ def then_package_pricing(ctx: dict, pricing_option_id: str) -> None:
 
     Maps feature-file names (cpm-standard) to real IDs (cpm_usd_fixed).
     """
+    import pytest
+
     pricing_id_map = {"cpm-standard": "cpm_usd_fixed", "cpm-auction": "cpm_usd_auction"}
     expected = pricing_id_map.get(pricing_option_id, pricing_option_id)
     packages = _get_packages(ctx)
     pkg = packages[0]
     actual = _pkg_field(pkg, "pricing_option_id")
-    if actual is not None:
-        assert actual == expected, f"Expected pricing_option_id '{expected}', got '{actual}'"
+    if actual is None:
+        pytest.xfail("SPEC-PRODUCTION GAP: pricing_option_id is None — production may not echo it yet")
+    assert actual == expected, f"Expected pricing_option_id '{expected}', got '{actual}'"
 
 
 @then("the package should contain format_ids defaulting to all product formats")
 def then_package_default_formats(ctx: dict) -> None:
     """Assert package format_ids default to all product formats."""
+    import pytest
+
     packages = _get_packages(ctx)
     pkg = packages[0]
-    # format_ids may or may not be set in the response — depends on production code
-    ctx.setdefault("format_ids_checked", True)
+    format_ids = _pkg_field(pkg, "format_ids")
+    if format_ids is None:
+        pytest.xfail("SPEC-PRODUCTION GAP: format_ids not present on package — production may not echo defaults")
+    assert isinstance(format_ids, list), f"Expected format_ids to be a list, got {type(format_ids)}"
+    assert len(format_ids) > 0, "Expected format_ids to default to all product formats, got empty list"
 
 
 @then("the package should contain paused as false")
@@ -216,11 +227,19 @@ def then_package_not_paused(ctx: dict) -> None:
 
 @then("the package should contain format_ids_to_provide listing formats needing creative assets")
 def then_package_formats_to_provide(ctx: dict) -> None:
-    """Assert package has format_ids_to_provide field."""
+    """Assert package has format_ids_to_provide field listing formats needing creative assets."""
+    import pytest
+
     packages = _get_packages(ctx)
     pkg = packages[0]
-    # format_ids_to_provide may not be set yet in production
-    ctx.setdefault("formats_to_provide_checked", True)
+    formats_to_provide = _pkg_field(pkg, "format_ids_to_provide")
+    if formats_to_provide is None:
+        pytest.xfail(
+            "SPEC-PRODUCTION GAP: format_ids_to_provide not present on package — production may not set it yet"
+        )
+    assert isinstance(formats_to_provide, list), (
+        f"Expected format_ids_to_provide to be a list, got {type(formats_to_provide)}"
+    )
 
 
 def _pkg_field(pkg: Any, field: str) -> Any:

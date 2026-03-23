@@ -47,6 +47,12 @@ def then_all_formats(ctx: dict) -> None:
     formats = _get_formats(ctx)
     registered = ctx.get("registry_formats", [])
     assert len(formats) == len(registered), f"Expected {len(registered)} formats, got {len(formats)}"
+    # Verify format identity — not just count but the same formats by name
+    returned_names = {_fmt_name(f) for f in formats}
+    registered_names = {_fmt_name(r) if hasattr(r, "name") else str(r) for r in registered}
+    assert returned_names == registered_names, (
+        f"Format identity mismatch: returned={returned_names}, registered={registered_names}"
+    )
 
 
 @then("the response should include an empty formats array")
@@ -71,10 +77,14 @@ def then_no_video(ctx: dict) -> None:
 def then_has_referrals(ctx: dict) -> None:
     """Assert response contains creative_agents with well-formed referral entries."""
     resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
     referrals = getattr(resp, "creative_agents", None) or []
     assert len(referrals) > 0, "Expected creative agent referrals in response"
     for ref in referrals:
         assert getattr(ref, "agent_url", None), f"Referral missing agent_url: {ref}"
+        # Referrals must include capabilities to be well-formed
+        capabilities = getattr(ref, "capabilities", None)
+        assert capabilities is not None, f"Referral missing capabilities: {ref}"
 
 
 @then("each referral should include the agent URL and supported capabilities")
@@ -100,25 +110,40 @@ def then_format_id_fields(ctx: dict) -> None:
 
 @then("each format should include a name and type category")
 def then_format_name_type(ctx: dict) -> None:
+    # Known valid format type category values (from adcp FormatType/FormatCategory enum)
+    valid_types = {"audio", "video", "display", "native", "dooh", "rich_media", "universal"}
     for f in _get_formats(ctx):
-        assert _fmt_name(f), f"Format missing name: {f}"
-        assert _fmt_type_str(f), f"Format missing type: {f}"
+        name = _fmt_name(f)
+        assert name, f"Format missing name: {f}"
+        assert isinstance(name, str), f"Format name is not a string: {type(name)}"
+        type_str = _fmt_type_str(f)
+        assert type_str, f"Format missing type: {f}"
+        assert type_str in valid_types, (
+            f"Format '{name}' has invalid type category '{type_str}', expected one of {valid_types}"
+        )
 
 
 @then("each format should include asset requirements with type and dimensions")
 def then_format_assets(ctx: dict) -> None:
-    """Assert formats with assets have typed assets and formats with renders have dimensions."""
+    """Assert formats have asset requirements with type (asset_type) AND dimensions (on renders)."""
     formats = _get_formats(ctx)
+    # At least some formats should have assets or renders (otherwise no "requirements" to check)
     formats_with_assets = [f for f in formats if hasattr(f, "assets") and f.assets]
     for f in formats_with_assets:
         for a in f.assets:
-            # Assets are typed (Assets, Assets5=video, etc.) — check the asset_id or type attribute
-            assert hasattr(a, "asset_id"), f"Asset in format '{_fmt_name(f)}' missing asset_id"
-    # Check renders have dimensions
+            # Assets must have a type indicator (asset_type or the object type itself)
+            has_type = hasattr(a, "asset_type") or hasattr(a, "type") or hasattr(a, "asset_id")
+            assert has_type, f"Asset in format '{_fmt_name(f)}' missing type indicator"
+    # Check renders have dimensions (the "dimensions" part of the step claim)
     formats_with_renders = [f for f in formats if hasattr(f, "renders") and f.renders]
     for f in formats_with_renders:
         for r in f.renders:
-            assert hasattr(r, "dimensions"), f"Render in format '{_fmt_name(f)}' missing dimensions"
+            dims = getattr(r, "dimensions", None)
+            assert dims is not None, f"Render in format '{_fmt_name(f)}' missing dimensions"
+            # Dimensions should have width and height
+            assert getattr(dims, "width", None) is not None or getattr(dims, "min_width", None) is not None, (
+                f"Render dimensions in format '{_fmt_name(f)}' missing width"
+            )
 
 
 # ── Sorting assertions ──────────────────────────────────────────────
@@ -195,12 +220,34 @@ def then_returned_type(ctx: dict, fmt_type: str) -> None:
 # checks accept/reject outcome.
 
 
-def _assert_partition_outcome(ctx: dict, expected: str) -> None:
+# Known filter fields used in partition/boundary tests (catches Gherkin typos)
+_KNOWN_FILTER_FIELDS = frozenset(
+    {
+        "type",
+        "format_ids",
+        "asset_types",
+        "dimension",
+        "responsive",
+        "name search",
+        "wcag",
+        "disclosure_positions",
+        "disclosure",
+        "output_format_ids",
+        "input_format_ids",
+    }
+)
+
+
+def _assert_partition_outcome(ctx: dict, field: str, expected: str) -> None:
     """Assert partition/boundary test outcome against real production results.
 
     "valid" means production code returned successfully (response exists).
     "invalid" means production code raised an error (error exists).
+    The field parameter is validated against known filter fields to catch Gherkin typos.
     """
+    assert field in _KNOWN_FILTER_FIELDS, (
+        f"Unknown filter field '{field}' in partition/boundary test. Known fields: {sorted(_KNOWN_FILTER_FIELDS)}"
+    )
     if expected == "valid":
         assert "error" not in ctx, f"Expected valid result but got error: {ctx.get('error')}"
         assert "response" in ctx, "Expected response but none found"
@@ -213,10 +260,10 @@ def _assert_partition_outcome(ctx: dict, expected: str) -> None:
 @then(parsers.re(r"the (?P<field>.+) filtering should result in (?P<expected>\w+)"))
 def then_partition_filtering_result(ctx: dict, field: str, expected: str) -> None:
     """Generic partition test: any '<field> filtering should result in <expected>'."""
-    _assert_partition_outcome(ctx, expected)
+    _assert_partition_outcome(ctx, field, expected)
 
 
 @then(parsers.re(r"the (?P<field>.+) handling should be (?P<expected>\w+)"))
 def then_boundary_handling_result(ctx: dict, field: str, expected: str) -> None:
     """Generic boundary test: any '<field> handling should be <expected>'."""
-    _assert_partition_outcome(ctx, expected)
+    _assert_partition_outcome(ctx, field, expected)

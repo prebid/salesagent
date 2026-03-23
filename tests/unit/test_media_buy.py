@@ -1608,6 +1608,9 @@ class TestUpdateMediaBuyMainFlow:
         mock_session = MagicMock()
         mock_uow.session = mock_session
         mock_uow.media_buys = MagicMock()
+        mock_currency_limits = MagicMock()
+        mock_currency_limits.get_for_currency.return_value = cl
+        mock_uow.currency_limits = mock_currency_limits
         mock_uow.__enter__ = MagicMock(return_value=mock_uow)
         mock_uow.__exit__ = MagicMock(return_value=False)
 
@@ -1634,9 +1637,7 @@ class TestUpdateMediaBuyMainFlow:
             adapter.update_media_buy.return_value = adapter_result
             mock_adapter.return_value = adapter
 
-            # Media buy via repo, currency limit via session
             mock_uow.media_buys.get_by_id.return_value = mock_buy
-            mock_session.scalars.return_value.first.side_effect = [cl]
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
@@ -1685,6 +1686,9 @@ class TestUpdateMediaBuyMainFlow:
         mock_session = MagicMock()
         mock_uow.session = mock_session
         mock_uow.media_buys = MagicMock()
+        mock_currency_limits = MagicMock()
+        mock_currency_limits.get_for_currency.return_value = cl
+        mock_uow.currency_limits = mock_currency_limits
         mock_uow.__enter__ = MagicMock(return_value=mock_uow)
         mock_uow.__exit__ = MagicMock(return_value=False)
 
@@ -1711,15 +1715,12 @@ class TestUpdateMediaBuyMainFlow:
             adapter.update_media_buy.return_value = adapter_result
             mock_adapter.return_value = adapter
 
-            # buyer_ref resolution via repo, media buy + currency limit via repo/session
             mock_uow.media_buys.get_by_buyer_ref.return_value = mock_buy
             mock_uow.media_buys.get_by_id.return_value = mock_buy
-            mock_session.scalars.return_value.first.side_effect = [cl]
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuySuccess)
-        # media_buy_id resolved from buyer_ref
         assert result.media_buy_id == "mb_resolved"
 
     def test_partial_update_omitted_fields_unchanged(self):
@@ -2012,14 +2013,14 @@ class TestUpdateMediaBuyTiming:
             mock_uow_session = MagicMock()
             mock_uow.session = mock_uow_session
             mock_uow.media_buys = MagicMock()
+            mock_currency_limits = MagicMock()
+            mock_currency_limits.get_for_currency.return_value = cl
+            mock_uow.currency_limits = mock_currency_limits
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
 
-            # Media buy via repo (called twice: currency check + date path)
             mock_uow.media_buys.get_by_id.side_effect = [mock_buy, mock_buy]
-            # Currency limit via session
-            mock_uow_session.scalars.return_value.first.side_effect = [cl]
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
@@ -2083,13 +2084,14 @@ class TestUpdateMediaBuyTiming:
             mock_uow_session = MagicMock()
             mock_uow.session = mock_uow_session
             mock_uow.media_buys = MagicMock()
+            mock_currency_limits = MagicMock()
+            mock_currency_limits.get_for_currency.return_value = cl
+            mock_uow.currency_limits = mock_currency_limits
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
 
-            # Media buy via repo, currency limit via session
             mock_uow.media_buys.get_by_id.return_value = mock_buy
-            mock_uow_session.scalars.return_value.first.side_effect = [cl]
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
@@ -3000,18 +3002,18 @@ class TestUpdateMediaBuyAdapterFailure:
             uow_session = MagicMock()
             mock_uow.session = uow_session
             mock_uow.media_buys = MagicMock()
+            mock_currency_limits = MagicMock()
+            mock_currency_limits.get_for_currency.return_value = cl
+            mock_uow.currency_limits = mock_currency_limits
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
 
-            # Media buy via repo, currency limit via session
             mock_uow.media_buys.get_by_id.return_value = mock_buy
-            uow_session.scalars.return_value.first.side_effect = [cl]
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuyError)
-        # Workflow step should be marked as failed
         ctx_mgr.update_workflow_step.assert_called()
         call_kwargs = ctx_mgr.update_workflow_step.call_args
         assert call_kwargs[1].get("status") == "failed" or call_kwargs.kwargs.get("status") == "failed"
