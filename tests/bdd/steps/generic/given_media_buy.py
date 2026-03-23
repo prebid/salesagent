@@ -955,6 +955,111 @@ def given_product_configuration(ctx: dict, config: str) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Minimum spend partition/boundary — BR-RULE-008
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _set_min_spend(ctx: dict, *, product_min: float | None, tenant_min: float | None, budget: float) -> None:
+    """Configure minimum spend thresholds and package budget.
+
+    Sets PricingOption.min_spend_per_package (product-level) and
+    CurrencyLimit.min_package_budget (tenant-level), then adjusts
+    the request package budget.
+    """
+    from decimal import Decimal
+
+    env = ctx["env"]
+    kwargs = _ensure_request_defaults(ctx)
+
+    # Product-level minimum: update the default pricing option
+    po = ctx["default_pricing_option"]
+    po.min_spend_per_package = Decimal(str(product_min)) if product_min is not None else None
+    env._commit_factory_data()
+
+    # Tenant-level minimum: update the existing CurrencyLimit row
+    from sqlalchemy import select
+
+    from src.core.database.models import CurrencyLimit
+
+    cl = env._session.scalars(
+        select(CurrencyLimit).filter_by(
+            tenant_id=ctx["tenant"].tenant_id,
+            currency_code="USD",
+        )
+    ).one()
+    cl.min_package_budget = Decimal(str(tenant_min)) if tenant_min is not None else None
+    env._commit_factory_data()
+
+    # Set package budget
+    if kwargs.get("packages"):
+        kwargs["packages"][0]["budget"] = budget
+
+
+@given(parsers.parse("the minimum spend scenario is {partition}"))
+def given_minimum_spend_scenario(ctx: dict, partition: str) -> None:
+    """Set up minimum spend configuration for partition scenarios (BR-RULE-008).
+
+    Partition values:
+    - budget_meets_product_min: budget 5000 >= product min_spend 1000
+    - budget_meets_tenant_min: budget 5000 >= tenant min_package_budget 100 (no product min)
+    - no_minimum_configured: no min_spend at either level
+    - budget_below_product_min: budget 50 < product min_spend 1000
+    - budget_below_tenant_min: budget 50 < tenant min_package_budget 100 (no product min)
+    """
+    partition = partition.strip()
+
+    if partition == "budget_meets_product_min":
+        _set_min_spend(ctx, product_min=1000.0, tenant_min=100.0, budget=5000.0)
+
+    elif partition == "budget_meets_tenant_min":
+        _set_min_spend(ctx, product_min=None, tenant_min=100.0, budget=5000.0)
+
+    elif partition == "no_minimum_configured":
+        _set_min_spend(ctx, product_min=None, tenant_min=None, budget=5000.0)
+
+    elif partition == "budget_below_product_min":
+        _set_min_spend(ctx, product_min=1000.0, tenant_min=100.0, budget=50.0)
+
+    elif partition == "budget_below_tenant_min":
+        _set_min_spend(ctx, product_min=None, tenant_min=100.0, budget=50.0)
+
+    else:
+        raise ValueError(f"Unknown minimum spend partition: {partition}")
+
+
+@given(parsers.parse("the minimum spend configuration is: {config}"))
+def given_minimum_spend_configuration(ctx: dict, config: str) -> None:
+    """Set up minimum spend configuration for boundary scenarios (BR-RULE-008).
+
+    Boundary values:
+    - budget=100 min=100: budget exactly at product min_spend (exact match)
+    - budget=99.99 min=100: budget just below product min_spend
+    - budget=50 tmin=50: budget exactly at tenant min_package_budget (no product min)
+    - budget=49.99 tmin=50: budget just below tenant min_package_budget
+    - budget=1 no-min: no minimum configured at any level
+    """
+    config = config.strip()
+
+    if config == "budget=100 min=100":
+        _set_min_spend(ctx, product_min=100.0, tenant_min=100.0, budget=100.0)
+
+    elif config == "budget=99.99 min=100":
+        _set_min_spend(ctx, product_min=100.0, tenant_min=100.0, budget=99.99)
+
+    elif config == "budget=50 tmin=50":
+        _set_min_spend(ctx, product_min=None, tenant_min=50.0, budget=50.0)
+
+    elif config == "budget=49.99 tmin=50":
+        _set_min_spend(ctx, product_min=None, tenant_min=50.0, budget=49.99)
+
+    elif config == "budget=1 no-min":
+        _set_min_spend(ctx, product_min=None, tenant_min=None, budget=1.0)
+
+    else:
+        raise ValueError(f"Unknown minimum spend boundary config: {config}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Proposal-related request construction
 # ═══════════════════════════════════════════════════════════════════════
 

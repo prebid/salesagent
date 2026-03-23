@@ -539,8 +539,9 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
     if outcome.startswith("account resolution succeeds"):
         assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
         assert "resolved_account_id" in ctx, "Expected resolved_account_id in ctx"
-    elif outcome.endswith("validation passes"):
-        # Success outcome: "budget validation passes", "pricing validation passes", etc.
+    elif outcome.endswith("passes") or outcome.endswith("skipped"):
+        # Success outcome: "* validation passes", "minimum spend passes",
+        # "minimum spend check skipped", etc.
         if "error" in ctx:
             # SPEC-PRODUCTION GAP: production rejects what spec considers valid
             error = ctx["error"]
