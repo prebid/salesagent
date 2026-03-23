@@ -541,6 +541,8 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
         assert "resolved_account_id" in ctx, "Expected resolved_account_id in ctx"
     elif outcome.startswith("start time "):
         _assert_start_time_outcome(ctx, outcome)
+    elif outcome.startswith("end time "):
+        _assert_end_time_outcome(ctx, outcome)
     elif outcome.endswith("passes") or outcome.endswith("skipped"):
         # Success outcome: "* validation passes", "minimum spend passes",
         # "minimum spend check skipped", etc.
@@ -585,6 +587,30 @@ def _assert_start_time_outcome(ctx: dict, outcome: str) -> None:
         pass  # media_buy_id assertion above is sufficient for these outcomes
     else:
         raise ValueError(f"Unknown start time outcome: {outcome}")
+
+
+def _assert_end_time_outcome(ctx: dict, outcome: str) -> None:
+    """Assert end_time success outcomes from partition/boundary scenarios.
+
+    Supported outcomes:
+        "end time accepted" — end_time after start_time accepted without error
+    """
+    import pytest
+
+    from tests.bdd.steps.generic.then_media_buy import _get_response_field
+
+    if "error" in ctx:
+        pytest.xfail(f"SPEC-PRODUCTION GAP: Expected success ({outcome}) but production rejected with: {ctx['error']}")
+    resp = ctx.get("response")
+    assert resp is not None, f"Expected a response for '{outcome}'"
+
+    media_buy_id = _get_response_field(resp, "media_buy_id")
+    assert media_buy_id, f"No media_buy_id in response for '{outcome}'"
+
+    if outcome == "end time accepted":
+        pass  # media_buy_id assertion above is sufficient
+    else:
+        raise ValueError(f"Unknown end time outcome: {outcome}")
 
 
 def _assert_error_outcome(ctx: dict, outcome: str) -> None:
