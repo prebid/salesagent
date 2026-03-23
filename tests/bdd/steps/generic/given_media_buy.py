@@ -1060,6 +1060,105 @@ def given_minimum_spend_configuration(ctx: dict, config: str) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Daily spend cap partition/boundary — BR-RULE-012
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _set_daily_spend_cap(ctx: dict, *, cap: float | None, budget: float, flight_days: int = 10) -> None:
+    """Configure daily spend cap and package budget/flight duration.
+
+    Sets CurrencyLimit.max_daily_package_spend (tenant-level cap) and adjusts
+    the request package budget and flight dates to achieve the target daily spend.
+
+    Daily spend = budget / max(flight_days, 1).
+    """
+    from decimal import Decimal
+
+    from sqlalchemy import select
+
+    from src.core.database.models import CurrencyLimit
+
+    env = ctx["env"]
+    kwargs = _ensure_request_defaults(ctx)
+
+    # Set flight duration via start_time / end_time
+    kwargs["start_time"] = _future(1).isoformat()
+    kwargs["end_time"] = _future(1 + flight_days).isoformat()
+
+    # Set package budget
+    if kwargs.get("packages"):
+        kwargs["packages"][0]["budget"] = budget
+
+    # Set cap on CurrencyLimit
+    cl = env._session.scalars(
+        select(CurrencyLimit).filter_by(
+            tenant_id=ctx["tenant"].tenant_id,
+            currency_code="USD",
+        )
+    ).one()
+    cl.max_daily_package_spend = Decimal(str(cap)) if cap is not None else None
+    env._commit_factory_data()
+
+
+@given(parsers.parse("the daily spend cap scenario is {partition}"))
+def given_daily_spend_cap_scenario(ctx: dict, partition: str) -> None:
+    """Set up daily spend cap configuration for partition scenarios (BR-RULE-012).
+
+    Partition values (daily = budget / flight_days):
+    - below_cap: daily 50 < cap 100
+    - cap_not_configured: no cap set (check skipped)
+    - at_cap_exactly: daily 100 == cap 100
+    - exceeds_cap: daily 200 > cap 100
+    """
+    partition = partition.strip()
+
+    if partition == "below_cap":
+        _set_daily_spend_cap(ctx, cap=100.0, budget=500.0)
+
+    elif partition == "cap_not_configured":
+        _set_daily_spend_cap(ctx, cap=None, budget=5000.0)
+
+    elif partition == "at_cap_exactly":
+        _set_daily_spend_cap(ctx, cap=100.0, budget=1000.0)
+
+    elif partition == "exceeds_cap":
+        _set_daily_spend_cap(ctx, cap=100.0, budget=2000.0)
+
+    else:
+        raise ValueError(f"Unknown daily spend cap partition: {partition}")
+
+
+@given(parsers.parse("the daily spend scenario is: {config}"))
+def given_daily_spend_boundary(ctx: dict, config: str) -> None:
+    """Set up daily spend cap for boundary scenarios (BR-RULE-012).
+
+    Boundary configs:
+    - daily=1000 cap=1000: at limit (budget=10000, 10-day flight)
+    - daily=1001 cap=1000: exceeds by 1 (budget=10010, 10-day flight)
+    - daily=9999 no-cap: no cap configured (check skipped)
+    - 0-day-flight: start==end, production floors to 1 day
+    """
+    config = config.strip()
+
+    if config == "daily=1000 cap=1000":
+        _set_daily_spend_cap(ctx, cap=1000.0, budget=10000.0)
+
+    elif config == "daily=1001 cap=1000":
+        _set_daily_spend_cap(ctx, cap=1000.0, budget=10010.0)
+
+    elif config == "daily=9999 no-cap":
+        _set_daily_spend_cap(ctx, cap=None, budget=99990.0)
+
+    elif config == "0-day-flight":
+        # 0-day flight: start==end, production floors flight_days to 1
+        # daily = budget / 1 = 500, cap = 1000 → passes
+        _set_daily_spend_cap(ctx, cap=1000.0, budget=500.0, flight_days=0)
+
+    else:
+        raise ValueError(f"Unknown daily spend boundary config: {config}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Proposal-related request construction
 # ═══════════════════════════════════════════════════════════════════════
 

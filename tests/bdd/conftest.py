@@ -394,6 +394,19 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {"account field absent", "both account_id and brand"},
                 "INVALID_REQUEST validation not implemented (schema-level)",
             ),
+            # FIXME(salesagent-9vgz.61): daily spend cap error code mismatch
+            # Production raises plain ValueError → code="validation_error", no suggestion.
+            # Spec expects BUDGET_TOO_LOW with suggestion field.
+            (
+                "T-UC-002-partition-daily-spend-cap",
+                {"exceeds_cap"},
+                "daily spend cap returns validation_error, not BUDGET_TOO_LOW — spec-production gap",
+            ),
+            (
+                "T-UC-002-boundary-daily-spend-cap",
+                {"daily budget > cap"},
+                "daily spend cap returns validation_error, not BUDGET_TOO_LOW — spec-production gap",
+            ),
         ]
         if any(t.startswith("T-UC-002") for t in marker_names):
             for tag, substrings, reason in _UC002_VALIDATION_XFAIL:
