@@ -941,7 +941,8 @@ def given_product_configuration(ctx: dict, config: str) -> None:
     config = config.strip()
 
     if config == "1 pkg prod-A":
-        _setup_multi_product_request(ctx, ["prod-A"])
+        # Single package — reuse harness default (mirrors currency boundary "1 pkg USD")
+        _ensure_request_defaults(ctx)
 
     elif config == "2 pkg prod-A,B":
         _setup_multi_product_request(ctx, ["prod-A", "prod-B"])
