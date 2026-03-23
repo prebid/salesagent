@@ -1,51 +1,57 @@
-"""Tests for unknown targeting field rejection.
+"""Tests for unknown targeting field handling.
 
-Regression tests for salesagent-duu: ensures unknown buyer-submitted targeting
-fields (typos, bogus fields) are rejected. With extra='forbid' in dev mode,
-unknown fields are caught at construction time via ValidationError.
+Targeting uses extra='allow' so unknown buyer-submitted fields (typos, bogus
+names) land in model_extra.  The business-logic validator
+(validate_unknown_targeting_fields) inspects model_extra and raises
+INVALID_REQUEST.  model_dump() strips extra fields from serialized output.
 """
-
-import pytest
 
 from src.core.schemas import Targeting
 
 
-class TestForbidRejectsUnknownFields:
-    """extra='forbid' should reject unknown fields at construction time."""
+class TestExtraAllowCaptures:
+    """extra='allow' should capture unknown fields in model_extra."""
 
-    def test_unknown_field_rejected(self):
-        with pytest.raises(Exception, match="Extra inputs are not permitted"):
-            Targeting(totally_bogus="hello", geo_countries=["US"])
+    def test_unknown_field_captured_in_model_extra(self):
+        t = Targeting(totally_bogus="hello", geo_countries=["US"])
+        assert "totally_bogus" in (t.model_extra or {})
 
     def test_known_field_accepted(self):
-        """Known model fields must be accepted, model_extra stays None (extra='forbid')."""
+        """Known model fields must be accepted; model_extra empty for known fields."""
         t = Targeting(geo_countries=["US"], device_type_any_of=["mobile"])
         assert t.geo_countries is not None
-        assert t.model_extra is None
+        assert not t.model_extra  # Empty dict or None
 
     def test_managed_field_accepted(self):
-        """Managed-only fields are real model fields, accepted normally."""
+        """Managed-only fields are real model fields, not in model_extra."""
         t = Targeting(axe_include_segment="foo", key_value_pairs={"k": "v"})
         assert t.axe_include_segment == "foo"
-        assert t.model_extra is None
+        assert not t.model_extra
 
     def test_v2_normalized_field_accepted(self):
-        """v2 field names consumed by normalizer should not cause rejection."""
+        """v2 field names consumed by normalizer should not land in model_extra."""
         t = Targeting(geo_country_any_of=["CA"])
         assert t.geo_countries is not None
-        assert t.model_extra is None
+        assert not t.model_extra
 
-    def test_multiple_unknown_fields_rejected(self):
-        with pytest.raises(Exception, match="Extra inputs are not permitted"):
-            Targeting(bogus_one="a", bogus_two="b")
+    def test_multiple_unknown_fields_captured(self):
+        t = Targeting(bogus_one="a", bogus_two="b")
+        assert "bogus_one" in (t.model_extra or {})
+        assert "bogus_two" in (t.model_extra or {})
+
+    def test_model_dump_strips_extra_fields(self):
+        """Extra fields captured in model_extra should NOT appear in model_dump()."""
+        t = Targeting(geo_countries=["US"], weather_targeting="sunny")
+        dumped = t.model_dump()
+        assert "weather_targeting" not in dumped
+        assert "geo_countries" in dumped
 
 
 class TestValidateUnknownTargetingFields:
     """validate_unknown_targeting_fields should report model_extra keys.
 
-    With extra='forbid', unknown fields are rejected at parse time, so
-    model_extra is always empty/None. These tests verify the validator
-    handles both modes correctly.
+    With extra='allow', unknown fields land in model_extra.  The validator
+    reports them as violations.
     """
 
     def test_accepts_all_known_fields(self):
@@ -78,3 +84,13 @@ class TestValidateUnknownTargetingFields:
         t = Targeting()
         violations = validate_unknown_targeting_fields(t)
         assert violations == []
+
+    def test_detects_unknown_fields(self):
+        """Unknown fields in model_extra should be reported as violations."""
+        from src.services.targeting_capabilities import validate_unknown_targeting_fields
+
+        t = Targeting(weather_targeting="sunny", bogus="value")
+        violations = validate_unknown_targeting_fields(t)
+        assert len(violations) == 2
+        assert any("weather_targeting" in v for v in violations)
+        assert any("bogus" in v for v in violations)

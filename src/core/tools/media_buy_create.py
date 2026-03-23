@@ -1930,7 +1930,12 @@ async def _create_media_buy_impl(
                     violations = unknown_violations + access_violations + geo_overlap_violations
                     if violations:
                         error_msg = f"Targeting validation failed: {'; '.join(violations)}"
-                        raise ValueError(error_msg)
+                        raise _StructuredValidationError(
+                            error_msg,
+                            code="INVALID_REQUEST",
+                            recovery="correctable",
+                            suggestion="Check targeting_overlay fields against the AdCP targeting spec.",
+                        )
 
     except (ValueError, PermissionError) as e:
         # Update workflow step as failed (only if step exists - not created in dry_run mode)

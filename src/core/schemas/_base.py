@@ -841,9 +841,15 @@ class Targeting(TargetingOverlay):
 
     Adds exclusion extensions, internal dimensions, and a legacy normalizer
     that converts flat DB fields to v3 structured format.
+
+    Uses extra="allow" so unknown targeting fields land in model_extra
+    instead of being silently dropped (extra="ignore") or rejected with a
+    generic VALIDATION_ERROR (extra="forbid").  The business-logic validator
+    (validate_unknown_targeting_fields) inspects model_extra and raises
+    INVALID_REQUEST with an actionable suggestion.
     """
 
-    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+    model_config = ConfigDict(extra="allow")
 
     # --- Inherited from TargetingOverlay (7 fields): ---
     # geo_countries: list[GeoCountry] | None
@@ -961,7 +967,11 @@ class Targeting(TargetingOverlay):
         return values
 
     def model_dump(self, **kwargs):
-        """Override to provide AdCP-compliant responses while preserving internal fields."""
+        """Override to provide AdCP-compliant responses while preserving internal fields.
+
+        Strips extra fields (from model_extra) so unknown targeting dimensions
+        accepted by extra="allow" don't leak into serialized output.
+        """
         kwargs.setdefault("mode", "json")
         # Default to excluding internal and managed fields for AdCP compliance
         exclude = kwargs.get("exclude", set())
@@ -978,14 +988,22 @@ class Targeting(TargetingOverlay):
             )
             kwargs["exclude"] = exclude
 
-        return super().model_dump(**kwargs)
+        result = super().model_dump(**kwargs)
+        # Strip extra fields that landed in model_extra (extra="allow")
+        for key in self.model_extra or {}:
+            result.pop(key, None)
+        return result
 
     def model_dump_internal(self, **kwargs):
         """Dump including internal and managed fields for database storage and internal processing."""
         kwargs.setdefault("mode", "json")
         # Don't exclude internal fields or managed fields
         kwargs.pop("exclude", None)  # Remove any exclude parameter
-        return super().model_dump(**kwargs)
+        result = super().model_dump(**kwargs)
+        # Strip extra fields (from model_extra) — they are unknown dimensions
+        for key in self.model_extra or {}:
+            result.pop(key, None)
+        return result
 
     def dict(self, **kwargs):
         """Override dict to always exclude managed fields (for backward compat)."""

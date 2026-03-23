@@ -403,10 +403,14 @@ def given_unknown_targeting_field(ctx: dict, field_name: str) -> None:
 @given("a package targeting_overlay sets a managed-only dimension")
 @given("But a package targeting_overlay sets a managed-only dimension")
 def given_managed_targeting_dimension(ctx: dict) -> None:
-    """Set a managed-only targeting dimension."""
+    """Set a managed-only targeting dimension.
+
+    Uses key_value_pairs which is a real managed-only dimension per
+    validate_overlay_targeting() in targeting_capabilities.py.
+    """
     kwargs = _ensure_request_defaults(ctx)
     if kwargs.get("packages"):
-        kwargs["packages"][0]["targeting_overlay"] = {"content_labels": ["DL-MA"]}
+        kwargs["packages"][0]["targeting_overlay"] = {"key_value_pairs": {"section": "sports"}}
 
 
 @given(parsers.parse('a package targeting_overlay includes "{value}" in both geo_countries and geo_countries_exclude'))
