@@ -133,6 +133,7 @@ while [ "$TASK_INDEX" -lt "$TOTAL" ] && [ "$PIPELINE_HALT" = false ]; do
     echo ""
     echo "[$(( TASK_INDEX + 1 ))/$TOTAL] $TASK_ID: ${TITLE:-???}"
     TASK_START=$(date +%s)
+    PRE_HEAD=$(git rev-parse HEAD)
 
     $CLAUDE "/dev-practices:execute $TASK_ID
 
@@ -144,10 +145,27 @@ Context: BDD step wiring task. Wire step definitions for the scenarios in the ta
 - tests/bdd/steps/domain/uc019_query_media_buys.py
 - tests/bdd/steps/domain/uc026_package_media_buy.py
 
-If production code doesn't implement expected behavior (spec-production gap), record the gap in task notes and move on. Goal is to wire steps that exercise real production code.
+CRITICAL CONSTRAINT: You may ONLY modify files under tests/. Do NOT modify any file under src/, scripts/, docs/, or any other non-test path. If production code doesn't implement expected behavior (spec-production gap), xfail the scenario in conftest.py and record the gap in task notes. NEVER change production code to make tests pass.
 
 $GIT_INSTRUCTION" \
       > "$LOG" 2>&1 || true
+
+    # --- Guard: revert any production code changes ---
+    POST_HEAD=$(git rev-parse HEAD)
+    if [ "$PRE_HEAD" != "$POST_HEAD" ]; then
+      PROD_FILES=$(git diff --name-only "$PRE_HEAD" "$POST_HEAD" | grep -v '^tests/' | grep -v '^\.beads/' || true)
+      if [ -n "$PROD_FILES" ]; then
+        echo "  ⚠ PRODUCTION FILES MODIFIED (reverting):"
+        echo "$PROD_FILES" | sed 's/^/    /'
+        echo "$PROD_FILES" >> "$LOGDIR/prod-violations.log"
+        # Revert production files to pre-task state
+        echo "$PROD_FILES" | xargs git checkout "$PRE_HEAD" --
+        git commit -m "fix(pipeline): revert unauthorized production changes from $TASK_ID
+
+Reverted files:
+$(echo "$PROD_FILES" | sed 's/^/- /')" --allow-empty
+      fi
+    fi
 
     # Report timing
     TASK_END=$(date +%s)
@@ -321,6 +339,14 @@ if [ "$TOTAL_FAILED" -gt 0 ]; then
       echo "  - $TASK → $LOG"
     fi
   done
+fi
+
+# Print production violations if any
+if [ -f "$LOGDIR/prod-violations.log" ]; then
+  VIOLATION_COUNT=$(wc -l < "$LOGDIR/prod-violations.log" | tr -d ' ')
+  echo ""
+  echo "⚠ Production file violations ($VIOLATION_COUNT files reverted):"
+  sort -u "$LOGDIR/prod-violations.log" | sed 's/^/  - /'
 fi
 
 # Print all verdicts
