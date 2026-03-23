@@ -540,19 +540,7 @@ def given_both_fixed_and_floor(ctx: dict) -> None:
     the ORM level (is_fixed + rate + price_guidance) and does not enforce the
     schema-level XOR invariant during create_media_buy. The operation may succeed.
     """
-    env = ctx["env"]
-    malformed_po = PricingOptionFactory(
-        product=ctx["default_product"],
-        pricing_model="cpm",
-        currency="USD",
-        is_fixed=True,
-        rate=5.00,
-        price_guidance={"floor": 2.0},  # Both rate AND floor — violates XOR
-    )
-    env._commit_factory_data()
-    kwargs = _ensure_request_defaults(ctx)
-    if kwargs.get("packages"):
-        kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(malformed_po)
+    _setup_both_pricing(ctx)
 
 
 @given("a package pricing option has neither fixed_price nor floor_price")
@@ -566,19 +554,154 @@ def given_neither_fixed_nor_floor(ctx: dict) -> None:
     Production catches this as "has is_fixed=true but no rate specified" in
     _validate_pricing_model_selection (PRICING_ERROR).
     """
+    _setup_neither_pricing(ctx)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Pricing option XOR partition/boundary — BR-RULE-006
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _setup_fixed_pricing(ctx: dict, rate: float = 5.00) -> None:
+    """Configure a fixed-price pricing option (is_fixed=True, rate set, no floor)."""
+    po = ctx.get("default_pricing_option")
+    assert po is not None, "No default_pricing_option in ctx"
+    if po.is_fixed and po.rate:
+        # Default PO is already fixed — just ensure it has the right rate if overridden
+        if rate != 5.00:
+            env = ctx["env"]
+            new_po = PricingOptionFactory(
+                product=ctx["default_product"],
+                pricing_model="cpm",
+                currency="USD",
+                is_fixed=True,
+                rate=rate,
+            )
+            env._commit_factory_data()
+            kwargs = _ensure_request_defaults(ctx)
+            if kwargs.get("packages"):
+                kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(new_po)
+        return
+    # Default PO is not fixed — create a new fixed one
+    env = ctx["env"]
+    new_po = PricingOptionFactory(
+        product=ctx["default_product"],
+        pricing_model="cpm",
+        currency="USD",
+        is_fixed=True,
+        rate=rate,
+    )
+    env._commit_factory_data()
+    kwargs = _ensure_request_defaults(ctx)
+    if kwargs.get("packages"):
+        kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(new_po)
+
+
+def _setup_auction_pricing(ctx: dict, floor: float = 2.0, bid: float = 5.0) -> None:
+    """Configure an auction pricing option (is_fixed=False, floor set) with bid_price."""
+    env = ctx["env"]
+    auction_po = PricingOptionFactory(
+        product=ctx["default_product"],
+        pricing_model="cpm",
+        currency="USD",
+        is_fixed=False,
+        price_guidance={"floor": floor},
+    )
+    env._commit_factory_data()
+    kwargs = _ensure_request_defaults(ctx)
+    if kwargs.get("packages"):
+        kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(auction_po)
+        kwargs["packages"][0]["bid_price"] = bid
+
+
+def _setup_both_pricing(ctx: dict, rate: float = 5.00, floor: float = 2.0) -> None:
+    """Configure a malformed PO with both fixed_price and floor_price (XOR violation).
+
+    SPEC-PRODUCTION GAP: Production treats this as a valid fixed option because
+    _validate_pricing_model_selection only checks is_fixed + rate. The XOR invariant
+    is a spec-level constraint not enforced at create_media_buy time.
+    """
     env = ctx["env"]
     malformed_po = PricingOptionFactory(
         product=ctx["default_product"],
         pricing_model="cpm",
         currency="USD",
         is_fixed=True,
-        rate=None,  # No rate → no fixed_price
-        price_guidance=None,  # No floor → no floor_price
+        rate=rate,
+        price_guidance={"floor": floor},
     )
     env._commit_factory_data()
     kwargs = _ensure_request_defaults(ctx)
     if kwargs.get("packages"):
         kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(malformed_po)
+
+
+def _setup_neither_pricing(ctx: dict) -> None:
+    """Configure a malformed PO with neither fixed_price nor floor_price.
+
+    Production catches this as "has is_fixed=true but no rate specified" → PRICING_ERROR.
+    """
+    env = ctx["env"]
+    malformed_po = PricingOptionFactory(
+        product=ctx["default_product"],
+        pricing_model="cpm",
+        currency="USD",
+        is_fixed=True,
+        rate=None,
+        price_guidance=None,
+    )
+    env._commit_factory_data()
+    kwargs = _ensure_request_defaults(ctx)
+    if kwargs.get("packages"):
+        kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(malformed_po)
+
+
+@given(parsers.parse("the pricing option configuration is {config}"))
+def given_pricing_option_configuration(ctx: dict, config: str) -> None:
+    """Set up pricing option configuration for partition/boundary scenarios.
+
+    Partition values: fixed_pricing, auction_pricing, cpa_model, both_set, neither_set
+    Boundary values: fixed_price=N, floor_price=N, fixed+floor, neither
+    """
+    config = config.strip()
+
+    if config == "fixed_pricing":
+        _setup_fixed_pricing(ctx)
+
+    elif config == "auction_pricing":
+        _setup_auction_pricing(ctx)
+
+    elif config == "cpa_model":
+        # CPA pricing model — create a fixed CPA option (valid from production's view)
+        env = ctx["env"]
+        cpa_po = PricingOptionFactory(
+            product=ctx["default_product"],
+            pricing_model="cpa",
+            currency="USD",
+            is_fixed=True,
+            rate=10.00,
+        )
+        env._commit_factory_data()
+        kwargs = _ensure_request_defaults(ctx)
+        if kwargs.get("packages"):
+            kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(cpa_po)
+
+    elif config in ("both_set", "fixed+floor"):
+        _setup_both_pricing(ctx)
+
+    elif config in ("neither_set", "neither"):
+        _setup_neither_pricing(ctx)
+
+    elif config.startswith("fixed_price="):
+        rate = float(config.split("=")[1])
+        _setup_fixed_pricing(ctx, rate=rate)
+
+    elif config.startswith("floor_price="):
+        floor = float(config.split("=")[1])
+        _setup_auction_pricing(ctx, floor=floor, bid=floor + 1.0)
+
+    else:
+        raise ValueError(f"Unknown pricing option configuration: {config}")
 
 
 # ═══════════════════════════════════════════════════════════════════════
