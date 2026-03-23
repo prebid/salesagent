@@ -17,13 +17,15 @@ Strategy:
 from typing import Any, get_args, get_origin
 
 import pytest
-
-# Generated schemas from adcp library (using public API)
-from adcp import (
-    GetProductsRequest as GeneratedGetProductsRequest,
-)
 from adcp import (
     GetProductsResponse as GeneratedGetProductsResponse,
+)
+
+# Generated schemas from adcp library (using public API)
+# adcp 3.9: GetProductsRequest is a TypeAlias union, not a class.
+# Use the concrete wholesale variant for comparison.
+from adcp.types import (
+    GetProductsWholesaleRequest as GeneratedGetProductsRequest,
 )
 from pydantic import BaseModel
 from pydantic.fields import FieldInfo

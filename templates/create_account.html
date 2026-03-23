@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if edit_mode else 'Create' }} Account{% endblock %}
+{% block content %}
+<style>
+    .form-card { background: #fff; border-radius: 12px; padding: 2rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); max-width: 600px; margin: 0 auto; }
+    .form-group { margin-bottom: 1.25rem; }
+    .form-group label { display: block; font-weight: 500; color: #374151; margin-bottom: 0.4rem; }
+    .form-group input, .form-group select { width: 100%; padding: 0.5rem 0.75rem; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.95rem; }
+    .form-group input:focus, .form-group select:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59,130,246,0.2); }
+    .form-group small { color: #9ca3af; font-size: 0.8rem; }
+    .form-group input[readonly] { background: #f3f4f6; cursor: not-allowed; }
+    .checkbox-group { display: flex; align-items: center; gap: 0.5rem; }
+    .checkbox-group input[type="checkbox"] { width: auto; }
+</style>
+
+<div style="margin-bottom: 1rem;">
+    <a href="{{ url_for('accounts.list_accounts', tenant_id=tenant_id) }}" class="btn btn-secondary">
+        &larr; Back to Accounts
+    </a>
+</div>
+
+<div class="form-card">
+    <h2>{{ 'Edit' if edit_mode else 'Create New' }} Account</h2>
+
+    <form method="POST" style="margin-top: 1.5rem;">
+        {% if edit_mode %}
+        <div class="form-group">
+            <label>Account ID</label>
+            <input type="text" value="{{ account.account_id }}" readonly>
+        </div>
+        {% endif %}
+
+        <div class="form-group">
+            <label for="name">Account Name *</label>
+            <input type="text" id="name" name="name" required
+                   value="{{ account.name if edit_mode else '' }}"
+                   placeholder="e.g., Acme Corp c/o ExampleMedia">
+        </div>
+
+        <div class="form-group">
+            <label for="brand_domain">Brand Domain</label>
+            <input type="text" id="brand_domain" name="brand_domain"
+                   value="{{ account.brand.domain if edit_mode and account.brand else '' }}"
+                   placeholder="e.g., acme-corp.com"
+                   {{ 'readonly' if edit_mode else '' }}>
+            <small>The brand's domain name (part of natural key, immutable after creation)</small>
+        </div>
+
+        <div class="form-group">
+            <label for="brand_id">Brand ID (optional)</label>
+            <input type="text" id="brand_id" name="brand_id"
+                   value="{{ account.brand.brand_id.root if edit_mode and account.brand and account.brand.brand_id else '' }}"
+                   placeholder="e.g., spark"
+                   {{ 'readonly' if edit_mode else '' }}>
+            <small>Sub-brand identifier for multi-brand domains</small>
+        </div>
+
+        <div class="form-group">
+            <label for="operator">Operator</label>
+            <input type="text" id="operator" name="operator"
+                   value="{{ account.operator if edit_mode else '' }}"
+                   placeholder="e.g., example-media.com"
+                   {{ 'readonly' if edit_mode else '' }}>
+            <small>The operator managing this account (part of natural key)</small>
+        </div>
+
+        <div class="form-group">
+            <label for="billing">Billing Model</label>
+            <select id="billing" name="billing">
+                <option value="">-- Select --</option>
+                <option value="operator" {{ 'selected' if edit_mode and account.billing == 'operator' }}>Operator</option>
+                <option value="agent" {{ 'selected' if edit_mode and account.billing == 'agent' }}>Agent</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="payment_terms">Payment Terms</label>
+            <select id="payment_terms" name="payment_terms">
+                <option value="">-- Select --</option>
+                {% for pt in ['net_15', 'net_30', 'net_45', 'net_60', 'net_90', 'prepay'] %}
+                <option value="{{ pt }}" {{ 'selected' if edit_mode and account.payment_terms == pt }}>{{ pt | replace('_', ' ') | title }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="rate_card">Rate Card</label>
+            <input type="text" id="rate_card" name="rate_card"
+                   value="{{ account.rate_card if edit_mode else '' }}"
+                   placeholder="e.g., Standard 2024">
+        </div>
+
+        <div class="form-group">
+            <div class="checkbox-group">
+                <input type="checkbox" id="sandbox" name="sandbox"
+                       {{ 'checked' if edit_mode and account.sandbox }}>
+                <label for="sandbox" style="margin: 0;">Sandbox Account</label>
+            </div>
+            <small>Sandbox accounts are for testing — no real ad platform resources are created.</small>
+        </div>
+
+        <div style="display: flex; gap: 1rem; margin-top: 1.5rem;">
+            <button type="submit" class="btn btn-primary">{{ 'Update' if edit_mode else 'Create Account' }}</button>
+            <a href="{{ url_for('accounts.list_accounts', tenant_id=tenant_id) }}" class="btn btn-secondary">Cancel</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

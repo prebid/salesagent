@@ -42,10 +42,17 @@ def test_pricing_option_rootmodel_unwrapping():
     # Should be wrapped in RootModel
     assert hasattr(po, "root"), "pricing_options[0] should have .root attribute (is RootModel)"
 
-    # Direct access should NOT work (this is the bug we're testing for)
-    assert not hasattr(po, "pricing_model"), "pricing_options wrapper should not have .pricing_model directly"
+    # adcp 3.9: PricingOption RootModel now proxies attributes from .root,
+    # so .pricing_model is accessible directly on the wrapper
+    assert hasattr(po, "pricing_model"), "pricing_options wrapper should proxy .pricing_model from .root"
 
-    # Access via .root should work
+    # Direct access works (proxy behavior)
+    assert po.pricing_model == "cpm"
+    assert po.currency == "USD"
+    assert po.rate == 10.0
+    assert po.is_fixed is True
+
+    # Access via .root should also still work
     assert po.root.pricing_model == "cpm"
     assert po.root.currency == "USD"
     assert po.root.rate == 10.0

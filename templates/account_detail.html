@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block title %}{{ account.name }} - Account Detail{% endblock %}
+{% block content %}
+<style>
+    .detail-card { background: #fff; border-radius: 12px; padding: 2rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 1.5rem; }
+    .detail-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1.5rem; }
+    .detail-header h2 { margin: 0; color: #111827; }
+    .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    .field-item { padding: 0.75rem 0; }
+    .field-label { font-size: 0.8rem; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; }
+    .field-value { font-size: 1rem; color: #111827; margin-top: 0.25rem; }
+    .status-badge { display: inline-block; padding: 0.3rem 0.8rem; border-radius: 12px; font-size: 0.85rem; font-weight: 500; }
+    .status-active { background: #d1fae5; color: #065f46; }
+    .status-pending_approval { background: #fef3c7; color: #92400e; }
+    .status-rejected { background: #fee2e2; color: #991b1b; }
+    .status-payment_required { background: #fef3c7; color: #92400e; }
+    .status-suspended { background: #fee2e2; color: #991b1b; }
+    .status-closed { background: #f3f4f6; color: #6b7280; }
+    .action-buttons { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 1rem; }
+    .brand-domain { font-family: monospace; color: #3b82f6; }
+</style>
+
+<div style="margin-bottom: 1rem;">
+    <a href="{{ url_for('accounts.list_accounts', tenant_id=tenant_id) }}" class="btn btn-secondary">
+        &larr; Back to Accounts
+    </a>
+</div>
+
+<div class="detail-card">
+    <div class="detail-header">
+        <div>
+            <h2>{{ account.name }}</h2>
+            <small style="color: #9ca3af;">{{ account.account_id }}</small>
+        </div>
+        <div>
+            <span class="status-badge status-{{ account.status }}">{{ account.status | replace('_', ' ') | title }}</span>
+            <a href="{{ url_for('accounts.edit_account', tenant_id=tenant_id, account_id=account.account_id) }}" class="btn btn-sm" style="margin-left: 0.5rem;">
+                <i class="fas fa-edit"></i> Edit
+            </a>
+        </div>
+    </div>
+
+    <div class="field-grid">
+        <div class="field-item">
+            <div class="field-label">Brand</div>
+            <div class="field-value">
+                {% if account.brand %}
+                <span class="brand-domain">{{ account.brand.domain or '-' }}</span>
+                {% if account.brand.brand_id %}
+                    : {{ account.brand.brand_id.root if account.brand.brand_id.root is defined else account.brand.brand_id }}
+                {% endif %}
+                {% else %}-{% endif %}
+            </div>
+        </div>
+        <div class="field-item">
+            <div class="field-label">Operator</div>
+            <div class="field-value">{{ account.operator or '-' }}</div>
+        </div>
+        <div class="field-item">
+            <div class="field-label">Billing</div>
+            <div class="field-value">{{ account.billing or '-' }}</div>
+        </div>
+        <div class="field-item">
+            <div class="field-label">Payment Terms</div>
+            <div class="field-value">{{ account.payment_terms or '-' }}</div>
+        </div>
+        <div class="field-item">
+            <div class="field-label">Rate Card</div>
+            <div class="field-value">{{ account.rate_card or '-' }}</div>
+        </div>
+        <div class="field-item">
+            <div class="field-label">Sandbox</div>
+            <div class="field-value">{{ 'Yes' if account.sandbox else 'No' }}</div>
+        </div>
+        <div class="field-item">
+            <div class="field-label">Created</div>
+            <div class="field-value">{{ account.created_at.strftime('%Y-%m-%d %H:%M') if account.created_at else '-' }}</div>
+        </div>
+        <div class="field-item">
+            <div class="field-label">Updated</div>
+            <div class="field-value">{{ account.updated_at.strftime('%Y-%m-%d %H:%M') if account.updated_at else '-' }}</div>
+        </div>
+    </div>
+
+    {% if allowed_transitions %}
+    <div class="action-buttons">
+        <strong style="line-height: 2;">Actions:</strong>
+        {% for status in allowed_transitions %}
+        <button class="btn btn-sm {{ 'btn-success' if status == 'active' else 'btn-danger' if status in ('suspended', 'closed', 'rejected') else 'btn-warning' }}"
+                onclick="changeStatus('{{ status }}')">
+            {{ status | replace('_', ' ') | title }}
+        </button>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const scriptRoot = '{{ request.script_root }}' || '';
+function changeStatus(newStatus) {
+    if (!confirm('Change account status to "' + newStatus + '"?')) return;
+    fetch(scriptRoot + '/tenant/{{ tenant_id }}/accounts/{{ account.account_id }}/status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ status: newStatus })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) { window.location.reload(); }
+        else { alert(data.error || 'Failed to change status'); }
+    })
+    .catch(err => alert('Error: ' + err));
+}
+</script>
+{% endblock %}

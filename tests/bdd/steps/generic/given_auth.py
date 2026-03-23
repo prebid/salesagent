@@ -12,6 +12,7 @@ from pytest_bdd import given
 # ── Authenticated / tenant-present paths ────────────────────────────
 
 
+@given("a valid tenant context exists")
 @given("the Buyer has tenant context")
 def given_buyer_has_tenant_context(ctx: dict) -> None:
     """Buyer has valid tenant context (happy path)."""

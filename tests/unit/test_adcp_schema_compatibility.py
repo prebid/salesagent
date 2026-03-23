@@ -62,6 +62,7 @@ class TestADCPSchemaCompatibility:
     def test_signal_from_adcp_response(self):
         """Test Signal model can be created from adcp library signal format."""
         # Simulate signal data as returned by adcp library (all required fields)
+        # adcp 3.9: pricing_options replaces the old pricing field
         adcp_signal_data = {
             "signal_agent_segment_id": "segment_123",
             "name": "Automotive Enthusiasts",
@@ -76,7 +77,9 @@ class TestADCPSchemaCompatibility:
                     "type": "platform",
                 }
             ],
-            "pricing": {"cpm": 5.0, "currency": "USD"},
+            "pricing_options": [
+                {"pricing_option_id": "cpm_usd", "cpm": 5.0, "currency": "USD", "model": "cpm"},
+            ],
         }
 
         signal = Signal(**adcp_signal_data)
@@ -87,7 +90,7 @@ class TestADCPSchemaCompatibility:
         assert signal.data_provider == "Optable"
         assert signal.coverage_percentage == 85.0
         assert len(signal.deployments) == 1
-        assert signal.pricing.cpm == 5.0
+        assert len(signal.pricing_options) == 1
 
     def test_format_with_agent_url_override(self):
         """Test Format model does NOT allow agent_url at top level (only in format_id)."""
@@ -169,6 +172,7 @@ class TestADCPSchemaCompatibility:
 
     def test_signal_roundtrip_with_model_dump(self):
         """Test Signal can roundtrip through model_dump and reconstruction."""
+        # adcp 3.9: pricing_options replaces the old pricing field
         original_data = {
             "signal_agent_segment_id": "roundtrip_seg",
             "name": "Roundtrip Signal",
@@ -183,7 +187,9 @@ class TestADCPSchemaCompatibility:
                     "type": "platform",
                 }
             ],
-            "pricing": {"cpm": 10.0, "currency": "USD"},
+            "pricing_options": [
+                {"pricing_option_id": "cpm_usd", "cpm": 10.0, "currency": "USD", "model": "cpm"},
+            ],
         }
 
         # Create signal from data

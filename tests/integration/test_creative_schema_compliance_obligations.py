@@ -215,7 +215,7 @@ class TestCreativeExtendsListingBase:
 
         Covers: UC-006-CREATIVE-SCHEMA-COMPLIANCE-01
         """
-        from adcp.types.generated_poc.media_buy.list_creatives_response import (
+        from adcp.types.generated_poc.creative.list_creatives_response import (
             Creative as ListingCreative,
         )
 
