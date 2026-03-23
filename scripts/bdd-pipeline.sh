@@ -153,7 +153,19 @@ $GIT_INSTRUCTION" \
     # --- Guard: revert any production code changes ---
     POST_HEAD=$(git rev-parse HEAD)
     if [ "$PRE_HEAD" != "$POST_HEAD" ]; then
-      PROD_FILES=$(git diff --name-only "$PRE_HEAD" "$POST_HEAD" | grep -v '^tests/' | grep -v '^\.beads/' || true)
+      # Only flag files the task agent shouldn't touch. Exclude:
+      #   tests/       — expected output
+      #   .beads/      — task tracking state
+      #   .claude/     — pipeline infrastructure (may change between runs)
+      #   scripts/     — pipeline scripts (may change between runs)
+      #   logs/        — pipeline output
+      PROD_FILES=$(git diff --name-only "$PRE_HEAD" "$POST_HEAD" \
+        | grep -v '^tests/' \
+        | grep -v '^\.beads/' \
+        | grep -v '^\.claude/' \
+        | grep -v '^scripts/' \
+        | grep -v '^logs/' \
+        || true)
       if [ -n "$PROD_FILES" ]; then
         echo "  ⚠ PRODUCTION FILES MODIFIED (reverting):"
         echo "$PROD_FILES" | sed 's/^/    /'
