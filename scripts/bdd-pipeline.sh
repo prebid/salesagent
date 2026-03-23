@@ -167,6 +167,61 @@ $(echo "$PROD_FILES" | sed 's/^/- /')" --allow-empty
       fi
     fi
 
+    # --- Inspect: strengthen weak assertions in changed step files ---
+    CHANGED_STEPS=$(git diff --name-only "$PRE_HEAD" HEAD -- 'tests/bdd/steps/' || true)
+    if [ -n "$CHANGED_STEPS" ]; then
+      INSPECT_LOG="$LOGDIR/inspect-$TASK_ID.log"
+      echo "  🔍 inspecting assertions..."
+
+      # Find which Gherkin scenarios reference these steps (for context)
+      STEP_FILES_ARG=$(echo "$CHANGED_STEPS" | tr '\n' ' ')
+
+      $CLAUDE "You are a BDD assertion quality inspector. Review the CHANGED step definitions below and strengthen any weak Then-step assertions.
+
+## Changed step files (just wired by task $TASK_ID):
+$CHANGED_STEPS
+
+## Rules for strong assertions
+
+1. **Success outcomes** ('passes', 'accepted', 'skipped'): MUST assert at minimum:
+   - \`response is not None\` (existence)
+   - \`media_buy_id\` is present in response (proves persistence)
+   - For time-related outcomes: verify the time field value matches input or expected transformation
+   - For validation-pass outcomes: verify response.status is a valid creation status
+
+2. **Error outcomes**: MUST assert:
+   - Error code matches expected (already good if using _assert_error_outcome)
+   - Recovery hint if specified
+   - Suggestion field if specified
+
+3. **NEVER weaken existing assertions** to make tests pass. If production doesn't match, xfail.
+
+4. **NEVER modify production code.** Only touch files under tests/.
+
+5. Read the Gherkin scenarios that use these steps (in tests/bdd/features/) to understand the INTENT of each assertion.
+
+6. Run \`make quality\` after changes to verify nothing breaks.
+
+## What to do
+- Read the changed step files
+- For each Then step or assertion helper, check if it asserts enough for what the step text claims
+- If weak: add the missing assertions
+- If a new assertion would fail because production doesn't match spec: xfail with a SPEC-PRODUCTION GAP note
+- Commit your changes with message: 'fix(bdd): strengthen assertions for $TASK_ID'
+
+$GIT_INSTRUCTION" \
+        > "$INSPECT_LOG" 2>&1 || true
+
+      INSPECT_SIZE=$(wc -c < "$INSPECT_LOG" 2>/dev/null | tr -d ' ' || echo "0")
+      # Check if inspector made commits
+      INSPECT_HEAD=$(git rev-parse HEAD)
+      if [ "$INSPECT_HEAD" != "$POST_HEAD" ]; then
+        echo "  ✅ assertions strengthened"
+      else
+        echo "  ── assertions OK (no changes)"
+      fi
+    fi
+
     # Report timing
     TASK_END=$(date +%s)
     ELAPSED=$(( TASK_END - TASK_START ))
