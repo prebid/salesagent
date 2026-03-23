@@ -805,6 +805,128 @@ def given_ad_server_rejects_upload(ctx: dict) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# GIVEN steps — creative URL validation (ext-g)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given("a valid create_media_buy request with inline creatives")
+def given_request_with_inline_creatives_base(ctx: dict) -> None:
+    """Set up a request with creative_ids referencing an existing creative.
+
+    For ext-g: creates a creative with valid data so subsequent steps can
+    inject specific validation failures (missing URL, non-generative format).
+    Stores the creative ORM object in ctx["inline_creative"] for modification.
+    """
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
+    from tests.factories.creative import CreativeFactory
+
+    env = ctx["env"]
+    kwargs = _ensure_request_defaults(ctx)
+    creative = CreativeFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        creative_id="cr-ext-g-test",
+        agent_url="https://creative.adcontextprotocol.org",
+        format="display_300x250",
+        status="approved",
+        data={
+            "assets": {
+                "primary": {
+                    "url": "https://cdn.example.com/creative.png",
+                    "width": 300,
+                    "height": 250,
+                }
+            }
+        },
+    )
+    ctx["inline_creative"] = creative
+    if kwargs.get("packages"):
+        pkg = kwargs["packages"][0]
+        existing = pkg.get("creative_ids") or []
+        existing.append(creative.creative_id)
+        pkg["creative_ids"] = existing
+
+
+@given("a creative is missing the required URL in assets")
+@given("But a creative is missing the required URL in assets")
+def given_creative_missing_url(ctx: dict) -> None:
+    """Remove the URL from the inline creative's asset data.
+
+    For ext-g: production code in _validate_creatives_before_adapter_call
+    calls extract_media_url_and_dimensions which returns (None, None, None)
+    when the primary asset has no URL, triggering INVALID_CREATIVES error.
+    """
+    creative = ctx.get("inline_creative")
+    assert creative is not None, "No inline creative in ctx — call 'with inline creatives' first"
+    # Clear the URL from assets so extract_media_url_and_dimensions returns None
+    creative.data = {"assets": {"primary": {"width": 300, "height": 250}}}
+
+
+@given("the creative format is not generative")
+@given("And the creative format is not generative")
+def given_creative_format_not_generative(ctx: dict) -> None:
+    """Ensure the format spec for the creative's format is non-generative.
+
+    For ext-g: generative formats have output_format_ids and are skipped
+    during URL validation. The default test format (display_300x250) is
+    already non-generative, so this step verifies the invariant.
+    """
+    env = ctx["env"]
+    format_spec = env._format_specs.get("display_300x250")
+    assert format_spec is not None, "display_300x250 format spec not configured in harness"
+    # Generative formats have output_format_ids — verify ours doesn't
+    assert not getattr(format_spec, "output_format_ids", None), (
+        "display_300x250 format spec should NOT have output_format_ids (non-generative)"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GIVEN steps — format_id validation (ext-h, ext-h-agent)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given(parsers.parse('a package format_id is a plain string "{value}" instead of a FormatId object'))
+@given(parsers.parse('But a package format_id is a plain string "{value}" instead of a FormatId object'))
+def given_format_id_plain_string(ctx: dict, value: str) -> None:
+    """Replace package format_ids with a plain string instead of FormatId object.
+
+    For ext-h: AI agents commonly send format IDs as plain strings like
+    "banner_300x250" instead of the required FormatId object with {agent_url, id}.
+    Pydantic rejects this at request construction time with a ValidationError.
+    """
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
+
+    kwargs = _ensure_request_defaults(ctx)
+    if kwargs.get("packages"):
+        # Set format_ids to a list containing the plain string
+        # This will fail Pydantic validation when CreateMediaBuyRequest is constructed
+        kwargs["packages"][0]["format_ids"] = [value]
+
+
+@given("a package format_id references an unregistered agent_url")
+@given("But a package format_id references an unregistered agent_url")
+def given_format_id_unregistered_agent(ctx: dict) -> None:
+    """Set a format_id with a valid structure but unregistered agent_url.
+
+    For ext-h-agent: the FormatId object has {agent_url, id} but the agent_url
+    is not registered with the tenant. Production should detect this and reject
+    it, but _validate_and_convert_format_ids is currently dead code — the
+    format_id passes Pydantic validation and reaches the format compatibility
+    check, which rejects it because the product doesn't have this agent's formats.
+    """
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
+
+    kwargs = _ensure_request_defaults(ctx)
+    if kwargs.get("packages"):
+        kwargs["packages"][0]["format_ids"] = [
+            {
+                "agent_url": "https://unknown-agent.example.com",
+                "id": "display_300x250",
+            }
+        ]
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — creative assignment validation (inv-026-1, inv-026-2, inv-026-4)
 # ═══════════════════════════════════════════════════════════════════════
 

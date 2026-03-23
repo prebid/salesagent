@@ -178,6 +178,13 @@ _XFAIL_TAGS: dict[str, str] = {
     # FIXME(salesagent-9vgz.15): production errors lack suggestion field
     # AdCPNotFoundError/AdCPValidationError/AdCPAdapterError raised with details={"error_code": ...}
     # but no details["suggestion"]. Spec requires suggestion for buyer remediation.
+    # FIXME(salesagent-9vgz.6): creative/format_id validation errors lack suggestion field
+    # ext-g: _validate_creatives_before_adapter_call raises INVALID_CREATIVES without suggestion
+    # ext-h: plain string format_id caught by Pydantic, not structured AdCPError
+    # ext-h-agent: _validate_and_convert_format_ids is dead code — unregistered agent not detected
+    "T-UC-002-ext-g": "INVALID_CREATIVES error lacks suggestion field",
+    "T-UC-002-ext-h": "plain string format_id produces Pydantic error, not AdCPError with suggestion",
+    "T-UC-002-ext-h-agent": "unregistered agent_url validation not wired — _validate_and_convert_format_ids is dead code",
     "T-UC-002-ext-o": "CREATIVES_NOT_FOUND error lacks suggestion field",
     "T-UC-002-ext-p": "CREATIVE_FORMAT_MISMATCH error lacks suggestion field",
     "T-UC-002-ext-q": "CREATIVE_UPLOAD_FAILED error lacks suggestion field",
