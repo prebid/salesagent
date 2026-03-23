@@ -335,7 +335,6 @@ def when_list_accounts_no_auth(ctx: dict) -> None:
 def when_list_accounts_paginated(ctx: dict, value: int) -> None:
     """Send list_accounts with max_results pagination."""
     from adcp.types.generated_poc.core.pagination_request import PaginationRequest
-
     from src.core.schemas.account import ListAccountsRequest
 
     try:
@@ -349,7 +348,6 @@ def when_list_accounts_paginated(ctx: dict, value: int) -> None:
 def when_list_accounts_with_cursor(ctx: dict) -> None:
     """Send list_accounts with the cursor from the previous response."""
     from adcp.types.generated_poc.core.pagination_request import PaginationRequest
-
     from src.core.schemas.account import ListAccountsRequest
 
     prev_response = ctx["response"]
@@ -367,7 +365,6 @@ def when_list_accounts_with_cursor(ctx: dict) -> None:
 def when_list_accounts_with_explicit_cursor(ctx: dict, cursor: str) -> None:
     """Send list_accounts with a specific cursor string (e.g. malformed base64)."""
     from adcp.types.generated_poc.core.pagination_request import PaginationRequest
-
     from src.core.schemas.account import ListAccountsRequest
 
     try:
@@ -385,6 +382,7 @@ def when_list_sandbox_filter(ctx: dict, value: str) -> None:
     that need list dispatch on a sync env, calls _list_accounts_impl directly.
     """
     from src.core.schemas.account import ListAccountsRequest
+
     from tests.harness.account_sync import AccountSyncEnv
 
     env = ctx["env"]
@@ -1049,7 +1047,6 @@ def then_both_invalid(ctx: dict) -> None:
     Either way, a valid response never has both.
     """
     from pydantic import ValidationError
-
     from src.core.schemas.account import SyncAccountsResponse
 
     try:
@@ -1070,7 +1067,6 @@ def then_both_invalid(ctx: dict) -> None:
 def then_neither_invalid(ctx: dict, description: str) -> None:
     """Verify the schema requires either accounts or errors."""
     from pydantic import ValidationError
-
     from src.core.schemas.account import SyncAccountsResponse
 
     # SyncAccountsResponse requires accounts field — omitting it is invalid
@@ -1470,8 +1466,9 @@ def then_account_shows_action(ctx: dict, domain: str, action: str) -> None:
 @then("no accounts were actually created or modified on the seller")
 def then_no_db_writes(ctx: dict) -> None:
     """Assert dry_run didn't write to DB — query repo and verify no accounts exist."""
-    from src.core.database.database_session import get_db_session
     from src.core.database.repositories.account import AccountRepository
+
+    from src.core.database.database_session import get_db_session
 
     tenant, principal = ctx["tenant"], ctx["principal"]
     with get_db_session() as session:
@@ -1485,8 +1482,9 @@ def then_no_db_writes(ctx: dict) -> None:
 @then("the account was actually created on the seller")
 def then_account_in_db(ctx: dict) -> None:
     """Assert the sync actually wrote the correct account to DB."""
-    from src.core.database.database_session import get_db_session
     from src.core.database.repositories.account import AccountRepository
+
+    from src.core.database.database_session import get_db_session
 
     tenant, principal = ctx["tenant"], ctx["principal"]
     with get_db_session() as session:
@@ -1532,8 +1530,9 @@ def then_account_unchanged_or_updated(ctx: dict, domain: str) -> None:
 @then(parsers.parse('agent B\'s account for brand domain "{domain}" is not affected'))
 def then_agent_b_not_affected(ctx: dict, domain: str) -> None:
     """Assert agent B's account is still active (not deactivated by agent A)."""
-    from src.core.database.database_session import get_db_session
     from src.core.database.repositories.account import AccountRepository
+
+    from src.core.database.database_session import get_db_session
 
     tenant = ctx["tenant"]
     agent_b = ctx["agents"]["B"]
@@ -1554,8 +1553,9 @@ def then_only_agent_a_deactivated(ctx: dict) -> None:
     Verifies agent B's accounts remain untouched in the DB by checking
     their status is NOT 'closed'.
     """
-    from src.core.database.database_session import get_db_session
     from src.core.database.repositories.account import AccountRepository
+
+    from src.core.database.database_session import get_db_session
 
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
@@ -1579,8 +1579,9 @@ def then_only_agent_a_deactivated(ctx: dict) -> None:
 @then(parsers.parse('brand domain "{domain}" remains in its current state'))
 def then_brand_unchanged(ctx: dict, domain: str) -> None:
     """Assert the account for the given domain was NOT deactivated."""
-    from src.core.database.database_session import get_db_session
     from src.core.database.repositories.account import AccountRepository
+
+    from src.core.database.database_session import get_db_session
 
     tenant = ctx["tenant"]
     principal = ctx["principal"]
@@ -1615,8 +1616,9 @@ def then_only_included_processed(ctx: dict) -> None:
 @then("no accounts are deactivated")
 def then_no_deactivations(ctx: dict) -> None:
     """Assert no accounts were deactivated (all still active/non-closed)."""
-    from src.core.database.database_session import get_db_session
     from src.core.database.repositories.account import AccountRepository
+
+    from src.core.database.database_session import get_db_session
 
     tenant = ctx["tenant"]
     principal = ctx["principal"]
@@ -1736,7 +1738,6 @@ def when_sync_empty_accounts(ctx: dict) -> None:
 def when_sync_no_brand_domain(ctx: dict) -> None:
     """Send sync with account missing brand.domain — triggers Pydantic validation."""
     from pydantic import ValidationError
-
     from src.core.schemas.account import SyncAccountsRequest
 
     try:
@@ -1752,7 +1753,6 @@ def when_sync_no_brand_domain(ctx: dict) -> None:
 def when_sync_no_operator(ctx: dict) -> None:
     """Send sync with account missing operator — triggers Pydantic validation."""
     from pydantic import ValidationError
-
     from src.core.schemas.account import SyncAccountsRequest
 
     try:
@@ -1768,7 +1768,6 @@ def when_sync_no_operator(ctx: dict) -> None:
 def when_sync_no_billing(ctx: dict) -> None:
     """Send sync with account missing billing — triggers Pydantic validation."""
     from pydantic import ValidationError
-
     from src.core.schemas.account import SyncAccountsRequest
 
     try:
@@ -1784,7 +1783,6 @@ def when_sync_no_billing(ctx: dict) -> None:
 def when_sync_invalid_field(ctx: dict, field: str, value: str) -> None:
     """Send sync with an invalid field value for validation testing."""
     from pydantic import ValidationError
-
     from src.core.schemas.account import SyncAccountsRequest
 
     # Build account entry with the invalid field
@@ -1814,7 +1812,6 @@ def when_sync_invalid_field(ctx: dict, field: str, value: str) -> None:
 def when_sync_n_accounts(ctx: dict, count: int) -> None:
     """Send sync with N generated accounts for boundary testing."""
     from pydantic import ValidationError
-
     from src.core.schemas.account import SyncAccountsRequest
 
     accounts = [
@@ -2075,8 +2072,9 @@ def then_error_has_fix_suggestion(ctx: dict) -> None:
 @then(parsers.parse('the governance_agents are stored for brand domain "{domain}"'))
 def then_governance_agents_stored(ctx: dict, domain: str) -> None:
     """Assert governance_agents were persisted in the DB for the given brand domain."""
-    from src.core.database.database_session import get_db_session
     from src.core.database.repositories.account import AccountRepository
+
+    from src.core.database.database_session import get_db_session
 
     tenant = ctx["tenant"]
     principal = ctx["principal"]
@@ -2099,8 +2097,9 @@ def then_no_modifications_for_domain(ctx: dict, domain: str) -> None:
     Verifies that the pre-existing account retains its original billing value
     despite the dry-run response reporting action='updated'.
     """
-    from src.core.database.database_session import get_db_session
     from src.core.database.repositories.account import AccountRepository
+
+    from src.core.database.database_session import get_db_session
 
     tenant = ctx["tenant"]
     principal = ctx["principal"]
