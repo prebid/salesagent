@@ -852,6 +852,108 @@ def given_currency_configuration(ctx: dict, config: str) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Product uniqueness partition/boundary — BR-RULE-010
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _setup_multi_product_request(ctx: dict, product_ids: list[str]) -> None:
+    """Create a request with N packages, each using the given product_id.
+
+    All packages use USD/CPM/fixed pricing — currency is not the variable under test.
+    Duplicate product_ids are intentional for testing the uniqueness constraint.
+    """
+    env = ctx["env"]
+    kwargs = _ensure_request_defaults(ctx)
+    packages = []
+
+    for i, pid in enumerate(product_ids):
+        default_product = ctx.get("default_product")
+        if default_product is not None and pid == default_product.product_id:
+            product = default_product
+        else:
+            # Check if product already exists in the session (dedup for same pid)
+            existing = ctx.get(f"_product_{pid}")
+            if existing is not None:
+                product = existing
+            else:
+                product = ProductFactory(
+                    tenant=ctx["tenant"],
+                    product_id=pid,
+                    property_tags=["all_inventory"],
+                )
+                ctx[f"_product_{pid}"] = product
+
+        po = PricingOptionFactory(
+            product=product,
+            pricing_model="cpm",
+            currency="USD",
+            is_fixed=True,
+            rate=5.00,
+        )
+        env._commit_factory_data()
+        packages.append(
+            {
+                "product_id": product.product_id,
+                "buyer_ref": f"pkg-{i + 1}",
+                "budget": 5000.0,
+                "pricing_option_id": _pricing_option_id(po),
+            }
+        )
+
+    kwargs["packages"] = packages
+
+
+@given(parsers.parse("the product scenario is {partition}"))
+def given_product_scenario(ctx: dict, partition: str) -> None:
+    """Set up product configuration for partition scenarios (BR-RULE-010).
+
+    Partition values:
+    - single_package: 1 package, 1 product (trivially unique)
+    - distinct_products: 2 packages, different product_ids
+    - duplicate_product: 2 packages, same product_id (uniqueness violation)
+    """
+    partition = partition.strip()
+
+    default_pid = ctx["default_product"].product_id
+
+    if partition == "single_package":
+        _ensure_request_defaults(ctx)
+
+    elif partition == "distinct_products":
+        _setup_multi_product_request(ctx, [default_pid, "product_b"])
+
+    elif partition == "duplicate_product":
+        _setup_multi_product_request(ctx, [default_pid, default_pid])
+
+    else:
+        raise ValueError(f"Unknown product partition: {partition}")
+
+
+@given(parsers.parse("the product configuration is: {config}"))
+def given_product_configuration(ctx: dict, config: str) -> None:
+    """Set up product configuration for boundary scenarios (BR-RULE-010).
+
+    Boundary values:
+    - 1 pkg prod-A: single package (trivially unique)
+    - 2 pkg prod-A,B: two packages, different products
+    - 2 pkg prod-A,A: two packages, same product_id (uniqueness violation)
+    """
+    config = config.strip()
+
+    if config == "1 pkg prod-A":
+        _setup_multi_product_request(ctx, ["prod-A"])
+
+    elif config == "2 pkg prod-A,B":
+        _setup_multi_product_request(ctx, ["prod-A", "prod-B"])
+
+    elif config == "2 pkg prod-A,A":
+        _setup_multi_product_request(ctx, ["prod-A", "prod-A"])
+
+    else:
+        raise ValueError(f"Unknown product boundary config: {config}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Proposal-related request construction
 # ═══════════════════════════════════════════════════════════════════════
 
