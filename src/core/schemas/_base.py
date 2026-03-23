@@ -1616,6 +1616,12 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest1):
     - packages: use our AdCPPackageUpdate (adds creative_ids)
     - budget: campaign-level budget (not in library — convenience field)
     - today: internal testing field
+
+    Spec fields missing from library codegen (accepted here for forward compatibility):
+    - revision: optimistic concurrency control
+    - canceled: irreversible cancellation flag
+    - cancellation_reason: reason for cancellation
+    - new_packages: mid-flight package additions
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
@@ -1630,6 +1636,11 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest1):
     # Bare float is accepted so transport wrappers can preserve existing DB currency
     # when the caller updates only the amount.
     budget: Budget | float | None = None
+    # Spec fields missing from library codegen — accept for forward compatibility
+    revision: int | None = Field(None, description="Expected current revision for optimistic concurrency")
+    canceled: bool | None = Field(None, description="Cancel the media buy (irreversible)")
+    cancellation_reason: str | None = Field(None, description="Reason for cancellation", max_length=500)
+    new_packages: list[PackageRequest] | None = Field(None, description="New packages to add mid-flight")
     # Internal testing field
     today: date | None = Field(None, exclude=True, description="For testing/simulation only - not part of AdCP spec")
 
