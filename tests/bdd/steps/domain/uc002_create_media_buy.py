@@ -586,6 +586,12 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
         from tests.bdd.steps.generic.then_media_buy import then_approval_manual
 
         then_approval_manual(ctx)
+    elif outcome == "all records persisted after adapter success":
+        _assert_persistence_after_adapter_success(ctx)
+    elif outcome == "no records persisted after adapter failure":
+        _assert_no_persistence_after_adapter_failure(ctx)
+    elif outcome == "records persisted in pending state":
+        _assert_persistence_in_pending_state(ctx)
     elif outcome.startswith("error "):
         _assert_error_outcome(ctx, outcome)
     else:
@@ -729,6 +735,67 @@ def _assert_has_suggestion(error: object) -> None:
             pytest.xfail(f"SPEC-PRODUCTION GAP: Error has suggestion=None. Error: {error}")
     else:
         pytest.xfail(f"SPEC-PRODUCTION GAP: Error type {type(error).__name__} has no suggestion attribute")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Persistence timing assertions (BR-RULE-020)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _assert_persistence_after_adapter_success(ctx: dict) -> None:
+    """Assert all records persisted after adapter returns success (auto-approval path).
+
+    Verifies: success response, media buy persisted, packages persisted, adapter called.
+    """
+    import pytest
+
+    from tests.bdd.steps.generic.then_media_buy import (
+        then_adapter_executed,
+        then_media_buy_persisted,
+        then_package_records_persisted,
+    )
+
+    if "error" in ctx:
+        pytest.xfail(f"SPEC-PRODUCTION GAP: Expected adapter success + persistence but got error: {ctx['error']}")
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response for adapter success path"
+
+    then_media_buy_persisted(ctx)
+    then_package_records_persisted(ctx)
+    then_adapter_executed(ctx)
+
+
+def _assert_no_persistence_after_adapter_failure(ctx: dict) -> None:
+    """Assert no records persisted after adapter returns failure.
+
+    Verifies: error in context, no media buy persisted, no packages persisted.
+    """
+    from tests.bdd.steps.generic.then_media_buy import (
+        then_no_media_buy_persisted,
+        then_no_package_records_persisted,
+    )
+
+    assert "error" in ctx, f"Expected an error after adapter failure but got success response: {ctx.get('response')}"
+    then_no_media_buy_persisted(ctx)
+    then_no_package_records_persisted(ctx)
+
+
+def _assert_persistence_in_pending_state(ctx: dict) -> None:
+    """Assert records persisted in pending state (manual approval path).
+
+    Verifies: submitted status in response, media buy persisted with pending_approval in DB.
+    """
+    import pytest
+
+    from tests.bdd.steps.generic.then_media_buy import (
+        then_approval_manual,
+        then_pending_state,
+    )
+
+    if "error" in ctx:
+        pytest.xfail(f"SPEC-PRODUCTION GAP: Expected pending state but got error: {ctx['error']}")
+    then_approval_manual(ctx)
+    then_pending_state(ctx)
 
 
 # ═══════════════════════════════════════════════════════════════════════

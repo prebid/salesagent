@@ -165,6 +165,57 @@ def given_approval_boundary(ctx: dict, config: str) -> None:
         raise ValueError(f"Unknown approval boundary config: {config}")
 
 
+# ───────────────────────────────────────────────────────────────────────
+# Persistence timing configuration (BR-RULE-020)
+# ───────────────────────────────────────────────────────────────────────
+
+
+@given(parsers.parse("the persistence timing scenario is {partition}"))
+def given_persistence_timing_partition(ctx: dict, partition: str) -> None:
+    """Configure approval + adapter state for persistence timing partitions (BR-RULE-020).
+
+    Dispatches to existing tenant/adapter helpers.
+    """
+    partition = partition.strip()
+
+    if partition == "auto_approve_adapter_success":
+        given_tenant_auto_approval(ctx)
+        given_adapter_no_manual_approval(ctx)
+        given_adapter_success(ctx)
+    elif partition == "manual_approval_pending":
+        given_tenant_manual_approval(ctx)
+        given_adapter_manual_approval(ctx)
+    elif partition == "auto_approve_adapter_failure":
+        given_tenant_auto_approval(ctx)
+        given_adapter_no_manual_approval(ctx)
+        given_adapter_error(ctx)
+    else:
+        raise ValueError(f"Unknown persistence timing partition: {partition}")
+
+
+@given(parsers.parse("the persistence timing scenario is: {config}"))
+def given_persistence_timing_boundary(ctx: dict, config: str) -> None:
+    """Configure approval + adapter state for persistence timing boundaries (BR-RULE-020).
+
+    Dispatches to existing tenant/adapter helpers.
+    """
+    config = config.strip()
+
+    if config == "auto-approve success":
+        given_tenant_auto_approval(ctx)
+        given_adapter_no_manual_approval(ctx)
+        given_adapter_success(ctx)
+    elif config == "auto-approve failure":
+        given_tenant_auto_approval(ctx)
+        given_adapter_no_manual_approval(ctx)
+        given_adapter_error(ctx)
+    elif config == "manual approval":
+        given_tenant_manual_approval(ctx)
+        given_adapter_manual_approval(ctx)
+    else:
+        raise ValueError(f"Unknown persistence timing boundary config: {config}")
+
+
 @given(parsers.parse("the tenant has max_daily_package_spend configured at {amount:d}"))
 def given_tenant_max_daily_spend(ctx: dict, amount: int) -> None:
     """Configure tenant max daily package spend on the CurrencyLimit (USD)."""
