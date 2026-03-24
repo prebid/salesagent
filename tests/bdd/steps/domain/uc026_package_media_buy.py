@@ -235,11 +235,17 @@ def then_package_default_formats(ctx: dict) -> None:
 
         product_ids = {_extract_id(f) for f in product_format_ids}
         pkg_ids = {_extract_id(f) for f in format_ids}
-        if product_ids and pkg_ids != product_ids:
-            pytest.xfail(
-                f"SPEC-PRODUCTION GAP: Package format_ids {pkg_ids} don't match "
-                f"product formats {product_ids}. Step claims 'defaulting to all "
-                f"product formats'."
+        if product_ids:
+            if pkg_ids != product_ids:
+                pytest.xfail(
+                    f"SPEC-PRODUCTION GAP: Package format_ids {pkg_ids} don't match "
+                    f"product formats {product_ids}. Step claims 'defaulting to all "
+                    f"product formats'."
+                )
+            # Verify exact set equality — not a subset or superset
+            assert pkg_ids == product_ids, (
+                f"Package format_ids {pkg_ids} don't match product formats {product_ids}. "
+                f"Step claims 'defaulting to all product formats'."
             )
 
 

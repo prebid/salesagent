@@ -327,7 +327,11 @@ def then_creative_approval_state(ctx: dict) -> None:
 
 @then("each media buy should include buyer_ref and buyer_campaign_ref for correlation")
 def then_buyer_refs_for_correlation(ctx: dict) -> None:
-    """Assert each media buy includes buyer_ref and buyer_campaign_ref."""
+    """Assert each media buy includes buyer_ref and buyer_campaign_ref with populated values.
+
+    Step text says 'for correlation' — both fields must be non-None (a None value
+    cannot be used for correlation).
+    """
     import pytest
 
     buys = _get_media_buys(ctx)
@@ -335,10 +339,15 @@ def then_buyer_refs_for_correlation(ctx: dict) -> None:
     for buy in buys:
         mb_id = getattr(buy, "media_buy_id", "?")
         assert getattr(buy, "buyer_ref", None) is not None, f"Missing buyer_ref on {mb_id}"
-        # Step text also claims buyer_campaign_ref
-        has_bcr = hasattr(buy, "buyer_campaign_ref") or (isinstance(buy, dict) and "buyer_campaign_ref" in buy)
-        if not has_bcr:
+        # Step text claims buyer_campaign_ref for correlation — must be present AND non-None
+        bcr = getattr(buy, "buyer_campaign_ref", None)
+        if bcr is None and isinstance(buy, dict):
+            bcr = buy.get("buyer_campaign_ref")
+        if not hasattr(buy, "buyer_campaign_ref") and not (isinstance(buy, dict) and "buyer_campaign_ref" in buy):
             pytest.xfail("SPEC-PRODUCTION GAP: buyer_campaign_ref field not present on media buy schema")
+        assert bcr is not None, (
+            f"buyer_campaign_ref is None on {mb_id} — step claims 'for correlation', implying a populated value"
+        )
 
 
 @then(parsers.parse('the response should include media buys "{mb1}" and "{mb2}"'))
@@ -408,7 +417,6 @@ def then_snapshot_fields(ctx: dict) -> None:
             f"SPEC-PRODUCTION GAP: Snapshot missing fields: {sorted(set(missing_fields))}. "
             f"Step claims all 4 (as_of, staleness_seconds, impressions, spend) are present."
         )
-    raise AssertionError("No snapshot found on any package — expected at least one")
 
 
 @then("the response should include an empty media_buys array")

@@ -1730,17 +1730,39 @@ def then_budget_distributed_per_allocations(ctx: dict) -> None:
 
 @then("the response should include the created media buy with derived packages")
 def then_response_has_derived_packages(ctx: dict) -> None:
-    """Assert response has a media buy with packages from proposal.
+    """Assert response has a media buy with packages derived from proposal allocations.
 
-    SPEC-PRODUCTION GAP: Production does not derive packages from proposals.
-    This asserts the response has a media_buy_id and packages array.
+    Verifies:
+    1. media_buy_id is present
+    2. packages count matches expected_proposal_allocations (from Given step)
+    3. Each package has a product_id (evidence of derivation from proposal)
     """
+    import pytest
+
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     media_buy_id = _get_response_field_from_resp(resp, "media_buy_id")
     assert media_buy_id, "No media_buy_id in response"
     packages = _get_response_field_from_resp(resp, "packages")
     assert packages is not None and len(packages) > 0, "No derived packages in response"
+    # Verify package count matches expected proposal allocations
+    expected_count = ctx.get("expected_proposal_allocations")
+    if expected_count is not None and len(packages) != expected_count:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: Expected {expected_count} packages derived from "
+            f"proposal allocations, got {len(packages)}. Production does not derive "
+            f"packages from proposals yet."
+        )
+    # Verify each package has a product_id (evidence of derivation from product allocations)
+    for i, pkg in enumerate(packages):
+        product_id = getattr(pkg, "product_id", None)
+        if product_id is None and isinstance(pkg, dict):
+            product_id = pkg.get("product_id")
+        if product_id is None:
+            pytest.xfail(
+                f"SPEC-PRODUCTION GAP: Package {i} has no product_id — cannot confirm "
+                f"derivation from proposal allocations."
+            )
 
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -251,10 +251,21 @@ def then_webhook_notification(ctx: dict) -> None:
         assert media_buy_id, (
             "Response has no media_buy_id — webhook cannot notify Buyer without identifying the media buy"
         )
+    # Check if webhook mock was wired in harness (future-proofing)
+    webhook_mock = ctx.get("webhook_mock") or ctx.get("notification_mock")
+    if webhook_mock is not None:
+        webhook_mock.assert_called_once()
+        call_args = webhook_mock.call_args
+        payload = call_args.kwargs if call_args.kwargs else {}
+        assert "media_buy_id" in payload or (call_args.args and len(call_args.args) > 0), (
+            "Webhook was called but payload has no media_buy_id"
+        )
+        return
     pytest.xfail(
         "SPEC-PRODUCTION GAP: Webhook notification service not wired in BDD harness. "
         "push_notification_config and webhook delivery service need harness setup. "
-        "Step claims 'Buyer should be notified via webhook' but no webhook mock exists."
+        "Step claims 'Buyer should be notified via webhook' but no webhook mock exists. "
+        "FIXME(salesagent-9vgz.1)"
     )
 
 

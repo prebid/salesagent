@@ -240,6 +240,8 @@ def then_response_buyer_ref(ctx: dict, buyer_ref: str) -> None:
 @then("the response should contain an implementation_date that is not null")
 def then_implementation_date_not_null(ctx: dict) -> None:
     """Assert response has a non-null implementation_date."""
+    from datetime import datetime
+
     import pytest
 
     resp = ctx.get("response")
@@ -251,8 +253,16 @@ def then_implementation_date_not_null(ctx: dict) -> None:
             "SPEC-PRODUCTION GAP: implementation_date is None — production does not "
             "set it on update responses yet. Step claims 'not null'."
         )
-    # If production does return it, verify it's a meaningful datetime value
-    assert impl_date is not None, "implementation_date must not be None"
+    # Verify it's a meaningful datetime value (not just a truthy non-None)
+    if isinstance(impl_date, str):
+        try:
+            datetime.fromisoformat(impl_date.replace("Z", "+00:00"))
+        except ValueError:
+            raise AssertionError(f"implementation_date is not a valid ISO datetime: {impl_date!r}")
+    elif not isinstance(impl_date, datetime):
+        raise AssertionError(
+            f"implementation_date should be datetime or ISO string, got {type(impl_date).__name__}: {impl_date!r}"
+        )
 
 
 @then(parsers.parse('the response should contain affected_packages including "{package_id}"'))
@@ -311,11 +321,22 @@ def then_response_has_sandbox(ctx: dict) -> None:
 
 @then('the response should NOT contain an "errors" field')
 def then_no_errors_field(ctx: dict) -> None:
-    """Assert the response has no errors."""
+    """Assert the response does not contain an 'errors' field at all.
+
+    Step text says 'NOT contain' — the field should be absent (None),
+    not just empty. An empty list ``[]`` still means the field exists.
+    """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
-    errors = getattr(resp, "errors", None)
-    assert not errors, f"Expected no errors, got: {errors}"
+    # Check via model_dump first (catches Pydantic models that exclude None fields)
+    if hasattr(resp, "model_dump"):
+        data = resp.model_dump()
+        assert "errors" not in data or data["errors"] is None, (
+            f"Expected no 'errors' field in response, got: {data.get('errors')}"
+        )
+    else:
+        errors = getattr(resp, "errors", None)
+        assert errors is None, f"Expected no 'errors' field in response, got: {errors}"
 
 
 # ═══════════════════════════════════════════════════════════════════════
