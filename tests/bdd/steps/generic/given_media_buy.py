@@ -1740,6 +1740,379 @@ def given_creative_boundary(ctx: dict, config: str) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Optimization goals partition/boundary — BR-RULE-087
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _set_optimization_goals(ctx: dict, goals: list[dict[str, Any]] | None) -> None:
+    """Set optimization_goals on the first package in the request.
+
+    None means field omitted entirely.
+    """
+    kwargs = _ensure_request_defaults(ctx)
+    if kwargs.get("packages"):
+        if goals is None:
+            kwargs["packages"][0].pop("optimization_goals", None)
+        else:
+            kwargs["packages"][0]["optimization_goals"] = goals
+
+
+def _metric_goal(
+    metric: str = "clicks",
+    *,
+    priority: int | None = None,
+    target: dict[str, Any] | None = None,
+    view_duration_seconds: float | None = None,
+    reach_unit: str | None = None,
+    target_frequency: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a metric-kind optimization goal dict."""
+    goal: dict[str, Any] = {"kind": "metric", "metric": metric}
+    if priority is not None:
+        goal["priority"] = priority
+    if target is not None:
+        goal["target"] = target
+    if view_duration_seconds is not None:
+        goal["view_duration_seconds"] = view_duration_seconds
+    if reach_unit is not None:
+        goal["reach_unit"] = reach_unit
+    if target_frequency is not None:
+        goal["target_frequency"] = target_frequency
+    return goal
+
+
+def _event_goal(
+    *,
+    event_sources: list[dict[str, Any]] | None = None,
+    priority: int | None = None,
+    target: dict[str, Any] | None = None,
+    attribution_window: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build an event-kind optimization goal dict."""
+    goal: dict[str, Any] = {"kind": "event"}
+    if event_sources is not None:
+        goal["event_sources"] = event_sources
+    if priority is not None:
+        goal["priority"] = priority
+    if target is not None:
+        goal["target"] = target
+    if attribution_window is not None:
+        goal["attribution_window"] = attribution_window
+    return goal
+
+
+def _simple_event_sources(
+    *,
+    event_source_id: str = "pixel-1",
+    event_type: str = "purchase",
+    value_field: str | None = None,
+    value_factor: float | None = None,
+) -> list[dict[str, Any]]:
+    """Build a minimal event_sources list."""
+    src: dict[str, Any] = {"event_source_id": event_source_id, "event_type": event_type}
+    if value_field is not None:
+        src["value_field"] = value_field
+    if value_factor is not None:
+        src["value_factor"] = value_factor
+    return [src]
+
+
+@given(parsers.parse("the optimization goal scenario is {partition}"))
+def given_optimization_goal_partition(ctx: dict, partition: str) -> None:
+    """Set up optimization goals for partition scenarios (BR-RULE-087).
+
+    SPEC-PRODUCTION GAP: optimization_goals is not in adcp v3.6.0 or production
+    schemas. PackageRequest(extra='forbid') will reject the field. All scenarios
+    are expected to xfail via conftest.py tag-based xfail.
+
+    Valid partitions (11): optimization validation passes
+    Invalid partitions (12): error UNSUPPORTED_FEATURE/INVALID_REQUEST with suggestion
+    """
+    partition = partition.strip()
+
+    # ── Valid partitions ──
+    if partition == "single_metric_goal":
+        _set_optimization_goals(ctx, [_metric_goal("clicks")])
+
+    elif partition == "single_event_goal":
+        _set_optimization_goals(ctx, [_event_goal(event_sources=_simple_event_sources())])
+
+    elif partition == "multiple_goals_unique_priorities":
+        _set_optimization_goals(
+            ctx,
+            [
+                _metric_goal("clicks", priority=1),
+                _event_goal(event_sources=_simple_event_sources(), priority=2),
+            ],
+        )
+
+    elif partition == "metric_completed_views_with_duration":
+        _set_optimization_goals(ctx, [_metric_goal("completed_views", view_duration_seconds=15)])
+
+    elif partition == "metric_reach_with_unit":
+        _set_optimization_goals(ctx, [_metric_goal("reach", reach_unit="individuals")])
+
+    elif partition == "event_goal_with_attribution_window":
+        _set_optimization_goals(
+            ctx,
+            [
+                _event_goal(
+                    event_sources=_simple_event_sources(),
+                    attribution_window={
+                        "post_click": {"interval": 7, "unit": "days"},
+                        "post_view": {"interval": 1, "unit": "days"},
+                    },
+                )
+            ],
+        )
+
+    elif partition == "metric_goal_with_target":
+        _set_optimization_goals(ctx, [_metric_goal("clicks", target={"kind": "cost_per", "value": 0.50})])
+
+    elif partition == "event_goal_with_roas_target":
+        _set_optimization_goals(
+            ctx,
+            [
+                _event_goal(
+                    event_sources=_simple_event_sources(value_field="value"),
+                    target={"kind": "per_ad_spend", "value": 4.0},
+                )
+            ],
+        )
+
+    elif partition == "goals_at_max_count":
+        # 10 goals with unique priorities — at the spec cap
+        goals = [_metric_goal("clicks", priority=i + 1) for i in range(10)]
+        _set_optimization_goals(ctx, goals)
+
+    elif partition == "reach_with_target_frequency":
+        _set_optimization_goals(
+            ctx,
+            [
+                _metric_goal(
+                    "reach",
+                    reach_unit="individuals",
+                    target_frequency={"min": 1, "max": 3, "window": {"interval": 7, "unit": "days"}},
+                )
+            ],
+        )
+
+    elif partition == "event_multi_source_dedup":
+        _set_optimization_goals(
+            ctx,
+            [
+                _event_goal(
+                    event_sources=[
+                        {"event_source_id": "pixel", "event_type": "purchase", "value_field": "value"},
+                        {
+                            "event_source_id": "api",
+                            "event_type": "purchase",
+                            "value_field": "order_total",
+                            "value_factor": 0.01,
+                        },
+                    ]
+                )
+            ],
+        )
+
+    # ── Invalid partitions ──
+    elif partition == "unsupported_metric":
+        _set_optimization_goals(ctx, [_metric_goal("attention_score")])
+
+    elif partition == "unregistered_event_source":
+        _set_optimization_goals(
+            ctx,
+            [
+                _event_goal(
+                    event_sources=[{"event_source_id": "evt-unregistered-999", "event_type": "purchase"}],
+                )
+            ],
+        )
+
+    elif partition == "duplicate_priority":
+        _set_optimization_goals(
+            ctx,
+            [
+                _metric_goal("clicks", priority=1),
+                _metric_goal("views", priority=1),
+            ],
+        )
+
+    elif partition == "unsupported_view_duration":
+        _set_optimization_goals(ctx, [_metric_goal("completed_views", view_duration_seconds=-1)])
+
+    elif partition == "unsupported_reach_unit":
+        _set_optimization_goals(ctx, [_metric_goal("reach", reach_unit="households")])
+
+    elif partition == "unsupported_attribution_window":
+        _set_optimization_goals(
+            ctx,
+            [
+                _event_goal(
+                    event_sources=_simple_event_sources(),
+                    attribution_window={"post_click": {"interval": 365, "unit": "days"}},
+                )
+            ],
+        )
+
+    elif partition == "empty_array":
+        _set_optimization_goals(ctx, [])
+
+    elif partition == "exceeds_max_goals":
+        goals = [_metric_goal("clicks", priority=i + 1) for i in range(11)]
+        _set_optimization_goals(ctx, goals)
+
+    elif partition == "unsupported_target_kind":
+        _set_optimization_goals(ctx, [_metric_goal("clicks", target={"kind": "unsupported_kind", "value": 1.0})])
+
+    elif partition == "value_target_without_value_field":
+        _set_optimization_goals(
+            ctx,
+            [
+                _event_goal(
+                    event_sources=_simple_event_sources(),  # no value_field
+                    target={"kind": "per_ad_spend", "value": 4.0},
+                )
+            ],
+        )
+
+    elif partition == "metric_not_supported_by_product":
+        # Configure product to not support metric optimization
+        _set_optimization_goals(ctx, [_metric_goal("viewability")])
+        ctx["product_lacks_metric_optimization"] = True
+
+    elif partition == "event_not_supported_by_product":
+        # Configure product to not support event/conversion tracking
+        _set_optimization_goals(ctx, [_event_goal(event_sources=_simple_event_sources())])
+        ctx["product_lacks_conversion_tracking"] = True
+
+    else:
+        raise ValueError(f"Unknown optimization goal partition: {partition}")
+
+
+@given(parsers.parse("the optimization goals scenario is: {config}"))
+def given_optimization_goals_boundary(ctx: dict, config: str) -> None:
+    """Set up optimization goals for boundary scenarios (BR-RULE-087).
+
+    SPEC-PRODUCTION GAP: optimization_goals is not in adcp v3.6.0 or production
+    schemas. PackageRequest(extra='forbid') will reject the field. All scenarios
+    are expected to xfail via conftest.py tag-based xfail.
+
+    Boundary configs test edge values for optimization goal validation.
+    """
+    config = config.strip()
+
+    if config == "1 metric goal":
+        _set_optimization_goals(ctx, [_metric_goal("clicks")])
+
+    elif config == "empty array":
+        _set_optimization_goals(ctx, [])
+
+    elif config == "at max count":
+        goals = [_metric_goal("clicks", priority=i + 1) for i in range(10)]
+        _set_optimization_goals(ctx, goals)
+
+    elif config == "above max count":
+        goals = [_metric_goal("clicks", priority=i + 1) for i in range(11)]
+        _set_optimization_goals(ctx, goals)
+
+    elif config == "priority=1":
+        _set_optimization_goals(
+            ctx,
+            [
+                _metric_goal("clicks", priority=1),
+                _metric_goal("views", priority=2),
+            ],
+        )
+
+    elif config == "priority=0":
+        _set_optimization_goals(ctx, [_metric_goal("clicks", priority=0)])
+
+    elif config == "vds=0.001":
+        _set_optimization_goals(ctx, [_metric_goal("completed_views", view_duration_seconds=0.001)])
+
+    elif config == "vds=0":
+        _set_optimization_goals(ctx, [_metric_goal("completed_views", view_duration_seconds=0)])
+
+    elif config == "target=0.001":
+        _set_optimization_goals(ctx, [_metric_goal("clicks", target={"kind": "cost_per", "value": 0.001})])
+
+    elif config == "target=0":
+        _set_optimization_goals(ctx, [_metric_goal("clicks", target={"kind": "cost_per", "value": 0})])
+
+    elif config == "metric kind valid":
+        _set_optimization_goals(ctx, [_metric_goal("clicks")])
+
+    elif config == "event kind valid":
+        _set_optimization_goals(ctx, [_event_goal(event_sources=_simple_event_sources())])
+
+    elif config == "metric capable":
+        _set_optimization_goals(ctx, [_metric_goal("clicks")])
+        ctx["product_has_metric_optimization"] = True
+
+    elif config == "no metric capability":
+        _set_optimization_goals(ctx, [_metric_goal("clicks")])
+        ctx["product_lacks_metric_optimization"] = True
+
+    elif config == "event capable":
+        _set_optimization_goals(ctx, [_event_goal(event_sources=_simple_event_sources())])
+        ctx["product_has_conversion_tracking"] = True
+
+    elif config == "no event capability":
+        _set_optimization_goals(ctx, [_event_goal(event_sources=_simple_event_sources())])
+        ctx["product_lacks_conversion_tracking"] = True
+
+    elif config == "freq min=1 max=3":
+        _set_optimization_goals(
+            ctx,
+            [
+                _metric_goal(
+                    "reach",
+                    reach_unit="individuals",
+                    target_frequency={"min": 1, "max": 3, "window": {"interval": 7, "unit": "days"}},
+                )
+            ],
+        )
+
+    elif config == "freq min=5 max=3":
+        _set_optimization_goals(
+            ctx,
+            [
+                _metric_goal(
+                    "reach",
+                    reach_unit="individuals",
+                    target_frequency={"min": 5, "max": 3, "window": {"interval": 7, "unit": "days"}},
+                )
+            ],
+        )
+
+    elif config == "roas with value_field":
+        _set_optimization_goals(
+            ctx,
+            [
+                _event_goal(
+                    event_sources=_simple_event_sources(value_field="value"),
+                    target={"kind": "per_ad_spend", "value": 4.0},
+                )
+            ],
+        )
+
+    elif config == "roas no value_field":
+        _set_optimization_goals(
+            ctx,
+            [
+                _event_goal(
+                    event_sources=_simple_event_sources(),  # no value_field
+                    target={"kind": "per_ad_spend", "value": 4.0},
+                )
+            ],
+        )
+
+    else:
+        raise ValueError(f"Unknown optimization goals boundary config: {config}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Proposal-related request construction
 # ═══════════════════════════════════════════════════════════════════════
 

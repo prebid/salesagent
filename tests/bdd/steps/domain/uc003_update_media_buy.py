@@ -103,6 +103,66 @@ def given_buyer_ref_resolves(ctx: dict, buyer_ref: str) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# GIVEN steps — optimization_goals on package updates (partition/boundary)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given("the package update includes optimization_goals:")
+def given_package_update_optimization_goals_default(ctx: dict) -> None:
+    """Set default optimization_goals on the first package update (alt-flow scenario).
+
+    SPEC-PRODUCTION GAP: optimization_goals is not in adcp v3.6.0 or production
+    schemas. Used by the alt-flow replacement semantics scenario.
+    """
+    import json
+
+    kwargs = _ensure_update_defaults(ctx)
+    if not kwargs.get("packages"):
+        kwargs["packages"] = [{"package_id": "pkg_001"}]
+    # Default: single metric goal (clicks) — representative for replacement semantics test
+    kwargs["packages"][0]["optimization_goals"] = json.loads('[{"kind": "metric", "metric": "clicks", "priority": 1}]')
+
+
+@given(parsers.parse("the package update includes optimization_goals: {goals_value}"))
+def given_package_update_optimization_goals(ctx: dict, goals_value: str) -> None:
+    """Set optimization_goals on the first package update.
+
+    SPEC-PRODUCTION GAP: optimization_goals is not in adcp v3.6.0 or production
+    schemas. UpdateMediaBuyRequest's package updates will reject the field.
+    All scenarios are expected to xfail via conftest.py tag-based xfail.
+
+    The goals_value is either a JSON array or the literal '<not provided>'.
+    """
+    import json
+
+    kwargs = _ensure_update_defaults(ctx)
+    if not kwargs.get("packages"):
+        kwargs["packages"] = [{"package_id": "pkg_001"}]
+
+    if goals_value.strip() == "<not provided>":
+        # Omit optimization_goals entirely — tests preservation semantics
+        kwargs["packages"][0].pop("optimization_goals", None)
+        ctx["optimization_goals_omitted"] = True
+    else:
+        kwargs["packages"][0]["optimization_goals"] = json.loads(goals_value)
+
+
+@given("no targeting_overlay.keyword_targets is present in the same package update")
+def given_no_keyword_targets_in_update(ctx: dict) -> None:
+    """Ensure the package update does not include keyword_targets.
+
+    This step is a declarative guard — it confirms that the package update
+    doesn't have keyword_targets set (which would conflict with keyword_targets_add).
+    """
+    kwargs = _ensure_update_defaults(ctx)
+    if kwargs.get("packages"):
+        pkg = kwargs["packages"][0]
+        overlay = pkg.get("targeting_overlay")
+        if isinstance(overlay, dict):
+            overlay.pop("keyword_targets", None)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # WHEN step — dispatch update request
 # ═══════════════════════════════════════════════════════════════════════
 

@@ -195,6 +195,13 @@ _XFAIL_TAGS: dict[str, str] = {
     # not spec-expected UNSUPPORTED_FEATURE / INVALID_REQUEST with structured codes.
     "T-UC-002-ext-u": "optimization_goals not in production schemas — spec-production gap",
     "T-UC-002-ext-u-event": "optimization_goals not in production schemas — spec-production gap",
+    # FIXME(salesagent-9vgz.77): optimization_goals partition/boundary — field not in adcp v3.6.0
+    # PackageRequest(extra='forbid') rejects optimization_goals with generic validation error.
+    "T-UC-002-partition-optimization-goals": "optimization_goals not in production schemas — spec-production gap",
+    "T-UC-002-boundary-optimization-goals": "optimization_goals not in production schemas — spec-production gap",
+    "T-UC-003-partition-optimization-goals": "optimization_goals not in production schemas — spec-production gap",
+    "T-UC-003-boundary-optimization-goals": "optimization_goals not in production schemas — spec-production gap",
+    "T-UC-003-alt-optimization-goals": "optimization_goals not in production schemas — spec-production gap",
     # FIXME(salesagent-9vgz.19): catalog validation not implemented in production
     # PackageRequest accepts catalogs (inherited from adcp library) but production
     # code never validates duplicate types or catalog_id existence.
