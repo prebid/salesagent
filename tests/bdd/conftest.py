@@ -407,6 +407,29 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {"daily budget > cap"},
                 "daily spend cap returns validation_error, not BUDGET_TOO_LOW — spec-production gap",
             ),
+            # FIXME(salesagent-9vgz.72): creative error code mismatch
+            # Production uses CREATIVES_NOT_FOUND / VALIDATION_ERROR / INVALID_CREATIVES,
+            # spec expects CREATIVE_REJECTED. No max_creatives limit in production either.
+            (
+                "T-UC-002-partition-creative-asset",
+                {"creative_not_found", "format_mismatch", "missing_required_assets"},
+                "creative error code mismatch: production uses NOT_FOUND/VALIDATION_ERROR/INVALID_CREATIVES, spec expects CREATIVE_REJECTED — spec-production gap",
+            ),
+            (
+                "T-UC-002-partition-creative-asset",
+                {"exceeds_max_creatives"},
+                "max_creatives limit not enforced in production — spec-production gap",
+            ),
+            (
+                "T-UC-002-boundary-creative-asset",
+                {"cr-bad", "wrong format"},
+                "creative error code mismatch: production uses NOT_FOUND/VALIDATION_ERROR, spec expects CREATIVE_REJECTED — spec-production gap",
+            ),
+            (
+                "T-UC-002-boundary-creative-asset",
+                {"101 uploads"},
+                "max_creatives limit not enforced in production — spec-production gap",
+            ),
         ]
         if any(t.startswith("T-UC-002") for t in marker_names):
             for tag, substrings, reason in _UC002_VALIDATION_XFAIL:

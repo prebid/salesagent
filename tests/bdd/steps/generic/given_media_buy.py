@@ -1549,6 +1549,197 @@ def given_targeting_overlay_boundary(ctx: dict, config: str) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Creative asset partition/boundary — BR-RULE-015
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _add_creative_ids_to_package(ctx: dict, creative_ids: list[str]) -> None:
+    """Add creative_ids to the first package in the request.
+
+    Merges with any existing creative_ids. Ensures request_kwargs exists.
+    """
+    kwargs = _ensure_request_defaults(ctx)
+    if kwargs.get("packages"):
+        pkg = kwargs["packages"][0]
+        existing = pkg.get("creative_ids") or []
+        existing.extend(creative_ids)
+        pkg["creative_ids"] = existing
+
+
+def _create_approved_creative(ctx: dict, creative_id: str, fmt: str = "display_300x250") -> Any:
+    """Create an approved Creative in the DB and return it.
+
+    Uses CreativeFactory with the tenant/principal from harness context.
+    Asset key uses "primary" to match the harness format spec's asset_id.
+    """
+    from tests.factories.creative import CreativeFactory
+
+    env = ctx["env"]
+    creative = CreativeFactory(
+        creative_id=creative_id,
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        format=fmt,
+        approved=True,
+        data={"assets": {"primary": {"url": "https://example.com/banner.png", "width": 300, "height": 250}}},
+    )
+    env._commit_factory_data()
+    return creative
+
+
+def _add_inline_creatives(ctx: dict, count: int = 1, fmt_id: str = "display_300x250") -> None:
+    """Add inline creative dicts to the first package's 'creatives' field.
+
+    Builds minimal creative payloads matching the product's accepted format.
+    """
+    kwargs = _ensure_request_defaults(ctx)
+    if kwargs.get("packages"):
+        pkg = kwargs["packages"][0]
+        creatives = pkg.get("creatives") or []
+        for i in range(count):
+            creatives.append(
+                {
+                    "creative_id": f"inline-cr-{i + 1:03d}",
+                    "name": f"Inline Creative {i + 1}",
+                    "format_id": {
+                        "agent_url": "https://creative.adcontextprotocol.org",
+                        "id": fmt_id,
+                    },
+                    "assets": {
+                        "primary": {
+                            "url": f"https://example.com/banner-{i + 1}.png",
+                            "width": 300,
+                            "height": 250,
+                        }
+                    },
+                }
+            )
+        pkg["creatives"] = creatives
+
+
+@given(parsers.parse("the creative scenario is {partition}"))
+def given_creative_partition(ctx: dict, partition: str) -> None:
+    """Set up creative configuration for partition scenarios (BR-RULE-015).
+
+    Valid partitions (6): creative validation passes
+    Invalid partitions (4): error CREATIVE_REJECTED or INVALID_REQUEST
+    """
+    partition = partition.strip()
+
+    # ── Valid partitions ──
+    if partition == "no_creatives":
+        # Default request has no creative_ids or inline creatives
+        _ensure_request_defaults(ctx)
+
+    elif partition == "assignments_only":
+        # Reference an existing approved creative via creative_ids
+        creative = _create_approved_creative(ctx, "cr-assign-001")
+        _add_creative_ids_to_package(ctx, [creative.creative_id])
+
+    elif partition == "uploads_only":
+        # Inline creative objects on the package (no library references)
+        _add_inline_creatives(ctx, count=1)
+
+    elif partition == "both_paths":
+        # Both library references AND inline uploads
+        creative = _create_approved_creative(ctx, "cr-both-001")
+        _add_creative_ids_to_package(ctx, [creative.creative_id])
+        _add_inline_creatives(ctx, count=1)
+
+    elif partition == "assignment_with_weight_zero":
+        # Approved creative referenced by ID — weight=0 is an assignment-level
+        # attribute applied post-creation; validation should still pass.
+        creative = _create_approved_creative(ctx, "cr-weight0-001")
+        _add_creative_ids_to_package(ctx, [creative.creative_id])
+
+    elif partition == "assignment_with_placement_targeting":
+        # Approved creative referenced by ID — placement targeting is an
+        # assignment-level attribute; validation should still pass.
+        creative = _create_approved_creative(ctx, "cr-placement-001")
+        _add_creative_ids_to_package(ctx, [creative.creative_id])
+
+    # ── Invalid partitions ──
+    elif partition == "creative_not_found":
+        # Reference a creative_id that doesn't exist in the DB
+        _add_creative_ids_to_package(ctx, ["cr-nonexistent-999"])
+
+    elif partition == "format_mismatch":
+        # Creative with format that doesn't match the product's supported formats
+        creative = _create_approved_creative(ctx, "cr-badfmt-001", fmt="video_640x480")
+        _add_creative_ids_to_package(ctx, [creative.creative_id])
+
+    elif partition == "missing_required_assets":
+        # Creative exists but has empty assets (validation should reject)
+        from tests.factories.creative import CreativeFactory
+
+        env = ctx["env"]
+        creative = CreativeFactory(
+            creative_id="cr-noassets-001",
+            tenant=ctx["tenant"],
+            principal=ctx["principal"],
+            format="display_300x250",
+            approved=True,
+            data={},  # No assets
+        )
+        env._commit_factory_data()
+        _add_creative_ids_to_package(ctx, [creative.creative_id])
+
+    elif partition == "exceeds_max_creatives":
+        # 101 inline creatives — exceeds the spec limit of 100
+        _add_inline_creatives(ctx, count=101)
+
+    else:
+        raise ValueError(f"Unknown creative asset partition: {partition}")
+
+
+@given(parsers.parse("the creative scenario is: {config}"))
+def given_creative_boundary(ctx: dict, config: str) -> None:
+    """Set up creative configuration for boundary scenarios (BR-RULE-015).
+
+    Boundary configs test edge values for creative assignment and upload.
+    """
+    config = config.strip()
+
+    if config == "no creatives":
+        _ensure_request_defaults(ctx)
+
+    elif config == "assignment cr-001":
+        # Single library creative reference
+        creative = _create_approved_creative(ctx, "cr-001")
+        _add_creative_ids_to_package(ctx, [creative.creative_id])
+
+    elif config == "upload with format":
+        # Single inline creative with proper format matching product
+        _add_inline_creatives(ctx, count=1)
+
+    elif config == "assignment cr-bad":
+        # Reference a creative_id that doesn't exist
+        _add_creative_ids_to_package(ctx, ["cr-bad"])
+
+    elif config == "wrong format":
+        # Creative with mismatched format
+        creative = _create_approved_creative(ctx, "cr-wrongfmt", fmt="video_640x480")
+        _add_creative_ids_to_package(ctx, [creative.creative_id])
+
+    elif config == "weight=0":
+        # Creative reference — weight=0 (paused) is valid
+        creative = _create_approved_creative(ctx, "cr-w0")
+        _add_creative_ids_to_package(ctx, [creative.creative_id])
+
+    elif config == "weight=100":
+        # Creative reference — weight=100 (max rotation) is valid
+        creative = _create_approved_creative(ctx, "cr-w100")
+        _add_creative_ids_to_package(ctx, [creative.creative_id])
+
+    elif config == "101 uploads":
+        # 101 inline creatives — exceeds spec limit
+        _add_inline_creatives(ctx, count=101)
+
+    else:
+        raise ValueError(f"Unknown creative asset boundary config: {config}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Proposal-related request construction
 # ═══════════════════════════════════════════════════════════════════════
 
