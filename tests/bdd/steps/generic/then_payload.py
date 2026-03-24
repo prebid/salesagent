@@ -144,6 +144,13 @@ def then_format_assets(ctx: dict) -> None:
             assert getattr(dims, "width", None) is not None or getattr(dims, "min_width", None) is not None, (
                 f"Render dimensions in format '{_fmt_name(f)}' missing width"
             )
+    # Guard against vacuous truth: step claims "each format" so at least one must have been checked
+    formats_checked = len(formats_with_assets) + len(formats_with_renders)
+    assert formats_checked > 0, (
+        f"No formats had asset requirements — step claims 'each format' but none were checked. "
+        f"Total formats: {len(formats)}, with assets: {len(formats_with_assets)}, "
+        f"with renders: {len(formats_with_renders)}"
+    )
 
 
 # ── Sorting assertions ──────────────────────────────────────────────
