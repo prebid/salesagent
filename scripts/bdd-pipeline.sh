@@ -186,10 +186,24 @@ $(echo "$PROD_FILES" | sed 's/^/- /')" --allow-empty
       INSPECT_MD="$LOGDIR/inspect-$TASK_ID.md"
       echo "  🔍 inspecting assertions..."
 
-      # Phase 1: Run the inspect script on changed files only → JSON report
+      # Build file list: changed files + their companion Then-step files.
+      # Given steps live in generic/ but Then steps that consume them live in domain/.
+      # Always include the domain Then file for the UC being wired.
       STEP_FILES_ARGS=""
       for SF in $CHANGED_STEPS; do
         STEP_FILES_ARGS="$STEP_FILES_ARGS $SF"
+      done
+      # Add companion Then files: if Given changed in generic/, include the domain Then file
+      for THEN_FILE in \
+        tests/bdd/steps/domain/uc002_create_media_buy.py \
+        tests/bdd/steps/domain/uc003_update_media_buy.py \
+        tests/bdd/steps/domain/uc019_query_media_buys.py \
+        tests/bdd/steps/domain/uc026_package_media_buy.py \
+        tests/bdd/steps/generic/then_media_buy.py \
+        tests/bdd/steps/generic/then_error.py; do
+        if [ -f "$THEN_FILE" ] && ! echo "$STEP_FILES_ARGS" | grep -q "$THEN_FILE"; then
+          STEP_FILES_ARGS="$STEP_FILES_ARGS $THEN_FILE"
+        fi
       done
       python3 .claude/scripts/inspect_bdd_steps.py \
         --pass1-only --json \
