@@ -200,27 +200,56 @@ def then_media_buy_status(ctx: dict, status: str) -> None:
 
 @then("a Slack notification should be sent to the Seller")
 def then_slack_notification_sent(ctx: dict) -> None:
-    """Assert Slack notifier was called with event details indicating seller notification."""
+    """Assert Slack notifier was called with seller-facing event details.
+
+    Step text claims 'sent to the Seller'. Slack notifications go to the
+    tenant/publisher (the Seller). The event_type must be seller-relevant
+    (approval_required, created, config_approval_required) and include
+    tenant context (tenant_name).
+    """
     env = ctx["env"]
     mock_slack = env.mock["slack"].return_value
     assert mock_slack.notify_media_buy_event.called, "Expected Slack notification to be sent"
-    # Verify the notification includes an event_type (first positional arg or kwarg)
     call_args = mock_slack.notify_media_buy_event.call_args
     assert call_args is not None, "Slack notify_media_buy_event called but call_args is None"
     event_type = call_args.args[0] if call_args.args else call_args.kwargs.get("event_type")
     assert event_type, "Slack notification missing event_type argument"
+    # Seller-facing events: approval requests go to the seller's Slack channel
+    seller_event_types = ("approval_required", "created", "config_approval_required")
+    assert event_type in seller_event_types, (
+        f"Expected seller-facing event_type (one of {seller_event_types}), "
+        f"got '{event_type}' — this may not target the Seller"
+    )
+    # Verify tenant context is included (Seller = tenant/publisher)
+    tenant_name = call_args.kwargs.get("tenant_name")
+    if not tenant_name and len(call_args.args) > 4:
+        tenant_name = call_args.args[4]
+    assert tenant_name, "Slack notification missing tenant_name — cannot confirm it targets the Seller"
 
 
 @then("the Buyer should be notified via webhook")
 def then_webhook_notification(ctx: dict) -> None:
     """Assert buyer webhook notification was sent.
 
-    FIXME(salesagent-9vgz.1): webhook notification requires push notification
-    config and protocol webhook service setup in the harness.
+    SPEC-PRODUCTION GAP: The BDD harness does not yet wire push_notification_config
+    or the webhook delivery service. When wired, this step should verify:
+    1. The webhook was POSTed to the buyer's push_notification_config URL
+    2. The payload includes the media_buy_id and event details
+    3. The notification targets the Buyer (not the Seller)
+
+    FIXME(salesagent-9vgz.1): Wire webhook service mock in harness to replace xfail.
     """
     import pytest
 
-    pytest.xfail("Webhook notification not yet wired in harness")
+    # Verify preconditions that WOULD be needed for webhook notification
+    resp = ctx.get("response")
+    error = ctx.get("error")
+    # A webhook notification requires either a response or an error to report
+    assert resp is not None or error is not None, "No response or error in ctx — nothing to notify the Buyer about"
+    pytest.xfail(
+        "SPEC-PRODUCTION GAP: Webhook notification service not wired in BDD harness. "
+        "push_notification_config and webhook delivery service need harness setup."
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -343,7 +372,8 @@ def then_no_package_records_persisted(ctx: dict) -> None:
 def then_creative_assignment_records_persisted(ctx: dict) -> None:
     """Assert creative assignment records were persisted in the database.
 
-    Only asserts if the request included creative_ids in its packages.
+    Verifies: (1) records exist, and (2) count matches the total number of
+    creative_ids across all packages in the request.
     If no creative_ids were requested, this step passes (no assignments expected).
     """
     resp = ctx.get("response")
@@ -351,10 +381,10 @@ def then_creative_assignment_records_persisted(ctx: dict) -> None:
     media_buy_id = _get_response_field(resp, "media_buy_id")
     assert media_buy_id, "No media_buy_id in response"
 
-    # Check if the request included creative_ids
+    # Count expected creative assignments from the request
     request_kwargs = ctx.get("request_kwargs", {})
-    has_creative_ids = any(pkg.get("creative_ids") for pkg in request_kwargs.get("packages", []))
-    if not has_creative_ids:
+    expected_count = sum(len(pkg.get("creative_ids", []) or []) for pkg in request_kwargs.get("packages", []))
+    if expected_count == 0:
         return  # No creative assignments expected
 
     from sqlalchemy import func, select
@@ -363,10 +393,14 @@ def then_creative_assignment_records_persisted(ctx: dict) -> None:
     from src.core.database.models import CreativeAssignment
 
     with get_db_session() as session:
-        count = session.scalar(
+        actual_count = session.scalar(
             select(func.count()).select_from(CreativeAssignment).filter_by(media_buy_id=media_buy_id)
         )
-        assert count and count > 0, f"No creative assignment records found for media buy {media_buy_id}"
+        assert actual_count and actual_count > 0, f"No creative assignment records found for media buy {media_buy_id}"
+        assert actual_count == expected_count, (
+            f"Expected {expected_count} creative assignment record(s) for media buy {media_buy_id} "
+            f"(matching creative_ids in request), found {actual_count}"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -486,13 +520,24 @@ def then_response_includes_resolved_start_time(ctx: dict) -> None:
 
 @then("the response should have success fields")
 def then_response_has_success_fields(ctx: dict) -> None:
-    """Assert response contains success-only fields (media_buy_id, packages)."""
+    """Assert response contains success-only fields with valid values.
+
+    Success fields for BR-RULE-018: media_buy_id (non-empty string),
+    packages (non-empty list), and status (valid completion status).
+    """
     resp = ctx.get("response")
     assert resp is not None, "Expected a success response but none found"
     media_buy_id = _get_response_field(resp, "media_buy_id")
-    assert media_buy_id, f"Expected media_buy_id in success response, got: {media_buy_id}"
+    assert isinstance(media_buy_id, str) and len(media_buy_id) > 0, (
+        f"Expected non-empty string media_buy_id in success response, got: {media_buy_id!r}"
+    )
     packages = _get_response_field(resp, "packages")
-    assert packages is not None, "Expected packages in success response"
+    assert isinstance(packages, list), f"Expected packages to be a list, got: {type(packages).__name__}"
+    assert len(packages) > 0, "Expected at least one package in success response"
+    status = _get_response_field(resp, "status")
+    assert status is not None, "Expected status field in success response"
+    valid_statuses = ("completed", "submitted", "pending_approval", "activating", "pending_activation")
+    assert status in valid_statuses, f"Expected valid success status (one of {valid_statuses}), got: {status!r}"
 
 
 @then('the response should NOT have an "errors" field')

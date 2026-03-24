@@ -1514,10 +1514,10 @@ def then_creatives_assigned_to_packages(ctx: dict) -> None:
 
 @then("the response should include the created media buy with creative assignments")
 def then_response_has_creative_assignments(ctx: dict) -> None:
-    """Assert the response includes a created media buy.
+    """Assert the response includes a created media buy with creative assignments.
 
-    The response should be a success with a media_buy_id. Creative assignments
-    are verified by the preceding Then steps (DB check).
+    Verifies: media_buy_id present, activation-related status, AND creative
+    assignment records exist in the database for this media buy.
     """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
@@ -1529,6 +1529,20 @@ def then_response_has_creative_assignments(ctx: dict) -> None:
     assert status in ("pending_activation", "completed", "activating"), (
         f"Expected activation-related status, got '{status}'"
     )
+    # Step text claims "with creative assignments" — verify they exist in DB
+    from sqlalchemy import func, select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import CreativeAssignment
+
+    with get_db_session() as session:
+        assignment_count = session.scalar(
+            select(func.count()).select_from(CreativeAssignment).filter_by(media_buy_id=media_buy_id)
+        )
+        assert assignment_count and assignment_count > 0, (
+            f"Step claims 'with creative assignments' but no CreativeAssignment records "
+            f"found for media_buy {media_buy_id}"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1580,15 +1594,23 @@ def then_packages_derived_from_proposal(ctx: dict) -> None:
 
 @then("the total_budget should be distributed per allocation percentages")
 def then_budget_distributed_per_allocations(ctx: dict) -> None:
-    """Assert total budget was distributed across packages.
+    """Assert total budget was distributed across packages per allocation percentages.
 
     SPEC-PRODUCTION GAP: Production does not distribute budget per proposal
     allocations. Packages retain their individual budgets as submitted.
+    Verifies: (1) budget sum matches total, (2) each package gets a non-zero
+    share, and (3) shares are proportional (within rounding tolerance).
     """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     packages = _get_response_field_from_resp(resp, "packages")
     assert packages is not None and len(packages) > 0, "No packages in response"
+
+    def _extract_budget(pkg: object) -> float:
+        if isinstance(pkg, dict):
+            return float(pkg.get("budget", 0) or 0)
+        return float(getattr(pkg, "budget", 0) or 0)
+
     # Verify budget sum matches total_budget from request
     kwargs = ctx.get("request_kwargs", {})
     total_budget = kwargs.get("total_budget", {})
@@ -1597,8 +1619,27 @@ def then_budget_distributed_per_allocations(ctx: dict) -> None:
     else:
         expected_total = getattr(total_budget, "amount", None)
         assert expected_total is not None, f"Cannot extract amount from total_budget: {total_budget!r}"
-    budget_sum = sum((p.get("budget", 0) if isinstance(p, dict) else getattr(p, "budget", 0) or 0) for p in packages)
+
+    pkg_budgets = [_extract_budget(p) for p in packages]
+    budget_sum = sum(pkg_budgets)
     assert abs(budget_sum - expected_total) < 0.01, f"Expected budget sum {expected_total}, got {budget_sum}"
+
+    # Step text claims "per allocation percentages" — verify each package
+    # received a non-zero proportional share of the total budget
+    expected_count = ctx.get("expected_proposal_allocations", len(packages))
+    assert len(packages) == expected_count, f"Expected {expected_count} allocation packages, got {len(packages)}"
+    for i, budget in enumerate(pkg_budgets):
+        assert budget > 0, (
+            f"Package {i} has zero budget — 'distributed per allocation percentages' "
+            f"requires each allocation to receive a non-zero share"
+        )
+        # Each package should hold a reasonable share (not 99%+1% for N>1)
+        share_pct = (budget / expected_total * 100) if expected_total else 0
+        min_expected_share = 100.0 / expected_count * 0.1  # at least 10% of equal share
+        assert share_pct >= min_expected_share, (
+            f"Package {i} budget {budget} is only {share_pct:.1f}% of total — "
+            f"expected at least {min_expected_share:.1f}% for proportional distribution"
+        )
 
 
 @then("the response should include the created media buy with derived packages")
