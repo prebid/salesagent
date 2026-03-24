@@ -146,17 +146,26 @@ def then_suggestion_contains(ctx: dict, text: str) -> None:
 
 @then("the error message should indicate tenant context could not be determined")
 def then_error_tenant_context(ctx: dict) -> None:
-    """Assert error message indicates tenant context could not be determined."""
+    """Assert error message indicates tenant context could not be determined.
+
+    Step text is specific: 'tenant context could not be determined'. The message
+    must mention 'tenant' AND indicate a failure to resolve/determine context —
+    both conditions must be met simultaneously (not just generic keywords).
+    """
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
     msg = _get_error_message(error).lower()
     assert "tenant" in msg, f"Expected 'tenant' in error message: {_get_error_message(error)}"
-    # "could not be determined" requires more than just mentioning "tenant" —
-    # the message must indicate a resolution/determination failure
-    context_keywords = ("context", "resolve", "determine", "identify", "required", "missing", "not found")
-    assert any(kw in msg for kw in context_keywords), (
+    # The message must convey "could not be determined" — a resolution/determination
+    # failure. Require at least one determination-failure keyword AND one
+    # negation/failure indicator to avoid matching generic "tenant required" messages.
+    determination_keywords = ("context", "resolve", "determine", "identify")
+    failure_keywords = ("not", "could not", "cannot", "unable", "fail", "missing", "required", "no ")
+    has_determination = any(kw in msg for kw in determination_keywords)
+    has_failure = any(kw in msg for kw in failure_keywords)
+    assert has_determination and has_failure, (
         f"Expected tenant context determination failure message "
-        f"(context/resolve/determine/required/missing), got: {_get_error_message(error)}"
+        f"(needs determination concept + failure indicator), got: {_get_error_message(error)}"
     )
 
 
@@ -203,11 +212,20 @@ def then_error_min_items(ctx: dict) -> None:
 
 @then("the error message should indicate duplicate values are not allowed")
 def then_error_duplicates(ctx: dict) -> None:
-    """Assert error message mentions duplicate values."""
+    """Assert error message indicates duplicate values are not allowed.
+
+    Step text claims 'duplicate values are not allowed'. The message must mention
+    'duplicate' AND convey prohibition (not allowed/invalid/unique/rejected).
+    """
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
     msg = _get_error_message(error).lower()
     assert "duplicate" in msg, f"Expected 'duplicate' in error message: {_get_error_message(error)}"
+    prohibition_keywords = ("not allowed", "invalid", "unique", "rejected", "not permitted", "forbidden", "error")
+    assert any(kw in msg for kw in prohibition_keywords), (
+        f"Expected duplicate prohibition message (not allowed/invalid/unique/rejected), "
+        f"got: {_get_error_message(error)}"
+    )
 
 
 @then("the error message should indicate FormatId must include agent_url and id")
@@ -355,19 +373,43 @@ def then_suggestion_disclosure_enum(ctx: dict) -> None:
 
 @then("the suggestion should advise providing at least one position or omitting the filter")
 def then_suggestion_positions_or_omit(ctx: dict) -> None:
-    """Assert suggestion advises providing positions or omitting."""
-    d = _get_error_dict(ctx.get("error"))
+    """Assert suggestion advises providing positions or omitting the filter.
+
+    Step text: 'providing at least one position or omitting the filter'.
+    The suggestion must reference both the item concept (position/item)
+    AND the corrective action (provide/add/include OR omit/remove).
+    """
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    d = _get_error_dict(error)
     suggestion = (d.get("suggestion") or "").lower()
-    assert "position" in suggestion or "omit" in suggestion, f"Expected position/omit suggestion: {d.get('suggestion')}"
+    assert suggestion, "Expected non-empty suggestion"
+    has_item_ref = "position" in suggestion or "item" in suggestion or "value" in suggestion
+    has_action = any(kw in suggestion for kw in ("provide", "add", "include", "omit", "remove", "at least"))
+    assert has_item_ref and has_action, (
+        f"Expected suggestion about providing positions or omitting filter "
+        f"(needs item reference + corrective action), got: {d.get('suggestion')}"
+    )
 
 
 @then("the suggestion should advise removing duplicate positions")
 def then_suggestion_remove_dupes(ctx: dict) -> None:
-    """Assert suggestion advises removing duplicates."""
-    d = _get_error_dict(ctx.get("error"))
+    """Assert suggestion advises removing duplicate positions.
+
+    Step text: 'removing duplicate positions'. The suggestion must reference
+    duplicates (duplicate/unique/deduplicate) AND a corrective action
+    (remove/deduplicate/ensure unique).
+    """
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    d = _get_error_dict(error)
     suggestion = (d.get("suggestion") or "").lower()
-    assert "duplicate" in suggestion or "remove" in suggestion, (
-        f"Expected duplicate removal suggestion: {d.get('suggestion')}"
+    assert suggestion, "Expected non-empty suggestion"
+    has_duplicate_ref = any(kw in suggestion for kw in ("duplicate", "unique", "deduplicate", "distinct"))
+    has_action = any(kw in suggestion for kw in ("remove", "deduplicate", "ensure", "use unique", "eliminate"))
+    assert has_duplicate_ref and has_action, (
+        f"Expected suggestion about removing duplicates "
+        f"(needs duplicate reference + corrective action), got: {d.get('suggestion')}"
     )
 
 
