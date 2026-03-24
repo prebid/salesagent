@@ -157,15 +157,30 @@ def extract_bdd_steps(directory: Path, files: list[Path] | None = None) -> list[
 # ── Pass 1: Triage (Sonnet) ─────────────────────────────────────────
 
 
-TRIAGE_PROMPT_TEMPLATE = """You are reviewing BDD step definitions for assertion completeness.
+TRIAGE_PROMPT_TEMPLATE = """You are reviewing BDD step definitions for correctness.
 
 For each step below, answer FLAG or PASS:
-- FLAG: High chance the function does NOT implement what the step text claims.
-  Examples: body is just `pass`, assertions only check truthiness/existence
-  but the step text promises content-specific validation (e.g., "should indicate
-  which parameters" but only asserts `assert msg`).
-- PASS: The function plausibly implements what the step text claims.
-  A function that checks error existence for "the operation should fail" is PASS.
+
+## Then steps — assertion completeness
+- FLAG: Function does NOT assert what the step text claims.
+  Examples: body is `pass`, only checks truthiness/existence when step promises
+  content-specific validation, xfails inside the step body masking real checks.
+- PASS: Function plausibly asserts what the step text claims.
+
+## Given steps — setup correctness
+- FLAG: Function does NOT set up what the step text describes.
+  Examples: uses wrong factory params, sets incorrect field values, uses dict
+  intermediaries instead of proper model construction, sets up data that doesn't
+  match the scenario (e.g., step says "budget 5000" but code sets 100),
+  missing required setup fields, silently skips setup behind `if` guards.
+- PASS: Function plausibly sets up what the step text describes.
+
+## When steps — dispatch correctness
+- FLAG: Function does NOT dispatch the operation the step text describes.
+  Examples: catches errors and silently swallows them, doesn't actually call
+  the production function, stores result in wrong ctx key, missing error capture
+  path, dispatches to wrong function.
+- PASS: Function plausibly dispatches the described operation and captures outcomes.
 
 Respond with EXACTLY one line per step in format: <number>|<FLAG or PASS>|<reason>
 
@@ -233,12 +248,15 @@ def run_pass1_triage(steps: list[BddStepInfo], batch_size: int = 10) -> list[Tri
 # ── Pass 2: Deep trace (Opus) ───────────────────────────────────────
 
 
-DEEP_TRACE_PROMPT_TEMPLATE = """You are an expert reviewing a BDD Then step definition that was flagged
+DEEP_TRACE_PROMPT_TEMPLATE = """You are an expert reviewing a BDD {step_type} step definition that was flagged
 as potentially NOT implementing what its step text claims.
 
-Your job is to make an ARCHITECTURAL JUDGMENT: what should this function
-actually verify? You are NOT writing code — you are deciding what the
-correct semantic assertion should be.
+Your job is to make an ARCHITECTURAL JUDGMENT:
+- For Then steps: what should this function actually ASSERT?
+- For Given steps: what should this function actually SET UP? Is the data correct for the scenario?
+- For When steps: what should this function actually DISPATCH? Are all outcomes captured?
+
+You are NOT writing code — you are deciding what the correct semantic behavior should be.
 
 ## Flagged Function
 
@@ -266,9 +284,11 @@ SEVERITY: <COSMETIC|WEAK|MISSING>
 RECOMMENDATION: <what the correct assertion should be — describe the semantic check, not code>
 
 Severity guide:
-- COSMETIC: naming/wording mismatch but the assertion is functionally correct
-- WEAK: assertion checks something related but is significantly weaker than what's claimed
-- MISSING: assertion doesn't check what's claimed at all (pass body, pure existence check for content claim)"""
+- COSMETIC: naming/wording mismatch but the function is functionally correct for its purpose
+- WEAK: function does something related but significantly weaker than what's claimed
+  (Then: weak assertion; Given: incomplete setup; When: partial dispatch)
+- MISSING: function doesn't do what's claimed at all
+  (Then: pass body or pure existence check; Given: no setup or wrong data; When: no dispatch)"""
 
 
 def _collect_context_for_step(step: BddStepInfo) -> str:
@@ -328,6 +348,7 @@ def run_pass2_deep_trace(
         context = _collect_context_for_step(step)
 
         prompt = DEEP_TRACE_PROMPT_TEMPLATE.format(
+            step_type=step.step_type.capitalize(),
             step_text=step.step_text,
             func_name=step.function_name,
             file_path=step.file_path,
@@ -421,7 +442,7 @@ def generate_report(
                     pass
                 lines.extend(
                     [
-                        f"#### `{r.step.function_name}` ({rel_path}:{r.step.line_number})",
+                        f"#### `{r.step.function_name}` [{r.step.step_type}] ({rel_path}:{r.step.line_number})",
                         "",
                         f'**Step text**: "{r.step.step_text}"',
                         "",
@@ -474,8 +495,8 @@ def main() -> None:
     parser.add_argument(
         "--then-only",
         action="store_true",
-        default=True,
-        help="Only inspect Then steps (default: true)",
+        default=False,
+        help="Only inspect Then steps (default: false — inspects all step types)",
     )
     parser.add_argument(
         "--files",
@@ -504,12 +525,16 @@ def main() -> None:
         all_steps = extract_bdd_steps(args.steps_dir)
     print(f"  Found {len(all_steps)} step functions total")
 
-    # Filter to Then steps for assertion completeness
+    # Filter by step type
     if args.then_only:
         target_steps = [s for s in all_steps if s.step_type == "then"]
         print(f"  Filtering to {len(target_steps)} Then steps")
     else:
         target_steps = all_steps
+        from collections import Counter
+
+        by_type = Counter(s.step_type for s in target_steps)
+        print(f"  Inspecting all types: {dict(by_type)}")
 
     # Pass 1: Triage
     print("\n=== Pass 1: Triage (Sonnet) ===")
@@ -539,6 +564,7 @@ def main() -> None:
             findings.append(
                 {
                     "function": r.step.function_name,
+                    "step_type": r.step.step_type,
                     "file": r.step.file_path,
                     "line": r.step.line_number,
                     "step_text": r.step.step_text,
