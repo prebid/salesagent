@@ -1704,9 +1704,16 @@ def given_proposal_allocations(ctx: dict, count: int) -> None:
     """Record expected proposal allocations (spec-production gap).
 
     SPEC-PRODUCTION GAP: Production has no proposal allocation mechanism.
-    This step records the expected allocation count for Then-step assertions.
+    This step records the expected allocation count AND default equal-percentage
+    allocations for Then-step assertions. When no explicit percentages are given
+    in the scenario, equal distribution is assumed.
     """
     ctx["expected_proposal_allocations"] = count
+    # Default to equal allocation percentages when scenario doesn't specify them.
+    # Scenarios with non-equal splits should set ctx["expected_allocation_percentages"]
+    # explicitly via a dedicated Given step.
+    if "expected_allocation_percentages" not in ctx:
+        ctx["expected_allocation_percentages"] = [100.0 / count] * count
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1793,20 +1800,24 @@ def then_budget_distributed_per_allocations(ctx: dict) -> None:
             f"requires each allocation to receive a non-zero share"
         )
 
-    # Proportional distribution requires correct package count
-    expected_count = ctx.get("expected_proposal_allocations")
-    assert expected_count is not None and expected_count > 0, (
-        "Scenario must set expected_proposal_allocations via 'the proposal has N product allocations' Given step"
+    # Proportional distribution requires allocation percentages
+    alloc_pcts = ctx.get("expected_allocation_percentages")
+    assert alloc_pcts is not None and len(alloc_pcts) > 0, (
+        "Scenario must set expected_allocation_percentages (list of floats summing to 100) "
+        "via the 'the proposal has N product allocations' Given step or a dedicated step. "
+        "Cannot verify 'distributed per allocation percentages' without knowing the percentages."
     )
-    assert len(packages) == expected_count, f"Expected {expected_count} allocation packages, got {len(packages)}"
-    # Verify proportional shares
-    equal_share = expected_total / expected_count
-    for i, budget in enumerate(pkg_budgets):
-        deviation = abs(budget - equal_share) / equal_share if equal_share else 0
-        assert deviation <= 0.05, (
-            f"Package {i} budget {budget} deviates {deviation:.0%} from equal share "
-            f"{equal_share:.2f}. 'Distributed per allocation percentages' requires "
-            f"proportional distribution within 5% tolerance."
+    assert len(packages) == len(alloc_pcts), (
+        f"Expected {len(alloc_pcts)} allocation packages (one per allocation percentage), got {len(packages)}"
+    )
+    # Verify each package's budget matches total_budget * (percentage / 100)
+    for i, (budget, pct) in enumerate(zip(pkg_budgets, alloc_pcts, strict=True)):
+        expected_share = expected_total * (pct / 100.0)
+        assert abs(budget - expected_share) < 0.01, (
+            f"Package {i} budget {budget} does not match expected share "
+            f"{expected_share:.2f} (total_budget {expected_total} * {pct}%). "
+            f"'Distributed per allocation percentages' requires each package's "
+            f"budget to equal total_budget * (allocation_percentage / 100)."
         )
 
 
