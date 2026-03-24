@@ -241,14 +241,20 @@ def then_webhook_notification(ctx: dict) -> None:
     """
     import pytest
 
-    # Verify preconditions that WOULD be needed for webhook notification
+    # Verify preconditions: a response or error must exist (the event to notify about)
     resp = ctx.get("response")
     error = ctx.get("error")
-    # A webhook notification requires either a response or an error to report
     assert resp is not None or error is not None, "No response or error in ctx — nothing to notify the Buyer about"
+    # Verify the media_buy_id is present (webhook payload needs it)
+    if resp is not None:
+        media_buy_id = _get_response_field(resp, "media_buy_id")
+        assert media_buy_id, (
+            "Response has no media_buy_id — webhook cannot notify Buyer without identifying the media buy"
+        )
     pytest.xfail(
         "SPEC-PRODUCTION GAP: Webhook notification service not wired in BDD harness. "
-        "push_notification_config and webhook delivery service need harness setup."
+        "push_notification_config and webhook delivery service need harness setup. "
+        "Step claims 'Buyer should be notified via webhook' but no webhook mock exists."
     )
 
 
@@ -542,13 +548,22 @@ def then_response_has_success_fields(ctx: dict) -> None:
 
 @then('the response should NOT have an "errors" field')
 def then_response_no_errors_field(ctx: dict) -> None:
-    """Assert the success response has no errors field."""
+    """Assert the success response has no errors field or errors is None/absent.
+
+    Step says 'NOT have an "errors" field' — the field should be absent or None,
+    not merely an empty list (which would mean the field IS present but empty).
+    """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     # Check the inner response (unwrap CreateMediaBuyResult)
     inner = getattr(resp, "response", resp)
-    errors = getattr(inner, "errors", None)
-    assert not errors, f"Expected no errors on success response, got: {errors}"
+    if isinstance(inner, dict):
+        assert "errors" not in inner or inner["errors"] is None, (
+            f'Expected no "errors" field on success response, got: {inner.get("errors")}'
+        )
+    else:
+        errors = getattr(inner, "errors", None)
+        assert errors is None, f'Expected "errors" field to be absent/None on success response, got: {errors!r}'
 
 
 @then('the response should have an "errors" array')
@@ -591,22 +606,32 @@ def then_each_error_has_suggestion(ctx: dict) -> None:
 
 @then('the error should include "retry_after" field')
 def then_error_has_retry_after(ctx: dict) -> None:
-    """Assert the error includes a retry_after hint (transient error recovery)."""
+    """Assert the error includes a retry_after hint (transient error recovery).
+
+    Step claims the field should be 'included' — verify it exists and contains
+    a positive numeric value (retry delay in seconds).
+    """
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
     # AdCPError stores retry_after in details dict
     from src.core.exceptions import AdCPError
 
+    retry_after = None
     if isinstance(error, AdCPError):
         assert error.details is not None, "Expected error details with retry_after"
         assert "retry_after" in error.details, f"Expected 'retry_after' in error details, got: {error.details}"
-        assert error.details["retry_after"], "Expected non-zero retry_after value"
+        retry_after = error.details["retry_after"]
     else:
         # adcp.types.Error model — check for retry_after attribute
         retry_after = getattr(error, "retry_after", None)
         if retry_after is None and hasattr(error, "details"):
             retry_after = (error.details or {}).get("retry_after")
-        assert retry_after, f"Expected retry_after on error, got: {error}"
+    assert retry_after is not None, f"Expected retry_after field on error, but it is absent: {error}"
+    # retry_after should be a positive number (seconds to wait before retrying)
+    assert isinstance(retry_after, (int, float)), (
+        f"Expected retry_after to be a number (seconds), got {type(retry_after).__name__}: {retry_after!r}"
+    )
+    assert retry_after > 0, f"Expected positive retry_after value, got {retry_after}"
 
 
 # ═══════════════════════════════════════════════════════════════════════

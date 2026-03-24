@@ -151,7 +151,7 @@ def _get_packages(ctx: dict) -> list:
 
 @then("the response should contain a package with a seller-assigned package_id")
 def then_package_has_id(ctx: dict) -> None:
-    """Assert response contains at least one package with package_id."""
+    """Assert response contains at least one package with a meaningful seller-assigned package_id."""
     packages = _get_packages(ctx)
     assert len(packages) > 0, "No packages in response"
     pkg = packages[0]
@@ -159,6 +159,10 @@ def then_package_has_id(ctx: dict) -> None:
     if pkg_id is None and isinstance(pkg, dict):
         pkg_id = pkg.get("package_id")
     assert pkg_id is not None, "Package missing package_id"
+    # "seller-assigned" implies a non-empty, meaningful identifier
+    assert isinstance(pkg_id, str) and len(pkg_id.strip()) > 0, (
+        f"Expected seller-assigned package_id to be a non-empty string, got {pkg_id!r}"
+    )
 
 
 @then(parsers.parse('the package should contain buyer_ref "{buyer_ref}"'))
@@ -203,7 +207,10 @@ def then_package_pricing(ctx: dict, pricing_option_id: str) -> None:
 
 @then("the package should contain format_ids defaulting to all product formats")
 def then_package_default_formats(ctx: dict) -> None:
-    """Assert package format_ids default to all product formats."""
+    """Assert package format_ids default to all product formats.
+
+    Step claims format_ids should match the product's full format set.
+    """
     import pytest
 
     packages = _get_packages(ctx)
@@ -213,21 +220,54 @@ def then_package_default_formats(ctx: dict) -> None:
         pytest.xfail("SPEC-PRODUCTION GAP: format_ids not present on package — production may not echo defaults")
     assert isinstance(format_ids, list), f"Expected format_ids to be a list, got {type(format_ids)}"
     assert len(format_ids) > 0, "Expected format_ids to default to all product formats, got empty list"
+    # Verify format_ids match the product's format set (from Given step context)
+    product = ctx.get("default_product")
+    if product is not None:
+        product_format_ids = getattr(product, "format_ids", None) or []
+
+        # Extract IDs (format_ids may be dicts with "id" key or plain strings)
+        def _extract_id(f: Any) -> str:
+            if isinstance(f, dict):
+                return f.get("id", str(f))
+            if hasattr(f, "id"):
+                return f.id
+            return str(f)
+
+        product_ids = {_extract_id(f) for f in product_format_ids}
+        pkg_ids = {_extract_id(f) for f in format_ids}
+        if product_ids and pkg_ids != product_ids:
+            pytest.xfail(
+                f"SPEC-PRODUCTION GAP: Package format_ids {pkg_ids} don't match "
+                f"product formats {product_ids}. Step claims 'defaulting to all "
+                f"product formats'."
+            )
 
 
 @then("the package should contain paused as false")
 def then_package_not_paused(ctx: dict) -> None:
-    """Assert package is not paused."""
+    """Assert package paused field is explicitly False (not None or absent)."""
+    import pytest
+
     packages = _get_packages(ctx)
     pkg = packages[0]
     paused = _pkg_field(pkg, "paused")
-    # Default is False or None
-    assert paused is not True, f"Expected paused=false, got {paused}"
+    # Step text says "paused as false" — must be exactly False, not None/absent
+    if paused is None:
+        pytest.xfail(
+            "SPEC-PRODUCTION GAP: paused is None — step claims 'paused as false' "
+            "but production may not echo the paused field yet."
+        )
+    assert paused is False, f"Expected paused to be False, got {paused!r}"
 
 
 @then("the package should contain format_ids_to_provide listing formats needing creative assets")
 def then_package_formats_to_provide(ctx: dict) -> None:
-    """Assert package has format_ids_to_provide field listing formats needing creative assets."""
+    """Assert package has format_ids_to_provide listing formats that need creative assets.
+
+    Step claims the list contains formats needing creative assets — verify the
+    entries are a subset of the package's format_ids (can't need assets for
+    formats not in the package).
+    """
     import pytest
 
     packages = _get_packages(ctx)
@@ -240,6 +280,28 @@ def then_package_formats_to_provide(ctx: dict) -> None:
     assert isinstance(formats_to_provide, list), (
         f"Expected format_ids_to_provide to be a list, got {type(formats_to_provide)}"
     )
+    assert len(formats_to_provide) > 0, (
+        "Expected format_ids_to_provide to list formats needing creative assets, got empty list"
+    )
+    # Verify entries are valid format references (subset of package format_ids)
+    format_ids = _pkg_field(pkg, "format_ids")
+    if format_ids:
+
+        def _extract_id(f: Any) -> str:
+            if isinstance(f, dict):
+                return f.get("id", str(f))
+            if hasattr(f, "id"):
+                return f.id
+            return str(f)
+
+        pkg_format_set = {_extract_id(f) for f in format_ids}
+        provide_set = {_extract_id(f) for f in formats_to_provide}
+        extra = provide_set - pkg_format_set
+        if extra:
+            pytest.xfail(
+                f"SPEC-PRODUCTION GAP: format_ids_to_provide contains {extra} "
+                f"which are not in package format_ids {pkg_format_set}"
+            )
 
 
 def _pkg_field(pkg: Any, field: str) -> Any:

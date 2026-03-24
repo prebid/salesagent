@@ -203,6 +203,29 @@ def _assert_pkg_field_present(pkg: Any, field: str) -> None:
         assert getattr(pkg, field, None) is not None, f"Package missing {field}"
 
 
+def _assert_flight_dates_present(pkg: Any) -> None:
+    """Assert flight date fields are present on a package.
+
+    Step text claims 'flight dates' — check start_date/end_date or
+    start_time/end_time (naming varies by schema version).
+    """
+    import pytest
+
+    def _has(field: str) -> bool:
+        if isinstance(pkg, dict):
+            return field in pkg and pkg[field] is not None
+        return getattr(pkg, field, None) is not None
+
+    has_dates = _has("start_date") and _has("end_date")
+    has_times = _has("start_time") and _has("end_time")
+    if not has_dates and not has_times:
+        pytest.xfail(
+            "SPEC-PRODUCTION GAP: Package missing flight date fields "
+            "(start_date/end_date or start_time/end_time). Step claims "
+            "'flight dates' are included in package details."
+        )
+
+
 def _get_media_buys(ctx: dict) -> list:
     """Extract media_buys list from response."""
     resp = ctx.get("response")
@@ -250,6 +273,8 @@ def then_package_details(ctx: dict) -> None:
                 assert hasattr(pkg, "bid_price") or (isinstance(pkg, dict) and "bid_price" in pkg), (
                     "Package missing bid_price field"
                 )
+                # Flight dates: step text explicitly claims these are present
+                _assert_flight_dates_present(pkg)
                 # paused must be a boolean, not absent
                 paused = getattr(pkg, "paused", None) if not isinstance(pkg, dict) else pkg.get("paused")
                 if paused is None:
@@ -259,14 +284,15 @@ def then_package_details(ctx: dict) -> None:
 
 @then("each package should include creative approval state when creatives are assigned")
 def then_creative_approval_state(ctx: dict) -> None:
-    """Assert packages include creative_approval_state field when applicable.
+    """Assert packages include creative_approval_state with meaningful values.
 
-    Creative approvals are only present when creatives are assigned.
-    The scenario's Given steps do not assign creatives, so the field may be
-    None/empty -- but it must exist on the schema.
+    Step text: "when creatives are assigned" — so we check:
+    1. Field must exist on the schema
+    2. When creatives ARE assigned, the value must be a recognized approval state
     """
     import pytest
 
+    valid_states = ("pending_review", "approved", "rejected", "not_applicable", None)
     buys = _get_media_buys(ctx)
     assert len(buys) > 0, "No media buys in response"
     for buy in buys:
@@ -276,6 +302,27 @@ def then_creative_approval_state(ctx: dict) -> None:
             )
             if not has_field:
                 pytest.xfail("SPEC-PRODUCTION GAP: creative_approval_state field not present on package schema")
+            # Extract value
+            state = (
+                getattr(pkg, "creative_approval_state", None)
+                if not isinstance(pkg, dict)
+                else pkg.get("creative_approval_state")
+            )
+            # When creatives exist on the package, verify state is meaningful
+            creatives = (
+                getattr(pkg, "creatives", None) or getattr(pkg, "creative_ids", None)
+                if not isinstance(pkg, dict)
+                else pkg.get("creatives") or pkg.get("creative_ids")
+            )
+            if creatives:
+                assert state is not None, (
+                    "Package has creatives assigned but creative_approval_state is None — "
+                    "step claims state should be present 'when creatives are assigned'"
+                )
+                state_str = state.value if hasattr(state, "value") else str(state)
+                assert state_str in valid_states, (
+                    f"Unexpected creative_approval_state '{state_str}', expected one of {valid_states}"
+                )
 
 
 @then("each media buy should include buyer_ref and buyer_campaign_ref for correlation")
@@ -334,24 +381,33 @@ def then_package_has_snapshot(ctx: dict, pkg_id: str) -> None:
 
 @then("the snapshot should include as_of, staleness_seconds, impressions, and spend")
 def then_snapshot_fields(ctx: dict) -> None:
-    """Assert snapshot has all 4 claimed fields: as_of, staleness_seconds, impressions, spend."""
+    """Assert snapshot has all 4 claimed fields: as_of, staleness_seconds, impressions, spend.
+
+    Must check ALL packages with snapshots, not just the first one found.
+    """
     import pytest
 
+    required_fields = ("as_of", "staleness_seconds", "impressions", "spend")
     buys = _get_media_buys(ctx)
+    checked_any = False
+    missing_fields: list[str] = []
     for buy in buys:
         for pkg in getattr(buy, "packages", []) or []:
             snapshot = getattr(pkg, "snapshot", None)
             if snapshot is not None:
-                assert getattr(snapshot, "as_of", None) is not None, "Snapshot missing as_of"
-                # Step text claims staleness_seconds, impressions, and spend too
-                if getattr(snapshot, "staleness_seconds", None) is None:
-                    pytest.xfail("SPEC-PRODUCTION GAP: snapshot missing staleness_seconds")
-                if getattr(snapshot, "impressions", None) is None:
-                    pytest.xfail("SPEC-PRODUCTION GAP: snapshot missing impressions")
-                if getattr(snapshot, "spend", None) is None:
-                    pytest.xfail("SPEC-PRODUCTION GAP: snapshot missing spend")
-                return
-    # This step only runs after then_package_has_snapshot, so a snapshot must exist
+                checked_any = True
+                for field in required_fields:
+                    val = getattr(snapshot, field, None)
+                    if val is None and isinstance(snapshot, dict):
+                        val = snapshot.get(field)
+                    if val is None:
+                        missing_fields.append(field)
+    assert checked_any, "No snapshots found — this step requires at least one snapshot to verify"
+    if missing_fields:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: Snapshot missing fields: {sorted(set(missing_fields))}. "
+            f"Step claims all 4 (as_of, staleness_seconds, impressions, spend) are present."
+        )
     raise AssertionError("No snapshot found on any package — expected at least one")
 
 

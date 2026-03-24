@@ -171,7 +171,11 @@ def then_error_tenant_context(ctx: dict) -> None:
 
 @then("the error message should indicate which parameters are invalid")
 def then_error_invalid_params(ctx: dict) -> None:
-    """Assert error message indicates which specific parameters are invalid."""
+    """Assert error message indicates which specific parameters are invalid.
+
+    Step claims 'which parameters' — the error must name the actual invalid
+    field(s), not just contain generic keywords like 'invalid'.
+    """
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
     # Pydantic ValidationError: has per-field error details with field paths
@@ -179,22 +183,57 @@ def then_error_invalid_params(ctx: dict) -> None:
         field_errors = error.errors()
         assert field_errors, "ValidationError has no field-level error details"
         assert all("loc" in e for e in field_errors), f"Expected field locations in error details: {field_errors}"
+        # Verify at least one field path is non-empty (actually names a parameter)
+        field_names = [e["loc"] for e in field_errors if e.get("loc")]
+        assert field_names, "ValidationError locations are empty — cannot determine which parameters are invalid"
         return
-    # AdCPError: message must reference parameter/field specifics
+    # AdCPError: message must reference a specific parameter/field name
     msg = _get_error_message(error)
+    # The message should contain an actual field name, not just generic error words.
+    # Check for known parameter names that appear in the request schema.
+    request_fields = (
+        "type",
+        "format_id",
+        "agent_url",
+        "disclosure_positions",
+        "product_id",
+        "buyer_ref",
+        "budget",
+        "pricing_option_id",
+        "start_time",
+        "end_time",
+    )
     msg_lower = msg.lower()
-    assert any(kw in msg_lower for kw in ("parameter", "field", "invalid", "format_id", "agent_url")), (
-        f"Expected error to indicate which parameters are invalid, got: {msg}"
+    has_specific_field = any(field in msg_lower for field in request_fields)
+    # Also accept structured error details that name fields
+    has_details = (
+        hasattr(error, "details")
+        and error.details
+        and any(k in ("field", "parameter", "loc") for k in (error.details if isinstance(error.details, dict) else {}))
+    )
+    assert has_specific_field or has_details, (
+        f"Expected error to name which specific parameters are invalid (one of {request_fields}), got: {msg}"
     )
 
 
 @then(parsers.parse('the error message should indicate "{value}" is not a valid disclosure position'))
 def then_error_invalid_disclosure(ctx: dict, value: str) -> None:
-    """Assert error message mentions the invalid disclosure position value."""
+    """Assert error message indicates the value is not a valid disclosure position.
+
+    Step claims the message says '"{value}" is not a valid disclosure position' —
+    verify both the value AND the disclosure position context appear in the message.
+    """
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
     msg = _get_error_message(error)
-    assert value in msg, f"Expected '{value}' in error message: {msg}"
+    assert value in msg, f"Expected invalid value '{value}' in error message: {msg}"
+    # Verify the message provides disclosure position context (not just the value)
+    msg_lower = msg.lower()
+    disclosure_context = ("disclosure", "position", "valid")
+    assert any(kw in msg_lower for kw in disclosure_context), (
+        f"Expected error to indicate '{value}' is not a valid disclosure position, "
+        f"but message lacks disclosure/position context: {msg}"
+    )
 
 
 @then("the error message should indicate at least 1 item is required")

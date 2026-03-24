@@ -247,7 +247,12 @@ def then_implementation_date_not_null(ctx: dict) -> None:
     assert hasattr(resp, "implementation_date"), "Response has no implementation_date field"
     impl_date = resp.implementation_date
     if impl_date is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: implementation_date is None — production does not set it yet")
+        pytest.xfail(
+            "SPEC-PRODUCTION GAP: implementation_date is None — production does not "
+            "set it on update responses yet. Step claims 'not null'."
+        )
+    # If production does return it, verify it's a meaningful datetime value
+    assert impl_date is not None, "implementation_date must not be None"
 
 
 @then(parsers.parse('the response should contain affected_packages including "{package_id}"'))
@@ -264,7 +269,7 @@ def then_affected_packages_include(ctx: dict, package_id: str) -> None:
 
 @then(parsers.parse("the affected package should show the updated budget of {budget:d}"))
 def then_affected_package_budget(ctx: dict, budget: int) -> None:
-    """Assert the affected package shows the updated budget."""
+    """Assert the affected package shows the updated budget value."""
     import pytest
 
     resp = ctx.get("response")
@@ -276,7 +281,11 @@ def then_affected_package_budget(ctx: dict, budget: int) -> None:
     if actual_budget is None and isinstance(pkg, dict):
         actual_budget = pkg.get("budget")
     if actual_budget is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: affected package budget is None — production may not echo budget yet")
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: affected package budget is None — production may "
+            f"not echo budget yet. Step claims 'updated budget of {budget}'."
+        )
+    # xfail exits above; if we reach here, budget is present — assert exact match
     assert float(actual_budget) == float(budget), f"Expected budget {budget}, got {actual_budget}"
 
 
@@ -292,7 +301,12 @@ def then_response_has_sandbox(ctx: dict) -> None:
     if sandbox is None and hasattr(resp, "model_dump"):
         sandbox = resp.model_dump().get("sandbox")
     if sandbox is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: sandbox flag not present on response — may be envelope-level only")
+        pytest.xfail(
+            "SPEC-PRODUCTION GAP: sandbox flag not present on response — "
+            "step claims envelope 'should include' it but field is absent."
+        )
+    # If sandbox is present, verify it's a boolean (not just any truthy/falsy value)
+    assert isinstance(sandbox, bool), f"Expected sandbox to be bool, got {type(sandbox).__name__}: {sandbox!r}"
 
 
 @then('the response should NOT contain an "errors" field')
