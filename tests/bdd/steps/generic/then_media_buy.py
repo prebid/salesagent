@@ -241,50 +241,73 @@ def then_webhook_notification(ctx: dict) -> None:
     """
     import pytest
 
-    # Verify preconditions: a response or error must exist (the event to notify about)
+    # --- Resolve the media buy identity (response, existing record, or error) ---
     resp = ctx.get("response")
     error = ctx.get("error")
-    assert resp is not None or error is not None, "No response or error in ctx — nothing to notify the Buyer about"
-    # Verify the media_buy_id is present (webhook payload needs it)
+    existing_mb = ctx.get("existing_media_buy")
+    assert resp is not None or error is not None or existing_mb is not None, (
+        "No response, error, or existing media buy in ctx — nothing to notify the Buyer about"
+    )
+
+    # --- Extract and assert media_buy_id (required for webhook payload) ---
+    media_buy_id = None
     if resp is not None:
         media_buy_id = _get_response_field(resp, "media_buy_id")
-        assert media_buy_id, (
-            "Response has no media_buy_id — webhook cannot notify Buyer without identifying the media buy"
-        )
-    # Verify a state change occurred that WOULD trigger a buyer webhook notification.
-    # Webhooks fire on status transitions (rejected, approved, delivered, etc.).
+    elif existing_mb is not None:
+        media_buy_id = getattr(existing_mb, "media_buy_id", None)
+    assert media_buy_id, "No media_buy_id found — webhook cannot notify Buyer without identifying the media buy"
+
+    # --- Assert a webhook-triggering status transition occurred ---
+    webhook_triggering_statuses = {
+        "rejected",
+        "approved",
+        "active",
+        "delivered",
+        "completed",
+        "pending_approval",
+    }
+    status = None
     if resp is not None:
         status = _get_response_field(resp, "status")
-        assert status is not None, "Response has no status — cannot verify a webhook-triggering state change occurred"
-        webhook_triggering_statuses = {
-            "rejected",
-            "approved",
-            "active",
-            "delivered",
-            "completed",
-            "pending_approval",
-        }
-        assert status in webhook_triggering_statuses, (
-            f"Status '{status}' is not a webhook-triggering status. Expected one of {webhook_triggering_statuses}"
-        )
-    # Verify the buyer registered for webhook notifications.
-    # push_notification_config is the mechanism — without it, no webhook can fire.
+    elif existing_mb is not None:
+        # For scenarios that update DB directly (e.g., seller rejection),
+        # re-read the current status from the database.
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import MediaBuy
+
+        with get_db_session() as session:
+            mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id)).first()
+            assert mb is not None, f"Media buy {media_buy_id} not found in DB"
+            status = mb.status
+    assert status is not None, "No status found — cannot verify a webhook-triggering state change occurred"
+    assert status in webhook_triggering_statuses, (
+        f"Status '{status}' is not a webhook-triggering status. Expected one of {webhook_triggering_statuses}"
+    )
+
+    # --- Resolve push_notification_config (buyer's webhook endpoint) ---
     push_config = ctx.get("push_notification_config")
     if push_config is None:
-        # Check if the original request had it
         request = ctx.get("request")
         if request is not None:
             push_config = getattr(request, "push_notification_config", None) or (
                 request.get("push_notification_config") if isinstance(request, dict) else None
             )
+
+    # --- Check for webhook delivery mock ---
     # SPEC-PRODUCTION GAP: xfail only when harness lacks webhook mock.
-    # Preconditions above verify the triggering event and buyer intent; this gap
-    # is specifically about verifying actual HTTP delivery to the buyer's endpoint.
+    # Preconditions above verify: media_buy_id present, status is webhook-triggering,
+    # and DB state confirms the transition. The gap is actual HTTP delivery.
     webhook_mock = ctx.get("webhook_mock") or ctx.get("notification_mock")
     if webhook_mock is None:
+        verified = (
+            f"media_buy_id={media_buy_id}, status={status}"
+            f"{', push_config present' if push_config else ', push_config NOT configured'}"
+        )
         pytest.xfail(
             "SPEC-PRODUCTION GAP: Webhook delivery service not wired in BDD harness. "
-            "Verified: event occurred, media_buy_id present, status is webhook-triggering. "
+            f"Verified: {verified}. "
             "Cannot verify: actual HTTP POST to buyer's push_notification_config URL. "
             "FIXME(salesagent-9vgz.1)"
         )
