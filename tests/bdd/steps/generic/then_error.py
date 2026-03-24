@@ -471,6 +471,8 @@ def then_suggestion_format_id_or_omit(ctx: dict) -> None:
 @then("the suggestion should advise including agent_url (URI) and id fields")
 def then_suggestion_agent_url_id(ctx: dict) -> None:
     """Assert suggestion advises including both agent_url AND id fields."""
+    import re
+
     d = _get_error_dict(ctx.get("error"))
     suggestion = d.get("suggestion", "")
     assert suggestion, "Expected non-empty suggestion"
@@ -478,7 +480,10 @@ def then_suggestion_agent_url_id(ctx: dict) -> None:
     assert "agent_url" in suggestion_lower or "uri" in suggestion_lower, (
         f"Expected agent_url/URI in suggestion: {suggestion}"
     )
-    assert "id" in suggestion_lower, f"Expected 'id' field reference in suggestion: {suggestion}"
+    # Use word-boundary match to avoid false positives from "valid", "provide", etc.
+    assert re.search(r"\bid\b", suggestion_lower), (
+        f"Expected 'id' field reference (word-boundary) in suggestion: {suggestion}"
+    )
 
 
 # ── No error raised ─────────────────────────────────────────────────
