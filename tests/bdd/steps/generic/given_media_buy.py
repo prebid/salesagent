@@ -170,50 +170,56 @@ def given_approval_boundary(ctx: dict, config: str) -> None:
 # ───────────────────────────────────────────────────────────────────────
 
 
-@given(parsers.parse("the persistence timing scenario is {partition}"))
-def given_persistence_timing_partition(ctx: dict, partition: str) -> None:
-    """Configure approval + adapter state for persistence timing partitions (BR-RULE-020).
+def _configure_persistence_timing(ctx: dict, approval: str, adapter_result: str) -> None:
+    """Shared configuration for persistence timing scenarios.
 
-    Dispatches to existing tenant/adapter helpers.
+    Args:
+        approval: "auto" for auto-approval, "manual" for manual approval.
+        adapter_result: "success" or "failure" (only meaningful for auto-approval).
     """
-    partition = partition.strip()
-
-    if partition == "auto_approve_adapter_success":
+    if approval == "auto":
         given_tenant_auto_approval(ctx)
         given_adapter_no_manual_approval(ctx)
-        given_adapter_success(ctx)
-    elif partition == "manual_approval_pending":
+        if adapter_result == "success":
+            given_adapter_success(ctx)
+        else:
+            given_adapter_error(ctx)
+    else:
         given_tenant_manual_approval(ctx)
         given_adapter_manual_approval(ctx)
-    elif partition == "auto_approve_adapter_failure":
-        given_tenant_auto_approval(ctx)
-        given_adapter_no_manual_approval(ctx)
-        given_adapter_error(ctx)
-    else:
+
+
+_PARTITION_MAP = {
+    "auto_approve_adapter_success": ("auto", "success"),
+    "manual_approval_pending": ("manual", "n/a"),
+    "auto_approve_adapter_failure": ("auto", "failure"),
+}
+
+_BOUNDARY_MAP = {
+    "auto-approve success": ("auto", "success"),
+    "auto-approve failure": ("auto", "failure"),
+    "manual approval": ("manual", "n/a"),
+}
+
+
+@given(parsers.parse("the persistence timing scenario is {partition}"))
+def given_persistence_timing_partition(ctx: dict, partition: str) -> None:
+    """Configure approval + adapter state for persistence timing partitions (BR-RULE-020)."""
+    partition = partition.strip()
+    if partition not in _PARTITION_MAP:
         raise ValueError(f"Unknown persistence timing partition: {partition}")
+    approval, adapter_result = _PARTITION_MAP[partition]
+    _configure_persistence_timing(ctx, approval, adapter_result)
 
 
 @given(parsers.parse("the persistence timing scenario is: {config}"))
 def given_persistence_timing_boundary(ctx: dict, config: str) -> None:
-    """Configure approval + adapter state for persistence timing boundaries (BR-RULE-020).
-
-    Dispatches to existing tenant/adapter helpers.
-    """
+    """Configure approval + adapter state for persistence timing boundaries (BR-RULE-020)."""
     config = config.strip()
-
-    if config == "auto-approve success":
-        given_tenant_auto_approval(ctx)
-        given_adapter_no_manual_approval(ctx)
-        given_adapter_success(ctx)
-    elif config == "auto-approve failure":
-        given_tenant_auto_approval(ctx)
-        given_adapter_no_manual_approval(ctx)
-        given_adapter_error(ctx)
-    elif config == "manual approval":
-        given_tenant_manual_approval(ctx)
-        given_adapter_manual_approval(ctx)
-    else:
+    if config not in _BOUNDARY_MAP:
         raise ValueError(f"Unknown persistence timing boundary config: {config}")
+    approval, adapter_result = _BOUNDARY_MAP[config]
+    _configure_persistence_timing(ctx, approval, adapter_result)
 
 
 @given(parsers.parse("the tenant has max_daily_package_spend configured at {amount:d}"))

@@ -745,12 +745,13 @@ def _assert_has_suggestion(error: object) -> None:
 def _assert_persistence_after_adapter_success(ctx: dict) -> None:
     """Assert all records persisted after adapter returns success (auto-approval path).
 
-    Verifies: success response, media buy persisted, packages persisted, adapter called.
+    Verifies: auto-approval status, media buy persisted, packages persisted, adapter called.
     """
     import pytest
 
     from tests.bdd.steps.generic.then_media_buy import (
         then_adapter_executed,
+        then_approval_auto,
         then_media_buy_persisted,
         then_package_records_persisted,
     )
@@ -760,6 +761,7 @@ def _assert_persistence_after_adapter_success(ctx: dict) -> None:
     resp = ctx.get("response")
     assert resp is not None, "Expected a response for adapter success path"
 
+    then_approval_auto(ctx)
     then_media_buy_persisted(ctx)
     then_package_records_persisted(ctx)
     then_adapter_executed(ctx)
