@@ -2430,3 +2430,80 @@ def given_catalog_boundary(ctx: dict, config: str) -> None:
 
     else:
         raise ValueError(f"Unknown catalog boundary config: {config}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Format ID structure partition / boundary
+# ═══════════════════════════════════════════════════════════════════════
+
+_VALID_FORMAT_ID = {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}
+
+
+def _set_format_ids(ctx: dict, format_ids: list[dict[str, Any] | str] | None) -> None:
+    """Set format_ids on the first package of the request."""
+    kwargs = _ensure_request_defaults(ctx)
+    if format_ids is None:
+        kwargs["packages"][0].pop("format_ids", None)
+    else:
+        kwargs["packages"][0]["format_ids"] = format_ids
+
+
+@given(parsers.parse("the format ID scenario is {partition}"))
+def given_format_id_partition(ctx: dict, partition: str) -> None:
+    """Set up format_ids for partition scenarios (format ID structure).
+
+    SPEC-PRODUCTION GAP: Production validates format_id structure via Pydantic
+    (FormatId model), so plain strings and missing fields raise ValidationError.
+    However, unregistered agent and unknown format pass Pydantic validation and
+    are only caught later (or not at all) by format compatibility checks.
+    """
+    partition = partition.strip()
+
+    if partition == "valid_format_id":
+        _set_format_ids(ctx, [_VALID_FORMAT_ID])
+
+    elif partition == "plain_string":
+        _set_format_ids(ctx, ["banner_300x250"])
+
+    elif partition == "missing_agent_url":
+        _set_format_ids(ctx, [{"id": "display_300x250"}])
+
+    elif partition == "missing_id":
+        _set_format_ids(ctx, [{"agent_url": "https://creative.adcontextprotocol.org"}])
+
+    elif partition == "unregistered_agent":
+        _set_format_ids(ctx, [{"agent_url": "https://unknown-agent.example.com", "id": "display_300x250"}])
+
+    elif partition == "unknown_format":
+        _set_format_ids(ctx, [{"agent_url": "https://creative.adcontextprotocol.org", "id": "nonexistent_format_999"}])
+
+    else:
+        raise ValueError(f"Unknown format ID partition: {partition}")
+
+
+@given(parsers.parse("the format ID scenario is: {config}"))
+def given_format_id_boundary(ctx: dict, config: str) -> None:
+    """Set up format_ids for boundary scenarios (format ID structure).
+
+    SPEC-PRODUCTION GAP: same as partition — Pydantic catches structural issues,
+    but agent registration and format existence are not fully validated.
+    """
+    config = config.strip()
+
+    if config == "valid FormatId":
+        _set_format_ids(ctx, [_VALID_FORMAT_ID])
+
+    elif config == '"banner_300x250"':
+        _set_format_ids(ctx, ["banner_300x250"])
+
+    elif config == "no agent_url":
+        _set_format_ids(ctx, [{"id": "display_300x250"}])
+
+    elif config == "bad agent_url":
+        _set_format_ids(ctx, [{"agent_url": "https://unknown-agent.example.com", "id": "display_300x250"}])
+
+    elif config == "unknown format":
+        _set_format_ids(ctx, [{"agent_url": "https://creative.adcontextprotocol.org", "id": "nonexistent_format_999"}])
+
+    else:
+        raise ValueError(f"Unknown format ID boundary config: {config}")
