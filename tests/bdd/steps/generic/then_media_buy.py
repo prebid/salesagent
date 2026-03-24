@@ -251,24 +251,32 @@ def then_webhook_notification(ctx: dict) -> None:
         assert media_buy_id, (
             "Response has no media_buy_id — webhook cannot notify Buyer without identifying the media buy"
         )
-    # Hard-assert webhook mock is wired; xfail on known harness gap
+    # SPEC-PRODUCTION GAP: xfail immediately when harness lacks webhook mock.
+    # No try/except — xfail is explicit, not a silent catch-all.
     webhook_mock = ctx.get("webhook_mock") or ctx.get("notification_mock")
-    try:
-        assert webhook_mock is not None, (
-            "Webhook notification mock not wired — step claims 'Buyer should be notified via webhook'"
-        )
-    except AssertionError:
+    if webhook_mock is None:
         pytest.xfail(
             "SPEC-PRODUCTION GAP: Webhook notification service not wired in BDD harness. "
             "push_notification_config and webhook delivery service need harness setup. "
             "FIXME(salesagent-9vgz.1)"
         )
+    # --- Assertions below only run when webhook mock IS wired ---
     webhook_mock.assert_called_once()
     call_args = webhook_mock.call_args
+    # Payload must include media_buy_id so the Buyer can correlate the notification
     payload = call_args.kwargs if call_args.kwargs else {}
-    assert "media_buy_id" in payload or (call_args.args and len(call_args.args) > 0), (
-        "Webhook was called but payload has no media_buy_id"
+    if call_args.args:
+        # Positional arg[0] is often the payload dict
+        payload = call_args.args[0] if isinstance(call_args.args[0], dict) else payload
+    assert "media_buy_id" in payload, (
+        "Webhook was called but payload has no media_buy_id — Buyer cannot correlate notification to a media buy"
     )
+    # Verify notification targets the Buyer (event_type should be buyer-facing)
+    if "event_type" in payload:
+        buyer_events = {"rejected", "approved", "status_changed", "delivered", "completed"}
+        assert payload["event_type"] in buyer_events, (
+            f"Webhook event_type '{payload['event_type']}' is not a buyer-facing event. Expected one of {buyer_events}"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════
