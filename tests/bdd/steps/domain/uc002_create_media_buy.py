@@ -1718,11 +1718,9 @@ def given_proposal_allocations(ctx: dict, count: int) -> None:
 def then_packages_derived_from_proposal(ctx: dict) -> None:
     """Assert packages were derived from proposal allocations.
 
-    SPEC-PRODUCTION GAP: Production does not derive packages from proposals.
-    proposal_id is accepted but never processed.
+    Hard assertions only — scenario-level xfail in conftest.py handles the
+    spec-production gap (T-UC-002-alt-proposal tag).
     """
-    import pytest
-
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     packages = _get_response_field_from_resp(resp, "packages")
@@ -1733,7 +1731,7 @@ def then_packages_derived_from_proposal(ctx: dict) -> None:
     assert packages is not None and len(packages) > 0, (
         "Response has no packages — cannot verify derivation from proposal allocations"
     )
-    # Verify derivation evidence on existing packages BEFORE count check.
+    # Verify derivation evidence on existing packages.
     # Each derived package must have a product_id (the allocation's product).
     proposal_id = ctx.get("expected_proposal_id")
     missing_derivation = []
@@ -1749,32 +1747,22 @@ def then_packages_derived_from_proposal(ctx: dict) -> None:
                 assert pkg_proposal == proposal_id, (
                     f"Package {i} proposal_id '{pkg_proposal}' doesn't match expected '{proposal_id}'"
                 )
-    # Count check — xfail if production derived fewer/more packages than allocations
-    if len(packages) != expected:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: Expected {expected} packages derived from proposal "
-            f"allocations, got {len(packages)}. Production does not "
-            f"derive packages from proposals yet."
-        )
-    if missing_derivation:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: Packages missing derivation evidence: "
-            f"{', '.join(missing_derivation)}. Production does not derive "
-            f"packages from proposals yet."
-        )
+    # Count check
+    assert len(packages) == expected, (
+        f"Expected {expected} packages derived from proposal allocations, got {len(packages)}"
+    )
+    assert not missing_derivation, f"Packages missing derivation evidence: {', '.join(missing_derivation)}"
 
 
 @then("the total_budget should be distributed per allocation percentages")
 def then_budget_distributed_per_allocations(ctx: dict) -> None:
     """Assert total budget was distributed across packages per allocation percentages.
 
-    SPEC-PRODUCTION GAP: Production does not distribute budget per proposal
-    allocations. Packages retain their individual budgets as submitted.
+    Hard assertions only — scenario-level xfail in conftest.py handles the
+    spec-production gap (T-UC-002-alt-proposal tag).
     Verifies: (1) budget sum matches total, (2) each package gets a non-zero
     share, and (3) shares are proportional (within rounding tolerance).
     """
-    import pytest
-
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     packages = _get_response_field_from_resp(resp, "packages")
@@ -1798,7 +1786,7 @@ def then_budget_distributed_per_allocations(ctx: dict) -> None:
     budget_sum = sum(pkg_budgets)
     assert abs(budget_sum - expected_total) < 0.01, f"Expected budget sum {expected_total}, got {budget_sum}"
 
-    # Verify each existing package has a non-zero budget share (runs regardless of count)
+    # Verify each existing package has a non-zero budget share
     for i, budget in enumerate(pkg_budgets):
         assert budget > 0, (
             f"Package {i} has zero budget — 'distributed per allocation percentages' "
@@ -1810,12 +1798,8 @@ def then_budget_distributed_per_allocations(ctx: dict) -> None:
     assert expected_count is not None and expected_count > 0, (
         "Scenario must set expected_proposal_allocations via 'the proposal has N product allocations' Given step"
     )
-    if len(packages) != expected_count:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: Expected {expected_count} allocation packages, "
-            f"got {len(packages)}. Production does not derive packages from proposals yet."
-        )
-    # With correct count, verify proportional shares (hard assertion — not a gap)
+    assert len(packages) == expected_count, f"Expected {expected_count} allocation packages, got {len(packages)}"
+    # Verify proportional shares
     equal_share = expected_total / expected_count
     for i, budget in enumerate(pkg_budgets):
         deviation = abs(budget - equal_share) / equal_share if equal_share else 0
@@ -1830,20 +1814,20 @@ def then_budget_distributed_per_allocations(ctx: dict) -> None:
 def then_response_has_derived_packages(ctx: dict) -> None:
     """Assert response has a media buy with packages derived from proposal allocations.
 
+    Hard assertions only — scenario-level xfail in conftest.py handles the
+    spec-production gap (T-UC-002-alt-proposal tag).
     Verifies:
     1. media_buy_id is present
     2. Each package has a product_id (evidence of derivation from proposal)
     3. packages count matches expected_proposal_allocations (from Given step)
     """
-    import pytest
-
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     media_buy_id = _get_response_field_from_resp(resp, "media_buy_id")
     assert media_buy_id, "No media_buy_id in response"
     packages = _get_response_field_from_resp(resp, "packages")
     assert packages is not None and len(packages) > 0, "No derived packages in response"
-    # Verify each package has a product_id (derivation evidence) BEFORE count check
+    # Verify each package has a product_id (derivation evidence)
     missing_product_ids = []
     for i, pkg in enumerate(packages):
         product_id = getattr(pkg, "product_id", None)
@@ -1857,17 +1841,13 @@ def then_response_has_derived_packages(ctx: dict) -> None:
             )
     # Verify package count matches expected proposal allocations
     expected_count = ctx.get("expected_proposal_allocations")
-    if expected_count is not None and len(packages) != expected_count:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: Expected {expected_count} packages derived from "
-            f"proposal allocations, got {len(packages)}. Production does not derive "
-            f"packages from proposals yet."
+    if expected_count is not None:
+        assert len(packages) == expected_count, (
+            f"Expected {expected_count} packages derived from proposal allocations, got {len(packages)}"
         )
-    if missing_product_ids:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: Packages {missing_product_ids} have no product_id — "
-            f"cannot confirm derivation from proposal allocations."
-        )
+    assert not missing_product_ids, (
+        f"Packages {missing_product_ids} have no product_id — cannot confirm derivation from proposal allocations"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
