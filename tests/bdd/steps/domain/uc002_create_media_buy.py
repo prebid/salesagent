@@ -553,8 +553,9 @@ def then_error_contains_count(ctx: dict, count: str) -> None:
     """Assert error message mentions the specific number of matching accounts."""
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
-    msg = str(error)
-    assert f"{count} account" in msg.lower() or f"{count}" in msg, f"Expected '{count} accounts' in error: {msg}"
+    msg = str(error).lower()
+    assert f"{count}" in msg, f"Expected count '{count}' in error: {msg}"
+    assert "account" in msg, f"Expected 'account(s)' in error: {msg}"
 
 
 @then(parsers.parse("the result should be {outcome}"))

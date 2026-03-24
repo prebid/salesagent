@@ -308,11 +308,26 @@ def then_webhook_notification(ctx: dict) -> None:
         # this proves the notification *would* fire if the delivery service were wired.
         assert media_buy_id, "media_buy_id required for webhook notification payload"
         assert status in webhook_triggering_statuses, f"Status '{status}' would not trigger a webhook"
+
+        # DB-level verification: confirm the status transition persisted (not just in response).
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import MediaBuy
+
+        with get_db_session() as session:
+            mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id)).first()
+            assert mb is not None, f"Media buy {media_buy_id} not found in DB — cannot confirm transition persisted"
+            assert mb.status in webhook_triggering_statuses, (
+                f"DB status '{mb.status}' is not webhook-triggering (expected one of {webhook_triggering_statuses}) — "
+                "notification precondition NOT met at persistence layer"
+            )
+
         gaps = []
         if not push_config:
             gaps.append("push_notification_config NOT configured on request")
         gaps.append("webhook delivery service not wired in BDD harness")
-        verified = f"media_buy_id={media_buy_id}, status={status}"
+        verified = f"media_buy_id={media_buy_id}, db_status={mb.status}"
         pytest.xfail(
             f"SPEC-PRODUCTION GAP: {'; '.join(gaps)}. "
             f"Verified preconditions: {verified}. "
@@ -584,10 +599,20 @@ def then_response_includes_resolved_start_time(ctx: dict) -> None:
     media_buy_id = _get_response_field(resp, "media_buy_id")
     assert media_buy_id, "No media_buy_id in response"
 
-    # Check response first — if start_time is present on response, verify it
+    # Check response first — if start_time is present on response, verify it's
+    # a resolved datetime (not literal "asap") and within a reasonable window.
     resp_start_time = _get_response_field(resp, "start_time")
     if resp_start_time is not None:
-        assert str(resp_start_time) != "asap", "Response start_time is literal 'asap', not resolved"
+        resp_str = str(resp_start_time)
+        assert resp_str != "asap", "Response start_time is literal 'asap', not resolved"
+        # Verify it parses as a real datetime (not some other non-datetime string)
+        if isinstance(resp_start_time, str):
+            parsed = datetime.fromisoformat(resp_start_time.replace("Z", "+00:00"))
+            delta = abs((parsed - datetime.now(UTC)).total_seconds())
+            assert delta < 60, (
+                f"Response start_time {resp_start_time} is {delta:.1f}s from now — "
+                "expected within 60s of current UTC for 'asap' resolution"
+            )
         return
 
     # SPEC-PRODUCTION GAP: Response lacks start_time field.

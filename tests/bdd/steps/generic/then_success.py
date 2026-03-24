@@ -136,8 +136,9 @@ def then_no_real_orders(ctx: dict) -> None:
         method = getattr(mock_adapter, method_name, None)
         if method is not None and method.called:
             called_methods.append(method_name)
-    # In sandbox mode, order methods should NOT have been called on the adapter.
-    # But since we're running through mock adapter (not real), the key guarantee
-    # is that no real API calls happened — the mock absorbed them.
-    # This is a proxy assertion: mock adapter present = no real calls possible.
-    assert adapter_mock is not None, "Adapter mock confirms no real ad platform orders were created"
+    # In sandbox mode, order-creation methods should NOT have been called.
+    # The adapter mock is present (harness guarantee), so even if called, no real
+    # API calls would occur — but sandbox should suppress them entirely.
+    assert not called_methods, (
+        f"Sandbox mode should not create ad platform orders, but adapter methods were called: {called_methods}"
+    )
