@@ -1194,6 +1194,361 @@ def given_daily_spend_boundary(ctx: dict, config: str) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Targeting overlay partition/boundary — BR-RULE-014
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _set_targeting_overlay(ctx: dict, overlay: dict[str, Any] | None) -> None:
+    """Set the targeting_overlay on the first package in the request.
+
+    None means absent overlay (field omitted entirely).
+    {} means empty overlay.
+    """
+    kwargs = _ensure_request_defaults(ctx)
+    if kwargs.get("packages"):
+        if overlay is None:
+            kwargs["packages"][0].pop("targeting_overlay", None)
+        else:
+            kwargs["packages"][0]["targeting_overlay"] = overlay
+
+
+@given(parsers.parse("the targeting overlay scenario is {partition}"))
+def given_targeting_overlay_partition(ctx: dict, partition: str) -> None:
+    """Set up targeting overlay for partition scenarios (BR-RULE-014).
+
+    Valid partitions (12): targeting validation passes
+    Invalid partitions (7): error INVALID_REQUEST with suggestion
+    """
+    partition = partition.strip()
+
+    # ── Valid partitions ──
+    if partition == "absent_overlay":
+        _set_targeting_overlay(ctx, overlay=None)
+
+    elif partition == "valid_overlay":
+        _set_targeting_overlay(ctx, overlay={"geo_countries": ["US", "CA"]})
+
+    elif partition == "empty_overlay":
+        _set_targeting_overlay(ctx, overlay={})
+
+    elif partition == "single_geo_dimension":
+        _set_targeting_overlay(ctx, overlay={"geo_countries": ["US"]})
+
+    elif partition == "multiple_dimensions":
+        _set_targeting_overlay(
+            ctx,
+            overlay={
+                "geo_countries": ["US"],
+                "device_type_any_of": ["mobile", "desktop"],
+            },
+        )
+
+    elif partition == "frequency_cap_suppress_only":
+        _set_targeting_overlay(
+            ctx,
+            overlay={
+                "frequency_cap": {"suppress_minutes": 60.0},
+            },
+        )
+
+    elif partition == "frequency_cap_max_impressions_only":
+        _set_targeting_overlay(
+            ctx,
+            overlay={
+                "frequency_cap": {
+                    "max_impressions": 3,
+                    "per": "devices",
+                    "window": {"interval": 24, "unit": "hours"},
+                },
+            },
+        )
+
+    elif partition == "frequency_cap_combined":
+        _set_targeting_overlay(
+            ctx,
+            overlay={
+                "frequency_cap": {
+                    "suppress_minutes": 30.0,
+                    "max_impressions": 5,
+                    "per": "devices",
+                    "window": {"interval": 1, "unit": "days"},
+                },
+            },
+        )
+
+    elif partition == "keyword_targeting":
+        _set_targeting_overlay(
+            ctx,
+            overlay={
+                "keyword_targets": [
+                    {"keyword": "shoes", "match_type": "exact"},
+                ],
+            },
+        )
+
+    elif partition == "proximity_travel_time":
+        _set_targeting_overlay(
+            ctx,
+            overlay={
+                "geo_proximity": [
+                    {
+                        "lat": 40.7128,
+                        "lng": -74.0060,
+                        "travel_time": {"value": 30, "unit": "min"},
+                        "transport_mode": "driving",
+                    }
+                ],
+            },
+        )
+
+    elif partition == "proximity_radius":
+        _set_targeting_overlay(
+            ctx,
+            overlay={
+                "geo_proximity": [
+                    {
+                        "lat": 40.7128,
+                        "lng": -74.0060,
+                        "radius": {"value": 5, "unit": "km"},
+                    }
+                ],
+            },
+        )
+
+    elif partition == "proximity_geometry":
+        _set_targeting_overlay(
+            ctx,
+            overlay={
+                "geo_proximity": [
+                    {
+                        "geometry": {
+                            "type": "Polygon",
+                            "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]],
+                        },
+                    }
+                ],
+            },
+        )
+
+    # ── Invalid partitions ──
+    elif partition == "unknown_field":
+        _set_targeting_overlay(ctx, overlay={"weather_targeting": "sunny"})
+
+    elif partition == "managed_only_dimension":
+        _set_targeting_overlay(ctx, overlay={"key_value_pairs": {"section": "sports"}})
+
+    elif partition == "geo_overlap":
+        _set_targeting_overlay(
+            ctx,
+            overlay={
+                "geo_countries": ["US"],
+                "geo_countries_exclude": ["US"],
+            },
+        )
+
+    elif partition == "device_type_overlap":
+        _set_targeting_overlay(
+            ctx,
+            overlay={
+                "device_type_any_of": ["mobile"],
+                "device_type_none_of": ["mobile"],
+            },
+        )
+
+    elif partition == "proximity_method_conflict":
+        _set_targeting_overlay(
+            ctx,
+            overlay={
+                "geo_proximity": [
+                    {
+                        "lat": 40.7128,
+                        "lng": -74.0060,
+                        "travel_time": {"value": 30, "unit": "min"},
+                        "transport_mode": "driving",
+                        "radius": {"value": 5, "unit": "km"},
+                    }
+                ],
+            },
+        )
+
+    elif partition == "frequency_cap_missing_fields":
+        _set_targeting_overlay(
+            ctx,
+            overlay={
+                "frequency_cap": {"max_impressions": 3},
+            },
+        )
+
+    elif partition == "keyword_duplicate":
+        _set_targeting_overlay(
+            ctx,
+            overlay={
+                "keyword_targets": [
+                    {"keyword": "shoes", "match_type": "exact"},
+                    {"keyword": "shoes", "match_type": "exact"},
+                ],
+            },
+        )
+
+    else:
+        raise ValueError(f"Unknown targeting overlay partition: {partition}")
+
+
+@given(parsers.parse("the targeting overlay scenario is: {config}"))
+def given_targeting_overlay_boundary(ctx: dict, config: str) -> None:
+    """Set up targeting overlay for boundary scenarios (BR-RULE-014).
+
+    Boundary configs map to edge-case values for each targeting dimension.
+    """
+    config = config.strip()
+
+    if config == "no overlay":
+        _set_targeting_overlay(ctx, overlay=None)
+
+    elif config == "empty":
+        _set_targeting_overlay(ctx, overlay={})
+
+    elif config == "geo_countries=US":
+        _set_targeting_overlay(ctx, overlay={"geo_countries": ["US"]})
+
+    elif config == "weather=sunny":
+        _set_targeting_overlay(ctx, overlay={"weather": "sunny"})
+
+    elif config == "managed dimension":
+        _set_targeting_overlay(ctx, overlay={"key_value_pairs": {"section": "sports"}})
+
+    elif config == "US in both lists":
+        _set_targeting_overlay(
+            ctx,
+            overlay={
+                "geo_countries": ["US"],
+                "geo_countries_exclude": ["US"],
+            },
+        )
+
+    elif config == "mobile in both":
+        _set_targeting_overlay(
+            ctx,
+            overlay={
+                "device_type_any_of": ["mobile"],
+                "device_type_none_of": ["mobile"],
+            },
+        )
+
+    elif config == "travel_time=30m":
+        _set_targeting_overlay(
+            ctx,
+            overlay={
+                "geo_proximity": [
+                    {
+                        "lat": 40.7128,
+                        "lng": -74.0060,
+                        "travel_time": {"value": 30, "unit": "min"},
+                        "transport_mode": "driving",
+                    }
+                ],
+            },
+        )
+
+    elif config == "radius=5km":
+        _set_targeting_overlay(
+            ctx,
+            overlay={
+                "geo_proximity": [
+                    {
+                        "lat": 40.7128,
+                        "lng": -74.0060,
+                        "radius": {"value": 5, "unit": "km"},
+                    }
+                ],
+            },
+        )
+
+    elif config == "geometry=polygon":
+        _set_targeting_overlay(
+            ctx,
+            overlay={
+                "geo_proximity": [
+                    {
+                        "geometry": {
+                            "type": "Polygon",
+                            "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]],
+                        },
+                    }
+                ],
+            },
+        )
+
+    elif config == "travel+radius":
+        _set_targeting_overlay(
+            ctx,
+            overlay={
+                "geo_proximity": [
+                    {
+                        "lat": 40.7128,
+                        "lng": -74.0060,
+                        "travel_time": {"value": 30, "unit": "min"},
+                        "transport_mode": "driving",
+                        "radius": {"value": 5, "unit": "km"},
+                    }
+                ],
+            },
+        )
+
+    elif config == "suppress=24h":
+        _set_targeting_overlay(
+            ctx,
+            overlay={
+                "frequency_cap": {"suppress_minutes": 1440.0},
+            },
+        )
+
+    elif config == "max=3 per=1 win=24h":
+        _set_targeting_overlay(
+            ctx,
+            overlay={
+                "frequency_cap": {
+                    "max_impressions": 3,
+                    "per": "devices",
+                    "window": {"interval": 24, "unit": "hours"},
+                },
+            },
+        )
+
+    elif config == "max=3 no-per":
+        _set_targeting_overlay(
+            ctx,
+            overlay={
+                "frequency_cap": {"max_impressions": 3},
+            },
+        )
+
+    elif config == "kw=shoes exact":
+        _set_targeting_overlay(
+            ctx,
+            overlay={
+                "keyword_targets": [
+                    {"keyword": "shoes", "match_type": "exact"},
+                ],
+            },
+        )
+
+    elif config == "kw=shoes exact x2":
+        _set_targeting_overlay(
+            ctx,
+            overlay={
+                "keyword_targets": [
+                    {"keyword": "shoes", "match_type": "exact"},
+                    {"keyword": "shoes", "match_type": "exact"},
+                ],
+            },
+        )
+
+    else:
+        raise ValueError(f"Unknown targeting overlay boundary config: {config}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Proposal-related request construction
 # ═══════════════════════════════════════════════════════════════════════
 
