@@ -309,6 +309,18 @@ def given_request_with_total_budget(ctx: dict, amount: int) -> None:
         kwargs["packages"][0]["budget"] = float(amount)
 
 
+@given(parsers.parse("a create_media_buy request with total_budget of {amount:d}"))
+def given_request_with_total_budget_of(ctx: dict, amount: int) -> None:
+    """Set up request with a specific total_budget amount (may be invalid, e.g. 0).
+
+    Unlike 'a valid create_media_buy request with total budget' this step
+    deliberately allows invalid amounts for validation-error scenarios.
+    """
+    kwargs = _ensure_request_defaults(ctx)
+    if kwargs.get("packages"):
+        kwargs["packages"][0]["budget"] = float(amount)
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Package construction
 # ═══════════════════════════════════════════════════════════════════════
@@ -2294,6 +2306,7 @@ def given_adapter_success(ctx: dict) -> None:
 
 
 @given("a create_media_buy request")
+@given("a valid create_media_buy request with packages")
 def given_bare_create_request(ctx: dict) -> None:
     """Set up a bare create_media_buy request with valid defaults."""
     _ensure_request_defaults(ctx)

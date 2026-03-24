@@ -232,6 +232,11 @@ _XFAIL_TAGS: dict[str, str] = {
     # FIXME(salesagent-9vgz.27): ASAP case sensitivity error code mismatch
     # Production: Pydantic rejects "ASAP" → ValidationError, spec expects INVALID_REQUEST.
     "T-UC-002-inv-013-5": "INVALID_REQUEST error code not implemented for wrong-case ASAP — spec-production gap",
+    # FIXME(salesagent-9vgz.94): sandbox mode not implemented in create_media_buy
+    # CreateMediaBuyResult has no sandbox field; no sandbox suppression logic exists.
+    # sandbox-production passes vacuously (sandbox absent from response by default).
+    "T-UC-002-sandbox-happy": "sandbox mode not implemented in create_media_buy — spec-production gap",
+    "T-UC-002-sandbox-validation": "sandbox mode not implemented in create_media_buy — spec-production gap",
 }
 
 # FIXME(beads-dul): Selective xfail for parametrized scenarios where only
