@@ -220,6 +220,9 @@ def then_slack_notification_sent(ctx: dict) -> None:
         f"Expected seller-facing event_type (one of {seller_event_types}), "
         f"got '{event_type}' — this may not target the Seller"
     )
+    # Verify media_buy_id was passed (positional arg 1 per notify_media_buy_event signature)
+    media_buy_id = call_args.args[1] if len(call_args.args) > 1 else call_args.kwargs.get("media_buy_id")
+    assert media_buy_id, "Slack notification missing media_buy_id — cannot confirm it references the correct media buy"
     # Verify tenant context is included (Seller = tenant/publisher)
     tenant_name = call_args.kwargs.get("tenant_name")
     if not tenant_name and len(call_args.args) > 4:
@@ -301,13 +304,18 @@ def then_webhook_notification(ctx: dict) -> None:
     # and DB state confirms the transition. The gap is actual HTTP delivery.
     webhook_mock = ctx.get("webhook_mock") or ctx.get("notification_mock")
     if webhook_mock is None:
-        verified = (
-            f"media_buy_id={media_buy_id}, status={status}"
-            f"{', push_config present' if push_config else ', push_config NOT configured'}"
-        )
+        # Assert all verifiable preconditions BEFORE xfailing —
+        # this proves the notification *would* fire if the delivery service were wired.
+        assert media_buy_id, "media_buy_id required for webhook notification payload"
+        assert status in webhook_triggering_statuses, f"Status '{status}' would not trigger a webhook"
+        gaps = []
+        if not push_config:
+            gaps.append("push_notification_config NOT configured on request")
+        gaps.append("webhook delivery service not wired in BDD harness")
+        verified = f"media_buy_id={media_buy_id}, status={status}"
         pytest.xfail(
-            "SPEC-PRODUCTION GAP: Webhook delivery service not wired in BDD harness. "
-            f"Verified: {verified}. "
+            f"SPEC-PRODUCTION GAP: {'; '.join(gaps)}. "
+            f"Verified preconditions: {verified}. "
             "Cannot verify: actual HTTP POST to buyer's push_notification_config URL. "
             "FIXME(salesagent-9vgz.1)"
         )
@@ -591,14 +599,18 @@ def then_response_includes_resolved_start_time(ctx: dict) -> None:
         mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id)).first()
         assert mb is not None, f"Media buy {media_buy_id} not found"
         assert mb.start_time is not None, "No start_time persisted — 'asap' was not resolved"
+        assert str(mb.start_time) != "asap", "DB start_time is literal 'asap' — resolution did not happen"
         now = datetime.now(UTC)
         delta = abs((mb.start_time - now).total_seconds())
-        assert delta < 30, f"Persisted start_time {mb.start_time} not resolved to current UTC"
+        assert delta < 30, (
+            f"Persisted start_time {mb.start_time} is {delta:.1f}s from now — "
+            "expected within 30s of current UTC for 'asap' resolution"
+        )
     pytest.xfail(
         "SPEC-PRODUCTION GAP: CreateMediaBuySuccess response lacks start_time field. "
-        "DB confirms 'asap' was correctly resolved to current UTC, but step text claims "
-        "'response should include resolved start_time' — response does not satisfy this. "
-        "FIXME(salesagent-9vgz.1)"
+        f"DB confirms 'asap' correctly resolved to {mb.start_time} (within {delta:.1f}s of UTC now), "
+        "but step text claims 'response should include resolved start_time' — "
+        "response does not expose it. FIXME(salesagent-9vgz.1)"
     )
 
 

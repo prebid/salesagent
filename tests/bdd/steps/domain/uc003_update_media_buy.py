@@ -336,11 +336,12 @@ def then_no_errors_field(ctx: dict) -> None:
     """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
-    # Check via model_dump first (catches Pydantic models that exclude None fields)
+    # "NOT contain" means the key must be absent, not just None.
+    # Use exclude_none=True (AdCP default) so errors=None is excluded from the dict.
     if hasattr(resp, "model_dump"):
-        data = resp.model_dump()
-        assert "errors" not in data or data["errors"] is None, (
-            f"Expected no 'errors' field in response, got: {data.get('errors')}"
+        data = resp.model_dump(exclude_none=True)
+        assert "errors" not in data, (
+            f"Expected 'errors' key absent from response (exclude_none=True), but found: {data.get('errors')!r}"
         )
     else:
         errors = getattr(resp, "errors", None)

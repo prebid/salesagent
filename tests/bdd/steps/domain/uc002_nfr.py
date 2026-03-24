@@ -273,8 +273,13 @@ def then_budget_validated_against_min_order(ctx: dict) -> None:
 
     if resp is not None:
         # Successful response means budget passed validation.
-        # The default request uses budget > min_package_budget (100.00),
-        # so reaching here proves validate_min_package_budget() passed.
+        # Verify the persisted package budgets actually meet the minimum.
+        from decimal import Decimal
+
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import MediaPackage
         from tests.bdd.steps.generic.then_media_buy import _get_response_field
 
         media_buy_id = _get_response_field(resp, "media_buy_id")
@@ -282,6 +287,24 @@ def then_budget_validated_against_min_order(ctx: dict) -> None:
             "Expected media_buy_id in response — budget validation should have "
             "either passed (creating media buy) or failed (BUDGET_TOO_LOW error)"
         )
+
+        # Verify each package budget >= min_package_budget in the DB
+        min_decimal = Decimal(str(min_budget))
+        with get_db_session() as session:
+            packages = session.scalars(select(MediaPackage).filter_by(media_buy_id=media_buy_id)).all()
+            assert packages, (
+                f"No packages found for media buy {media_buy_id} — "
+                "cannot verify budget validation against minimum order"
+            )
+            for pkg in packages:
+                assert pkg.budget is not None, (
+                    f"Package {pkg.package_id} has no budget — budget validation requires a numeric budget"
+                )
+                assert pkg.budget >= min_decimal, (
+                    f"Package {pkg.package_id} budget {pkg.budget} is below "
+                    f"min_package_budget {min_decimal} — validation should "
+                    "have rejected this (BUDGET_TOO_LOW)"
+                )
         return
 
     raise AssertionError("No response or error in ctx — cannot verify budget validation ran")
