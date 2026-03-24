@@ -251,13 +251,31 @@ def then_webhook_notification(ctx: dict) -> None:
         assert media_buy_id, (
             "Response has no media_buy_id — webhook cannot notify Buyer without identifying the media buy"
         )
-    # SPEC-PRODUCTION GAP: xfail immediately when harness lacks webhook mock.
-    # No try/except — xfail is explicit, not a silent catch-all.
+    # Verify a state change occurred that WOULD trigger a buyer webhook notification.
+    # Webhooks fire on status transitions (rejected, approved, delivered, etc.).
+    if resp is not None:
+        status = _get_response_field(resp, "status")
+        if status is not None:
+            webhook_triggering_statuses = {
+                "rejected",
+                "approved",
+                "active",
+                "delivered",
+                "completed",
+                "pending_approval",
+            }
+            assert status in webhook_triggering_statuses, (
+                f"Status '{status}' is not a webhook-triggering status. Expected one of {webhook_triggering_statuses}"
+            )
+    # SPEC-PRODUCTION GAP: xfail when harness lacks webhook mock.
+    # Preconditions above verify the trigger event occurred; this gap is about
+    # verifying actual webhook delivery, which requires a wired mock.
     webhook_mock = ctx.get("webhook_mock") or ctx.get("notification_mock")
     if webhook_mock is None:
         pytest.xfail(
             "SPEC-PRODUCTION GAP: Webhook notification service not wired in BDD harness. "
-            "push_notification_config and webhook delivery service need harness setup. "
+            "Preconditions verified (event occurred, media_buy_id present, status is "
+            "webhook-triggering), but cannot verify actual webhook delivery. "
             "FIXME(salesagent-9vgz.1)"
         )
     # --- Assertions below only run when webhook mock IS wired ---
@@ -510,10 +528,11 @@ def then_response_includes_resolved_start_time(ctx: dict) -> None:
 
     SPEC-PRODUCTION GAP: CreateMediaBuySuccess has no top-level start_time field,
     and Package.start_time / PlannedDelivery are not populated by production code.
-    Falls back to checking the persisted DB record instead.
+    Verifies via DB that resolution happened, then xfails the response-level claim.
     """
     from datetime import UTC, datetime
 
+    import pytest
     from sqlalchemy import select
 
     from src.core.database.database_session import get_db_session
@@ -530,14 +549,24 @@ def then_response_includes_resolved_start_time(ctx: dict) -> None:
         assert str(resp_start_time) != "asap", "Response start_time is literal 'asap', not resolved"
         return
 
-    # Fallback: verify via persisted DB record (spec-production gap)
+    # SPEC-PRODUCTION GAP: Response lacks start_time field.
+    # Step text claims "the response should include resolved start_time" but
+    # CreateMediaBuySuccess has no top-level start_time field.
+    # Verify via DB that start_time WAS resolved (behavior is correct, just
+    # not exposed in the response), then xfail the response-level claim.
     with get_db_session() as session:
         mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id)).first()
         assert mb is not None, f"Media buy {media_buy_id} not found"
-        assert mb.start_time is not None, "No start_time persisted"
+        assert mb.start_time is not None, "No start_time persisted — 'asap' was not resolved"
         now = datetime.now(UTC)
         delta = abs((mb.start_time - now).total_seconds())
         assert delta < 30, f"Persisted start_time {mb.start_time} not resolved to current UTC"
+    pytest.xfail(
+        "SPEC-PRODUCTION GAP: CreateMediaBuySuccess response lacks start_time field. "
+        "DB confirms 'asap' was correctly resolved to current UTC, but step text claims "
+        "'response should include resolved start_time' — response does not satisfy this. "
+        "FIXME(salesagent-9vgz.1)"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
