@@ -43,6 +43,7 @@ pytest_plugins = [
     "tests.bdd.steps.generic.then_media_buy",
     "tests.bdd.steps.domain.uc004_delivery",
     "tests.bdd.steps.domain.uc002_create_media_buy",
+    "tests.bdd.steps.domain.uc002_nfr",
     "tests.bdd.steps.domain.uc002_task_query",
     "tests.bdd.steps.domain.uc003_update_media_buy",
     "tests.bdd.steps.domain.uc019_query_media_buys",
