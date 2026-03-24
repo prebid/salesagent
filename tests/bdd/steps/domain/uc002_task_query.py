@@ -6,7 +6,7 @@ Then outcomes verify sort order, domain filtering, status filtering, or error �
 most xfail as SPEC-PRODUCTION GAPs because list_tasks() only accepts
 status, object_type, object_id, limit, offset.
 
-beads: salesagent-9vgz.86, salesagent-9vgz.88
+beads: salesagent-9vgz.86, salesagent-9vgz.88, salesagent-9vgz.90
 """
 
 from __future__ import annotations
@@ -135,6 +135,39 @@ def given_task_status_filter_boundary(ctx: dict, config: str) -> None:
         params["task_status"] = _parse_array_value(config)
     else:
         params["task_status"] = config
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GIVEN steps — task type filter configuration
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given(parsers.parse("the task type filter is {partition}"))
+def given_task_type_filter_partition(ctx: dict, partition: str) -> None:
+    """Set task_type filter for a partition scenario."""
+    params = _ensure_task_query_params(ctx)
+    if partition == "omitted":
+        return
+    if partition == "task_type_array":
+        params["task_type"] = ["create_media_buy", "update_media_buy"]
+    elif partition == "empty_array":
+        params["task_type"] = []
+    else:
+        params["task_type"] = partition
+
+
+@given(parsers.parse("the task type filter boundary is: {config}"))
+def given_task_type_filter_boundary(ctx: dict, config: str) -> None:
+    """Set task_type filter for a boundary scenario."""
+    params = _ensure_task_query_params(ctx)
+    if config == "omitted":
+        return
+    if config == "empty array":
+        params["task_type"] = []
+    elif "+" in config:
+        params["task_type"] = _parse_array_value(config)
+    else:
+        params["task_type"] = config
 
 
 # ═══════════════════════════════════════════════════════════════════════
