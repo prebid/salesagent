@@ -222,31 +222,31 @@ def then_package_default_formats(ctx: dict) -> None:
     assert len(format_ids) > 0, "Expected format_ids to default to all product formats, got empty list"
     # Verify format_ids match the product's format set (from Given step context)
     product = ctx.get("default_product")
-    if product is not None:
-        product_format_ids = getattr(product, "format_ids", None) or []
+    if product is None:
+        pytest.xfail(
+            "SPEC-PRODUCTION GAP: No default_product in context — cannot verify "
+            "'defaulting to all product formats' claim"
+        )
 
-        # Extract IDs (format_ids may be dicts with "id" key or plain strings)
-        def _extract_id(f: Any) -> str:
-            if isinstance(f, dict):
-                return f.get("id", str(f))
-            if hasattr(f, "id"):
-                return f.id
-            return str(f)
+    product_format_ids = getattr(product, "format_ids", None) or []
 
-        product_ids = {_extract_id(f) for f in product_format_ids}
-        pkg_ids = {_extract_id(f) for f in format_ids}
-        if product_ids:
-            if pkg_ids != product_ids:
-                pytest.xfail(
-                    f"SPEC-PRODUCTION GAP: Package format_ids {pkg_ids} don't match "
-                    f"product formats {product_ids}. Step claims 'defaulting to all "
-                    f"product formats'."
-                )
-            # Verify exact set equality — not a subset or superset
-            assert pkg_ids == product_ids, (
-                f"Package format_ids {pkg_ids} don't match product formats {product_ids}. "
-                f"Step claims 'defaulting to all product formats'."
-            )
+    # Extract IDs (format_ids may be dicts with "id" key or plain strings)
+    def _extract_id(f: Any) -> str:
+        if isinstance(f, dict):
+            return f.get("id", str(f))
+        if hasattr(f, "id"):
+            return f.id
+        return str(f)
+
+    product_ids = {_extract_id(f) for f in product_format_ids}
+    assert product_ids, "Product has no format_ids — cannot verify 'defaulting to all product formats'"
+    pkg_ids = {_extract_id(f) for f in format_ids}
+    if pkg_ids != product_ids:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: Package format_ids {pkg_ids} don't match "
+            f"product formats {product_ids}. Step claims 'defaulting to all "
+            f"product formats'."
+        )
 
 
 @then("the package should contain paused as false")

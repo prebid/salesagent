@@ -255,18 +255,18 @@ def then_webhook_notification(ctx: dict) -> None:
     # Webhooks fire on status transitions (rejected, approved, delivered, etc.).
     if resp is not None:
         status = _get_response_field(resp, "status")
-        if status is not None:
-            webhook_triggering_statuses = {
-                "rejected",
-                "approved",
-                "active",
-                "delivered",
-                "completed",
-                "pending_approval",
-            }
-            assert status in webhook_triggering_statuses, (
-                f"Status '{status}' is not a webhook-triggering status. Expected one of {webhook_triggering_statuses}"
-            )
+        assert status is not None, "Response has no status — cannot verify a webhook-triggering state change occurred"
+        webhook_triggering_statuses = {
+            "rejected",
+            "approved",
+            "active",
+            "delivered",
+            "completed",
+            "pending_approval",
+        }
+        assert status in webhook_triggering_statuses, (
+            f"Status '{status}' is not a webhook-triggering status. Expected one of {webhook_triggering_statuses}"
+        )
     # SPEC-PRODUCTION GAP: xfail when harness lacks webhook mock.
     # Preconditions above verify the trigger event occurred; this gap is about
     # verifying actual webhook delivery, which requires a wired mock.

@@ -1726,21 +1726,38 @@ def then_packages_derived_from_proposal(ctx: dict) -> None:
     assert expected is not None and expected > 0, (
         "Scenario must set expected_proposal_allocations via 'the proposal has N product allocations' Given step"
     )
-    if packages is None or len(packages) != expected:
+    assert packages is not None and len(packages) > 0, (
+        "Response has no packages — cannot verify derivation from proposal allocations"
+    )
+    # Verify derivation evidence on existing packages BEFORE count check.
+    # Each derived package must have a product_id (the allocation's product).
+    proposal_id = ctx.get("expected_proposal_id")
+    missing_derivation = []
+    for i, pkg in enumerate(packages):
+        product_id = getattr(pkg, "product_id", None) if not isinstance(pkg, dict) else pkg.get("product_id")
+        if product_id is None:
+            missing_derivation.append(f"pkg[{i}] missing product_id")
+        if proposal_id:
+            pkg_proposal = getattr(pkg, "proposal_id", None) if not isinstance(pkg, dict) else pkg.get("proposal_id")
+            if pkg_proposal is None:
+                missing_derivation.append(f"pkg[{i}] missing proposal_id")
+            else:
+                assert pkg_proposal == proposal_id, (
+                    f"Package {i} proposal_id '{pkg_proposal}' doesn't match expected '{proposal_id}'"
+                )
+    # Count check — xfail if production derived fewer/more packages than allocations
+    if len(packages) != expected:
         pytest.xfail(
             f"SPEC-PRODUCTION GAP: Expected {expected} packages derived from proposal "
-            f"allocations, got {len(packages) if packages else 0}. Production does not "
+            f"allocations, got {len(packages)}. Production does not "
             f"derive packages from proposals yet."
         )
-    # Verify packages reference the proposal (when production supports it)
-    proposal_id = ctx.get("expected_proposal_id")
-    if proposal_id:
-        for pkg in packages:
-            pkg_proposal = getattr(pkg, "proposal_id", None) if not isinstance(pkg, dict) else pkg.get("proposal_id")
-            if pkg_proposal is not None:
-                assert pkg_proposal == proposal_id, (
-                    f"Package proposal_id '{pkg_proposal}' doesn't match expected '{proposal_id}'"
-                )
+    if missing_derivation:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: Packages missing derivation evidence: "
+            f"{', '.join(missing_derivation)}. Production does not derive "
+            f"packages from proposals yet."
+        )
 
 
 @then("the total_budget should be distributed per allocation percentages")
@@ -1777,8 +1794,14 @@ def then_budget_distributed_per_allocations(ctx: dict) -> None:
     budget_sum = sum(pkg_budgets)
     assert abs(budget_sum - expected_total) < 0.01, f"Expected budget sum {expected_total}, got {budget_sum}"
 
-    # Step text claims "per allocation percentages" — verify proportional distribution.
-    # With N equal allocations, each package should get ~(100/N)% of the total budget.
+    # Verify each existing package has a non-zero budget share (runs regardless of count)
+    for i, budget in enumerate(pkg_budgets):
+        assert budget > 0, (
+            f"Package {i} has zero budget — 'distributed per allocation percentages' "
+            f"requires each allocation to receive a non-zero share"
+        )
+
+    # Proportional distribution requires correct package count
     expected_count = ctx.get("expected_proposal_allocations")
     assert expected_count is not None and expected_count > 0, (
         "Scenario must set expected_proposal_allocations via 'the proposal has N product allocations' Given step"
@@ -1788,21 +1811,15 @@ def then_budget_distributed_per_allocations(ctx: dict) -> None:
             f"SPEC-PRODUCTION GAP: Expected {expected_count} allocation packages, "
             f"got {len(packages)}. Production does not derive packages from proposals yet."
         )
-    equal_share = expected_total / expected_count if expected_count else 0
+    # With correct count, verify proportional shares (hard assertion — not a gap)
+    equal_share = expected_total / expected_count
     for i, budget in enumerate(pkg_budgets):
-        assert budget > 0, (
-            f"Package {i} has zero budget — 'distributed per allocation percentages' "
-            f"requires each allocation to receive a non-zero share"
-        )
-        # Each allocation share should be within 5% tolerance of equal share
-        # (proposals with non-equal percentages would need ctx to store percentages)
         deviation = abs(budget - equal_share) / equal_share if equal_share else 0
-        if deviation > 0.05:
-            pytest.xfail(
-                f"SPEC-PRODUCTION GAP: Package {i} budget {budget} deviates "
-                f"{deviation:.0%} from equal share {equal_share:.2f}. Production may "
-                f"not distribute budget per allocation percentages yet."
-            )
+        assert deviation <= 0.05, (
+            f"Package {i} budget {budget} deviates {deviation:.0%} from equal share "
+            f"{equal_share:.2f}. 'Distributed per allocation percentages' requires "
+            f"proportional distribution within 5% tolerance."
+        )
 
 
 @then("the response should include the created media buy with derived packages")
@@ -1811,8 +1828,8 @@ def then_response_has_derived_packages(ctx: dict) -> None:
 
     Verifies:
     1. media_buy_id is present
-    2. packages count matches expected_proposal_allocations (from Given step)
-    3. Each package has a product_id (evidence of derivation from proposal)
+    2. Each package has a product_id (evidence of derivation from proposal)
+    3. packages count matches expected_proposal_allocations (from Given step)
     """
     import pytest
 
@@ -1822,6 +1839,18 @@ def then_response_has_derived_packages(ctx: dict) -> None:
     assert media_buy_id, "No media_buy_id in response"
     packages = _get_response_field_from_resp(resp, "packages")
     assert packages is not None and len(packages) > 0, "No derived packages in response"
+    # Verify each package has a product_id (derivation evidence) BEFORE count check
+    missing_product_ids = []
+    for i, pkg in enumerate(packages):
+        product_id = getattr(pkg, "product_id", None)
+        if product_id is None and isinstance(pkg, dict):
+            product_id = pkg.get("product_id")
+        if product_id is None:
+            missing_product_ids.append(i)
+        else:
+            assert isinstance(product_id, str) and len(product_id.strip()) > 0, (
+                f"Package {i} product_id is empty — derived packages must reference a product"
+            )
     # Verify package count matches expected proposal allocations
     expected_count = ctx.get("expected_proposal_allocations")
     if expected_count is not None and len(packages) != expected_count:
@@ -1830,16 +1859,11 @@ def then_response_has_derived_packages(ctx: dict) -> None:
             f"proposal allocations, got {len(packages)}. Production does not derive "
             f"packages from proposals yet."
         )
-    # Verify each package has a product_id (evidence of derivation from product allocations)
-    for i, pkg in enumerate(packages):
-        product_id = getattr(pkg, "product_id", None)
-        if product_id is None and isinstance(pkg, dict):
-            product_id = pkg.get("product_id")
-        if product_id is None:
-            pytest.xfail(
-                f"SPEC-PRODUCTION GAP: Package {i} has no product_id — cannot confirm "
-                f"derivation from proposal allocations."
-            )
+    if missing_product_ids:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: Packages {missing_product_ids} have no product_id — "
+            f"cannot confirm derivation from proposal allocations."
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════
