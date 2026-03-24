@@ -552,6 +552,14 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
             pytest.xfail(f"SPEC-PRODUCTION GAP: Expected success ({outcome}) but production rejected with: {error}")
         resp = ctx.get("response")
         assert resp is not None, "Expected a response for success outcome"
+    elif outcome == "auto-approved path taken":
+        from tests.bdd.steps.generic.then_media_buy import then_approval_auto
+
+        then_approval_auto(ctx)
+    elif outcome == "manual approval required":
+        from tests.bdd.steps.generic.then_media_buy import then_approval_manual
+
+        then_approval_manual(ctx)
     elif outcome.startswith("error "):
         _assert_error_outcome(ctx, outcome)
     else:

@@ -123,6 +123,48 @@ def given_adapter_manual_approval(ctx: dict) -> None:
     adapter_mock.manual_approval_operations = {"create_media_buy", "update_media_buy"}
 
 
+@given(parsers.parse("the approval scenario is {partition}"))
+def given_approval_partition(ctx: dict, partition: str) -> None:
+    """Configure approval flags for partition scenarios (BR-RULE-080).
+
+    Dispatches to existing tenant/adapter approval helpers.
+    """
+    partition = partition.strip()
+
+    if partition == "auto_approve":
+        given_tenant_auto_approval(ctx)
+        given_adapter_no_manual_approval(ctx)
+    elif partition == "pending_human_review":
+        given_tenant_manual_approval(ctx)
+    elif partition == "pending_adapter_approval":
+        # Tenant auto-approve, but adapter requires manual approval
+        given_tenant_auto_approval(ctx)
+        given_adapter_manual_approval(ctx)
+    else:
+        raise ValueError(f"Unknown approval partition: {partition}")
+
+
+@given(parsers.parse("the approval configuration is: {config}"))
+def given_approval_boundary(ctx: dict, config: str) -> None:
+    """Configure approval flags for boundary scenarios (BR-RULE-080).
+
+    Dispatches to existing tenant/adapter approval helpers.
+    """
+    config = config.strip()
+
+    if config == "both=false":
+        given_tenant_auto_approval(ctx)
+        given_adapter_no_manual_approval(ctx)
+    elif config == "tenant_hr=true":
+        given_tenant_manual_approval(ctx)
+    elif config == "adapter_ma=true":
+        # Tenant auto-approve, but adapter requires manual approval
+        given_tenant_auto_approval(ctx)
+        given_adapter_manual_approval(ctx)
+    else:
+        raise ValueError(f"Unknown approval boundary config: {config}")
+
+
 @given(parsers.parse("the tenant has max_daily_package_spend configured at {amount:d}"))
 def given_tenant_max_daily_spend(ctx: dict, amount: int) -> None:
     """Configure tenant max daily package spend on the CurrencyLimit (USD)."""
