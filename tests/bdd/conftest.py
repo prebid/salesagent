@@ -185,6 +185,14 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-002-ext-g": "INVALID_CREATIVES error lacks suggestion field",
     "T-UC-002-ext-h": "plain string format_id produces Pydantic error, not AdCPError with suggestion",
     "T-UC-002-ext-h-agent": "unregistered agent_url validation not wired — _validate_and_convert_format_ids is dead code",
+    # FIXME(salesagent-9vgz.8): auth error lacks suggestion field
+    # AdCPAuthenticationError("Principal ID not found...") has no details["suggestion"].
+    # Spec requires suggestion for buyer remediation (POST-F3).
+    "T-UC-002-ext-i": "auth error lacks suggestion field — spec-production gap",
+    # FIXME(salesagent-9vgz.8): adapter failure raises exception instead of returning failed result
+    # Production wraps adapter exceptions as AdCPAdapterError and re-raises instead of
+    # returning CreateMediaBuyResult(status="failed"). Also no suggestion field on error.
+    "T-UC-002-ext-j": "adapter failure raises exception, no failed result envelope or suggestion — spec-production gap",
     "T-UC-002-ext-o": "CREATIVES_NOT_FOUND error lacks suggestion field",
     "T-UC-002-ext-p": "CREATIVE_FORMAT_MISMATCH error lacks suggestion field",
     "T-UC-002-ext-q": "CREATIVE_UPLOAD_FAILED error lacks suggestion field",

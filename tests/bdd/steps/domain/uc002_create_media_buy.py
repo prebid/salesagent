@@ -440,6 +440,13 @@ def _dispatch_create_media_buy(ctx: dict) -> None:
 
     from tests.bdd.steps.generic._dispatch import dispatch_request
 
+    # For auth-failure scenarios (no Given step builds request_kwargs),
+    # build a valid request so we test the AUTH path, not Pydantic parsing.
+    if ctx.get("has_auth") is False and "request_kwargs" not in ctx:
+        from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
+
+        _ensure_request_defaults(ctx)
+
     request_kwargs = ctx.get("request_kwargs", {})
 
     # Build the request object — may raise ValidationError for malformed inputs
@@ -469,11 +476,11 @@ def _dispatch_create_media_buy(ctx: dict) -> None:
         if enriched is not None:
             dispatch_request(ctx, req=req, identity=enriched)
         elif ctx.get("has_auth") is False:
-            dispatch_request(ctx, req=req, identity=None)
+            dispatch_request(ctx, req=req, identity=_no_principal_identity(ctx))
         else:
             dispatch_request(ctx, req=req)
     elif ctx.get("has_auth") is False:
-        dispatch_request(ctx, req=req, identity=None)
+        dispatch_request(ctx, req=req, identity=_no_principal_identity(ctx))
     else:
         dispatch_request(ctx, req=req)
 
@@ -491,6 +498,25 @@ def _dispatch_create_media_buy(ctx: dict) -> None:
         elif resp.status == "failed":
             ctx["error"] = resp
             del ctx["response"]
+
+
+def _no_principal_identity(ctx: dict) -> object:
+    """Build a ResolvedIdentity with tenant but no principal_id.
+
+    For auth-failure scenarios (ext-i), the buyer has tenant context but lacks
+    a principal. This lets the request get past Pydantic parsing and fail at
+    the authentication layer with a proper "Principal ID not found" error.
+    Using identity=None would instead trigger "Identity is required" which
+    doesn't match the scenario's expected error message.
+    """
+    from tests.factories.principal import PrincipalFactory
+
+    tenant = ctx.get("tenant")
+    tenant_id = tenant.tenant_id if tenant else "test_tenant"
+    return PrincipalFactory.make_identity(
+        principal_id=None,
+        tenant_id=tenant_id,
+    )
 
 
 def _ensure_tenant_principal(ctx: dict, env: object) -> None:
