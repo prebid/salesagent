@@ -227,12 +227,15 @@ def then_error_invalid_disclosure(ctx: dict, value: str) -> None:
     assert error is not None, "No error recorded in ctx"
     msg = _get_error_message(error)
     assert value in msg, f"Expected invalid value '{value}' in error message: {msg}"
-    # Verify the message provides disclosure position context (not just the value)
+    # Verify the message specifically frames this as a disclosure position error —
+    # "valid" alone could match any validation error, so require "disclosure"
     msg_lower = msg.lower()
-    disclosure_context = ("disclosure", "position", "valid")
-    assert any(kw in msg_lower for kw in disclosure_context), (
-        f"Expected error to indicate '{value}' is not a valid disclosure position, "
-        f"but message lacks disclosure/position context: {msg}"
+    assert "disclosure" in msg_lower, (
+        f"Expected error to specifically mention 'disclosure' (not just generic validation), got: {msg}"
+    )
+    position_keywords = ("position", "positions", "not a valid", "invalid")
+    assert any(kw in msg_lower for kw in position_keywords), (
+        f"Expected error to indicate invalid disclosure position, but message lacks position/validity context: {msg}"
     )
 
 

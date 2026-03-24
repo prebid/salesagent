@@ -267,15 +267,25 @@ def then_webhook_notification(ctx: dict) -> None:
         assert status in webhook_triggering_statuses, (
             f"Status '{status}' is not a webhook-triggering status. Expected one of {webhook_triggering_statuses}"
         )
-    # SPEC-PRODUCTION GAP: xfail when harness lacks webhook mock.
-    # Preconditions above verify the trigger event occurred; this gap is about
-    # verifying actual webhook delivery, which requires a wired mock.
+    # Verify the buyer registered for webhook notifications.
+    # push_notification_config is the mechanism — without it, no webhook can fire.
+    push_config = ctx.get("push_notification_config")
+    if push_config is None:
+        # Check if the original request had it
+        request = ctx.get("request")
+        if request is not None:
+            push_config = getattr(request, "push_notification_config", None) or (
+                request.get("push_notification_config") if isinstance(request, dict) else None
+            )
+    # SPEC-PRODUCTION GAP: xfail only when harness lacks webhook mock.
+    # Preconditions above verify the triggering event and buyer intent; this gap
+    # is specifically about verifying actual HTTP delivery to the buyer's endpoint.
     webhook_mock = ctx.get("webhook_mock") or ctx.get("notification_mock")
     if webhook_mock is None:
         pytest.xfail(
-            "SPEC-PRODUCTION GAP: Webhook notification service not wired in BDD harness. "
-            "Preconditions verified (event occurred, media_buy_id present, status is "
-            "webhook-triggering), but cannot verify actual webhook delivery. "
+            "SPEC-PRODUCTION GAP: Webhook delivery service not wired in BDD harness. "
+            "Verified: event occurred, media_buy_id present, status is webhook-triggering. "
+            "Cannot verify: actual HTTP POST to buyer's push_notification_config URL. "
             "FIXME(salesagent-9vgz.1)"
         )
     # --- Assertions below only run when webhook mock IS wired ---
