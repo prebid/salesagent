@@ -592,6 +592,14 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
         _assert_no_persistence_after_adapter_failure(ctx)
     elif outcome == "records persisted in pending state":
         _assert_persistence_in_pending_state(ctx)
+    elif (
+        outcome.startswith("tasks sorted by ")
+        or outcome.startswith("defaults to ")
+        or outcome.startswith("results in ")
+    ):
+        from tests.bdd.steps.domain.uc002_task_query import assert_task_query_outcome
+
+        assert_task_query_outcome(ctx, outcome)
     elif outcome.startswith("error "):
         _assert_error_outcome(ctx, outcome)
     else:
