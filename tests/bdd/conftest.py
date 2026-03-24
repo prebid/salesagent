@@ -615,6 +615,20 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 pytest.mark.xfail(reason="partition validation behavior varies with adcp schema version", strict=False)
             )
 
+        # FIXME(salesagent-9vgz.80): catalog distinct type partition/boundary
+        # Production accepts catalogs but never validates duplicate types or catalog_id
+        # existence. Valid partitions pass; invalid partitions succeed when they should fail.
+        _UC002_CATALOG_TAGS = {
+            "T-UC-002-partition-catalog-distinct-type",
+            "T-UC-002-boundary-catalog-distinct-type",
+        }
+        if marker_names & _UC002_CATALOG_TAGS:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="catalog validation not implemented in production — spec-production gap", strict=False
+                )
+            )
+
         # --- Entity marker auto-application based on BDD tags ---
         # BDD tests don't have entity keywords in filenames; instead they
         # use tags like T-UC-004-* (delivery) and T-UC-005-* (creative).

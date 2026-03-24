@@ -2283,3 +2283,150 @@ def given_existing_media_buy(ctx: dict, state: str) -> None:
     env._commit_factory_data()
     ctx["existing_media_buy"] = media_buy
     ctx["existing_media_buy_id"] = media_buy.media_buy_id
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Catalog distinct type — partition + boundary
+# ═══════════════════════════════════════════════════════════════════════
+
+# All 13 AdCP catalog types
+_CATALOG_TYPES = [
+    "offering",
+    "product",
+    "inventory",
+    "store",
+    "promotion",
+    "hotel",
+    "flight",
+    "job",
+    "vehicle",
+    "real_estate",
+    "education",
+    "destination",
+    "app",
+]
+
+
+def _set_catalogs(ctx: dict, catalogs: list[dict[str, Any]] | None) -> None:
+    """Set catalogs on the first package of the request."""
+    kwargs = _ensure_request_defaults(ctx)
+    if catalogs is None:
+        # Remove catalogs key entirely
+        kwargs["packages"][0].pop("catalogs", None)
+    else:
+        kwargs["packages"][0]["catalogs"] = catalogs
+
+
+def _make_catalog(catalog_type: str, suffix: str = "") -> dict[str, Any]:
+    """Build a catalog dict with the given type."""
+    return {"type": catalog_type, "url": f"https://example.com/{catalog_type}{suffix}-feed.xml"}
+
+
+@given(parsers.parse("the catalog scenario is {partition}"))
+def given_catalog_partition(ctx: dict, partition: str) -> None:
+    """Set up catalogs for partition scenarios (catalog distinct type).
+
+    SPEC-PRODUCTION GAP: Production code accepts catalogs (field is in adcp
+    library PackageRequest) but never validates duplicate types or catalog_id
+    existence. Valid partitions succeed silently; invalid partitions should fail
+    but succeed instead.
+    """
+    partition = partition.strip()
+
+    # ── Valid partitions ──
+    if partition == "no_catalogs":
+        _set_catalogs(ctx, None)
+
+    elif partition == "single_catalog":
+        _set_catalogs(ctx, [_make_catalog("product")])
+
+    elif partition == "distinct_types":
+        _set_catalogs(ctx, [_make_catalog("product"), _make_catalog("store")])
+
+    elif partition == "max_distinct_types":
+        _set_catalogs(ctx, [_make_catalog(t) for t in _CATALOG_TYPES])
+
+    # ── Invalid partitions ──
+    elif partition == "duplicate_catalog_type":
+        _set_catalogs(ctx, [_make_catalog("product", "-a"), _make_catalog("product", "-b")])
+
+    elif partition == "multiple_duplicates":
+        _set_catalogs(
+            ctx,
+            [
+                _make_catalog("product", "-a"),
+                _make_catalog("product", "-b"),
+                _make_catalog("store", "-a"),
+                _make_catalog("store", "-b"),
+            ],
+        )
+
+    elif partition == "catalog_not_found":
+        _set_catalogs(
+            ctx, [{"type": "product", "catalog_id": "cat-nonexistent-999", "url": "https://example.com/feed.xml"}]
+        )
+
+    else:
+        raise ValueError(f"Unknown catalog partition: {partition}")
+
+
+@given(parsers.parse("the catalog configuration is: {config}"))
+def given_catalog_boundary(ctx: dict, config: str) -> None:
+    """Set up catalogs for boundary scenarios (catalog distinct type).
+
+    SPEC-PRODUCTION GAP: same as partition — production never validates catalog
+    uniqueness or catalog_id existence.
+    """
+    config = config.strip()
+
+    if config == "absent":
+        _set_catalogs(ctx, None)
+
+    elif config == "empty array":
+        _set_catalogs(ctx, [])
+
+    elif config == "1 product":
+        _set_catalogs(ctx, [_make_catalog("product")])
+
+    elif config == "product+store":
+        _set_catalogs(ctx, [_make_catalog("product"), _make_catalog("store")])
+
+    elif config == "product+product":
+        _set_catalogs(ctx, [_make_catalog("product", "-a"), _make_catalog("product", "-b")])
+
+    elif config == "2prod+store":
+        _set_catalogs(
+            ctx,
+            [
+                _make_catalog("product", "-a"),
+                _make_catalog("product", "-b"),
+                _make_catalog("store"),
+            ],
+        )
+
+    elif config == "all 13 types":
+        _set_catalogs(ctx, [_make_catalog(t) for t in _CATALOG_TYPES])
+
+    elif config == "cross-pkg product":
+        # Two packages, each with type=product — distinct per-package, not cross-package
+        kwargs = _ensure_request_defaults(ctx)
+        kwargs["packages"][0]["catalogs"] = [_make_catalog("product")]
+        # Duplicate the first package for a second one
+        if len(kwargs["packages"]) < 2:
+            import copy
+
+            pkg2 = copy.deepcopy(kwargs["packages"][0])
+            pkg2["buyer_ref"] = "pkg-2"
+            kwargs["packages"].append(pkg2)
+        kwargs["packages"][1]["catalogs"] = [_make_catalog("product")]
+
+    elif config == "valid catalog_id":
+        _set_catalogs(ctx, [{"type": "product", "catalog_id": "cat-synced-001", "url": "https://example.com/feed.xml"}])
+
+    elif config == "bad catalog_id":
+        _set_catalogs(
+            ctx, [{"type": "product", "catalog_id": "cat-nonexistent-999", "url": "https://example.com/feed.xml"}]
+        )
+
+    else:
+        raise ValueError(f"Unknown catalog boundary config: {config}")
