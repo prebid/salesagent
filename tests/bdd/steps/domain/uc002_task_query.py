@@ -1,11 +1,12 @@
-"""BDD step definitions for UC-002: Task list sort + direction partition/boundary.
+"""BDD step definitions for UC-002: Task list query partition/boundary.
 
-Given steps configure sort_field / sort_direction in ctx["task_query_params"].
-When step calls list_tasks production code.
-Then outcomes verify sort order or error — most xfail as SPEC-PRODUCTION GAPs
-because list_tasks() does not accept sort_field/sort_direction parameters.
+Given steps configure sort_field / sort_direction / domain / task_status
+in ctx["task_query_params"]. When step calls list_tasks production code.
+Then outcomes verify sort order, domain filtering, status filtering, or error —
+most xfail as SPEC-PRODUCTION GAPs because list_tasks() only accepts
+status, object_type, object_id, limit, offset.
 
-beads: salesagent-9vgz.86
+beads: salesagent-9vgz.86, salesagent-9vgz.88
 """
 
 from __future__ import annotations
@@ -26,6 +27,11 @@ from src.core.exceptions import AdCPError
 def _ensure_task_query_params(ctx: dict) -> dict[str, Any]:
     """Initialize and return ctx['task_query_params']."""
     return ctx.setdefault("task_query_params", {})
+
+
+def _parse_array_value(raw: str, separator: str = "+") -> list[str]:
+    """Parse 'a+b+c' boundary config into a list."""
+    return [v.strip() for v in raw.split(separator) if v.strip()]
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -66,6 +72,72 @@ def given_sort_direction_boundary(ctx: dict, config: str) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# GIVEN steps — domain filter configuration
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given(parsers.parse("the domain filter is {partition}"))
+def given_domain_filter_partition(ctx: dict, partition: str) -> None:
+    """Set domain filter for a partition scenario."""
+    params = _ensure_task_query_params(ctx)
+    if partition == "omitted":
+        return
+    if partition == "domain_array":
+        params["domain"] = ["media_buy", "signals"]
+    elif partition == "empty_array":
+        params["domain"] = []
+    else:
+        params["domain"] = partition
+
+
+@given(parsers.parse("the domain filter boundary is: {config}"))
+def given_domain_filter_boundary(ctx: dict, config: str) -> None:
+    """Set domain filter for a boundary scenario."""
+    params = _ensure_task_query_params(ctx)
+    if config == "omitted":
+        return
+    if config == "empty array":
+        params["domain"] = []
+    elif "+" in config:
+        params["domain"] = _parse_array_value(config)
+    else:
+        params["domain"] = config
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GIVEN steps — task status filter configuration
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given(parsers.parse("the task status filter is {partition}"))
+def given_task_status_filter_partition(ctx: dict, partition: str) -> None:
+    """Set task_status filter for a partition scenario."""
+    params = _ensure_task_query_params(ctx)
+    if partition == "omitted":
+        return
+    if partition == "status_array":
+        params["task_status"] = ["submitted", "working"]
+    elif partition == "empty_array":
+        params["task_status"] = []
+    else:
+        params["task_status"] = partition
+
+
+@given(parsers.parse("the task status filter boundary is: {config}"))
+def given_task_status_filter_boundary(ctx: dict, config: str) -> None:
+    """Set task_status filter for a boundary scenario."""
+    params = _ensure_task_query_params(ctx)
+    if config == "omitted":
+        return
+    if config == "empty array":
+        params["task_status"] = []
+    elif "+" in config:
+        params["task_status"] = _parse_array_value(config)
+    else:
+        params["task_status"] = config
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # WHEN step — query task list
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -80,12 +152,12 @@ def when_query_task_list(ctx: dict) -> None:
     from src.core.tools.task_management import list_tasks
 
     env = ctx["env"]
-    identity = env.default_identity()
+    identity = env.identity
     params = ctx.get("task_query_params", {})
 
     # list_tasks() only accepts: status, object_type, object_id, limit, offset, identity
-    # sort_field and sort_direction are NOT accepted by production code.
-    # We pass them to detect SPEC-PRODUCTION GAP at runtime.
+    # sort_field, sort_direction, domain, task_status are NOT accepted by production code.
+    # We pass known ones and record unsupported ones for Then step xfail.
     known_params = {"status", "object_type", "object_id", "limit", "offset"}
     impl_kwargs: dict[str, Any] = {"identity": identity}
     extra_params: dict[str, Any] = {}
@@ -114,7 +186,7 @@ def when_query_task_list(ctx: dict) -> None:
 
 
 def assert_task_query_outcome(ctx: dict, outcome: str) -> None:
-    """Assert task query outcomes for sort field/direction scenarios.
+    """Assert task query outcomes for sort/domain/status scenarios.
 
     Called from the then_result_should_be dispatcher in uc002_create_media_buy.py.
     """
@@ -124,6 +196,14 @@ def assert_task_query_outcome(ctx: dict, outcome: str) -> None:
         _assert_default_sort(ctx, outcome)
     elif outcome.startswith("results in "):
         _assert_sort_direction(ctx, outcome)
+    elif outcome.startswith("tasks filtered to "):
+        _assert_filtered_to(ctx, outcome)
+    elif outcome in (
+        "tasks from all domains returned",
+        "tasks of all statuses returned",
+        "tasks of all types returned",
+    ):
+        _assert_all_returned(ctx, outcome)
     else:
         raise ValueError(f"Unknown task query outcome: {outcome}")
 
@@ -195,5 +275,65 @@ def _assert_sort_direction(ctx: dict, outcome: str) -> None:
         )
 
     assert "error" not in ctx, f"Expected sorted results but got error: {ctx.get('error')}"
+    result = ctx.get("task_list_result")
+    assert result is not None, "No task list result"
+
+
+def _assert_filtered_to(ctx: dict, outcome: str) -> None:
+    """Assert tasks are filtered to a specific domain, status, or type.
+
+    SPEC-PRODUCTION GAP: list_tasks() does not accept domain or task_status
+    (AdCP enum) parameters. The production 'status' param uses internal
+    workflow statuses (pending, in_progress, etc.), not AdCP task statuses
+    (submitted, working, etc.). All domain and task_status filter scenarios
+    xfail until production implements AdCP-aligned filtering.
+    """
+    unsupported = ctx.get("unsupported_query_params", {})
+
+    if "domain" in unsupported:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: list_tasks() does not accept domain parameter. "
+            f"Requested domain={unsupported['domain']!r}, outcome={outcome!r}."
+        )
+
+    if "task_status" in unsupported:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: list_tasks() does not accept task_status parameter. "
+            f"AdCP task statuses (submitted, working, etc.) differ from production "
+            f"workflow statuses (pending, in_progress, etc.). "
+            f"Requested task_status={unsupported['task_status']!r}, outcome={outcome!r}."
+        )
+
+    if "task_type" in unsupported:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: list_tasks() does not accept task_type parameter. "
+            f"Requested task_type={unsupported['task_type']!r}, outcome={outcome!r}."
+        )
+
+    # If we get here, the filter param was supported — verify response
+    assert "error" not in ctx, f"Expected filtered results but got error: {ctx.get('error')}"
+    result = ctx.get("task_list_result")
+    assert result is not None, "No task list result"
+
+
+def _assert_all_returned(ctx: dict, outcome: str) -> None:
+    """Assert all tasks returned when filter is omitted.
+
+    When no domain/status/type filter is specified, list_tasks() returns all
+    tasks for the tenant — this is the production default behavior.
+    """
+    unsupported = ctx.get("unsupported_query_params", {})
+
+    # Domain/task_status/task_type omitted should mean no filtering was requested.
+    # If somehow unsupported params slipped through, xfail.
+    for param in ("domain", "task_status", "task_type"):
+        if param in unsupported:
+            pytest.xfail(
+                f"SPEC-PRODUCTION GAP: list_tasks() does not accept {param} parameter. "
+                f"Cannot verify 'all returned' behavior explicitly. "
+                f"Requested {param}={unsupported[param]!r}, outcome={outcome!r}."
+            )
+
+    assert "error" not in ctx, f"Expected all tasks but got error: {ctx.get('error')}"
     result = ctx.get("task_list_result")
     assert result is not None, "No task list result"

@@ -596,6 +596,9 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
         outcome.startswith("tasks sorted by ")
         or outcome.startswith("defaults to ")
         or outcome.startswith("results in ")
+        or outcome.startswith("tasks filtered to ")
+        or outcome
+        in ("tasks from all domains returned", "tasks of all statuses returned", "tasks of all types returned")
     ):
         from tests.bdd.steps.domain.uc002_task_query import assert_task_query_outcome
 
