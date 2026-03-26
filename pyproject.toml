@@ -12,7 +12,7 @@ dependencies = [
     "google-cloud-iam>=2.19.1",
     "rich>=13.7.1",
     "google-ads>=24.1.0",
-    "requests>=2.32.3",
+    "requests>=2.33.0",
     "googleads==49.0.0",  # Pinned: library default sets GAM API version
     "flask>=3.1.3",
     "flask-caching>=2.3.0", # Response caching for improved performance

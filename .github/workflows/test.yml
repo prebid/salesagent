@@ -25,10 +25,11 @@ jobs:
         version: ${{ env.UV_VERSION }}
 
     - name: Scan for vulnerabilities
-      # GHSA-7gcm-g887-7qv7: protobuf DoS vulnerability (CVE-2026-0994)
-      # No fix available yet - affects all versions through 6.33.4
-      # Transitive dependency from google-ads, google-api-core, logfire, a2a-sdk
-      run: uvx uv-secure --ignore-vulns GHSA-7gcm-g887-7qv7
+      # GHSA-7gcm-g887-7qv7: protobuf DoS (CVE-2026-0994) - no fix available; transitive via
+      #   google-ads, google-api-core, logfire, a2a-sdk
+      # GHSA-5239-wwwm-4pmq: Pygments ReDoS in AdlLexer (CVE-2026-4539) - no fix available;
+      #   local-access-only (AV:L, CVSS 3.3); ADL lexer not invoked by this application
+      run: uvx uv-secure --ignore-vulns GHSA-7gcm-g887-7qv7,GHSA-5239-wwwm-4pmq
 
   smoke-tests:
     name: Smoke Tests (Fast Import Checks)
