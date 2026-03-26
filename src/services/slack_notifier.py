@@ -163,7 +163,7 @@ class SlackNotifier:
 
         # Add action buttons with tenant-specific URL
         admin_url = os.getenv("ADMIN_UI_URL", "http://localhost:8001")
-        script_name = "/admin" if os.environ.get("PRODUCTION") == "true" else ""
+        script_name = "/admin"
         if tenant_id:
             # Tenant-specific workflows page
             operations_url = f"{admin_url}{script_name}/tenant/{tenant_id}/workflows"
@@ -303,10 +303,10 @@ class SlackNotifier:
 
         # Build correct URL to specific creative
         admin_url = os.getenv("ADMIN_UI_URL", "http://localhost:8001")
-        script_name = "/admin" if os.environ.get("PRODUCTION") == "true" else ""
+        script_name = "/admin"
         if tenant_id:
             # Link directly to the specific creative using anchor
-            # Correct URL pattern: /tenant/{tenant_id}/creatives/review#{creative_id}
+            # Correct URL pattern: /admin/tenant/{tenant_id}/creatives/review#{creative_id}
             review_url = f"{admin_url}{script_name}/tenant/{tenant_id}/creatives/review#{creative_id}"
         else:
             # Fallback to workflows page if tenant_id not provided
@@ -656,7 +656,7 @@ class SlackNotifier:
 
         # Add action button with tenant-specific URL
         admin_url = os.getenv("ADMIN_UI_URL", "http://localhost:8001")
-        script_name = "/admin" if os.environ.get("PRODUCTION") == "true" else ""
+        script_name = "/admin"
         if tenant_id and media_buy_id:
             # Link to specific media buy in tenant context
             operations_url = f"{admin_url}{script_name}/tenant/{tenant_id}/workflows#{media_buy_id}"

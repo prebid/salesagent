@@ -61,7 +61,7 @@
                 <h1>Policy Settings - {{ tenant_name }}</h1>
                 <nav aria-label="breadcrumb">
                     <ol class="breadcrumb">
-                        <li class="breadcrumb-item"><a href="/tenant/{{ tenant_id }}">Dashboard</a></li>
+                        <li class="breadcrumb-item"><a href="{{ request.script_root }}/tenant/{{ tenant_id }}">Dashboard</a></li>
                         <li class="breadcrumb-item active">Policy Settings</li>
                     </ol>
                 </nav>
@@ -75,7 +75,7 @@
     </div>
 
     <div id="policy-container" class="view-mode">
-        <form action="/tenant/{{ tenant_id }}/policy/update" method="POST" id="policy-form">
+        <form action="{{ request.script_root }}/tenant/{{ tenant_id }}/policy/update" method="POST" id="policy-form">
         <div class="row mt-4">
             <!-- General Settings -->
             <div class="col-md-4">
@@ -117,7 +117,7 @@
                         {% if pending_reviews %}
                             <div class="list-group">
                                 {% for review in pending_reviews[:5] %}
-                                <a href="/tenant/{{ tenant_id }}/policy/review/{{ review.task_id }}"
+                                <a href="{{ request.script_root }}/tenant/{{ tenant_id }}/policy/review/{{ review.task_id }}"
                                    class="list-group-item list-group-item-action">
                                     <div class="d-flex w-100 justify-content-between">
                                         <h6 class="mb-1">{{ review.brief[:50] }}...</h6>

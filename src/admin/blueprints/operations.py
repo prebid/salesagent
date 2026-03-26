@@ -76,7 +76,7 @@ def reporting(tenant_id):
                     "error.html",
                     error_title="GAM Reporting Not Available",
                     error_message=f"This tenant is currently using {tenant_obj.ad_server or 'no ad server'}. GAM Reporting is only available for tenants using Google Ad Manager.",
-                    back_url=f"/tenant/{tenant_id}",
+                    back_url=f"/admin/tenant/{tenant_id}",
                 ),
                 400,
             )

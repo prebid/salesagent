@@ -199,7 +199,7 @@ def get_business_activities(tenant_id: str, limit: int = 50) -> list[dict]:
                     links.append(
                         {
                             "text": f"View Media Buy {details['media_buy_id']}",
-                            "url": f"/tenant/{tenant_id}/media-buy/{details['media_buy_id']}",
+                            "url": f"/admin/tenant/{tenant_id}/media-buy/{details['media_buy_id']}",
                             "icon": "💰",
                         }
                     )
@@ -207,7 +207,7 @@ def get_business_activities(tenant_id: str, limit: int = 50) -> list[dict]:
                     links.append(
                         {
                             "text": f"View Creative {details['creative_id']}",
-                            "url": f"/tenant/{tenant_id}/creative/{details['creative_id']}",
+                            "url": f"/admin/tenant/{tenant_id}/creative/{details['creative_id']}",
                             "icon": "🎨",
                         }
                     )
@@ -216,7 +216,7 @@ def get_business_activities(tenant_id: str, limit: int = 50) -> list[dict]:
                 links.append(
                     {
                         "text": "View in Audit Log",
-                        "url": f"/tenant/{tenant_id}/workflows#audit-logs",
+                        "url": f"/admin/tenant/{tenant_id}/workflows#audit-logs",
                         "icon": "📋",
                     }
                 )

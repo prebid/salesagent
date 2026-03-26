@@ -45,7 +45,7 @@
                     <div style="font-weight: 600; font-size: 0.875rem;">{{ task.name }}</div>
                     <div style="font-size: 0.75rem; opacity: 0.9; margin-top: 0.125rem;">{{ task.description }}</div>
                     {% if task.action_url %}
-                    <a href="{{ task.action_url }}" style="display: inline-block; margin-top: 0.5rem; padding: 0.25rem 0.75rem; background: white; color: #667eea; border-radius: 6px; text-decoration: none; font-size: 0.75rem; font-weight: 600;">
+                    <a href="{{ request.script_root }}{{ task.action_url }}" style="display: inline-block; margin-top: 0.5rem; padding: 0.25rem 0.75rem; background: white; color: #667eea; border-radius: 6px; text-decoration: none; font-size: 0.75rem; font-weight: 600;">
                         Configure →
                     </a>
                     {% elif task.details %}
@@ -124,7 +124,7 @@
     </div>
 
     <!-- View Full Checklist -->
-    <a href="/tenant/{{ tenant_id }}/setup-checklist" style="display: block; margin-top: 1rem; padding: 0.75rem; background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.3); border-radius: 8px; text-align: center; color: white; text-decoration: none; font-weight: 600; font-size: 0.875rem; transition: all 0.2s; backdrop-filter: blur(10px);" onmouseover="this.style.background='rgba(255,255,255,0.3)'" onmouseout="this.style.background='rgba(255,255,255,0.2)'">
+    <a href="{{ request.script_root }}/tenant/{{ tenant_id }}/setup-checklist" style="display: block; margin-top: 1rem; padding: 0.75rem; background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.3); border-radius: 8px; text-align: center; color: white; text-decoration: none; font-weight: 600; font-size: 0.875rem; transition: all 0.2s; backdrop-filter: blur(10px);" onmouseover="this.style.background='rgba(255,255,255,0.3)'" onmouseout="this.style.background='rgba(255,255,255,0.2)'">
         View Full Setup Checklist →
     </a>
 </div>

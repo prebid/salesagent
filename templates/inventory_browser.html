@@ -702,7 +702,7 @@ async function saveProductAssignment() {
 
         // Add new assignments
         for (const productId of toAdd) {
-            const response = await fetch(`/tenant/{{ tenant_id }}/products/${productId}/inventory`, {
+            const response = await fetch(`{{ request.script_root }}/tenant/{{ tenant_id }}/products/${productId}/inventory`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -721,7 +721,7 @@ async function saveProductAssignment() {
 
         // Remove old assignments
         for (const { productId, mappingId } of toRemove) {
-            const response = await fetch(`/tenant/{{ tenant_id }}/products/${productId}/inventory/${mappingId}`, {
+            const response = await fetch(`{{ request.script_root }}/tenant/{{ tenant_id }}/products/${productId}/inventory/${mappingId}`, {
                 method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' }
             });

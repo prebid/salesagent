@@ -156,7 +156,7 @@ function searchLineItem() {
     }
 
     // Open the line item viewer in a new tab
-    window.open(`/tenant/${tenantId}/gam/line-item/${lineItemId}`, '_blank');
+    window.open(`{{ request.script_root }}/tenant/${tenantId}/gam/line-item/${lineItemId}`, '_blank');
 }
 
 function loadOrders() {
@@ -165,7 +165,7 @@ function loadOrders() {
     const advertiserId = document.getElementById('advertiserFilter').value;
     const hasLineItems = document.getElementById('lineItemsFilter').value;
 
-    let url = `/api/tenant/${tenantId}/orders?`;
+    let url = `{{ request.script_root }}/api/tenant/${tenantId}/orders?`;
     if (searchTerm) url += `search=${encodeURIComponent(searchTerm)}&`;
     if (status) url += `status=${encodeURIComponent(status)}&`;
     if (advertiserId) url += `advertiser_id=${encodeURIComponent(advertiserId)}&`;
@@ -435,7 +435,7 @@ function displayOrderDetails(order) {
                                     <td>${liDeliveryPercentage.toFixed(1)}%</td>
                                     <td>${li.cost_per_unit ? '$' + li.cost_per_unit.toFixed(2) : '-'}</td>
                                     <td>
-                                        <a href="/tenant/${tenantId}/gam/line-item/${li.line_item_id}"
+                                        <a href="{{ request.script_root }}/tenant/${tenantId}/gam/line-item/${li.line_item_id}"
                                            class="btn btn-sm btn-outline-info"
                                            target="_blank"
                                            title="View full line item details including targeting, creatives, and JSON representation">

@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import secrets
 import uuid
 from datetime import UTC, datetime
@@ -261,7 +262,10 @@ def create_tenant():
                 "name": data["name"],
                 "subdomain": data["subdomain"],
                 "admin_token": admin_token,
-                "admin_ui_url": f"http://{data['subdomain']}.localhost:8001/tenant/{tenant_id}",
+                "admin_ui_url": (
+                    f"http://{data['subdomain']}.localhost:{os.environ.get('ADCP_SALES_PORT', '8080')}"
+                    f"/admin/tenant/{tenant_id}"
+                ),
             }
 
             if principal_token:
