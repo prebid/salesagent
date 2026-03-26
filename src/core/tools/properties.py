@@ -202,6 +202,7 @@ async def list_authorized_properties(
     webhook_url: str | None = None,
     ctx: Context | ToolContext | None = None,
     context: ContextObject | None = None,  # payload-level context
+    **kwargs: Any,
 ):
     """List all properties this agent is authorized to represent (AdCP spec endpoint).
 

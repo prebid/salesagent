@@ -3769,6 +3769,7 @@ async def create_media_buy(
     ext: Any | None = None,  # AdCP ExtensionObject for custom fields
     webhook_url: str | None = None,
     ctx: Context | ToolContext | None = None,
+    **kwargs: Any,
 ):
     """Create a media buy with the specified parameters.
 

@@ -593,6 +593,7 @@ async def get_media_buy_delivery(
     reporting_dimensions: dict[str, Any] | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
+    **kwargs: Any,
 ):
     """Get delivery data for media buys.
 

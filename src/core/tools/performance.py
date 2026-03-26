@@ -133,6 +133,7 @@ async def update_performance_index(
     webhook_url: str | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
+    **kwargs: Any,
 ):
     """Update performance index data for a media buy.
 

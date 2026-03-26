@@ -1,5 +1,7 @@
 """MCP and A2A wrapper functions for sync_creatives."""
 
+from typing import Any
+
 from adcp import PushNotificationConfig
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.core.creative_asset import CreativeAsset
@@ -23,6 +25,7 @@ async def sync_creatives(
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
+    **kwargs: Any,
 ):
     """Sync creative assets to centralized library (AdCP v2.5 spec compliant endpoint).
 

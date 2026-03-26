@@ -1404,6 +1404,7 @@ async def update_media_buy(
     reporting_webhook: Any | None = None,  # AdCP ReportingWebhook
     ext: Any | None = None,  # AdCP ExtensionObject for custom fields
     ctx: Context | ToolContext | None = None,
+    **kwargs: Any,
 ):
     """Update a media buy with campaign-level and/or package-level changes.
 

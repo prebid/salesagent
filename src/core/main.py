@@ -1,6 +1,12 @@
 import logging
 from typing import Any
 
+# Patch FastMCP to accept **kwargs on tool functions (AdCP additionalProperties compliance).
+# Must be applied before any mcp.tool() registration below.
+from src.core.adcp_extra_fields_patch import patch_fastmcp_extra_fields
+
+patch_fastmcp_extra_fields()
+
 from fastmcp import FastMCP
 from fastmcp.server.context import Context
 from rich.console import Console

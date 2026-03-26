@@ -221,6 +221,7 @@ async def get_media_buys(
     account_id: str | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
+    **kwargs: Any,
 ):
     """Get media buys with status, creative approval state, and optional delivery snapshots.
 

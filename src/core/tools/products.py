@@ -815,6 +815,7 @@ async def get_products(
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,  # payload-level context
     ctx: Context | ToolContext | None = None,
+    **kwargs: Any,
 ):
     """Get available products matching the brief.
 

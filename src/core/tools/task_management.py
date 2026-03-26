@@ -29,6 +29,7 @@ async def list_tasks(
     offset: int = 0,
     context: Context | None = None,
     identity: ResolvedIdentity | None = None,
+    **kwargs: Any,
 ) -> dict[str, Any]:
     """List workflow tasks with filtering options.
 
@@ -122,7 +123,7 @@ async def list_tasks(
 
 
 async def get_task(
-    task_id: str, context: Context | None = None, identity: ResolvedIdentity | None = None
+    task_id: str, context: Context | None = None, identity: ResolvedIdentity | None = None, **kwargs: Any
 ) -> dict[str, Any]:
     """Get detailed information about a specific task.
 
@@ -192,6 +193,7 @@ async def complete_task(
     error_message: str | None = None,
     context: Context | None = None,
     identity: ResolvedIdentity | None = None,
+    **kwargs: Any,
 ) -> dict[str, Any]:
     """Complete a pending task (simulates human approval or async completion).
 

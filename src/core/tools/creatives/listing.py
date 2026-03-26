@@ -410,6 +410,7 @@ async def list_creatives(
     webhook_url: str | None = None,
     context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
+    **kwargs: Any,
 ):
     """List and filter creative assets from the centralized library (AdCP v2.5).
 

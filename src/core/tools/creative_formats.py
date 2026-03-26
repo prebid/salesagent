@@ -6,7 +6,7 @@ implementation pattern from CLAUDE.md.
 
 import logging
 import time
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from adcp import FormatId
 from adcp.types import Format as AdcpFormat
@@ -453,6 +453,7 @@ async def list_creative_formats(
     max_height: int | None = None,
     context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
+    **kwargs: Any,
 ):
     """List all available creative formats (AdCP spec endpoint).
 
