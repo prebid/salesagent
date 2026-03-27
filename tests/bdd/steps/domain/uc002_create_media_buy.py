@@ -38,6 +38,9 @@ def given_request_with_account_id(ctx: dict, account_id: str) -> None:
 
     ctx["account_ref"] = AccountReference(root=AccountReference1(account_id=account_id))
     ctx["request_account_id"] = account_id
+    _maybe_init_request_kwargs(ctx)
+    if "request_kwargs" in ctx:
+        ctx["request_kwargs"]["account"] = ctx["account_ref"]
 
 
 @given(parsers.parse('a valid create_media_buy request with account natural key brand "{brand}" operator "{operator}"'))
@@ -51,6 +54,9 @@ def given_request_with_natural_key(ctx: dict, brand: str, operator: str) -> None
     )
     ctx["request_brand"] = brand
     ctx["request_operator"] = operator
+    _maybe_init_request_kwargs(ctx)
+    if "request_kwargs" in ctx:
+        ctx["request_kwargs"]["account"] = ctx["account_ref"]
 
 
 @given("a create_media_buy request without account field")
@@ -58,6 +64,10 @@ def given_request_without_account(ctx: dict) -> None:
     """Set up a create_media_buy request with no account field."""
     ctx["account_ref"] = None
     ctx["account_absent"] = True
+    _maybe_init_request_kwargs(ctx)
+    # Explicitly omit account from request_kwargs (not just absent — actively removed)
+    if "request_kwargs" in ctx:
+        ctx["request_kwargs"].pop("account", None)
 
 
 @given("a create_media_buy request with account_id that does not exist")
@@ -79,9 +89,18 @@ def given_request_account_not_exists(ctx: dict) -> None:
 
 @given("a valid create_media_buy request with creative assignments")
 def given_request_with_creative_assignments(ctx: dict) -> None:
-    """Set up a create_media_buy request with creative assignments (account is implicit)."""
+    """Set up a create_media_buy request with creative assignments (account is implicit).
+
+    Initialises request_kwargs and ensures the first package has a creative_ids
+    key so subsequent Given steps can populate the creative assignment data.
+    """
     ctx.setdefault("account_ref", None)
     _maybe_init_request_kwargs(ctx)
+    # Ensure packages exist with creative_ids key so subsequent steps can append
+    if "request_kwargs" in ctx:
+        kwargs = ctx["request_kwargs"]
+        if kwargs.get("packages"):
+            kwargs["packages"][0].setdefault("creative_ids", [])
 
 
 @given("a valid create_media_buy request")
@@ -550,12 +569,14 @@ def then_error_has_setup_details(ctx: dict) -> None:
 
 @then(parsers.parse('the error message should contain "{count} accounts"'))
 def then_error_contains_count(ctx: dict, count: str) -> None:
-    """Assert error message mentions the specific number of matching accounts."""
+    """Assert error message contains '{count} accounts' as a phrase (not as independent words)."""
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
     msg = str(error).lower()
-    assert f"{count}" in msg, f"Expected count '{count}' in error: {msg}"
-    assert "account" in msg, f"Expected 'account(s)' in error: {msg}"
+    # Step text claims the phrase "{count} accounts" — check as a combined substring
+    # to avoid false positives from messages that mention count and account separately.
+    expected_phrase = f"{count} account"
+    assert expected_phrase in msg, f"Expected phrase '{expected_phrase}...' in error message, got: {msg}"
 
 
 @then(parsers.parse("the result should be {outcome}"))
@@ -822,8 +843,11 @@ def when_seller_rejects_media_buy(ctx: dict, reason: str) -> None:
     """Simulate seller rejecting a pending media buy (admin action).
 
     Updates the media buy status to 'rejected' and stores the rejection reason
-    on the associated workflow step, mirroring the production admin flow
-    in operations.py:approve_media_buy(action='reject').
+    on the associated workflow step.
+
+    FIXME(salesagent-9vgz.1): This step bypasses operations.py:approve_media_buy(action='reject')
+    and directly manipulates DB rows. Bugs in the production rejection path will not be caught.
+    Wire through the production admin flow when the harness supports it.
     """
     from datetime import UTC, datetime
 
@@ -1020,6 +1044,7 @@ def given_request_with_inline_creatives_base(ctx: dict) -> None:
             }
         },
     )
+    env._commit_factory_data()
     ctx["inline_creative"] = creative
     if kwargs.get("packages"):
         pkg = kwargs["packages"][0]
@@ -1550,18 +1575,26 @@ def given_creatives_have_valid_fields(ctx: dict) -> None:
     """Assert the inline creatives already have required fields.
 
     The previous Given step builds valid CreativeAssets — this step confirms
-    the precondition without modifying state.
+    the precondition without modifying state. Step text claims 'URL and
+    dimensions' so both url AND width/height are checked.
     """
     kwargs = ctx.get("request_kwargs", {})
     packages = kwargs.get("packages", [])
+    assert packages, "No packages in request_kwargs"
+    checked_any = False
     for pkg in packages:
         for creative in pkg.get("creatives", []):
             assert "format_id" in creative, "Creative missing format_id"
             assert "name" in creative, "Creative missing name"
             assert "assets" in creative, "Creative missing assets"
-            for asset in creative["assets"].values():
+            for asset_key, asset in creative["assets"].items():
                 if isinstance(asset, dict):
-                    assert "url" in asset, f"Asset missing url: {asset}"
+                    assert "url" in asset, f"Asset '{asset_key}' missing url: {asset}"
+                    # Step text claims 'dimensions' — verify width and height
+                    assert "width" in asset, f"Asset '{asset_key}' missing width: {asset}"
+                    assert "height" in asset, f"Asset '{asset_key}' missing height: {asset}"
+                    checked_any = True
+    assert checked_any, "No assets found to validate — step claims assets with URL and dimensions"
 
 
 @given("the creative agent has the referenced formats registered")

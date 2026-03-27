@@ -21,11 +21,16 @@ from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
 
 @given(parsers.parse('the seller has a product "{product_id}" in inventory with pricing_options {options}'))
 def given_product_with_pricing(ctx: dict, product_id: str, options: str) -> None:
-    """Verify product exists in DB (created by conftest _harness_env)."""
+    """Verify product exists in DB with pricing_options (created by conftest _harness_env)."""
     product = ctx.get("default_product")
     assert product is not None, "No default_product in ctx"
     assert product.product_id == product_id, f"Expected product '{product_id}', got '{product.product_id}'"
-    ctx.setdefault("product_pricing_options", options)
+    # Step claims product has pricing_options — verify the product has them configured
+    actual_options = getattr(product, "pricing_options", None)
+    assert actual_options is not None, (
+        f"Product '{product_id}' has no pricing_options attribute — step claims 'with pricing_options {options}'"
+    )
+    ctx["product_pricing_options"] = options
 
 
 @given(parsers.parse('the product "{product_id}" supports format_ids {format_ids}'))
@@ -33,7 +38,13 @@ def given_product_format_ids(ctx: dict, product_id: str, format_ids: str) -> Non
     """Verify product supports the specified format_ids."""
     product = ctx.get("default_product")
     assert product is not None, "No default_product in ctx"
-    ctx.setdefault("product_format_ids", format_ids)
+    assert product.product_id == product_id, f"Expected product '{product_id}', got '{product.product_id}'"
+    # Step claims product 'supports' these format_ids — verify format_ids exist on product
+    actual_format_ids = getattr(product, "format_ids", None)
+    assert actual_format_ids is not None, (
+        f"Product '{product_id}' has no format_ids attribute — step claims 'supports format_ids {format_ids}'"
+    )
+    ctx["product_format_ids"] = format_ids
 
 
 def _build_package_request(ctx: dict, datatable: list[list[str]], transport: str) -> None:
@@ -95,13 +106,17 @@ def _apply_package_table(kwargs: dict, datatable: list[list[str]]) -> None:
 
 @when("the Buyer Agent invokes the create_media_buy MCP tool")
 def when_invoke_create_mcp(ctx: dict) -> None:
-    """Dispatch create_media_buy through MCP."""
+    """Dispatch create_media_buy through MCP transport."""
+    # Override transport hint to match step text ('MCP tool')
+    ctx["package_transport_hint"] = "mcp"
     _dispatch_create(ctx)
 
 
 @when("the Buyer Agent sends the create_media_buy A2A task")
 def when_send_create_a2a(ctx: dict) -> None:
-    """Dispatch create_media_buy through A2A."""
+    """Dispatch create_media_buy through A2A transport."""
+    # Override transport hint to match step text ('A2A task')
+    ctx["package_transport_hint"] = "a2a"
     _dispatch_create(ctx)
 
 

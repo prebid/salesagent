@@ -67,7 +67,11 @@ def given_principal_owns_multiple(ctx: dict, principal_id: str, mb1: str, mb2: s
 
 @given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with buyer_ref "{ref}"'))
 def given_principal_owns_with_ref(ctx: dict, principal_id: str, mb_id: str, ref: str) -> None:
-    """Create a media buy with specific buyer_ref."""
+    """Create a media buy with specific buyer_ref, verifying principal_id consistency."""
+    # Verify the stated principal_id matches the ctx principal
+    assert ctx["principal"].principal_id == principal_id, (
+        f"Step claims principal '{principal_id}' but ctx has '{ctx['principal'].principal_id}'"
+    )
     env = ctx["env"]
     mb = MediaBuyFactory(
         tenant=ctx["tenant"],
@@ -82,7 +86,11 @@ def given_principal_owns_with_ref(ctx: dict, principal_id: str, mb_id: str, ref:
 
 @given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with an active package "{pkg_id}"'))
 def given_principal_owns_with_package(ctx: dict, principal_id: str, mb_id: str, pkg_id: str) -> None:
-    """Create a media buy with an active package."""
+    """Create a media buy with an active package, verifying principal_id consistency."""
+    # Verify the stated principal_id matches the ctx principal
+    assert ctx["principal"].principal_id == principal_id, (
+        f"Step claims principal '{principal_id}' but ctx has '{ctx['principal'].principal_id}'"
+    )
     env = ctx["env"]
     mb = MediaBuyFactory(
         tenant=ctx["tenant"],
@@ -94,6 +102,12 @@ def given_principal_owns_with_package(ctx: dict, principal_id: str, mb_id: str, 
     MediaPackageFactory(
         media_buy=mb,
         package_id=pkg_id,
+        package_config={
+            "package_id": pkg_id,
+            "product_id": "guaranteed_display",
+            "budget": 5000.0,
+            "status": "active",
+        },
     )
     env._commit_factory_data()
     ctx.setdefault("seeded_media_buys", {})[mb_id] = mb
@@ -107,14 +121,24 @@ def given_principal_owns_none(ctx: dict, principal_id: str) -> None:
 
 @given("the ad platform adapter supports realtime reporting")
 def given_adapter_supports_reporting(ctx: dict) -> None:
-    """Adapter supports realtime reporting for snapshots."""
-    ctx.setdefault("adapter_supports_reporting", True)
+    """Declarative guard — adapter supports realtime reporting for snapshots.
+
+    FIXME(salesagent-9vgz.1): This step only sets a context boolean and does not
+    wire the adapter mock to actually provide reporting data. When the harness
+    supports adapter capability configuration, this step should configure it.
+    """
+    ctx["adapter_supports_reporting"] = True
 
 
 @given(parsers.parse('snapshot data is available for package "{pkg_id}"'))
 def given_snapshot_available(ctx: dict, pkg_id: str) -> None:
-    """Snapshot data available for the package."""
-    ctx.setdefault("snapshot_available", True)
+    """Declarative guard — snapshot data available for the specified package.
+
+    FIXME(salesagent-9vgz.1): This step should create actual snapshot data linked
+    to pkg_id. Currently only records the package-specific availability.
+    """
+    ctx.setdefault("snapshot_available_packages", []).append(pkg_id)
+    ctx["snapshot_available"] = True
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -135,7 +159,11 @@ def _dispatch_query(ctx: dict, **extra_kwargs: Any) -> None:
 
 @when("the Buyer Agent sends a get_media_buys request via A2A with no filters")
 def when_query_a2a_no_filters(ctx: dict) -> None:
-    """Send get_media_buys with no filters via A2A (transport-specific)."""
+    """Send get_media_buys with no filters via A2A (transport-specific).
+
+    env.call_a2a() dispatches to get_media_buys_raw — the tool name is baked
+    into MediaBuyListEnv, matching the step text's 'get_media_buys' claim.
+    """
     env = ctx["env"]
     try:
         ctx["response"] = env.call_a2a()
@@ -145,7 +173,11 @@ def when_query_a2a_no_filters(ctx: dict) -> None:
 
 @when("the Buyer Agent invokes the get_media_buys MCP tool with no filters")
 def when_query_mcp_no_filters(ctx: dict) -> None:
-    """Send get_media_buys with no filters via MCP (transport-specific)."""
+    """Send get_media_buys with no filters via MCP (transport-specific).
+
+    env.call_mcp() dispatches to the get_media_buys MCP wrapper — the tool name
+    is baked into MediaBuyListEnv, matching the step text's 'get_media_buys' claim.
+    """
     env = ctx["env"]
     try:
         ctx["response"] = env.call_mcp()

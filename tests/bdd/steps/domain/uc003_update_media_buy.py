@@ -32,10 +32,13 @@ def given_buyer_owns_media_buy(ctx: dict, media_buy_id: str) -> None:
 def given_media_buy_status(ctx: dict, status: str) -> None:
     """Set the existing media buy to the specified status."""
     mb = ctx.get("existing_media_buy")
-    if mb is not None:
-        mb.status = status
-        env = ctx["env"]
-        env._commit_factory_data()
+    assert mb is not None, (
+        "No existing_media_buy in ctx — step claims 'the media buy is in "
+        f'"{status}" status\' but no media buy exists to set status on'
+    )
+    mb.status = status
+    env = ctx["env"]
+    env._commit_factory_data()
 
 
 @given(parsers.parse("a valid update_media_buy request with:"))
@@ -70,29 +73,42 @@ def given_package_update_with_table(ctx: dict, datatable: list[list[str]]) -> No
 
 @given(parsers.parse('the package "{package_id}" exists in the media buy'))
 def given_package_exists(ctx: dict, package_id: str) -> None:
-    """Verify the package exists in the existing media buy."""
+    """Verify or create the package in the existing media buy."""
     pkg = ctx.get("existing_package")
-    assert pkg is not None, "No existing_package in ctx"
-    if pkg.package_id != package_id:
-        # Create the package if it doesn't match
-        from tests.factories import MediaPackageFactory
+    if pkg is not None and pkg.package_id == package_id:
+        return  # Package already matches
+    # Create the package if it doesn't exist or doesn't match
+    from tests.factories import MediaPackageFactory
 
-        env = ctx["env"]
-        MediaPackageFactory(
-            media_buy=ctx["existing_media_buy"],
-            package_id=package_id,
-            package_config={
-                "package_id": package_id,
-                "product_id": "guaranteed_display",
-                "budget": 5000.0,
-            },
-        )
-        env._commit_factory_data()
+    assert ctx.get("existing_media_buy") is not None, "No existing_media_buy in ctx — cannot create package"
+    env = ctx["env"]
+    new_pkg = MediaPackageFactory(
+        media_buy=ctx["existing_media_buy"],
+        package_id=package_id,
+        package_config={
+            "package_id": package_id,
+            "product_id": "guaranteed_display",
+            "budget": 5000.0,
+        },
+    )
+    env._commit_factory_data()
+    ctx["existing_package"] = new_pkg
 
 
 @given("the updated daily spend does not exceed max_daily_package_spend")
 def given_daily_spend_ok(ctx: dict) -> None:
-    """Declarative — default test data has budgets within limits."""
+    """Declarative guard — default test data has budgets within limits.
+
+    Verifies that the update request's budget (if present) is a positive number,
+    which is a necessary condition for 'does not exceed max_daily_package_spend'.
+    The actual max_daily check depends on tenant config; the default test tenant
+    has no restrictive daily cap.
+    """
+    kwargs = ctx.get("update_kwargs", {})
+    for pkg in kwargs.get("packages", []):
+        budget = pkg.get("budget")
+        if budget is not None:
+            assert budget > 0, f"Package budget {budget} is not positive — cannot satisfy daily spend constraint"
     ctx.setdefault("daily_spend_validated", True)
 
 
@@ -100,7 +116,11 @@ def given_daily_spend_ok(ctx: dict) -> None:
 def given_buyer_ref_resolves(ctx: dict, buyer_ref: str) -> None:
     """Ensure the existing media buy has the specified buyer_ref."""
     mb = ctx.get("existing_media_buy")
-    if mb is not None and mb.buyer_ref != buyer_ref:
+    assert mb is not None, (
+        f"No existing_media_buy in ctx — step claims buyer_ref '{buyer_ref}' "
+        "resolves to media buy but no media buy exists"
+    )
+    if mb.buyer_ref != buyer_ref:
         mb.buyer_ref = buyer_ref
         env = ctx["env"]
         env._commit_factory_data()
@@ -160,9 +180,33 @@ def given_creatives_exist_in_library(ctx: dict) -> None:
 
 @given("all referenced creatives are in valid state (not error or rejected)")
 def given_creatives_in_valid_state(ctx: dict) -> None:
-    """Declarative guard — creatives created by the previous step are already approved."""
-    # CreativeFactory with approved=True sets status="approved"
-    assert ctx.get("referenced_creative_ids"), "No referenced creative_ids — missing prior step"
+    """Declarative guard — creatives created by the previous step are already approved.
+
+    CreativeFactory with approved=True sets status='approved'. This step verifies
+    the referenced creative_ids exist and were created with valid status by the
+    prior 'all referenced creative_ids exist in the creative library' step.
+    """
+    ids = ctx.get("referenced_creative_ids")
+    assert ids and len(ids) > 0, "No referenced creative_ids — missing prior step"
+    # Prior step (given_creatives_exist_in_library) creates with approved=True.
+    # If we have DB access, verify the status is not error/rejected.
+    from sqlalchemy import select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import Creative as CreativeModel
+
+    tenant = ctx.get("tenant")
+    if tenant is not None:
+        invalid_statuses = ("error", "rejected")
+        with get_db_session() as session:
+            for cid in ids:
+                cr = session.scalars(
+                    select(CreativeModel).filter_by(creative_id=cid, tenant_id=tenant.tenant_id)
+                ).first()
+                if cr is not None:
+                    assert cr.status not in invalid_statuses, (
+                        f"Creative {cid} is in '{cr.status}' state — step claims 'not error or rejected'"
+                    )
 
 
 @given("all placement_ids are valid for the product")
@@ -172,7 +216,9 @@ def given_placement_ids_valid(ctx: dict) -> None:
     The guaranteed_display product created by setup_update_data() does not
     restrict placements, so any placement_id is valid.
     """
-    assert ctx.get("referenced_placement_ids") is not None, "No referenced placement_ids — missing prior step"
+    pids = ctx.get("referenced_placement_ids")
+    assert pids is not None, "No referenced placement_ids — missing prior step"
+    assert isinstance(pids, list), f"Expected placement_ids to be a list, got {type(pids).__name__}"
 
 
 @given("the package update includes inline creatives with valid content")

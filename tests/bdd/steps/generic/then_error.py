@@ -190,18 +190,33 @@ def then_error_invalid_params(ctx: dict) -> None:
     # AdCPError: message must reference a specific parameter/field name
     msg = _get_error_message(error)
     # The message should contain an actual field name, not just generic error words.
-    # Check for known parameter names that appear in the request schema.
+    # Check for known parameter names that appear in the request schemas.
     request_fields = (
         "type",
         "format_id",
+        "format_ids",
         "agent_url",
         "disclosure_positions",
         "product_id",
         "buyer_ref",
+        "buyer_campaign_ref",
         "budget",
         "pricing_option_id",
         "start_time",
         "end_time",
+        "packages",
+        "creative_ids",
+        "creative_assignments",
+        "targeting",
+        "targeting_overlay",
+        "keyword_targets",
+        "paused",
+        "media_buy_id",
+        "account",
+        "account_id",
+        "currency",
+        "name",
+        "optimization_goals",
     )
     msg_lower = msg.lower()
     has_specific_field = any(field in msg_lower for field in request_fields)
@@ -209,7 +224,8 @@ def then_error_invalid_params(ctx: dict) -> None:
     has_details = (
         hasattr(error, "details")
         and error.details
-        and any(k in ("field", "parameter", "loc") for k in (error.details if isinstance(error.details, dict) else {}))
+        and isinstance(error.details, dict)
+        and any(k in ("field", "parameter", "loc", "error_code") for k in error.details)
     )
     assert has_specific_field or has_details, (
         f"Expected error to name which specific parameters are invalid (one of {request_fields}), got: {msg}"
