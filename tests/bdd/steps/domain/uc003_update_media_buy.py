@@ -9,6 +9,7 @@ beads: salesagent-82p
 
 from __future__ import annotations
 
+from datetime import UTC
 from typing import Any
 
 from pytest_bdd import given, parsers, then, when
@@ -41,6 +42,28 @@ def given_media_buy_status(ctx: dict, status: str) -> None:
     env._commit_factory_data()
 
 
+@given(parsers.parse('the existing media buy has start_time "{start_time}" and end_time "{end_time}"'))
+def given_existing_mb_start_end_time(ctx: dict, start_time: str, end_time: str) -> None:
+    """Set start_time and end_time on the existing media buy ORM model.
+
+    Stores the original values in ctx for later comparison by the Then step
+    'the existing start_time and end_time should remain unchanged'.
+    """
+    from datetime import datetime
+
+    mb = ctx.get("existing_media_buy")
+    assert mb is not None, "No existing_media_buy in ctx — cannot set start_time/end_time"
+    parsed_start = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
+    parsed_end = datetime.fromisoformat(end_time.replace("Z", "+00:00"))
+    mb.start_time = parsed_start
+    mb.end_time = parsed_end
+    env = ctx["env"]
+    env._commit_factory_data()
+    # Store originals for the Then step that checks they remain unchanged
+    ctx["original_start_time"] = parsed_start.astimezone(UTC)
+    ctx["original_end_time"] = parsed_end.astimezone(UTC)
+
+
 @given(parsers.parse("a valid update_media_buy request with:"))
 def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> None:
     """Build update request kwargs from a data table."""
@@ -53,6 +76,32 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
             kwargs["buyer_ref"] = value
         elif field == "paused":
             kwargs["paused"] = value.lower() == "true"
+
+
+@given("the request does NOT include start_time, end_time, or paused fields")
+def given_request_omits_start_end_paused(ctx: dict) -> None:
+    """Declarative guard — ensure start_time, end_time, paused are NOT in update_kwargs.
+
+    The default update_kwargs only contains media_buy_id, so these fields are already
+    absent. This step explicitly strips them in case prior Given steps added them.
+    """
+    kwargs = _ensure_update_defaults(ctx)
+    for field in ("start_time", "end_time", "paused"):
+        kwargs.pop(field, None)
+
+
+@given("the request does not include any updatable fields")
+def given_request_no_updatable_fields(ctx: dict) -> None:
+    """Ensure the update request contains only media_buy_id — no updatable fields.
+
+    Strips packages, paused, start_time, end_time, buyer_ref, and any other
+    fields that _update_media_buy_impl treats as updatable.
+    """
+    kwargs = _ensure_update_defaults(ctx)
+    # Keep only media_buy_id, remove everything else
+    media_buy_id = kwargs.get("media_buy_id", "mb_existing")
+    kwargs.clear()
+    kwargs["media_buy_id"] = media_buy_id
 
 
 @given(parsers.parse("the request includes 1 package update with:"))
@@ -452,6 +501,40 @@ def _promote_update_errors(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 # THEN steps — update-specific assertions
 # ═══════════════════════════════════════════════════════════════════════
+
+
+@then("the existing start_time and end_time should remain unchanged")
+def then_start_end_time_unchanged(ctx: dict) -> None:
+    """Assert the media buy's start_time and end_time were not altered by the update.
+
+    Reloads the media buy from DB and compares against the values stored in ctx
+    by the Given step 'the existing media buy has start_time ... and end_time ...'.
+    """
+
+    from sqlalchemy import select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import MediaBuy
+
+    original_start = ctx.get("original_start_time")
+    original_end = ctx.get("original_end_time")
+    assert original_start is not None and original_end is not None, (
+        "original_start_time/original_end_time not in ctx — "
+        "missing prior Given step 'the existing media buy has start_time ... and end_time ...'"
+    )
+    mb = ctx["existing_media_buy"]
+    with get_db_session() as session:
+        refreshed = session.scalars(select(MediaBuy).filter_by(media_buy_id=mb.media_buy_id)).first()
+        assert refreshed is not None, f"Media buy {mb.media_buy_id} not found in DB after update"
+        actual_start = refreshed.start_time
+        actual_end = refreshed.end_time
+    # Normalize to UTC for comparison (DB may return timezone-aware or naive)
+    if actual_start is not None and actual_start.tzinfo is not None:
+        actual_start = actual_start.astimezone(UTC)
+    if actual_end is not None and actual_end.tzinfo is not None:
+        actual_end = actual_end.astimezone(UTC)
+    assert actual_start == original_start, f"start_time changed: expected {original_start}, got {actual_start}"
+    assert actual_end == original_end, f"end_time changed: expected {original_end}, got {actual_end}"
 
 
 @then(parsers.parse('the response should contain media_buy_id "{media_buy_id}"'))

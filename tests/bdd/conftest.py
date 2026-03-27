@@ -379,10 +379,22 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             or "T-UC-003-alt-keyword-ops" in marker_names
             or "T-UC-003-alt-keyword-remove" in marker_names
             or "T-UC-003-alt-negative-keywords" in marker_names
+            or "T-UC-003-partial-update" in marker_names
         ):
             item.add_marker(
                 pytest.mark.xfail(
                     reason="REST endpoint doesn't forward packages param (spec-production gap)",
+                    strict=True,
+                )
+            )
+
+        # FIXME(salesagent-9vgz.18): UC-003 empty update — production does not reject
+        # requests with no updatable fields. Instead returns completed with empty
+        # affected_packages. BR-RULE-022 INV-3 says: "No updatable fields → rejected".
+        if "T-UC-003-empty-update" in marker_names:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="empty update not rejected by production (BR-RULE-022 INV-3 spec-production gap)",
                     strict=True,
                 )
             )
