@@ -221,11 +221,22 @@ $(echo "$PROD_FILES" | sed 's/^/- /')" --allow-empty
       if [ "$FLAG_COUNT" -gt 0 ]; then
         echo "  ⚠ $FLAG_COUNT weak assertions found — fixing..."
 
-        # Feed each finding to a fix agent
-        FIX_LOG="$LOGDIR/inspect-fix-$TASK_ID.log"
-        FINDINGS=$(cat "$INSPECT_REPORT")
+        MAX_FIX_ITERATIONS=3
+        ITERATION=1
+        REMAINING="$FLAG_COUNT"
 
-        $CLAUDE "You are a BDD assertion fixer. The inspector found $FLAG_COUNT weak Then-step assertions in files just modified by task $TASK_ID.
+        while [ "$REMAINING" -gt 0 ] && [ "$ITERATION" -le "$MAX_FIX_ITERATIONS" ]; do
+          # Read current findings
+          if [ "$ITERATION" -eq 1 ]; then
+            CURRENT_REPORT="$INSPECT_REPORT"
+          else
+            CURRENT_REPORT="$LOGDIR/reinspect-${TASK_ID}-iter${ITERATION}.json"
+          fi
+          FINDINGS=$(cat "$CURRENT_REPORT")
+
+          FIX_LOG="$LOGDIR/inspect-fix-${TASK_ID}-iter${ITERATION}.log"
+
+          $CLAUDE "You are a BDD assertion fixer (iteration $ITERATION/$MAX_FIX_ITERATIONS). The inspector found $REMAINING weak assertions in files modified by task $TASK_ID.
 
 ## Findings (from inspect_bdd_steps.py)
 $FINDINGS
@@ -240,30 +251,39 @@ $FINDINGS
 3. If a strengthened assertion would fail because production doesn't match spec: use pytest.xfail() with a SPEC-PRODUCTION GAP note. NEVER weaken assertions.
 4. NEVER modify production code. Only files under tests/.
 5. Run make quality after all fixes.
-6. Commit: 'fix(bdd): strengthen assertions for $TASK_ID'
+6. Commit: 'fix(bdd): strengthen assertions for $TASK_ID (iter $ITERATION)'
 
 $GIT_INSTRUCTION" \
-          > "$FIX_LOG" 2>&1 || true
+            > "$FIX_LOG" 2>&1 || true
 
-        # Phase 3: Re-inspect to verify fixes
-        REINSPECT_REPORT="$LOGDIR/reinspect-$TASK_ID.json"
-        REINSPECT_MD="$LOGDIR/reinspect-$TASK_ID.md"
-        python3 .claude/scripts/inspect_bdd_steps.py \
-          --pass1-only --json \
-          --files $STEP_FILES_ARGS \
-          --output "$REINSPECT_MD" \
-          > "$LOGDIR/reinspect-scan-$TASK_ID.log" 2>&1 || true
+          # Re-inspect to check remaining
+          NEXT_ITER=$(( ITERATION + 1 ))
+          REINSPECT_REPORT="$LOGDIR/reinspect-${TASK_ID}-iter${NEXT_ITER}.json"
+          REINSPECT_MD="$LOGDIR/reinspect-${TASK_ID}-iter${NEXT_ITER}.md"
+          python3 .claude/scripts/inspect_bdd_steps.py \
+            --pass1-only --json \
+            --files $STEP_FILES_ARGS \
+            --output "$REINSPECT_MD" \
+            > "$LOGDIR/reinspect-scan-${TASK_ID}-iter${NEXT_ITER}.log" 2>&1 || true
 
-        REMAINING=0
-        if [ -f "$REINSPECT_REPORT" ]; then
-          REMAINING=$(python3 -c "import json; print(len(json.load(open('$REINSPECT_REPORT'))))" 2>/dev/null || echo "0")
-        fi
+          REMAINING=0
+          if [ -f "$REINSPECT_REPORT" ]; then
+            REMAINING=$(python3 -c "import json; print(len(json.load(open('$REINSPECT_REPORT'))))" 2>/dev/null || echo "0")
+          fi
 
-        if [ "$REMAINING" -eq 0 ]; then
-          echo "  ✅ all $FLAG_COUNT assertions strengthened"
-        else
-          echo "  ⚠ $REMAINING/$FLAG_COUNT assertions still weak (see $REINSPECT_MD)"
-          echo "$TASK_ID: $REMAINING remaining" >> "$LOGDIR/weak-assertions.log"
+          if [ "$REMAINING" -eq 0 ]; then
+            echo "  ✅ all assertions fixed (iteration $ITERATION)"
+            break
+          else
+            echo "  ↻ $REMAINING remaining after iteration $ITERATION"
+          fi
+
+          ITERATION=$(( ITERATION + 1 ))
+        done
+
+        if [ "$REMAINING" -gt 0 ]; then
+          echo "  ⚠ $REMAINING assertions still weak after $MAX_FIX_ITERATIONS iterations (see $REINSPECT_MD)"
+          echo "$TASK_ID: $REMAINING remaining after $MAX_FIX_ITERATIONS iterations" >> "$LOGDIR/weak-assertions.log"
         fi
       else
         echo "  ── assertions OK (0 flags)"
