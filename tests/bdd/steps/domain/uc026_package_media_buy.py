@@ -21,7 +21,9 @@ from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
 
 @given(parsers.parse('the seller has a product "{product_id}" in inventory with pricing_options {options}'))
 def given_product_with_pricing(ctx: dict, product_id: str, options: str) -> None:
-    """Verify product exists in DB with pricing_options (created by conftest _harness_env)."""
+    """Verify product exists in DB with pricing_options matching the step parameter."""
+    import json
+
     product = ctx.get("default_product")
     assert product is not None, "No default_product in ctx"
     assert product.product_id == product_id, f"Expected product '{product_id}', got '{product.product_id}'"
@@ -30,12 +32,31 @@ def given_product_with_pricing(ctx: dict, product_id: str, options: str) -> None
     assert actual_options is not None, (
         f"Product '{product_id}' has no pricing_options attribute — step claims 'with pricing_options {options}'"
     )
+    assert len(actual_options) > 0, (
+        f"Product '{product_id}' has empty pricing_options — step claims 'with pricing_options {options}'"
+    )
+    # Verify the step parameter's option IDs are present in the product's pricing options
+    try:
+        expected_ids = json.loads(options)
+        if isinstance(expected_ids, list):
+            actual_ids = {
+                getattr(o, "id", None) or (o.get("id") if isinstance(o, dict) else str(o)) for o in actual_options
+            }
+            for eid in expected_ids:
+                eid_str = eid.get("id") if isinstance(eid, dict) else str(eid)
+                assert eid_str in actual_ids, (
+                    f"Expected pricing option '{eid_str}' not found in product's options {actual_ids}"
+                )
+    except (json.JSONDecodeError, TypeError):
+        pass  # options parameter may not be JSON — stored as string for ctx
     ctx["product_pricing_options"] = options
 
 
 @given(parsers.parse('the product "{product_id}" supports format_ids {format_ids}'))
 def given_product_format_ids(ctx: dict, product_id: str, format_ids: str) -> None:
     """Verify product supports the specified format_ids."""
+    import json
+
     product = ctx.get("default_product")
     assert product is not None, "No default_product in ctx"
     assert product.product_id == product_id, f"Expected product '{product_id}', got '{product.product_id}'"
@@ -44,6 +65,27 @@ def given_product_format_ids(ctx: dict, product_id: str, format_ids: str) -> Non
     assert actual_format_ids is not None, (
         f"Product '{product_id}' has no format_ids attribute — step claims 'supports format_ids {format_ids}'"
     )
+    assert len(actual_format_ids) > 0, (
+        f"Product '{product_id}' has empty format_ids — step claims 'supports format_ids {format_ids}'"
+    )
+    # Verify the claimed format_ids are actually present in the product's format set
+    try:
+        expected = json.loads(format_ids)
+        if isinstance(expected, list):
+
+            def _extract_id(f: Any) -> str:
+                if isinstance(f, dict):
+                    return f.get("id", str(f))
+                if hasattr(f, "id"):
+                    return f.id
+                return str(f)
+
+            actual_set = {_extract_id(f) for f in actual_format_ids}
+            for ef in expected:
+                ef_id = _extract_id(ef)
+                assert ef_id in actual_set, f"Expected format '{ef_id}' not found in product's format_ids {actual_set}"
+    except (json.JSONDecodeError, TypeError):
+        pass  # format_ids parameter may not be JSON — stored as string for ctx
     ctx["product_format_ids"] = format_ids
 
 

@@ -99,8 +99,11 @@ def given_request_with_creative_assignments(ctx: dict) -> None:
     # Ensure packages exist with creative_ids key so subsequent steps can append
     if "request_kwargs" in ctx:
         kwargs = ctx["request_kwargs"]
-        if kwargs.get("packages"):
-            kwargs["packages"][0].setdefault("creative_ids", [])
+        assert kwargs.get("packages"), (
+            "Step claims 'with creative assignments' but no packages in request — "
+            "_ensure_request_defaults must create at least one package"
+        )
+        kwargs["packages"][0].setdefault("creative_ids", [])
 
 
 @given("a valid create_media_buy request")
@@ -600,6 +603,11 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
             pytest.xfail(f"SPEC-PRODUCTION GAP: Expected success ({outcome}) but production rejected with: {error}")
         resp = ctx.get("response")
         assert resp is not None, "Expected a response for success outcome"
+        # Strengthen: verify response has a media_buy_id (proof of successful creation)
+        from tests.bdd.steps.generic.then_media_buy import _get_response_field
+
+        media_buy_id = _get_response_field(resp, "media_buy_id")
+        assert media_buy_id, f"Expected media_buy_id in response for '{outcome}', got None"
     elif outcome == "auto-approved path taken":
         from tests.bdd.steps.generic.then_media_buy import then_approval_auto
 
@@ -879,6 +887,14 @@ def when_seller_rejects_media_buy(ctx: dict, reason: str) -> None:
 
         session.commit()
 
+    # Verify the rejection actually persisted
+    with get_db_session() as session:
+        mb_check = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id)).first()
+        assert mb_check is not None, f"Media buy {media_buy_id} not found after rejection"
+        assert mb_check.status == "rejected", (
+            f"Expected 'rejected' status after seller rejection, got '{mb_check.status}'"
+        )
+
     # Store rejection_reason on existing_media_buy so Then steps can find it.
     # MediaBuy model lacks a rejection_reason column — we set it dynamically.
     media_buy.rejection_reason = reason  # type: ignore[attr-defined]
@@ -899,11 +915,14 @@ def given_package_references_creative_id(ctx: dict, creative_id: str) -> None:
     from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
 
     kwargs = _ensure_request_defaults(ctx)
-    if kwargs.get("packages"):
-        pkg = kwargs["packages"][0]
-        existing = pkg.get("creative_ids") or []
-        existing.append(creative_id)
-        pkg["creative_ids"] = existing
+    assert kwargs.get("packages"), (
+        "Step claims 'a package creative_assignment references creative_id' "
+        "but no packages in request — ensure packages are set up first"
+    )
+    pkg = kwargs["packages"][0]
+    existing = pkg.get("creative_ids") or []
+    existing.append(creative_id)
+    pkg["creative_ids"] = existing
 
 
 @given("a creative's format_id does not match any of the product's supported format_ids")
@@ -1066,6 +1085,9 @@ def given_creative_missing_url(ctx: dict) -> None:
     assert creative is not None, "No inline creative in ctx — call 'with inline creatives' first"
     # Clear the URL from assets so extract_media_url_and_dimensions returns None
     creative.data = {"assets": {"primary": {"width": 300, "height": 250}}}
+    # Re-commit so the DB row reflects the missing URL (not just in-memory ORM object)
+    env = ctx["env"]
+    env._commit_factory_data()
 
 
 @given("the creative format is not generative")
@@ -1483,10 +1505,12 @@ def given_catalog_id_not_found(ctx: dict, catalog_id: str) -> None:
     from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
 
     kwargs = _ensure_request_defaults(ctx)
-    if kwargs.get("packages"):
-        kwargs["packages"][0]["catalogs"] = [
-            {"type": "product", "catalog_id": catalog_id, "url": "https://example.com/feed.xml"},
-        ]
+    assert kwargs.get("packages"), (
+        "Step claims 'a package references catalog_id' but no packages in request — ensure packages are set up first"
+    )
+    kwargs["packages"][0]["catalogs"] = [
+        {"type": "product", "catalog_id": catalog_id, "url": "https://example.com/feed.xml"},
+    ]
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1550,24 +1574,27 @@ def given_request_with_inline_creatives_array(ctx: dict) -> None:
         ]
         env._commit_factory_data()
 
-    if kwargs.get("packages"):
-        kwargs["packages"][0]["creatives"] = [
-            {
-                "creative_id": "cr-inline-001",
-                "name": "Inline Banner 300x250",
-                "format_id": {
-                    "agent_url": "https://creative.adcontextprotocol.org",
-                    "id": "display_300x250_image",
-                },
-                "assets": {
-                    "primary": {
-                        "url": "https://cdn.example.com/inline-banner.png",
-                        "width": 300,
-                        "height": 250,
-                    }
-                },
-            }
-        ]
+    assert kwargs.get("packages"), (
+        "Step claims 'request includes packages with inline creatives array' "
+        "but no packages in request — ensure packages are set up first"
+    )
+    kwargs["packages"][0]["creatives"] = [
+        {
+            "creative_id": "cr-inline-001",
+            "name": "Inline Banner 300x250",
+            "format_id": {
+                "agent_url": "https://creative.adcontextprotocol.org",
+                "id": "display_300x250_image",
+            },
+            "assets": {
+                "primary": {
+                    "url": "https://cdn.example.com/inline-banner.png",
+                    "width": 300,
+                    "height": 250,
+                }
+            },
+        }
+    ]
 
 
 @given("each creative has a valid format_id, name, and assets with URL and dimensions")
@@ -1728,8 +1755,16 @@ def given_proposal_exists(ctx: dict, proposal_id: str) -> None:
     SPEC-PRODUCTION GAP: Production has no proposal store. proposal_id is
     accepted on CreateMediaBuyRequest (from adcp library) but never validated.
     This step records the expected proposal for Then-step assertions.
+
+    When production implements proposal storage, this step must:
+    1. Create a proposal record via ProposalFactory
+    2. Set expiry to a future date
+    3. Link it to the tenant/principal
     """
     ctx["expected_proposal_id"] = proposal_id
+    # SPEC-PRODUCTION GAP: No proposal persistence layer — only recording
+    # the expected ID. Scenario-level xfail (T-UC-002-alt-proposal tag)
+    # handles the gap at the correct level.
 
 
 @given(parsers.parse("the proposal has {count:d} product allocations"))
@@ -1740,13 +1775,22 @@ def given_proposal_allocations(ctx: dict, count: int) -> None:
     This step records the expected allocation count AND default equal-percentage
     allocations for Then-step assertions. When no explicit percentages are given
     in the scenario, equal distribution is assumed.
+
+    When production implements proposals, this step must:
+    1. Create N allocation records linked to the proposal
+    2. Each allocation must reference a valid product_id
+    3. Default to equal-percentage distribution
     """
+    assert count > 0, "Proposal must have at least 1 product allocation"
     ctx["expected_proposal_allocations"] = count
     # Default to equal allocation percentages when scenario doesn't specify them.
     # Scenarios with non-equal splits should set ctx["expected_allocation_percentages"]
     # explicitly via a dedicated Given step.
     if "expected_allocation_percentages" not in ctx:
         ctx["expected_allocation_percentages"] = [100.0 / count] * count
+    # SPEC-PRODUCTION GAP: No proposal allocation mechanism — only recording
+    # expected count. Scenario-level xfail (T-UC-002-alt-proposal tag)
+    # handles the gap at the correct level.
 
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -315,8 +315,8 @@ def then_error_recovery(ctx: dict, recovery: str) -> None:
 
     if isinstance(error, AdCPError):
         assert error.recovery == recovery, f"Expected recovery '{recovery}', got '{error.recovery}'"
-    elif hasattr(error, "recovery") and not isinstance(error, Exception):
-        # adcp.types.Error model (from response.errors promotion)
+    elif hasattr(error, "recovery"):
+        # adcp.types.Error model (from response.errors promotion) OR exception with .recovery
         # recovery may be a Recovery enum — compare by .value
         actual = error.recovery.value if hasattr(error.recovery, "value") else str(error.recovery)
         assert actual == recovery, f"Expected recovery '{recovery}', got '{actual}'"
@@ -341,18 +341,24 @@ def then_error_has_field(ctx: dict) -> None:
 
     The adcp Error model has ``field: str | None`` indicating which request
     field caused the error (e.g. 'packages[0].product_id').
+    Uses _get_error_dict for consistent extraction across all error types
+    (AdCPError exceptions, adcp.types.Error models, response.errors promotion).
     """
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
-    # adcp.types.Error model (from response.errors promotion)
-    field_val = getattr(error, "field", None)
+    # Use _get_error_dict for consistent extraction, then check for "field"
+    d = _get_error_dict(error)
+    field_val = d.get("field")
+    if field_val is None:
+        # Also check direct attribute (adcp.types.Error model has .field)
+        field_val = getattr(error, "field", None)
     if field_val is None:
         # AdCPError may store field in details
         from src.core.exceptions import AdCPError
 
         if isinstance(error, AdCPError) and error.details:
             field_val = error.details.get("field")
-    assert field_val is not None, f"Expected 'field' on error, got None. Error: {error}"
+    assert field_val is not None, f"Expected 'field' on error, got None. Error type: {type(error).__name__}, dict: {d}"
 
 
 @then("the error should include a suggestion for how to fix the issue")

@@ -169,28 +169,33 @@ def then_pending_state(ctx: dict) -> None:
 
 @then(parsers.parse('the media buy status should be "{status}"'))
 def then_media_buy_status(ctx: dict, status: str) -> None:
-    """Assert the media buy has the expected status."""
+    """Assert the media buy has the expected status.
+
+    Checks response first (preferred), then falls back to DB query.
+    Both paths must assert the exact status — no silent fallthrough.
+    """
     resp = ctx.get("response")
+    media_buy = ctx.get("existing_media_buy")
+    assert resp is not None or media_buy is not None, (
+        "No response or existing media buy to check status — "
+        f"step claims status should be '{status}' but nothing to verify against"
+    )
     if resp is not None:
         actual = _get_response_field(resp, "status")
-        assert actual == status, f"Expected media buy status '{status}', got '{actual}'"
+        assert actual == status, f"Expected media buy status '{status}' in response, got '{actual}'"
         return
-    # Check existing media buy in DB
-    media_buy = ctx.get("existing_media_buy")
-    if media_buy is not None:
-        env = ctx["env"]
-        env._commit_factory_data()
-        from sqlalchemy import select
+    # Fallback: check existing media buy in DB (explicit path, not silent)
+    env = ctx["env"]
+    env._commit_factory_data()
+    from sqlalchemy import select
 
-        from src.core.database.database_session import get_db_session
-        from src.core.database.models import MediaBuy
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import MediaBuy
 
-        with get_db_session() as session:
-            mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy.media_buy_id)).first()
-            assert mb is not None, f"Media buy {media_buy.media_buy_id} not found in DB"
-            assert mb.status == status, f"Expected status '{status}', got '{mb.status}'"
-        return
-    raise AssertionError("No response or existing media buy to check status")
+    with get_db_session() as session:
+        mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy.media_buy_id)).first()
+        assert mb is not None, f"Media buy {media_buy.media_buy_id} not found in DB"
+        assert mb.status == status, f"Expected DB status '{status}', got '{mb.status}'"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -214,11 +219,15 @@ def then_slack_notification_sent(ctx: dict) -> None:
     assert call_args is not None, "Slack notify_media_buy_event called but call_args is None"
     event_type = call_args.args[0] if call_args.args else call_args.kwargs.get("event_type")
     assert event_type, "Slack notification missing event_type argument"
-    # Seller-facing events: approval requests go to the seller's Slack channel
+    # Seller-facing events: approval/notification events directed to the seller's channel.
+    # "created" is a lifecycle event that notifies the seller a new media buy arrived.
+    # "approval_required" and "config_approval_required" require seller action.
     seller_event_types = ("approval_required", "created", "config_approval_required")
     assert event_type in seller_event_types, (
         f"Expected seller-facing event_type (one of {seller_event_types}), "
-        f"got '{event_type}' — this may not target the Seller"
+        f"got '{event_type}' — this event type does not target the Seller. "
+        f"Buyer-facing events (rejected, approved, status_changed) should not "
+        f"be sent to the Seller's Slack channel."
     )
     # Verify media_buy_id was passed (positional arg 1 per notify_media_buy_event signature)
     media_buy_id = call_args.args[1] if len(call_args.args) > 1 else call_args.kwargs.get("media_buy_id")

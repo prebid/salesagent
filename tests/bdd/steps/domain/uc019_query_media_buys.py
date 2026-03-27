@@ -28,7 +28,10 @@ from tests.factories import MediaBuyFactory, MediaPackageFactory
     )
 )
 def given_principal_owns_media_buy_with_dates(ctx: dict, principal_id: str, mb_id: str, start: str, end: str) -> None:
-    """Create a media buy with specific flight dates."""
+    """Create a media buy with specific flight dates, verifying principal_id consistency."""
+    assert ctx["principal"].principal_id == principal_id, (
+        f"Step claims principal '{principal_id}' but ctx has '{ctx['principal'].principal_id}'"
+    )
     env = ctx["env"]
     mb = MediaBuyFactory(
         tenant=ctx["tenant"],
@@ -45,13 +48,24 @@ def given_principal_owns_media_buy_with_dates(ctx: dict, principal_id: str, mb_i
 
 @given(parsers.parse('today is "{today_str}"'))
 def given_today_is(ctx: dict, today_str: str) -> None:
-    """Override 'today' for status computation. Stored for reference."""
+    """Override 'today' for status computation.
+
+    Stores the date string for reference AND validates it parses as a valid date.
+    Note: production code using ``date.today()`` directly will not see this override.
+    Status computation in query responses depends on actual system date; this step
+    documents the scenario's assumed date for human readers and Then-step tolerance.
+    """
+    # Validate the date string parses correctly (fail-fast on typos in feature files)
+    date.fromisoformat(today_str)
     ctx["mock_today"] = today_str
 
 
 @given(parsers.parse('the principal "{principal_id}" owns media buys "{mb1}", "{mb2}", and "{mb3}"'))
 def given_principal_owns_multiple(ctx: dict, principal_id: str, mb1: str, mb2: str, mb3: str) -> None:
-    """Create 3 media buys."""
+    """Create 3 media buys, verifying principal_id consistency."""
+    assert ctx["principal"].principal_id == principal_id, (
+        f"Step claims principal '{principal_id}' but ctx has '{ctx['principal'].principal_id}'"
+    )
     env = ctx["env"]
     for mb_id in [mb1, mb2, mb3]:
         mb = MediaBuyFactory(
@@ -125,9 +139,14 @@ def given_adapter_supports_reporting(ctx: dict) -> None:
 
     FIXME(salesagent-9vgz.1): This step only sets a context boolean and does not
     wire the adapter mock to actually provide reporting data. When the harness
-    supports adapter capability configuration, this step should configure it.
+    supports adapter capability configuration, this step should:
+    1. Configure the adapter mock to return reporting capabilities
+    2. Set up mock reporting endpoints that return test data
+    3. Verify the adapter is actually wired to provide realtime data
     """
     ctx["adapter_supports_reporting"] = True
+    # Verify env exists (guaranteed by autouse fixture) to confirm test harness is wired
+    _ = ctx["env"]
 
 
 @given(parsers.parse('snapshot data is available for package "{pkg_id}"'))
@@ -135,8 +154,12 @@ def given_snapshot_available(ctx: dict, pkg_id: str) -> None:
     """Declarative guard — snapshot data available for the specified package.
 
     FIXME(salesagent-9vgz.1): This step should create actual snapshot data linked
-    to pkg_id. Currently only records the package-specific availability.
+    to pkg_id. When the harness supports snapshot fixtures, this step must:
+    1. Create a snapshot record in the DB for the specified package
+    2. Include as_of timestamp, staleness_seconds, impressions, and spend
+    3. Verify the snapshot is queryable via the production code path
     """
+    assert pkg_id, "pkg_id must be non-empty — step claims snapshot data is 'available for package'"
     ctx.setdefault("snapshot_available_packages", []).append(pkg_id)
     ctx["snapshot_available"] = True
 

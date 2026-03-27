@@ -101,18 +101,29 @@ def given_package_exists(ctx: dict, package_id: str) -> None:
 
 @given("the updated daily spend does not exceed max_daily_package_spend")
 def given_daily_spend_ok(ctx: dict) -> None:
-    """Declarative guard — default test data has budgets within limits.
+    """Declarative guard — verifies budgets are within daily spend limits.
 
-    Verifies that the update request's budget (if present) is a positive number,
-    which is a necessary condition for 'does not exceed max_daily_package_spend'.
-    The actual max_daily check depends on tenant config; the default test tenant
-    has no restrictive daily cap.
+    Checks that each package's budget is positive AND does not exceed the tenant's
+    max_daily_package_spend (if configured). The default test tenant has no
+    restrictive daily cap, so the primary check is positivity.
     """
     kwargs = ctx.get("update_kwargs", {})
     for pkg in kwargs.get("packages", []):
         budget = pkg.get("budget")
         if budget is not None:
             assert budget > 0, f"Package budget {budget} is not positive — cannot satisfy daily spend constraint"
+    # Verify against tenant's max_daily_package_spend if available
+    tenant = ctx.get("tenant")
+    if tenant is not None:
+        max_daily = getattr(tenant, "max_daily_package_spend", None)
+        if max_daily is not None:
+            for pkg in kwargs.get("packages", []):
+                budget = pkg.get("budget")
+                if budget is not None:
+                    assert budget <= max_daily, (
+                        f"Package budget {budget} exceeds tenant max_daily_package_spend {max_daily} — "
+                        "step claims 'does not exceed max_daily_package_spend'"
+                    )
     ctx.setdefault("daily_spend_validated", True)
 
 
@@ -193,36 +204,52 @@ def given_creatives_in_valid_state(ctx: dict) -> None:
     ids = ctx.get("referenced_creative_ids")
     assert ids and len(ids) > 0, "No referenced creative_ids — missing prior step"
     # Prior step (given_creatives_exist_in_library) creates with approved=True.
-    # If we have DB access, verify the status is not error/rejected.
+    # Verify the status is not error/rejected via DB query.
     from sqlalchemy import select
 
     from src.core.database.database_session import get_db_session
     from src.core.database.models import Creative as CreativeModel
 
     tenant = ctx.get("tenant")
-    if tenant is not None:
-        invalid_statuses = ("error", "rejected")
-        with get_db_session() as session:
-            for cid in ids:
-                cr = session.scalars(
-                    select(CreativeModel).filter_by(creative_id=cid, tenant_id=tenant.tenant_id)
-                ).first()
-                if cr is not None:
-                    assert cr.status not in invalid_statuses, (
-                        f"Creative {cid} is in '{cr.status}' state — step claims 'not error or rejected'"
-                    )
+    assert tenant is not None, (
+        "No tenant in ctx — step claims 'all referenced creatives are in valid state' "
+        "but cannot verify without tenant context"
+    )
+    invalid_statuses = ("error", "rejected")
+    with get_db_session() as session:
+        for cid in ids:
+            cr = session.scalars(select(CreativeModel).filter_by(creative_id=cid, tenant_id=tenant.tenant_id)).first()
+            assert cr is not None, (
+                f"Creative {cid} not found in DB for tenant {tenant.tenant_id} — "
+                "step claims creatives are 'in valid state' but creative doesn't exist"
+            )
+            assert cr.status not in invalid_statuses, (
+                f"Creative {cid} is in '{cr.status}' state — step claims 'not error or rejected'"
+            )
 
 
 @given("all placement_ids are valid for the product")
 def given_placement_ids_valid(ctx: dict) -> None:
-    """Declarative guard — default test product accepts all placement_ids.
+    """Declarative guard — verifies placement_ids are valid for the product.
 
     The guaranteed_display product created by setup_update_data() does not
-    restrict placements, so any placement_id is valid.
+    restrict placements, so any placement_id is valid. When a product has
+    explicit placement restrictions, this step verifies compatibility.
     """
     pids = ctx.get("referenced_placement_ids")
     assert pids is not None, "No referenced placement_ids — missing prior step"
     assert isinstance(pids, list), f"Expected placement_ids to be a list, got {type(pids).__name__}"
+    assert len(pids) > 0, "placement_ids list is empty — step claims placements are 'valid for the product'"
+    # Verify product does not have restrictive placement config that would reject these
+    product = ctx.get("default_product") or ctx.get("existing_product")
+    if product is not None:
+        allowed = getattr(product, "allowed_placement_ids", None)
+        if allowed is not None:
+            invalid = [p for p in pids if p not in allowed]
+            assert not invalid, (
+                f"Placement IDs {invalid} are not in product's allowed placements {allowed} — "
+                "step claims 'all placement_ids are valid for the product'"
+            )
 
 
 @given("the package update includes inline creatives with valid content")
