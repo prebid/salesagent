@@ -76,6 +76,7 @@ def given_tenant_auto_approval(ctx: dict) -> None:
         env._tenant_overrides["human_review_required"] = False
 
 
+@given("the tenant is configured for manual approval")
 @given(parsers.parse('the tenant has "human_review_required" set to true'))
 @given("tenant human_review_required is true")
 @given("approval path is manual")

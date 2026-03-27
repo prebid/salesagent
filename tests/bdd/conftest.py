@@ -212,6 +212,11 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-003-partition-optimization-goals": "optimization_goals not in production schemas — spec-production gap",
     "T-UC-003-boundary-optimization-goals": "optimization_goals not in production schemas — spec-production gap",
     "T-UC-003-alt-optimization-goals": "optimization_goals not in production schemas — spec-production gap",
+    # FIXME(salesagent-9vgz.16): UpdateMediaBuySuccess has no status field
+    # Unlike CreateMediaBuyResult which wraps response+status, the update path returns
+    # UpdateMediaBuySuccess directly with no status/implementation_date tracking.
+    # Spec expects status="submitted" and implementation_date=null for manual approval.
+    "T-UC-003-alt-manual": "UpdateMediaBuySuccess has no status field — spec-production gap",
     # FIXME(salesagent-9vgz.19): catalog validation not implemented in production
     # PackageRequest accepts catalogs (inherited from adcp library) but production
     # code never validates duplicate types or catalog_id existence.

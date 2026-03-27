@@ -471,6 +471,16 @@ def then_response_buyer_ref(ctx: dict, buyer_ref: str) -> None:
     assert actual == buyer_ref, f"Expected buyer_ref '{buyer_ref}', got '{actual}'"
 
 
+@then("the response should contain implementation_date that is null")
+def then_implementation_date_null(ctx: dict) -> None:
+    """Assert response has a null implementation_date (pending approval)."""
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    assert hasattr(resp, "implementation_date"), "Response has no implementation_date field"
+    impl_date = resp.implementation_date
+    assert impl_date is None, f"Expected implementation_date to be None (pending approval), got {impl_date!r}"
+
+
 @then("the response should contain an implementation_date that is not null")
 def then_implementation_date_not_null(ctx: dict) -> None:
     """Assert response has a non-null implementation_date."""
