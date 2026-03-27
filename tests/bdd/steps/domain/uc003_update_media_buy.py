@@ -58,6 +58,8 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
 @given(parsers.parse("the request includes 1 package update with:"))
 def given_package_update_with_table(ctx: dict, datatable: list[list[str]]) -> None:
     """Add a package update to the request from a data table."""
+    import json
+
     kwargs = _ensure_update_defaults(ctx)
     pkg_update: dict[str, Any] = {}
     for row in datatable:
@@ -68,6 +70,8 @@ def given_package_update_with_table(ctx: dict, datatable: list[list[str]]) -> No
             pkg_update["budget"] = float(value)
         elif field == "paused":
             pkg_update["paused"] = value.lower() == "true"
+        elif field == "targeting_overlay":
+            pkg_update["targeting_overlay"] = json.loads(value)
     kwargs["packages"] = [pkg_update]
 
 

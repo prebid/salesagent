@@ -364,10 +364,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     item.add_marker(pytest.mark.xfail(reason="REST endpoint drops filter params", strict=True))
                     break
 
-        # FIXME(salesagent-9vgz.11): UC-003 creative scenarios — REST endpoint doesn't
-        # forward packages/creative_assignments/creatives to update_media_buy_raw
+        # FIXME(salesagent-9vgz.11): UC-003 package-level update scenarios — REST endpoint
+        # doesn't forward packages/creative_assignments/creatives/targeting_overlay to
+        # update_media_buy_raw
         if is_rest and (
-            "T-UC-003-alt-creative-assignments" in marker_names or "T-UC-003-alt-creatives-inline" in marker_names
+            "T-UC-003-alt-creative-assignments" in marker_names
+            or "T-UC-003-alt-creatives-inline" in marker_names
+            or "T-UC-003-alt-targeting" in marker_names
         ):
             item.add_marker(
                 pytest.mark.xfail(
