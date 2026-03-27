@@ -67,13 +67,15 @@ def _ensure_request_defaults(ctx: dict) -> dict[str, Any]:
 def given_tenant_auto_approval(ctx: dict) -> None:
     """Configure tenant for auto-approval (human_review_required=False)."""
     tenant = ctx.get("tenant")
-    if tenant:
-        tenant.human_review_required = False
-        env = ctx["env"]
-        env._commit_factory_data()
-        # Also update identity's tenant dict (pre-built, not re-read from DB)
-        env._identity_cache.clear()
-        env._tenant_overrides["human_review_required"] = False
+    assert tenant is not None, (
+        "No tenant in ctx — step claims 'tenant is configured for auto-approval' but no tenant exists to configure"
+    )
+    tenant.human_review_required = False
+    env = ctx["env"]
+    env._commit_factory_data()
+    # Also update identity's tenant dict (pre-built, not re-read from DB)
+    env._identity_cache.clear()
+    env._tenant_overrides["human_review_required"] = False
 
 
 @given("the tenant is configured for manual approval")
@@ -306,8 +308,10 @@ def given_request_with_start_time(ctx: dict, value: str) -> None:
 def given_request_with_total_budget(ctx: dict, amount: int) -> None:
     """Set up request with a specific total budget amount on the first package."""
     kwargs = _ensure_request_defaults(ctx)
-    if kwargs.get("packages"):
-        kwargs["packages"][0]["budget"] = float(amount)
+    assert kwargs.get("packages"), (
+        "No packages in request — step claims 'with total budget' but cannot set budget without packages"
+    )
+    kwargs["packages"][0]["budget"] = float(amount)
 
 
 @given(parsers.parse("a create_media_buy request with total_budget of {amount:d}"))
@@ -318,8 +322,10 @@ def given_request_with_total_budget_of(ctx: dict, amount: int) -> None:
     deliberately allows invalid amounts for validation-error scenarios.
     """
     kwargs = _ensure_request_defaults(ctx)
-    if kwargs.get("packages"):
-        kwargs["packages"][0]["budget"] = float(amount)
+    assert kwargs.get("packages"), (
+        "No packages in request — step claims 'total_budget of {amount}' but cannot set budget without packages"
+    )
+    kwargs["packages"][0]["budget"] = float(amount)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -374,17 +380,42 @@ def given_packages_positive_budget(ctx: dict) -> None:
 
 @given(parsers.parse('all packages use the same currency "{currency}"'))
 def given_packages_same_currency(ctx: dict, currency: str) -> None:
-    """Ensure all packages use the specified currency via their pricing options."""
-    # Currency comes from the pricing option, not the package directly.
-    # Default pricing options are already the specified currency.
-    ctx.setdefault("expected_currency", currency)
+    """Ensure all packages use the specified currency via their pricing options.
+
+    Verifies the default pricing option's currency matches the claimed currency.
+    Currency comes from the pricing option, not the package directly.
+    """
+    ctx["expected_currency"] = currency
+    # Verify the default pricing option actually uses this currency
+    po = ctx.get("default_pricing_option")
+    assert po is not None, (
+        "No default_pricing_option in ctx — step claims 'all packages use the same currency' "
+        "but no pricing option exists to verify currency against"
+    )
+    assert po.currency.upper() == currency.upper(), (
+        f"Step claims all packages use currency '{currency}' but default pricing option "
+        f"has currency '{po.currency}' — setup mismatch"
+    )
 
 
 @given("each package has a valid pricing_option_id")
 def given_packages_valid_pricing(ctx: dict) -> None:
-    """Ensure each package has a valid pricing_option_id."""
-    # Default packages already reference valid pricing options created by setup_media_buy_data.
-    ctx.setdefault("pricing_validated", True)
+    """Ensure each package has a valid pricing_option_id.
+
+    Verifies the request packages actually reference pricing_option_ids, not just
+    recording a boolean flag. Default packages reference valid pricing options
+    created by setup_media_buy_data.
+    """
+    kwargs = ctx.get("request_kwargs")
+    assert kwargs is not None, "No request_kwargs in ctx — step claims packages have valid pricing"
+    packages = kwargs.get("packages", [])
+    assert packages, "No packages in request — step claims each has a valid pricing_option_id"
+    for i, pkg in enumerate(packages):
+        po_id = pkg.get("pricing_option_id")
+        assert po_id is not None, (
+            f"Package {i} has no pricing_option_id — step claims 'each package has a valid pricing_option_id'"
+        )
+    ctx["pricing_validated"] = True
 
 
 @given("a valid create_media_buy request with 2 packages")
@@ -628,9 +659,11 @@ def given_bid_below_floor(ctx: dict, bid: float, floor: float) -> None:
     )
     env._commit_factory_data()
     kwargs = _ensure_request_defaults(ctx)
-    if kwargs.get("packages"):
-        kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(auction_po)
-        kwargs["packages"][0]["bid_price"] = bid
+    assert kwargs.get("packages"), (
+        "No packages in request — step claims 'a package has bid_price' but no package exists to set it on"
+    )
+    kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(auction_po)
+    kwargs["packages"][0]["bid_price"] = bid
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -664,16 +697,31 @@ def given_floor_price_only(ctx: dict) -> None:
     )
     env._commit_factory_data()
     kwargs = _ensure_request_defaults(ctx)
-    if kwargs.get("packages"):
-        kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(auction_po)
+    assert kwargs.get("packages"), (
+        "No packages in request — step claims 'a package pricing option' but no package exists to associate it with"
+    )
+    kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(auction_po)
 
 
 @given("the package has a bid_price above the floor")
 def given_bid_above_floor(ctx: dict) -> None:
-    """Set bid_price above the pricing option's floor price."""
+    """Set bid_price above the pricing option's floor price.
+
+    Requires a prior step that sets up an auction pricing option with a floor.
+    The default floor from given_floor_price_only is 2.0.
+    """
     kwargs = _ensure_request_defaults(ctx)
-    if kwargs.get("packages"):
-        kwargs["packages"][0]["bid_price"] = 5.0  # Above default floor of 2.0
+    assert kwargs.get("packages"), (
+        "No packages in request — step claims 'the package has a bid_price' but no package exists"
+    )
+    # Derive bid from the actual floor price if available, otherwise use safe default
+    po = ctx.get("default_pricing_option")
+    floor = 2.0  # default from given_floor_price_only
+    if po is not None and not po.is_fixed:
+        guidance = getattr(po, "price_guidance", None)
+        if isinstance(guidance, dict) and "floor" in guidance:
+            floor = float(guidance["floor"])
+    kwargs["packages"][0]["bid_price"] = floor + 3.0
 
 
 @given("a package pricing option has both fixed_price and floor_price set")
@@ -727,8 +775,8 @@ def _setup_fixed_pricing(ctx: dict, rate: float = 5.00) -> None:
             )
             env._commit_factory_data()
             kwargs = _ensure_request_defaults(ctx)
-            if kwargs.get("packages"):
-                kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(new_po)
+            assert kwargs.get("packages"), "No packages in request — cannot assign fixed pricing option"
+            kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(new_po)
         return
     # Default PO is not fixed — create a new fixed one
     env = ctx["env"]
@@ -741,8 +789,8 @@ def _setup_fixed_pricing(ctx: dict, rate: float = 5.00) -> None:
     )
     env._commit_factory_data()
     kwargs = _ensure_request_defaults(ctx)
-    if kwargs.get("packages"):
-        kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(new_po)
+    assert kwargs.get("packages"), "No packages in request — cannot assign fixed pricing option"
+    kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(new_po)
 
 
 def _setup_auction_pricing(ctx: dict, floor: float = 2.0, bid: float = 5.0) -> None:
@@ -757,9 +805,9 @@ def _setup_auction_pricing(ctx: dict, floor: float = 2.0, bid: float = 5.0) -> N
     )
     env._commit_factory_data()
     kwargs = _ensure_request_defaults(ctx)
-    if kwargs.get("packages"):
-        kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(auction_po)
-        kwargs["packages"][0]["bid_price"] = bid
+    assert kwargs.get("packages"), "No packages in request — cannot assign auction pricing option"
+    kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(auction_po)
+    kwargs["packages"][0]["bid_price"] = bid
 
 
 def _setup_both_pricing(ctx: dict, rate: float = 5.00, floor: float = 2.0) -> None:
@@ -780,8 +828,8 @@ def _setup_both_pricing(ctx: dict, rate: float = 5.00, floor: float = 2.0) -> No
     )
     env._commit_factory_data()
     kwargs = _ensure_request_defaults(ctx)
-    if kwargs.get("packages"):
-        kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(malformed_po)
+    assert kwargs.get("packages"), "No packages in request — cannot assign both-set pricing option"
+    kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(malformed_po)
 
 
 def _setup_neither_pricing(ctx: dict) -> None:
@@ -800,8 +848,8 @@ def _setup_neither_pricing(ctx: dict) -> None:
     )
     env._commit_factory_data()
     kwargs = _ensure_request_defaults(ctx)
-    if kwargs.get("packages"):
-        kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(malformed_po)
+    assert kwargs.get("packages"), "No packages in request — cannot assign neither-set pricing option"
+    kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(malformed_po)
 
 
 @given(parsers.parse("the pricing option configuration is {config}"))
@@ -831,8 +879,10 @@ def given_pricing_option_configuration(ctx: dict, config: str) -> None:
         )
         env._commit_factory_data()
         kwargs = _ensure_request_defaults(ctx)
-        if kwargs.get("packages"):
-            kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(cpa_po)
+        assert kwargs.get("packages"), (
+            "No packages in request — pricing option configuration 'cpa_model' requires at least one package"
+        )
+        kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(cpa_po)
 
     elif config in ("both_set", "fixed+floor"):
         _setup_both_pricing(ctx)
@@ -931,8 +981,10 @@ def given_currency_scenario(ctx: dict, partition: str) -> None:
             rate=5.00,
         )
         env._commit_factory_data()
-        if kwargs.get("packages"):
-            kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(po_eur)
+        assert kwargs.get("packages"), (
+            "No packages in request — currency_in_tenant_table partition requires packages to assign EUR PO"
+        )
+        kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(po_eur)
 
     elif partition == "mixed_currencies":
         # 2 packages with different currencies — production derives currency from
@@ -951,8 +1003,10 @@ def given_currency_scenario(ctx: dict, partition: str) -> None:
             rate=5.00,
         )
         env._commit_factory_data()
-        if kwargs.get("packages"):
-            kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(po_xyz)
+        assert kwargs.get("packages"), (
+            "No packages in request — currency_not_in_tenant partition requires packages to assign XYZ PO"
+        )
+        kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(po_xyz)
 
     else:
         raise ValueError(f"Unknown currency partition: {partition}")
@@ -991,8 +1045,8 @@ def given_currency_configuration(ctx: dict, config: str) -> None:
             rate=5.00,
         )
         env._commit_factory_data()
-        if kwargs.get("packages"):
-            kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(po_xyz)
+        assert kwargs.get("packages"), "No packages in request — '1 pkg XYZ' config requires packages to assign XYZ PO"
+        kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(po_xyz)
 
     else:
         raise ValueError(f"Unknown currency boundary config: {config}")
@@ -2250,9 +2304,15 @@ def given_proposal_not_exists(ctx: dict, proposal_id: str) -> None:
     """Mark that the referenced proposal does not exist.
 
     SPEC-PRODUCTION GAP: Production has no proposal store — proposal_id is
-    accepted but never validated. This step is a no-op; the scenario will
-    xfail at the Then assertion because production won't raise PROPOSAL_EXPIRED.
+    accepted but never validated. This step records the expected state; the
+    scenario will xfail at the Then assertion because production won't raise
+    PROPOSAL_EXPIRED.
+
+    FIXME(salesagent-9vgz.1): When production implements proposal storage, this step must:
+    1. Verify no proposal record exists for this ID, OR
+    2. Create an expired proposal record to test the expiry path
     """
+    assert proposal_id, "proposal_id must be non-empty"
     ctx["expected_proposal_missing"] = proposal_id
 
 
@@ -2263,7 +2323,12 @@ def given_proposal_budget_guidance_min(ctx: dict, amount: int) -> None:
 
     SPEC-PRODUCTION GAP: Production has no proposal budget guidance.
     This step records the expected minimum but production won't validate against it.
+
+    FIXME(salesagent-9vgz.1): When production implements proposal budget guidance, this step must:
+    1. Configure the proposal record with total_budget_guidance.min = amount
+    2. Verify the proposal exists in ctx before setting guidance
     """
+    assert amount >= 0, f"Budget guidance minimum must be non-negative, got {amount}"
     ctx["expected_budget_guidance_min"] = amount
 
 

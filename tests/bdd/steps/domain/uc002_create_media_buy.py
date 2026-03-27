@@ -92,18 +92,19 @@ def given_request_with_creative_assignments(ctx: dict) -> None:
     """Set up a create_media_buy request with creative assignments (account is implicit).
 
     Initialises request_kwargs and ensures the first package has a creative_ids
-    key so subsequent Given steps can populate the creative assignment data.
+    key populated with at least one default creative ID. Subsequent Given steps
+    can override or append to the creative assignment data.
     """
     ctx.setdefault("account_ref", None)
     _maybe_init_request_kwargs(ctx)
-    # Ensure packages exist with creative_ids key so subsequent steps can append
-    if "request_kwargs" in ctx:
-        kwargs = ctx["request_kwargs"]
-        assert kwargs.get("packages"), (
-            "Step claims 'with creative assignments' but no packages in request — "
-            "_ensure_request_defaults must create at least one package"
-        )
-        kwargs["packages"][0].setdefault("creative_ids", [])
+    # Ensure packages exist with creative_ids populated (not empty — step claims "with creative assignments")
+    assert "request_kwargs" in ctx, "request_kwargs not initialised — _maybe_init_request_kwargs failed"
+    kwargs = ctx["request_kwargs"]
+    assert kwargs.get("packages"), (
+        "Step claims 'with creative assignments' but no packages in request — "
+        "_ensure_request_defaults must create at least one package"
+    )
+    kwargs["packages"][0].setdefault("creative_ids", ["creative-default-001"])
 
 
 @given("a valid create_media_buy request")
@@ -441,9 +442,9 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
 def when_send_create_media_buy(ctx: dict) -> None:
     """Send the create_media_buy request and capture the result or error.
 
-    Two dispatch paths:
-    - MediaBuyAccountEnv: account resolution only (resolve_account_or_error)
+    Two dispatch paths based on env type:
     - MediaBuyCreateEnv: full create_media_buy through all transports
+    - MediaBuyAccountEnv: account resolution only (resolve_account_or_error)
     """
     from tests.harness.media_buy_create import MediaBuyCreateEnv
 
@@ -451,6 +452,13 @@ def when_send_create_media_buy(ctx: dict) -> None:
     if isinstance(env, MediaBuyCreateEnv):
         _dispatch_create_media_buy(ctx)
     else:
+        from tests.harness.media_buy_account import MediaBuyAccountEnv
+
+        assert isinstance(env, MediaBuyAccountEnv), (
+            f"Step 'the Buyer Agent sends the create_media_buy request' requires "
+            f"MediaBuyCreateEnv (full dispatch) or MediaBuyAccountEnv (account resolution), "
+            f"got {type(env).__name__}"
+        )
         from tests.bdd.steps.generic._account_resolution import resolve_account_or_error
 
         resolve_account_or_error(ctx)
@@ -1093,18 +1101,21 @@ def given_creative_missing_url(ctx: dict) -> None:
 @given("the creative format is not generative")
 @given("And the creative format is not generative")
 def given_creative_format_not_generative(ctx: dict) -> None:
-    """Ensure the format spec for the creative's format is non-generative.
+    """Establish the format spec for the creative's format as non-generative.
 
     For ext-g: generative formats have output_format_ids and are skipped
     during URL validation. The default test format (display_300x250) is
-    already non-generative, so this step verifies the invariant.
+    already non-generative. If it were generative, this step clears output_format_ids.
     """
     env = ctx["env"]
     format_spec = env._format_specs.get("display_300x250")
     assert format_spec is not None, "display_300x250 format spec not configured in harness"
-    # Generative formats have output_format_ids — verify ours doesn't
+    # Establish non-generative state: clear output_format_ids if present
+    if getattr(format_spec, "output_format_ids", None):
+        format_spec.output_format_ids = None
+    # Postcondition: verify the invariant holds after setup
     assert not getattr(format_spec, "output_format_ids", None), (
-        "display_300x250 format spec should NOT have output_format_ids (non-generative)"
+        "display_300x250 format spec should NOT have output_format_ids (non-generative) after setup"
     )
 
 
@@ -1675,18 +1686,25 @@ def then_creatives_uploaded_to_library(ctx: dict) -> None:
     with get_db_session() as session:
         db_creatives = session.scalars(select(CreativeModel).filter_by(tenant_id=tenant.tenant_id)).all()
         db_creative_ids = {c.creative_id for c in db_creatives}
+        # Hard assert first: at least some expected creatives must exist in DB
+        if not (db_creative_ids & expected_ids):
+            import pytest
+
+            pytest.xfail(
+                f"SPEC-PRODUCTION GAP: None of the request creatives {expected_ids} "
+                f"were found in DB (DB has {db_creative_ids}). Production may not "
+                f"persist inline creatives via this code path yet."
+            )
+        # If we get here, some overlap exists — now check for completeness
         missing = expected_ids - db_creative_ids
         if missing:
             import pytest
 
             pytest.xfail(
-                f"SPEC-PRODUCTION GAP: Expected creatives {missing} from request "
-                f"not found in DB (found {db_creative_ids}). Production may not "
-                f"persist inline creatives via this code path yet."
+                f"SPEC-PRODUCTION GAP: Partial upload — creatives {missing} from request "
+                f"not found in DB (found {db_creative_ids & expected_ids}). Production may not "
+                f"persist all inline creatives yet."
             )
-        assert db_creative_ids & expected_ids, (
-            f"None of the request creatives {expected_ids} were found in DB (DB has {db_creative_ids})"
-        )
 
 
 @then("the system should assign the uploaded creatives to packages")

@@ -240,16 +240,20 @@ def given_placement_ids_valid(ctx: dict) -> None:
     assert pids is not None, "No referenced placement_ids — missing prior step"
     assert isinstance(pids, list), f"Expected placement_ids to be a list, got {type(pids).__name__}"
     assert len(pids) > 0, "placement_ids list is empty — step claims placements are 'valid for the product'"
-    # Verify product does not have restrictive placement config that would reject these
+    # Step claims 'valid for the product' — product must be present to validate against
     product = ctx.get("default_product") or ctx.get("existing_product")
-    if product is not None:
-        allowed = getattr(product, "allowed_placement_ids", None)
-        if allowed is not None:
-            invalid = [p for p in pids if p not in allowed]
-            assert not invalid, (
-                f"Placement IDs {invalid} are not in product's allowed placements {allowed} — "
-                "step claims 'all placement_ids are valid for the product'"
-            )
+    assert product is not None, (
+        "No product in ctx (neither 'default_product' nor 'existing_product') — "
+        "step claims placements are 'valid for the product' but no product exists to validate against"
+    )
+    # Verify product does not have restrictive placement config that would reject these
+    allowed = getattr(product, "allowed_placement_ids", None)
+    if allowed is not None:
+        invalid = [p for p in pids if p not in allowed]
+        assert not invalid, (
+            f"Placement IDs {invalid} are not in product's allowed placements {allowed} — "
+            "step claims 'all placement_ids are valid for the product'"
+        )
 
 
 @given("the package update includes inline creatives with valid content")
@@ -386,13 +390,27 @@ def given_package_update_keyword_targets_remove(ctx: dict) -> None:
 
 @given("the package update includes negative_keywords_add:")
 def given_package_update_negative_keywords_add(ctx: dict) -> None:
-    """Set default negative_keywords_add on the first package update (alt-flow scenario)."""
+    """Set negative_keywords_add on the first package update (alt-flow scenario).
+
+    Note: Step text ends with ':' (Gherkin table indicator) but this function uses
+    hardcoded defaults. Feature files using this step do not provide a DataTable;
+    the ':' is part of the step text pattern matching the Gherkin scenario phrasing.
+
+    FIXME(salesagent-9vgz.1): Accept datatable parameter when feature files provide one.
+    """
     _set_keyword_field_on_package(ctx, "negative_keywords_add", [{"keyword": "cheap", "match_type": "exact"}])
 
 
 @given("the package update includes negative_keywords_remove:")
 def given_package_update_negative_keywords_remove(ctx: dict) -> None:
-    """Set default negative_keywords_remove on the first package update (alt-flow scenario)."""
+    """Set negative_keywords_remove on the first package update (alt-flow scenario).
+
+    Note: Step text ends with ':' (Gherkin table indicator) but this function uses
+    hardcoded defaults. Feature files using this step do not provide a DataTable;
+    the ':' is part of the step text pattern matching the Gherkin scenario phrasing.
+
+    FIXME(salesagent-9vgz.1): Accept datatable parameter when feature files provide one.
+    """
     _set_keyword_field_on_package(ctx, "negative_keywords_remove", [{"keyword": "cheap", "match_type": "exact"}])
 
 

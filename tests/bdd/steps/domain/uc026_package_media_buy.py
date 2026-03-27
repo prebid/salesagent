@@ -38,17 +38,20 @@ def given_product_with_pricing(ctx: dict, product_id: str, options: str) -> None
     # Verify the step parameter's option IDs are present in the product's pricing options
     try:
         expected_ids = json.loads(options)
-        if isinstance(expected_ids, list):
-            actual_ids = {
-                getattr(o, "id", None) or (o.get("id") if isinstance(o, dict) else str(o)) for o in actual_options
-            }
-            for eid in expected_ids:
-                eid_str = eid.get("id") if isinstance(eid, dict) else str(eid)
-                assert eid_str in actual_ids, (
-                    f"Expected pricing option '{eid_str}' not found in product's options {actual_ids}"
-                )
     except (json.JSONDecodeError, TypeError):
-        pass  # options parameter may not be JSON — stored as string for ctx
+        # options parameter is not valid JSON — treat as opaque string identifier.
+        # Still assert the product has pricing options (already checked above).
+        ctx["product_pricing_options"] = options
+        return
+    if isinstance(expected_ids, list):
+        actual_ids = {
+            getattr(o, "id", None) or (o.get("id") if isinstance(o, dict) else str(o)) for o in actual_options
+        }
+        for eid in expected_ids:
+            eid_str = eid.get("id") if isinstance(eid, dict) else str(eid)
+            assert eid_str in actual_ids, (
+                f"Expected pricing option '{eid_str}' not found in product's options {actual_ids}"
+            )
     ctx["product_pricing_options"] = options
 
 
@@ -71,21 +74,24 @@ def given_product_format_ids(ctx: dict, product_id: str, format_ids: str) -> Non
     # Verify the claimed format_ids are actually present in the product's format set
     try:
         expected = json.loads(format_ids)
-        if isinstance(expected, list):
-
-            def _extract_id(f: Any) -> str:
-                if isinstance(f, dict):
-                    return f.get("id", str(f))
-                if hasattr(f, "id"):
-                    return f.id
-                return str(f)
-
-            actual_set = {_extract_id(f) for f in actual_format_ids}
-            for ef in expected:
-                ef_id = _extract_id(ef)
-                assert ef_id in actual_set, f"Expected format '{ef_id}' not found in product's format_ids {actual_set}"
     except (json.JSONDecodeError, TypeError):
-        pass  # format_ids parameter may not be JSON — stored as string for ctx
+        # format_ids parameter is not valid JSON — treat as opaque string identifier.
+        # Still assert the product has format_ids (already checked above).
+        ctx["product_format_ids"] = format_ids
+        return
+    if isinstance(expected, list):
+
+        def _extract_id(f: Any) -> str:
+            if isinstance(f, dict):
+                return f.get("id", str(f))
+            if hasattr(f, "id"):
+                return f.id
+            return str(f)
+
+        actual_set = {_extract_id(f) for f in actual_format_ids}
+        for ef in expected:
+            ef_id = _extract_id(ef)
+            assert ef_id in actual_set, f"Expected format '{ef_id}' not found in product's format_ids {actual_set}"
     ctx["product_format_ids"] = format_ids
 
 

@@ -50,14 +50,24 @@ def given_principal_owns_media_buy_with_dates(ctx: dict, principal_id: str, mb_i
 def given_today_is(ctx: dict, today_str: str) -> None:
     """Override 'today' for status computation.
 
-    Stores the date string for reference AND validates it parses as a valid date.
-    Note: production code using ``date.today()`` directly will not see this override.
-    Status computation in query responses depends on actual system date; this step
-    documents the scenario's assumed date for human readers and Then-step tolerance.
+    Stores the date string AND patches ``date.today()`` in the production module
+    so that status computation sees the overridden date.
+
+    FIXME(salesagent-9vgz.1): If the production date.today() callsite moves,
+    update the patch target. Currently patches the scenario's assumed date
+    for Then-step tolerance windows.
     """
     # Validate the date string parses correctly (fail-fast on typos in feature files)
-    date.fromisoformat(today_str)
+    parsed = date.fromisoformat(today_str)
     ctx["mock_today"] = today_str
+    # Patch date.today() so production code sees the overridden date
+    from unittest.mock import patch
+
+    patcher = patch("src.core.main.date", wraps=date)
+    mock_date = patcher.start()
+    mock_date.today.return_value = parsed
+    mock_date.fromisoformat = date.fromisoformat
+    ctx.setdefault("_patchers", []).append(patcher)
 
 
 @given(parsers.parse('the principal "{principal_id}" owns media buys "{mb1}", "{mb2}", and "{mb3}"'))
@@ -135,31 +145,37 @@ def given_principal_owns_none(ctx: dict, principal_id: str) -> None:
 
 @given("the ad platform adapter supports realtime reporting")
 def given_adapter_supports_reporting(ctx: dict) -> None:
-    """Declarative guard — adapter supports realtime reporting for snapshots.
+    """Configure the adapter mock to support realtime reporting for snapshots.
 
-    FIXME(salesagent-9vgz.1): This step only sets a context boolean and does not
-    wire the adapter mock to actually provide reporting data. When the harness
-    supports adapter capability configuration, this step should:
-    1. Configure the adapter mock to return reporting capabilities
-    2. Set up mock reporting endpoints that return test data
-    3. Verify the adapter is actually wired to provide realtime data
+    FIXME(salesagent-9vgz.1): When the harness supports full adapter capability
+    configuration, this step should also set up mock reporting endpoints that
+    return test data (impressions, spend, etc.).
     """
     ctx["adapter_supports_reporting"] = True
-    # Verify env exists (guaranteed by autouse fixture) to confirm test harness is wired
-    _ = ctx["env"]
+    env = ctx["env"]
+    # Configure adapter mock to report it supports realtime reporting
+    adapter_mock = env.mock["adapter"].return_value
+    adapter_mock.supports_realtime_reporting = True
 
 
 @given(parsers.parse('snapshot data is available for package "{pkg_id}"'))
 def given_snapshot_available(ctx: dict, pkg_id: str) -> None:
-    """Declarative guard — snapshot data available for the specified package.
+    """Record that snapshot data should be available for the specified package.
 
     FIXME(salesagent-9vgz.1): This step should create actual snapshot data linked
-    to pkg_id. When the harness supports snapshot fixtures, this step must:
+    to pkg_id via a SnapshotFactory. When the harness supports snapshot fixtures,
+    this step must:
     1. Create a snapshot record in the DB for the specified package
     2. Include as_of timestamp, staleness_seconds, impressions, and spend
     3. Verify the snapshot is queryable via the production code path
+
+    Currently records the expectation; Then steps that check snapshot fields
+    will xfail with SPEC-PRODUCTION GAP if the data isn't present.
     """
     assert pkg_id, "pkg_id must be non-empty — step claims snapshot data is 'available for package'"
+    # Verify the package was actually seeded (not referencing a phantom package)
+    seeded = ctx.get("seeded_media_buys", {})
+    assert seeded, "No media buys seeded — step claims snapshot available but no media buys exist"
     ctx.setdefault("snapshot_available_packages", []).append(pkg_id)
     ctx["snapshot_available"] = True
 
