@@ -332,25 +332,35 @@ def then_package_details(ctx: dict) -> None:
 
     buys = _get_media_buys(ctx)
     assert len(buys) > 0, "No media buys in response to check"
+    paused_gaps: list[str] = []
     for buy in buys:
+        mb_id = getattr(buy, "media_buy_id", "?")
         packages = getattr(buy, "packages", None) or []
-        if packages:
-            for pkg in packages:
-                assert getattr(pkg, "package_id", None) is not None, "Package missing package_id"
-                # Step text claims: budget, bid_price, product_id, flight dates, paused
-                _assert_pkg_field_present(pkg, "product_id")
-                _assert_pkg_field_present(pkg, "budget")
-                # bid_price may be None for fixed-price options — verify field exists
-                assert hasattr(pkg, "bid_price") or (isinstance(pkg, dict) and "bid_price" in pkg), (
-                    "Package missing bid_price field"
-                )
-                # Flight dates: step text explicitly claims these are present
-                _assert_flight_dates_present(pkg)
-                # paused must be a boolean, not absent
-                paused = getattr(pkg, "paused", None) if not isinstance(pkg, dict) else pkg.get("paused")
-                if paused is None:
-                    pytest.xfail("SPEC-PRODUCTION GAP: paused field not present on package")
-                assert isinstance(paused, bool), f"Expected paused to be bool, got {type(paused)}"
+        assert len(packages) > 0, (
+            f"Media buy '{mb_id}' has no packages — step text claims "
+            "'each media buy should include package-level details' but packages list is empty"
+        )
+        for pkg in packages:
+            assert getattr(pkg, "package_id", None) is not None, "Package missing package_id"
+            # Step text claims: budget, bid_price, product_id, flight dates, paused
+            _assert_pkg_field_present(pkg, "product_id")
+            _assert_pkg_field_present(pkg, "budget")
+            # bid_price may be None for fixed-price options — verify field exists
+            assert hasattr(pkg, "bid_price") or (isinstance(pkg, dict) and "bid_price" in pkg), (
+                "Package missing bid_price field"
+            )
+            # Flight dates: step text explicitly claims these are present
+            _assert_flight_dates_present(pkg)
+            # paused must be a boolean, not absent — collect gaps across ALL packages
+            paused = getattr(pkg, "paused", None) if not isinstance(pkg, dict) else pkg.get("paused")
+            if paused is None:
+                paused_gaps.append(f"package {getattr(pkg, 'package_id', '?')} in {mb_id}")
+            elif not isinstance(paused, bool):
+                raise AssertionError(f"Expected paused to be bool, got {type(paused)}")
+    if paused_gaps:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: paused field not present on {len(paused_gaps)} package(s): {', '.join(paused_gaps)}"
+        )
 
 
 @then("each package should include creative approval state when creatives are assigned")
@@ -483,7 +493,12 @@ def then_snapshot_fields(ctx: dict) -> None:
                     if val is None:
                         missing_fields.append(field)
     assert checked_any, "No snapshots found — this step requires at least one snapshot to verify"
-    if missing_fields:
+    try:
+        assert not missing_fields, (
+            f"Snapshot missing fields: {sorted(set(missing_fields))}. "
+            f"Step claims all 4 (as_of, staleness_seconds, impressions, spend) are present."
+        )
+    except AssertionError:
         pytest.xfail(
             f"SPEC-PRODUCTION GAP: Snapshot missing fields: {sorted(set(missing_fields))}. "
             f"Step claims all 4 (as_of, staleness_seconds, impressions, spend) are present."

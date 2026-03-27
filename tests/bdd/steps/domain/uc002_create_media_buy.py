@@ -1236,11 +1236,14 @@ def given_creative_in_error_state(ctx: dict) -> None:
         },
     )
     env._commit_factory_data()
-    if kwargs.get("packages"):
-        pkg = kwargs["packages"][0]
-        existing = pkg.get("creative_ids") or []
-        existing.append(creative.creative_id)
-        pkg["creative_ids"] = existing
+    assert kwargs.get("packages"), (
+        "packages must be initialized before adding creative — "
+        "step text claims a creative is associated with a package but no packages exist"
+    )
+    pkg = kwargs["packages"][0]
+    existing = pkg.get("creative_ids") or []
+    existing.append(creative.creative_id)
+    pkg["creative_ids"] = existing
 
 
 @given("a creative format is incompatible with the product's supported formats")
@@ -1282,11 +1285,14 @@ def given_creative_format_incompatible(ctx: dict) -> None:
         name="Display 728x90 Leaderboard",
         type="display",
     )
-    if kwargs.get("packages"):
-        pkg = kwargs["packages"][0]
-        existing = pkg.get("creative_ids") or []
-        existing.append(creative.creative_id)
-        pkg["creative_ids"] = existing
+    assert kwargs.get("packages"), (
+        "packages must be initialized before setting creative format incompatibility — "
+        "step text claims a creative is associated with a package but no packages exist"
+    )
+    pkg = kwargs["packages"][0]
+    existing = pkg.get("creative_ids") or []
+    existing.append(creative.creative_id)
+    pkg["creative_ids"] = existing
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1334,18 +1340,27 @@ def then_creative_assignment_proceeds(ctx: dict) -> None:
 
 @given(parsers.parse("the system returns a transient error ({error_type})"))
 def given_transient_error(ctx: dict, error_type: str) -> None:
-    """Configure mock adapter to raise a transient error (e.g., RATE_LIMITED).
+    """Configure mock adapter to raise a transient error matching error_type.
 
-    Sets the adapter mock's create_media_buy side_effect to an AdCPRateLimitError
-    with retry_after in details, so the error flows through dispatch as a real
-    transient error with recovery hints.
+    Maps error_type to the appropriate AdCP exception class so the error
+    flows through dispatch as the correct transient error type.
     """
-    from src.core.exceptions import AdCPRateLimitError
+    from src.core.exceptions import AdCPRateLimitError, AdCPServiceUnavailableError
+
+    _transient_error_map: dict[str, type] = {
+        "RATE_LIMITED": AdCPRateLimitError,
+        "SERVICE_UNAVAILABLE": AdCPServiceUnavailableError,
+        "TIMEOUT": AdCPServiceUnavailableError,
+    }
+    error_cls = _transient_error_map.get(error_type)
+    assert error_cls is not None, (
+        f"Unknown transient error type '{error_type}'. Supported: {sorted(_transient_error_map.keys())}"
+    )
 
     env = ctx["env"]
     mock_adapter = env.mock["adapter"].return_value
-    mock_adapter.create_media_buy.side_effect = AdCPRateLimitError(
-        f"{error_type}: too many requests",
+    mock_adapter.create_media_buy.side_effect = error_cls(
+        f"{error_type}: transient error",
         details={"retry_after": 30, "error_code": error_type},
         recovery="transient",
     )
@@ -1370,8 +1385,11 @@ def given_unsupported_optimization_metric(ctx: dict, kind: str, metric: str) -> 
     from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
 
     kwargs = _ensure_request_defaults(ctx)
-    if kwargs.get("packages"):
-        kwargs["packages"][0]["optimization_goals"] = [{"kind": kind, "metric": metric, "priority": 1}]
+    assert kwargs.get("packages"), (
+        "packages must be initialized before setting optimization_goals — "
+        "step text claims a package has a specific optimization_goal but no packages exist"
+    )
+    kwargs["packages"][0]["optimization_goals"] = [{"kind": kind, "metric": metric, "priority": 1}]
 
 
 @given('a package has optimization_goal with kind "event" and unregistered event_source_id')
@@ -1386,10 +1404,13 @@ def given_unregistered_event_source(ctx: dict) -> None:
     from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
 
     kwargs = _ensure_request_defaults(ctx)
-    if kwargs.get("packages"):
-        kwargs["packages"][0]["optimization_goals"] = [
-            {"kind": "event", "event_source_id": "evt-unregistered-999", "priority": 1}
-        ]
+    assert kwargs.get("packages"), (
+        "packages must be initialized before setting optimization_goals — "
+        "step text claims a package has an unregistered event_source_id but no packages exist"
+    )
+    kwargs["packages"][0]["optimization_goals"] = [
+        {"kind": "event", "event_source_id": "evt-unregistered-999", "priority": 1}
+    ]
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1410,11 +1431,14 @@ def given_duplicate_optimization_priority(ctx: dict) -> None:
     from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
 
     kwargs = _ensure_request_defaults(ctx)
-    if kwargs.get("packages"):
-        kwargs["packages"][0]["optimization_goals"] = [
-            {"kind": "metric", "metric": "viewability", "priority": 1},
-            {"kind": "metric", "metric": "ctr", "priority": 1},
-        ]
+    assert kwargs.get("packages"), (
+        "packages must be initialized before setting optimization_goals — "
+        "step text claims duplicate priority values but no packages exist"
+    )
+    kwargs["packages"][0]["optimization_goals"] = [
+        {"kind": "metric", "metric": "viewability", "priority": 1},
+        {"kind": "metric", "metric": "ctr", "priority": 1},
+    ]
 
 
 @given("a package has optimization_goals as an empty array")
@@ -1429,8 +1453,11 @@ def given_empty_optimization_goals(ctx: dict) -> None:
     from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
 
     kwargs = _ensure_request_defaults(ctx)
-    if kwargs.get("packages"):
-        kwargs["packages"][0]["optimization_goals"] = []
+    assert kwargs.get("packages"), (
+        "packages must be initialized before setting optimization_goals — "
+        "step text claims empty optimization_goals but no packages exist to set it on"
+    )
+    kwargs["packages"][0]["optimization_goals"] = []
 
 
 @given(parsers.parse('a package has an event kind optimization goal with target kind "{target_kind}"'))
@@ -1446,17 +1473,20 @@ def given_event_optimization_with_target(ctx: dict, target_kind: str) -> None:
     from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
 
     kwargs = _ensure_request_defaults(ctx)
-    if kwargs.get("packages"):
-        kwargs["packages"][0]["optimization_goals"] = [
-            {
-                "kind": "event",
-                "event_source_id": "evt-src-001",
-                "target": {"kind": target_kind, "value": 5.0},
-                "priority": 1,
-            }
-        ]
-        # Also set up event_sources without value_field (companion step may override)
-        kwargs["packages"][0].setdefault("event_sources", [{"event_source_id": "evt-src-001", "name": "conversions"}])
+    assert kwargs.get("packages"), (
+        "packages must be initialized before setting event optimization goals — "
+        "step text claims a package has an event kind optimization goal but no packages exist"
+    )
+    kwargs["packages"][0]["optimization_goals"] = [
+        {
+            "kind": "event",
+            "event_source_id": "evt-src-001",
+            "target": {"kind": target_kind, "value": 5.0},
+            "priority": 1,
+        }
+    ]
+    # Also set up event_sources without value_field (companion step may override)
+    kwargs["packages"][0].setdefault("event_sources", [{"event_source_id": "evt-src-001", "name": "conversions"}])
 
 
 @given("no event_sources entry has value_field set")
@@ -1470,13 +1500,16 @@ def given_no_value_field_on_event_sources(ctx: dict) -> None:
     from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
 
     kwargs = _ensure_request_defaults(ctx)
-    if kwargs.get("packages"):
-        pkg = kwargs["packages"][0]
-        # Ensure event_sources exist but none have value_field
-        event_sources = pkg.get("event_sources", [{"event_source_id": "evt-src-001", "name": "conversions"}])
-        for es in event_sources:
-            es.pop("value_field", None)
-        pkg["event_sources"] = event_sources
+    assert kwargs.get("packages"), (
+        "packages must be initialized before modifying event_sources — "
+        "step text claims 'no event_sources entry has value_field set' but no packages exist"
+    )
+    pkg = kwargs["packages"][0]
+    # Ensure event_sources exist but none have value_field
+    event_sources = pkg.get("event_sources", [{"event_source_id": "evt-src-001", "name": "conversions"}])
+    for es in event_sources:
+        es.pop("value_field", None)
+    pkg["event_sources"] = event_sources
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1496,11 +1529,14 @@ def given_duplicate_catalog_types(ctx: dict, catalog_type: str) -> None:
     from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
 
     kwargs = _ensure_request_defaults(ctx)
-    if kwargs.get("packages"):
-        kwargs["packages"][0]["catalogs"] = [
-            {"type": catalog_type, "url": "https://example.com/feed-a.xml"},
-            {"type": catalog_type, "url": "https://example.com/feed-b.xml"},
-        ]
+    assert kwargs.get("packages"), (
+        "packages must be initialized before setting catalogs — "
+        "step text claims duplicate catalog types but no packages exist"
+    )
+    kwargs["packages"][0]["catalogs"] = [
+        {"type": catalog_type, "url": "https://example.com/feed-a.xml"},
+        {"type": catalog_type, "url": "https://example.com/feed-b.xml"},
+    ]
 
 
 @given(parsers.parse('a package references catalog_id "{catalog_id}" not found in synced catalogs'))
@@ -1683,26 +1719,28 @@ def then_creatives_uploaded_to_library(ctx: dict) -> None:
                 expected_ids.add(cid)
     assert expected_ids, "No creative IDs found in request — cannot verify upload"
 
+    import pytest
+
     with get_db_session() as session:
         db_creatives = session.scalars(select(CreativeModel).filter_by(tenant_id=tenant.tenant_id)).all()
         db_creative_ids = {c.creative_id for c in db_creatives}
-        # Hard assert first: at least some expected creatives must exist in DB
-        if not (db_creative_ids & expected_ids):
-            import pytest
-
-            pytest.xfail(
-                f"SPEC-PRODUCTION GAP: None of the request creatives {expected_ids} "
-                f"were found in DB (DB has {db_creative_ids}). Production may not "
-                f"persist inline creatives via this code path yet."
+        # Hard assert: all expected creatives must exist in DB
+        try:
+            assert expected_ids <= db_creative_ids, (
+                f"Expected all request creatives {expected_ids} in DB, "
+                f"but DB has {db_creative_ids}. Missing: {expected_ids - db_creative_ids}"
             )
-        # If we get here, some overlap exists — now check for completeness
-        missing = expected_ids - db_creative_ids
-        if missing:
-            import pytest
-
+        except AssertionError:
+            if not (db_creative_ids & expected_ids):
+                pytest.xfail(
+                    f"SPEC-PRODUCTION GAP: None of the request creatives {expected_ids} "
+                    f"were found in DB (DB has {db_creative_ids}). Production may not "
+                    f"persist inline creatives via this code path yet."
+                )
             pytest.xfail(
-                f"SPEC-PRODUCTION GAP: Partial upload — creatives {missing} from request "
-                f"not found in DB (found {db_creative_ids & expected_ids}). Production may not "
+                f"SPEC-PRODUCTION GAP: Partial upload — missing "
+                f"{expected_ids - db_creative_ids} from DB "
+                f"(found {db_creative_ids & expected_ids}). Production may not "
                 f"persist all inline creatives yet."
             )
 

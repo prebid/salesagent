@@ -67,15 +67,39 @@ def given_existing_mb_start_end_time(ctx: dict, start_time: str, end_time: str) 
 @given(parsers.parse("a valid update_media_buy request with:"))
 def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> None:
     """Build update request kwargs from a data table."""
+    import json
+
+    _supported_fields = {
+        "media_buy_id",
+        "buyer_ref",
+        "paused",
+        "start_time",
+        "end_time",
+        "packages",
+        "budget",
+    }
     kwargs = _ensure_update_defaults(ctx)
     for row in datatable:
         field, value = row[0].strip(), row[1].strip()
+        assert field in _supported_fields, (
+            f"Unrecognized update field '{field}' in datatable — "
+            f"step silently drops it. Supported: {sorted(_supported_fields)}. "
+            f"Add handling for '{field}' if it's a valid UpdateMediaBuyRequest field."
+        )
         if field == "media_buy_id":
             kwargs["media_buy_id"] = value
         elif field == "buyer_ref":
             kwargs["buyer_ref"] = value
         elif field == "paused":
             kwargs["paused"] = value.lower() == "true"
+        elif field == "start_time":
+            kwargs["start_time"] = value
+        elif field == "end_time":
+            kwargs["end_time"] = value
+        elif field == "budget":
+            kwargs["budget"] = float(value)
+        elif field == "packages":
+            kwargs["packages"] = json.loads(value)
 
 
 @given("the request does NOT include start_time, end_time, or paused fields")
@@ -401,11 +425,17 @@ def given_no_negative_keywords_in_update(ctx: dict) -> None:
     conflict with negative_keywords_add (BR-RULE-083).
     """
     kwargs = _ensure_update_defaults(ctx)
-    if kwargs.get("packages"):
-        pkg = kwargs["packages"][0]
-        overlay = pkg.get("targeting_overlay")
-        if isinstance(overlay, dict):
-            overlay.pop("negative_keywords", None)
+    if not kwargs.get("packages"):
+        return  # No packages → negative_keywords trivially absent
+    pkg = kwargs["packages"][0]
+    overlay = pkg.get("targeting_overlay")
+    if overlay is None:
+        return  # No overlay → negative_keywords trivially absent
+    if isinstance(overlay, dict):
+        overlay.pop("negative_keywords", None)
+    elif hasattr(overlay, "negative_keywords"):
+        # Handle Pydantic model overlays
+        overlay.negative_keywords = None
 
 
 # ═══════════════════════════════════════════════════════════════════════
