@@ -371,10 +371,24 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-003-alt-creative-assignments" in marker_names
             or "T-UC-003-alt-creatives-inline" in marker_names
             or "T-UC-003-alt-targeting" in marker_names
+            or "T-UC-003-alt-keyword-ops" in marker_names
+            or "T-UC-003-alt-keyword-remove" in marker_names
+            or "T-UC-003-alt-negative-keywords" in marker_names
         ):
             item.add_marker(
                 pytest.mark.xfail(
                     reason="REST endpoint doesn't forward packages param (spec-production gap)",
+                    strict=True,
+                )
+            )
+
+        # FIXME(salesagent-9vgz.14): UC-003 keyword_targets_add — production applies the
+        # keyword additions but returns empty affected_packages. impl/a2a/mcp pass the When
+        # step (no error) but the Then step "affected_packages including pkg_001" fails.
+        if "T-UC-003-alt-keyword-ops" in marker_names and not is_rest:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="keyword_targets_add: affected_packages empty after keyword add (spec-production gap)",
                     strict=True,
                 )
             )

@@ -313,6 +313,62 @@ def given_no_keyword_targets_in_update(ctx: dict) -> None:
             overlay.pop("keyword_targets", None)
 
 
+@given("no targeting_overlay.negative_keywords is present in the same package update")
+def given_no_negative_keywords_in_update(ctx: dict) -> None:
+    """Ensure the package update does not include negative_keywords in targeting_overlay.
+
+    Declarative guard — analogous to the keyword_targets guard above. Prevents
+    conflict with negative_keywords_add (BR-RULE-083).
+    """
+    kwargs = _ensure_update_defaults(ctx)
+    if kwargs.get("packages"):
+        pkg = kwargs["packages"][0]
+        overlay = pkg.get("targeting_overlay")
+        if isinstance(overlay, dict):
+            overlay.pop("negative_keywords", None)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GIVEN steps — keyword operations on package updates
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _set_keyword_field_on_package(ctx: dict, field: str, default_value: list[dict[str, Any]]) -> None:
+    """Set a keyword operation field on the first package update.
+
+    Shared helper for keyword_targets_add, keyword_targets_remove,
+    negative_keywords_add, and negative_keywords_remove steps.
+    """
+    kwargs = _ensure_update_defaults(ctx)
+    if not kwargs.get("packages"):
+        kwargs["packages"] = [{"package_id": "pkg_001"}]
+    kwargs["packages"][0][field] = default_value
+
+
+@given("the package update includes keyword_targets_add:")
+def given_package_update_keyword_targets_add(ctx: dict) -> None:
+    """Set default keyword_targets_add on the first package update (alt-flow scenario)."""
+    _set_keyword_field_on_package(ctx, "keyword_targets_add", [{"keyword": "shoes", "match_type": "broad"}])
+
+
+@given("the package update includes keyword_targets_remove:")
+def given_package_update_keyword_targets_remove(ctx: dict) -> None:
+    """Set default keyword_targets_remove on the first package update (alt-flow scenario)."""
+    _set_keyword_field_on_package(ctx, "keyword_targets_remove", [{"keyword": "shoes", "match_type": "broad"}])
+
+
+@given("the package update includes negative_keywords_add:")
+def given_package_update_negative_keywords_add(ctx: dict) -> None:
+    """Set default negative_keywords_add on the first package update (alt-flow scenario)."""
+    _set_keyword_field_on_package(ctx, "negative_keywords_add", [{"keyword": "cheap", "match_type": "exact"}])
+
+
+@given("the package update includes negative_keywords_remove:")
+def given_package_update_negative_keywords_remove(ctx: dict) -> None:
+    """Set default negative_keywords_remove on the first package update (alt-flow scenario)."""
+    _set_keyword_field_on_package(ctx, "negative_keywords_remove", [{"keyword": "cheap", "match_type": "exact"}])
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # WHEN step — dispatch update request
 # ═══════════════════════════════════════════════════════════════════════
