@@ -364,6 +364,30 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     item.add_marker(pytest.mark.xfail(reason="REST endpoint drops filter params", strict=True))
                     break
 
+        # FIXME(salesagent-9vgz.11): UC-003 creative scenarios — REST endpoint doesn't
+        # forward packages/creative_assignments/creatives to update_media_buy_raw
+        if is_rest and (
+            "T-UC-003-alt-creative-assignments" in marker_names or "T-UC-003-alt-creatives-inline" in marker_names
+        ):
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="REST endpoint doesn't forward packages param (spec-production gap)",
+                    strict=True,
+                )
+            )
+
+        # FIXME(salesagent-9vgz.11): UC-003 inline creatives — _sync_creatives_impl
+        # FK violation: creative_assignments references creative before commit.
+        # _sync_creatives_impl uses its own UoW scope; assignment FK check fails
+        # because the creative hasn't been committed in the outer transaction yet.
+        if "T-UC-003-alt-creatives-inline" in marker_names and not is_rest:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="inline creatives: FK violation in _sync_creatives_impl assignment path (spec-production gap)",
+                    strict=True,
+                )
+            )
+
         # FIXME(salesagent-9vgz.1): UC-002 alt-manual: workflow_step_id is exclude=True
         # in CreateMediaBuySuccess schema, so MCP/REST serialization drops it.
         # impl/a2a return raw Pydantic objects where the field is still accessible.
@@ -815,7 +839,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
     elif uc == "UC-003":
         # UC-003 update_media_buy — needs existing media buy in DB
         request.getfixturevalue("integration_db")
-        from tests.harness.media_buy_update import MediaBuyUpdateEnv
+        from tests.harness.media_buy_update import MediaBuyUpdateIntegrationEnv as MediaBuyUpdateEnv
 
         with MediaBuyUpdateEnv() as env:
             tenant, principal, media_buy, package = env.setup_update_data()

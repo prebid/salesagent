@@ -1,10 +1,10 @@
-"""MediaBuyUpdateEnv — unit test environment for _update_media_buy_impl.
+"""MediaBuyUpdateEnv — test environments for _update_media_buy_impl.
 
-Patches: MediaBuyUoW, get_principal_object, _verify_principal,
-         get_context_manager, get_adapter, get_audit_logger,
-         ensure_tenant_context, get_db_session.
+Two variants:
+- **MediaBuyUpdateEnv** (unit): All external deps mocked. Fast, isolated.
+- **MediaBuyUpdateIntegrationEnv** (integration/BDD): Real DB, mocks external services only.
 
-Usage::
+Unit env usage::
 
     def test_something() -> None:
         with MediaBuyUpdateEnv() as env:
@@ -37,7 +37,7 @@ from decimal import Decimal
 from typing import Any
 from unittest.mock import MagicMock
 
-from tests.harness._base import BaseTestEnv
+from tests.harness._base import BaseTestEnv, IntegrationEnv
 
 _MODULE = "src.core.tools.media_buy_update"
 _DB_MODULE = "src.core.database.database_session"
@@ -174,3 +174,162 @@ class MediaBuyUpdateEnv(BaseTestEnv):
 
         req = UpdateMediaBuyRequest(media_buy_id=media_buy_id, **kwargs)
         return _update_media_buy_impl(req=req, identity=self.identity)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Integration variant — real DB, mocks only external services
+# ═══════════════════════════════════════════════════════════════════════════
+
+_UPDATE_MODULE = "src.core.tools.media_buy_update"
+
+
+class MediaBuyUpdateIntegrationEnv(IntegrationEnv):
+    """Integration test environment for _update_media_buy_impl.
+
+    Real: DB, MediaBuyUoW, repositories, validation logic.
+    Mocked: adapter, audit logger, context manager.
+
+    Requires: integration_db pytest fixture.
+    """
+
+    EXTERNAL_PATCHES = {
+        "adapter": f"{_UPDATE_MODULE}.get_adapter",
+        "audit": f"{_UPDATE_MODULE}.get_audit_logger",
+        "context_mgr": f"{_UPDATE_MODULE}.get_context_manager",
+    }
+
+    def setup_update_data(self) -> tuple:
+        """Create the full dependency chain needed for update_media_buy.
+
+        Creates: tenant (with CurrencyLimit USD), principal, PropertyTag,
+        Product with PricingOption (with placements), a pre-existing media buy
+        with one package.
+
+        Returns (tenant, principal, media_buy, package).
+        """
+        from tests.factories import MediaBuyFactory, MediaPackageFactory
+
+        tenant, principal = self.setup_default_data()
+        self.setup_product_chain(
+            tenant,
+            placements=[
+                {"placement_id": "plc_a", "name": "Placement A"},
+                {"placement_id": "plc_b", "name": "Placement B"},
+            ],
+        )
+        media_buy = MediaBuyFactory(
+            tenant=tenant,
+            principal=principal,
+            media_buy_id="mb_existing",
+            buyer_ref="test-buyer-ref",
+            currency="USD",
+            status="active",
+        )
+        package = MediaPackageFactory(
+            media_buy=media_buy,
+            package_id="pkg_001",
+            package_config={
+                "package_id": "pkg_001",
+                "product_id": "guaranteed_display",
+                "budget": 5000.0,
+            },
+        )
+        self._commit_factory_data()
+        return tenant, principal, media_buy, package
+
+    def _configure_mocks(self) -> None:
+        """Set up happy-path defaults for external mocks."""
+        # Adapter: no manual approval by default
+        mock_adapter = MagicMock()
+        mock_adapter.manual_approval_required = False
+        mock_adapter.manual_approval_operations = []
+        mock_adapter.validate_media_buy_request.return_value = None
+        mock_adapter.add_creative_assets.return_value = None
+        mock_adapter.associate_creatives.return_value = None
+        self.mock["adapter"].return_value = mock_adapter
+
+        # Audit logger: no-op
+        mock_audit = MagicMock()
+        mock_audit.log_operation.return_value = None
+        mock_audit.log_security_violation.return_value = None
+        self.mock["audit"].return_value = mock_audit
+
+        # Context manager: creates real DB records for FK constraints.
+        # Uses shared helper from IntegrationEnv.
+        self.mock["context_mgr"].return_value = self._build_mock_context_manager(tool_name="update_media_buy")
+
+    REST_ENDPOINT = "/api/v1/media-buys/mb_existing"
+    REST_METHOD = "put"
+
+    def call_impl(self, **kwargs: Any) -> Any:
+        """Call _update_media_buy_impl with real DB."""
+        from src.core.schemas import UpdateMediaBuyRequest
+        from src.core.tools.media_buy_update import _update_media_buy_impl
+
+        self._commit_factory_data()
+        identity = kwargs.pop("identity", None) or self.identity
+
+        req = kwargs.pop("req", None)
+        if req is None:
+            req = UpdateMediaBuyRequest(**kwargs)
+
+        return _update_media_buy_impl(req=req, identity=identity)
+
+    def call_a2a(self, **kwargs: Any) -> Any:
+        """Call update_media_buy_raw (A2A wrapper)."""
+        from src.core.tools.media_buy_update import update_media_buy_raw
+
+        self._commit_factory_data()
+        kwargs.setdefault("identity", self.identity)
+        req = kwargs.pop("req", None)
+        if req is not None:
+            flat = req.model_dump(mode="json", exclude_none=True)
+            flat.update(kwargs)
+            kwargs = flat
+        return update_media_buy_raw(**kwargs)
+
+    def call_mcp(self, **kwargs: Any) -> Any:
+        """Call update_media_buy MCP wrapper."""
+        import asyncio
+        from unittest.mock import AsyncMock
+        from unittest.mock import MagicMock as MM
+
+        from fastmcp.server.context import Context
+
+        from src.core.tools.media_buy_update import update_media_buy
+        from tests.harness.transport import Transport
+
+        self._commit_factory_data()
+
+        req = kwargs.pop("req", None)
+        if req is not None:
+            flat = req.model_dump(mode="json", exclude_none=True)
+            flat.update(kwargs)
+            kwargs = flat
+
+        identity = kwargs.pop("identity", None) or self.identity_for(Transport.MCP)
+        mock_ctx = MM(spec=Context)
+        mock_ctx.get_state = AsyncMock(return_value=identity)
+
+        tool_result = asyncio.run(update_media_buy(ctx=mock_ctx, **kwargs))
+        data = dict(tool_result.structured_content)
+        return self.parse_rest_response(data)
+
+    def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
+        """Build REST request body from kwargs."""
+        kwargs.pop("identity", None)
+        req = kwargs.pop("req", None)
+        if req is not None:
+            body = req.model_dump(mode="json", exclude_none=True)
+            body.pop("media_buy_id", None)  # media_buy_id is in the URL, not body
+            return body
+        kwargs.pop("media_buy_id", None)
+        return kwargs
+
+    def parse_rest_response(self, data: dict[str, Any]) -> Any:
+        """Parse REST/MCP response into UpdateMediaBuySuccess or UpdateMediaBuyError."""
+        from src.core.schemas._base import UpdateMediaBuyError, UpdateMediaBuySuccess
+
+        if "errors" in data and data["errors"]:
+            return UpdateMediaBuyError(**data)
+        return UpdateMediaBuySuccess(**data)

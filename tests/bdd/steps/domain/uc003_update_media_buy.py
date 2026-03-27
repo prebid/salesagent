@@ -81,7 +81,11 @@ def given_package_exists(ctx: dict, package_id: str) -> None:
         MediaPackageFactory(
             media_buy=ctx["existing_media_buy"],
             package_id=package_id,
-            product_id="guaranteed_display",
+            package_config={
+                "package_id": package_id,
+                "product_id": "guaranteed_display",
+                "budget": 5000.0,
+            },
         )
         env._commit_factory_data()
 
@@ -100,6 +104,103 @@ def given_buyer_ref_resolves(ctx: dict, buyer_ref: str) -> None:
         mb.buyer_ref = buyer_ref
         env = ctx["env"]
         env._commit_factory_data()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GIVEN steps — creative_assignments / inline creatives on package updates
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given("the package update includes creative_assignments with:")
+def given_package_update_creative_assignments(ctx: dict, datatable: list[list[str]]) -> None:
+    """Add creative_assignments to the first package update from a data table.
+
+    Table columns: creative_id, weight, placement_ids (comma-separated).
+    First row is the header (skipped).
+    """
+    kwargs = _ensure_update_defaults(ctx)
+    if not kwargs.get("packages"):
+        kwargs["packages"] = [{"package_id": "pkg_001"}]
+    assignments = []
+    for row in datatable[1:]:  # skip header row
+        creative_id = row[0].strip()
+        weight = float(row[1].strip())
+        placement_ids = [p.strip() for p in row[2].strip().split(",") if p.strip()]
+        assignments.append(
+            {
+                "creative_id": creative_id,
+                "weight": weight,
+                "placement_ids": placement_ids,
+            }
+        )
+    kwargs["packages"][0]["creative_assignments"] = assignments
+    # Track referenced creative_ids for later guard steps
+    ctx["referenced_creative_ids"] = [a["creative_id"] for a in assignments]
+    ctx["referenced_placement_ids"] = [pid for a in assignments for pid in (a.get("placement_ids") or [])]
+
+
+@given("all referenced creative_ids exist in the creative library")
+def given_creatives_exist_in_library(ctx: dict) -> None:
+    """Create DB Creative records for all creative_ids referenced by creative_assignments."""
+    from tests.factories.creative import CreativeFactory
+
+    env = ctx["env"]
+    creative_ids = ctx.get("referenced_creative_ids", [])
+    for cid in creative_ids:
+        CreativeFactory(
+            creative_id=cid,
+            tenant=ctx["tenant"],
+            principal=ctx["principal"],
+            format="display_300x250",
+            approved=True,
+            data={"assets": {"primary": {"url": "https://example.com/banner.png", "width": 300, "height": 250}}},
+        )
+    env._commit_factory_data()
+
+
+@given("all referenced creatives are in valid state (not error or rejected)")
+def given_creatives_in_valid_state(ctx: dict) -> None:
+    """Declarative guard — creatives created by the previous step are already approved."""
+    # CreativeFactory with approved=True sets status="approved"
+    assert ctx.get("referenced_creative_ids"), "No referenced creative_ids — missing prior step"
+
+
+@given("all placement_ids are valid for the product")
+def given_placement_ids_valid(ctx: dict) -> None:
+    """Declarative guard — default test product accepts all placement_ids.
+
+    The guaranteed_display product created by setup_update_data() does not
+    restrict placements, so any placement_id is valid.
+    """
+    assert ctx.get("referenced_placement_ids") is not None, "No referenced placement_ids — missing prior step"
+
+
+@given("the package update includes inline creatives with valid content")
+def given_package_update_inline_creatives(ctx: dict) -> None:
+    """Add inline creative objects to the first package update.
+
+    Uses the adcp CreativeAsset structure with minimal valid content.
+    """
+    kwargs = _ensure_update_defaults(ctx)
+    if not kwargs.get("packages"):
+        kwargs["packages"] = [{"package_id": "pkg_001"}]
+    kwargs["packages"][0]["creatives"] = [
+        {
+            "creative_id": "inline-cr-001",
+            "name": "Inline Creative 1",
+            "format_id": {
+                "agent_url": "https://creative.adcontextprotocol.org",
+                "id": "display_300x250",
+            },
+            "assets": {
+                "primary": {
+                    "url": "https://example.com/banner-1.png",
+                    "width": 300,
+                    "height": 250,
+                }
+            },
+        }
+    ]
 
 
 # ═══════════════════════════════════════════════════════════════════════

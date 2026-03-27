@@ -63,33 +63,8 @@ class MediaBuyCreateEnv(IntegrationEnv):
 
         Returns (tenant, principal, product, pricing_option).
         """
-        from tests.factories import (
-            PricingOptionFactory,
-            ProductFactory,
-            PropertyTagFactory,
-            PublisherPartnerFactory,
-        )
-
         tenant, principal = self.setup_default_data()
-        # Fix subdomain to be DNS-compatible (no underscores)
-        if "_" in (tenant.subdomain or ""):
-            tenant.subdomain = tenant.subdomain.replace("_", "-")
-        PropertyTagFactory(tenant=tenant, tag_id="all_inventory", name="All Inventory")
-        PublisherPartnerFactory(
-            tenant=tenant,
-            publisher_domain="testpublisher.example.com",
-        )
-        product = ProductFactory(
-            tenant=tenant,
-            product_id="guaranteed_display",
-            property_tags=["all_inventory"],
-        )
-        pricing_option = PricingOptionFactory(
-            product=product,
-            pricing_model="cpm",
-            currency="USD",
-            is_fixed=True,
-        )
+        product, pricing_option = self.setup_product_chain(tenant)
         return tenant, principal, product, pricing_option
 
     def _configure_mocks(self) -> None:
@@ -152,63 +127,8 @@ class MediaBuyCreateEnv(IntegrationEnv):
 
         # Context manager: creates real DB records (Context + WorkflowStep)
         # so FK constraints on ObjectWorkflowMapping don't fail in the manual
-        # approval path.
-        mock_ctx_mgr = MagicMock()
-
-        def _create_real_context(*args: Any, **kwargs: Any) -> MagicMock:
-            """Create a real Context row so workflow steps can reference it."""
-            from src.core.database.database_session import get_db_session
-            from src.core.database.models import Context as DBContext
-
-            ctx_id = f"test_ctx_{uuid.uuid4().hex[:8]}"
-            with get_db_session() as session:
-                db_ctx = DBContext(
-                    context_id=ctx_id,
-                    tenant_id=self._tenant_id,
-                    principal_id=self._principal_id,
-                    conversation_history=[],
-                )
-                session.add(db_ctx)
-                session.commit()
-            mock_context = MagicMock()
-            mock_context.context_id = ctx_id
-            return mock_context
-
-        # Production calls create_context() + get_context(), not get_or_create_context()
-        mock_ctx_mgr.create_context.side_effect = _create_real_context
-        mock_ctx_mgr.get_context.return_value = None  # No pre-existing context
-
-        def _create_real_step(*args: Any, **kwargs: Any) -> MagicMock:
-            """Create a real WorkflowStep row so ObjectWorkflowMapping FK succeeds."""
-            from src.core.database.database_session import get_db_session
-            from src.core.database.models import WorkflowStep
-
-            step_id = f"test_step_{uuid.uuid4().hex[:8]}"
-            # Get the context_id from the most recent context
-            ctx_id = kwargs.get("context_id") or (args[0] if args else None)
-            if ctx_id is None:
-                # Fallback: create a context too
-                ctx = _create_real_context()
-                ctx_id = ctx.context_id
-            with get_db_session() as session:
-                db_step = WorkflowStep(
-                    step_id=step_id,
-                    context_id=ctx_id,
-                    step_type=kwargs.get("step_type", "tool_call"),
-                    tool_name=kwargs.get("tool_name", "create_media_buy"),
-                    status="pending",
-                    owner="principal",
-                )
-                session.add(db_step)
-                session.commit()
-            mock_step = MagicMock()
-            mock_step.step_id = step_id
-            return mock_step
-
-        mock_ctx_mgr.create_workflow_step.side_effect = _create_real_step
-        mock_ctx_mgr.update_workflow_step.return_value = None
-        mock_ctx_mgr.add_message.return_value = None
-        self.mock["context_mgr"].return_value = mock_ctx_mgr
+        # approval path. Uses shared helper from IntegrationEnv.
+        self.mock["context_mgr"].return_value = self._build_mock_context_manager(tool_name="create_media_buy")
 
         # Setup checklist: pass by default
         self.mock["setup_check"].return_value = None

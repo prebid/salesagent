@@ -294,7 +294,8 @@ class BaseTestEnv:
             app.dependency_overrides[_resolve_auth_dep] = lambda: identity
 
         body = self.build_rest_body(**kwargs)
-        return client.post(endpoint, json=body)
+        method = getattr(self, "REST_METHOD", "post")
+        return getattr(client, method)(endpoint, json=body)
 
     def call_rest(self, **kwargs: Any) -> Any:
         """Call the REST endpoint and parse the response.
@@ -505,6 +506,110 @@ class IntegrationEnv(BaseTestEnv):
         tenant = TenantFactory(tenant_id=self._tenant_id)
         principal = PrincipalFactory(tenant=tenant, principal_id=self._principal_id)
         return tenant, principal
+
+    def setup_product_chain(
+        self,
+        tenant: Any,
+        product_id: str = "guaranteed_display",
+        placements: list[dict[str, str]] | None = None,
+    ) -> tuple[Any, Any]:
+        """Create product + pricing option with required supporting data.
+
+        Creates: PropertyTag("all_inventory"), PublisherPartner, Product,
+        PricingOption (CPM/USD). Fixes DNS-incompatible subdomains.
+
+        Returns (product, pricing_option).
+        """
+        from tests.factories import (
+            PricingOptionFactory,
+            ProductFactory,
+            PropertyTagFactory,
+            PublisherPartnerFactory,
+        )
+
+        if "_" in (tenant.subdomain or ""):
+            tenant.subdomain = tenant.subdomain.replace("_", "-")
+        PropertyTagFactory(tenant=tenant, tag_id="all_inventory", name="All Inventory")
+        PublisherPartnerFactory(tenant=tenant, publisher_domain="testpublisher.example.com")
+        product = ProductFactory(
+            tenant=tenant,
+            product_id=product_id,
+            property_tags=["all_inventory"],
+            **({"placements": placements} if placements else {}),
+        )
+        pricing_option = PricingOptionFactory(
+            product=product,
+            pricing_model="cpm",
+            currency="USD",
+            is_fixed=True,
+        )
+        return product, pricing_option
+
+    def _build_mock_context_manager(self, tool_name: str = "tool_call") -> Any:
+        """Build a mock context manager with real DB records for FK constraints.
+
+        Creates real Context and WorkflowStep rows so FK constraints on
+        ObjectWorkflowMapping succeed. Returns the configured MagicMock.
+
+        Used by integration harnesses that mock the context manager but need
+        real DB rows for FK integrity.
+        """
+        import uuid
+        from unittest.mock import MagicMock
+
+        mock_ctx_mgr = MagicMock()
+
+        def _create_real_context(*args: Any, **kwargs: Any) -> MagicMock:
+            from src.core.database.database_session import get_db_session
+            from src.core.database.models import Context as DBContext
+
+            ctx_id = f"test_ctx_{uuid.uuid4().hex[:8]}"
+            with get_db_session() as session:
+                db_ctx = DBContext(
+                    context_id=ctx_id,
+                    tenant_id=self._tenant_id,
+                    principal_id=self._principal_id,
+                    conversation_history=[],
+                )
+                session.add(db_ctx)
+                session.commit()
+            mock_context = MagicMock()
+            mock_context.context_id = ctx_id
+            return mock_context
+
+        def _create_real_step(*args: Any, **kwargs: Any) -> MagicMock:
+            from src.core.database.database_session import get_db_session
+            from src.core.database.models import WorkflowStep
+
+            step_id = f"test_step_{uuid.uuid4().hex[:8]}"
+            ctx_id = kwargs.get("context_id") or (args[0] if args else None)
+            if ctx_id is None:
+                ctx = _create_real_context()
+                ctx_id = ctx.context_id
+            with get_db_session() as session:
+                db_step = WorkflowStep(
+                    step_id=step_id,
+                    context_id=ctx_id,
+                    step_type=kwargs.get("step_type", "tool_call"),
+                    tool_name=kwargs.get("tool_name", tool_name),
+                    status="pending",
+                    owner="principal",
+                )
+                session.add(db_step)
+                session.commit()
+            mock_step = MagicMock()
+            mock_step.step_id = step_id
+            return mock_step
+
+        # Wire both APIs (different envs use different create methods)
+        mock_ctx_mgr.create_context.side_effect = _create_real_context
+        mock_ctx_mgr.get_context.return_value = None
+        mock_ctx_mgr.get_or_create_context.side_effect = _create_real_context
+        mock_ctx_mgr.create_workflow_step.side_effect = _create_real_step
+        mock_ctx_mgr.update_workflow_step.return_value = None
+        mock_ctx_mgr.add_message.return_value = None
+
+        return mock_ctx_mgr
 
     def get_rest_client(self) -> Any:
         """Return FastAPI TestClient with default auth dep override.
