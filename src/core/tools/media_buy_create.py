@@ -350,7 +350,7 @@ def _validate_creatives_before_adapter_call(
             accepted_formats: set[str] = set()
             if product.format_ids:
                 for fmt in product.format_ids:
-                    fmt_id = fmt.get("id") if isinstance(fmt, dict) else getattr(fmt, "id", None)
+                    fmt_id = fmt.get("id")
                     if fmt_id:
                         accepted_formats.add(str(fmt_id))
             product_format_map[product.product_id] = accepted_formats
@@ -658,7 +658,6 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
 
                     # Convert formats to FormatId objects with comprehensive validation
                     from src.core.schemas import FormatId as FormatIdType
-                    from src.core.schemas import FormatReference
 
                     format_ids_list: list[FormatIdType] = []
                     formats = product.format_ids or []
@@ -667,55 +666,33 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
 
                     for idx, fmt in enumerate(formats):
                         try:
-                            # Most common case: dict from database (JSONB field returns dicts)
-                            if isinstance(fmt, dict):
-                                agent_url = fmt.get("agent_url")
-                                format_id = fmt.get("format_id") or fmt.get("id")
+                            # format_ids is a JSONB column — entries are always dicts
+                            agent_url = fmt.get("agent_url")
+                            format_id = fmt.get("format_id") or fmt.get("id")
 
-                                # Validate required fields exist and are non-empty strings
-                                if not agent_url or not isinstance(agent_url, str):
-                                    raise ValueError(f"Format missing or invalid agent_url: agent_url={agent_url!r}")
-                                if not validate_agent_url(agent_url):
-                                    raise ValueError(f"agent_url must be valid HTTP(S) URL: {agent_url!r}")
-                                if not format_id or not isinstance(format_id, str):
-                                    raise ValueError(f"Format missing or invalid id: id={format_id!r}")
+                            # Validate required fields exist and are non-empty strings
+                            if not agent_url or not isinstance(agent_url, str):
+                                raise ValueError(f"Format missing or invalid agent_url: agent_url={agent_url!r}")
+                            if not validate_agent_url(agent_url):
+                                raise ValueError(f"agent_url must be valid HTTP(S) URL: {agent_url!r}")
+                            if not format_id or not isinstance(format_id, str):
+                                raise ValueError(f"Format missing or invalid id: id={format_id!r}")
 
-                                # Pydantic automatically converts string to AnyUrl per FormatId schema
-                                # IMPORTANT: Include width, height, duration_ms from database (parameterized formats)
-                                # Convert to correct types (database may return int or need conversion)
-                                fmt_width = fmt.get("width")
-                                fmt_height = fmt.get("height")
-                                fmt_duration_ms = fmt.get("duration_ms")
+                            # Include width, height, duration_ms from database (parameterized formats)
+                            # Convert to correct types (database may return int or need conversion)
+                            fmt_width = fmt.get("width")
+                            fmt_height = fmt.get("height")
+                            fmt_duration_ms = fmt.get("duration_ms")
 
-                                format_ids_list.append(
-                                    FormatIdType(
-                                        agent_url=make_url(agent_url),
-                                        id=format_id,
-                                        width=int(fmt_width) if fmt_width is not None else None,
-                                        height=int(fmt_height) if fmt_height is not None else None,
-                                        duration_ms=float(fmt_duration_ms) if fmt_duration_ms is not None else None,
-                                    )
+                            format_ids_list.append(
+                                FormatIdType(
+                                    agent_url=make_url(agent_url),
+                                    id=format_id,
+                                    width=int(fmt_width) if fmt_width is not None else None,
+                                    height=int(fmt_height) if fmt_height is not None else None,
+                                    duration_ms=float(fmt_duration_ms) if fmt_duration_ms is not None else None,
                                 )
-
-                            # Already correct type (no conversion needed)
-                            elif isinstance(fmt, FormatIdType):
-                                # Defensive validation even for FormatId objects
-                                if not fmt.agent_url or not validate_agent_url(fmt.agent_url):
-                                    raise ValueError(f"FormatId has invalid agent_url: {fmt.agent_url!r}")
-                                if not fmt.id:
-                                    raise ValueError(f"FormatId has empty id: {fmt.id!r}")
-                                format_ids_list.append(fmt)
-
-                            # Legacy FormatReference object (convert format_id -> id)
-                            elif isinstance(fmt, FormatReference):
-                                if not fmt.agent_url or not validate_agent_url(fmt.agent_url):
-                                    raise ValueError(f"FormatReference has invalid agent_url: {fmt.agent_url!r}")
-                                if not fmt.format_id:
-                                    raise ValueError(f"FormatReference has empty format_id: {fmt.format_id!r}")
-                                format_ids_list.append(FormatIdType(agent_url=fmt.agent_url, id=fmt.format_id))
-
-                            else:
-                                raise ValueError(f"Unknown format type: {type(fmt).__name__}")
+                            )
 
                         except (ValueError, ValidationError) as e:
                             error_msg = (
