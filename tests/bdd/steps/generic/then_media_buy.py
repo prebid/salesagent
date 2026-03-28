@@ -108,12 +108,21 @@ def then_packages_have_details(ctx: dict) -> None:
 def then_approval_auto(ctx: dict) -> None:
     """Assert the response indicates auto-approval (task status 'completed').
 
-    Production: auto-approved → adapter called synchronously → status=completed.
+    Production mapping: auto-approved → adapter called synchronously → status=completed.
+    This is the documented production behavior per BR-RULE-017: when no manual
+    approval is required, the media buy is processed immediately and returned
+    with status='completed'. The step text "auto-approved" maps to status='completed'
+    because auto-approval means the full pipeline (validation → adapter → completion)
+    runs synchronously in a single request.
     """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response but none found"
     status = _get_response_field(resp, "status")
-    assert status == "completed", f"Expected auto-approval (status='completed'), got '{status}'"
+    # auto-approved = full pipeline ran synchronously → status is 'completed'
+    assert status == "completed", (
+        f"Expected auto-approval (status='completed' per BR-RULE-017), got '{status}'. "
+        "Auto-approved media buys complete the full pipeline synchronously."
+    )
 
 
 @then("the media buy should proceed to adapter execution")
@@ -739,9 +748,16 @@ def then_error_has_retry_after(ctx: dict) -> None:
 
     Step claims the field should be 'included' — verify it exists and contains
     a positive numeric value (retry delay in seconds).
+
+    Checks both ctx["error"] (AdCPError from dispatch) and ctx["error_response"]
+    (structured error response) to match the dispatch contract.
     """
-    error = ctx.get("error")
-    assert error is not None, "No error recorded in ctx"
+    # Check both error keys to match the dispatch contract used by other error steps
+    error = ctx.get("error") or ctx.get("error_response")
+    assert error is not None, (
+        "No error recorded in ctx (checked both 'error' and 'error_response') — "
+        "step claims error should include retry_after but no error was captured"
+    )
     # AdCPError stores retry_after in details dict
     from src.core.exceptions import AdCPError
 

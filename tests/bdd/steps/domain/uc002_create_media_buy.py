@@ -129,7 +129,30 @@ def given_request_with_account(ctx: dict, account_id: str) -> None:
 @given("the account_id does not exist in the seller's account store")
 @given("no account matches the brand + operator combination")
 def given_account_not_exists(ctx: dict) -> None:
-    """Ensure the referenced account does not exist in DB — no-op (default state)."""
+    """Ensure the referenced account does not exist in DB.
+
+    Verifies that if a prior step set an account_id, no matching Account record
+    exists in the database. This prevents silent lies when a prior step
+    accidentally created an account with this ID.
+    """
+    account_id = ctx.get("request_account_id")
+    if account_id is not None:
+        from sqlalchemy import select
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import Account
+
+        tenant = ctx.get("tenant")
+        if tenant is not None:
+            with get_db_session() as session:
+                existing = session.scalars(
+                    select(Account).filter_by(account_id=account_id, tenant_id=tenant.tenant_id)
+                ).first()
+                assert existing is None, (
+                    f"Account '{account_id}' exists in DB for tenant '{tenant.tenant_id}' — "
+                    "step claims 'account_id does not exist in the seller's account store' "
+                    "but a prior step created it. Clean up or use a different account_id."
+                )
 
 
 @given(parsers.parse('the account "{account_id}" exists but requires setup (billing not configured)'))
@@ -459,9 +482,19 @@ def when_send_create_media_buy(ctx: dict) -> None:
             f"MediaBuyCreateEnv (full dispatch) or MediaBuyAccountEnv (account resolution), "
             f"got {type(env).__name__}"
         )
+        # MediaBuyAccountEnv: account resolution IS the first phase of create_media_buy.
+        # For account-validation scenarios, the request is "sent" but expected to fail
+        # at account resolution — the same error path production would take.
+        # resolve_account_or_error stores ctx["response"] or ctx["error"] using
+        # the same contract as _dispatch_create_media_buy.
         from tests.bdd.steps.generic._account_resolution import resolve_account_or_error
 
         resolve_account_or_error(ctx)
+        # Verify the dispatch stored an outcome (response or error)
+        assert "response" in ctx or "error" in ctx, (
+            "MediaBuyAccountEnv dispatch completed but neither ctx['response'] "
+            "nor ctx['error'] was set — account resolution must produce an outcome"
+        )
 
 
 def _dispatch_create_media_buy(ctx: dict) -> None:
@@ -606,9 +639,17 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
         # Success outcome: "* validation passes", "minimum spend passes",
         # "minimum spend check skipped", etc.
         if "error" in ctx:
-            # SPEC-PRODUCTION GAP: production rejects what spec considers valid
+            # SPEC-PRODUCTION GAP: production rejects what spec considers valid.
+            # Only xfail for AdCPError (production validation) — other errors
+            # are test bugs and must surface as hard failures.
+            from src.core.exceptions import AdCPError
+
             error = ctx["error"]
-            pytest.xfail(f"SPEC-PRODUCTION GAP: Expected success ({outcome}) but production rejected with: {error}")
+            if isinstance(error, AdCPError):
+                pytest.xfail(
+                    f"SPEC-PRODUCTION GAP: Expected success ({outcome}) but production rejected with AdCPError: {error}"
+                )
+            raise AssertionError(f"Expected success ({outcome}) but got non-AdCPError: {type(error).__name__}: {error}")
         resp = ctx.get("response")
         assert resp is not None, "Expected a response for success outcome"
         # Strengthen: verify response has a media_buy_id (proof of successful creation)
@@ -863,10 +904,12 @@ def when_seller_rejects_media_buy(ctx: dict, reason: str) -> None:
 
     FIXME(salesagent-9vgz.1): This step bypasses operations.py:approve_media_buy(action='reject')
     and directly manipulates DB rows. Bugs in the production rejection path will not be caught.
-    Wire through the production admin flow when the harness supports it.
+    Wire through the production admin flow when the harness supports Flask request context.
+    Production path: POST /operations/media-buy/<id>/approve with action=reject.
     """
     from datetime import UTC, datetime
 
+    import pytest
     from sqlalchemy import select
 
     from src.core.database.database_session import get_db_session
@@ -877,14 +920,21 @@ def when_seller_rejects_media_buy(ctx: dict, reason: str) -> None:
 
     media_buy = ctx["existing_media_buy"]
     media_buy_id = media_buy.media_buy_id
+    tenant = ctx["tenant"]
 
     with get_db_session() as session:
-        # Update media buy status
-        mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id)).first()
-        assert mb is not None, f"Media buy {media_buy_id} not found in DB"
+        # Verify media buy exists and is in a rejectable state
+        mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id, tenant_id=tenant.tenant_id)).first()
+        assert mb is not None, f"Media buy {media_buy_id} not found in DB for tenant {tenant.tenant_id}"
+        rejectable_statuses = {"pending_approval", "submitted", "requires_approval"}
+        assert mb.status in rejectable_statuses, (
+            f"Media buy {media_buy_id} has status '{mb.status}' — "
+            f"expected one of {rejectable_statuses} for rejection. "
+            "Step claims 'Seller rejects' but media buy is not in a rejectable state."
+        )
         mb.status = "rejected"
 
-        # Find or create workflow step to store rejection reason
+        # Find workflow step to store rejection reason
         mapping = session.scalars(select(ObjectWorkflowMapping).filter_by(object_id=media_buy_id)).first()
         if mapping:
             step = session.scalars(select(WorkflowStep).filter_by(step_id=mapping.step_id)).first()
@@ -892,12 +942,20 @@ def when_seller_rejects_media_buy(ctx: dict, reason: str) -> None:
                 step.status = "rejected"
                 step.error_message = reason
                 step.updated_at = datetime.now(UTC)
+        else:
+            pytest.xfail(
+                f"SPEC-PRODUCTION GAP: No workflow mapping for media buy {media_buy_id} — "
+                "rejection reason cannot be stored on a workflow step. "
+                "FIXME(salesagent-9vgz.1): Wire through production admin rejection flow."
+            )
 
         session.commit()
 
-    # Verify the rejection actually persisted
+    # Verify the rejection actually persisted (tenant-scoped)
     with get_db_session() as session:
-        mb_check = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id)).first()
+        mb_check = session.scalars(
+            select(MediaBuy).filter_by(media_buy_id=media_buy_id, tenant_id=tenant.tenant_id)
+        ).first()
         assert mb_check is not None, f"Media buy {media_buy_id} not found after rejection"
         assert mb_check.status == "rejected", (
             f"Expected 'rejected' status after seller rejection, got '{mb_check.status}'"
@@ -1725,24 +1783,26 @@ def then_creatives_uploaded_to_library(ctx: dict) -> None:
         db_creatives = session.scalars(select(CreativeModel).filter_by(tenant_id=tenant.tenant_id)).all()
         db_creative_ids = {c.creative_id for c in db_creatives}
         # Hard assert: all expected creatives must exist in DB
-        try:
-            assert expected_ids <= db_creative_ids, (
-                f"Expected all request creatives {expected_ids} in DB, "
-                f"but DB has {db_creative_ids}. Missing: {expected_ids - db_creative_ids}"
-            )
-        except AssertionError:
+        missing = expected_ids - db_creative_ids
+        if missing:
             if not (db_creative_ids & expected_ids):
                 pytest.xfail(
                     f"SPEC-PRODUCTION GAP: None of the request creatives {expected_ids} "
                     f"were found in DB (DB has {db_creative_ids}). Production may not "
-                    f"persist inline creatives via this code path yet."
+                    f"persist inline creatives via this code path yet. "
+                    f"FIXME(salesagent-9vgz.1)"
                 )
             pytest.xfail(
                 f"SPEC-PRODUCTION GAP: Partial upload — missing "
-                f"{expected_ids - db_creative_ids} from DB "
+                f"{missing} from DB "
                 f"(found {db_creative_ids & expected_ids}). Production may not "
-                f"persist all inline creatives yet."
+                f"persist all inline creatives yet. "
+                f"FIXME(salesagent-9vgz.1)"
             )
+        # All expected creatives found — hard-assert the subset relationship
+        assert expected_ids <= db_creative_ids, (
+            f"Expected all request creatives {expected_ids} in DB, but DB has {db_creative_ids}. Missing: {missing}"
+        )
 
 
 @then("the system should assign the uploaded creatives to packages")
@@ -1817,10 +1877,14 @@ def given_proposal_exists(ctx: dict, proposal_id: str) -> None:
     2. Set expiry to a future date
     3. Link it to the tenant/principal
     """
+    assert proposal_id, "proposal_id must be non-empty — step claims proposal 'exists'"
     ctx["expected_proposal_id"] = proposal_id
+    # Record in request_kwargs so the create request includes proposal_id
+    if "request_kwargs" in ctx:
+        ctx["request_kwargs"]["proposal_id"] = proposal_id
     # SPEC-PRODUCTION GAP: No proposal persistence layer — only recording
     # the expected ID. Scenario-level xfail (T-UC-002-alt-proposal tag)
-    # handles the gap at the correct level.
+    # handles the gap at the correct level. FIXME(salesagent-9vgz.1)
 
 
 @given(parsers.parse("the proposal has {count:d} product allocations"))
@@ -1838,6 +1902,10 @@ def given_proposal_allocations(ctx: dict, count: int) -> None:
     3. Default to equal-percentage distribution
     """
     assert count > 0, "Proposal must have at least 1 product allocation"
+    assert "expected_proposal_id" in ctx, (
+        "No expected_proposal_id in ctx — 'the proposal has N product allocations' "
+        "requires a prior 'proposal X exists' step"
+    )
     ctx["expected_proposal_allocations"] = count
     # Default to equal allocation percentages when scenario doesn't specify them.
     # Scenarios with non-equal splits should set ctx["expected_allocation_percentages"]
@@ -1846,7 +1914,7 @@ def given_proposal_allocations(ctx: dict, count: int) -> None:
         ctx["expected_allocation_percentages"] = [100.0 / count] * count
     # SPEC-PRODUCTION GAP: No proposal allocation mechanism — only recording
     # expected count. Scenario-level xfail (T-UC-002-alt-proposal tag)
-    # handles the gap at the correct level.
+    # handles the gap at the correct level. FIXME(salesagent-9vgz.1)
 
 
 # ═══════════════════════════════════════════════════════════════════════

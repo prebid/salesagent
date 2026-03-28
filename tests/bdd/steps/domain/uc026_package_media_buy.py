@@ -245,12 +245,11 @@ def then_package_budget(ctx: dict, budget: int) -> None:
     packages = _get_packages(ctx)
     pkg = packages[0]
     actual = _pkg_field(pkg, "budget")
-    try:
-        assert actual is not None, f"package budget is None, expected {budget}"
-    except AssertionError:
+    if actual is None:
         pytest.xfail(
             f"SPEC-PRODUCTION GAP: package budget is None — "
-            f"step claims 'contain budget {budget}' but production may not echo budget yet"
+            f"step claims 'contain budget {budget}' but production may not echo budget yet. "
+            f"FIXME(salesagent-9vgz.1)"
         )
     assert float(actual) == float(budget), f"Expected budget {budget}, got {actual}"
 
@@ -268,12 +267,11 @@ def then_package_pricing(ctx: dict, pricing_option_id: str) -> None:
     packages = _get_packages(ctx)
     pkg = packages[0]
     actual = _pkg_field(pkg, "pricing_option_id")
-    try:
-        assert actual is not None, f"pricing_option_id is None, expected '{expected}'"
-    except AssertionError:
+    if actual is None:
         pytest.xfail(
             f"SPEC-PRODUCTION GAP: pricing_option_id is None — "
-            f"step claims 'contain pricing_option_id \"{pricing_option_id}\"' but production may not echo it yet"
+            f"step claims 'contain pricing_option_id \"{pricing_option_id}\"' but production may not echo it yet. "
+            f"FIXME(salesagent-9vgz.1)"
         )
     assert actual == expected, f"Expected pricing_option_id '{expected}', got '{actual}'"
 
@@ -289,12 +287,11 @@ def then_package_default_formats(ctx: dict) -> None:
     packages = _get_packages(ctx)
     pkg = packages[0]
     format_ids = _pkg_field(pkg, "format_ids")
-    try:
-        assert format_ids is not None, "format_ids not present on package"
-    except AssertionError:
+    if format_ids is None:
         pytest.xfail(
             "SPEC-PRODUCTION GAP: format_ids not present on package — "
-            "step claims 'defaulting to all product formats' but production may not echo defaults"
+            "step claims 'defaulting to all product formats' but production may not echo defaults. "
+            "FIXME(salesagent-9vgz.1)"
         )
     assert isinstance(format_ids, list), f"Expected format_ids to be a list, got {type(format_ids)}"
     assert len(format_ids) > 0, "Expected format_ids to default to all product formats, got empty list"
@@ -333,12 +330,11 @@ def then_package_not_paused(ctx: dict) -> None:
     pkg = packages[0]
     paused = _pkg_field(pkg, "paused")
     # Step text says "paused as false" — must be exactly False, not None/absent
-    try:
-        assert paused is not None, "paused field is None"
-    except AssertionError:
+    if paused is None:
         pytest.xfail(
             "SPEC-PRODUCTION GAP: paused is None — step claims 'paused as false' "
-            "but production may not echo the paused field yet."
+            "but production may not echo the paused field yet. "
+            "FIXME(salesagent-9vgz.1)"
         )
     assert paused is False, f"Expected paused to be False, got {paused!r}"
 
@@ -356,12 +352,11 @@ def then_package_formats_to_provide(ctx: dict) -> None:
     packages = _get_packages(ctx)
     pkg = packages[0]
     formats_to_provide = _pkg_field(pkg, "format_ids_to_provide")
-    try:
-        assert formats_to_provide is not None, "format_ids_to_provide not present on package"
-    except AssertionError:
+    if formats_to_provide is None:
         pytest.xfail(
             "SPEC-PRODUCTION GAP: format_ids_to_provide not present on package — "
-            "step claims 'listing formats needing creative assets' but production may not set it yet"
+            "step claims 'listing formats needing creative assets' but production may not set it yet. "
+            "FIXME(salesagent-9vgz.1)"
         )
     assert isinstance(formats_to_provide, list), (
         f"Expected format_ids_to_provide to be a list, got {type(formats_to_provide)}"

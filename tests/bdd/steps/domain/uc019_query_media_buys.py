@@ -139,7 +139,19 @@ def given_principal_owns_with_package(ctx: dict, principal_id: str, mb_id: str, 
 
 @given(parsers.parse('the principal "{principal_id}" owns no media buys'))
 def given_principal_owns_none(ctx: dict, principal_id: str) -> None:
-    """No media buys exist for this principal (default state)."""
+    """No media buys exist for this principal (default state).
+
+    Validates that the principal_id matches the ctx principal (like other
+    principal-scoped Given steps).
+    """
+    principal = ctx.get("principal")
+    assert principal is not None, (
+        f"No principal in ctx — step claims principal '{principal_id}' owns no media buys "
+        "but no principal exists to validate against"
+    )
+    assert principal.principal_id == principal_id, (
+        f"Step references principal '{principal_id}' but ctx principal is '{principal.principal_id}' — mismatch"
+    )
     ctx.setdefault("seeded_media_buys", {})
 
 
@@ -176,6 +188,11 @@ def given_snapshot_available(ctx: dict, pkg_id: str) -> None:
     # Verify the package was actually seeded (not referencing a phantom package)
     seeded = ctx.get("seeded_media_buys", {})
     assert seeded, "No media buys seeded — step claims snapshot available but no media buys exist"
+    # Verify the adapter supports reporting (required for snapshots)
+    assert ctx.get("adapter_supports_reporting"), (
+        "adapter_supports_reporting not set — step claims 'snapshot data is available' "
+        "but the adapter reporting capability has not been configured by a prior Given step"
+    )
     ctx.setdefault("snapshot_available_packages", []).append(pkg_id)
     ctx["snapshot_available"] = True
 
@@ -359,7 +376,8 @@ def then_package_details(ctx: dict) -> None:
                 raise AssertionError(f"Expected paused to be bool, got {type(paused)}")
     if paused_gaps:
         pytest.xfail(
-            f"SPEC-PRODUCTION GAP: paused field not present on {len(paused_gaps)} package(s): {', '.join(paused_gaps)}"
+            f"SPEC-PRODUCTION GAP: paused field not present on {len(paused_gaps)} package(s): "
+            f"{', '.join(paused_gaps)}. FIXME(salesagent-9vgz.1)"
         )
 
 
@@ -382,7 +400,10 @@ def then_creative_approval_state(ctx: dict) -> None:
                 isinstance(pkg, dict) and "creative_approval_state" in pkg
             )
             if not has_field:
-                pytest.xfail("SPEC-PRODUCTION GAP: creative_approval_state field not present on package schema")
+                pytest.xfail(
+                    "SPEC-PRODUCTION GAP: creative_approval_state field not present on package schema. "
+                    "FIXME(salesagent-9vgz.1)"
+                )
             # Extract value
             state = (
                 getattr(pkg, "creative_approval_state", None)
@@ -425,7 +446,10 @@ def then_buyer_refs_for_correlation(ctx: dict) -> None:
         if bcr is None and isinstance(buy, dict):
             bcr = buy.get("buyer_campaign_ref")
         if not hasattr(buy, "buyer_campaign_ref") and not (isinstance(buy, dict) and "buyer_campaign_ref" in buy):
-            pytest.xfail("SPEC-PRODUCTION GAP: buyer_campaign_ref field not present on media buy schema")
+            pytest.xfail(
+                "SPEC-PRODUCTION GAP: buyer_campaign_ref field not present on media buy schema. "
+                "FIXME(salesagent-9vgz.1)"
+            )
         assert bcr is not None, (
             f"buyer_campaign_ref is None on {mb_id} — step claims 'for correlation', implying a populated value"
         )
@@ -493,15 +517,11 @@ def then_snapshot_fields(ctx: dict) -> None:
                     if val is None:
                         missing_fields.append(field)
     assert checked_any, "No snapshots found — this step requires at least one snapshot to verify"
-    try:
-        assert not missing_fields, (
-            f"Snapshot missing fields: {sorted(set(missing_fields))}. "
-            f"Step claims all 4 (as_of, staleness_seconds, impressions, spend) are present."
-        )
-    except AssertionError:
+    if missing_fields:
         pytest.xfail(
             f"SPEC-PRODUCTION GAP: Snapshot missing fields: {sorted(set(missing_fields))}. "
-            f"Step claims all 4 (as_of, staleness_seconds, impressions, spend) are present."
+            f"Step claims all 4 (as_of, staleness_seconds, impressions, spend) are present. "
+            f"FIXME(salesagent-9vgz.1)"
         )
 
 
