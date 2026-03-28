@@ -14,6 +14,17 @@ from src.core.database.models import Tenant, TenantManagementConfig, User
 logger = logging.getLogger(__name__)
 
 
+def is_admin_production() -> bool:
+    """Return True when admin should behave in production-safe mode.
+
+    Treats both PRODUCTION=true and ENVIRONMENT=production as authoritative
+    so security-sensitive checks do not drift between deployment styles.
+    """
+    return (
+        os.environ.get("PRODUCTION", "").lower() == "true" or os.environ.get("ENVIRONMENT", "").lower() == "production"
+    )
+
+
 def parse_json_config(config_str):
     """Parse JSON config string."""
     if not config_str:

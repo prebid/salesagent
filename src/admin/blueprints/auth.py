@@ -13,13 +13,14 @@ Configuration priority:
 import json
 import logging
 import os
+from urllib.parse import unquote, urlsplit
 
 from authlib.integrations.flask_client import OAuth
 from flask import Blueprint, abort, current_app, flash, redirect, render_template, request, session, url_for
 from sqlalchemy import select
 
 from src.admin.auth_utils import extract_user_info
-from src.admin.utils import is_super_admin
+from src.admin.utils import is_admin_production, is_super_admin
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
 from src.core.domain_config import (
@@ -34,6 +35,32 @@ logger = logging.getLogger(__name__)
 
 # Create Blueprint
 auth_bp = Blueprint("auth", __name__)
+
+
+def _safe_redirect(url: str | None, fallback: str) -> str:
+    """Return *url* only if it is a safe local path, otherwise *fallback*.
+
+    Rejects anything with a scheme, a netloc, a leading // or \\,
+    a backslash anywhere, or anything that does not start with /.
+    Also rejects after URL-decoding to defeat encoded bypass attempts.
+    """
+    if not url:
+        return fallback
+
+    decoded = unquote(url).strip()
+    parts = urlsplit(decoded)
+    if (
+        parts.scheme
+        or parts.netloc
+        or decoded.startswith(("//", "\\\\"))
+        or "\\" in decoded
+        or not decoded.startswith("/")
+    ):
+        logger.warning("[SECURITY] Rejected unsafe redirect URL: %r", url)
+        return fallback
+
+    return decoded
+
 
 # Well-known OIDC discovery URLs for common providers
 OIDC_PROVIDERS = {
@@ -158,8 +185,8 @@ def login():
     """
     logger.debug("login route hit, has_user=%s, args=%s", "user" in session, dict(request.args))
 
-    # Capture 'next' parameter for redirect after login
-    next_url = request.args.get("next")
+    # Capture 'next' parameter for redirect after login — validate before storing
+    next_url = _safe_redirect(request.args.get("next"), fallback="")
     if next_url:
         session["login_next_url"] = next_url
 
@@ -279,8 +306,8 @@ def tenant_login(tenant_id):
     # Don't auto-redirect if user just logged out
     just_logged_out = request.args.get("logged_out") == "1"
 
-    # Capture 'next' parameter for redirect after login
-    next_url = request.args.get("next")
+    # Capture 'next' parameter for redirect after login — validate before storing
+    next_url = _safe_redirect(request.args.get("next"), fallback="")
     if next_url:
         session["login_next_url"] = next_url
 
@@ -531,10 +558,8 @@ def google_callback():
                 f"Session keys: {list(session.keys())} =========="
             )
             # Check for saved redirect URL
-            next_url = session.pop("login_next_url", None)
-            if next_url:
-                return redirect(next_url)
-            return redirect(url_for("core.index"))
+            next_url = _safe_redirect(session.pop("login_next_url", None), fallback=url_for("core.index"))
+            return redirect(next_url)
 
         # Check if this is a signup flow (only for non-super-admin users)
         if session.get("signup_flow"):
@@ -632,10 +657,11 @@ def google_callback():
             session.pop("available_tenants", None)
             flash(f"Welcome {user.get('name', email)}!", "success")
             # Check for saved redirect URL
-            next_url = session.pop("login_next_url", None)
-            if next_url:
-                return redirect(next_url)
-            return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
+            next_url = _safe_redirect(
+                session.pop("login_next_url", None),
+                fallback=url_for("tenants.dashboard", tenant_id=tenant_id),
+            )
+            return redirect(next_url)
 
         # Multi-tenant mode or multiple tenants: show tenant selector
         flash(f"Welcome {user.get('name', email)}!", "success")
@@ -694,10 +720,11 @@ def select_tenant():
                 session.pop("available_tenants", None)  # Clean up
                 flash(f"Welcome to {tenant['name']}!", "success")
                 # Check for saved redirect URL
-                next_url = session.pop("login_next_url", None)
-                if next_url:
-                    return redirect(next_url)
-                return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
+                next_url = _safe_redirect(
+                    session.pop("login_next_url", None),
+                    fallback=url_for("tenants.dashboard", tenant_id=tenant_id),
+                )
+                return redirect(next_url)
 
         flash("Invalid tenant selection", "error")
         return redirect(url_for("auth.select_tenant"))
@@ -744,9 +771,13 @@ def logout():
 def test_auth():
     """Test authentication endpoint.
 
-    Works when:
-    - ADCP_AUTH_TEST_MODE=true (global override), OR
+    Works only when BOTH conditions are true:
+    - ADCP_AUTH_TEST_MODE=true (global deployment flag), AND
     - The requested tenant has auth_setup_mode=True (per-tenant setting)
+
+    Either condition alone is no longer sufficient. A tenant operator
+    disabling Setup Mode via the Admin UI immediately blocks test auth
+    for that tenant, regardless of the global env var.
     """
     email = request.form.get("email", "").lower()
     password = request.form.get("password")
@@ -758,6 +789,14 @@ def test_auth():
     if is_single_tenant_mode() and not tenant_id:
         tenant_id = "default"
 
+    # Production-like deployments must never expose test auth, regardless of flags.
+    if is_admin_production():
+        logger.warning(
+            "[SECURITY] test_auth blocked: production mode detected. "
+            "Switch to SSO or disable production mode for non-production use."
+        )
+        abort(404)
+
     # Check if test auth is allowed
     env_test_mode = os.environ.get("ADCP_AUTH_TEST_MODE", "").lower() == "true"
     tenant_setup_mode = False
@@ -768,14 +807,21 @@ def test_auth():
             if tenant and hasattr(tenant, "auth_setup_mode"):
                 tenant_setup_mode = tenant.auth_setup_mode
 
-    # Allow if env var is set OR tenant is in setup mode
-    if not env_test_mode and not tenant_setup_mode:
+    # Require BOTH: env var enabled AND tenant still in setup mode (F-02).
+    # The env var alone is no longer sufficient — the tenant operator's
+    # decision to disable Setup Mode via the UI must also be respected.
+    if not env_test_mode or not tenant_setup_mode:
+        if not env_test_mode:
+            logger.debug("[SECURITY] test_auth blocked: ADCP_AUTH_TEST_MODE not set.")
+        else:
+            logger.warning(
+                "[SECURITY] test_auth blocked for tenant %r: auth_setup_mode is disabled. "
+                "Re-enable Setup Mode or configure SSO.",
+                tenant_id,
+            )
         abort(404)
 
-    # Check for saved redirect URL from login page
-    next_url = session.get("login_next_url")
-
-    # Define test users
+    # Define test users — credentials are always read from env vars, never hardcoded
     test_users = {
         os.environ.get("TEST_SUPER_ADMIN_EMAIL", "test_super_admin@example.com"): {
             "password": os.environ.get("TEST_SUPER_ADMIN_PASSWORD", "test123"),
@@ -794,40 +840,13 @@ def test_auth():
         },
     }
 
-    # Check if email is a super admin (bypass password check for super admins in test mode)
-    if is_super_admin(email) and password == "test123":
-        session["test_user"] = email
-        session["test_user_name"] = email.split("@")[0].title()
-        session["test_user_role"] = "super_admin"
-        session["user"] = email  # Store as string for is_super_admin check
-        session["user_name"] = email.split("@")[0].title()
-        session["is_super_admin"] = True
-        session["role"] = "super_admin"
-        session["authenticated"] = True
-        session["email"] = email
-
-        if tenant_id:
-            session["test_tenant_id"] = tenant_id
-            session["tenant_id"] = tenant_id  # Set tenant_id for authorization checks
-            # Use saved redirect URL if available
-            if next_url:
-                session.pop("login_next_url", None)
-                return redirect(next_url)
-            return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
-        else:
-            # Use saved redirect URL if available
-            if next_url:
-                session.pop("login_next_url", None)
-                return redirect(next_url)
-            return redirect(url_for("core.index"))
-
-    # Check test users
+    # Check test users — all credentials go through the test_users table, no bypasses
     if email in test_users and test_users[email]["password"] == password:
         user_info = test_users[email]
         session["test_user"] = email
         session["test_user_name"] = user_info["name"]
         session["test_user_role"] = user_info["role"]
-        session["user"] = email  # Store as string for consistency
+        session["user"] = email
         session["user_name"] = user_info["name"]
         session["role"] = user_info["role"]
         session["authenticated"] = True
@@ -838,18 +857,15 @@ def test_auth():
 
         if tenant_id:
             session["test_tenant_id"] = tenant_id
-            session["tenant_id"] = tenant_id  # Set tenant_id for authorization checks
-            # Use saved redirect URL if available
-            if next_url:
-                session.pop("login_next_url", None)
-                return redirect(next_url)
-            return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
+            session["tenant_id"] = tenant_id
+            next_url = _safe_redirect(
+                session.pop("login_next_url", None),
+                fallback=url_for("tenants.dashboard", tenant_id=tenant_id),
+            )
+            return redirect(next_url)
         else:
-            # Use saved redirect URL if available
-            if next_url:
-                session.pop("login_next_url", None)
-                return redirect(next_url)
-            return redirect(url_for("core.index"))
+            next_url = _safe_redirect(session.pop("login_next_url", None), fallback=url_for("core.index"))
+            return redirect(next_url)
 
     flash("Invalid test credentials", "error")
     return redirect(request.referrer or url_for("auth.login"))

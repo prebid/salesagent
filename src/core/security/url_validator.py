@@ -20,13 +20,18 @@ BLOCKED_NETWORKS = [
     ipaddress.ip_network("fe80::/10"),
 ]
 
-# Blocked hostnames (cloud metadata services, localhost aliases)
+# Blocked hostnames (cloud metadata services, localhost aliases, Docker-internal hostnames)
 BLOCKED_HOSTNAMES = {
     "localhost",
     "metadata.google.internal",
     "169.254.169.254",
     "metadata",
     "instance-data",
+    # Docker-internal hostnames that resolve to private/loopback IPs and
+    # are not guaranteed to be caught by DNS resolution in all environments
+    "host.docker.internal",
+    "gateway.docker.internal",
+    "docker.host.internal",
 }
 
 

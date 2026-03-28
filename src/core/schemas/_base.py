@@ -1615,6 +1615,13 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
     - packages: use our AdCPPackageUpdate (adds creative_ids)
     - budget: campaign-level budget (not in library — convenience field)
     - today: internal testing field
+
+    Spec fields missing from library codegen (accepted here for forward compatibility):
+    - revision: optimistic concurrency control
+    - canceled: irreversible cancellation flag
+    - cancellation_reason: reason for cancellation
+    - new_packages: mid-flight package additions
+    - invoice_recipient: override billing entity for this buy
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
@@ -1624,7 +1631,20 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
     # Override packages to use our extended type with creative_ids
     packages: list[AdCPPackageUpdate] | None = None  # type: ignore[assignment]
     # Campaign-level budget (not in library spec — convenience field)
-    budget: Budget | None = None
+    # Bare float is accepted so transport wrappers can preserve existing DB currency
+    # when the caller updates only the amount.
+    budget: Budget | float | None = None
+    # Spec fields missing from library codegen — accept for forward compatibility
+    revision: int | None = Field(None, description="Expected current revision for optimistic concurrency")
+    canceled: bool | None = Field(None, description="Cancel the media buy (irreversible)")
+    cancellation_reason: str | None = Field(None, description="Reason for cancellation", max_length=500)
+    new_packages: list[PackageRequest] | None = Field(None, description="New packages to add mid-flight")
+    invoice_recipient: dict[str, Any] | None = Field(
+        None,
+        description="Override who receives the invoice for this buy (business-entity.json). "
+        "When provided, the seller invoices this entity instead of the account's default billing_entity.",
+    )
+    # idempotency_key: now provided by adcp library base class (since 3.10)
     # Internal testing field
     today: date | None = Field(None, exclude=True, description="For testing/simulation only - not part of AdCP spec")
 
