@@ -78,7 +78,7 @@ def _parse_format_entries(formats_parsed: list[dict]) -> list[dict]:
     """
     entries = []
     for fmt in formats_parsed:
-        if not isinstance(fmt, dict) or not fmt.get("agent_url"):
+        if not fmt.get("agent_url"):
             continue
         format_id = fmt.get("id") or fmt.get("format_id")
         if not format_id:
@@ -764,7 +764,7 @@ def add_product(tenant_id):
 
                                 invalid_formats = []
                                 for fmt in formats_parsed:
-                                    if not isinstance(fmt, dict) or not fmt.get("agent_url"):
+                                    if not fmt.get("agent_url"):
                                         continue
                                     format_id = fmt.get("id") or fmt.get("format_id")
                                     if not format_id:
@@ -1402,7 +1402,7 @@ def edit_product(tenant_id, product_id):
 
                         invalid_formats = []
                         for fmt in formats_parsed:
-                            if not isinstance(fmt, dict) or not fmt.get("agent_url"):
+                            if not fmt.get("agent_url"):
                                 continue
                             format_id = fmt.get("id") or fmt.get("format_id")
                             if not format_id:
