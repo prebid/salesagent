@@ -76,6 +76,10 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/conftest.py", "test_media_buy_workflow"),
     # tests/integration/test_adapter_factory.py
     ("tests/integration/test_adapter_factory.py", "setup_adapters"),
+    # tests/integration/test_gam_adapter_auth.py — no AdapterConfigFactory exists yet
+    # FIXME(salesagent-bka): migrate to factory when AdapterConfigFactory is created
+    ("tests/integration/test_gam_adapter_auth.py", "oauth_tenant"),
+    ("tests/integration/test_gam_adapter_auth.py", "sa_tenant"),
     # tests/integration/test_admin_ui_pages.py
     ("tests/integration/test_admin_ui_pages.py", "test_cannot_access_other_tenant_data"),
     # tests/integration/test_audit_decorator.py
