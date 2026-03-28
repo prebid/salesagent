@@ -30,6 +30,7 @@ from adcp.types import (
     PriceGuidance,  # Replaces local PriceGuidance class
     PricingModel,  # Replaces local PricingModel enum (lowercase members: .cpm, .cpc, etc.)
 )
+from adcp.types import DeliveryStatus  # noqa: F401 — used by Snapshot below
 from adcp.types import UpdateMediaBuyRequest as LibraryUpdateMediaBuyRequest
 from adcp.types.aliases import (
     CreateMediaBuyErrorResponse as AdCPCreateMediaBuyError,
@@ -2274,21 +2275,7 @@ class ListAuthorizedPropertiesResponse(NestedModelSerializerMixin, SalesAgentBas
 
 
 # --- Get Media Buys Types ---
-# These types match the adcp 3.6.0 spec for get_media_buys.
-# When the project migrates to adcp >=3.6.0, these can be replaced with library imports.
-
-
-class DeliveryStatus(str, Enum):
-    """Operational delivery state of a package.
-
-    Used by Snapshot (get_media_buys types). The delivery.py module defines
-    a superset of this enum with additional values for delivery responses.
-    """
-
-    delivering = "delivering"
-    not_delivering = "not_delivering"
-    completed = "completed"
-    budget_exhausted = "budget_exhausted"
+# DeliveryStatus: imported from adcp library at top of file (all 6 values).
 
 
 class SnapshotUnavailableReason(str, Enum):
