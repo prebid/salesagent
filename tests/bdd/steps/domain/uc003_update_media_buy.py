@@ -77,9 +77,12 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
         "end_time",
         "packages",
         "budget",
+        "idempotency_key",
     }
     kwargs = _ensure_update_defaults(ctx)
-    for row in datatable:
+    # Skip header row (pytest-bdd datatables include the header as first row)
+    rows = datatable[1:] if datatable and datatable[0][0].strip() == "field" else datatable
+    for row in rows:
         field, value = row[0].strip(), row[1].strip()
         assert field in _supported_fields, (
             f"Unrecognized update field '{field}' in datatable — "
@@ -100,6 +103,8 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
             kwargs["budget"] = float(value)
         elif field == "packages":
             kwargs["packages"] = json.loads(value)
+        elif field == "idempotency_key":
+            kwargs["idempotency_key"] = value
 
 
 @given("the request does NOT include start_time, end_time, or paused fields")
@@ -112,6 +117,17 @@ def given_request_omits_start_end_paused(ctx: dict) -> None:
     kwargs = _ensure_update_defaults(ctx)
     for field in ("start_time", "end_time", "paused"):
         kwargs.pop(field, None)
+
+
+@given("the request does NOT include an idempotency_key")
+def given_request_omits_idempotency_key(ctx: dict) -> None:
+    """Declarative guard — ensure idempotency_key is NOT in update_kwargs.
+
+    The default update_kwargs only contains media_buy_id, so idempotency_key is
+    already absent. This step explicitly strips it in case prior Given steps added it.
+    """
+    kwargs = _ensure_update_defaults(ctx)
+    kwargs.pop("idempotency_key", None)
 
 
 @given("the request does not include any updatable fields")

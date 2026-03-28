@@ -342,8 +342,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         marker_names = {m.name for m in item.iter_markers()}
         nodeid = item.nodeid
 
-        # Detect transport from parametrized nodeid: [mcp], [mcp-...], [rest], [rest-...]
+        # Detect transport from parametrized nodeid: [mcp], [mcp-...], [a2a], [rest], etc.
         is_mcp = "[mcp]" in nodeid or "[mcp-" in nodeid
+        is_a2a = "[a2a]" in nodeid or "[a2a-" in nodeid
         is_rest = "[rest]" in nodeid or "[rest-" in nodeid
 
         # Transport-specific xfails: MCP wrappers don't accept certain filter params
@@ -380,10 +381,23 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             or "T-UC-003-alt-keyword-remove" in marker_names
             or "T-UC-003-alt-negative-keywords" in marker_names
             or "T-UC-003-partial-update" in marker_names
+            or "T-UC-003-idempotency-valid" in marker_names
+            or "T-UC-003-idempotency-absent" in marker_names
         ):
             item.add_marker(
                 pytest.mark.xfail(
                     reason="REST endpoint doesn't forward packages param (spec-production gap)",
+                    strict=True,
+                )
+            )
+
+        # FIXME(salesagent-9vgz.21): UC-003 idempotency-valid — MCP/A2A wrappers don't
+        # accept idempotency_key param. Schema has the field but transport boundary
+        # doesn't forward it.
+        if (is_mcp or is_a2a) and "T-UC-003-idempotency-valid" in marker_names:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="MCP/A2A wrappers don't accept idempotency_key param (spec-production gap)",
                     strict=True,
                 )
             )
