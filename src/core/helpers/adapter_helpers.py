@@ -44,14 +44,11 @@ def build_agent_config(agent: _HasAgentFields) -> AgentConfig:
     )
 
 
-from sqlalchemy import select
-
 from src.adapters.google_ad_manager import GoogleAdManager
 from src.adapters.kevel import Kevel
 from src.adapters.mock_ad_server import MockAdServer as MockAdServerAdapter
 from src.adapters.triton_digital import TritonDigital
 from src.core.database.database_session import get_db_session
-from src.core.database.models import AdapterConfig
 from src.core.schemas import Principal
 
 
@@ -86,10 +83,12 @@ def get_adapter(
         selected_adapter = tenant.ad_server or "mock"
     logger.info(f"[ADAPTER_SELECT] Initial selected_adapter from tenant.ad_server: {selected_adapter}")
 
-    # Get adapter config from adapter_config table
+    # Get adapter config via repository
+    from src.core.database.repositories.adapter_config import AdapterConfigRepository
+
     with get_db_session() as session:
-        stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id)
-        config_row = session.scalars(stmt).first()
+        repo = AdapterConfigRepository(session, tenant_id)
+        config_row = repo.get_by_tenant()
 
         adapter_config: dict[str, Any] = {"enabled": True}
         if config_row:
@@ -108,9 +107,7 @@ def get_adapter(
                     else True
                 )
             elif adapter_type == "google_ad_manager":
-                from src.adapters.gam import build_gam_config_from_adapter
-
-                adapter_config = build_gam_config_from_adapter(config_row)
+                adapter_config = repo.get_gam_config()
 
                 # Get advertiser_id from principal's platform_mappings (per-principal, not tenant-level)
                 # Support both old format (nested under "google_ad_manager") and new format (root "gam_advertiser_id")
