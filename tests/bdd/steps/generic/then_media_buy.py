@@ -223,11 +223,15 @@ def then_slack_notification_sent(ctx: dict) -> None:
     """
     env = ctx["env"]
     mock_slack = env.mock["slack"].return_value
-    assert mock_slack.notify_media_buy_event.called, "Expected Slack notification to be sent"
+    # assert_called_once() ensures exactly one notification — .called allows multiple
+    mock_slack.notify_media_buy_event.assert_called_once()
     call_args = mock_slack.notify_media_buy_event.call_args
     assert call_args is not None, "Slack notify_media_buy_event called but call_args is None"
+    # Extract all args upfront for combined verification
     event_type = call_args.args[0] if call_args.args else call_args.kwargs.get("event_type")
+    media_buy_id = call_args.args[1] if len(call_args.args) > 1 else call_args.kwargs.get("media_buy_id")
     assert event_type, "Slack notification missing event_type argument"
+    assert media_buy_id, "Slack notification missing media_buy_id — cannot confirm it references the correct media buy"
     # Seller-facing events: approval/notification events directed to the seller's channel.
     # "created" is a lifecycle event that notifies the seller a new media buy arrived.
     # "approval_required" and "config_approval_required" require seller action.
@@ -238,13 +242,25 @@ def then_slack_notification_sent(ctx: dict) -> None:
         f"Buyer-facing events (rejected, approved, status_changed) should not "
         f"be sent to the Seller's Slack channel."
     )
-    # Verify media_buy_id was passed (positional arg 1 per notify_media_buy_event signature)
-    media_buy_id = call_args.args[1] if len(call_args.args) > 1 else call_args.kwargs.get("media_buy_id")
-    assert media_buy_id, "Slack notification missing media_buy_id — cannot confirm it references the correct media buy"
+    # Verify the notification references the CORRECT media buy from this scenario
+    resp = ctx.get("response")
+    if resp is not None:
+        expected_mb_id = _get_response_field(resp, "media_buy_id")
+        if expected_mb_id:
+            assert media_buy_id == expected_mb_id, (
+                f"Slack notification sent for media_buy_id '{media_buy_id}' but scenario "
+                f"created '{expected_mb_id}' — notification targets the wrong media buy"
+            )
     # Verify tenant context is included (Seller = tenant/publisher)
+    # Check kwargs first (explicit), then positional args (fragile fallback)
     tenant_name = call_args.kwargs.get("tenant_name")
-    if not tenant_name and len(call_args.args) > 4:
-        tenant_name = call_args.args[4]
+    if not tenant_name:
+        # Positional args: signature is (event_type, media_buy_id, ..., tenant_name)
+        # Only use positional if kwargs didn't have it
+        for i, arg in enumerate(call_args.args):
+            if i >= 2 and isinstance(arg, str) and arg and arg not in (media_buy_id, event_type):
+                tenant_name = arg
+                break
     assert tenant_name, "Slack notification missing tenant_name — cannot confirm it targets the Seller"
 
 
@@ -413,9 +429,23 @@ def then_media_buy_persisted(ctx: dict) -> None:
         assert mb is not None, f"Media buy {media_buy_id} not found in database"
         # Verify key field values are populated (not just existence)
         tenant = ctx.get("tenant")
-        if tenant is not None:
-            assert mb.tenant_id == tenant.tenant_id, f"Expected tenant_id '{tenant.tenant_id}', got '{mb.tenant_id}'"
+        assert tenant is not None, "No tenant in ctx — cannot verify tenant_id on persisted media buy"
+        assert mb.tenant_id == tenant.tenant_id, f"Expected tenant_id '{tenant.tenant_id}', got '{mb.tenant_id}'"
         assert mb.status is not None, f"Media buy {media_buy_id} persisted with no status"
+        # Verify buyer_ref from the request was persisted correctly
+        request_kwargs = ctx.get("request_kwargs", {})
+        expected_buyer_ref = request_kwargs.get("buyer_ref")
+        if expected_buyer_ref:
+            assert mb.buyer_ref == expected_buyer_ref, (
+                f"Expected buyer_ref '{expected_buyer_ref}' on persisted media buy, got '{mb.buyer_ref}'"
+            )
+        # Verify principal linkage
+        principal = ctx.get("principal")
+        if principal is not None:
+            assert mb.principal_id is not None, (
+                f"Media buy {media_buy_id} persisted without principal_id — "
+                "step claims record is 'persisted' but identity linkage is missing"
+            )
 
 
 @then(parsers.parse('the media buy record should be persisted with status "{status}"'))

@@ -23,10 +23,33 @@ from tests.bdd.steps.generic._dispatch import dispatch_request
 
 @given(parsers.parse('the Buyer owns an existing media buy with media_buy_id "{media_buy_id}"'))
 def given_buyer_owns_media_buy(ctx: dict, media_buy_id: str) -> None:
-    """Verify the existing media buy is in ctx (set by conftest _harness_env)."""
+    """Verify the existing media buy is in ctx AND persisted in DB.
+
+    Step text says 'Buyer owns an existing media buy' — verify both ctx state
+    AND database persistence to prevent phantom media buys that exist only in
+    test state.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import MediaBuy
+
     mb = ctx.get("existing_media_buy")
     assert mb is not None, "No existing_media_buy in ctx — conftest setup_update_data() failed"
     assert mb.media_buy_id == media_buy_id, f"Expected media_buy_id '{media_buy_id}', got '{mb.media_buy_id}'"
+    # Verify DB persistence — step claims media buy "exists", not just "is in ctx"
+    env = ctx["env"]
+    env._commit_factory_data()
+    tenant = ctx.get("tenant")
+    assert tenant is not None, "No tenant in ctx — cannot verify media buy ownership"
+    with get_db_session() as session:
+        db_mb = session.scalars(
+            select(MediaBuy).filter_by(media_buy_id=media_buy_id, tenant_id=tenant.tenant_id)
+        ).first()
+        assert db_mb is not None, (
+            f"Media buy '{media_buy_id}' not found in DB for tenant '{tenant.tenant_id}' — "
+            "step claims 'Buyer owns an existing media buy' but it is not persisted"
+        )
 
 
 @given(parsers.parse('the media buy is in "{status}" status'))
@@ -149,10 +172,18 @@ def given_package_update_with_table(ctx: dict, datatable: list[list[str]]) -> No
     """Add a package update to the request from a data table."""
     import json
 
+    _supported_pkg_fields = {"package_id", "budget", "paused", "targeting_overlay"}
     kwargs = _ensure_update_defaults(ctx)
     pkg_update: dict[str, Any] = {}
-    for row in datatable:
+    # Skip header row if present (pytest-bdd datatables include header as first row)
+    rows = datatable[1:] if datatable and datatable[0][0].strip().lower() == "field" else datatable
+    for row in rows:
         field, value = row[0].strip(), row[1].strip()
+        assert field in _supported_pkg_fields, (
+            f"Unrecognized package field '{field}' in datatable — "
+            f"supported: {sorted(_supported_pkg_fields)}. "
+            f"Add handling for '{field}' if it's a valid package update field."
+        )
         if field == "package_id":
             pkg_update["package_id"] = value
         elif field == "budget":
@@ -161,6 +192,7 @@ def given_package_update_with_table(ctx: dict, datatable: list[list[str]]) -> No
             pkg_update["paused"] = value.lower() == "true"
         elif field == "targeting_overlay":
             pkg_update["targeting_overlay"] = json.loads(value)
+    assert pkg_update, "Datatable produced empty package update — check table format"
     kwargs["packages"] = [pkg_update]
 
 
@@ -207,7 +239,12 @@ def given_daily_spend_ok(ctx: dict) -> None:
             "step claims 'daily spend does not exceed max_daily_package_spend' "
             "but there is no budget data to validate"
         )
-        # Existing packages already satisfy constraint (created by setup_update_data)
+        # Verify existing packages actually satisfy the constraint (not just assumed)
+        existing_pkgs = getattr(existing_mb, "packages", None) or []
+        assert len(existing_pkgs) > 0, (
+            "existing_media_buy has no packages — step claims 'daily spend does not "
+            "exceed max_daily_package_spend' but there are no packages to validate"
+        )
     else:
         for pkg in packages_to_check:
             budget = pkg.get("budget")

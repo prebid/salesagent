@@ -193,8 +193,23 @@ def given_snapshot_available(ctx: dict, pkg_id: str) -> None:
         "adapter_supports_reporting not set — step claims 'snapshot data is available' "
         "but the adapter reporting capability has not been configured by a prior Given step"
     )
+    # Verify the referenced package_id exists in the database
+    from sqlalchemy import select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import MediaPackage
+
+    with get_db_session() as session:
+        db_pkg = session.scalars(select(MediaPackage).filter_by(package_id=pkg_id)).first()
+        assert db_pkg is not None, (
+            f"Package '{pkg_id}' not found in DB — step claims "
+            "'snapshot data is available for package' but the package does not exist"
+        )
     ctx.setdefault("snapshot_available_packages", []).append(pkg_id)
     ctx["snapshot_available"] = True
+    # SPEC-PRODUCTION GAP: No snapshot fixture factory exists. This step records
+    # the expectation; Then steps verify fields with xfail when absent.
+    # FIXME(salesagent-9vgz.1): Create SnapshotFactory to persist real data.
 
 
 # ═══════════════════════════════════════════════════════════════════════

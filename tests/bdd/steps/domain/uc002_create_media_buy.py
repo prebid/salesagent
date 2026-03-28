@@ -136,23 +136,27 @@ def given_account_not_exists(ctx: dict) -> None:
     accidentally created an account with this ID.
     """
     account_id = ctx.get("request_account_id")
-    if account_id is not None:
-        from sqlalchemy import select
+    assert account_id is not None, (
+        "No request_account_id in ctx — step claims 'account_id does not exist "
+        "in the seller's account store' but no account_id was set by a prior Given step"
+    )
+    from sqlalchemy import select
 
-        from src.core.database.database_session import get_db_session
-        from src.core.database.models import Account
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import Account
 
-        tenant = ctx.get("tenant")
-        if tenant is not None:
-            with get_db_session() as session:
-                existing = session.scalars(
-                    select(Account).filter_by(account_id=account_id, tenant_id=tenant.tenant_id)
-                ).first()
-                assert existing is None, (
-                    f"Account '{account_id}' exists in DB for tenant '{tenant.tenant_id}' — "
-                    "step claims 'account_id does not exist in the seller's account store' "
-                    "but a prior step created it. Clean up or use a different account_id."
-                )
+    tenant = ctx.get("tenant")
+    assert tenant is not None, (
+        "No tenant in ctx — step claims 'account_id does not exist in the seller's "
+        "account store' but cannot verify without a tenant"
+    )
+    with get_db_session() as session:
+        existing = session.scalars(select(Account).filter_by(account_id=account_id, tenant_id=tenant.tenant_id)).first()
+        assert existing is None, (
+            f"Account '{account_id}' exists in DB for tenant '{tenant.tenant_id}' — "
+            "step claims 'account_id does not exist in the seller's account store' "
+            "but a prior step created it. Clean up or use a different account_id."
+        )
 
 
 @given(parsers.parse('the account "{account_id}" exists but requires setup (billing not configured)'))
@@ -657,6 +661,9 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
 
         media_buy_id = _get_response_field(resp, "media_buy_id")
         assert media_buy_id, f"Expected media_buy_id in response for '{outcome}', got None"
+        # Verify status is present and valid for a success outcome
+        status = _get_response_field(resp, "status")
+        assert status is not None, f"Expected status in response for success outcome '{outcome}'"
     elif outcome == "auto-approved path taken":
         from tests.bdd.steps.generic.then_media_buy import then_approval_auto
 
@@ -902,9 +909,10 @@ def when_seller_rejects_media_buy(ctx: dict, reason: str) -> None:
     Updates the media buy status to 'rejected' and stores the rejection reason
     on the associated workflow step.
 
-    FIXME(salesagent-9vgz.1): This step bypasses operations.py:approve_media_buy(action='reject')
+    SPEC-PRODUCTION GAP: This step bypasses operations.py:approve_media_buy(action='reject')
     and directly manipulates DB rows. Bugs in the production rejection path will not be caught.
-    Wire through the production admin flow when the harness supports Flask request context.
+    FIXME(salesagent-9vgz.1): Wire through the production admin flow when the harness
+    supports Flask request context.
     Production path: POST /operations/media-buy/<id>/approve with action=reject.
     """
     from datetime import UTC, datetime
@@ -1785,23 +1793,21 @@ def then_creatives_uploaded_to_library(ctx: dict) -> None:
         # Hard assert: all expected creatives must exist in DB
         missing = expected_ids - db_creative_ids
         if missing:
-            if not (db_creative_ids & expected_ids):
-                pytest.xfail(
-                    f"SPEC-PRODUCTION GAP: None of the request creatives {expected_ids} "
-                    f"were found in DB (DB has {db_creative_ids}). Production may not "
-                    f"persist inline creatives via this code path yet. "
-                    f"FIXME(salesagent-9vgz.1)"
-                )
-            pytest.xfail(
-                f"SPEC-PRODUCTION GAP: Partial upload — missing "
-                f"{missing} from DB "
-                f"(found {db_creative_ids & expected_ids}). Production may not "
-                f"persist all inline creatives yet. "
-                f"FIXME(salesagent-9vgz.1)"
+            found = db_creative_ids & expected_ids
+            gap_detail = (
+                f"None of the request creatives {sorted(expected_ids)} were found in DB"
+                if not found
+                else f"Partial upload — missing {sorted(missing)} (found {sorted(found)})"
             )
-        # All expected creatives found — hard-assert the subset relationship
+            pytest.xfail(
+                f"SPEC-PRODUCTION GAP: {gap_detail}. "
+                f"DB has {sorted(db_creative_ids)}. Production may not persist inline "
+                f"creatives via this code path yet. FIXME(salesagent-9vgz.1)"
+            )
+        # All expected creatives found — verify the subset relationship holds
         assert expected_ids <= db_creative_ids, (
-            f"Expected all request creatives {expected_ids} in DB, but DB has {db_creative_ids}. Missing: {missing}"
+            f"Expected all request creatives {sorted(expected_ids)} in DB, "
+            f"but DB has {sorted(db_creative_ids)}. Missing: {sorted(missing)}"
         )
 
 
