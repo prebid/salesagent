@@ -191,8 +191,7 @@ class SignalsAgentRegistry:
             if result.status == "completed":
                 # Synchronous completion
                 if result.data is None:
-                    logger.warning("Completed status but no data in response")
-                    return []
+                    raise ValueError("Completed status but no data in signals response")
                 signals = result.data.signals
                 total_duration = time.time() - start_time
                 logger.info(f"[TIMING] Got {len(signals)} signals synchronously in {total_duration:.2f}s total")
@@ -213,8 +212,7 @@ class SignalsAgentRegistry:
                 # Asynchronous completion - webhook registered
                 total_duration = time.time() - start_time
                 if result.submitted is None:
-                    logger.warning("Submitted status but no submitted info in response")
-                    return []
+                    raise ValueError("Submitted status but no submitted info in signals response")
                 logger.info(
                     f"[TIMING] Async operation submitted in {total_duration:.2f}s, "
                     f"webhook: {result.submitted.webhook_url}"
@@ -223,8 +221,7 @@ class SignalsAgentRegistry:
                 return []
 
             else:
-                logger.warning(f"_get_signals_from_agent: Unexpected status: {result.status}")
-                return []
+                raise ValueError(f"Unexpected result status from {agent.name}: {result.status}")
 
         except ADCPAuthenticationError as e:
             logger.error(f"Authentication failed for {agent.name}: {e.message}")
