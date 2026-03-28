@@ -267,29 +267,15 @@ class TestGetAdapterGAMAuth:
         assert adapter.dry_run is True
 
     def test_sa_tenant_config_dict_has_correct_keys(self, sa_tenant, _encryption_key):
-        """The config dict passed to GoogleAdManager must contain service_account_json.
+        """The config dict built by build_gam_config_from_adapter must contain service_account_json.
 
-        Tests the intermediate config dict that get_adapter() constructs,
-        independently of the GoogleAdManager constructor.
+        Verifies that the centralized config builder (now used by get_adapter)
+        produces a config dict with valid auth credentials for SA tenants.
         """
-        _set_tenant_context(sa_tenant["tenant_id"])
-
         with get_db_session() as session:
             config_row = session.scalars(select(AdapterConfig).filter_by(tenant_id=sa_tenant["tenant_id"])).first()
+            adapter_config = build_gam_config_from_adapter(config_row)
 
-            # This is what get_adapter() builds inline — verify it has SA credentials
-            # Currently it only sets refresh_token (the bug)
-            adapter_config: dict = {"enabled": True}
-            adapter_config["network_code"] = config_row.gam_network_code or ""
-            adapter_config["refresh_token"] = config_row.gam_refresh_token or ""
-            adapter_config["trafficker_id"] = config_row.gam_trafficker_id or ""
-
-        # BUG: refresh_token is "" (falsy), service_account_json is absent
-        # After fix, get_adapter() should use build_gam_config_from_adapter()
-        # which would set service_account_json instead of refresh_token
-        has_any_auth = bool(adapter_config.get("refresh_token")) or bool(adapter_config.get("service_account_json"))
-        assert has_any_auth, (
-            "Config dict has no valid auth credentials. "
-            f"refresh_token={adapter_config.get('refresh_token')!r}, "
-            f"service_account_json={adapter_config.get('service_account_json')!r}"
-        )
+        assert "service_account_json" in adapter_config, "SA tenant config must include service_account_json"
+        assert "refresh_token" not in adapter_config, "SA tenant config must not include refresh_token"
+        assert adapter_config["network_code"] == "987654321"

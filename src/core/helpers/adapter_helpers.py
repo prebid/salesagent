@@ -108,15 +108,9 @@ def get_adapter(
                     else True
                 )
             elif adapter_type == "google_ad_manager":
-                adapter_config["network_code"] = config_row.gam_network_code or ""
-                adapter_config["refresh_token"] = config_row.gam_refresh_token or ""
-                adapter_config["trafficker_id"] = config_row.gam_trafficker_id or ""
-                # Default to True (require approval) for safety
-                adapter_config["manual_approval_required"] = (
-                    config_row.gam_manual_approval_required
-                    if config_row.gam_manual_approval_required is not None
-                    else True
-                )
+                from src.adapters.gam import build_gam_config_from_adapter
+
+                adapter_config = build_gam_config_from_adapter(config_row)
 
                 # Get advertiser_id from principal's platform_mappings (per-principal, not tenant-level)
                 # Support both old format (nested under "google_ad_manager") and new format (root "gam_advertiser_id")
