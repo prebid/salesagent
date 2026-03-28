@@ -440,11 +440,19 @@ def given_product_no_placement_targeting(ctx: dict) -> None:
     """
     product = _get_product(ctx)
     assert product is not None, "No product in ctx or DB"
-    # Clear placements from the product
-    if hasattr(product, "placement_configs"):
-        product.placement_configs = []
+    # Assert product has the placement_configs attribute — if absent, the step
+    # cannot guarantee the product is configured as "no placement targeting".
+    assert hasattr(product, "placement_configs"), (
+        f"Product {type(product).__name__} has no 'placement_configs' attribute — "
+        "cannot clear placements to disable placement-level targeting"
+    )
+    product.placement_configs = []
     env = ctx["env"]
     env._commit_factory_data()
+    # Post-condition: verify placements were actually cleared
+    reloaded = _get_product(ctx)
+    cleared = getattr(reloaded, "placement_configs", None) or []
+    assert len(cleared) == 0, f"placement_configs not cleared after commit — still has {len(cleared)} entries"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -454,11 +462,18 @@ def given_product_no_placement_targeting(ctx: dict) -> None:
 
 @given("the Buyer does not have admin privileges")
 def given_buyer_no_admin(ctx: dict) -> None:
-    """Mark the buyer as non-admin."""
+    """Mark the buyer as non-admin and set role on the principal object."""
     ctx["buyer_is_admin"] = False
     principal = ctx.get("principal")
-    if principal is not None and hasattr(principal, "role"):
+    # Principal may not exist yet if this step runs before env setup —
+    # that's OK because the scenario's When step creates the identity.
+    # But if a principal IS present, it must have the role attribute set.
+    if principal is not None:
+        assert hasattr(principal, "role"), (
+            f"Principal {type(principal).__name__} has no 'role' attribute — cannot mark buyer as non-admin"
+        )
         principal.role = "buyer"
+        assert principal.role == "buyer", f"Failed to set principal.role to 'buyer', got {principal.role!r}"
 
     # If update already requires admin, inject the privilege error now
     if ctx.get("update_requires_admin"):
@@ -478,6 +493,17 @@ def given_update_requires_admin(ctx: dict) -> None:
     # If buyer is already marked non-admin, inject the privilege error now
     if not ctx.get("buyer_is_admin", True):
         _inject_privilege_error(ctx)
+
+    # Post-condition: if both flags are set, verify injection actually happened.
+    # This catches the case where step ordering left the env unconfigured.
+    if ctx.get("update_requires_admin") and not ctx.get("buyer_is_admin", True):
+        env = ctx["env"]
+        mock_adapter = env.mock["adapter"].return_value
+        assert mock_adapter.validate_media_buy_request.side_effect is not None, (
+            "Both 'update_requires_admin' and 'buyer_is_admin=False' are set, "
+            "but validate_media_buy_request.side_effect was not injected — "
+            "the privilege error will not fire during the When step"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -740,6 +740,8 @@ def then_implementation_date_not_null(ctx: dict) -> None:
 
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
+    # Guard: this step only makes sense on a success response, not an error
+    assert "error" not in ctx, f"Response is an error ({ctx.get('error')}) — cannot check implementation_date on error"
     assert hasattr(resp, "implementation_date"), "Response has no implementation_date field"
     impl_date = resp.implementation_date
     # Hard-assert what the step text claims: "not null"
@@ -754,11 +756,12 @@ def then_implementation_date_not_null(ctx: dict) -> None:
     # Verify it's a meaningful datetime value (not just a truthy non-None)
     if isinstance(impl_date, str):
         parsed = datetime.fromisoformat(impl_date.replace("Z", "+00:00"))
-        assert parsed is not None, f"implementation_date is not a valid ISO datetime: {impl_date!r}"
+        assert parsed.year >= 2020, f"implementation_date parsed to implausible date: {parsed!r}"
     else:
         assert isinstance(impl_date, datetime), (
             f"implementation_date should be datetime or ISO string, got {type(impl_date).__name__}: {impl_date!r}"
         )
+        assert impl_date.year >= 2020, f"implementation_date has implausible year: {impl_date!r}"
 
 
 @then(parsers.parse('the response should contain affected_packages including "{package_id}"'))
@@ -780,6 +783,8 @@ def then_affected_package_budget(ctx: dict, budget: int) -> None:
 
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
+    # Guard: this step only makes sense on a success response
+    assert "error" not in ctx, f"Response is an error ({ctx.get('error')}) — cannot check budget on error"
     affected = getattr(resp, "affected_packages", None) or []
     assert len(affected) > 0, "No affected packages in response"
     pkg = affected[0]
@@ -793,8 +798,8 @@ def then_affected_package_budget(ctx: dict, budget: int) -> None:
         # SPEC-PRODUCTION GAP: budget not echoed in affected_packages response.
         # The assertion WOULD fail, so xfail documents the gap.
         pytest.xfail(
-            f"SPEC-PRODUCTION GAP: affected package budget is None in response — "
-            f"production may not echo budget in affected_packages. "
+            f"SPEC-PRODUCTION GAP: affected package '{pkg_id}' budget is None — "
+            f"production does not echo budget in affected_packages. "
             f"Step claims 'updated budget of {budget}'. "
             f"FIXME(salesagent-9vgz.1)"
         )
@@ -808,8 +813,12 @@ def then_response_has_sandbox(ctx: dict) -> None:
 
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
-    # Verify this is a real response object, not an error
+    # Guard: this step only makes sense on a success response, not an error
     assert "error" not in ctx, f"Update errored ({ctx['error']}) — cannot check sandbox flag on an error response"
+    # Guard: response must be a real model object, not a raw dict or string
+    assert hasattr(resp, "model_dump") or hasattr(resp, "__dict__"), (
+        f"Response is not a model object (type: {type(resp).__name__}) — cannot inspect for sandbox flag"
+    )
     # sandbox may live on the response directly or on a wrapper envelope
     sandbox = getattr(resp, "sandbox", None)
     if sandbox is None and hasattr(resp, "model_dump"):
@@ -818,10 +827,11 @@ def then_response_has_sandbox(ctx: dict) -> None:
     # Hard-assert what the step text claims: "should include a sandbox flag"
     if sandbox is None:
         # SPEC-PRODUCTION GAP: sandbox flag not present in response.
-        # The assertion WOULD fail, so xfail documents the gap.
+        # Only xfail if this is a genuine gap (response is otherwise valid).
+        resp_fields = list(resp.model_dump().keys()) if hasattr(resp, "model_dump") else dir(resp)
         pytest.xfail(
             f"SPEC-PRODUCTION GAP: sandbox flag not present on response "
-            f"(response type: {type(resp).__name__}). "
+            f"(type: {type(resp).__name__}, fields: {resp_fields[:10]}). "
             "Step claims envelope 'should include' it but value is absent. "
             "FIXME(salesagent-9vgz.1)"
         )
