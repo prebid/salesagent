@@ -296,8 +296,7 @@ class CreativeAgentRegistry:
             if result.status == "completed":
                 formats_data = result.data
                 if formats_data is None:
-                    logger.warning("Completed status but no data in response")
-                    return []
+                    raise ValueError("Completed status but no data in response")
 
                 logger.info(
                     f"_fetch_formats_from_agent: Got response with {len(formats_data.formats) if hasattr(formats_data, 'formats') else 'N/A'} formats"
@@ -316,11 +315,7 @@ class CreativeAgentRegistry:
                 return formats
 
             elif result.status == "submitted":
-                # Webhook registered for async completion
-                logger.info(
-                    f"Async operation submitted, webhook: {result.submitted.webhook_url if result.submitted else 'none'}"
-                )
-                return []
+                raise ValueError(f"Unexpected submitted status for list_creative_formats from {agent.name}")
 
             elif result.status == "failed":
                 # Log detailed error information for debugging
@@ -351,8 +346,7 @@ class CreativeAgentRegistry:
                 raise ValueError(f"Creative agent format fetch failed: {error_msg}")
 
             else:
-                logger.warning(f"Unexpected result status: {result.status}")
-                return []
+                raise ValueError(f"Unexpected result status from {agent.name}: {result.status}")
 
         except ADCPAuthenticationError as e:
             logger.error(f"Authentication failed for creative agent {agent.name}: {e.message}")
@@ -448,8 +442,7 @@ class CreativeAgentRegistry:
             if "result" in data:
                 return self._parse_mcp_tool_result(data["result"], logger)
 
-        logger.warning("_fetch_formats_raw_mcp: No parseable result in MCP response")
-        return []
+        raise RuntimeError(f"No parseable result in MCP response from {agent.agent_url}")
 
     def _parse_mcp_tool_result(self, result: dict, logger: Any) -> list[Format]:
         """Parse formats from an MCP tools/call result."""
@@ -463,7 +456,7 @@ class CreativeAgentRegistry:
                 formats = [Format.model_validate(fmt_data) for fmt_data in formats_list]
                 logger.info(f"_fetch_formats_raw_mcp: Parsed {len(formats)} formats from TextContent")
                 return formats
-        return []
+        raise RuntimeError("No text content in MCP tool result")
 
     async def get_formats_for_agent(
         self,

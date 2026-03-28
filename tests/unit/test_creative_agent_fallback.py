@@ -124,8 +124,11 @@ class TestFetchFormatsRawMcp:
             assert formats[0].format_id.id == "display_image"
 
     @pytest.mark.asyncio
-    async def test_unexpected_format_returns_empty(self, registry, agent):
-        """Raw HTTP returns unexpected format → returns empty list."""
+    async def test_unexpected_format_raises_runtime_error(self, registry, agent):
+        """Raw HTTP returns unexpected format (no 'result' key) → raises RuntimeError.
+
+        Fix for salesagent-kwws: silent return [] masked failures as 'no formats'.
+        """
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
         mock_response.headers = {"content-type": "application/json"}
@@ -137,8 +140,8 @@ class TestFetchFormatsRawMcp:
         mock_http.__aexit__ = AsyncMock(return_value=False)
 
         with patch("httpx.AsyncClient", return_value=mock_http):
-            formats = await registry._fetch_formats_raw_mcp(agent)
-            assert formats == []
+            with pytest.raises(RuntimeError, match="No parseable result"):
+                await registry._fetch_formats_raw_mcp(agent)
 
     @pytest.mark.asyncio
     async def test_auth_headers_forwarded(self, registry, agent):
@@ -146,7 +149,11 @@ class TestFetchFormatsRawMcp:
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
         mock_response.headers = {"content-type": "application/json"}
-        mock_response.json.return_value = {"jsonrpc": "2.0", "id": 1, "result": {"content": []}}
+        mock_response.json.return_value = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {"content": [{"type": "text", "text": '{"formats": []}'}]},
+        }
 
         mock_http = AsyncMock()
         mock_http.post.return_value = mock_response
@@ -224,18 +231,24 @@ class TestParseMcpToolResult:
         assert len(formats) == 1
         assert formats[0].name == "Display Image"
 
-    def test_no_text_content_returns_empty(self, registry):
-        """Content with no text items → returns []."""
+    def test_no_text_content_raises(self, registry):
+        """Content with no text items → raises RuntimeError.
+
+        Fix for salesagent-kwws: silent return [] masked failures as 'no formats'.
+        """
         import logging
 
         result = {"content": [{"type": "image", "data": "..."}]}
-        formats = registry._parse_mcp_tool_result(result, logging.getLogger())
-        assert formats == []
+        with pytest.raises(RuntimeError, match="No text content"):
+            registry._parse_mcp_tool_result(result, logging.getLogger())
 
-    def test_empty_content_returns_empty(self, registry):
-        """Empty content list → returns []."""
+    def test_empty_content_raises(self, registry):
+        """Empty content list → raises RuntimeError.
+
+        Fix for salesagent-kwws: silent return [] masked failures as 'no formats'.
+        """
         import logging
 
         result = {"content": []}
-        formats = registry._parse_mcp_tool_result(result, logging.getLogger())
-        assert formats == []
+        with pytest.raises(RuntimeError, match="No text content"):
+            registry._parse_mcp_tool_result(result, logging.getLogger())

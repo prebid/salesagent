@@ -191,11 +191,10 @@ class TestCreativeAgentRegistry:
         mock_agent_client.list_creative_formats = AsyncMock(return_value=mock_result)
         mock_client.agent = Mock(return_value=mock_agent_client)
 
-        # Call the method
-        formats = await registry._fetch_formats_from_agent(mock_client, test_agent)
-
-        # Should return empty list for webhook submission
-        assert formats == []
+        # Submitted status is anomalous for list_creative_formats — must raise
+        # Fix for salesagent-kwws: silent return [] masked failures as 'no formats'
+        with pytest.raises(ValueError, match="Unexpected submitted status"):
+            await registry._fetch_formats_from_agent(mock_client, test_agent)
 
     @pytest.mark.asyncio
     async def test_fetch_formats_from_agent_handles_auth_error(self):
