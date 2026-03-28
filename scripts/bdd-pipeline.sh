@@ -211,6 +211,22 @@ $(echo "$PROD_FILES" | sed 's/^/- /')" --allow-empty
         --output "$INSPECT_MD" \
         > "$LOGDIR/inspect-scan-$TASK_ID.log" 2>&1 || true
 
+      # Filter findings to only files the task agent actually changed.
+      # Companion files are scanned for context but their pre-existing issues
+      # should not be fixed here — that creates churn and Sisyphean loops.
+      RAW_REPORT="$LOGDIR/inspect-raw-$TASK_ID.json"
+      if [ -f "$INSPECT_REPORT" ]; then
+        mv "$INSPECT_REPORT" "$RAW_REPORT"
+        python3 -c "
+import json, os
+changed = set('''$CHANGED_STEPS'''.split())
+findings = json.load(open('$RAW_REPORT'))
+scoped = [f for f in findings if f['file'] in changed]
+json.dump(scoped, open('$INSPECT_REPORT', 'w'), indent=2)
+print(f'Scoped: {len(scoped)}/{len(findings)} findings in changed files')
+" > "$LOGDIR/inspect-scope-$TASK_ID.log" 2>&1 || true
+      fi
+
       # Phase 2: Parse FLAGs and fix each one
       FLAG_COUNT=0
       FIX_COUNT=0
@@ -256,7 +272,7 @@ $FINDINGS
 $GIT_INSTRUCTION" \
             > "$FIX_LOG" 2>&1 || true
 
-          # Re-inspect to check remaining
+          # Re-inspect to check remaining (scoped to changed files only)
           NEXT_ITER=$(( ITERATION + 1 ))
           REINSPECT_REPORT="$LOGDIR/reinspect-${TASK_ID}-iter${NEXT_ITER}.json"
           REINSPECT_MD="$LOGDIR/reinspect-${TASK_ID}-iter${NEXT_ITER}.md"
@@ -265,6 +281,19 @@ $GIT_INSTRUCTION" \
             --files $STEP_FILES_ARGS \
             --output "$REINSPECT_MD" \
             > "$LOGDIR/reinspect-scan-${TASK_ID}-iter${NEXT_ITER}.log" 2>&1 || true
+
+          # Scope re-inspect findings to changed files only
+          REINSPECT_RAW="$LOGDIR/reinspect-raw-${TASK_ID}-iter${NEXT_ITER}.json"
+          if [ -f "$REINSPECT_REPORT" ]; then
+            mv "$REINSPECT_REPORT" "$REINSPECT_RAW"
+            python3 -c "
+import json
+changed = set('''$CHANGED_STEPS'''.split())
+findings = json.load(open('$REINSPECT_RAW'))
+scoped = [f for f in findings if f['file'] in changed]
+json.dump(scoped, open('$REINSPECT_REPORT', 'w'), indent=2)
+" 2>/dev/null || true
+          fi
 
           REMAINING=0
           if [ -f "$REINSPECT_REPORT" ]; then
