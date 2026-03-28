@@ -11,6 +11,11 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
+# Admin UI mount prefix for external URLs (Slack links, emails).
+# Unlike template URLs (which use request.script_root), Slack notifications
+# run outside Flask request context, so the prefix is fixed.
+_ADMIN_PREFIX = "/admin"
+
 
 class SlackNotifier:
     """Handles sending notifications to Slack channels via webhooks."""
@@ -163,7 +168,7 @@ class SlackNotifier:
 
         # Add action buttons with tenant-specific URL
         admin_url = os.getenv("ADMIN_UI_URL", "http://localhost:8001")
-        script_name = "/admin"
+        script_name = _ADMIN_PREFIX
         if tenant_id:
             # Tenant-specific workflows page
             operations_url = f"{admin_url}{script_name}/tenant/{tenant_id}/workflows"
@@ -303,7 +308,7 @@ class SlackNotifier:
 
         # Build correct URL to specific creative
         admin_url = os.getenv("ADMIN_UI_URL", "http://localhost:8001")
-        script_name = "/admin"
+        script_name = _ADMIN_PREFIX
         if tenant_id:
             # Link directly to the specific creative using anchor
             # Correct URL pattern: /admin/tenant/{tenant_id}/creatives/review#{creative_id}
@@ -656,7 +661,7 @@ class SlackNotifier:
 
         # Add action button with tenant-specific URL
         admin_url = os.getenv("ADMIN_UI_URL", "http://localhost:8001")
-        script_name = "/admin"
+        script_name = _ADMIN_PREFIX
         if tenant_id and media_buy_id:
             # Link to specific media buy in tenant context
             operations_url = f"{admin_url}{script_name}/tenant/{tenant_id}/workflows#{media_buy_id}"
