@@ -1517,11 +1517,9 @@ def create_inventory_endpoints(app):
                 return jsonify({"error": "GAM configuration not found"}), 400
 
             # Build GAM config from adapter_config columns
-            gam_config = {
-                "enabled": True,
-                "refresh_token": adapter_config.gam_refresh_token,
-                "manual_approval_required": adapter_config.gam_manual_approval_required,
-            }
+            from src.adapters.gam import build_gam_config_from_adapter
+
+            gam_config = build_gam_config_from_adapter(adapter_config)
 
             # Create dummy principal for client initialization
             from src.core.schemas import Principal
@@ -1729,11 +1727,9 @@ def create_inventory_endpoints(app):
                 return jsonify({"error": "GAM configuration not found"}), 400
 
             # Build GAM config
-            gam_config = {
-                "enabled": True,
-                "refresh_token": adapter_config.gam_refresh_token,
-                "manual_approval_required": adapter_config.gam_manual_approval_required,
-            }
+            from src.adapters.gam import build_gam_config_from_adapter
+
+            gam_config = build_gam_config_from_adapter(adapter_config)
 
             # Create dummy principal
             from src.core.schemas import Principal

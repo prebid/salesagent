@@ -390,7 +390,10 @@ def sync_orders(tenant_id):
             # Get GAM configuration from adapter_config
             adapter_config = tenant.adapter_config
 
-            if not adapter_config or not adapter_config.gam_network_code or not adapter_config.gam_refresh_token:
+            has_gam_credentials = adapter_config and (
+                adapter_config.gam_refresh_token or adapter_config.gam_service_account_json
+            )
+            if not adapter_config or not adapter_config.gam_network_code or not has_gam_credentials:
                 return (
                     jsonify(
                         {
