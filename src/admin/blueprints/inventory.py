@@ -387,13 +387,13 @@ def sync_orders(tenant_id):
             if not tenant:
                 return jsonify({"error": "Tenant not found"}), 404
 
-            # Get GAM configuration from adapter_config
-            adapter_config = tenant.adapter_config
+            # Validate GAM configuration via repository
+            from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
-            has_gam_credentials = adapter_config and (
-                adapter_config.gam_refresh_token or adapter_config.gam_service_account_json
-            )
-            if not adapter_config or not adapter_config.gam_network_code or not has_gam_credentials:
+            adapter_repo = AdapterConfigRepository(db_session, tenant_id)
+            adapter_config = adapter_repo.get_by_tenant()
+
+            if not adapter_config or not adapter_config.gam_network_code or not adapter_repo.has_gam_credentials():
                 return (
                     jsonify(
                         {

@@ -488,12 +488,13 @@ def view_gam_line_item(tenant_id, line_item_id):
                 if not tenant:
                     return render_template("error.html", error="Tenant not found"), 404
 
-                # Get GAM configuration from adapter_config
-                from src.core.database.models import AdapterConfig
+                # Validate GAM configuration via repository
+                from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
-                adapter_config = db_session.scalars(select(AdapterConfig).filter_by(tenant_id=tenant_id)).first()
+                adapter_repo = AdapterConfigRepository(db_session, tenant_id)
+                adapter_config = adapter_repo.get_by_tenant()
 
-                if not adapter_config or not adapter_config.gam_network_code or not adapter_config.gam_refresh_token:
+                if not adapter_config or not adapter_config.gam_network_code or not adapter_repo.has_gam_credentials():
                     return (
                         render_template(
                             "error.html",
@@ -586,12 +587,13 @@ def get_gam_custom_targeting_keys(tenant_id):
             if not tenant:
                 return jsonify({"error": "Tenant not found"}), 404
 
-            # Get GAM configuration from adapter_config
-            from src.core.database.models import AdapterConfig
+            # Validate GAM configuration via repository
+            from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
-            adapter_config = db_session.scalars(select(AdapterConfig).filter_by(tenant_id=tenant_id)).first()
+            adapter_repo = AdapterConfigRepository(db_session, tenant_id)
+            adapter_config = adapter_repo.get_by_tenant()
 
-            if not adapter_config or not adapter_config.gam_network_code or not adapter_config.gam_refresh_token:
+            if not adapter_config or not adapter_config.gam_network_code or not adapter_repo.has_gam_credentials():
                 return (
                     jsonify(
                         {"error": "Please connect your GAM account first. Go to Ad Server settings to configure GAM."}
@@ -1117,12 +1119,13 @@ def get_gam_line_item_api(tenant_id, line_item_id):
                 if not tenant:
                     return jsonify({"error": "Tenant not found"}), 404
 
-                # Get GAM configuration from adapter_config
-                from src.core.database.models import AdapterConfig
+                # Validate GAM configuration via repository
+                from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
-                adapter_config = db_session.scalars(select(AdapterConfig).filter_by(tenant_id=tenant_id)).first()
+                adapter_repo = AdapterConfigRepository(db_session, tenant_id)
+                adapter_config = adapter_repo.get_by_tenant()
 
-                if not adapter_config or not adapter_config.gam_network_code or not adapter_config.gam_refresh_token:
+                if not adapter_config or not adapter_config.gam_network_code or not adapter_repo.has_gam_credentials():
                     return (
                         jsonify(
                             {
