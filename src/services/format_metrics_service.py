@@ -300,10 +300,11 @@ def aggregate_all_tenants(period_days: int = 30) -> dict[str, Any]:
             logger.info(f"Processing tenant: {tenant.name} ({tenant_id})")
 
             try:
-                # Initialize GAM client
-                from src.adapters.gam import build_gam_config_from_adapter
+                # Initialize GAM client via repository
+                from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
-                gam_config = build_gam_config_from_adapter(adapter_config)
+                adapter_repo = AdapterConfigRepository(db_session, tenant_id)
+                gam_config = adapter_repo.get_gam_config()
                 auth_manager = GAMAuthManager(gam_config)
                 client_manager = GAMClientManager(gam_config, adapter_config.gam_network_code)
                 gam_client = client_manager.get_client()

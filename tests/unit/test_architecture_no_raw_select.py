@@ -328,7 +328,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/dynamic_products.py", "generate_variants_from_signals"),
     ("src/services/format_metrics_service.py", "_process_and_store_metrics"),
     ("src/services/format_metrics_service.py", "aggregate_all_tenants"),
-    ("src/services/gam_inventory_service.py", "_update_adapter_config_targeting_keys"),
+    # _update_adapter_config_targeting_keys removed — uses AdapterConfigRepository (salesagent-zj9)
     ("src/services/gam_inventory_service.py", "_upsert_inventory_item"),
     ("src/services/gam_inventory_service.py", "create_inventory_endpoints"),
     ("src/services/gam_inventory_service.py", "fetch_custom_targeting_values"),
