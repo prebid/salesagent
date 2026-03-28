@@ -46,6 +46,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc002_nfr",
     "tests.bdd.steps.domain.uc002_task_query",
     "tests.bdd.steps.domain.uc003_update_media_buy",
+    "tests.bdd.steps.domain.uc003_ext_error_scenarios",
     "tests.bdd.steps.domain.uc019_query_media_buys",
     "tests.bdd.steps.domain.uc026_package_media_buy",
     "tests.bdd.steps.domain.uc006_sync_creatives",
@@ -432,6 +433,63 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             item.add_marker(
                 pytest.mark.xfail(
                     reason="inline creatives: FK violation in _sync_creatives_impl assignment path (spec-production gap)",
+                    strict=True,
+                )
+            )
+
+        # FIXME(salesagent-05b): UC-003 extension/error scenarios — production uses
+        # different error codes than spec, or doesn't validate at all. These are
+        # spec-production gaps where the step definitions are correct but production
+        # code doesn't implement the expected validation.
+        _UC003_EXT_XFAILS: dict[str, str] = {
+            # Error code mismatches (production uses different codes than spec)
+            "T-UC-003-ext-a": "production returns AUTHORIZATION_ERROR, spec expects authentication_error",
+            "T-UC-003-ext-a-unknown": "production returns AUTHORIZATION_ERROR, spec expects authentication_error",
+            "T-UC-003-ext-b": "production returns ValueError, spec expects PRODUCT_NOT_FOUND",
+            "T-UC-003-ext-b-buyer-ref": "production returns ValueError, spec expects PRODUCT_NOT_FOUND",
+            "T-UC-003-ext-c": "production returns AUTHORIZATION_ERROR, spec expects ACCOUNT_NOT_FOUND",
+            "T-UC-003-ext-d": "production returns invalid_budget, spec expects BUDGET_TOO_LOW",
+            "T-UC-003-ext-d-negative": "production returns invalid_budget, spec expects BUDGET_TOO_LOW",
+            "T-UC-003-ext-h": "production returns missing_package_id, spec expects INVALID_REQUEST",
+            # Production doesn't validate these cases at all
+            "T-UC-003-ext-e": "production doesn't validate end_time < start_time on update",
+            "T-UC-003-ext-e-equal": "production doesn't validate end_time == start_time on update",
+            "T-UC-003-ext-f": "production doesn't validate currency on update path",
+            "T-UC-003-ext-g": "production doesn't validate daily spend cap on update",
+            "T-UC-003-ext-i": "production doesn't validate creative existence on update path",
+            "T-UC-003-ext-j-error": "production doesn't validate creative state on update path",
+            "T-UC-003-ext-j-rejected": "production doesn't validate creative state on update path",
+            "T-UC-003-ext-j-format": "production doesn't validate creative format compatibility on update",
+            "T-UC-003-ext-k": "inline creative sync: FK violation in production (missing creative commit)",
+            "T-UC-003-ext-l": "production doesn't validate package_id existence on update",
+            "T-UC-003-ext-m": "production doesn't validate placement_ids on update path",
+            "T-UC-003-ext-m-unsupported": "production doesn't validate placement targeting support",
+            "T-UC-003-ext-n": "production doesn't check admin privileges on update",
+            "T-UC-003-ext-o": "adapter error handling returns wrong shape on update",
+            "T-UC-003-ext-p-short": "production doesn't validate idempotency key length on update",
+            "T-UC-003-ext-p-long": "production doesn't validate idempotency key length on update",
+            "T-UC-003-ext-q-rejected": "production doesn't reject updates to terminal-status media buys",
+            "T-UC-003-ext-q-canceled": "production doesn't reject updates to terminal-status media buys",
+            "T-UC-003-ext-q-completed": "production doesn't reject updates to terminal-status media buys",
+            "T-UC-003-ext-r-keyword": "production doesn't validate keyword operation conflicts",
+            "T-UC-003-ext-r-negative": "production doesn't validate negative keyword conflicts",
+        }
+        for tag, reason in _UC003_EXT_XFAILS.items():
+            if tag in marker_names:
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason=f"spec-production gap: {reason}",
+                        strict=False,
+                    )
+                )
+                break  # One xfail per scenario is sufficient
+
+        # FIXME(salesagent-05b): UC-003 ext-r cross-ok scenarios — REST endpoint
+        # doesn't forward keyword_targets_add/negative_keywords_add params
+        if is_rest and ("T-UC-003-ext-r-cross-ok" in marker_names or "T-UC-003-ext-r-cross-ok-2" in marker_names):
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="REST endpoint doesn't forward keyword params (spec-production gap)",
                     strict=True,
                 )
             )

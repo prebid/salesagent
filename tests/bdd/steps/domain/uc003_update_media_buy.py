@@ -87,6 +87,23 @@ def given_existing_mb_start_end_time(ctx: dict, start_time: str, end_time: str) 
     ctx["original_end_time"] = parsed_end.astimezone(UTC)
 
 
+@given(parsers.parse('the existing media buy has start_time "{start_time}"'))
+def given_existing_mb_start_time(ctx: dict, start_time: str) -> None:
+    """Set start_time on the existing media buy ORM model (end_time unchanged).
+
+    Used by ext-e scenarios where end_time is set via the update request,
+    not pre-existing on the media buy.
+    """
+    from datetime import datetime
+
+    mb = ctx.get("existing_media_buy")
+    assert mb is not None, "No existing_media_buy in ctx — cannot set start_time"
+    parsed_start = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
+    mb.start_time = parsed_start
+    env = ctx["env"]
+    env._commit_factory_data()
+
+
 @given(parsers.parse("a valid update_media_buy request with:"))
 def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> None:
     """Build update request kwargs from a data table."""
@@ -305,24 +322,31 @@ def given_buyer_ref_resolves(ctx: dict, buyer_ref: str) -> None:
 def given_package_update_creative_assignments(ctx: dict, datatable: list[list[str]]) -> None:
     """Add creative_assignments to the first package update from a data table.
 
-    Table columns: creative_id, weight, placement_ids (comma-separated).
+    Handles variable column counts:
+    - 1 col: creative_id only (error scenarios)
+    - 2 cols: creative_id + placement_ids (placement error scenarios)
+    - 3 cols: creative_id + weight + placement_ids (full happy path)
     First row is the header (skipped).
     """
     kwargs = _ensure_update_defaults(ctx)
     if not kwargs.get("packages"):
         kwargs["packages"] = [{"package_id": "pkg_001"}]
+    # Detect column layout from header
+    header = [h.strip().lower() for h in datatable[0]]
     assignments = []
     for row in datatable[1:]:  # skip header row
         creative_id = row[0].strip()
-        weight = float(row[1].strip())
-        placement_ids = [p.strip() for p in row[2].strip().split(",") if p.strip()]
-        assignments.append(
-            {
-                "creative_id": creative_id,
-                "weight": weight,
-                "placement_ids": placement_ids,
-            }
-        )
+        assignment: dict[str, Any] = {"creative_id": creative_id}
+        if "weight" in header and len(row) > header.index("weight"):
+            assignment["weight"] = float(row[header.index("weight")].strip())
+        else:
+            assignment["weight"] = 1.0  # default weight
+        if "placement_ids" in header and len(row) > header.index("placement_ids"):
+            placement_ids = [p.strip() for p in row[header.index("placement_ids")].strip().split(",") if p.strip()]
+            assignment["placement_ids"] = placement_ids
+        else:
+            assignment["placement_ids"] = []
+        assignments.append(assignment)
     kwargs["packages"][0]["creative_assignments"] = assignments
     # Track referenced creative_ids for later guard steps
     ctx["referenced_creative_ids"] = [a["creative_id"] for a in assignments]
