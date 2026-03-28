@@ -314,7 +314,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/auth_config_service.py", "is_oidc_config_valid"),
     ("src/services/auth_config_service.py", "mark_oidc_verified"),
     ("src/services/auth_config_service.py", "save_oidc_config"),
-    ("src/services/background_approval_service.py", "_run_approval_polling_thread"),
+    # _run_approval_polling_thread removed — uses AdapterConfigRepository (salesagent-zj9)
     ("src/services/background_sync_service.py", "_mark_sync_complete"),
     ("src/services/background_sync_service.py", "_mark_sync_failed"),
     ("src/services/background_sync_service.py", "_run_sync_thread"),
@@ -351,7 +351,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/media_buy_status_scheduler.py", "_are_creatives_approved"),
     ("src/services/order_approval_service.py", "_mark_approval_complete"),
     ("src/services/order_approval_service.py", "_mark_approval_failed"),
-    ("src/services/order_approval_service.py", "_run_approval_thread"),
+    # _run_approval_thread removed — uses AdapterConfigRepository (salesagent-zj9)
     ("src/services/order_approval_service.py", "_send_approval_webhook"),
     ("src/services/order_approval_service.py", "_update_approval_progress"),
     ("src/services/order_approval_service.py", "get_approval_status"),
