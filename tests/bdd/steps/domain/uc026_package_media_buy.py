@@ -241,14 +241,31 @@ def then_package_buyer_ref(ctx: dict, buyer_ref: str) -> None:
 def then_package_budget(ctx: dict, budget: int) -> None:
     """Assert first package has the expected budget."""
     import pytest
+    from sqlalchemy import select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import MediaPackage
 
     packages = _get_packages(ctx)
     pkg = packages[0]
+    pkg_id = _pkg_field(pkg, "package_id")
+    assert pkg_id, "Package has no package_id — cannot verify budget"
     actual = _pkg_field(pkg, "budget")
     if actual is None:
+        # DB fallback: verify budget was persisted even if not in response
+        with get_db_session() as session:
+            db_pkg = session.scalars(select(MediaPackage).filter_by(package_id=pkg_id)).first()
+            if db_pkg and getattr(db_pkg, "budget", None) is not None:
+                db_budget = float(db_pkg.budget)
+                assert db_budget == float(budget), f"DB has budget {db_budget}, expected {budget}"
+                pytest.xfail(
+                    f"SPEC-PRODUCTION GAP: budget correctly persisted as {db_budget} in DB "
+                    f"but not echoed in response. Step claims 'contain budget {budget}'. "
+                    f"FIXME(salesagent-9vgz.1)"
+                )
         pytest.xfail(
-            f"SPEC-PRODUCTION GAP: package budget is None — "
-            f"step claims 'contain budget {budget}' but production may not echo budget yet. "
+            f"SPEC-PRODUCTION GAP: package budget is None in both response and DB — "
+            f"step claims 'contain budget {budget}' but production may not set budget yet. "
             f"FIXME(salesagent-9vgz.1)"
         )
     assert float(actual) == float(budget), f"Expected budget {budget}, got {actual}"
@@ -261,16 +278,34 @@ def then_package_pricing(ctx: dict, pricing_option_id: str) -> None:
     Maps feature-file names (cpm-standard) to real IDs (cpm_usd_fixed).
     """
     import pytest
+    from sqlalchemy import select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import MediaPackage
 
     pricing_id_map = {"cpm-standard": "cpm_usd_fixed", "cpm-auction": "cpm_usd_auction"}
     expected = pricing_id_map.get(pricing_option_id, pricing_option_id)
     packages = _get_packages(ctx)
     pkg = packages[0]
+    pkg_id = _pkg_field(pkg, "package_id")
+    assert pkg_id, "Package has no package_id — cannot verify pricing_option_id"
     actual = _pkg_field(pkg, "pricing_option_id")
     if actual is None:
+        # DB fallback: check if pricing_option_id was persisted
+        with get_db_session() as session:
+            db_pkg = session.scalars(select(MediaPackage).filter_by(package_id=pkg_id)).first()
+            if db_pkg and getattr(db_pkg, "pricing_option_id", None) is not None:
+                assert db_pkg.pricing_option_id == expected, (
+                    f"DB has pricing_option_id '{db_pkg.pricing_option_id}', expected '{expected}'"
+                )
+                pytest.xfail(
+                    f"SPEC-PRODUCTION GAP: pricing_option_id correctly persisted as "
+                    f"'{db_pkg.pricing_option_id}' in DB but not echoed in response. "
+                    f"FIXME(salesagent-9vgz.1)"
+                )
         pytest.xfail(
-            f"SPEC-PRODUCTION GAP: pricing_option_id is None — "
-            f"step claims 'contain pricing_option_id \"{pricing_option_id}\"' but production may not echo it yet. "
+            f"SPEC-PRODUCTION GAP: pricing_option_id is None in both response and DB — "
+            f"step claims 'contain pricing_option_id \"{pricing_option_id}\"' but production may not set it yet. "
             f"FIXME(salesagent-9vgz.1)"
         )
     assert actual == expected, f"Expected pricing_option_id '{expected}', got '{actual}'"
@@ -283,13 +318,30 @@ def then_package_default_formats(ctx: dict) -> None:
     Step claims format_ids should match the product's full format set.
     """
     import pytest
+    from sqlalchemy import select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import MediaPackage
 
     packages = _get_packages(ctx)
     pkg = packages[0]
+    pkg_id = _pkg_field(pkg, "package_id")
+    assert pkg_id, "Package has no package_id — cannot verify format_ids"
     format_ids = _pkg_field(pkg, "format_ids")
     if format_ids is None:
+        # DB fallback: check if format_ids were persisted
+        with get_db_session() as session:
+            db_pkg = session.scalars(select(MediaPackage).filter_by(package_id=pkg_id)).first()
+            if db_pkg:
+                db_format_ids = getattr(db_pkg, "format_ids", None)
+                if db_format_ids:
+                    pytest.xfail(
+                        f"SPEC-PRODUCTION GAP: format_ids persisted in DB ({len(db_format_ids)} items) "
+                        "but not echoed in response. Step claims 'defaulting to all product formats'. "
+                        "FIXME(salesagent-9vgz.1)"
+                    )
         pytest.xfail(
-            "SPEC-PRODUCTION GAP: format_ids not present on package — "
+            "SPEC-PRODUCTION GAP: format_ids not present on package or in DB — "
             "step claims 'defaulting to all product formats' but production may not echo defaults. "
             "FIXME(salesagent-9vgz.1)"
         )
@@ -325,15 +377,33 @@ def then_package_default_formats(ctx: dict) -> None:
 def then_package_not_paused(ctx: dict) -> None:
     """Assert package paused field is explicitly False (not None or absent)."""
     import pytest
+    from sqlalchemy import select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import MediaPackage
 
     packages = _get_packages(ctx)
     pkg = packages[0]
+    pkg_id = _pkg_field(pkg, "package_id")
+    assert pkg_id, "Package has no package_id — cannot verify paused state"
     paused = _pkg_field(pkg, "paused")
     # Step text says "paused as false" — must be exactly False, not None/absent
     if paused is None:
+        # DB fallback: check if paused was persisted
+        with get_db_session() as session:
+            db_pkg = session.scalars(select(MediaPackage).filter_by(package_id=pkg_id)).first()
+            if db_pkg:
+                db_paused = getattr(db_pkg, "paused", None)
+                if db_paused is not None:
+                    assert db_paused is False, f"DB has paused={db_paused!r}, expected False"
+                    pytest.xfail(
+                        "SPEC-PRODUCTION GAP: paused correctly persisted as False in DB "
+                        "but not echoed in response. Step claims 'paused as false'. "
+                        "FIXME(salesagent-9vgz.1)"
+                    )
         pytest.xfail(
-            "SPEC-PRODUCTION GAP: paused is None — step claims 'paused as false' "
-            "but production may not echo the paused field yet. "
+            "SPEC-PRODUCTION GAP: paused is None in both response and DB — "
+            "step claims 'paused as false' but production may not set the paused field yet. "
             "FIXME(salesagent-9vgz.1)"
         )
     assert paused is False, f"Expected paused to be False, got {paused!r}"
@@ -348,13 +418,30 @@ def then_package_formats_to_provide(ctx: dict) -> None:
     formats not in the package).
     """
     import pytest
+    from sqlalchemy import select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import MediaPackage
 
     packages = _get_packages(ctx)
     pkg = packages[0]
+    pkg_id = _pkg_field(pkg, "package_id")
+    assert pkg_id, "Package has no package_id — cannot verify format_ids_to_provide"
     formats_to_provide = _pkg_field(pkg, "format_ids_to_provide")
     if formats_to_provide is None:
+        # DB fallback: check if field was persisted
+        with get_db_session() as session:
+            db_pkg = session.scalars(select(MediaPackage).filter_by(package_id=pkg_id)).first()
+            if db_pkg:
+                db_val = getattr(db_pkg, "format_ids_to_provide", None)
+                if db_val:
+                    pytest.xfail(
+                        f"SPEC-PRODUCTION GAP: format_ids_to_provide persisted in DB "
+                        f"({len(db_val)} items) but not echoed in response. "
+                        "FIXME(salesagent-9vgz.1)"
+                    )
         pytest.xfail(
-            "SPEC-PRODUCTION GAP: format_ids_to_provide not present on package — "
+            "SPEC-PRODUCTION GAP: format_ids_to_provide not present on package or in DB — "
             "step claims 'listing formats needing creative assets' but production may not set it yet. "
             "FIXME(salesagent-9vgz.1)"
         )

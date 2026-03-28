@@ -259,6 +259,7 @@ def given_daily_spend_ok(ctx: dict) -> None:
     )
     max_daily = getattr(tenant, "max_daily_package_spend", None)
     if max_daily is not None:
+        # Check update packages when present
         for pkg in packages_to_check:
             budget = pkg.get("budget")
             if budget is not None:
@@ -266,6 +267,18 @@ def given_daily_spend_ok(ctx: dict) -> None:
                     f"Package budget {budget} exceeds tenant max_daily_package_spend {max_daily} — "
                     "step claims 'does not exceed max_daily_package_spend'"
                 )
+        # Also check existing packages when no update packages specified —
+        # the step claims the constraint holds, so existing packages must satisfy it too.
+        if not packages_to_check:
+            existing_mb = ctx.get("existing_media_buy")
+            for pkg in getattr(existing_mb, "packages", None) or []:
+                budget = getattr(pkg, "budget", None)
+                if budget is not None:
+                    assert float(budget) <= float(max_daily), (
+                        f"Existing package budget {budget} exceeds tenant max_daily_package_spend "
+                        f"{max_daily} — step claims 'does not exceed max_daily_package_spend' "
+                        "but existing packages violate the constraint"
+                    )
     ctx.setdefault("daily_spend_validated", True)
 
 
@@ -700,6 +713,10 @@ def then_implementation_date_not_null(ctx: dict) -> None:
     from datetime import datetime
 
     import pytest
+    from sqlalchemy import select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import MediaBuy
 
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
@@ -707,9 +724,26 @@ def then_implementation_date_not_null(ctx: dict) -> None:
     impl_date = resp.implementation_date
     # Hard-assert what the step text claims; xfail only on known gap
     if impl_date is None:
+        # DB fallback: check if production set it in persistence but not response
+        media_buy_id = getattr(resp, "media_buy_id", None)
+        if not media_buy_id:
+            existing = ctx.get("existing_media_buy")
+            media_buy_id = getattr(existing, "media_buy_id", None) if existing else None
+        db_impl_date = None
+        if media_buy_id:
+            with get_db_session() as session:
+                mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id)).first()
+                if mb:
+                    db_impl_date = getattr(mb, "implementation_date", None)
+        if db_impl_date is not None:
+            pytest.xfail(
+                f"SPEC-PRODUCTION GAP: implementation_date is set in DB ({db_impl_date}) "
+                "but not echoed in update response. Step claims 'not null'. "
+                "FIXME(salesagent-9vgz.1)"
+            )
         pytest.xfail(
-            "SPEC-PRODUCTION GAP: implementation_date is None — production does not "
-            "set it on update responses yet. Step claims 'not null'. "
+            "SPEC-PRODUCTION GAP: implementation_date is None in both response and DB — "
+            "production does not set it on update yet. Step claims 'not null'. "
             "FIXME(salesagent-9vgz.1)"
         )
     # Verify it's a meaningful datetime value (not just a truthy non-None)
@@ -740,19 +774,40 @@ def then_affected_packages_include(ctx: dict, package_id: str) -> None:
 def then_affected_package_budget(ctx: dict, budget: int) -> None:
     """Assert the affected package shows the updated budget value."""
     import pytest
+    from sqlalchemy import select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import MediaPackage
 
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     affected = getattr(resp, "affected_packages", None) or []
     assert len(affected) > 0, "No affected packages in response"
     pkg = affected[0]
+    pkg_id = getattr(pkg, "package_id", None) or (pkg.get("package_id") if isinstance(pkg, dict) else None)
+    assert pkg_id, "Affected package has no package_id — cannot identify which package was updated"
     actual_budget = getattr(pkg, "budget", None)
     if actual_budget is None and isinstance(pkg, dict):
         actual_budget = pkg.get("budget")
     if actual_budget is None:
+        # DB fallback: verify the budget was persisted even if not echoed in response
+        db_budget = None
+        with get_db_session() as session:
+            db_pkg = session.scalars(select(MediaPackage).filter_by(package_id=pkg_id)).first()
+            if db_pkg:
+                db_budget = getattr(db_pkg, "budget", None)
+        if db_budget is not None:
+            assert float(db_budget) == float(budget), (
+                f"Response doesn't echo budget, but DB has {db_budget} (expected {budget})"
+            )
+            pytest.xfail(
+                f"SPEC-PRODUCTION GAP: budget correctly persisted as {db_budget} in DB but "
+                f"not echoed in affected_packages response. Step claims 'updated budget of {budget}'. "
+                f"FIXME(salesagent-9vgz.1)"
+            )
         pytest.xfail(
-            f"SPEC-PRODUCTION GAP: affected package budget is None — production may "
-            f"not echo budget yet. Step claims 'updated budget of {budget}'. "
+            f"SPEC-PRODUCTION GAP: affected package budget is None in both response and DB — "
+            f"production may not set budget yet. Step claims 'updated budget of {budget}'. "
             f"FIXME(salesagent-9vgz.1)"
         )
     assert float(actual_budget) == float(budget), f"Expected budget {budget}, got {actual_budget}"
@@ -765,14 +820,25 @@ def then_response_has_sandbox(ctx: dict) -> None:
 
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
+    # Verify this is a real response object, not an error
+    assert "error" not in ctx, f"Update errored ({ctx['error']}) — cannot check sandbox flag on an error response"
     # sandbox may live on the response directly or on a wrapper envelope
     sandbox = getattr(resp, "sandbox", None)
     if sandbox is None and hasattr(resp, "model_dump"):
-        sandbox = resp.model_dump().get("sandbox")
+        dumped = resp.model_dump()
+        sandbox = dumped.get("sandbox")
     if sandbox is None:
+        # Check if the response schema even defines the field
+        resp_fields = set()
+        if hasattr(resp, "model_fields"):
+            resp_fields = set(resp.model_fields.keys())
+        elif hasattr(resp, "__fields__"):
+            resp_fields = set(resp.__fields__.keys())
+        has_field_defined = "sandbox" in resp_fields
         pytest.xfail(
-            "SPEC-PRODUCTION GAP: sandbox flag not present on response — "
-            "step claims envelope 'should include' it but field is absent. "
+            f"SPEC-PRODUCTION GAP: sandbox flag not present on response "
+            f"(schema defines field: {has_field_defined}, response type: {type(resp).__name__}). "
+            "Step claims envelope 'should include' it but value is absent. "
             "FIXME(salesagent-9vgz.1)"
         )
     # If sandbox is present, verify it's a boolean (not just any truthy/falsy value)

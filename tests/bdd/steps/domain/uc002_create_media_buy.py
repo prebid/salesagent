@@ -651,7 +651,9 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
             error = ctx["error"]
             if isinstance(error, AdCPError):
                 pytest.xfail(
-                    f"SPEC-PRODUCTION GAP: Expected success ({outcome}) but production rejected with AdCPError: {error}"
+                    f"SPEC-PRODUCTION GAP: Expected success ({outcome}) but production "
+                    f"rejected with AdCPError (code={error.error_code}, "
+                    f"recovery={error.recovery}): {error}"
                 )
             raise AssertionError(f"Expected success ({outcome}) but got non-AdCPError: {type(error).__name__}: {error}")
         resp = ctx.get("response")
@@ -930,6 +932,7 @@ def when_seller_rejects_media_buy(ctx: dict, reason: str) -> None:
     media_buy_id = media_buy.media_buy_id
     tenant = ctx["tenant"]
 
+    workflow_step_id = None
     with get_db_session() as session:
         # Verify media buy exists and is in a rejectable state
         mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id, tenant_id=tenant.tenant_id)).first()
@@ -950,6 +953,7 @@ def when_seller_rejects_media_buy(ctx: dict, reason: str) -> None:
                 step.status = "rejected"
                 step.error_message = reason
                 step.updated_at = datetime.now(UTC)
+                workflow_step_id = step.step_id
         else:
             pytest.xfail(
                 f"SPEC-PRODUCTION GAP: No workflow mapping for media buy {media_buy_id} — "
@@ -968,6 +972,14 @@ def when_seller_rejects_media_buy(ctx: dict, reason: str) -> None:
         assert mb_check.status == "rejected", (
             f"Expected 'rejected' status after seller rejection, got '{mb_check.status}'"
         )
+        # Also verify the workflow step was updated with the rejection reason
+        if workflow_step_id:
+            ws = session.scalars(select(WorkflowStep).filter_by(step_id=workflow_step_id)).first()
+            assert ws is not None, f"Workflow step {workflow_step_id} not found after rejection commit"
+            assert ws.status == "rejected", f"Expected workflow step status 'rejected', got '{ws.status}'"
+            assert ws.error_message == reason, (
+                f"Expected rejection reason '{reason}' on workflow step, got '{ws.error_message}'"
+            )
 
     # Store rejection_reason on existing_media_buy so Then steps can find it.
     # MediaBuy model lacks a rejection_reason column — we set it dynamically.
@@ -1775,6 +1787,14 @@ def then_creatives_uploaded_to_library(ctx: dict) -> None:
     from src.core.database.models import Creative as CreativeModel
 
     tenant = ctx["tenant"]
+    # Verify the create request succeeded before checking creative upload
+    resp = ctx.get("response")
+    assert resp is not None, (
+        "No response in ctx — step claims 'system should upload creatives' but the create request did not succeed"
+    )
+    assert "error" not in ctx, (
+        f"Create request errored ({ctx['error']}) — cannot verify creative upload when the parent operation failed"
+    )
     # Extract expected creative IDs from the request
     kwargs = ctx.get("request_kwargs", {})
     expected_ids = set()
@@ -1884,6 +1904,9 @@ def given_proposal_exists(ctx: dict, proposal_id: str) -> None:
     3. Link it to the tenant/principal
     """
     assert proposal_id, "proposal_id must be non-empty — step claims proposal 'exists'"
+    # Verify tenant and principal exist — proposals are tenant+principal scoped
+    assert "tenant" in ctx, "No tenant in ctx — proposal requires a tenant context"
+    assert "principal" in ctx, "No principal in ctx — proposal requires a principal context"
     ctx["expected_proposal_id"] = proposal_id
     # Record in request_kwargs so the create request includes proposal_id
     if "request_kwargs" in ctx:
@@ -1911,6 +1934,10 @@ def given_proposal_allocations(ctx: dict, count: int) -> None:
     assert "expected_proposal_id" in ctx, (
         "No expected_proposal_id in ctx — 'the proposal has N product allocations' "
         "requires a prior 'proposal X exists' step"
+    )
+    # Verify products exist so allocations can reference them
+    assert "default_product" in ctx or ctx.get("request_kwargs", {}).get("product_ids"), (
+        "No products configured — proposal allocations require products to distribute across"
     )
     ctx["expected_proposal_allocations"] = count
     # Default to equal allocation percentages when scenario doesn't specify them.

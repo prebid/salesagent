@@ -344,10 +344,10 @@ def then_webhook_notification(ctx: dict) -> None:
         assert status in webhook_triggering_statuses, f"Status '{status}' would not trigger a webhook"
 
         # DB-level verification: confirm the status transition persisted (not just in response).
-        from sqlalchemy import select
+        from sqlalchemy import func, select
 
         from src.core.database.database_session import get_db_session
-        from src.core.database.models import MediaBuy
+        from src.core.database.models import AuditLog, MediaBuy
 
         with get_db_session() as session:
             mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id)).first()
@@ -356,12 +356,17 @@ def then_webhook_notification(ctx: dict) -> None:
                 f"DB status '{mb.status}' is not webhook-triggering (expected one of {webhook_triggering_statuses}) — "
                 "notification precondition NOT met at persistence layer"
             )
+            # Verify audit trail exists (proves the operation was processed end-to-end)
+            audit_count = (
+                session.scalar(select(func.count()).select_from(AuditLog).filter_by(object_id=media_buy_id)) or 0
+            )
+            db_status = mb.status
 
         gaps = []
         if not push_config:
             gaps.append("push_notification_config NOT configured on request")
         gaps.append("webhook delivery service not wired in BDD harness")
-        verified = f"media_buy_id={media_buy_id}, db_status={mb.status}"
+        verified = f"media_buy_id={media_buy_id}, db_status={db_status}, audit_records={audit_count}"
         pytest.xfail(
             f"SPEC-PRODUCTION GAP: {'; '.join(gaps)}. "
             f"Verified preconditions: {verified}. "
@@ -663,9 +668,23 @@ def then_response_includes_resolved_start_time(ctx: dict) -> None:
             )
         return
 
-    # SPEC-PRODUCTION GAP: Response lacks start_time field.
-    # Step text claims "the response should include resolved start_time" but
-    # CreateMediaBuySuccess has no top-level start_time field.
+    # Check package-level start_time before falling back to DB
+    inner = getattr(resp, "response", resp)
+    pkgs = getattr(inner, "packages", None) or getattr(resp, "packages", None) or []
+    for pkg in pkgs:
+        pkg_start = getattr(pkg, "start_time", None)
+        if pkg_start is not None and str(pkg_start) != "asap":
+            # Package has a resolved start_time — step claim satisfied at package level
+            if isinstance(pkg_start, str):
+                parsed = datetime.fromisoformat(pkg_start.replace("Z", "+00:00"))
+                delta = abs((parsed - datetime.now(UTC)).total_seconds())
+                assert delta < 60, (
+                    f"Package start_time {pkg_start} is {delta:.1f}s from now — "
+                    "expected within 60s for 'asap' resolution"
+                )
+            return
+
+    # SPEC-PRODUCTION GAP: Neither top-level nor package-level start_time in response.
     # Verify via DB that start_time WAS resolved (behavior is correct, just
     # not exposed in the response), then xfail the response-level claim.
     with get_db_session() as session:
@@ -680,7 +699,8 @@ def then_response_includes_resolved_start_time(ctx: dict) -> None:
             "expected within 30s of current UTC for 'asap' resolution"
         )
     pytest.xfail(
-        "SPEC-PRODUCTION GAP: CreateMediaBuySuccess response lacks start_time field. "
+        "SPEC-PRODUCTION GAP: CreateMediaBuySuccess response lacks start_time field "
+        f"(checked top-level AND {len(pkgs)} package(s)). "
         f"DB confirms 'asap' correctly resolved to {mb.start_time} (within {delta:.1f}s of UTC now), "
         "but step text claims 'response should include resolved start_time' — "
         "response does not expose it. FIXME(salesagent-9vgz.1)"
