@@ -14,6 +14,27 @@ from pytest_bdd import given, parsers, then
 
 from tests.bdd.steps.domain.uc003_update_media_buy import _ensure_update_defaults
 
+
+def _inject_privilege_error(ctx: dict) -> None:
+    """Inject INSUFFICIENT_PRIVILEGES error into the mock adapter.
+
+    Called when both 'Buyer does not have admin privileges' and
+    'the update operation requires admin privileges' are active, regardless
+    of step ordering.
+    """
+    from src.core.exceptions import AdCPError
+
+    env = ctx["env"]
+    mock_adapter = env.mock["adapter"].return_value
+    error = AdCPError(
+        error_code="INSUFFICIENT_PRIVILEGES",
+        message="This operation requires admin privileges",
+        recovery="contact_admin",
+        details={"suggestion": "Request admin privileges or contact an administrator"},
+    )
+    mock_adapter.validate_media_buy_request.side_effect = error
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — authentication / principal overrides
 # ═══════════════════════════════════════════════════════════════════════
@@ -439,15 +460,24 @@ def given_buyer_no_admin(ctx: dict) -> None:
     if principal is not None and hasattr(principal, "role"):
         principal.role = "buyer"
 
+    # If update already requires admin, inject the privilege error now
+    if ctx.get("update_requires_admin"):
+        _inject_privilege_error(ctx)
+
 
 @given("the update operation requires admin privileges")
 def given_update_requires_admin(ctx: dict) -> None:
     """Configure the environment so the update operation requires admin.
 
-    This is a declarative guard — combined with 'Buyer does not have admin',
-    the update should be rejected with insufficient privileges.
+    Combined with 'Buyer does not have admin', the update should be rejected
+    with insufficient privileges. Injects a privilege-check error into the
+    adapter's validate_media_buy_request so the operation actually fails.
     """
     ctx["update_requires_admin"] = True
+
+    # If buyer is already marked non-admin, inject the privilege error now
+    if not ctx.get("buyer_is_admin", True):
+        _inject_privilege_error(ctx)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -473,8 +503,11 @@ def given_adapter_error_during_update(ctx: dict) -> None:
         recovery="retryable",
         details={"suggestion": "Retry the operation or contact ad server support"},
     )
-    # Inject into all adapter methods that update_media_buy_impl might call
+    # Inject into all adapter methods that update_media_buy_impl might call.
+    # Production calls adapter.update_media_buy() for the actual update,
+    # and may call validate_media_buy_request() beforehand.
     mock_adapter.validate_media_buy_request.side_effect = error
+    mock_adapter.update_media_buy.side_effect = error
     # Store original for potential recovery
     mock_adapter._original_validate_side_effect = None
 
@@ -569,7 +602,8 @@ def then_error_recovery_field(ctx: dict, value: str) -> None:
 def then_no_db_records_modified(ctx: dict) -> None:
     """Assert that no database records were modified (POST-F1: system state unchanged).
 
-    Verifies the existing media buy in DB matches its pre-operation state.
+    Verifies ALL mutable fields on the existing media buy in DB match
+    their pre-operation state — not just status.
     """
     from sqlalchemy import select
 
@@ -581,11 +615,29 @@ def then_no_db_records_modified(ctx: dict) -> None:
     with get_db_session() as session:
         db_mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=mb.media_buy_id)).first()
         assert db_mb is not None, f"Media buy {mb.media_buy_id} not found in DB"
-        # Verify status hasn't changed from what was set before the operation
-        assert db_mb.status == mb.status, (
-            f"DB status changed from '{mb.status}' to '{db_mb.status}' — "
-            "POST-F1 violated: system state should be unchanged on failure"
+        # Verify all mutable fields haven't changed from pre-operation state
+        _MUTABLE_FIELDS = (
+            "status",
+            "buyer_ref",
+            "budget",
+            "currency",
+            "start_date",
+            "end_date",
+            "start_time",
+            "end_time",
+            "campaign_objective",
+            "kpi_goal",
+            "is_paused",
+            "order_name",
+            "advertiser_name",
         )
+        for field in _MUTABLE_FIELDS:
+            original = getattr(mb, field, None)
+            actual = getattr(db_mb, field, None)
+            assert actual == original, (
+                f"DB field '{field}' changed from {original!r} to {actual!r} — "
+                "POST-F1 violated: system state should be unchanged on failure"
+            )
 
 
 @then(parsers.parse('the suggestion should contain "{text1}" or "{text2}"'))
