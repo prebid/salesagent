@@ -666,7 +666,8 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
 
                     for idx, fmt in enumerate(formats):
                         try:
-                            # format_ids is a JSONB column — entries are always dicts
+                            if not isinstance(fmt, dict):
+                                raise ValueError(f"Format entry must be dict, got {type(fmt).__name__}: {fmt!r}")
                             agent_url = fmt.get("agent_url")
                             format_id = fmt.get("format_id") or fmt.get("id")
 
