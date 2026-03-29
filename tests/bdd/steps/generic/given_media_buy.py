@@ -85,19 +85,21 @@ def given_tenant_auto_approval(ctx: dict) -> None:
 def given_tenant_manual_approval(ctx: dict) -> None:
     """Configure tenant for manual approval."""
     tenant = ctx.get("tenant")
-    if tenant:
-        tenant.human_review_required = True
-        env = ctx["env"]
-        env._commit_factory_data()
-        env._identity_cache.clear()
-        env._tenant_overrides["human_review_required"] = True
-        # Production code checks: manual_approval_required AND
-        # "create_media_buy" in adapter.manual_approval_operations.
-        # The mock adapter defaults to manual_approval_operations=[],
-        # so we must also configure the adapter mock for manual approval.
-        adapter_mock = env.mock["adapter"].return_value
-        adapter_mock.manual_approval_required = True
-        adapter_mock.manual_approval_operations = {"create_media_buy", "update_media_buy"}
+    assert tenant is not None, (
+        "No tenant in ctx — step claims 'tenant is configured for manual approval' but no tenant exists to configure"
+    )
+    tenant.human_review_required = True
+    env = ctx["env"]
+    env._commit_factory_data()
+    env._identity_cache.clear()
+    env._tenant_overrides["human_review_required"] = True
+    # Production code checks: manual_approval_required AND
+    # "create_media_buy" in adapter.manual_approval_operations.
+    # The mock adapter defaults to manual_approval_operations=[],
+    # so we must also configure the adapter mock for manual approval.
+    adapter_mock = env.mock["adapter"].return_value
+    adapter_mock.manual_approval_required = True
+    adapter_mock.manual_approval_operations = {"create_media_buy", "update_media_buy"}
 
 
 @given("adapter manual_approval_required is false")
@@ -320,12 +322,25 @@ def given_request_with_total_budget_of(ctx: dict, amount: int) -> None:
 
     Unlike 'a valid create_media_buy request with total budget' this step
     deliberately allows invalid amounts for validation-error scenarios.
+
+    In the package-based model, total_budget is the sum of all package budgets.
+    This step sets the first package's budget and zeroes out any others so the
+    total matches the claimed amount.
     """
     kwargs = _ensure_request_defaults(ctx)
     assert kwargs.get("packages"), (
         "No packages in request — step claims 'total_budget of {amount}' but cannot set budget without packages"
     )
     kwargs["packages"][0]["budget"] = float(amount)
+    # Zero out remaining packages so total equals claimed amount
+    for pkg in kwargs["packages"][1:]:
+        pkg["budget"] = 0.0
+    # Post-setup invariant: total across all packages equals the claimed total_budget
+    actual_total = sum(pkg.get("budget", 0) for pkg in kwargs["packages"])
+    assert actual_total == float(amount), (
+        f"Step claims 'total_budget of {amount}' but total of all package budgets "
+        f"is {actual_total} — setup did not establish the claimed total"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -382,8 +397,9 @@ def given_packages_positive_budget(ctx: dict) -> None:
 def given_packages_same_currency(ctx: dict, currency: str) -> None:
     """Ensure all packages use the specified currency via their pricing options.
 
-    Verifies the default pricing option's currency matches the claimed currency.
+    Verifies every package's pricing option currency matches the claimed currency.
     Currency comes from the pricing option, not the package directly.
+    The pricing_option_id format is "{model}_{currency}_{type}" (e.g. "cpm_usd_fixed").
     """
     ctx["expected_currency"] = currency
     # Verify the default pricing option actually uses this currency
@@ -396,6 +412,18 @@ def given_packages_same_currency(ctx: dict, currency: str) -> None:
         f"Step claims all packages use currency '{currency}' but default pricing option "
         f"has currency '{po.currency}' — setup mismatch"
     )
+    # Verify ALL packages' pricing_option_ids embed the claimed currency
+    kwargs = ctx.get("request_kwargs", {})
+    for i, pkg in enumerate(kwargs.get("packages", [])):
+        po_id = pkg.get("pricing_option_id", "")
+        # pricing_option_id format: "{model}_{currency}_{type}" e.g. "cpm_usd_fixed"
+        parts = po_id.split("_") if po_id else []
+        if len(parts) >= 2:
+            po_currency = parts[1].upper()
+            assert po_currency == currency.upper(), (
+                f"Step claims 'all packages use the same currency \"{currency}\"' but "
+                f"package[{i}] pricing_option_id '{po_id}' embeds currency '{po_currency}'"
+            )
 
 
 @given("each package has a valid pricing_option_id")
@@ -2304,16 +2332,23 @@ def given_proposal_not_exists(ctx: dict, proposal_id: str) -> None:
     """Mark that the referenced proposal does not exist.
 
     SPEC-PRODUCTION GAP: Production has no proposal store — proposal_id is
-    accepted but never validated. This step records the expected state; the
-    scenario will xfail at the Then assertion because production won't raise
-    PROPOSAL_EXPIRED.
+    accepted but never validated. This step cannot establish the claimed
+    precondition, so the scenario is xfailed.
 
     FIXME(salesagent-9vgz.1): When production implements proposal storage, this step must:
     1. Verify no proposal record exists for this ID, OR
     2. Create an expired proposal record to test the expiry path
+    Then remove the xfail.
     """
+    import pytest
+
     assert proposal_id, "proposal_id must be non-empty"
     ctx["expected_proposal_missing"] = proposal_id
+    pytest.xfail(
+        "SPEC-PRODUCTION GAP: Production has no proposal store — cannot establish "
+        f"'proposal \"{proposal_id}\" does not exist or has expired' precondition. "
+        "FIXME(salesagent-9vgz.1)"
+    )
 
 
 @given(parsers.parse("the proposal's total_budget_guidance.min is {amount:d}"))
@@ -2322,14 +2357,21 @@ def given_proposal_budget_guidance_min(ctx: dict, amount: int) -> None:
     """Set expected proposal budget guidance minimum.
 
     SPEC-PRODUCTION GAP: Production has no proposal budget guidance.
-    This step records the expected minimum but production won't validate against it.
+    This step cannot configure the claimed precondition, so the scenario is xfailed.
 
     FIXME(salesagent-9vgz.1): When production implements proposal budget guidance, this step must:
     1. Configure the proposal record with total_budget_guidance.min = amount
     2. Verify the proposal exists in ctx before setting guidance
+    Then remove the xfail.
     """
+    import pytest
+
     assert amount >= 0, f"Budget guidance minimum must be non-negative, got {amount}"
     ctx["expected_budget_guidance_min"] = amount
+    pytest.xfail(
+        "SPEC-PRODUCTION GAP: Production has no proposal budget guidance — cannot establish "
+        f"'total_budget_guidance.min is {amount}' precondition. FIXME(salesagent-9vgz.1)"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════

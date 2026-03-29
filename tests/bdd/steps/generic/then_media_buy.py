@@ -261,17 +261,25 @@ def then_slack_notification_sent(ctx: dict) -> None:
                 f"Slack notification sent for media_buy_id '{media_buy_id}' but scenario "
                 f"created '{expected_mb_id}' — notification targets the wrong media buy"
             )
-    # Verify tenant context is included (Seller = tenant/publisher)
-    # Check kwargs first (explicit), then positional args (fragile fallback)
-    tenant_name = call_args.kwargs.get("tenant_name")
-    if not tenant_name:
-        # Positional args: signature is (event_type, media_buy_id, ..., tenant_name)
-        # Only use positional if kwargs didn't have it
-        for i, arg in enumerate(call_args.args):
-            if i >= 2 and isinstance(arg, str) and arg and arg not in (media_buy_id, event_type):
-                tenant_name = arg
-                break
-    assert tenant_name, "Slack notification missing tenant_name — cannot confirm it targets the Seller"
+    # Verify tenant context is included (Seller = tenant/publisher).
+    # Production calls notify_media_buy_event with tenant_name as a keyword argument
+    # (see media_buy_create.py: tenant_name=tenant.get("name", "Unknown")).
+    # Assert it was passed as a kwarg — positional fallback is fragile and speculative.
+    assert "tenant_name" in call_args.kwargs, (
+        "Slack notification missing tenant_name keyword argument — production passes "
+        "tenant_name as a kwarg; if it arrived positionally the call signature has diverged"
+    )
+    tenant_name = call_args.kwargs["tenant_name"]
+    assert tenant_name, "Slack notification has empty tenant_name — cannot confirm it targets the Seller"
+    # Verify the notification targets the correct seller (tenant from this scenario)
+    tenant = ctx.get("tenant")
+    if tenant is not None:
+        expected_tenant_name = getattr(tenant, "name", None)
+        if expected_tenant_name:
+            assert tenant_name == expected_tenant_name, (
+                f"Slack notification tenant_name '{tenant_name}' does not match scenario "
+                f"tenant name '{expected_tenant_name}' — notification targets the wrong Seller"
+            )
 
 
 @then("the Buyer should be notified via webhook")
@@ -584,7 +592,13 @@ def then_start_time_resolved_to_utc(ctx: dict) -> None:
 
 @then("the campaign should be immediately activating")
 def then_campaign_immediately_activating(ctx: dict) -> None:
-    """Assert the campaign is immediately activating: auto-approved AND start_time near now."""
+    """Assert the campaign is immediately activating: auto-approved AND start_time near now.
+
+    "Immediately activating" means:
+    1. Task status is "completed" (workflow succeeded, not stuck in manual approval)
+    2. DB media buy status is NOT "pending_approval" (bypassed manual approval)
+    3. start_time is near-now (ASAP was resolved to current UTC)
+    """
     from datetime import UTC, datetime
 
     from sqlalchemy import select
@@ -594,15 +608,26 @@ def then_campaign_immediately_activating(ctx: dict) -> None:
 
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
-    # Auto-approved means status == "completed"
+    # Task status "completed" means the create_media_buy workflow step finished
+    # successfully — the adapter was called (not held for manual approval).
+    # "submitted" would indicate manual approval pending.
     status = _get_response_field(resp, "status")
-    assert status == "completed", f"Expected 'completed' for immediate activation, got '{status}'"
-    # "Immediately activating" also means start_time is near-now (ASAP resolved)
+    assert status == "completed", (
+        f"Expected task status 'completed' for immediate activation (got '{status}'). "
+        f"'submitted' would mean manual approval is pending; 'failed' means adapter error."
+    )
     media_buy_id = _get_response_field(resp, "media_buy_id")
     assert media_buy_id, "No media_buy_id in response"
     with get_db_session() as session:
         mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id)).first()
         assert mb is not None, f"Media buy {media_buy_id} not found in DB"
+        # DB status must NOT be "pending_approval" — that means manual approval was required,
+        # contradicting "immediately activating"
+        assert mb.status != "pending_approval", (
+            f"Media buy {media_buy_id} has DB status 'pending_approval' — "
+            f"campaign is waiting for manual approval, not 'immediately activating'"
+        )
+        # start_time must be near-now (ASAP resolved to current UTC)
         assert mb.start_time is not None, "start_time not set — campaign cannot be 'immediately activating'"
         now = datetime.now(UTC)
         delta = abs((mb.start_time - now).total_seconds())
