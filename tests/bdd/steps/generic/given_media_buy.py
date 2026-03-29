@@ -2347,10 +2347,18 @@ def given_adapter_available(ctx: dict) -> None:
 @given("the ad server adapter returns an error")
 @given("But the ad server adapter returns an error")
 def given_adapter_error(ctx: dict) -> None:
-    """Configure the mock adapter to return an error."""
+    """Configure the mock adapter to return an error on any operation."""
+    from src.core.exceptions import AdCPAdapterError
+
     env = ctx["env"]
     mock_adapter = env.mock["adapter"].return_value
-    mock_adapter.create_media_buy.side_effect = Exception("Ad server unavailable")
+    error = AdCPAdapterError(
+        "Ad server unavailable",
+        recovery="retryable",
+        details={"suggestion": "Retry the operation or contact ad server support"},
+    )
+    mock_adapter.create_media_buy.side_effect = error
+    mock_adapter.update_media_buy.side_effect = error
 
 
 @given("the ad server adapter returns success")
@@ -2369,6 +2377,7 @@ def given_adapter_success(ctx: dict) -> None:
     else:
         # Fallback: just clear error injection; return_value may already be set
         mock_adapter.create_media_buy.side_effect = None
+    mock_adapter.update_media_buy.side_effect = None
 
 
 @given("a create_media_buy request")

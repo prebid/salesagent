@@ -468,6 +468,40 @@ def then_no_package_records_persisted(ctx: dict) -> None:
         assert count == existing_count, f"Expected {existing_count} package record(s) in DB, found {count}"
 
 
+@then(parsers.parse("the package budget should be persisted as {budget:d}"))
+def then_package_budget_persisted(ctx: dict, budget: int) -> None:
+    """Assert the package budget was persisted in the database with the expected value.
+
+    Queries the real DB for the package referenced in the update request and
+    verifies its budget matches the expected value. This checks actual persistence,
+    not just the response payload.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import MediaPackage
+
+    # Determine package_id from the update request or existing package
+    update_kwargs = ctx.get("update_kwargs", {})
+    packages = update_kwargs.get("packages", [])
+    if packages:
+        package_id = packages[0].get("package_id")
+    else:
+        pkg = ctx.get("existing_package")
+        assert pkg is not None, "No package in update request or ctx — cannot verify budget"
+        package_id = pkg.package_id
+
+    assert package_id, "No package_id found to verify budget persistence"
+
+    with get_db_session() as session:
+        db_pkg = session.scalars(select(MediaPackage).filter_by(package_id=package_id)).first()
+        assert db_pkg is not None, f"Package {package_id} not found in DB"
+        assert db_pkg.budget == budget, (
+            f"Expected package budget {budget}, got {db_pkg.budget} — "
+            "BR-RULE-020 INV-1: adapter success should persist changes"
+        )
+
+
 @then("the creative assignment records should be persisted")
 def then_creative_assignment_records_persisted(ctx: dict) -> None:
     """Assert creative assignment records were persisted in the database.

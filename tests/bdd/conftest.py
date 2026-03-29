@@ -400,6 +400,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             or "T-UC-003-partial-update" in marker_names
             or "T-UC-003-idempotency-valid" in marker_names
             or "T-UC-003-idempotency-absent" in marker_names
+            or "T-UC-003-adapter-success" in marker_names
+            or "T-UC-003-adapter-failure" in marker_names
         ):
             item.add_marker(
                 pytest.mark.xfail(
