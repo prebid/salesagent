@@ -242,9 +242,13 @@ def then_slack_notification_sent(ctx: dict) -> None:
     media_buy_id = call_args.args[1] if len(call_args.args) > 1 else call_args.kwargs.get("media_buy_id")
     assert event_type, "Slack notification missing event_type argument"
     assert media_buy_id, "Slack notification missing media_buy_id — cannot confirm it references the correct media buy"
-    # Seller-facing events: approval/notification events directed to the seller's channel.
-    # "created" is a lifecycle event that notifies the seller a new media buy arrived.
-    # "approval_required" and "config_approval_required" require seller action.
+    # Seller-facing events: events where the Seller (publisher/tenant) is the audience.
+    # - "created": notifies the seller that a buyer submitted a new media buy for
+    #   their inventory — seller needs to know a new order arrived, even if auto-approved.
+    # - "approval_required": seller must review and approve the media buy.
+    # - "config_approval_required": seller must configure adapter settings.
+    # Buyer-facing events (rejected, approved, status_changed) are NOT seller events
+    # and should never appear here.
     seller_event_types = ("approval_required", "created", "config_approval_required")
     assert event_type in seller_event_types, (
         f"Expected seller-facing event_type (one of {seller_event_types}), "
@@ -292,7 +296,6 @@ def then_webhook_notification(ctx: dict) -> None:
     was persisted (proves the buyer WILL be notified), not that the HTTP POST
     happened (that's async, tested in integration/e2e).
     """
-    import pytest
     from sqlalchemy import select
 
     from src.core.database.database_session import get_db_session
@@ -321,14 +324,13 @@ def then_webhook_notification(ctx: dict) -> None:
     if push_config is None:
         request_kwargs = ctx.get("request_kwargs", {})
         push_config = request_kwargs.get("push_notification_config")
-    if push_config is None:
-        # No push_notification_config on request — the buyer didn't ask for webhook notifications.
-        # This is a scenario setup issue, not a production gap.
-        pytest.xfail(
-            "push_notification_config not provided on request — "
-            "scenario should include a Given step that sets push_notification_config. "
-            "Without it, production has no webhook URL to store."
-        )
+    assert push_config is not None, (
+        "push_notification_config not provided on request — scenario should include "
+        "a Given step that sets push_notification_config. Without it, production has "
+        "no webhook URL to store, and the step claim 'the Buyer should be notified "
+        "via webhook' cannot be verified. This is a scenario setup issue, not a "
+        "production gap."
+    )
 
     # --- Verify PushNotificationConfig was persisted ---
     with get_db_session() as session:

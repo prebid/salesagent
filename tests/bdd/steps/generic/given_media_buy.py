@@ -285,6 +285,8 @@ def given_valid_create_request_with_table(ctx: dict, datatable: list[list[str]])
                 )
 
                 kwargs["account"] = AccountReference(root=AccountReference1(account_id=account_id))
+            else:
+                raise ValueError(f"Unrecognized account format: '{value}'. Expected format: account_id \"acc-001\"")
         elif field == "proposal_id":
             kwargs["proposal_id"] = value
         elif field == "total_budget":
@@ -428,21 +430,48 @@ def given_packages_same_currency(ctx: dict, currency: str) -> None:
 
 @given("each package has a valid pricing_option_id")
 def given_packages_valid_pricing(ctx: dict) -> None:
-    """Ensure each package has a valid pricing_option_id.
+    """Ensure each package has a valid pricing_option_id referencing a real DB record.
 
-    Verifies the request packages actually reference pricing_option_ids, not just
-    recording a boolean flag. Default packages reference valid pricing options
+    Verifies the request packages actually reference pricing_option_ids that
+    correspond to PricingOption records in the database, not just checking
+    non-None strings. Default packages reference valid pricing options
     created by setup_media_buy_data.
     """
+    from sqlalchemy import select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import PricingOption
+
     kwargs = ctx.get("request_kwargs")
     assert kwargs is not None, "No request_kwargs in ctx — step claims packages have valid pricing"
     packages = kwargs.get("packages", [])
     assert packages, "No packages in request — step claims each has a valid pricing_option_id"
+
+    tenant = ctx.get("tenant")
+    assert tenant is not None, "No tenant in ctx — cannot verify pricing option validity"
+    tenant_id = getattr(tenant, "tenant_id", None)
+
     for i, pkg in enumerate(packages):
         po_id = pkg.get("pricing_option_id")
         assert po_id is not None, (
             f"Package {i} has no pricing_option_id — step claims 'each package has a valid pricing_option_id'"
         )
+        # Verify the pricing_option_id references an actual PricingOption in the DB
+        product_id = pkg.get("product_id")
+        with get_db_session() as session:
+            po = session.scalars(
+                select(PricingOption).filter_by(
+                    tenant_id=tenant_id,
+                    product_id=product_id,
+                )
+            ).all()
+            known_po_ids = {_pricing_option_id(p) for p in po}
+            assert po_id in known_po_ids, (
+                f"Package {i} pricing_option_id '{po_id}' not found among product "
+                f"'{product_id}' pricing options: {known_po_ids}. "
+                "Step claims 'valid pricing_option_id' but the ID does not reference "
+                "an existing PricingOption record."
+            )
     ctx["pricing_validated"] = True
 
 
@@ -603,8 +632,11 @@ def given_duplicate_product(ctx: dict, product_id: str) -> None:
 def given_unknown_targeting_field(ctx: dict, field_name: str) -> None:
     """Add unknown field to package targeting_overlay."""
     kwargs = _ensure_request_defaults(ctx)
-    if kwargs.get("packages"):
-        kwargs["packages"][0].setdefault("targeting_overlay", {})[field_name] = "value"
+    assert kwargs.get("packages"), (
+        "No packages in request — step claims 'a package targeting_overlay contains "
+        f'unknown field "{field_name}"\' but no package exists to set it on'
+    )
+    kwargs["packages"][0].setdefault("targeting_overlay", {})[field_name] = "value"
 
 
 @given("a package targeting_overlay sets a managed-only dimension")
@@ -616,8 +648,11 @@ def given_managed_targeting_dimension(ctx: dict) -> None:
     validate_overlay_targeting() in targeting_capabilities.py.
     """
     kwargs = _ensure_request_defaults(ctx)
-    if kwargs.get("packages"):
-        kwargs["packages"][0]["targeting_overlay"] = {"key_value_pairs": {"section": "sports"}}
+    assert kwargs.get("packages"), (
+        "No packages in request — step claims 'a package targeting_overlay sets a "
+        "managed-only dimension' but no package exists to set it on"
+    )
+    kwargs["packages"][0]["targeting_overlay"] = {"key_value_pairs": {"section": "sports"}}
 
 
 @given(parsers.parse('a package targeting_overlay includes "{value}" in both geo_countries and geo_countries_exclude'))
@@ -627,22 +662,39 @@ def given_managed_targeting_dimension(ctx: dict) -> None:
 def given_geo_overlap(ctx: dict, value: str) -> None:
     """Create geo include/exclude overlap."""
     kwargs = _ensure_request_defaults(ctx)
-    if kwargs.get("packages"):
-        kwargs["packages"][0]["targeting_overlay"] = {
-            "geo_countries": [value],
-            "geo_countries_exclude": [value],
-        }
+    assert kwargs.get("packages"), (
+        f"No packages in request — step claims 'a package targeting_overlay includes "
+        f'"{value}" in both geo_countries and geo_countries_exclude\' but no package exists'
+    )
+    kwargs["packages"][0]["targeting_overlay"] = {
+        "geo_countries": [value],
+        "geo_countries_exclude": [value],
+    }
 
 
 @given(parsers.parse("a package has budget {budget:d} over a {days:d}-day flight (daily = {daily:d})"))
 @given(parsers.parse("But a package has budget {budget:d} over a {days:d}-day flight (daily = {daily:d})"))
 def given_high_daily_spend(ctx: dict, budget: int, days: int, daily: int) -> None:
-    """Set package with high daily spend exceeding cap."""
+    """Set package with high daily spend exceeding cap.
+
+    The `daily` parameter is captured from the step text for documentation purposes
+    (it describes the expected daily spend = budget / days). Verify it matches the
+    math to catch Gherkin typos.
+    """
     kwargs = _ensure_request_defaults(ctx)
     kwargs["start_time"] = _future(1).isoformat()
     kwargs["end_time"] = _future(1 + days).isoformat()
-    if kwargs.get("packages"):
-        kwargs["packages"][0]["budget"] = float(budget)
+    assert kwargs.get("packages"), (
+        f"No packages in request — step claims 'a package has budget {budget} over a "
+        f"{days}-day flight' but no package exists to set it on"
+    )
+    # Verify the daily parameter matches budget/days to catch Gherkin data errors
+    expected_daily = budget // days
+    assert daily == expected_daily, (
+        f"Step text claims daily = {daily} but budget {budget} / {days} days = "
+        f"{expected_daily} — Gherkin data table has inconsistent values"
+    )
+    kwargs["packages"][0]["budget"] = float(budget)
 
 
 @given(parsers.parse('a package references pricing_option_id "{po_id}" not found on the product'))
@@ -650,8 +702,11 @@ def given_high_daily_spend(ctx: dict, budget: int, days: int, daily: int) -> Non
 def given_nonexistent_pricing_option(ctx: dict, po_id: str) -> None:
     """Override first package pricing_option_id to a non-existent value."""
     kwargs = _ensure_request_defaults(ctx)
-    if kwargs.get("packages"):
-        kwargs["packages"][0]["pricing_option_id"] = po_id
+    assert kwargs.get("packages"), (
+        f"No packages in request — step claims 'a package references pricing_option_id "
+        f'"{po_id}" not found on the product\' but no package exists to set it on'
+    )
+    kwargs["packages"][0]["pricing_option_id"] = po_id
 
 
 @given("a package selects an auction pricing option but provides no bid_price")
@@ -668,9 +723,12 @@ def given_auction_no_bid_price(ctx: dict) -> None:
     )
     env._commit_factory_data()
     kwargs = _ensure_request_defaults(ctx)
-    if kwargs.get("packages"):
-        kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(auction_po)
-        kwargs["packages"][0].pop("bid_price", None)
+    assert kwargs.get("packages"), (
+        "No packages in request — step claims 'a package selects an auction pricing "
+        "option but provides no bid_price' but no package exists to set it on"
+    )
+    kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(auction_po)
+    kwargs["packages"][0].pop("bid_price", None)
 
 
 @given(parsers.parse("a package has bid_price {bid:g} but floor_price is {floor:g}"))
@@ -705,11 +763,25 @@ def given_fixed_price_only(ctx: dict) -> None:
 
     The default PricingOption from setup_media_buy_data() is already
     is_fixed=True with rate=5.00 — this maps to fixed_price=5.00, floor_price=None.
+    Also verifies the request package actually references this PO.
     """
-    # Default state — no mutation needed. Assert the default PO is fixed.
+    # Assert the default PO is fixed.
     po = ctx.get("default_pricing_option")
     assert po is not None, "No default_pricing_option in ctx — Given step ordering error"
     assert po.is_fixed, "Default pricing option should be fixed"
+    # Verify the request package references this fixed PO
+    kwargs = _ensure_request_defaults(ctx)
+    assert kwargs.get("packages"), (
+        "No packages in request — step claims 'a package pricing option has fixed_price' "
+        "but no package exists to verify"
+    )
+    expected_po_id = _pricing_option_id(po)
+    actual_po_id = kwargs["packages"][0].get("pricing_option_id")
+    assert actual_po_id == expected_po_id, (
+        f"Package pricing_option_id '{actual_po_id}' does not reference the fixed "
+        f"PO '{expected_po_id}' — step claims the package uses a fixed pricing option "
+        "but the package references a different PO"
+    )
 
 
 @given("a package pricing option has floor_price set and fixed_price null")
@@ -1753,11 +1825,11 @@ def _add_creative_ids_to_package(ctx: dict, creative_ids: list[str]) -> None:
     Merges with any existing creative_ids. Ensures request_kwargs exists.
     """
     kwargs = _ensure_request_defaults(ctx)
-    if kwargs.get("packages"):
-        pkg = kwargs["packages"][0]
-        existing = pkg.get("creative_ids") or []
-        existing.extend(creative_ids)
-        pkg["creative_ids"] = existing
+    assert kwargs.get("packages"), "No packages in request — cannot add creative_ids without a package"
+    pkg = kwargs["packages"][0]
+    existing = pkg.get("creative_ids") or []
+    existing.extend(creative_ids)
+    pkg["creative_ids"] = existing
 
 
 def _create_approved_creative(ctx: dict, creative_id: str, fmt: str = "display_300x250") -> Any:
@@ -1916,14 +1988,21 @@ def given_creative_boundary(ctx: dict, config: str) -> None:
         _add_creative_ids_to_package(ctx, [creative.creative_id])
 
     elif config == "weight=0":
-        # Creative reference — weight=0 (paused) is valid
+        # Creative reference — weight=0 (paused) is valid boundary
         creative = _create_approved_creative(ctx, "cr-w0")
         _add_creative_ids_to_package(ctx, [creative.creative_id])
+        # Store the expected weight for boundary verification.
+        # NOTE: create_media_buy uses creative_ids (no weight param) — the actual
+        # weight is set during _sync_creatives at default=100. This records the
+        # boundary intent so Then steps can verify production behavior.
+        ctx["expected_creative_weight"] = 0
 
     elif config == "weight=100":
-        # Creative reference — weight=100 (max rotation) is valid
+        # Creative reference — weight=100 (max rotation) is valid boundary
         creative = _create_approved_creative(ctx, "cr-w100")
         _add_creative_ids_to_package(ctx, [creative.creative_id])
+        # Store the expected weight for boundary verification.
+        ctx["expected_creative_weight"] = 100
 
     elif config == "101 uploads":
         # 101 inline creatives — exceeds spec limit
