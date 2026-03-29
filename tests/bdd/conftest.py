@@ -35,6 +35,7 @@ pytest_plugins = [
     "tests.bdd.steps.generic.then_error",
     "tests.bdd.steps.generic.then_payload",
     "tests.bdd.steps.domain.uc004_delivery",
+    "tests.bdd.steps.domain.uc_get_products_inventory",
 ]
 
 # ---------------------------------------------------------------------------
@@ -403,6 +404,8 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
         return "UC-005"
     if any(t.startswith("T-UC-004") for t in marker_names):
         return "UC-004"
+    if "inventory_profile" in marker_names:
+        return "UC-GET-PRODUCTS"
     return None
 
 
@@ -460,5 +463,13 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 yield
         else:
             yield
+    elif uc == "UC-GET-PRODUCTS":
+        request.getfixturevalue("integration_db")
+        from tests.harness.product import ProductEnv
+
+        with ProductEnv(tenant_id="inv-profile-test") as env:
+            ctx["env"] = env
+            yield
+
     else:
         yield
