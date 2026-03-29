@@ -353,10 +353,9 @@ def given_creatives_exist_in_library(ctx: dict) -> None:
     """Create DB Creative records for all creative_ids referenced by creative_assignments."""
     from tests.factories.creative import CreativeFactory
 
-    env = ctx["env"]
     creative_ids = ctx.get("referenced_creative_ids", [])
     for cid in creative_ids:
-        CreativeFactory(
+        CreativeFactory.create_sync(
             creative_id=cid,
             tenant=ctx["tenant"],
             principal=ctx["principal"],
@@ -364,7 +363,6 @@ def given_creatives_exist_in_library(ctx: dict) -> None:
             approved=True,
             data={"assets": {"primary": {"url": "https://example.com/banner.png", "width": 300, "height": 250}}},
         )
-    env._commit_factory_data()
 
 
 @given("all referenced creatives are in valid state (not error or rejected)")
@@ -956,13 +954,14 @@ def given_media_buy_flight_duration(ctx: dict, flight_days: str) -> None:
     """Set the media buy flight duration by adjusting start_time and end_time.
 
     Sets start_time to now and end_time to now + flight_days.
-    If flight_days is 0, floors to 1 day.
+    Given step must set up exactly what the step text says — no silent flooring.
+    0-day flights (start == end) are valid test inputs for validation error scenarios.
     """
     from datetime import datetime, timedelta
 
     mb = ctx.get("existing_media_buy")
     assert mb is not None, "No existing_media_buy in ctx — cannot set flight duration"
-    days = max(int(flight_days), 1)  # floor to 1 day
+    days = int(flight_days)
     now = datetime.now(tz=UTC)
     mb.start_time = now
     mb.end_time = now + timedelta(days=days)
@@ -1014,15 +1013,13 @@ def given_update_request_with_identification(ctx: dict, id_config: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-@given(parsers.parse("the package targeting_overlay includes frequency_cap with suppress: {suppress_value}"))
-def given_frequency_cap_suppress(ctx: dict, suppress_value: str) -> None:
+@given(parsers.parse("the package targeting_overlay includes frequency_cap: {freq_cap_config}"))
+@given(parsers.parse("the package targeting_overlay includes frequency_cap with suppress: {freq_cap_config}"))
+def given_frequency_cap_config(ctx: dict, freq_cap_config: str) -> None:
     """Set frequency_cap on the first package update's targeting_overlay.
 
-    NOTE: Despite the step text saying "suppress: {suppress_value}", the parameter
-    is the ENTIRE frequency_cap configuration object (not just the suppress subfield).
-    Examples include: {"interval": 60, "unit": "minutes"} (top-level config),
-    {"suppress": {"interval": 60, ...}, "max_impressions": 3} (with explicit suppress key),
-    {"suppress_minutes": 60} (deprecated format).
+    The parameter is the FULL frequency_cap configuration object (JSON).
+    Examples: {"interval": 60, "unit": "minutes"}, {"suppress": {...}, "max_impressions": 3}.
     """
     import json
 
@@ -1034,20 +1031,8 @@ def given_frequency_cap_suppress(ctx: dict, suppress_value: str) -> None:
     if isinstance(overlay, str):
         overlay = json.loads(overlay)
         pkg["targeting_overlay"] = overlay
-    freq_cap_config = json.loads(suppress_value)
-    # freq_cap_config is the ENTIRE frequency_cap configuration (not just the
-    # suppress subfield). Valid configs are dicts (e.g., {"interval": 60, "unit": "minutes"}).
-    # Invalid-partition tests intentionally pass non-dict values (e.g., "60") to test
-    # validation — so we warn but don't assert on type here.
-    if not isinstance(freq_cap_config, dict):
-        import warnings
-
-        warnings.warn(
-            f"frequency_cap config is not a dict ({type(freq_cap_config).__name__}: {freq_cap_config!r}) — "
-            "this is expected for invalid-partition tests that verify type validation.",
-            stacklevel=1,
-        )
-    overlay["frequency_cap"] = freq_cap_config
+    parsed_config = json.loads(freq_cap_config)
+    overlay["frequency_cap"] = parsed_config
 
 
 # ═══════════════════════════════════════════════════════════════════════
