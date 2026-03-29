@@ -755,8 +755,6 @@ def then_implementation_date_not_null(ctx: dict) -> None:
     """
     from datetime import datetime
 
-    import pytest
-
     resp = ctx.get("response")
     assert resp is not None, "Expected a response — no response in ctx"
     # Guard: this step only makes sense on a success response, not an error
@@ -766,15 +764,12 @@ def then_implementation_date_not_null(ctx: dict) -> None:
         "step claims response 'should contain' it"
     )
     impl_date = resp.implementation_date
-    # Step text claims "not null" unconditionally.
-    # SPEC-PRODUCTION GAP guard: xfail if production doesn't populate this field yet.
-    # When production is fixed, the xfail is never reached and full validation runs.
-    if impl_date is None:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: implementation_date is None in response — "
-            "production does not populate it on update. "
-            "Step text claims 'not null' unconditionally. FIXME(salesagent-9vgz.1)"
-        )
+    # Step text claims "not null" unconditionally — hard assert.
+    # If production doesn't populate this, the SCENARIO should be xfailed in conftest.py,
+    # not the step body. See salesagent-ghgx.
+    assert impl_date is not None, (
+        "implementation_date is None in response — step text claims 'not null' unconditionally"
+    )
     # impl_date is not None — verify it's a meaningful datetime
     if isinstance(impl_date, str):
         parsed = datetime.fromisoformat(impl_date.replace("Z", "+00:00"))
@@ -808,8 +803,6 @@ def then_affected_package_budget(ctx: dict, budget: int) -> None:
     Contract: affected_packages[0].budget MUST equal the requested budget.
     If production doesn't echo budget, that's a SPEC-PRODUCTION GAP (xfail).
     """
-    import pytest
-
     resp = ctx.get("response")
     assert resp is not None, "Expected a response — no response in ctx"
     # Guard: this step only makes sense on a success response
@@ -822,15 +815,12 @@ def then_affected_package_budget(ctx: dict, budget: int) -> None:
     actual_budget = getattr(pkg, "budget", None)
     if actual_budget is None and isinstance(pkg, dict):
         actual_budget = pkg.get("budget")
-    # Step text claims "updated budget of {budget}" unconditionally.
-    # SPEC-PRODUCTION GAP guard: xfail if production doesn't echo budget.
-    # When production is fixed, the xfail is never reached and full validation runs.
-    if actual_budget is None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: affected package '{pkg_id}' budget is None — "
-            f"production does not echo budget in affected_packages. "
-            f"Step text claims 'updated budget of {budget}'. FIXME(salesagent-9vgz.1)"
-        )
+    # Step text claims "updated budget of {budget}" unconditionally — hard assert.
+    # If production doesn't echo budget, the SCENARIO should be xfailed in conftest.py.
+    # See salesagent-2c9b.
+    assert actual_budget is not None, (
+        f"affected package '{pkg_id}' budget is None — step text claims 'updated budget of {budget}' unconditionally"
+    )
     # actual_budget is not None — validate type and value
     assert isinstance(actual_budget, (int, float)), (
         f"Expected budget to be numeric, got {type(actual_budget).__name__}: {actual_budget!r}"
@@ -848,8 +838,6 @@ def then_response_has_sandbox(ctx: dict) -> None:
     Contract: sandbox MUST be present as a boolean on the response envelope.
     If production doesn't include it, that's a SPEC-PRODUCTION GAP (xfail).
     """
-    import pytest
-
     resp = ctx.get("response")
     assert resp is not None, "Expected a response — no response in ctx"
     # Guard: this step only makes sense on a success response, not an error
@@ -863,16 +851,13 @@ def then_response_has_sandbox(ctx: dict) -> None:
     if sandbox is None and hasattr(resp, "model_dump"):
         dumped = resp.model_dump()
         sandbox = dumped.get("sandbox")
-    # Step text claims "should include a sandbox flag" unconditionally.
-    # SPEC-PRODUCTION GAP guard: xfail if production doesn't include sandbox.
-    # When production is fixed, the xfail is never reached and full validation runs.
-    if sandbox is None:
-        resp_fields = list(resp.model_dump().keys()) if hasattr(resp, "model_dump") else dir(resp)
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: sandbox flag not present on response "
-            f"(type: {type(resp).__name__}, fields: {resp_fields[:10]}). "
-            f"Step text claims envelope 'should include' it. FIXME(salesagent-9vgz.1)"
-        )
+    # Step text claims "should include a sandbox flag" unconditionally — hard assert.
+    # If production doesn't include sandbox, the SCENARIO should be xfailed in conftest.py.
+    # See salesagent-n3bf.
+    assert sandbox is not None, (
+        f"sandbox flag not present on response (type: {type(resp).__name__}) — "
+        "step text claims envelope 'should include' it unconditionally"
+    )
     # sandbox is not None — verify it's a boolean (not just any truthy/falsy value)
     assert isinstance(sandbox, bool), f"Expected sandbox to be bool, got {type(sandbox).__name__}: {sandbox!r}"
     # Verify sandbox reflects test mode — in BDD test environment, sandbox should be True

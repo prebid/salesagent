@@ -637,15 +637,10 @@ def then_response_includes_resolved_start_time(ctx: dict) -> None:
 
     SPEC-PRODUCTION GAP: CreateMediaBuySuccess has no top-level start_time field,
     and Package.start_time / PlannedDelivery are not populated by production code.
-    Verifies via DB that resolution happened, then xfails the response-level claim.
+    If production doesn't expose start_time in the response, the SCENARIO should be
+    xfailed in conftest.py (not the step body). See salesagent-12nd.
     """
     from datetime import UTC, datetime
-
-    import pytest
-    from sqlalchemy import select
-
-    from src.core.database.database_session import get_db_session
-    from src.core.database.models import MediaBuy
 
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
@@ -684,26 +679,13 @@ def then_response_includes_resolved_start_time(ctx: dict) -> None:
                 )
             return
 
-    # SPEC-PRODUCTION GAP: Neither top-level nor package-level start_time in response.
-    # Verify via DB that start_time WAS resolved (behavior is correct, just
-    # not exposed in the response), then xfail the response-level claim.
-    with get_db_session() as session:
-        mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id)).first()
-        assert mb is not None, f"Media buy {media_buy_id} not found"
-        assert mb.start_time is not None, "No start_time persisted — 'asap' was not resolved"
-        assert str(mb.start_time) != "asap", "DB start_time is literal 'asap' — resolution did not happen"
-        now = datetime.now(UTC)
-        delta = abs((mb.start_time - now).total_seconds())
-        assert delta < 30, (
-            f"Persisted start_time {mb.start_time} is {delta:.1f}s from now — "
-            "expected within 30s of current UTC for 'asap' resolution"
-        )
-    pytest.xfail(
-        "SPEC-PRODUCTION GAP: CreateMediaBuySuccess response lacks start_time field "
-        f"(checked top-level AND {len(pkgs)} package(s)). "
-        f"DB confirms 'asap' correctly resolved to {mb.start_time} (within {delta:.1f}s of UTC now), "
-        "but step text claims 'response should include resolved start_time' — "
-        "response does not expose it. FIXME(salesagent-9vgz.1)"
+    # Step text claims "response should include resolved start_time" — hard assert.
+    # No DB fallback: the step tests the RESPONSE, not the database.
+    # If production doesn't expose start_time in the response, the SCENARIO
+    # should be xfailed in conftest.py. See salesagent-12nd.
+    raise AssertionError(
+        f"Response has no resolved start_time — checked top-level and {len(pkgs)} package(s). "
+        "Step text claims 'response should include resolved start_time (not literal asap)'."
     )
 
 

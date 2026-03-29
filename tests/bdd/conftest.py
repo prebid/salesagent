@@ -121,6 +121,12 @@ def pytest_configure(config: pytest.Config) -> None:
 # Each xfail has a FIXME pointing to the work needed.
 
 _XFAIL_TAGS: dict[str, str] = {
+    # FIXME(salesagent-ghgx): UC-003 main/alt-timing — production doesn't populate these fields
+    # Steps have hard assertions now; xfail at scenario level until production catches up.
+    "T-UC-003-main": "implementation_date, budget, sandbox not populated in update response — spec-production gap",
+    "T-UC-003-alt-timing": "implementation_date not populated in update response — spec-production gap",
+    # FIXME(salesagent-12nd): UC-002 ASAP — response doesn't expose resolved start_time
+    "T-UC-002-alt-asap": "response lacks resolved start_time field — spec-production gap",
     # FIXME(beads-dul): disclosure_positions filter not implemented in production
     # Note: violated/nofield pass vacuously (field rejected at schema level)
     "T-UC-005-inv-049-8-holds": "disclosure_positions filter not implemented",
