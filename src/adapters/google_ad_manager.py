@@ -134,6 +134,23 @@ class GoogleAdManager(AdServerAdapter):
 
         # advertiser_id is only required for order/campaign operations, not inventory sync
 
+        # Pre-load targeting config and naming templates from repository
+        # (eliminates circular dependency: adapter managers no longer query the DB)
+        self._targeting_config: dict | None = None
+        self._order_name_template: str | None = None
+        self._line_item_name_template: str | None = None
+        self._placement_targeting_map: dict[str, str] = {}
+        try:
+            from src.core.database.database_session import get_db_session
+            from src.core.database.repositories.adapter_config import AdapterConfigRepository
+
+            with get_db_session() as session:
+                repo = AdapterConfigRepository(session, self.tenant_id)
+                self._targeting_config = repo.get_gam_targeting_config()
+                self._order_name_template, self._line_item_name_template = repo.get_gam_naming_templates()
+        except Exception as e:
+            logger.warning(f"Could not pre-load adapter config for tenant {self.tenant_id}: {e}")
+
         # Skip auth validation in dry_run mode (for testing)
         if not self.dry_run:
             if not self.key_file and not self.service_account_json and not self.refresh_token:
@@ -159,11 +176,10 @@ class GoogleAdManager(AdServerAdapter):
                 except Exception as e:
                     logger.warning(f"Could not auto-detect trafficker_id: {e}")
 
-            # Initialize placement_targeting_map (adcp#208) - built during create_order, used in add_creative_assets
-            self._placement_targeting_map: dict[str, str] = {}
-
-            # Initialize manager components
-            self.targeting_manager = GAMTargetingManager(self.tenant_id, gam_client=self.client)
+            # Initialize manager components with pre-loaded config
+            self.targeting_manager = GAMTargetingManager(
+                self.tenant_id, gam_client=self.client, targeting_config=self._targeting_config
+            )
 
             # Initialize orders manager (advertiser_id/trafficker_id optional for query operations)
             self.orders_manager = GAMOrdersManager(self.client_manager, self.advertiser_id, self.trafficker_id, dry_run)
@@ -190,11 +206,8 @@ class GoogleAdManager(AdServerAdapter):
             self.client = None
             self.log("[yellow]Running in dry-run mode - GAM client not initialized[/yellow]")
 
-            # Initialize placement_targeting_map (adcp#208) - built during create_order, used in add_creative_assets
-            self._placement_targeting_map = {}
-
             # Initialize managers for dry-run mode (they can work without real client)
-            self.targeting_manager = GAMTargetingManager(self.tenant_id)
+            self.targeting_manager = GAMTargetingManager(self.tenant_id, targeting_config=self._targeting_config)
 
             # Initialize orders manager in dry-run mode
             self.orders_manager = GAMOrdersManager(None, self.advertiser_id, self.trafficker_id, dry_run=True)
@@ -566,7 +579,12 @@ class GoogleAdManager(AdServerAdapter):
 
             # Create manual order workflow step
             step_id = self.workflow_manager.create_manual_order_workflow_step(
-                request, packages, start_time, end_time, media_buy_id
+                request,
+                packages,
+                start_time,
+                end_time,
+                media_buy_id,
+                order_name_template=self._order_name_template,
             )
 
             if step_id:
@@ -584,16 +602,12 @@ class GoogleAdManager(AdServerAdapter):
                 )
 
         # Automatic mode - create order directly
-        # Use naming template from adapter config, or fallback to default
-        from sqlalchemy import select
-
+        # Use pre-loaded naming template, or fallback to default
         from src.adapters.gam.utils.constants import GAM_NAME_LIMITS
         from src.adapters.gam.utils.naming import truncate_name_with_suffix
-        from src.core.database.database_session import get_db_session
-        from src.core.database.models import AdapterConfig
         from src.core.utils.naming import apply_naming_template, build_order_name_context
 
-        order_name_template = "{campaign_name|brand_name} - {date_range}"  # Default
+        order_name_template = self._order_name_template or "{campaign_name|brand_name} - {date_range}"
         tenant_gemini_key = None
 
         # Get currency from the request's package pricing (validated upstream in media_buy_create.py)
@@ -604,20 +618,20 @@ class GoogleAdManager(AdServerAdapter):
                 order_currency = pricing.get("currency", "USD")
                 break  # All packages have same currency
 
-        with get_db_session() as db_session:
+        # Get tenant's Gemini key for auto_name generation
+        try:
+            from src.core.database.database_session import get_db_session
             from src.core.database.models import Tenant
 
-            adapter_stmt = select(AdapterConfig).filter_by(tenant_id=self.tenant_id)
-            adapter_config = db_session.scalars(adapter_stmt).first()
-            if adapter_config:
-                if adapter_config.gam_order_name_template:
-                    order_name_template = adapter_config.gam_order_name_template
+            with get_db_session() as db_session:
+                from sqlalchemy import select
 
-            # Get tenant's Gemini key for auto_name generation
-            tenant_stmt = select(Tenant).filter_by(tenant_id=self.tenant_id)
-            tenant = db_session.scalars(tenant_stmt).first()
-            if tenant:
-                tenant_gemini_key = tenant.gemini_api_key
+                tenant_stmt = select(Tenant).filter_by(tenant_id=self.tenant_id)
+                tenant_obj = db_session.scalars(tenant_stmt).first()
+                if tenant_obj:
+                    tenant_gemini_key = tenant_obj.gemini_api_key
+        except Exception as e:
+            logger.warning(f"Could not load tenant Gemini key: {e}")
 
         context = build_order_name_context(request, packages, start_time, end_time, tenant_gemini_key=tenant_gemini_key)
         base_order_name = apply_naming_template(order_name_template, context)
@@ -687,6 +701,7 @@ class GoogleAdManager(AdServerAdapter):
                 order_name=order_name,
                 package_pricing_info=package_pricing_info,
                 package_targeting=package_targeting,
+                line_item_name_template=self._line_item_name_template,
             )
             self.log(f"✓ Created {len(line_item_ids)} line items")
 

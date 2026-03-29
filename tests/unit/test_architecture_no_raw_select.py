@@ -73,7 +73,7 @@ ORM_MODEL_NAMES = _discover_orm_model_names()
 # FIXME(salesagent-xw7): migrate each of these to repository calls
 ALLOWLIST: set[tuple[str, str]] = {
     # ── Adapters ──
-    ("src/adapters/gam/managers/orders.py", "create_line_items"),
+    # create_line_items removed — uses pre-loaded template param (salesagent-zj9)
     ("src/adapters/gam/managers/sync.py", "_get_recent_sync"),
     ("src/adapters/gam/managers/sync.py", "get_sync_history"),
     ("src/adapters/gam/managers/sync.py", "get_sync_stats"),
@@ -81,7 +81,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/adapters/gam/managers/sync.py", "needs_sync"),
     ("src/adapters/gam/managers/targeting.py", "_load_axe_keys"),
     ("src/adapters/gam/managers/targeting.py", "_load_custom_targeting_key_ids"),
-    ("src/adapters/gam/managers/targeting.py", "sync_custom_targeting_keys"),
+    # sync_custom_targeting_keys removed — uses AdapterConfigRepository (salesagent-zj9)
     ("src/adapters/gam/managers/workflow.py", "create_manual_order_workflow_step"),
     ("src/adapters/gam_reporting_api.py", "get_ad_unit_breakdown"),
     ("src/adapters/gam_reporting_api.py", "get_advertiser_summary"),
