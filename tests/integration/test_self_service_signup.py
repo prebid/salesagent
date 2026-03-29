@@ -22,6 +22,19 @@ from src.core.database.models import AdapterConfig, CurrencyLimit, Tenant, User
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
+def _create_test_app_with_mocked_oauth(email="newuser@example.com", name="New User"):
+    """Create a Flask test app with mocked OAuth token exchange for callback testing."""
+    from src.admin.app import create_app
+
+    app = create_app({"TESTING": True, "SECRET_KEY": "test_key"})
+    mock_google = MagicMock()
+    mock_google.authorize_access_token.return_value = {
+        "userinfo": {"email": email, "name": name},
+        "id_token": None,
+    }
+    return app, mock_google
+
+
 class TestSelfServiceSignupFlow:
     """Test self-service tenant signup flow."""
 
@@ -359,31 +372,29 @@ class TestSelfServiceSignupFlow:
 
     @pytest.mark.requires_db  # Uses database - skip in quick mode
     def test_oauth_callback_redirects_to_onboarding_for_signup_flow(self, client, integration_db):
-        """Test that OAuth callback redirects to onboarding when signup_flow is active.
+        """Test that OAuth callback redirects to onboarding when signup_flow is active
+        and the user has no existing tenants (legitimate new user)."""
+        app, mock_google = _create_test_app_with_mocked_oauth()
 
-        This test verifies the signup flow logic in the OAuth callback handler.
-        """
-        # Import the app to access oauth object
-        from src.admin.app import create_app
-
-        app = create_app({"TESTING": True, "SECRET_KEY": "test_key"})
-
-        # Mock OAuth at the app level (where it's actually used)
-        with patch.object(app, "oauth", create=True) as mock_oauth:
-            mock_google = MagicMock()
-            mock_google.authorize_access_token.return_value = {
-                "userinfo": {"email": "newuser@example.com", "name": "New User"},
-                "id_token": None,
-            }
+        with (
+            patch.object(app, "oauth", create=True) as mock_oauth,
+            patch("src.admin.blueprints.auth.get_super_admin_domain", return_value="superadmin.internal"),
+            patch("src.admin.blueprints.auth.is_super_admin", return_value=False),
+            patch("src.admin.domain_access.get_user_tenant_access") as mock_access,
+        ):
             mock_oauth.google = mock_google
+            mock_access.return_value = {
+                "domain_tenant": None,
+                "email_tenants": [],
+                "user_tenants": [],
+                "is_super_admin": False,
+                "total_access": 0,
+            }
 
-            # Create a test client with the mocked app
             with app.test_client() as test_client:
-                # Set signup flow in session
                 with test_client.session_transaction() as sess:
                     sess["signup_flow"] = True
 
-                # Make the OAuth callback request
                 response = test_client.get("/auth/google/callback", follow_redirects=False)
 
                 # Should redirect to onboarding wizard
@@ -395,6 +406,63 @@ class TestSelfServiceSignupFlow:
                     assert sess.get("user") == "newuser@example.com"
                     assert sess.get("user_name") == "New User"
                     assert sess.get("signup_flow") is True
+
+    @pytest.mark.requires_db
+    def test_stale_signup_flow_with_existing_tenants_bypasses_onboarding(self, client, integration_db):
+        """Stale signup_flow flag with existing tenants must not bypass tenant lookup.
+
+        A user who previously started signup (setting signup_flow=True) but abandoned it,
+        then returns to log in, should NOT be redirected to onboarding if they already
+        have access to existing tenants. The stale flag should be cleared.
+        """
+        app, mock_google = _create_test_app_with_mocked_oauth(email="returning@example.com", name="Returning User")
+
+        mock_tenant = MagicMock()
+        mock_tenant.tenant_id = "existing-tenant"
+        mock_tenant.name = "Existing Tenant"
+        mock_tenant.subdomain = "existing"
+
+        mock_db_session = MagicMock()
+        mock_user = MagicMock(role="admin")
+        mock_db_session.scalars.return_value.first.return_value = mock_user
+
+        with (
+            patch.object(app, "oauth", create=True) as mock_oauth,
+            patch("src.admin.blueprints.auth.get_super_admin_domain", return_value="superadmin.internal"),
+            patch("src.admin.blueprints.auth.is_super_admin", return_value=False),
+            patch("src.admin.domain_access.get_user_tenant_access") as mock_access,
+            patch("src.admin.blueprints.auth.get_db_session") as mock_get_db,
+            patch("src.core.config_loader.is_single_tenant_mode", return_value=False),
+        ):
+            mock_oauth.google = mock_google
+            mock_access.return_value = {
+                "domain_tenant": None,
+                "email_tenants": [],
+                "user_tenants": [mock_tenant],
+                "is_super_admin": False,
+                "total_access": 1,
+            }
+            mock_get_db.return_value.__enter__.return_value = mock_db_session
+            mock_get_db.return_value.__exit__.return_value = False
+
+            with app.test_client() as test_client:
+                with test_client.session_transaction() as sess:
+                    sess["signup_flow"] = True
+                    sess["signup_step"] = "oauth"
+
+                response = test_client.get("/auth/google/callback", follow_redirects=False)
+
+                # Should redirect to tenant selector, NOT onboarding
+                assert response.status_code == 302
+                assert "/auth/select-tenant" in response.headers["Location"]
+
+                # Stale signup_flow flag should be cleared
+                with test_client.session_transaction() as sess:
+                    assert "signup_flow" not in sess
+                    assert "signup_step" not in sess
+                    # User info should still be set
+                    assert sess.get("user") == "returning@example.com"
+                    assert sess.get("user_name") == "Returning User"
 
     def test_session_cleanup_after_provisioning(self, integration_db, client):
         """Test that signup session flags are cleared after provisioning."""
