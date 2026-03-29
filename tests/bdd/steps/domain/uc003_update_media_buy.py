@@ -741,24 +741,31 @@ def then_implementation_date_null(ctx: dict) -> None:
 
 @then("the response should contain an implementation_date that is not null")
 def then_implementation_date_not_null(ctx: dict) -> None:
-    """Assert response has a non-null implementation_date."""
+    """Assert response has a non-null implementation_date.
+
+    Step text: "the response should contain an implementation_date that is not null"
+    Contract: implementation_date MUST be present and non-null on success responses.
+    If production doesn't populate it, that's a SPEC-PRODUCTION GAP (xfail).
+    """
     from datetime import datetime
 
     import pytest
 
     resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
+    assert resp is not None, "Expected a response — no response in ctx"
     # Guard: this step only makes sense on a success response, not an error
     assert "error" not in ctx, f"Response is an error ({ctx.get('error')}) — cannot check implementation_date on error"
-    assert hasattr(resp, "implementation_date"), "Response has no implementation_date field"
+    assert hasattr(resp, "implementation_date"), (
+        f"Response (type: {type(resp).__name__}) has no implementation_date field — "
+        "step claims response 'should contain' it"
+    )
     impl_date = resp.implementation_date
-    # Step claims "not null" — assert unconditionally, xfail only for known production gap
-    try:
-        assert impl_date is not None, "implementation_date is None — step claims 'not null'"
-    except AssertionError:
+    # Step claims "not null" unconditionally — assert first, xfail only if production gap
+    if impl_date is None:
         pytest.xfail(
             "SPEC-PRODUCTION GAP: implementation_date is None in response — "
-            "production does not populate it on update. FIXME(salesagent-9vgz.1)"
+            "production does not populate it on update. "
+            "Step text claims 'not null' unconditionally. FIXME(salesagent-9vgz.1)"
         )
     # Value is present — verify it's a meaningful datetime (not just truthy)
     if isinstance(impl_date, str):
@@ -785,42 +792,50 @@ def then_affected_packages_include(ctx: dict, package_id: str) -> None:
 
 @then(parsers.parse("the affected package should show the updated budget of {budget:d}"))
 def then_affected_package_budget(ctx: dict, budget: int) -> None:
-    """Assert the affected package shows the updated budget value."""
+    """Assert the affected package shows the updated budget value.
+
+    Step text: "the affected package should show the updated budget of {budget}"
+    Contract: affected_packages[0].budget MUST equal the requested budget.
+    If production doesn't echo budget, that's a SPEC-PRODUCTION GAP (xfail).
+    """
     import pytest
 
     resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
+    assert resp is not None, "Expected a response — no response in ctx"
     # Guard: this step only makes sense on a success response
     assert "error" not in ctx, f"Response is an error ({ctx.get('error')}) — cannot check budget on error"
     affected = getattr(resp, "affected_packages", None) or []
-    assert len(affected) > 0, "No affected packages in response"
+    assert len(affected) > 0, "No affected packages in response — step claims a package was affected"
     pkg = affected[0]
     pkg_id = getattr(pkg, "package_id", None) or (pkg.get("package_id") if isinstance(pkg, dict) else None)
     assert pkg_id, "Affected package has no package_id — cannot identify which package was updated"
     actual_budget = getattr(pkg, "budget", None)
     if actual_budget is None and isinstance(pkg, dict):
         actual_budget = pkg.get("budget")
-    # Step claims "updated budget of {budget}" — assert unconditionally, xfail for known gap
-    try:
-        assert actual_budget is not None, (
-            f"Affected package '{pkg_id}' budget is None — step claims 'updated budget of {budget}'"
-        )
-    except AssertionError:
+    # Step claims "updated budget of {budget}" unconditionally — xfail only if production gap
+    if actual_budget is None:
         pytest.xfail(
             f"SPEC-PRODUCTION GAP: affected package '{pkg_id}' budget is None — "
             f"production does not echo budget in affected_packages. "
-            f"FIXME(salesagent-9vgz.1)"
+            f"Step text claims 'updated budget of {budget}'. FIXME(salesagent-9vgz.1)"
         )
-    assert float(actual_budget) == float(budget), f"Expected budget {budget}, got {actual_budget}"
+    assert float(actual_budget) == float(budget), (
+        f"Expected budget {budget} on affected package '{pkg_id}', got {actual_budget}"
+    )
 
 
 @then("the response envelope should include a sandbox flag")
 def then_response_has_sandbox(ctx: dict) -> None:
-    """Assert response includes sandbox information."""
+    """Assert response includes sandbox information.
+
+    Step text: "the response envelope should include a sandbox flag"
+    Contract: sandbox MUST be present as a boolean on the response envelope.
+    If production doesn't include it, that's a SPEC-PRODUCTION GAP (xfail).
+    """
     import pytest
 
     resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
+    assert resp is not None, "Expected a response — no response in ctx"
     # Guard: this step only makes sense on a success response, not an error
     assert "error" not in ctx, f"Update errored ({ctx['error']}) — cannot check sandbox flag on an error response"
     # Guard: response must be a real model object, not a raw dict or string
@@ -832,15 +847,13 @@ def then_response_has_sandbox(ctx: dict) -> None:
     if sandbox is None and hasattr(resp, "model_dump"):
         dumped = resp.model_dump()
         sandbox = dumped.get("sandbox")
-    # Step claims "should include a sandbox flag" — assert unconditionally, xfail for known gap
-    try:
-        assert sandbox is not None, "sandbox flag not present — step claims envelope 'should include' it"
-    except AssertionError:
+    # Step claims "should include a sandbox flag" unconditionally — xfail only if production gap
+    if sandbox is None:
         resp_fields = list(resp.model_dump().keys()) if hasattr(resp, "model_dump") else dir(resp)
         pytest.xfail(
             f"SPEC-PRODUCTION GAP: sandbox flag not present on response "
             f"(type: {type(resp).__name__}, fields: {resp_fields[:10]}). "
-            "FIXME(salesagent-9vgz.1)"
+            f"Step text claims envelope 'should include' it. FIXME(salesagent-9vgz.1)"
         )
     # Sandbox is present — verify it's a boolean (not just any truthy/falsy value)
     assert isinstance(sandbox, bool), f"Expected sandbox to be bool, got {type(sandbox).__name__}: {sandbox!r}"
@@ -1148,12 +1161,19 @@ def given_package_existing_creatives(ctx: dict, package_id: str, assignments: st
             approved=True,
             data={"assets": {"primary": {"url": f"https://example.com/{cid}.png", "width": 300, "height": 250}}},
         )
-    # Set creative_assignments on the existing package
+    # Set creative_assignments on the existing package — fail loudly if package missing
     pkg = ctx.get("existing_package")
-    if pkg is not None and pkg.package_id == package_id:
-        config = pkg.package_config or {}
-        config["creative_assignments"] = [{"creative_id": cid, "weight": 1.0} for cid in creative_ids]
-        pkg.package_config = config
+    assert pkg is not None, (
+        f"No 'existing_package' in ctx — step claims package '{package_id}' has creative assignments "
+        "but no package was set up by a prior Given step"
+    )
+    assert pkg.package_id == package_id, (
+        f"existing_package has package_id '{pkg.package_id}', but step text references '{package_id}'. "
+        "Package ID mismatch — check scenario setup."
+    )
+    config = pkg.package_config or {}
+    config["creative_assignments"] = [{"creative_id": cid, "weight": 1.0} for cid in creative_ids]
+    pkg.package_config = config
     env._commit_factory_data()
     ctx["existing_creative_ids"] = creative_ids
 
@@ -1225,17 +1245,59 @@ def given_creative_update_mode(ctx: dict, mode: str) -> None:
         env._commit_factory_data()
         pkg["creative_assignments"] = assignments
         ctx["referenced_creative_ids"] = [a["creative_id"] for a in assignments]
+    else:
+        raise ValueError(
+            f"Unrecognized creative update mode: '{stripped}'. "
+            f"Expected format: 'creative_ids=[id1, id2]' or "
+            f"'creative_assignments=[{{id, weight:N}}]'. "
+            f"Check the scenario step text."
+        )
 
 
 @given("all referenced creatives are valid")
 def given_all_creatives_valid(ctx: dict) -> None:
     """Declarative guard — all referenced creatives are in valid state.
 
-    Lighter variant of 'all referenced creatives are in valid state (not error or rejected)'.
-    Verifies creative records exist and are not in error/rejected state.
+    Verifies creative records exist in the DB and are not in error/rejected state.
+    Step text claims "all referenced creatives are valid" — we must verify this
+    against actual DB state, not just check that IDs exist in ctx.
     """
+    from sqlalchemy import select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import Creative as CreativeModel
+
     ids = ctx.get("referenced_creative_ids") or ctx.get("existing_creative_ids")
     assert ids and len(ids) > 0, "No referenced or existing creative_ids — missing prior step"
+
+    env = ctx["env"]
+    env._commit_factory_data()
+
+    tenant = ctx["tenant"]
+    with get_db_session() as session:
+        db_creatives = session.scalars(
+            select(CreativeModel).filter(
+                CreativeModel.tenant_id == tenant.tenant_id,
+                CreativeModel.creative_id.in_(ids),
+            )
+        ).all()
+        found_ids = {c.creative_id for c in db_creatives}
+        missing = set(ids) - found_ids
+        assert not missing, (
+            f"Step claims 'all referenced creatives are valid' but creative IDs "
+            f"{sorted(missing)} not found in DB for tenant '{tenant.tenant_id}'. "
+            f"Found: {sorted(found_ids)}"
+        )
+        # Verify none are in error/rejected state
+        invalid_states = {"error", "rejected", "failed"}
+        for creative in db_creatives:
+            status = getattr(creative, "status", None)
+            if status and status in invalid_states:
+                raise AssertionError(
+                    f"Creative '{creative.creative_id}' has status '{status}' — "
+                    f"step claims 'all referenced creatives are valid' but this creative "
+                    f"is in an invalid state"
+                )
 
 
 # ═══════════════════════════════════════════════════════════════════════

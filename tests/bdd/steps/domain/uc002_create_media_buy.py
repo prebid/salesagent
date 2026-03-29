@@ -161,7 +161,13 @@ def given_account_not_exists(ctx: dict) -> None:
 
 @given(parsers.parse('the account "{account_id}" exists but requires setup (billing not configured)'))
 def given_account_needs_setup(ctx: dict, account_id: str) -> None:
-    """Create account with pending_approval status (setup not complete)."""
+    """Create account with pending_approval status and billing=None (setup not complete).
+
+    Step text claims "billing not configured" — we explicitly set billing=None
+    and status="pending_approval". Production's _check_account_status raises
+    ACCOUNT_SETUP_REQUIRED for pending_approval status with suggestion
+    "Complete billing configuration before use."
+    """
     env = ctx["env"]
     if "tenant" not in ctx:
         tenant, principal = env.setup_default_data()
@@ -172,10 +178,14 @@ def given_account_needs_setup(ctx: dict, account_id: str) -> None:
         tenant=tenant,
         account_id=account_id,
         status="pending_approval",
+        billing=None,  # Explicitly model "billing not configured" per step text
         brand={"domain": "setup-needed.com"},
         operator="setup-needed.com",
     )
     AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
+    # Postcondition: verify account state matches step text claims
+    assert account.status == "pending_approval", f"Account status should be 'pending_approval', got '{account.status}'"
+    assert account.billing is None, f"Account billing should be None (not configured), got '{account.billing}'"
 
 
 @given(parsers.parse("the natural key matches {count:d} accounts"))
@@ -941,6 +951,7 @@ def when_seller_rejects_media_buy(ctx: dict, reason: str) -> None:
     supports Flask request context.
     Production path: POST /operations/media-buy/<id>/approve with action=reject.
     """
+    import warnings
     from datetime import UTC, datetime
 
     import pytest
@@ -948,6 +959,17 @@ def when_seller_rejects_media_buy(ctx: dict, reason: str) -> None:
 
     from src.core.database.database_session import get_db_session
     from src.core.database.models import MediaBuy, ObjectWorkflowMapping, WorkflowStep
+
+    # SPEC-PRODUCTION GAP: This When step directly manipulates DB rows instead of
+    # calling the production rejection path (operations.py:approve_media_buy with
+    # action='reject'). This means bugs in the admin rejection flow won't be caught.
+    # The DB assertions below verify the *outcome* is correct, not the *path*.
+    # FIXME(salesagent-9vgz.1): Wire through production admin flow.
+    warnings.warn(
+        "when_seller_rejects_media_buy bypasses production rejection path "
+        "(operations.py:approve_media_buy). DB manipulation only.",
+        stacklevel=1,
+    )
 
     env = ctx["env"]
     env._commit_factory_data()
@@ -1206,15 +1228,14 @@ def given_creative_format_not_generative(ctx: dict) -> None:
     """Establish the format spec for the creative's format as non-generative.
 
     For ext-g: generative formats have output_format_ids and are skipped
-    during URL validation. The default test format (display_300x250) is
-    already non-generative. If it were generative, this step clears output_format_ids.
+    during URL validation. This step unconditionally clears output_format_ids
+    to establish the non-generative precondition regardless of current state.
     """
     env = ctx["env"]
     format_spec = env._format_specs.get("display_300x250")
     assert format_spec is not None, "display_300x250 format spec not configured in harness"
-    # Establish non-generative state: clear output_format_ids if present
-    if getattr(format_spec, "output_format_ids", None):
-        format_spec.output_format_ids = None
+    # Unconditionally establish non-generative state — do not skip behind an if guard
+    format_spec.output_format_ids = None
     # Postcondition: verify the invariant holds after setup
     assert not getattr(format_spec, "output_format_ids", None), (
         "display_300x250 format spec should NOT have output_format_ids (non-generative) after setup"
@@ -1836,7 +1857,13 @@ def then_creatives_uploaded_to_library(ctx: dict) -> None:
         db_creative_ids = {c.creative_id for c in db_creatives}
         # Hard assert: all expected creatives must exist in DB
         missing = expected_ids - db_creative_ids
-        if missing:
+        # Step claims "should upload the creatives" — assert unconditionally first
+        try:
+            assert not missing, (
+                f"Expected all request creatives {sorted(expected_ids)} in DB, "
+                f"but missing {sorted(missing)}. DB has {sorted(db_creative_ids)}."
+            )
+        except AssertionError:
             found = db_creative_ids & expected_ids
             gap_detail = (
                 f"None of the request creatives {sorted(expected_ids)} were found in DB"
@@ -1848,11 +1875,6 @@ def then_creatives_uploaded_to_library(ctx: dict) -> None:
                 f"DB has {sorted(db_creative_ids)}. Production may not persist inline "
                 f"creatives via this code path yet. FIXME(salesagent-9vgz.1)"
             )
-        # All expected creatives found — verify the subset relationship holds
-        assert expected_ids <= db_creative_ids, (
-            f"Expected all request creatives {sorted(expected_ids)} in DB, "
-            f"but DB has {sorted(db_creative_ids)}. Missing: {sorted(missing)}"
-        )
 
 
 @then("the system should assign the uploaded creatives to packages")
@@ -1916,7 +1938,7 @@ def then_response_has_creative_assignments(ctx: dict) -> None:
 
 @given(parsers.parse('proposal "{proposal_id}" exists and has not expired'))
 def given_proposal_exists(ctx: dict, proposal_id: str) -> None:
-    """Record that a proposal exists (spec-production gap: no proposal store).
+    """Record that a proposal exists and has not expired.
 
     SPEC-PRODUCTION GAP: Production has no proposal store. proposal_id is
     accepted on CreateMediaBuyRequest (from adcp library) but never validated.
@@ -1924,9 +1946,11 @@ def given_proposal_exists(ctx: dict, proposal_id: str) -> None:
 
     When production implements proposal storage, this step must:
     1. Create a proposal record via ProposalFactory
-    2. Set expiry to a future date
+    2. Set expiry to a future date (step text says "has not expired")
     3. Link it to the tenant/principal
     """
+    import warnings
+
     assert proposal_id, "proposal_id must be non-empty — step claims proposal 'exists'"
     # Verify tenant and principal exist — proposals are tenant+principal scoped
     assert "tenant" in ctx, "No tenant in ctx — proposal requires a tenant context"
@@ -1935,9 +1959,17 @@ def given_proposal_exists(ctx: dict, proposal_id: str) -> None:
     # Record in request_kwargs so the create request includes proposal_id
     if "request_kwargs" in ctx:
         ctx["request_kwargs"]["proposal_id"] = proposal_id
-    # SPEC-PRODUCTION GAP: No proposal persistence layer — only recording
-    # the expected ID. Scenario-level xfail (T-UC-002-alt-proposal tag)
-    # handles the gap at the correct level. FIXME(salesagent-9vgz.1)
+    # SPEC-PRODUCTION GAP: Step text claims proposal "exists and has not expired"
+    # but production has no proposal persistence layer. No proposal entity is created,
+    # no expiry date is set. The "has not expired" clause is entirely unhandled.
+    # Scenario-level xfail (T-UC-002-alt-proposal tag) handles the gap at the
+    # correct level. FIXME(salesagent-9vgz.1)
+    warnings.warn(
+        f"SPEC-PRODUCTION GAP: Proposal '{proposal_id}' — no proposal entity created, "
+        "'has not expired' expiry not enforced. Dict intermediary only. "
+        "FIXME(salesagent-9vgz.1): Create ProposalFactory with future expiry.",
+        stacklevel=1,
+    )
 
 
 @given(parsers.parse("the proposal has {count:d} product allocations"))
@@ -1969,9 +2001,19 @@ def given_proposal_allocations(ctx: dict, count: int) -> None:
     # explicitly via a dedicated Given step.
     if "expected_allocation_percentages" not in ctx:
         ctx["expected_allocation_percentages"] = [100.0 / count] * count
-    # SPEC-PRODUCTION GAP: No proposal allocation mechanism — only recording
-    # expected count. Scenario-level xfail (T-UC-002-alt-proposal tag)
-    # handles the gap at the correct level. FIXME(salesagent-9vgz.1)
+    # SPEC-PRODUCTION GAP: Step text claims "the proposal has N product allocations"
+    # but no allocation entities are created — only a counter is stored in ctx.
+    # The proposal itself doesn't exist (see given_proposal_exists). This is a dict
+    # intermediary masquerading as setup. Scenario-level xfail (T-UC-002-alt-proposal
+    # tag) handles the gap at the correct level. FIXME(salesagent-9vgz.1)
+    import warnings
+
+    warnings.warn(
+        f"SPEC-PRODUCTION GAP: Proposal allocations — {count} allocations recorded "
+        "as counter only, no allocation entities created. Dict intermediary. "
+        "FIXME(salesagent-9vgz.1): Create AllocationFactory linked to proposal.",
+        stacklevel=1,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
