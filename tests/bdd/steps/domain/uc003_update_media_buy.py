@@ -766,22 +766,26 @@ def then_implementation_date_not_null(ctx: dict) -> None:
         "step claims response 'should contain' it"
     )
     impl_date = resp.implementation_date
-    # Step claims "not null" unconditionally — assert first, xfail only if production gap
+    # Step text claims "not null" unconditionally.
+    # SPEC-PRODUCTION GAP guard: xfail if production doesn't populate this field yet.
+    # When production is fixed, the xfail is never reached and full validation runs.
     if impl_date is None:
         pytest.xfail(
             "SPEC-PRODUCTION GAP: implementation_date is None in response — "
             "production does not populate it on update. "
             "Step text claims 'not null' unconditionally. FIXME(salesagent-9vgz.1)"
         )
-    # Value is present — verify it's a meaningful datetime (not just truthy)
+    # impl_date is not None — verify it's a meaningful datetime
     if isinstance(impl_date, str):
         parsed = datetime.fromisoformat(impl_date.replace("Z", "+00:00"))
         assert parsed.year >= 2020, f"implementation_date parsed to implausible date: {parsed!r}"
+        assert parsed.year <= 2100, f"implementation_date is implausibly far in the future: {parsed!r}"
     else:
         assert isinstance(impl_date, datetime), (
             f"implementation_date should be datetime or ISO string, got {type(impl_date).__name__}: {impl_date!r}"
         )
         assert impl_date.year >= 2020, f"implementation_date has implausible year: {impl_date!r}"
+        assert impl_date.year <= 2100, f"implementation_date is implausibly far in the future: {impl_date!r}"
 
 
 @then(parsers.parse('the response should contain affected_packages including "{package_id}"'))
@@ -818,13 +822,19 @@ def then_affected_package_budget(ctx: dict, budget: int) -> None:
     actual_budget = getattr(pkg, "budget", None)
     if actual_budget is None and isinstance(pkg, dict):
         actual_budget = pkg.get("budget")
-    # Step claims "updated budget of {budget}" unconditionally — xfail only if production gap
+    # Step text claims "updated budget of {budget}" unconditionally.
+    # SPEC-PRODUCTION GAP guard: xfail if production doesn't echo budget.
+    # When production is fixed, the xfail is never reached and full validation runs.
     if actual_budget is None:
         pytest.xfail(
             f"SPEC-PRODUCTION GAP: affected package '{pkg_id}' budget is None — "
             f"production does not echo budget in affected_packages. "
             f"Step text claims 'updated budget of {budget}'. FIXME(salesagent-9vgz.1)"
         )
+    # actual_budget is not None — validate type and value
+    assert isinstance(actual_budget, (int, float)), (
+        f"Expected budget to be numeric, got {type(actual_budget).__name__}: {actual_budget!r}"
+    )
     assert float(actual_budget) == float(budget), (
         f"Expected budget {budget} on affected package '{pkg_id}', got {actual_budget}"
     )
@@ -853,7 +863,9 @@ def then_response_has_sandbox(ctx: dict) -> None:
     if sandbox is None and hasattr(resp, "model_dump"):
         dumped = resp.model_dump()
         sandbox = dumped.get("sandbox")
-    # Step claims "should include a sandbox flag" unconditionally — xfail only if production gap
+    # Step text claims "should include a sandbox flag" unconditionally.
+    # SPEC-PRODUCTION GAP guard: xfail if production doesn't include sandbox.
+    # When production is fixed, the xfail is never reached and full validation runs.
     if sandbox is None:
         resp_fields = list(resp.model_dump().keys()) if hasattr(resp, "model_dump") else dir(resp)
         pytest.xfail(
@@ -861,8 +873,11 @@ def then_response_has_sandbox(ctx: dict) -> None:
             f"(type: {type(resp).__name__}, fields: {resp_fields[:10]}). "
             f"Step text claims envelope 'should include' it. FIXME(salesagent-9vgz.1)"
         )
-    # Sandbox is present — verify it's a boolean (not just any truthy/falsy value)
+    # sandbox is not None — verify it's a boolean (not just any truthy/falsy value)
     assert isinstance(sandbox, bool), f"Expected sandbox to be bool, got {type(sandbox).__name__}: {sandbox!r}"
+    # Verify sandbox reflects test mode — in BDD test environment, sandbox should be True
+    # (tests run against mock/test adapters, not production ad servers)
+    assert sandbox is True, f"Expected sandbox=True in test environment (BDD tests use mock adapters), got {sandbox!r}"
 
 
 @then('the response should NOT contain an "errors" field')
@@ -1018,7 +1033,11 @@ def given_update_request_with_identification(ctx: dict, id_config: str) -> None:
 def given_frequency_cap_suppress(ctx: dict, suppress_value: str) -> None:
     """Set frequency_cap on the first package update's targeting_overlay.
 
-    The suppress_value is a JSON object representing the frequency_cap configuration.
+    NOTE: Despite the step text saying "suppress: {suppress_value}", the parameter
+    is the ENTIRE frequency_cap configuration object (not just the suppress subfield).
+    Examples include: {"interval": 60, "unit": "minutes"} (top-level config),
+    {"suppress": {"interval": 60, ...}, "max_impressions": 3} (with explicit suppress key),
+    {"suppress_minutes": 60} (deprecated format).
     """
     import json
 
@@ -1030,7 +1049,20 @@ def given_frequency_cap_suppress(ctx: dict, suppress_value: str) -> None:
     if isinstance(overlay, str):
         overlay = json.loads(overlay)
         pkg["targeting_overlay"] = overlay
-    overlay["frequency_cap"] = json.loads(suppress_value)
+    freq_cap_config = json.loads(suppress_value)
+    # freq_cap_config is the ENTIRE frequency_cap configuration (not just the
+    # suppress subfield). Valid configs are dicts (e.g., {"interval": 60, "unit": "minutes"}).
+    # Invalid-partition tests intentionally pass non-dict values (e.g., "60") to test
+    # validation — so we warn but don't assert on type here.
+    if not isinstance(freq_cap_config, dict):
+        import warnings
+
+        warnings.warn(
+            f"frequency_cap config is not a dict ({type(freq_cap_config).__name__}: {freq_cap_config!r}) — "
+            "this is expected for invalid-partition tests that verify type validation.",
+            stacklevel=1,
+        )
+    overlay["frequency_cap"] = freq_cap_config
 
 
 # ═══════════════════════════════════════════════════════════════════════

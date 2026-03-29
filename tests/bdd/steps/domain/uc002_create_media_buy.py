@@ -672,8 +672,10 @@ def then_error_has_setup_details(ctx: dict) -> None:
     if isinstance(error, AdCPError):
         assert error.details, f"Expected details on error: {error}"
         details_str = str(error.details).lower()
-        assert "setup" in details_str or "billing" in details_str or "configure" in details_str, (
-            f"Expected setup instructions in details: {error.details}"
+        # Step text claims "setup instructions" — only "setup" and "configure" are
+        # synonyms. "billing" is NOT a synonym for setup instructions.
+        assert "setup" in details_str or "configure" in details_str, (
+            f"Expected setup instructions in details (must contain 'setup' or 'configure'): {error.details}"
         )
     else:
         raise AssertionError(f"Cannot check details on non-AdCPError: {type(error).__name__}")
@@ -754,6 +756,15 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
 
         media_buy_id = _get_field(resp, "media_buy_id")
         assert media_buy_id, f"Expected media_buy_id in response for '{outcome}', got None"
+        # Outcome-specific assertions: "success with pending status" must verify
+        # that the response status actually contains "pending" — not just that
+        # a media_buy_id exists. The outcome string promises a specific status.
+        if "pending status" in outcome:
+            status = _get_field(resp, "status")
+            assert status is not None, f"Expected status in response for '{outcome}', got None"
+            assert "pending" in str(status).lower(), (
+                f"Outcome '{outcome}' claims pending status but response status is '{status}'"
+            )
     elif outcome == "auto-approved path taken":
         from tests.bdd.steps.generic.then_media_buy import then_approval_auto
 
@@ -1060,6 +1071,7 @@ def when_seller_rejects_media_buy(ctx: dict, reason: str) -> None:
 
         # Find workflow step to store rejection reason
         mapping = session.scalars(select(ObjectWorkflowMapping).filter_by(object_id=media_buy_id)).first()
+        no_workflow_mapping = mapping is None
         if mapping:
             step = session.scalars(select(WorkflowStep).filter_by(step_id=mapping.step_id)).first()
             if step:
@@ -1067,13 +1079,10 @@ def when_seller_rejects_media_buy(ctx: dict, reason: str) -> None:
                 step.error_message = reason
                 step.updated_at = datetime.now(UTC)
                 workflow_step_id = step.step_id
-        else:
-            pytest.xfail(
-                f"SPEC-PRODUCTION GAP: No workflow mapping for media buy {media_buy_id} — "
-                "rejection reason cannot be stored on a workflow step. "
-                "FIXME(salesagent-9vgz.1): Wire through production admin rejection flow."
-            )
 
+        # Always commit the rejection status change — the status update (line above)
+        # must persist even when workflow mapping is missing. The previous code xfailed
+        # before commit, which meant the rejection never persisted.
         session.commit()
 
     # Verify the rejection actually persisted (tenant-scoped)
@@ -1097,6 +1106,17 @@ def when_seller_rejects_media_buy(ctx: dict, reason: str) -> None:
     # Store rejection_reason on existing_media_buy so Then steps can find it.
     # MediaBuy model lacks a rejection_reason column — we set it dynamically.
     media_buy.rejection_reason = reason  # type: ignore[attr-defined]
+
+    # SPEC-PRODUCTION GAP: xfail AFTER commit+verification — rejection status IS
+    # persisted, but the reason could not be stored on a workflow step because no
+    # workflow mapping exists. This surfaces the gap without masking the rejection.
+    if no_workflow_mapping:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: No workflow mapping for media buy {media_buy_id} — "
+            "rejection reason cannot be stored on a workflow step. "
+            "Rejection status IS persisted (verified above). "
+            "FIXME(salesagent-9vgz.1): Wire through production admin rejection flow."
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1938,6 +1958,11 @@ def then_creatives_uploaded_to_library(ctx: dict) -> None:
                 f"DB has {sorted(db_creative_ids)}. Production may not persist inline "
                 f"creatives via this code path yet. FIXME(salesagent-9vgz.1)"
             )
+        # All expected creatives found in DB — hard assertion for the success case.
+        # Without this, the step silently passes when missing is empty (no assertion).
+        assert expected_ids <= db_creative_ids, (
+            f"Expected all creatives {sorted(expected_ids)} uploaded to DB, but DB only has {sorted(db_creative_ids)}"
+        )
 
 
 @then("the system should assign the uploaded creatives to packages")
@@ -2020,6 +2045,10 @@ def given_proposal_exists(ctx: dict, proposal_id: str) -> None:
     assert "tenant" in ctx, "No tenant in ctx — proposal requires a tenant context"
     assert "principal" in ctx, "No principal in ctx — proposal requires a principal context"
     ctx["expected_proposal_id"] = proposal_id
+    # Explicit state tracking for "has not expired" — no real expiry enforced, but
+    # Then steps can assert this was set up. When production adds a proposal store,
+    # this must be replaced with a real expiry date on the proposal entity.
+    ctx["proposal_not_expired"] = True
     # Record in request_kwargs so the create request includes proposal_id
     if "request_kwargs" in ctx:
         ctx["request_kwargs"]["proposal_id"] = proposal_id
@@ -2028,13 +2057,14 @@ def given_proposal_exists(ctx: dict, proposal_id: str) -> None:
         ctx.setdefault("request_kwargs", {})["proposal_id"] = proposal_id
     # SPEC-PRODUCTION GAP: Step text claims proposal "exists and has not expired"
     # but production has no proposal persistence layer. No proposal entity is created,
-    # no expiry date is set, no expiry validation occurs. This is a DICT INTERMEDIARY
-    # (ctx["expected_proposal_id"]) — not a real entity.
-    # Scenario-level xfail (T-UC-002-alt-proposal tag in conftest.py) handles the
-    # gap at the correct level. FIXME(salesagent-9vgz.1)
+    # no expiry date is set, no expiry validation occurs. Dict intermediary only.
+    # Scenario-level xfail (T-UC-002-alt-proposal tag in conftest.py line 229)
+    # handles the gap at the correct level. FIXME(salesagent-9vgz.1)
     warnings.warn(
         f"SPEC-PRODUCTION GAP: Proposal '{proposal_id}' — no proposal entity created, "
-        "'has not expired' expiry not enforced. Dict intermediary only. "
+        "'has not expired' expiry not enforced. Dict intermediary "
+        "(ctx['expected_proposal_id'] + ctx['proposal_not_expired']). "
+        "Scenario-level xfail via T-UC-002-alt-proposal tag handles the gap. "
         "FIXME(salesagent-9vgz.1): Create ProposalFactory with future expiry.",
         stacklevel=1,
     )
@@ -2071,17 +2101,26 @@ def given_proposal_allocations(ctx: dict, count: int) -> None:
     # explicitly via a dedicated Given step.
     if "expected_allocation_percentages" not in ctx:
         ctx["expected_allocation_percentages"] = [100.0 / count] * count
+    # Validate allocation percentages sum to ~100% (floating-point tolerance)
+    percentages = ctx["expected_allocation_percentages"]
+    assert len(percentages) == count, (
+        f"Allocation percentages count ({len(percentages)}) must match allocation count ({count})"
+    )
+    assert abs(sum(percentages) - 100.0) < 0.01, f"Allocation percentages must sum to 100%, got {sum(percentages):.2f}%"
     # SPEC-PRODUCTION GAP: Step text claims "the proposal has N product allocations"
-    # but no allocation entities are created — only a counter is stored in ctx.
-    # This is a DICT INTERMEDIARY (ctx["expected_proposal_allocations"] = count) — not
-    # real allocation records. The proposal itself doesn't exist (see given_proposal_exists).
-    # Scenario-level xfail (T-UC-002-alt-proposal tag in conftest.py) handles the gap
-    # at the correct level. FIXME(salesagent-9vgz.1)
+    # but no allocation entities are created — only a counter + percentages stored in ctx.
+    # Dict intermediaries: ctx["expected_proposal_allocations"] = count,
+    # ctx["expected_allocation_percentages"] = [...]. The proposal itself doesn't
+    # exist (see given_proposal_exists).
+    # Scenario-level xfail (T-UC-002-alt-proposal tag in conftest.py line 229)
+    # handles the gap at the correct level. FIXME(salesagent-9vgz.1)
     import warnings
 
     warnings.warn(
         f"SPEC-PRODUCTION GAP: Proposal '{proposal_id}' allocations — {count} allocations "
-        "recorded as counter only, no allocation entities created. Dict intermediary. "
+        "recorded as counter+percentages only, no allocation entities created. "
+        "Dict intermediary. Scenario-level xfail via T-UC-002-alt-proposal tag "
+        "handles the gap. "
         "FIXME(salesagent-9vgz.1): Create AllocationFactory linked to proposal.",
         stacklevel=1,
     )
