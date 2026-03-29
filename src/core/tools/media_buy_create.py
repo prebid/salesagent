@@ -666,35 +666,11 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
 
                     for idx, fmt in enumerate(formats):
                         try:
-                            if not isinstance(fmt, dict):
-                                raise ValueError(f"Format entry must be dict, got {type(fmt).__name__}: {fmt!r}")
-                            agent_url = fmt.get("agent_url")
-                            format_id = fmt.get("format_id") or fmt.get("id")
-
-                            # Validate required fields exist and are non-empty strings
-                            if not agent_url or not isinstance(agent_url, str):
-                                raise ValueError(f"Format missing or invalid agent_url: agent_url={agent_url!r}")
-                            if not validate_agent_url(agent_url):
-                                raise ValueError(f"agent_url must be valid HTTP(S) URL: {agent_url!r}")
-                            if not format_id or not isinstance(format_id, str):
-                                raise ValueError(f"Format missing or invalid id: id={format_id!r}")
-
-                            # Include width, height, duration_ms from database (parameterized formats)
-                            # Convert to correct types (database may return int or need conversion)
-                            fmt_width = fmt.get("width")
-                            fmt_height = fmt.get("height")
-                            fmt_duration_ms = fmt.get("duration_ms")
-
-                            format_ids_list.append(
-                                FormatIdType(
-                                    agent_url=make_url(agent_url),
-                                    id=format_id,
-                                    width=int(fmt_width) if fmt_width is not None else None,
-                                    height=int(fmt_height) if fmt_height is not None else None,
-                                    duration_ms=float(fmt_duration_ms) if fmt_duration_ms is not None else None,
-                                )
-                            )
-
+                            validated = FormatIdType.model_validate(fmt)
+                            url_str = str(validated.agent_url)
+                            if not url_str.startswith(("http://", "https://")):
+                                raise ValueError(f"agent_url must be HTTP(S), got: {url_str}")
+                            format_ids_list.append(validated)
                         except (ValueError, ValidationError) as e:
                             error_msg = (
                                 f"Failed to reconstruct package {package_id}: "
@@ -1231,19 +1207,16 @@ async def _validate_and_convert_format_ids(
                 details={"error_code": "FORMAT_VALIDATION_ERROR"},
             )
 
-        # Extract agent_url and id from dict/object
-        if isinstance(fmt_id, dict):
-            agent_url = fmt_id.get("agent_url")
-            format_id = fmt_id.get("id")
-        elif isinstance(fmt_id, FormatId):
-            agent_url = fmt_id.agent_url
-            format_id = fmt_id.id
-        else:
+        # Coerce to FormatId via Pydantic validation (handles dicts and FormatId objects)
+        try:
+            validated_fmt = FormatId.model_validate(fmt_id, from_attributes=True)
+        except (ValueError, ValidationError) as e:
             raise AdCPValidationError(
-                f"Package {package_idx + 1}, format_ids[{idx}]: Invalid format_id structure. "
-                f"Expected FormatId object with {{agent_url, id}}, got: {type(fmt_id).__name__}",
+                f"Package {package_idx + 1}, format_ids[{idx}]: Invalid format_id structure: {e}",
                 details={"error_code": "FORMAT_VALIDATION_ERROR"},
-            )
+            ) from e
+        agent_url = str(validated_fmt.agent_url).rstrip("/")
+        format_id = validated_fmt.id
 
         if not agent_url or not format_id:
             raise AdCPValidationError(
@@ -1285,7 +1258,7 @@ async def _validate_and_convert_format_ids(
             )
 
         # Format validated - add to results
-        validated_format_ids.append({"agent_url": agent_url, "id": format_id})
+        validated_format_ids.append({"agent_url": str(agent_url), "id": format_id})
 
     return validated_format_ids
 
