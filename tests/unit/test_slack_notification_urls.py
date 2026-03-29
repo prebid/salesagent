@@ -49,7 +49,7 @@ class TestSlackNotificationUrls:
         assert actions_block is not None, "Should have actions block"
 
         url = actions_block["elements"][0]["url"]
-        assert url == "https://sales-agent.example.com/tenant/tenant_abc/workflows"
+        assert url == "https://sales-agent.example.com/admin/tenant/tenant_abc/workflows"
         assert "localhost" not in url, "Should not contain localhost"
 
     def test_notify_new_task_without_tenant_id(self, slack_notifier, mock_webhook_delivery):
@@ -70,8 +70,8 @@ class TestSlackNotificationUrls:
         actions_block = next((b for b in payload["blocks"] if b["type"] == "actions"), None)
         url = actions_block["elements"][0]["url"]
 
-        # Should fall back to global workflows
-        assert url == "https://sales-agent.example.com/workflows"
+        # Should fall back to global workflows (with /admin prefix in production)
+        assert url == "https://sales-agent.example.com/admin/workflows"
         assert "localhost" not in url
 
     def test_notify_media_buy_event_with_tenant_and_buy_id(self, slack_notifier, mock_webhook_delivery):
@@ -97,7 +97,7 @@ class TestSlackNotificationUrls:
             actions_block = next((b for b in payload["attachments"][0]["blocks"] if b["type"] == "actions"), None)
 
         url = actions_block["elements"][0]["url"]
-        assert url == "https://sales-agent.example.com/tenant/tenant_abc/workflows#mb_123"
+        assert url == "https://sales-agent.example.com/admin/tenant/tenant_abc/workflows#mb_123"
         assert "localhost" not in url
 
     def test_notify_media_buy_event_with_tenant_only(self, slack_notifier, mock_webhook_delivery):
@@ -121,7 +121,7 @@ class TestSlackNotificationUrls:
         actions_block = next((b for b in payload["attachments"][0]["blocks"] if b["type"] == "actions"), None)
         url = actions_block["elements"][0]["url"]
 
-        assert url == "https://sales-agent.example.com/tenant/tenant_abc/workflows"
+        assert url == "https://sales-agent.example.com/admin/tenant/tenant_abc/workflows"
         assert "localhost" not in url
 
     def test_notify_media_buy_event_without_tenant_id(self, slack_notifier, mock_webhook_delivery):
@@ -143,8 +143,8 @@ class TestSlackNotificationUrls:
         actions_block = next((b for b in payload["blocks"] if b["type"] == "actions"), None)
         url = actions_block["elements"][0]["url"]
 
-        # Should fall back to global workflows
-        assert url == "https://sales-agent.example.com/workflows"
+        # Should fall back to global workflows (with /admin prefix in production)
+        assert url == "https://sales-agent.example.com/admin/workflows"
         assert "localhost" not in url
 
     def test_notify_creative_pending_with_tenant_id(self, slack_notifier, mock_webhook_delivery):
@@ -164,7 +164,7 @@ class TestSlackNotificationUrls:
         actions_block = next((b for b in payload["blocks"] if b["type"] == "actions"), None)
         url = actions_block["elements"][0]["url"]
 
-        assert url == "https://sales-agent.example.com/tenant/tenant_abc/creatives/review#creative_123"
+        assert url == "https://sales-agent.example.com/admin/tenant/tenant_abc/creatives/review#creative_123"
         assert "localhost" not in url
 
     def test_localhost_fallback_when_env_not_set(self, slack_notifier, mock_webhook_delivery):
@@ -186,7 +186,7 @@ class TestSlackNotificationUrls:
         url = actions_block["elements"][0]["url"]
 
         # Should use localhost fallback in dev mode
-        assert url == "http://localhost:8001/tenant/tenant_abc/workflows"
+        assert url == "http://localhost:8001/admin/tenant/tenant_abc/workflows"
 
     def test_all_event_types_use_tenant_urls(self, slack_notifier, mock_webhook_delivery):
         """Test that all event types properly handle tenant-specific URLs."""

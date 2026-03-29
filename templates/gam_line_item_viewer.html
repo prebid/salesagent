@@ -329,7 +329,7 @@ async function loadLineItem() {
     }
 
     // Update URL
-    window.history.pushState({}, '', `/tenant/{{ tenant_id }}/gam/line-item/${lineItemId}`);
+    window.history.pushState({}, '', `{{ request.script_root }}/tenant/{{ tenant_id }}/gam/line-item/${lineItemId}`);
 
     // Show loading
     document.getElementById('loading').style.display = 'block';

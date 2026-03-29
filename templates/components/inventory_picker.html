@@ -158,7 +158,7 @@ Then in your template, add browse buttons:
             .then(response => {
                 // Handle authentication errors (401) by redirecting to login
                 if (response.status === 401) {
-                    const loginUrl = config.scriptRoot + '/auth/login?redirect=' + encodeURIComponent(window.location.pathname);
+                    const loginUrl = config.scriptRoot + '/login?redirect=' + encodeURIComponent(window.location.pathname);
                     window.location.href = loginUrl;
                     return Promise.reject(new Error('Session expired'));
                 }
@@ -219,7 +219,7 @@ Then in your template, add browse buttons:
             .then(response => {
                 // Handle authentication errors (401) by redirecting to login
                 if (response.status === 401) {
-                    const loginUrl = config.scriptRoot + '/auth/login?redirect=' + encodeURIComponent(window.location.pathname);
+                    const loginUrl = config.scriptRoot + '/login?redirect=' + encodeURIComponent(window.location.pathname);
                     window.location.href = loginUrl;
                     return Promise.reject(new Error('Session expired'));
                 }

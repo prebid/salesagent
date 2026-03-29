@@ -47,7 +47,7 @@ class TestLandingPages:
             # Admin domain should redirect to login
             assert response.status_code == 302, f"Admin domain should return 302 redirect, got {response.status_code}"
             location = response.headers.get("Location", "")
-            assert "/login" in location, f"Admin domain should redirect to /login, got {location}"
+            assert "/admin/login" in location, f"Admin domain should redirect to /admin/login, got {location}"
 
         except (requests.ConnectionError, requests.Timeout):
             pytest.skip(f"Server not running at {base_url}")
@@ -166,7 +166,7 @@ class TestLandingPages:
             )
 
             location = response.headers.get("Location", "")
-            assert "/login" in location, f"Proxied admin domain should redirect to /login, got {location}"
+            assert "/admin/login" in location, f"Proxied admin domain should redirect to /admin/login, got {location}"
 
         except (requests.ConnectionError, requests.Timeout):
             pytest.skip(f"Server not running at {base_url}")
@@ -421,7 +421,7 @@ class TestProductionLandingPages:
             assert response.status_code == 302, f"Admin UI should redirect to login (302), got {response.status_code}"
 
             location = response.headers.get("Location", "")
-            assert "/login" in location, f"Admin UI should redirect to /login, got {location}"
+            assert "/admin/login" in location, f"Admin UI should redirect to /admin/login, got {location}"
 
         except requests.RequestException as e:
             pytest.skip(f"Could not reach production URL: {e}")

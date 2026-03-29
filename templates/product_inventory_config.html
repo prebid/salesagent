@@ -8,9 +8,9 @@
         <div class="col-12">
             <nav aria-label="breadcrumb">
                 <ol class="breadcrumb">
-                    <li class="breadcrumb-item"><a href="/tenant/{{ tenant_id }}">{{ tenant_name }}</a></li>
-                    <li class="breadcrumb-item"><a href="/tenant/{{ tenant_id }}/products">Products</a></li>
-                    <li class="breadcrumb-item"><a href="/tenant/{{ tenant_id }}/products/{{ product.product_id }}/edit">{{ product.name }}</a></li>
+                    <li class="breadcrumb-item"><a href="{{ request.script_root }}/tenant/{{ tenant_id }}">{{ tenant_name }}</a></li>
+                    <li class="breadcrumb-item"><a href="{{ request.script_root }}/tenant/{{ tenant_id }}/products">Products</a></li>
+                    <li class="breadcrumb-item"><a href="{{ request.script_root }}/tenant/{{ tenant_id }}/products/{{ product.product_id }}/edit">{{ product.name }}</a></li>
                     <li class="breadcrumb-item active">Configure Inventory</li>
                 </ol>
             </nav>
@@ -102,7 +102,7 @@
                         <button class="btn btn-primary" onclick="saveConfiguration()">
                             Save Configuration
                         </button>
-                        <a href="/tenant/{{ tenant_id }}/products/{{ product.product_id }}/edit"
+                        <a href="{{ request.script_root }}/tenant/{{ tenant_id }}/products/{{ product.product_id }}/edit"
                            class="btn btn-secondary">Cancel</a>
                     </div>
                 </div>
@@ -326,7 +326,7 @@ function findUnitById(units, unitId) {
 
 function refreshInventory() {
     // Redirect to Inventory Browser for syncing
-    window.location.href = `/tenant/${tenantId}/inventory`;
+    window.location.href = `{{ request.script_root }}/tenant/${tenantId}/inventory`;
 }
 
 function getSuggestions() {
@@ -408,7 +408,7 @@ function saveConfiguration() {
     .then(result => {
         if (result.status === 'success') {
             alert('Configuration saved successfully!');
-            window.location.href = `/tenant/${tenantId}/products/${productId}/edit`;
+            window.location.href = `{{ request.script_root }}/tenant/${tenantId}/products/${productId}/edit`;
         } else {
             alert('Error saving configuration: ' + (result.error || 'Unknown error'));
         }

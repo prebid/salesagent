@@ -2569,10 +2569,9 @@ async def _create_media_buy_impl(
                 product_format_keys: set[tuple[str | None, str]] = set()
                 if pkg_product.format_ids:
                     for fmt in pkg_product.format_ids:
-                        # pkg_product.format_ids are dicts from database JSONB (type annotation says FormatId but runtime is dict)
-                        agent_url = fmt["agent_url"]  # type: ignore[index]
+                        agent_url = fmt.agent_url
                         normalized_url = str(agent_url).rstrip("/") if agent_url else None
-                        product_format_keys.add((normalized_url, fmt["id"]))  # type: ignore[index]
+                        product_format_keys.add((normalized_url, fmt.id))
 
                 # Build set of requested format keys for comparison
                 requested_format_keys: set[tuple[str | None, str]] = set()
@@ -2645,15 +2644,15 @@ async def _create_media_buy_impl(
                 ] = {}
                 if pkg_product.format_ids:
                     for fmt in pkg_product.format_ids:
-                        # pkg_product comes from get_product_catalog() — format_ids are FormatId objects
                         agent_url = fmt.agent_url
                         fmt_id = fmt.id
                         normalized_url = str(agent_url).rstrip("/") if agent_url else None
                         if fmt_id:
-                            width = fmt.width
-                            height = fmt.height
-                            duration_ms = fmt.duration_ms
-                            product_format_dimensions[(normalized_url, fmt_id)] = (width, height, duration_ms)
+                            product_format_dimensions[(normalized_url, fmt_id)] = (
+                                fmt.width,
+                                fmt.height,
+                                fmt.duration_ms,
+                            )
 
                 # Process request format_ids, merging dimensions from product if missing
                 for req_fmt in matching_package.format_ids:

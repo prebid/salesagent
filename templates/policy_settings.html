@@ -9,7 +9,7 @@
             <h1>Policy Settings - {{ tenant_name }}</h1>
             <nav aria-label="breadcrumb">
                 <ol class="breadcrumb">
-                    <li class="breadcrumb-item"><a href="/tenant/{{ tenant_id }}">Dashboard</a></li>
+                    <li class="breadcrumb-item"><a href="{{ request.script_root }}/tenant/{{ tenant_id }}">Dashboard</a></li>
                     <li class="breadcrumb-item active">Policy Settings</li>
                 </ol>
             </nav>
@@ -24,7 +24,7 @@
                     <h5 class="mb-0">Policy Configuration</h5>
                 </div>
                 <div class="card-body">
-                    <form action="/tenant/{{ tenant_id }}/policy/update" method="POST">
+                    <form action="{{ request.script_root }}/tenant/{{ tenant_id }}/policy/update" method="POST">
                         <div class="form-check mb-3">
                             <input class="form-check-input" type="checkbox" id="enabled" name="enabled"
                                    {% if policy_settings.enabled %}checked{% endif %}>
@@ -48,7 +48,7 @@
                         </div>
 
                         <button type="submit" class="btn btn-primary">Save Settings</button>
-                        <a href="/tenant/{{ tenant_id }}/policy/rules" class="btn btn-secondary">
+                        <a href="{{ request.script_root }}/tenant/{{ tenant_id }}/policy/rules" class="btn btn-secondary">
                             Manage Custom Rules
                         </a>
                     </form>
@@ -66,7 +66,7 @@
                     {% if pending_reviews %}
                         <div class="list-group">
                             {% for review in pending_reviews %}
-                            <a href="/tenant/{{ tenant_id }}/policy/review/{{ review.task_id }}"
+                            <a href="{{ request.script_root }}/tenant/{{ tenant_id }}/policy/review/{{ review.task_id }}"
                                class="list-group-item list-group-item-action">
                                 <div class="d-flex w-100 justify-content-between">
                                     <h6 class="mb-1">{{ review.brief[:50] }}...</h6>
