@@ -331,130 +331,142 @@ def given_principal_owns_mb_with_two_packages(ctx: dict, principal_id: str, mb_i
 
 @given(parsers.parse('package "{pkg_id}" has a creative with internal status "{status}"'))
 def given_package_creative_status(ctx: dict, pkg_id: str, status: str) -> None:
-    """Record expected creative state in ctx (dict intermediary — NOT a real DB record).
+    """Record expected creative state — cannot seed real DB records.
 
     FIXME(salesagent-vov): When CreativeAssignmentFactory exists, seed real DB
-    records. Currently this step does NOT create a DB row — production code
-    querying the database will not see this creative. Then steps that depend
-    on creative data from the response should xfail appropriately.
+    records. Currently no factory exists to create creative DB rows.
     """
-    creative_data = {"creative_id": f"cr-{pkg_id}-1", "internal_status": status}
-    ctx.setdefault("package_creatives", {}).setdefault(pkg_id, []).append(creative_data)
+    import pytest
+
+    pytest.xfail(
+        f"SPEC-PRODUCTION GAP: No CreativeAssignmentFactory — cannot seed creative with "
+        f"status='{status}' on package '{pkg_id}'. "
+        f"FIXME(salesagent-vov): Create factory to seed real DB records."
+    )
 
 
 @given(
     parsers.parse('package "{pkg_id}" has a creative with internal status "{status}" and rejection_reason "{reason}"')
 )
 def given_package_creative_rejected(ctx: dict, pkg_id: str, status: str, reason: str) -> None:
-    """Record rejected creative in ctx (dict intermediary — NOT a real DB record).
+    """Record rejected creative — cannot seed real DB records.
 
-    FIXME(salesagent-vov): When CreativeAssignmentFactory exists, seed real DB
-    records. rejection_reason is stored only in ctx, not in any real DB record.
+    FIXME(salesagent-vov): When CreativeAssignmentFactory exists, seed real DB records.
     """
-    creative_data = {
-        "creative_id": f"cr-{pkg_id}-1",
-        "internal_status": status,
-        "rejection_reason": reason,
-    }
-    ctx.setdefault("package_creatives", {}).setdefault(pkg_id, []).append(creative_data)
+    import pytest
+
+    pytest.xfail(
+        f"SPEC-PRODUCTION GAP: No CreativeAssignmentFactory — cannot seed creative with "
+        f"status='{status}', rejection_reason='{reason}' on package '{pkg_id}'. "
+        f"FIXME(salesagent-vov): Create factory to seed real DB records."
+    )
 
 
 @given(parsers.parse('package "{pkg_id}" has a creative assignment with creative_id "{creative_id}"'))
 def given_package_creative_assignment(ctx: dict, pkg_id: str, creative_id: str) -> None:
-    """Record creative assignment in ctx (dict intermediary — NOT a real DB row).
+    """Record creative assignment — cannot seed real DB records.
 
     FIXME(salesagent-vov): When CreativeAssignmentFactory exists, seed real DB records.
     """
-    creative_data = {"creative_id": creative_id, "internal_status": "submitted"}
-    ctx.setdefault("package_creatives", {}).setdefault(pkg_id, []).append(creative_data)
+    import pytest
+
+    pytest.xfail(
+        f"SPEC-PRODUCTION GAP: No CreativeAssignmentFactory — cannot seed creative assignment "
+        f"for '{creative_id}' on package '{pkg_id}'. "
+        f"FIXME(salesagent-vov): Create factory to seed real DB records."
+    )
 
 
 @given(parsers.parse('the creative "{creative_id}" has internal status "{status}" and rejection_reason "{reason}"'))
 def given_creative_status_with_reason(ctx: dict, creative_id: str, status: str, reason: str) -> None:
-    """Update creative status/reason in ctx dicts (NOT a real DB update).
+    """Update creative status/reason — cannot update real DB records.
 
     FIXME(salesagent-vov): When CreativeAssignmentFactory exists, update real DB records.
-    Mutates ctx dicts in memory; no database row is updated.
     """
-    for pkg_creatives in ctx.get("package_creatives", {}).values():
-        for c in pkg_creatives:
-            if c["creative_id"] == creative_id:
-                c["internal_status"] = status
-                c["rejection_reason"] = reason
-                return
-    ctx.setdefault("creative_overrides", {})[creative_id] = {
-        "internal_status": status,
-        "rejection_reason": reason,
-    }
+    import pytest
+
+    pytest.xfail(
+        f"SPEC-PRODUCTION GAP: No CreativeAssignmentFactory — cannot update creative "
+        f"'{creative_id}' with status='{status}', rejection_reason='{reason}' in DB. "
+        f"FIXME(salesagent-vov): Create factory to seed/update real DB records."
+    )
 
 
 @given(parsers.parse('the creative "{creative_id}" has internal status "{status}" {extra_condition}'))
 def given_creative_status_extra(ctx: dict, creative_id: str, status: str, extra_condition: str) -> None:
-    """Update creative status with extra conditions in ctx (dict intermediary — NOT DB).
+    """Update creative status with extra conditions — cannot update real DB records.
 
     FIXME(salesagent-vov): When CreativeAssignmentFactory exists, update real DB records.
     """
-    import re
+    import pytest
 
-    data: dict[str, Any] = {"internal_status": status}
-    if "rejection_reason" in extra_condition:
-        # Parse 'and rejection_reason "X"'
-        match = re.search(r'rejection_reason "([^"]*)"', extra_condition)
-        if match:
-            data["rejection_reason"] = match.group(1)
-    elif "no rejection_reason" in extra_condition:
-        data["rejection_reason"] = None
-    for pkg_creatives in ctx.get("package_creatives", {}).values():
-        for c in pkg_creatives:
-            if c["creative_id"] == creative_id:
-                c.update(data)
-                return
-    ctx.setdefault("creative_overrides", {})[creative_id] = data
+    pytest.xfail(
+        f"SPEC-PRODUCTION GAP: No CreativeAssignmentFactory — cannot update creative "
+        f"'{creative_id}' status to '{status}' with '{extra_condition}' in DB. "
+        f"FIXME(salesagent-vov): Create factory to seed/update real DB records."
+    )
 
 
 @given(parsers.parse('the creative "{creative_id}" has internal status "{status}"'))
 def given_creative_status_simple(ctx: dict, creative_id: str, status: str) -> None:
-    """Set creative internal status in ctx (dict intermediary — NOT a real DB update).
+    """Set creative internal status — cannot update real DB records.
 
     FIXME(salesagent-vov): When CreativeAssignmentFactory exists, update real DB records.
     """
-    for pkg_creatives in ctx.get("package_creatives", {}).values():
-        for c in pkg_creatives:
-            if c["creative_id"] == creative_id:
-                c["internal_status"] = status
-                return
-    ctx.setdefault("creative_overrides", {})[creative_id] = {"internal_status": status}
+    import pytest
+
+    pytest.xfail(
+        f"SPEC-PRODUCTION GAP: No CreativeAssignmentFactory — cannot update creative "
+        f"'{creative_id}' status to '{status}' in DB. "
+        f"FIXME(salesagent-vov): Create factory to seed/update real DB records."
+    )
 
 
 @given(parsers.parse('no creative with id "{creative_id}" exists in the tenant'))
 def given_no_creative_exists(ctx: dict, creative_id: str) -> None:
-    """Mark creative as nonexistent in ctx (does NOT verify or enforce DB absence).
+    """Mark creative as nonexistent — cannot verify or enforce DB absence.
 
     FIXME(salesagent-vov): When CreativeAssignmentFactory exists, verify actual
-    DB absence. Any pre-existing creative with this ID would not be removed.
+    DB absence rather than relying on ctx-only sentinels.
     """
-    ctx.setdefault("nonexistent_creatives", set()).add(creative_id)
+    import pytest
+
+    pytest.xfail(
+        f"SPEC-PRODUCTION GAP: Cannot enforce DB absence for creative '{creative_id}' — "
+        f"no CreativeAssignmentFactory to verify or control DB state. "
+        f"FIXME(salesagent-vov): Verify actual DB absence."
+    )
 
 
 @given(parsers.parse('package "{pkg_id}" has a creative assignment referencing creative_id "{creative_id}"'))
 def given_package_creative_ref_nonexistent(ctx: dict, pkg_id: str, creative_id: str) -> None:
-    """Record creative assignment in ctx referencing a potentially nonexistent creative.
+    """Record creative assignment referencing a potentially nonexistent creative.
 
-    FIXME(salesagent-vov): Dict intermediary — NOT a real DB row. When
-    CreativeAssignmentFactory exists, seed real DB records.
+    FIXME(salesagent-vov): No CreativeAssignmentFactory — cannot seed real DB records.
     """
-    creative_data = {"creative_id": creative_id, "internal_status": None}
-    ctx.setdefault("package_creatives", {}).setdefault(pkg_id, []).append(creative_data)
+    import pytest
+
+    pytest.xfail(
+        f"SPEC-PRODUCTION GAP: No CreativeAssignmentFactory — cannot seed creative assignment "
+        f"for '{creative_id}' on package '{pkg_id}'. "
+        f"FIXME(salesagent-vov): Create factory to seed real DB records."
+    )
 
 
 @given(parsers.parse('no snapshot data is available for package "{pkg_id}"'))
 def given_no_snapshot_for_package(ctx: dict, pkg_id: str) -> None:
-    """Record snapshot unavailability in ctx (does NOT interact with real snapshot system).
+    """Record snapshot unavailability — cannot verify actual DB absence.
 
-    FIXME(salesagent-9vgz.1): When SnapshotFactory exists, verify actual absence.
-    Currently ctx-only — production code querying for snapshot data is unaffected.
+    FIXME(salesagent-9vgz.1): When SnapshotFactory exists, verify actual absence
+    in DB rather than using ctx-only sentinels.
     """
-    ctx.setdefault("snapshot_unavailable_packages", []).append(pkg_id)
+    import pytest
+
+    pytest.xfail(
+        f"SPEC-PRODUCTION GAP: Cannot enforce snapshot absence for '{pkg_id}' — "
+        f"no SnapshotFactory to verify or control DB state. "
+        f"FIXME(salesagent-9vgz.1): Verify actual DB absence."
+    )
 
 
 @given("the ad platform adapter supports realtime reporting")
@@ -501,77 +513,64 @@ def given_adapter_exists(ctx: dict) -> None:
 def given_adapter_reporting_with_data(ctx: dict) -> None:
     """Adapter supports reporting AND snapshot data is available.
 
-    FIXME(salesagent-9vgz.1): Step says 'data is available' but only sets a
-    ctx sentinel — no mock return_value is configured for the adapter's
-    reporting method. Then steps that check snapshot fields will xfail
-    until mock return values are wired here.
+    FIXME(salesagent-9vgz.1): No mock return_value is configured for the
+    adapter's reporting method — cannot fulfill 'data is available'.
     """
-    ctx["adapter_supports_reporting"] = True
-    env = ctx["env"]
-    assert "adapter" in env.mock, (
-        "Step claims 'the adapter supports realtime reporting' "
-        "but no adapter mock is configured in the test environment"
+    import pytest
+
+    pytest.xfail(
+        "SPEC-PRODUCTION GAP: Adapter mock has no return_value for reporting data — "
+        "cannot fulfill 'data is available'. "
+        "FIXME(salesagent-9vgz.1): Configure adapter mock to return snapshot data."
     )
-    adapter_mock = env.mock["adapter"].return_value
-    adapter_mock.supports_realtime_reporting = True
-    ctx["snapshot_available"] = True
 
 
 @given(parsers.parse("the adapter supports realtime reporting but no data for {pkg_id}"))
 def given_adapter_reporting_no_data(ctx: dict, pkg_id: str) -> None:
     """Adapter supports reporting but no snapshot for specified package.
 
-    FIXME(salesagent-9vgz.1): Step says 'no data for {pkg_id}' but only
-    appends to ctx sentinel list — no mock side_effect or return_value
-    is configured to raise/return nothing for that package.
+    FIXME(salesagent-9vgz.1): No mock side_effect or return_value is configured
+    to raise/return nothing for the specified package — cannot fulfill 'no data for X'.
     """
-    ctx["adapter_supports_reporting"] = True
-    env = ctx["env"]
-    assert "adapter" in env.mock, (
-        "Step claims 'the adapter supports realtime reporting' "
-        "but no adapter mock is configured in the test environment"
+    import pytest
+
+    pytest.xfail(
+        f"SPEC-PRODUCTION GAP: Adapter mock has no side_effect/return_value for '{pkg_id}' — "
+        f"cannot fulfill 'no data for {pkg_id}'. "
+        f"FIXME(salesagent-9vgz.1): Configure adapter mock to return empty for this package."
     )
-    adapter_mock = env.mock["adapter"].return_value
-    adapter_mock.supports_realtime_reporting = True
-    ctx.setdefault("snapshot_unavailable_packages", []).append(pkg_id)
 
 
 @given(parsers.parse("the adapter supports realtime reporting and data for all pkgs"))
 def given_adapter_reporting_all_data(ctx: dict) -> None:
     """Adapter supports reporting with data for all packages.
 
-    FIXME(salesagent-9vgz.1): Step says 'data for all pkgs' but only sets
-    ctx sentinel — no mock return_value is configured to actually return
-    snapshot data for any package.
+    FIXME(salesagent-9vgz.1): No mock return_value is configured to actually
+    return snapshot data for any package — cannot fulfill 'data for all pkgs'.
     """
-    ctx["adapter_supports_reporting"] = True
-    env = ctx["env"]
-    assert "adapter" in env.mock, (
-        "Step claims 'the adapter supports realtime reporting' "
-        "but no adapter mock is configured in the test environment"
+    import pytest
+
+    pytest.xfail(
+        "SPEC-PRODUCTION GAP: Adapter mock has no return_value for snapshot data — "
+        "cannot fulfill 'data for all pkgs'. "
+        "FIXME(salesagent-9vgz.1): Configure adapter mock to return snapshot data."
     )
-    adapter_mock = env.mock["adapter"].return_value
-    adapter_mock.supports_realtime_reporting = True
-    ctx["snapshot_available_all"] = True
 
 
 @given(parsers.parse("the adapter supports reporting, data for {pkg1} but not {pkg2}"))
 def given_adapter_reporting_mixed(ctx: dict, pkg1: str, pkg2: str) -> None:
     """Adapter supports reporting with mixed snapshot availability.
 
-    FIXME(salesagent-9vgz.1): ctx sentinels snapshot_available_packages /
-    snapshot_unavailable_packages are set but the adapter mock is never
-    configured with per-package return values or side effects.
+    FIXME(salesagent-9vgz.1): Adapter mock is never configured with per-package
+    return values or side effects — cannot fulfill 'data for X but not Y'.
     """
-    ctx["adapter_supports_reporting"] = True
-    env = ctx["env"]
-    assert "adapter" in env.mock, (
-        "Step claims 'the adapter supports reporting' but no adapter mock is configured in the test environment"
+    import pytest
+
+    pytest.xfail(
+        "SPEC-PRODUCTION GAP: Adapter mock has no per-package return_value/side_effect — "
+        "cannot fulfill mixed snapshot availability. "
+        "FIXME(salesagent-9vgz.1): Configure adapter mock with per-package responses."
     )
-    adapter_mock = env.mock["adapter"].return_value
-    adapter_mock.supports_realtime_reporting = True
-    ctx.setdefault("snapshot_available_packages", []).append(pkg1)
-    ctx.setdefault("snapshot_unavailable_packages", []).append(pkg2)
 
 
 @given(parsers.parse('an authenticated principal "{principal_id}" who owns {count:d} media buys'))
@@ -695,43 +694,18 @@ def given_production_account(ctx: dict) -> None:
 def given_snapshot_available(ctx: dict, pkg_id: str) -> None:
     """Record expected snapshot data for a package in ctx.
 
-    NOTE: Despite the step text, this does NOT configure the adapter mock to
-    return snapshot data. It validates preconditions and records expected values
-    in ctx for Then-step comparison. The snapshot data is not actually made
-    available to the production query path.
-
-    FIXME(salesagent-9vgz.1): When a SnapshotFactory exists, seed real DB
-    records OR configure adapter mock return values so production code
-    actually receives snapshot data.
+    FIXME(salesagent-9vgz.1): No SnapshotFactory or adapter mock return values
+    exist to make snapshot data available to the production query path.
+    When a SnapshotFactory exists, seed real DB records OR configure adapter
+    mock return values.
     """
-    from datetime import UTC, datetime
+    import pytest
 
-    assert pkg_id, "pkg_id must be non-empty — step claims snapshot data is 'available for package'"
-    # Verify the package was actually seeded (not referencing a phantom package)
-    seeded = ctx.get("seeded_media_buys", {})
-    assert seeded, "No media buys seeded — step claims snapshot available but no media buys exist"
-    # Verify the adapter supports reporting (required for snapshots)
-    assert ctx.get("adapter_supports_reporting"), (
-        "adapter_supports_reporting not set — step claims 'snapshot data is available' "
-        "but the adapter reporting capability has not been configured by a prior Given step"
+    pytest.xfail(
+        "SPEC-PRODUCTION GAP: No SnapshotFactory — cannot seed real snapshot data. "
+        "FIXME(salesagent-9vgz.1): Step claims 'snapshot data is available' but no "
+        "adapter mock return values or DB records can be created."
     )
-    # Verify the package was seeded by a prior Given step (may not be committed yet)
-    seeded_buys = ctx.get("seeded_media_buys", {})
-    assert seeded_buys, "No media buys seeded — cannot verify package existence"
-    ctx.setdefault("snapshot_available_packages", []).append(pkg_id)
-    ctx["snapshot_available"] = True
-    # Record expected snapshot data for Then-step validation
-    snapshot_data = {
-        "as_of": datetime.now(UTC).isoformat(),
-        "staleness_seconds": 30,
-        "impressions": 1000,
-        "spend": 50.0,
-    }
-    ctx.setdefault("expected_snapshots", {})[pkg_id] = snapshot_data
-    # SPEC-PRODUCTION GAP: No snapshot fixture factory exists. This step records
-    # the expectation and configures adapter mock; Then steps verify fields
-    # with xfail when production doesn't propagate them.
-    # FIXME(salesagent-9vgz.1): Create SnapshotFactory to persist real data.
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1268,7 +1242,6 @@ def then_status_handles_missing_date(ctx: dict, mb_id: str) -> None:
     1. The buy is returned with a valid (non-error) status, OR
     2. An appropriate error was raised (AdCPError or ValueError, not crash)
     """
-    import pytest
 
     from src.core.exceptions import AdCPError
 
@@ -1283,14 +1256,9 @@ def then_status_handles_missing_date(ctx: dict, mb_id: str) -> None:
         return
 
     buys = _get_media_buys(ctx)
-    if not buys:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: Media buy with missing dates not returned in query. "
-            "Production may require both dates for status computation."
-        )
+    assert buys, "No media buys returned — expected at least one for missing date handling"
     matching = [b for b in buys if getattr(b, "media_buy_id", None) == mb_id]
-    if not matching:
-        pytest.xfail(f"SPEC-PRODUCTION GAP: Media buy '{mb_id}' with missing dates not found in response.")
+    assert matching, f"Media buy '{mb_id}' not found in response"
     # If found, verify it has a valid status (graceful = didn't crash)
     status = getattr(matching[0], "status", None)
     assert status is not None, f"Media buy '{mb_id}' returned but has no status — not graceful handling"
@@ -1397,7 +1365,6 @@ def then_creative_approval_status(ctx: dict, creative_id: str, status: str) -> N
     Searches ALL packages across ALL media buys for a creative_approvals
     entry matching creative_id, then asserts approval_status.
     """
-    import pytest
 
     buys = _get_media_buys(ctx)
     for buy in buys:
@@ -1412,18 +1379,12 @@ def then_creative_approval_status(ctx: dict, creative_id: str, status: str) -> N
                         f"Expected approval_status '{status}' for creative '{creative_id}', got '{actual_str}'"
                     )
                     return
-    pytest.xfail(
-        f"SPEC-PRODUCTION GAP: Creative approval status mapping not yet implemented. "
-        f"Searched all packages across {len(buys)} media buy(s) — "
-        f"no approval entry found for creative '{creative_id}' with expected status='{status}'. "
-        f"FIXME(salesagent-vov): Requires CreativeAssignmentFactory to seed real DB records."
-    )
+    raise AssertionError(f"No approval entry found for creative '{creative_id}' across {len(buys)} media buy(s)")
 
 
 @then(parsers.parse('the creative approval should have approval_status "{status}"'))
 def then_any_creative_approval_status(ctx: dict, status: str) -> None:
     """Assert creative approval status on any package (any creative matches)."""
-    import pytest
 
     buys = _get_media_buys(ctx)
     for buy in buys:
@@ -1434,18 +1395,12 @@ def then_any_creative_approval_status(ctx: dict, status: str) -> None:
                 actual_str = actual.value if hasattr(actual, "value") else str(actual)
                 if actual_str == status:
                     return  # Found a matching approval
-    pytest.xfail(
-        f"SPEC-PRODUCTION GAP: Creative approval status mapping not yet implemented. "
-        f"Searched all packages across {len(buys)} media buy(s) — "
-        f"no approval with status='{status}' found. "
-        f"FIXME(salesagent-vov): Requires CreativeAssignmentFactory to seed real DB records."
-    )
+    raise AssertionError(f"No approval with status='{status}' found across {len(buys)} media buy(s)")
 
 
 @then(parsers.parse('the rejection_reason should be "{reason}"'))
 def then_rejection_reason(ctx: dict, reason: str) -> None:
     """Assert rejection_reason matches expected value on any approval."""
-    import pytest
 
     buys = _get_media_buys(ctx)
     for buy in buys:
@@ -1456,18 +1411,14 @@ def then_rejection_reason(ctx: dict, reason: str) -> None:
                 if actual_reason is not None:
                     assert str(actual_reason) == reason, f"Expected rejection_reason '{reason}', got '{actual_reason}'"
                     return
-    pytest.xfail(
-        f"SPEC-PRODUCTION GAP: Creative rejection_reason not yet propagated. "
-        f"Searched all packages across {len(buys)} media buy(s) — "
-        f"no approval with rejection_reason found, expected '{reason}'. "
-        f"FIXME(salesagent-vov): Requires CreativeAssignmentFactory to seed real DB records."
+    raise AssertionError(
+        f"No approval with rejection_reason found across {len(buys)} media buy(s), expected '{reason}'"
     )
 
 
 @then(parsers.parse("rejection_reason should be absent"))
 def then_rejection_reason_absent(ctx: dict) -> None:
     """Assert rejection_reason is absent on ALL approvals when not rejected."""
-    import pytest
 
     buys = _get_media_buys(ctx)
     checked = 0
@@ -1478,17 +1429,12 @@ def then_rejection_reason_absent(ctx: dict) -> None:
                 checked += 1
                 actual_reason = getattr(approval, "rejection_reason", None)
                 assert actual_reason is None, f"Expected rejection_reason to be absent, got '{actual_reason}'"
-    if checked == 0:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: Creative rejection_reason presence/absence not yet verified — "
-            "no approval entries found in response."
-        )
+    assert checked > 0, "No approval entries found in response — cannot verify rejection_reason absence"
 
 
 @then(parsers.parse("rejection_reason should not be present in the approval entry"))
 def then_rejection_reason_not_present(ctx: dict) -> None:
     """Assert rejection_reason is not present on ANY approval entry."""
-    import pytest
 
     buys = _get_media_buys(ctx)
     checked = 0
@@ -1499,17 +1445,12 @@ def then_rejection_reason_not_present(ctx: dict) -> None:
                 checked += 1
                 actual_reason = getattr(approval, "rejection_reason", None)
                 assert actual_reason is None, f"Expected rejection_reason to not be present, got '{actual_reason}'"
-    if checked == 0:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: Creative rejection_reason presence not yet tracked — "
-            "no approval entries found in response."
-        )
+    assert checked > 0, "No approval entries found in response — cannot verify rejection_reason absence"
 
 
 @then(parsers.parse("rejection_reason should be null or absent"))
 def then_rejection_reason_null_or_absent(ctx: dict) -> None:
     """Assert rejection_reason is null or absent on ALL approval entries."""
-    import pytest
 
     buys = _get_media_buys(ctx)
     checked = 0
@@ -1520,11 +1461,7 @@ def then_rejection_reason_null_or_absent(ctx: dict) -> None:
                 checked += 1
                 actual_reason = getattr(approval, "rejection_reason", None)
                 assert actual_reason is None, f"Expected rejection_reason to be null or absent, got '{actual_reason}'"
-    if checked == 0:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: Creative rejection_reason null/absent handling not yet verified — "
-            "no approval entries found in response."
-        )
+    assert checked > 0, "No approval entries found in response — cannot verify rejection_reason null/absent"
 
 
 @then(parsers.parse('the creative approvals for package "{pkg_id}" should not include an entry for "{creative_id}"'))
@@ -1561,7 +1498,6 @@ def then_package_no_snapshot(ctx: dict, pkg_id: str) -> None:
     Step text: 'should not have a snapshot field'. If production returns
     a snapshot contrary to the requirement, this is a spec-production gap.
     """
-    import pytest
 
     buys = _get_media_buys(ctx)
     for buy in buys:
@@ -1569,14 +1505,8 @@ def then_package_no_snapshot(ctx: dict, pkg_id: str) -> None:
             if getattr(pkg, "package_id", None) == pkg_id:
                 snapshot = getattr(pkg, "snapshot", None)
                 # Violation path: snapshot IS present when it should NOT be
-                if snapshot is not None:
-                    pytest.xfail(
-                        f"SPEC-PRODUCTION GAP: Package '{pkg_id}' has snapshot={snapshot!r} "
-                        f"even though include_snapshot=false or not requested. "
-                        f"Correct assertion: assert snapshot is None. "
-                        f"FIXME(salesagent-9vgz.1): Production should omit snapshot when not requested."
-                    )
-                return  # snapshot is None — assertion passes
+                assert snapshot is None, f"Package '{pkg_id}' has snapshot={snapshot!r} — should be absent"
+                return
     raise AssertionError(f"Package '{pkg_id}' not found in response")
 
 
@@ -1586,7 +1516,6 @@ def then_package_no_unavailable_reason(ctx: dict, pkg_id: str) -> None:
 
     Step text: 'should not have a snapshot_unavailable_reason field'.
     """
-    import pytest
 
     buys = _get_media_buys(ctx)
     for buy in buys:
@@ -1594,60 +1523,45 @@ def then_package_no_unavailable_reason(ctx: dict, pkg_id: str) -> None:
             if getattr(pkg, "package_id", None) == pkg_id:
                 reason = getattr(pkg, "snapshot_unavailable_reason", None)
                 # Violation path: reason IS present when it should NOT be
-                if reason is not None:
-                    pytest.xfail(
-                        f"SPEC-PRODUCTION GAP: Package '{pkg_id}' has "
-                        f"snapshot_unavailable_reason='{reason}' even though not requested. "
-                        f"Correct assertion: assert reason is None. "
-                        f"FIXME(salesagent-9vgz.1): Production should omit field when not requested."
-                    )
-                return  # reason is None — assertion passes
+                assert reason is None, (
+                    f"Package '{pkg_id}' has snapshot_unavailable_reason='{reason}' — should be absent"
+                )
+                return
     raise AssertionError(f"Package '{pkg_id}' not found in response")
 
 
 @then(parsers.parse('package "{pkg_id}" should have snapshot_unavailable_reason "{reason}"'))
 def then_package_unavailable_reason(ctx: dict, pkg_id: str, reason: str) -> None:
     """Assert package has specific snapshot_unavailable_reason."""
-    import pytest
 
     buys = _get_media_buys(ctx)
     for buy in buys:
         for pkg in getattr(buy, "packages", []) or []:
             if getattr(pkg, "package_id", None) == pkg_id:
                 actual = getattr(pkg, "snapshot_unavailable_reason", None)
-                if actual is None:
-                    pytest.xfail(
-                        f"SPEC-PRODUCTION GAP: Package '{pkg_id}' missing "
-                        f"snapshot_unavailable_reason, expected '{reason}'."
-                    )
+                assert actual is not None, (
+                    f"Package '{pkg_id}' missing snapshot_unavailable_reason, expected '{reason}'"
+                )
                 actual_str = actual.value if hasattr(actual, "value") else str(actual)
                 assert actual_str == reason, f"Expected snapshot_unavailable_reason '{reason}', got '{actual_str}'"
                 return
-    pytest.xfail(f"Package '{pkg_id}' not found in response")
+    raise AssertionError(f"Package '{pkg_id}' not found in response")
 
 
 @then(parsers.parse('the snapshot for package "{pkg_id}" should include "{field}" timestamp'))
 def then_snapshot_field_timestamp(ctx: dict, pkg_id: str, field: str) -> None:
     """Assert snapshot has a timestamp field."""
-    import pytest
 
     buys = _get_media_buys(ctx)
     for buy in buys:
         for pkg in getattr(buy, "packages", []) or []:
             if getattr(pkg, "package_id", None) == pkg_id:
                 snapshot = getattr(pkg, "snapshot", None)
-                if snapshot is None:
-                    pytest.xfail(
-                        f"SPEC-PRODUCTION GAP: Package '{pkg_id}' has no snapshot — cannot verify '{field}' timestamp."
-                    )
+                assert snapshot is not None, f"Package '{pkg_id}' has no snapshot — cannot verify '{field}' timestamp"
                 val = getattr(snapshot, field, None)
                 if val is None and isinstance(snapshot, dict):
                     val = snapshot.get(field)
-                if val is None:
-                    pytest.xfail(
-                        f"SPEC-PRODUCTION GAP: Snapshot field '{field}' not present on "
-                        f"package '{pkg_id}' — snapshot data not fully propagated from adapter."
-                    )
+                assert val is not None, f"Snapshot field '{field}' not present on package '{pkg_id}'"
                 assert isinstance(val, str), (
                     f"Expected '{field}' to be a timestamp string, got {type(val).__name__}: {val!r}"
                 )
@@ -1658,7 +1572,6 @@ def then_snapshot_field_timestamp(ctx: dict, pkg_id: str, field: str) -> None:
 @then(parsers.parse('the snapshot should include "{field}" integer'))
 def then_snapshot_field_integer(ctx: dict, field: str) -> None:
     """Assert snapshot has an integer field (step text says 'integer', not 'numeric')."""
-    import pytest
 
     buys = _get_media_buys(ctx)
     for buy in buys:
@@ -1668,27 +1581,15 @@ def then_snapshot_field_integer(ctx: dict, field: str) -> None:
                 val = getattr(snapshot, field, None)
                 if val is None and isinstance(snapshot, dict):
                     val = snapshot.get(field)
-                if val is None:
-                    pytest.xfail(
-                        f"SPEC-PRODUCTION GAP: Snapshot field '{field}' not present — "
-                        f"snapshot data propagation incomplete."
-                    )
-                if isinstance(val, float) and not val.is_integer():
-                    pytest.xfail(
-                        f"SPEC-PRODUCTION GAP: Snapshot field '{field}' is float ({val!r}), "
-                        f"step text claims integer. Production may use float for numeric fields."
-                    )
-                assert isinstance(val, int | float), (
-                    f"Expected '{field}' to be an integer, got {type(val).__name__}: {val!r}"
-                )
+                assert val is not None, f"Snapshot field '{field}' not present — snapshot data propagation incomplete"
+                assert isinstance(val, int), f"Expected '{field}' to be an integer, got {type(val).__name__}: {val!r}"
                 return
-    pytest.xfail(f"SPEC-PRODUCTION GAP: No snapshots found — cannot verify '{field}' integer.")
+    raise AssertionError(f"No snapshots found — cannot verify '{field}' integer")
 
 
 @then(parsers.parse('the snapshot should include "{field}" count'))
 def then_snapshot_field_count(ctx: dict, field: str) -> None:
     """Assert snapshot has a count field."""
-    import pytest
 
     buys = _get_media_buys(ctx)
     for buy in buys:
@@ -1698,22 +1599,18 @@ def then_snapshot_field_count(ctx: dict, field: str) -> None:
                 val = getattr(snapshot, field, None)
                 if val is None and isinstance(snapshot, dict):
                     val = snapshot.get(field)
-                if val is None:
-                    pytest.xfail(
-                        f"SPEC-PRODUCTION GAP: Snapshot field '{field}' count not present — verification pending."
-                    )
+                assert val is not None, f"Snapshot field '{field}' count not present on package"
                 assert isinstance(val, int), (
                     f"Expected '{field}' to be an integer count, got {type(val).__name__}: {val!r}"
                 )
                 assert val >= 0, f"Expected '{field}' count to be non-negative, got {val}"
                 return
-    pytest.xfail(f"SPEC-PRODUCTION GAP: No snapshots found — cannot verify '{field}' count.")
+    raise AssertionError(f"No snapshots found — cannot verify '{field}' count")
 
 
 @then(parsers.parse('the snapshot should include "{field}" amount'))
 def then_snapshot_field_amount(ctx: dict, field: str) -> None:
     """Assert snapshot has an amount field."""
-    import pytest
 
     buys = _get_media_buys(ctx)
     for buy in buys:
@@ -1723,16 +1620,13 @@ def then_snapshot_field_amount(ctx: dict, field: str) -> None:
                 val = getattr(snapshot, field, None)
                 if val is None and isinstance(snapshot, dict):
                     val = snapshot.get(field)
-                if val is None:
-                    pytest.xfail(
-                        f"SPEC-PRODUCTION GAP: Snapshot field '{field}' amount not present — verification pending."
-                    )
+                assert val is not None, f"Snapshot field '{field}' amount not present on package"
                 assert isinstance(val, int | float), (
                     f"Expected '{field}' to be a numeric amount, got {type(val).__name__}: {val!r}"
                 )
                 assert val >= 0, f"Expected '{field}' amount to be non-negative, got {val}"
                 return
-    pytest.xfail(f"SPEC-PRODUCTION GAP: No snapshots found — cannot verify '{field}' amount.")
+    raise AssertionError(f"No snapshots found — cannot verify '{field}' amount")
 
 
 @then(parsers.parse("the response should include {count:d} media buys"))
@@ -1766,10 +1660,10 @@ def then_response_count_scoped(ctx: dict, count: int, principal_id: str) -> None
                     f"not '{principal_id}' — scoping violation"
                 )
     # Step claims scoping — we must have verified at least one buy's ownership
-    if count > 0 and scoping_checked == 0:
-        assert seeded, (
-            f"Step claims scoping to '{principal_id}' but no seeded_media_buys in ctx — "
-            f"cannot verify principal ownership of {count} returned buys"
+    if count > 0:
+        assert scoping_checked > 0, (
+            f"Step claims scoping to '{principal_id}' but verified 0 of {count} returned buys. "
+            f"Returned IDs: {returned_ids}, seeded IDs: {set(seeded.keys())}"
         )
 
 
@@ -1812,19 +1706,14 @@ def then_no_sandbox_field(ctx: dict) -> None:
     Step text: 'should not include a sandbox field'. If production includes
     it anyway, this is a spec-production gap.
     """
-    import pytest
 
     resp = ctx.get("response")
     assert resp is not None, f"Expected response, got error: {ctx.get('error')}"
     sandbox = getattr(resp, "sandbox", None)
     # Violation path: sandbox IS present when it should NOT be
-    if sandbox is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: Production response includes sandbox={sandbox!r} for "
-            f"production account — should be absent. "
-            f"Correct assertion: assert sandbox is None. "
-            f"FIXME(salesagent-9vgz.1): Production should omit sandbox for non-sandbox accounts."
-        )
+    assert sandbox is None, (
+        f"Production response includes sandbox={sandbox!r} for production account — should be absent"
+    )
 
 
 @then("no real ad platform API calls should have been made")
@@ -1834,11 +1723,9 @@ def then_no_real_api_calls(ctx: dict) -> None:
     Step text claims 'no real API calls' — must verify at least one method
     was checked, not vacuously pass when no methods exist on mock.
     """
-    import pytest
 
     env = ctx["env"]
-    if "adapter" not in env.mock:
-        pytest.xfail("SPEC-PRODUCTION GAP: Sandbox adapter call suppression not verified — no adapter mock available.")
+    assert "adapter" in env.mock, "Step claims 'no real API calls' but no adapter mock is available to verify"
     adapter_mock = env.mock["adapter"].return_value
     methods_checked = 0
     for method_name in ("create_line_item", "get_report", "sync_creative"):
@@ -1861,7 +1748,6 @@ def then_validation_error(ctx: dict) -> None:
     1. An exception was raised with validation-related keywords, OR
     2. Response.errors contains validation-related content.
     """
-    import pytest
 
     error = ctx.get("error")
     if error:
@@ -1882,17 +1768,17 @@ def then_validation_error(ctx: dict) -> None:
             )
             assert has_validation_keyword, f"Response has errors but none indicate validation: {errors}"
             return
-    pytest.xfail("SPEC-PRODUCTION GAP: Validation error not detected in sandbox mode.")
+    raise AssertionError(
+        "Expected validation error: neither error raised nor response.errors contains validation content"
+    )
 
 
 @then("the error should be a real validation error, not simulated")
 def then_real_validation_error(ctx: dict) -> None:
     """Assert error is a real validation error (not simulated sandbox response)."""
-    import pytest
 
     error = ctx.get("error")
-    if error is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: Cannot verify error is 'real' vs 'simulated' — no error raised.")
+    assert error is not None, "Expected a real validation error but no error was raised"
     from src.core.exceptions import AdCPError
 
     # A "real" validation error is an actual exception (not a response-embedded simulated one)
@@ -2025,7 +1911,6 @@ def then_no_snapshot_fields(ctx: dict) -> None:
     Step text: 'no snapshot or snapshot_unavailable_reason on any package'.
     Violations are collected across ALL packages before reporting.
     """
-    import pytest
 
     buys = _get_media_buys(ctx)
     snapshot_violations: list[str] = []
@@ -2039,13 +1924,10 @@ def then_no_snapshot_fields(ctx: dict) -> None:
             if reason is not None:
                 snapshot_violations.append(f"{pkg_id}: has snapshot_unavailable_reason='{reason}'")
     # Violation path: snapshot fields ARE present when they should NOT be
-    if snapshot_violations:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: {len(snapshot_violations)} snapshot field violation(s) "
-            f"found when not requested: {', '.join(snapshot_violations)}. "
-            f"Correct assertion: assert not snapshot_violations. "
-            f"FIXME(salesagent-9vgz.1): Production should omit snapshot fields when not requested."
-        )
+    assert not snapshot_violations, (
+        f"{len(snapshot_violations)} snapshot field violation(s) found when not requested: "
+        f"{', '.join(snapshot_violations)}"
+    )
 
 
 @then(parsers.parse('package "{pkg_id}" should include a snapshot with as_of and impressions'))
@@ -2055,38 +1937,25 @@ def then_package_snapshot_with_fields(ctx: dict, pkg_id: str) -> None:
     Step text claims three things: 1) snapshot exists, 2) as_of exists,
     3) impressions exists. Each is verified; xfail only on spec gaps.
     """
-    import pytest
 
     buys = _get_media_buys(ctx)
     for buy in buys:
         for pkg in getattr(buy, "packages", []) or []:
             if getattr(pkg, "package_id", None) == pkg_id:
                 snapshot = getattr(pkg, "snapshot", None)
-                if snapshot is None:
-                    pytest.xfail(
-                        f"SPEC-PRODUCTION GAP: Package '{pkg_id}' has no snapshot — "
-                        f"cannot verify as_of/impressions fields. "
-                        f"Correct assertion: assert snapshot is not None. "
-                        f"FIXME(salesagent-9vgz.1): Snapshot data not propagated from adapter."
-                    )
+                assert snapshot is not None, (
+                    f"Package '{pkg_id}' has no snapshot — cannot verify as_of/impressions fields"
+                )
                 # Verify as_of
                 as_of = getattr(snapshot, "as_of", None)
                 if as_of is None and isinstance(snapshot, dict):
                     as_of = snapshot.get("as_of")
-                if as_of is None:
-                    pytest.xfail(
-                        f"SPEC-PRODUCTION GAP: Snapshot on '{pkg_id}' missing 'as_of' field. "
-                        f"Correct assertion: assert as_of is not None."
-                    )
+                assert as_of is not None, f"Snapshot on '{pkg_id}' missing 'as_of' field"
                 # Verify impressions
                 impressions = getattr(snapshot, "impressions", None)
                 if impressions is None and isinstance(snapshot, dict):
                     impressions = snapshot.get("impressions")
-                if impressions is None:
-                    pytest.xfail(
-                        f"SPEC-PRODUCTION GAP: Snapshot on '{pkg_id}' missing 'impressions' field. "
-                        f"Correct assertion: assert impressions is not None."
-                    )
+                assert impressions is not None, f"Snapshot on '{pkg_id}' missing 'impressions' field"
                 assert isinstance(impressions, int | float), (
                     f"Expected 'impressions' to be numeric, got {type(impressions).__name__}"
                 )
@@ -2100,21 +1969,14 @@ def then_package_includes_snapshot(ctx: dict, pkg_id: str) -> None:
 
     Step text: 'should include a snapshot'. Missing snapshot is a spec gap.
     """
-    import pytest
 
     buys = _get_media_buys(ctx)
     for buy in buys:
         for pkg in getattr(buy, "packages", []) or []:
             if getattr(pkg, "package_id", None) == pkg_id:
                 snapshot = getattr(pkg, "snapshot", None)
-                if snapshot is None:
-                    pytest.xfail(
-                        f"SPEC-PRODUCTION GAP: Package '{pkg_id}' missing snapshot — "
-                        f"snapshot data not propagated from adapter. "
-                        f"Correct assertion: assert snapshot is not None. "
-                        f"FIXME(salesagent-9vgz.1): Configure adapter mock to return snapshot data."
-                    )
-                return  # snapshot is not None — assertion passes
+                assert snapshot is not None, f"Package '{pkg_id}' missing snapshot — expected snapshot to be present"
+                return
     raise AssertionError(f"Package '{pkg_id}' not found in response")
 
 
@@ -2124,7 +1986,6 @@ def then_all_packages_have_snapshots(ctx: dict) -> None:
 
     Step text: 'all packages should include snapshots'. Checks every package.
     """
-    import pytest
 
     buys = _get_media_buys(ctx)
     packages_checked = 0
@@ -2137,13 +1998,9 @@ def then_all_packages_have_snapshots(ctx: dict) -> None:
             if snapshot is None:
                 missing_snapshot.append(pkg_id)
     assert packages_checked > 0, "No packages found to check snapshots on"
-    if missing_snapshot:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: {len(missing_snapshot)} of {packages_checked} package(s) "
-            f"missing snapshots: {missing_snapshot}. "
-            f"Correct assertion: assert not missing_snapshot. "
-            f"FIXME(salesagent-9vgz.1): Snapshot data not propagated from adapter for all packages."
-        )
+    assert not missing_snapshot, (
+        f"{len(missing_snapshot)} of {packages_checked} package(s) missing snapshots: {missing_snapshot}"
+    )
 
 
 @then(parsers.parse("{pkg1} has snapshot, {pkg2} has SNAPSHOT_TEMPORARILY_UNAVAILABLE"))
@@ -2153,7 +2010,6 @@ def then_mixed_snapshot(ctx: dict, pkg1: str, pkg2: str) -> None:
     Step text claims: pkg1 HAS snapshot, pkg2 HAS SNAPSHOT_TEMPORARILY_UNAVAILABLE.
     Both claims are verified; xfail only when production doesn't propagate data.
     """
-    import pytest
 
     buys = _get_media_buys(ctx)
     pkg1_found = False
@@ -2164,22 +2020,14 @@ def then_mixed_snapshot(ctx: dict, pkg1: str, pkg2: str) -> None:
             if pid == pkg1:
                 pkg1_found = True
                 snapshot = getattr(pkg, "snapshot", None)
-                if snapshot is None:
-                    pytest.xfail(
-                        f"SPEC-PRODUCTION GAP: Package '{pkg1}' expected to have snapshot but "
-                        f"snapshot is None. Correct assertion: assert snapshot is not None. "
-                        f"FIXME(salesagent-9vgz.1): Snapshot data not propagated from adapter."
-                    )
+                assert snapshot is not None, f"Package '{pkg1}' expected to have snapshot but snapshot is None"
             elif pid == pkg2:
                 pkg2_found = True
                 reason = getattr(pkg, "snapshot_unavailable_reason", None)
-                if reason is None:
-                    pytest.xfail(
-                        f"SPEC-PRODUCTION GAP: Package '{pkg2}' expected to have "
-                        f"SNAPSHOT_TEMPORARILY_UNAVAILABLE but snapshot_unavailable_reason is None. "
-                        f"Correct assertion: assert reason is not None. "
-                        f"FIXME(salesagent-9vgz.1): Unavailability reason not propagated."
-                    )
+                assert reason is not None, (
+                    f"Package '{pkg2}' expected to have SNAPSHOT_TEMPORARILY_UNAVAILABLE "
+                    f"but snapshot_unavailable_reason is None"
+                )
                 reason_str = reason.value if hasattr(reason, "value") else str(reason)
                 assert reason_str == "SNAPSHOT_TEMPORARILY_UNAVAILABLE", (
                     f"Expected SNAPSHOT_TEMPORARILY_UNAVAILABLE for '{pkg2}', got '{reason_str}'"
@@ -2200,7 +2048,6 @@ def then_unavailable_reason_shorthand(ctx: dict, reason: str) -> None:
     Step text: 'snapshot_unavailable_reason "{reason}"'. Searches all packages
     for a matching reason value.
     """
-    import pytest
 
     buys = _get_media_buys(ctx)
     for buy in buys:
@@ -2210,8 +2057,6 @@ def then_unavailable_reason_shorthand(ctx: dict, reason: str) -> None:
                 actual_str = actual.value if hasattr(actual, "value") else str(actual)
                 assert actual_str == reason, f"Expected snapshot_unavailable_reason '{reason}', got '{actual_str}'"
                 return
-    pytest.xfail(
-        f"SPEC-PRODUCTION GAP: snapshot_unavailable_reason='{reason}' not found on any package "
-        f"across {len(buys)} media buy(s). "
-        f"FIXME(salesagent-9vgz.1): Snapshot unavailability reason not propagated from adapter."
+    raise AssertionError(
+        f"snapshot_unavailable_reason='{reason}' not found on any package across {len(buys)} media buy(s)"
     )
