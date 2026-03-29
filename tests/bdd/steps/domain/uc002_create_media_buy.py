@@ -363,11 +363,65 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
         raise ValueError(f"Unknown account partition: {partition}")
 
 
+_VALID_ACCOUNT_CONFIGS = frozenset(
+    {
+        "acc-* active",  # account_id present + active
+        "acc-* not-found",  # account_id present + not found
+        "brand+op single match",
+        "brand+op no match",
+        "brand+op multi match",
+        "setup-needed",
+        "payment-due",
+        "suspended",
+        "no account",
+        "both fields",
+    }
+)
+
+
+def _validate_account_config(config: str) -> None:
+    """Validate config against known patterns to fail fast on unknown values.
+
+    The config string comes from Gherkin Examples tables. Unknown values should
+    raise immediately with a helpful message, not silently fall through.
+    """
+    # Check against known patterns (wildcard for acc-* prefix configs)
+    if config.startswith("acc-") and ("active" in config or "not-found" in config):
+        return
+    if config.startswith("brand+op") and any(k in config for k in ("single match", "no match", "multi match")):
+        return
+    for keyword in ("setup-needed", "payment-due", "suspended", "no account", "both fields"):
+        if keyword in config:
+            return
+    known = sorted(_VALID_ACCOUNT_CONFIGS)
+    raise ValueError(
+        f"Unknown account boundary config: {config!r}. "
+        f"Known patterns: {known}. "
+        f"Add handling for this config or check the Gherkin Examples table."
+    )
+
+
 @given(parsers.parse("a create_media_buy request with account: {config}"))
 def given_request_with_boundary_config(ctx: dict, config: str) -> None:
-    """Set up request based on boundary config string."""
+    """Set up request based on boundary config string.
+
+    Valid configs (from BR-UC-002 boundary-account-ref Examples table):
+    - 'acc-NNN active'       → account exists with active status
+    - 'acc-NNN not-found'    → account_id reference to non-existent account
+    - 'brand+op single match' → brand+operator resolves to one account
+    - 'brand+op no match'    → brand+operator resolves to zero accounts
+    - 'brand+op multi match' → brand+operator resolves to multiple accounts
+    - 'acc setup-needed'     → account in pending_approval status
+    - 'acc payment-due'      → account in payment_required status
+    - 'acc suspended'        → account in suspended status
+    - 'no account'           → account field absent from request
+    - 'both fields'          → both account_id and brand/operator present (invalid)
+    """
     from adcp.types.generated_poc.core.account_ref import AccountReference, AccountReference1, AccountReference2
     from adcp.types.generated_poc.core.brand_ref import BrandReference
+
+    # Fail fast on unknown configs — don't let them silently fall to the else branch
+    _validate_account_config(config)
 
     env = ctx["env"]
     if "tenant" not in ctx:
@@ -649,11 +703,24 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
         _assert_start_time_outcome(ctx, outcome)
     elif outcome.startswith("end time "):
         _assert_end_time_outcome(ctx, outcome)
-    elif outcome.endswith("passes") or outcome.endswith("skipped") or outcome.startswith("success"):
+    elif outcome.endswith("skipped"):
+        # "Skipped" outcomes (e.g. "minimum spend check skipped") mean the
+        # validation was BYPASSED — the request MUST succeed. Unlike "passes"
+        # outcomes, a production rejection here is NOT a spec-production gap,
+        # it's a real failure (the check should not have been applied).
+        assert "error" not in ctx, (
+            f"Expected '{outcome}' (validation bypassed, hard success) but got error: {ctx.get('error')}"
+        )
+        resp = ctx.get("response")
+        assert resp is not None, f"Expected a response for '{outcome}'"
+        from tests.bdd.steps.generic.then_media_buy import _get_response_field
+
+        media_buy_id = _get_response_field(resp, "media_buy_id")
+        assert media_buy_id, f"Expected media_buy_id in response for '{outcome}', got None"
+    elif outcome.endswith("passes") or outcome.startswith("success"):
         # Success outcome: "* validation passes", "minimum spend passes",
-        # "minimum spend check skipped", "success", "success (completed)",
-        # "success (submitted)", "success with persisted records",
-        # "success with pending status", etc.
+        # "success", "success (completed)", "success (submitted)",
+        # "success with persisted records", "success with pending status", etc.
         if "error" in ctx:
             # SPEC-PRODUCTION GAP: production rejects what spec considers valid.
             # Only xfail for AdCPError (production validation) — other errors
@@ -683,9 +750,9 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
         resp = ctx.get("response")
         assert resp is not None, "Expected a response for success outcome"
         # Strengthen: verify response has a media_buy_id (proof of successful operation)
-        from tests.bdd.steps.generic.then_media_buy import _get_response_field
+        from tests.bdd.steps.generic.then_media_buy import _get_response_field as _get_field
 
-        media_buy_id = _get_response_field(resp, "media_buy_id")
+        media_buy_id = _get_field(resp, "media_buy_id")
         assert media_buy_id, f"Expected media_buy_id in response for '{outcome}', got None"
     elif outcome == "auto-approved path taken":
         from tests.bdd.steps.generic.then_media_buy import then_approval_auto
@@ -1857,13 +1924,9 @@ def then_creatives_uploaded_to_library(ctx: dict) -> None:
         db_creative_ids = {c.creative_id for c in db_creatives}
         # Hard assert: all expected creatives must exist in DB
         missing = expected_ids - db_creative_ids
-        # Step claims "should upload the creatives" — assert unconditionally first
-        try:
-            assert not missing, (
-                f"Expected all request creatives {sorted(expected_ids)} in DB, "
-                f"but missing {sorted(missing)}. DB has {sorted(db_creative_ids)}."
-            )
-        except AssertionError:
+        if missing:
+            # SPEC-PRODUCTION GAP: production may not persist inline creatives yet.
+            # Use xfail BEFORE the assertion — never catch AssertionError to xfail.
             found = db_creative_ids & expected_ids
             gap_detail = (
                 f"None of the request creatives {sorted(expected_ids)} were found in DB"
@@ -1952,6 +2015,7 @@ def given_proposal_exists(ctx: dict, proposal_id: str) -> None:
     import warnings
 
     assert proposal_id, "proposal_id must be non-empty — step claims proposal 'exists'"
+    assert isinstance(proposal_id, str), f"proposal_id must be a string, got {type(proposal_id).__name__}"
     # Verify tenant and principal exist — proposals are tenant+principal scoped
     assert "tenant" in ctx, "No tenant in ctx — proposal requires a tenant context"
     assert "principal" in ctx, "No principal in ctx — proposal requires a principal context"
@@ -1959,11 +2023,15 @@ def given_proposal_exists(ctx: dict, proposal_id: str) -> None:
     # Record in request_kwargs so the create request includes proposal_id
     if "request_kwargs" in ctx:
         ctx["request_kwargs"]["proposal_id"] = proposal_id
+    else:
+        # Ensure request_kwargs exists — the create request needs proposal_id
+        ctx.setdefault("request_kwargs", {})["proposal_id"] = proposal_id
     # SPEC-PRODUCTION GAP: Step text claims proposal "exists and has not expired"
     # but production has no proposal persistence layer. No proposal entity is created,
-    # no expiry date is set. The "has not expired" clause is entirely unhandled.
-    # Scenario-level xfail (T-UC-002-alt-proposal tag) handles the gap at the
-    # correct level. FIXME(salesagent-9vgz.1)
+    # no expiry date is set, no expiry validation occurs. This is a DICT INTERMEDIARY
+    # (ctx["expected_proposal_id"]) — not a real entity.
+    # Scenario-level xfail (T-UC-002-alt-proposal tag in conftest.py) handles the
+    # gap at the correct level. FIXME(salesagent-9vgz.1)
     warnings.warn(
         f"SPEC-PRODUCTION GAP: Proposal '{proposal_id}' — no proposal entity created, "
         "'has not expired' expiry not enforced. Dict intermediary only. "
@@ -1986,8 +2054,10 @@ def given_proposal_allocations(ctx: dict, count: int) -> None:
     2. Each allocation must reference a valid product_id
     3. Default to equal-percentage distribution
     """
+    assert isinstance(count, int), f"count must be an int, got {type(count).__name__}"
     assert count > 0, "Proposal must have at least 1 product allocation"
-    assert "expected_proposal_id" in ctx, (
+    proposal_id = ctx.get("expected_proposal_id")
+    assert proposal_id is not None, (
         "No expected_proposal_id in ctx — 'the proposal has N product allocations' "
         "requires a prior 'proposal X exists' step"
     )
@@ -2003,14 +2073,15 @@ def given_proposal_allocations(ctx: dict, count: int) -> None:
         ctx["expected_allocation_percentages"] = [100.0 / count] * count
     # SPEC-PRODUCTION GAP: Step text claims "the proposal has N product allocations"
     # but no allocation entities are created — only a counter is stored in ctx.
-    # The proposal itself doesn't exist (see given_proposal_exists). This is a dict
-    # intermediary masquerading as setup. Scenario-level xfail (T-UC-002-alt-proposal
-    # tag) handles the gap at the correct level. FIXME(salesagent-9vgz.1)
+    # This is a DICT INTERMEDIARY (ctx["expected_proposal_allocations"] = count) — not
+    # real allocation records. The proposal itself doesn't exist (see given_proposal_exists).
+    # Scenario-level xfail (T-UC-002-alt-proposal tag in conftest.py) handles the gap
+    # at the correct level. FIXME(salesagent-9vgz.1)
     import warnings
 
     warnings.warn(
-        f"SPEC-PRODUCTION GAP: Proposal allocations — {count} allocations recorded "
-        "as counter only, no allocation entities created. Dict intermediary. "
+        f"SPEC-PRODUCTION GAP: Proposal '{proposal_id}' allocations — {count} allocations "
+        "recorded as counter only, no allocation entities created. Dict intermediary. "
         "FIXME(salesagent-9vgz.1): Create AllocationFactory linked to proposal.",
         stacklevel=1,
     )

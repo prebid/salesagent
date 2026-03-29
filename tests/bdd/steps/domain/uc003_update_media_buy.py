@@ -542,10 +542,16 @@ def given_no_negative_keywords_in_update(ctx: dict) -> None:
 
     Declarative guard — analogous to the keyword_targets guard above. Prevents
     conflict with negative_keywords_add (BR-RULE-083).
+
+    Requires packages to exist in the update — this step is always preceded by
+    a 'the request includes 1 package update with:' step in the Gherkin.
     """
     kwargs = _ensure_update_defaults(ctx)
-    if not kwargs.get("packages"):
-        return  # No packages → negative_keywords trivially absent
+    assert kwargs.get("packages"), (
+        "No packages in update_kwargs — 'no targeting_overlay.negative_keywords is present' "
+        "requires a prior step that configures at least one package update. "
+        "The context is missing expected structure."
+    )
     pkg = kwargs["packages"][0]
     overlay = pkg.get("targeting_overlay")
     if overlay is None:
@@ -1415,7 +1421,10 @@ def given_creative_assignments_with_placements(ctx: dict, placement_config: str)
 
     assignment: dict[str, Any] = {"creative_id": cid, "weight": 1.0}
     if "no placement_ids" in stripped:
-        assignment["placement_ids"] = []
+        # Step text: "no placement_ids specified" — key ABSENT, not empty list.
+        # An empty list (key present, value=[]) is semantically different from
+        # key absent (field not specified). Do NOT set placement_ids at all.
+        pass
     else:
         ids_match = re.search(r"\[([^\]]*)\]", stripped)
         if ids_match:
@@ -1566,16 +1575,23 @@ def given_media_buy_with_owner(ctx: dict, media_buy_id: str, owner: str) -> None
     """Ensure the media buy exists and is owned by the specified principal.
 
     Creates the owner principal if needed and sets the media buy's principal_id.
+    Step text claims the owner "exists" — we must guarantee the principal record
+    is present in the DB, not just set the foreign key.
     """
     from tests.factories import PrincipalFactory
 
     mb = ctx.get("existing_media_buy")
     assert mb is not None, f"No existing_media_buy in ctx — cannot set owner for '{media_buy_id}'"
     assert mb.media_buy_id == media_buy_id, f"Expected media_buy_id '{media_buy_id}', got '{mb.media_buy_id}'"
+    assert "tenant" in ctx, "No tenant in ctx — owner principal requires a tenant"
     env = ctx["env"]
-    # Ensure the owner principal exists
+    # Ensure the owner principal exists in the DB.
+    # Step text says "exists with owner X" — the owner principal MUST exist.
+    # Always create if it differs from current ctx principal, or if no principal
+    # exists in ctx at all (the original code silently skipped this case).
     owner_id = owner.strip()
-    if ctx.get("principal") and ctx["principal"].principal_id != owner_id:
+    existing_principal = ctx.get("principal")
+    if existing_principal is None or existing_principal.principal_id != owner_id:
         PrincipalFactory(
             principal_id=owner_id,
             tenant=ctx["tenant"],
