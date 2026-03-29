@@ -285,6 +285,13 @@ def given_package_exists_bare(ctx: dict) -> None:
     """Verify that at least one package exists in the media buy (bare step)."""
     pkg = ctx.get("existing_package")
     assert pkg is not None, "No existing_package in ctx — harness setup_update_data() should create one"
+    # Step says "in the media buy" — verify the package is actually linked to it
+    mb = ctx.get("existing_media_buy")
+    assert mb is not None, "No existing_media_buy in ctx — cannot verify package linkage"
+    assert pkg.media_buy_id == mb.media_buy_id, (
+        f"Package '{pkg.package_id}' belongs to media_buy '{pkg.media_buy_id}', "
+        f"not the current media buy '{mb.media_buy_id}'"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
