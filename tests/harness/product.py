@@ -82,13 +82,20 @@ class ProductEnv(ProductMixin, IntegrationEnv):
         self._configure_product_mocks()
 
     def call_impl(self, **kwargs: Any) -> GetProductsResponse:  # type: ignore[override]
-        """Sync wrapper around ProductMixin's async call_impl.
+        """Sync/async-safe wrapper around ProductMixin's async call_impl.
 
-        The base ImplDispatcher calls call_impl() synchronously, so this
-        override bridges async -> sync via asyncio.run(). Direct callers
-        can still ``await super().call_impl()`` from async test functions.
+        Works in both contexts:
+        - Sync (BDD steps, ImplDispatcher): uses asyncio.run()
+        - Async (@pytest.mark.asyncio tests): returns coroutine for await
         """
-        return asyncio.run(super().call_impl(**kwargs))
+        coro = super().call_impl(**kwargs)
+        try:
+            asyncio.get_running_loop()
+            # Already in async context — return the coroutine for the caller to await
+            return coro  # type: ignore[return-value]
+        except RuntimeError:
+            # No running loop — bridge to sync
+            return asyncio.run(coro)
 
     def call_a2a(self, **kwargs: Any) -> GetProductsResponse:
         """Call get_products_raw (A2A wrapper)."""
@@ -96,7 +103,12 @@ class ProductEnv(ProductMixin, IntegrationEnv):
 
         self._commit_factory_data()
         identity = kwargs.pop("identity", None) or self.identity
-        return asyncio.run(get_products_raw(identity=identity, **kwargs))
+        coro = get_products_raw(identity=identity, **kwargs)
+        try:
+            asyncio.get_running_loop()
+            return coro  # type: ignore[return-value]
+        except RuntimeError:
+            return asyncio.run(coro)
 
     def call_mcp(self, **kwargs: Any) -> GetProductsResponse:
         """Call get_products MCP wrapper with mock Context."""

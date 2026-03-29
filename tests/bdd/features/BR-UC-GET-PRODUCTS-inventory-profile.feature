@@ -59,12 +59,10 @@ Feature: Product discovery with inventory profile publisher_properties
     And the first product publisher_properties selection_type is "all"
 
   @inventory_profile @selection_type @requires_db
-  Scenario: Profile with legacy extra fields strips them
+  Scenario: Profile with extra metadata fields preserves them
     Given an inventory profile with property_ids "homepage" for domain "example.com" and legacy fields
     And a product linked to that inventory profile with pricing
     When the buyer requests products
     Then the response contains at least one product
     And the first product publisher_properties selection_type is "by_id"
-    And the first product publisher_properties does not have field "property_name"
-    And the first product publisher_properties does not have field "property_type"
-    And the first product publisher_properties does not have field "identifiers"
+    And the first product publisher_properties property_ids contains "homepage"

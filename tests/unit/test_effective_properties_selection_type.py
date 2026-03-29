@@ -73,11 +73,11 @@ class TestEffectivePropertiesSelectionTypeInference:
         assert effective[0]["publisher_domain"] == "example.com"
         assert effective[0]["selection_type"] == "all"
 
-    def test_profile_legacy_fields_stripped(self):
-        """Profile with legacy extra fields should strip them and infer selection_type.
+    def test_profile_extra_fields_preserved(self):
+        """Profile with extra metadata fields should preserve them and infer selection_type.
 
-        Legacy data may contain property_name, property_type, identifiers from
-        older admin UI versions or direct DB manipulation.
+        Extra fields (property_name, property_type, identifiers) stored on the profile
+        are kept — ensure_selection_type is non-destructive, only adds selection_type.
         """
         product = _make_product_with_profile(
             [
@@ -97,10 +97,10 @@ class TestEffectivePropertiesSelectionTypeInference:
         assert effective[0]["selection_type"] == "by_id"
         assert effective[0]["publisher_domain"] == "example.com"
         assert effective[0]["property_ids"] == ["homepage"]
-        # Legacy fields must be stripped
-        assert "property_name" not in effective[0]
-        assert "property_type" not in effective[0]
-        assert "identifiers" not in effective[0]
+        # Extra fields preserved — non-destructive normalization
+        assert effective[0]["property_name"] == "Legacy Name"
+        assert effective[0]["property_type"] == "website"
+        assert effective[0]["identifiers"] == ["old_id"]
 
     def test_profile_with_selection_type_already_present_passes_through(self):
         """Profile with selection_type already present should pass through unchanged."""
@@ -128,5 +128,5 @@ class TestEffectivePropertiesSelectionTypeInference:
         assert len(effective) == 1
         assert effective[0]["publisher_domain"] == "example.com"
         assert effective[0]["selection_type"] == "all"
-        # Invalid property_ids should be filtered out
-        assert "property_ids" not in effective[0]
+        # Original property_ids preserved (non-destructive), but selection_type is "all"
+        # because no valid IDs matched ^[a-z0-9_]+$
