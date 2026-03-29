@@ -106,23 +106,33 @@ def then_packages_have_details(ctx: dict) -> None:
 
 @then("the approval path should be auto-approved")
 def then_approval_auto(ctx: dict) -> None:
-    """Assert the response indicates auto-approval (task status 'completed').
+    """Assert the media buy was auto-approved — no manual approval step required.
 
-    Production mapping: auto-approved → adapter called synchronously → status=completed.
-    This is the documented production behavior per BR-RULE-017: when no manual
-    approval is required, the media buy is processed immediately and returned
-    with status='completed'. The step text "auto-approved" maps to status='completed'
-    because auto-approval means the full pipeline (validation → adapter → completion)
-    runs synchronously in a single request.
+    Auto-approval means:
+    1. status='completed' (full pipeline ran synchronously)
+    2. No workflow_step_id on response packages (no pending approval task created)
+
+    This distinguishes auto-approved from manually-approved-then-completed,
+    where a workflow step would have been created even if it was later resolved.
     """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response but none found"
     status = _get_response_field(resp, "status")
-    # auto-approved = full pipeline ran synchronously → status is 'completed'
     assert status == "completed", (
         f"Expected auto-approval (status='completed' per BR-RULE-017), got '{status}'. "
         "Auto-approved media buys complete the full pipeline synchronously."
     )
+    # Auto-approved means no manual approval workflow step was created.
+    # Check that no package carries a workflow_step_id (which would indicate
+    # a pending approval task was created, even if it was later completed).
+    inner = getattr(resp, "response", resp)
+    pkgs = getattr(inner, "packages", None) or []
+    for pkg in pkgs:
+        wf_step_id = getattr(pkg, "workflow_step_id", None)
+        assert wf_step_id is None, (
+            f"Package {getattr(pkg, 'package_id', '?')} has workflow_step_id={wf_step_id} — "
+            "auto-approved media buys should not create approval workflow steps"
+        )
 
 
 @then("the media buy should proceed to adapter execution")
