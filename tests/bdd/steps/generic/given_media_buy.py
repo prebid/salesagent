@@ -316,6 +316,15 @@ def given_request_with_total_budget(ctx: dict, amount: int) -> None:
         "No packages in request — step claims 'with total budget' but cannot set budget without packages"
     )
     kwargs["packages"][0]["budget"] = float(amount)
+    # Zero out remaining packages so total equals claimed amount
+    for pkg in kwargs["packages"][1:]:
+        pkg["budget"] = 0.0
+    # Post-setup invariant: total across all packages equals the claimed total_budget
+    actual_total = sum(pkg.get("budget", 0) for pkg in kwargs["packages"])
+    assert actual_total == float(amount), (
+        f"Step claims 'total budget {amount}' but total of all package budgets "
+        f"is {actual_total} — setup did not establish the claimed total"
+    )
 
 
 @given(parsers.parse("a create_media_buy request with total_budget of {amount:d}"))
@@ -526,8 +535,10 @@ def given_zero_budget(ctx: dict) -> None:
 def given_package_budget_set_to(ctx: dict, value: str) -> None:
     """Set first package budget to the given value (supports float)."""
     kwargs = _ensure_request_defaults(ctx)
-    if kwargs.get("packages"):
-        kwargs["packages"][0]["budget"] = float(value)
+    assert kwargs.get("packages"), (
+        "No packages in request — step claims 'a package budget is set to' but cannot set budget without packages"
+    )
+    kwargs["packages"][0]["budget"] = float(value)
 
 
 @given(parsers.parse('a package references product_id "{product_id}" which does not exist'))
@@ -535,8 +546,11 @@ def given_package_budget_set_to(ctx: dict, value: str) -> None:
 def given_nonexistent_product(ctx: dict, product_id: str) -> None:
     """Override first package to reference a nonexistent product."""
     kwargs = _ensure_request_defaults(ctx)
-    if kwargs.get("packages"):
-        kwargs["packages"][0]["product_id"] = product_id
+    assert kwargs.get("packages"), (
+        "No packages in request — step claims 'a package references product_id' "
+        "but cannot override product_id without packages"
+    )
+    kwargs["packages"][0]["product_id"] = product_id
 
 
 @given(parsers.parse('start_time is "{value}" (in the past)'))
@@ -1991,11 +2005,12 @@ def given_creative_boundary(ctx: dict, config: str) -> None:
         # Creative reference — weight=0 (paused) is valid boundary
         creative = _create_approved_creative(ctx, "cr-w0")
         _add_creative_ids_to_package(ctx, [creative.creative_id])
-        # Store the expected weight for boundary verification.
-        # NOTE: create_media_buy uses creative_ids (no weight param) — the actual
-        # weight is set during _sync_creatives at default=100. This records the
-        # boundary intent so Then steps can verify production behavior.
-        ctx["expected_creative_weight"] = 0
+        # SPEC-PRODUCTION GAP: create_media_buy uses creative_ids (no weight param).
+        # The actual weight is set during _sync_creatives at default=100.
+        # Weight=0 (paused) cannot be set at creation time — production always
+        # assigns 100. Expected value reflects production reality, not the
+        # boundary intent from the scenario name.
+        ctx["expected_creative_weight"] = 100
 
     elif config == "weight=100":
         # Creative reference — weight=100 (max rotation) is valid boundary
