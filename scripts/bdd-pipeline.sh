@@ -159,7 +159,29 @@ HARNESS: Use existing infrastructure (MediaBuyCreateEnv, MediaBuyUpdateEnv, Medi
 - tests/bdd/steps/domain/uc019_query_media_buys.py
 - tests/bdd/steps/domain/uc026_package_media_buy.py
 
-CRITICAL CONSTRAINT: You may ONLY modify files under tests/. Do NOT modify any file under src/, scripts/, docs/, or any other non-test path. If production code doesn't implement expected behavior (spec-production gap), xfail the scenario in conftest.py and record the gap in task notes. NEVER change production code to make tests pass.
+STEP QUALITY RULES — every step you write must follow these:
+
+Given steps:
+- MUST set up exactly what the step text describes. Read .agent-index/schemas.pyi to know valid field names and types.
+- MUST use factory methods or proper model construction, never raw dicts for ORM objects.
+- NEVER silently skip setup behind 'if' guards — if the setup can't be done, raise an error.
+
+When steps:
+- MUST call the actual production function and capture ALL outcomes (success response AND errors).
+- MUST store errors in ctx['error'] — never swallow exceptions silently.
+
+Then steps:
+- MUST assert what the step text claims. Read .agent-index/schemas.pyi to know what fields exist on response objects.
+- For success outcomes: assert media_buy_id is present AND is a non-empty string, assert status is a valid value. Never just 'assert resp is not None'.
+- For error outcomes: assert specific error code, recovery hint, and suggestion field as claimed by the step text.
+- NEVER use pytest.xfail() inside a step body to mask assertions. If production doesn't match spec, xfail the SCENARIO in conftest.py (tag-based), not the step.
+- NEVER use 'if value is None: return' or 'if value is None: pytest.xfail()' to silently skip assertions. If a required field is None, that's either a test failure or a scenario-level xfail.
+
+Spec-production gaps:
+- xfail at SCENARIO level in conftest.py using tag-based XFAIL_TAGS dict (existing pattern).
+- The step body itself must contain the CORRECT assertion (what the spec requires). The conftest xfail prevents it from running until production catches up.
+
+CRITICAL CONSTRAINT: You may ONLY modify files under tests/. Do NOT modify any file under src/, scripts/, docs/, or any other non-test path. NEVER change production code to make tests pass.
 
 $GIT_INSTRUCTION" \
       > "$LOG" 2>&1 || true
