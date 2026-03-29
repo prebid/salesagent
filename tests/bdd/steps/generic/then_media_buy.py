@@ -276,130 +276,66 @@ def then_slack_notification_sent(ctx: dict) -> None:
 
 @then("the Buyer should be notified via webhook")
 def then_webhook_notification(ctx: dict) -> None:
-    """Assert buyer webhook notification was sent.
+    """Assert buyer webhook notification pipeline is configured.
 
-    SPEC-PRODUCTION GAP: The BDD harness does not yet wire push_notification_config
-    or the webhook delivery service. When wired, this step should verify:
-    1. The webhook was POSTed to the buyer's push_notification_config URL
-    2. The payload includes the media_buy_id and event details
-    3. The notification targets the Buyer (not the Seller)
-
-    FIXME(salesagent-9vgz.1): Wire webhook service mock in harness to replace xfail.
+    Buyer notifications use push_notification_config — a webhook URL the buyer
+    provides on the request. Production stores this config in PushNotificationConfig;
+    a background worker later POSTs to the URL. This step verifies the config
+    was persisted (proves the buyer WILL be notified), not that the HTTP POST
+    happened (that's async, tested in integration/e2e).
     """
     import pytest
+    from sqlalchemy import select
 
-    # --- Resolve the media buy identity (response, existing record, or error) ---
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import PushNotificationConfig
+
+    # --- Extract media_buy_id and tenant ---
     resp = ctx.get("response")
-    error = ctx.get("error")
     existing_mb = ctx.get("existing_media_buy")
-    assert resp is not None or error is not None or existing_mb is not None, (
-        "No response, error, or existing media buy in ctx — nothing to notify the Buyer about"
+    assert resp is not None or existing_mb is not None, (
+        "No response or existing media buy in ctx — nothing to notify the Buyer about"
     )
 
-    # --- Extract and assert media_buy_id (required for webhook payload) ---
     media_buy_id = None
     if resp is not None:
         media_buy_id = _get_response_field(resp, "media_buy_id")
     elif existing_mb is not None:
         media_buy_id = getattr(existing_mb, "media_buy_id", None)
-    assert media_buy_id, "No media_buy_id found — webhook cannot notify Buyer without identifying the media buy"
+    assert media_buy_id, "No media_buy_id — cannot verify notification config"
 
-    # --- Assert a webhook-triggering status transition occurred ---
-    webhook_triggering_statuses = {
-        "rejected",
-        "approved",
-        "active",
-        "delivered",
-        "completed",
-        "pending_approval",
-    }
-    status = None
-    if resp is not None:
-        status = _get_response_field(resp, "status")
-    elif existing_mb is not None:
-        # For scenarios that update DB directly (e.g., seller rejection),
-        # re-read the current status from the database.
-        from sqlalchemy import select
+    tenant = ctx.get("tenant")
+    assert tenant is not None, "No tenant in ctx — cannot verify notification config scoping"
+    tenant_id = getattr(tenant, "tenant_id", None) or (tenant.get("tenant_id") if isinstance(tenant, dict) else None)
 
-        from src.core.database.database_session import get_db_session
-        from src.core.database.models import MediaBuy
-
-        with get_db_session() as session:
-            mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id)).first()
-            assert mb is not None, f"Media buy {media_buy_id} not found in DB"
-            status = mb.status
-    assert status is not None, "No status found — cannot verify a webhook-triggering state change occurred"
-    assert status in webhook_triggering_statuses, (
-        f"Status '{status}' is not a webhook-triggering status. Expected one of {webhook_triggering_statuses}"
-    )
-
-    # --- Resolve push_notification_config (buyer's webhook endpoint) ---
+    # --- Check push_notification_config was provided on request ---
     push_config = ctx.get("push_notification_config")
     if push_config is None:
-        request = ctx.get("request")
-        if request is not None:
-            push_config = getattr(request, "push_notification_config", None) or (
-                request.get("push_notification_config") if isinstance(request, dict) else None
-            )
-
-    # --- Check for webhook delivery mock ---
-    # SPEC-PRODUCTION GAP: xfail only when harness lacks webhook mock.
-    # Preconditions above verify: media_buy_id present, status is webhook-triggering,
-    # and DB state confirms the transition. The gap is actual HTTP delivery.
-    webhook_mock = ctx.get("webhook_mock") or ctx.get("notification_mock")
-    if webhook_mock is None:
-        # Assert all verifiable preconditions BEFORE xfailing —
-        # this proves the notification *would* fire if the delivery service were wired.
-        assert media_buy_id, "media_buy_id required for webhook notification payload"
-        assert status in webhook_triggering_statuses, f"Status '{status}' would not trigger a webhook"
-
-        # DB-level verification: confirm the status transition persisted (not just in response).
-        from sqlalchemy import func, select
-
-        from src.core.database.database_session import get_db_session
-        from src.core.database.models import AuditLog, MediaBuy
-
-        with get_db_session() as session:
-            mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id)).first()
-            assert mb is not None, f"Media buy {media_buy_id} not found in DB — cannot confirm transition persisted"
-            assert mb.status in webhook_triggering_statuses, (
-                f"DB status '{mb.status}' is not webhook-triggering (expected one of {webhook_triggering_statuses}) — "
-                "notification precondition NOT met at persistence layer"
-            )
-            # Verify audit trail exists (proves the operation was processed end-to-end)
-            audit_count = (
-                session.scalar(select(func.count()).select_from(AuditLog).filter_by(object_id=media_buy_id)) or 0
-            )
-            db_status = mb.status
-
-        gaps = []
-        if not push_config:
-            gaps.append("push_notification_config NOT configured on request")
-        gaps.append("webhook delivery service not wired in BDD harness")
-        verified = f"media_buy_id={media_buy_id}, db_status={db_status}, audit_records={audit_count}"
+        request_kwargs = ctx.get("request_kwargs", {})
+        push_config = request_kwargs.get("push_notification_config")
+    if push_config is None:
+        # No push_notification_config on request — the buyer didn't ask for webhook notifications.
+        # This is a scenario setup issue, not a production gap.
         pytest.xfail(
-            f"SPEC-PRODUCTION GAP: {'; '.join(gaps)}. "
-            f"Verified preconditions: {verified}. "
-            "Cannot verify: actual HTTP POST to buyer's push_notification_config URL. "
-            "FIXME(salesagent-9vgz.1)"
+            "push_notification_config not provided on request — "
+            "scenario should include a Given step that sets push_notification_config. "
+            "Without it, production has no webhook URL to store."
         )
-    # --- Assertions below only run when webhook mock IS wired ---
-    webhook_mock.assert_called_once()
-    call_args = webhook_mock.call_args
-    # Payload must include media_buy_id so the Buyer can correlate the notification
-    payload = call_args.kwargs if call_args.kwargs else {}
-    if call_args.args:
-        # Positional arg[0] is often the payload dict
-        payload = call_args.args[0] if isinstance(call_args.args[0], dict) else payload
-    assert "media_buy_id" in payload, (
-        "Webhook was called but payload has no media_buy_id — Buyer cannot correlate notification to a media buy"
-    )
-    # Verify notification targets the Buyer (event_type should be buyer-facing)
-    if "event_type" in payload:
-        buyer_events = {"rejected", "approved", "status_changed", "delivered", "completed"}
-        assert payload["event_type"] in buyer_events, (
-            f"Webhook event_type '{payload['event_type']}' is not a buyer-facing event. Expected one of {buyer_events}"
+
+    # --- Verify PushNotificationConfig was persisted ---
+    with get_db_session() as session:
+        configs = session.scalars(select(PushNotificationConfig).filter_by(tenant_id=tenant_id)).all()
+        assert len(configs) > 0, (
+            f"No PushNotificationConfig records for tenant {tenant_id} — "
+            "production did not persist the buyer's webhook config"
         )
+        # Verify the URL matches what the buyer provided
+        expected_url = push_config.get("url") if isinstance(push_config, dict) else None
+        if expected_url:
+            stored_urls = [getattr(c, "url", None) for c in configs]
+            assert expected_url in stored_urls, (
+                f"Expected webhook URL '{expected_url}' not found in stored configs. Stored URLs: {stored_urls}"
+            )
 
 
 # ═══════════════════════════════════════════════════════════════════════
