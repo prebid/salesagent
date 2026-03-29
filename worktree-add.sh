@@ -45,11 +45,10 @@ fi
 TARGET="$(cd "$TARGET" && pwd)"
 
 # Symlink .beads/ for shared task tracking
-if [ -d "$MAIN_REPO/.beads" ]; then
-    rm -rf "$TARGET/.beads"
-    ln -sf "$MAIN_REPO/.beads" "$TARGET/.beads"
-    echo "Linked .beads/"
-fi
+# NOTE: .beads/ is NOT symlinked. Each worktree gets its own copy from git.
+# Symlinking caused data loss — concurrent SQLite writes from multiple
+# worktrees corrupt the database. See feedback_beads_never_touch.md.
+# Use 'bd sync' in each worktree independently.
 
 # Symlink untracked .claude/ local state
 # (tracked .claude/ files like rules/workflows come from git automatically)
