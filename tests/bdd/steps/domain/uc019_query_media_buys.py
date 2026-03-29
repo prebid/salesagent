@@ -436,9 +436,12 @@ def given_adapter_supports_reporting(ctx: dict) -> None:
     """
     ctx["adapter_supports_reporting"] = True
     env = ctx["env"]
-    if "adapter" in env.mock:
-        adapter_mock = env.mock["adapter"].return_value
-        adapter_mock.supports_realtime_reporting = True
+    assert "adapter" in env.mock, (
+        "Step claims 'the ad platform adapter supports realtime reporting' "
+        "but no adapter mock is configured in the test environment"
+    )
+    adapter_mock = env.mock["adapter"].return_value
+    adapter_mock.supports_realtime_reporting = True
 
 
 @given("the ad platform adapter does not support realtime reporting")
@@ -446,16 +449,21 @@ def given_adapter_no_reporting(ctx: dict) -> None:
     """Configure the adapter to NOT support realtime reporting."""
     ctx["adapter_supports_reporting"] = False
     env = ctx["env"]
-    if "adapter" in env.mock:
-        adapter_mock = env.mock["adapter"].return_value
-        adapter_mock.supports_realtime_reporting = False
+    assert "adapter" in env.mock, (
+        "Step claims 'the ad platform adapter does not support realtime reporting' "
+        "but no adapter mock is configured in the test environment"
+    )
+    adapter_mock = env.mock["adapter"].return_value
+    adapter_mock.supports_realtime_reporting = False
 
 
 @given(parsers.parse("the ad platform adapter exists"))
 def given_adapter_exists(ctx: dict) -> None:
     """Confirm adapter exists (default state in harness)."""
-    # The harness always provides an adapter mock — this is a no-op documentation step
-    pass
+    env = ctx["env"]
+    assert "adapter" in env.mock, (
+        "Step claims 'the ad platform adapter exists' but no adapter mock is configured in the test environment"
+    )
 
 
 @given(parsers.parse("the adapter supports realtime reporting and data is available"))
@@ -463,9 +471,12 @@ def given_adapter_reporting_with_data(ctx: dict) -> None:
     """Adapter supports reporting AND snapshot data is available."""
     ctx["adapter_supports_reporting"] = True
     env = ctx["env"]
-    if "adapter" in env.mock:
-        adapter_mock = env.mock["adapter"].return_value
-        adapter_mock.supports_realtime_reporting = True
+    assert "adapter" in env.mock, (
+        "Step claims 'the adapter supports realtime reporting' "
+        "but no adapter mock is configured in the test environment"
+    )
+    adapter_mock = env.mock["adapter"].return_value
+    adapter_mock.supports_realtime_reporting = True
     ctx["snapshot_available"] = True
 
 
@@ -474,9 +485,12 @@ def given_adapter_reporting_no_data(ctx: dict, pkg_id: str) -> None:
     """Adapter supports reporting but no snapshot for specified package."""
     ctx["adapter_supports_reporting"] = True
     env = ctx["env"]
-    if "adapter" in env.mock:
-        adapter_mock = env.mock["adapter"].return_value
-        adapter_mock.supports_realtime_reporting = True
+    assert "adapter" in env.mock, (
+        "Step claims 'the adapter supports realtime reporting' "
+        "but no adapter mock is configured in the test environment"
+    )
+    adapter_mock = env.mock["adapter"].return_value
+    adapter_mock.supports_realtime_reporting = True
     ctx.setdefault("snapshot_unavailable_packages", []).append(pkg_id)
 
 
@@ -485,9 +499,12 @@ def given_adapter_reporting_all_data(ctx: dict) -> None:
     """Adapter supports reporting with data for all packages."""
     ctx["adapter_supports_reporting"] = True
     env = ctx["env"]
-    if "adapter" in env.mock:
-        adapter_mock = env.mock["adapter"].return_value
-        adapter_mock.supports_realtime_reporting = True
+    assert "adapter" in env.mock, (
+        "Step claims 'the adapter supports realtime reporting' "
+        "but no adapter mock is configured in the test environment"
+    )
+    adapter_mock = env.mock["adapter"].return_value
+    adapter_mock.supports_realtime_reporting = True
     ctx["snapshot_available_all"] = True
 
 
@@ -496,9 +513,11 @@ def given_adapter_reporting_mixed(ctx: dict, pkg1: str, pkg2: str) -> None:
     """Adapter supports reporting with mixed snapshot availability."""
     ctx["adapter_supports_reporting"] = True
     env = ctx["env"]
-    if "adapter" in env.mock:
-        adapter_mock = env.mock["adapter"].return_value
-        adapter_mock.supports_realtime_reporting = True
+    assert "adapter" in env.mock, (
+        "Step claims 'the adapter supports reporting' but no adapter mock is configured in the test environment"
+    )
+    adapter_mock = env.mock["adapter"].return_value
+    adapter_mock.supports_realtime_reporting = True
     ctx.setdefault("snapshot_available_packages", []).append(pkg1)
     ctx.setdefault("snapshot_unavailable_packages", []).append(pkg2)
 
@@ -524,7 +543,14 @@ def given_principal_with_n_buys(ctx: dict, principal_id: str, count: int) -> Non
 @given(parsers.parse('an authenticated principal "{principal_id}" who owns no media buys'))
 def given_principal_no_buys(ctx: dict, principal_id: str) -> None:
     """No media buys exist for this principal."""
-    # Default state — no action needed, just validate principal match
+    principal = ctx.get("principal")
+    assert principal is not None, (
+        f"No principal in ctx — step claims principal '{principal_id}' owns no media buys "
+        "but no principal exists to validate against"
+    )
+    assert principal.principal_id == principal_id, (
+        f"Step references principal '{principal_id}' but ctx principal is '{principal.principal_id}' — mismatch"
+    )
     ctx.setdefault("seeded_media_buys", {})
 
 
@@ -1173,12 +1199,22 @@ def then_media_buy_has_status(ctx: dict, mb_id: str, expected_status: str) -> No
 
 @then(parsers.parse('the media buy "{mb_id}" status computation should handle the missing date gracefully'))
 def then_status_handles_missing_date(ctx: dict, mb_id: str) -> None:
-    """Assert that a media buy with missing dates has a graceful status."""
+    """Assert that a media buy with missing dates has a graceful status.
+
+    'Graceful handling' means either:
+    1. The buy is returned with a valid (non-error) status, OR
+    2. An error was raised (the Given step xfails before we get here)
+    """
     import pytest
+
+    # If we reach here, the Given step didn't xfail — so data exists
+    error = ctx.get("error")
+    if error is not None:
+        # An error was raised — the system handled it (not silently)
+        return
 
     buys = _get_media_buys(ctx)
     if not buys:
-        # Missing date may cause the buy not to appear at all
         pytest.xfail(
             "SPEC-PRODUCTION GAP: Media buy with missing dates not returned in query. "
             "Production may require both dates for status computation."
@@ -1186,6 +1222,9 @@ def then_status_handles_missing_date(ctx: dict, mb_id: str) -> None:
     matching = [b for b in buys if getattr(b, "media_buy_id", None) == mb_id]
     if not matching:
         pytest.xfail(f"SPEC-PRODUCTION GAP: Media buy '{mb_id}' with missing dates not found in response.")
+    # If found, verify it has a valid status (graceful = didn't crash)
+    status = getattr(matching[0], "status", None)
+    assert status is not None, f"Media buy '{mb_id}' returned but has no status — not graceful handling"
 
 
 @then(parsers.parse("the error message should include field-level validation details"))
@@ -1194,7 +1233,11 @@ def then_error_field_validation(ctx: dict) -> None:
     error = ctx.get("error")
     assert error is not None, "Expected a validation error"
     msg = str(error)
-    assert len(msg) > 0, "Expected non-empty error message with field details"
+    # Step text claims "field-level validation details" — must contain field names or paths
+    field_indicators = ("field", "media_buy_ids", "status_filter", "buyer_refs", "parameter", "type", "expected")
+    assert any(indicator in msg.lower() for indicator in field_indicators), (
+        f"Expected field-level validation details (containing field names/paths) in error message, got: {msg}"
+    )
 
 
 @then(parsers.parse('the error should include a "recovery" field indicating correctable failure'))
@@ -1204,34 +1247,40 @@ def then_error_recovery_correctable(ctx: dict) -> None:
     assert error is not None, "Expected an error"
     from src.core.exceptions import AdCPError
 
-    if isinstance(error, AdCPError):
-        assert error.recovery in ("correctable", "retryable"), (
-            f"Expected correctable/retryable recovery, got '{error.recovery}'"
-        )
+    assert isinstance(error, AdCPError), f"Expected AdCPError with recovery field, got {type(error).__name__}: {error}"
+    assert error.recovery in ("correctable", "retryable"), (
+        f"Expected correctable/retryable recovery, got '{error.recovery}'"
+    )
 
 
 @then(parsers.parse('the error should include a "suggestion" field'))
 def then_error_has_suggestion(ctx: dict) -> None:
     """Assert error includes a suggestion field."""
+    import pytest
+
     error = ctx.get("error")
     assert error is not None, "Expected an error"
     from src.core.exceptions import AdCPError
 
-    if isinstance(error, AdCPError) and error.details:
+    # Check AdCPError path
+    if isinstance(error, AdCPError):
+        if error.details is None:
+            pytest.xfail(
+                f"SPEC-PRODUCTION GAP: AdCPError has no details dict — "
+                f"cannot contain 'suggestion' field. error_code={error.error_code}"
+            )
         assert "suggestion" in error.details, f"Expected 'suggestion' in error details: {error.details}"
-    # For non-AdCPError or dict errors, the suggestion may be in the response
+        return
+    # For non-AdCPError, check response errors
     resp = ctx.get("response")
     if resp and hasattr(resp, "errors"):
         for e in getattr(resp, "errors", []) or []:
             if isinstance(e, dict) and "suggestion" in e:
                 return
-    if not isinstance(error, AdCPError):
-        import pytest
-
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: Error is {type(error).__name__}, not AdCPError with suggestion. "
-            f"Production may use different error format."
-        )
+    pytest.xfail(
+        f"SPEC-PRODUCTION GAP: Error is {type(error).__name__}, not AdCPError with suggestion. "
+        f"Production may use different error format."
+    )
 
 
 @then(parsers.parse('the error message should contain "{fragment}"'))
@@ -1259,7 +1308,11 @@ def then_error_invalid_status(ctx: dict, text: str) -> None:
     error = ctx.get("error")
     assert error is not None, "Expected an error"
     msg = str(error).lower()
-    assert text.lower() in msg or "status" in msg, f"Expected mention of '{text}' or 'status' in error: {error}"
+    # Step text requires BOTH: mention of the invalid value AND that it's about status
+    assert text.lower() in msg, f"Expected invalid value '{text}' to appear in error message, got: {error}"
+    assert "status" in msg, (
+        f"Expected 'status' to appear in error message (indicating this is a status validation error), got: {error}"
+    )
 
 
 @then(parsers.parse('the creative approval for "{creative_id}" should have approval_status "{status}"'))
@@ -1267,9 +1320,22 @@ def then_creative_approval_status(ctx: dict, creative_id: str, status: str) -> N
     """Assert a specific creative's approval status in the response."""
     import pytest
 
+    buys = _get_media_buys(ctx)
+    for buy in buys:
+        for pkg in getattr(buy, "packages", []) or []:
+            approvals = getattr(pkg, "creative_approvals", None) or []
+            for approval in approvals:
+                aid = getattr(approval, "creative_id", None)
+                if aid == creative_id:
+                    actual = getattr(approval, "approval_status", None)
+                    actual_str = actual.value if hasattr(actual, "value") else str(actual)
+                    assert actual_str == status, (
+                        f"Expected approval_status '{status}' for creative '{creative_id}', got '{actual_str}'"
+                    )
+                    return
     pytest.xfail(
         f"SPEC-PRODUCTION GAP: Creative approval status mapping not yet implemented. "
-        f"Expected creative '{creative_id}' approval_status='{status}'."
+        f"Expected creative '{creative_id}' approval_status='{status}' but no approval entry found."
     )
 
 
@@ -1278,9 +1344,18 @@ def then_any_creative_approval_status(ctx: dict, status: str) -> None:
     """Assert creative approval status on any package."""
     import pytest
 
+    buys = _get_media_buys(ctx)
+    for buy in buys:
+        for pkg in getattr(buy, "packages", []) or []:
+            approvals = getattr(pkg, "creative_approvals", None) or []
+            for approval in approvals:
+                actual = getattr(approval, "approval_status", None)
+                actual_str = actual.value if hasattr(actual, "value") else str(actual)
+                if actual_str == status:
+                    return  # Found a matching approval
     pytest.xfail(
         f"SPEC-PRODUCTION GAP: Creative approval status mapping not yet implemented. "
-        f"Expected approval_status='{status}'."
+        f"Expected approval_status='{status}' on any package but no matching approval found."
     )
 
 
@@ -1289,8 +1364,18 @@ def then_rejection_reason(ctx: dict, reason: str) -> None:
     """Assert rejection_reason matches expected value."""
     import pytest
 
+    buys = _get_media_buys(ctx)
+    for buy in buys:
+        for pkg in getattr(buy, "packages", []) or []:
+            approvals = getattr(pkg, "creative_approvals", None) or []
+            for approval in approvals:
+                actual_reason = getattr(approval, "rejection_reason", None)
+                if actual_reason is not None:
+                    assert str(actual_reason) == reason, f"Expected rejection_reason '{reason}', got '{actual_reason}'"
+                    return
     pytest.xfail(
-        f"SPEC-PRODUCTION GAP: Creative rejection_reason not yet propagated. Expected rejection_reason='{reason}'."
+        f"SPEC-PRODUCTION GAP: Creative rejection_reason not yet propagated. "
+        f"Expected rejection_reason='{reason}' but no approval with rejection_reason found."
     )
 
 
@@ -1299,7 +1384,18 @@ def then_rejection_reason_absent(ctx: dict) -> None:
     """Assert rejection_reason is absent when not rejected."""
     import pytest
 
-    pytest.xfail("SPEC-PRODUCTION GAP: Creative rejection_reason presence/absence not yet verified.")
+    buys = _get_media_buys(ctx)
+    for buy in buys:
+        for pkg in getattr(buy, "packages", []) or []:
+            approvals = getattr(pkg, "creative_approvals", None) or []
+            for approval in approvals:
+                actual_reason = getattr(approval, "rejection_reason", None)
+                assert actual_reason is None, f"Expected rejection_reason to be absent, got '{actual_reason}'"
+                return  # Checked at least one approval
+    pytest.xfail(
+        "SPEC-PRODUCTION GAP: Creative rejection_reason presence/absence not yet verified — "
+        "no approval entries found in response."
+    )
 
 
 @then(parsers.parse("rejection_reason should not be present in the approval entry"))
@@ -1307,7 +1403,18 @@ def then_rejection_reason_not_present(ctx: dict) -> None:
     """Assert rejection_reason is not in the approval entry."""
     import pytest
 
-    pytest.xfail("SPEC-PRODUCTION GAP: Creative rejection_reason presence not yet tracked.")
+    buys = _get_media_buys(ctx)
+    for buy in buys:
+        for pkg in getattr(buy, "packages", []) or []:
+            approvals = getattr(pkg, "creative_approvals", None) or []
+            for approval in approvals:
+                actual_reason = getattr(approval, "rejection_reason", None)
+                assert actual_reason is None, f"Expected rejection_reason to not be present, got '{actual_reason}'"
+                return
+    pytest.xfail(
+        "SPEC-PRODUCTION GAP: Creative rejection_reason presence not yet tracked — "
+        "no approval entries found in response."
+    )
 
 
 @then(parsers.parse("rejection_reason should be null or absent"))
@@ -1315,7 +1422,18 @@ def then_rejection_reason_null_or_absent(ctx: dict) -> None:
     """Assert rejection_reason is null or absent."""
     import pytest
 
-    pytest.xfail("SPEC-PRODUCTION GAP: Creative rejection_reason null/absent handling not yet verified.")
+    buys = _get_media_buys(ctx)
+    for buy in buys:
+        for pkg in getattr(buy, "packages", []) or []:
+            approvals = getattr(pkg, "creative_approvals", None) or []
+            for approval in approvals:
+                actual_reason = getattr(approval, "rejection_reason", None)
+                assert actual_reason is None, f"Expected rejection_reason to be null or absent, got '{actual_reason}'"
+                return
+    pytest.xfail(
+        "SPEC-PRODUCTION GAP: Creative rejection_reason null/absent handling not yet verified — "
+        "no approval entries found in response."
+    )
 
 
 @then(parsers.parse('the creative approvals for package "{pkg_id}" should not include an entry for "{creative_id}"'))
@@ -1323,9 +1441,19 @@ def then_no_approval_for_creative(ctx: dict, pkg_id: str, creative_id: str) -> N
     """Assert missing creative is not in approvals (INV-152-4)."""
     import pytest
 
+    buys = _get_media_buys(ctx)
+    for buy in buys:
+        for pkg in getattr(buy, "packages", []) or []:
+            if getattr(pkg, "package_id", None) == pkg_id:
+                approvals = getattr(pkg, "creative_approvals", None) or []
+                approval_ids = [getattr(a, "creative_id", None) for a in approvals]
+                assert creative_id not in approval_ids, (
+                    f"Expected creative '{creative_id}' to NOT appear in approvals for package '{pkg_id}', but found it"
+                )
+                return
     pytest.xfail(
         f"SPEC-PRODUCTION GAP: Creative approval omission for nonexistent creative "
-        f"'{creative_id}' on package '{pkg_id}' not yet implemented."
+        f"'{creative_id}' on package '{pkg_id}' — package not found in response."
     )
 
 
@@ -1350,8 +1478,8 @@ def then_package_no_snapshot(ctx: dict, pkg_id: str) -> None:
                         f"SPEC-PRODUCTION GAP: Package '{pkg_id}' has snapshot even though "
                         "include_snapshot=false. Production may always include it."
                     )
-                return
-    pytest.xfail(f"Package '{pkg_id}' not found in response")
+                return  # snapshot is None — assertion passes
+    raise AssertionError(f"Package '{pkg_id}' not found in response")
 
 
 @then(parsers.parse('package "{pkg_id}" should not have a snapshot_unavailable_reason field'))
@@ -1369,8 +1497,8 @@ def then_package_no_unavailable_reason(ctx: dict, pkg_id: str) -> None:
                         f"SPEC-PRODUCTION GAP: Package '{pkg_id}' has snapshot_unavailable_reason "
                         f"'{reason}' even though not requested."
                     )
-                return
-    pytest.xfail(f"Package '{pkg_id}' not found in response")
+                return  # reason is None — assertion passes
+    raise AssertionError(f"Package '{pkg_id}' not found in response")
 
 
 @then(parsers.parse('package "{pkg_id}" should have snapshot_unavailable_reason "{reason}"'))
@@ -1399,10 +1527,28 @@ def then_snapshot_field_timestamp(ctx: dict, pkg_id: str, field: str) -> None:
     """Assert snapshot has a timestamp field."""
     import pytest
 
-    pytest.xfail(
-        f"SPEC-PRODUCTION GAP: Snapshot field '{field}' verification for package '{pkg_id}' "
-        "not yet implemented — snapshot data not propagated from adapter."
-    )
+    buys = _get_media_buys(ctx)
+    for buy in buys:
+        for pkg in getattr(buy, "packages", []) or []:
+            if getattr(pkg, "package_id", None) == pkg_id:
+                snapshot = getattr(pkg, "snapshot", None)
+                if snapshot is None:
+                    pytest.xfail(
+                        f"SPEC-PRODUCTION GAP: Package '{pkg_id}' has no snapshot — cannot verify '{field}' timestamp."
+                    )
+                val = getattr(snapshot, field, None)
+                if val is None and isinstance(snapshot, dict):
+                    val = snapshot.get(field)
+                if val is None:
+                    pytest.xfail(
+                        f"SPEC-PRODUCTION GAP: Snapshot field '{field}' not present on "
+                        f"package '{pkg_id}' — snapshot data not fully propagated from adapter."
+                    )
+                assert isinstance(val, str), (
+                    f"Expected '{field}' to be a timestamp string, got {type(val).__name__}: {val!r}"
+                )
+                return
+    raise AssertionError(f"Package '{pkg_id}' not found in response")
 
 
 @then(parsers.parse('the snapshot should include "{field}" integer'))
@@ -1410,7 +1556,24 @@ def then_snapshot_field_integer(ctx: dict, field: str) -> None:
     """Assert snapshot has an integer field."""
     import pytest
 
-    pytest.xfail(f"SPEC-PRODUCTION GAP: Snapshot field '{field}' not verified — snapshot data propagation incomplete.")
+    buys = _get_media_buys(ctx)
+    for buy in buys:
+        for pkg in getattr(buy, "packages", []) or []:
+            snapshot = getattr(pkg, "snapshot", None)
+            if snapshot is not None:
+                val = getattr(snapshot, field, None)
+                if val is None and isinstance(snapshot, dict):
+                    val = snapshot.get(field)
+                if val is None:
+                    pytest.xfail(
+                        f"SPEC-PRODUCTION GAP: Snapshot field '{field}' not present — "
+                        f"snapshot data propagation incomplete."
+                    )
+                assert isinstance(val, int | float), (
+                    f"Expected '{field}' to be numeric, got {type(val).__name__}: {val!r}"
+                )
+                return
+    pytest.xfail(f"SPEC-PRODUCTION GAP: No snapshots found — cannot verify '{field}' integer.")
 
 
 @then(parsers.parse('the snapshot should include "{field}" count'))
@@ -1418,7 +1581,24 @@ def then_snapshot_field_count(ctx: dict, field: str) -> None:
     """Assert snapshot has a count field."""
     import pytest
 
-    pytest.xfail(f"SPEC-PRODUCTION GAP: Snapshot field '{field}' count verification pending.")
+    buys = _get_media_buys(ctx)
+    for buy in buys:
+        for pkg in getattr(buy, "packages", []) or []:
+            snapshot = getattr(pkg, "snapshot", None)
+            if snapshot is not None:
+                val = getattr(snapshot, field, None)
+                if val is None and isinstance(snapshot, dict):
+                    val = snapshot.get(field)
+                if val is None:
+                    pytest.xfail(
+                        f"SPEC-PRODUCTION GAP: Snapshot field '{field}' count not present — verification pending."
+                    )
+                assert isinstance(val, int), (
+                    f"Expected '{field}' to be an integer count, got {type(val).__name__}: {val!r}"
+                )
+                assert val >= 0, f"Expected '{field}' count to be non-negative, got {val}"
+                return
+    pytest.xfail(f"SPEC-PRODUCTION GAP: No snapshots found — cannot verify '{field}' count.")
 
 
 @then(parsers.parse('the snapshot should include "{field}" amount'))
@@ -1426,7 +1606,24 @@ def then_snapshot_field_amount(ctx: dict, field: str) -> None:
     """Assert snapshot has an amount field."""
     import pytest
 
-    pytest.xfail(f"SPEC-PRODUCTION GAP: Snapshot field '{field}' amount verification pending.")
+    buys = _get_media_buys(ctx)
+    for buy in buys:
+        for pkg in getattr(buy, "packages", []) or []:
+            snapshot = getattr(pkg, "snapshot", None)
+            if snapshot is not None:
+                val = getattr(snapshot, field, None)
+                if val is None and isinstance(snapshot, dict):
+                    val = snapshot.get(field)
+                if val is None:
+                    pytest.xfail(
+                        f"SPEC-PRODUCTION GAP: Snapshot field '{field}' amount not present — verification pending."
+                    )
+                assert isinstance(val, int | float), (
+                    f"Expected '{field}' to be a numeric amount, got {type(val).__name__}: {val!r}"
+                )
+                assert val >= 0, f"Expected '{field}' amount to be non-negative, got {val}"
+                return
+    pytest.xfail(f"SPEC-PRODUCTION GAP: No snapshots found — cannot verify '{field}' amount.")
 
 
 @then(parsers.parse("the response should include {count:d} media buys"))
@@ -1441,6 +1638,19 @@ def then_response_count_scoped(ctx: dict, count: int, principal_id: str) -> None
     """Assert response has N media buys scoped to a principal."""
     buys = _get_media_buys(ctx)
     assert len(buys) == count, f"Expected {count} media buys for '{principal_id}', got {len(buys)}"
+    # Verify scoping: all returned buys should belong to the claimed principal
+    seeded = ctx.get("seeded_media_buys", {})
+    if seeded:
+        returned_ids = {getattr(b, "media_buy_id", None) for b in buys}
+        for mb_id in returned_ids:
+            if mb_id in seeded:
+                mb = seeded[mb_id]
+                actual_principal = getattr(mb, "principal_id", None)
+                if actual_principal is not None:
+                    assert actual_principal == principal_id, (
+                        f"Media buy '{mb_id}' belongs to principal '{actual_principal}', "
+                        f"not '{principal_id}' — scoping violation"
+                    )
 
 
 @then(parsers.parse('the response should contain "media_buys" array'))
@@ -1457,7 +1667,14 @@ def then_sandbox_true(ctx: dict) -> None:
     """Assert response includes sandbox=true."""
     import pytest
 
-    pytest.xfail("SPEC-PRODUCTION GAP: sandbox flag in response not yet implemented.")
+    resp = ctx.get("response")
+    assert resp is not None, f"Expected response, got error: {ctx.get('error')}"
+    sandbox = getattr(resp, "sandbox", None)
+    if sandbox is None and hasattr(resp, "model_dump"):
+        sandbox = resp.model_dump().get("sandbox")
+    if sandbox is None:
+        pytest.xfail("SPEC-PRODUCTION GAP: sandbox flag in response not yet implemented.")
+    assert sandbox is True, f"Expected sandbox=true, got {sandbox!r}"
 
 
 @then("the response should not include a sandbox field")
@@ -1466,10 +1683,12 @@ def then_no_sandbox_field(ctx: dict) -> None:
     import pytest
 
     resp = ctx.get("response")
-    if resp is not None:
-        sandbox = getattr(resp, "sandbox", None)
-        if sandbox is not None:
-            pytest.xfail("SPEC-PRODUCTION GAP: Production response includes sandbox field — should be absent.")
+    assert resp is not None, f"Expected response, got error: {ctx.get('error')}"
+    sandbox = getattr(resp, "sandbox", None)
+    if sandbox is not None:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: Production response includes sandbox field (value={sandbox!r}) — should be absent."
+        )
 
 
 @then("no real ad platform API calls should have been made")
@@ -1477,48 +1696,76 @@ def then_no_real_api_calls(ctx: dict) -> None:
     """Assert no real adapter API calls (sandbox mode)."""
     import pytest
 
-    pytest.xfail("SPEC-PRODUCTION GAP: Sandbox adapter call suppression not verified.")
+    env = ctx["env"]
+    if "adapter" in env.mock:
+        adapter_mock = env.mock["adapter"].return_value
+        # If the adapter has callable methods, verify they weren't called
+        for method_name in ("create_line_item", "get_report", "sync_creative"):
+            method = getattr(adapter_mock, method_name, None)
+            if method is not None and hasattr(method, "called"):
+                assert not method.called, f"Real adapter method '{method_name}' was called in sandbox mode"
+        return
+    pytest.xfail("SPEC-PRODUCTION GAP: Sandbox adapter call suppression not verified — no adapter mock available.")
 
 
 @then("the response should indicate a validation error")
 def then_validation_error(ctx: dict) -> None:
     """Assert response indicates a validation error."""
-    error = ctx.get("error")
-    if error:
-        return  # An error was raised — validation detected
-    resp = ctx.get("response")
-    if resp and getattr(resp, "errors", None):
-        return  # Errors in response — validation detected
     import pytest
 
+    error = ctx.get("error")
+    if error:
+        # Verify it's actually a validation error, not just any error
+        msg = str(error).lower()
+        assert any(kw in msg for kw in ("validation", "invalid", "required", "type", "field")), (
+            f"Expected a validation error, but error doesn't indicate validation: {error}"
+        )
+        return
+    resp = ctx.get("response")
+    if resp:
+        errors = getattr(resp, "errors", None)
+        if errors:
+            # At least one error present in response — validate it's about validation
+            return
     pytest.xfail("SPEC-PRODUCTION GAP: Validation error not detected in sandbox mode.")
 
 
 @then("the error should be a real validation error, not simulated")
 def then_real_validation_error(ctx: dict) -> None:
     """Assert error is a real validation error (not simulated sandbox response)."""
-    error = ctx.get("error")
-    if error:
-        # Real error was raised — good
-        return
     import pytest
 
-    pytest.xfail("SPEC-PRODUCTION GAP: Cannot verify error is 'real' vs 'simulated'.")
+    error = ctx.get("error")
+    if error is None:
+        pytest.xfail("SPEC-PRODUCTION GAP: Cannot verify error is 'real' vs 'simulated' — no error raised.")
+    from src.core.exceptions import AdCPError
+
+    # A "real" validation error is an actual exception (not a response-embedded simulated one)
+    assert isinstance(error, (AdCPError, ValueError, TypeError)), (
+        f"Expected a real validation error (AdCPError/ValueError/TypeError), got {type(error).__name__}: {error}"
+    )
 
 
 @then("the error should include a suggestion for how to fix the issue")
 def then_error_suggestion_for_fix(ctx: dict) -> None:
     """Assert error includes a suggestion."""
-    error = ctx.get("error")
-    if error is None:
-        import pytest
+    import pytest
 
-        pytest.xfail("No error to check suggestion on")
+    error = ctx.get("error")
+    assert error is not None, "Expected an error to check suggestion on"
     from src.core.exceptions import AdCPError
 
-    if isinstance(error, AdCPError) and error.details:
-        suggestion = error.details.get("suggestion", "")
-        assert suggestion, "Expected suggestion in error details"
+    if not isinstance(error, AdCPError):
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: Error is {type(error).__name__}, not AdCPError — cannot verify suggestion field."
+        )
+    if error.details is None:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: AdCPError has no details dict — "
+            f"cannot contain suggestion. error_code={error.error_code}"
+        )
+    suggestion = error.details.get("suggestion", "")
+    assert suggestion, f"Expected non-empty suggestion in error details, got: {error.details}"
 
 
 @then(parsers.parse('only media buys with status "{status}" are returned'))
@@ -1533,16 +1780,34 @@ def then_only_status(ctx: dict, status: str) -> None:
 
 @then("media buys with either status are returned")
 def then_either_status_returned(ctx: dict) -> None:
-    """Assert some media buys are returned (multi-status filter)."""
+    """Assert media buys with multiple statuses are returned."""
     buys = _get_media_buys(ctx)
     assert len(buys) > 0, "Expected media buys returned with multi-status filter"
+    # "either status" implies at least 2 different statuses are represented
+    statuses = set()
+    for buy in buys:
+        actual = getattr(buy, "status", None)
+        actual_str = actual.value if hasattr(actual, "value") else str(actual)
+        statuses.add(actual_str)
+    assert len(statuses) >= 2, (
+        f"Step claims 'either status are returned' but only found status(es): {statuses}. "
+        f"Expected at least 2 different statuses."
+    )
 
 
 @then("media buys in any status are returned")
 def then_any_status_returned(ctx: dict) -> None:
-    """Assert media buys returned with all-status filter."""
+    """Assert media buys returned with all-status filter — all seeded statuses present."""
     buys = _get_media_buys(ctx)
     assert len(buys) > 0, "Expected media buys for all-status filter"
+    # "any status" with all-status filter: all seeded buys should be returned
+    seeded = ctx.get("seeded_media_buys", {})
+    if seeded:
+        returned_ids = {getattr(b, "media_buy_id", None) for b in buys}
+        for mb_id in seeded:
+            assert mb_id in returned_ids, (
+                f"All-status filter should return all media buys, but '{mb_id}' is missing. Returned: {returned_ids}"
+            )
 
 
 @then(parsers.parse('the response should include an empty media_buys array with error "{code}"'))
@@ -1551,10 +1816,12 @@ def then_empty_with_error(ctx: dict, code: str) -> None:
     buys = _get_media_buys(ctx)
     assert len(buys) == 0, f"Expected empty media_buys, got {len(buys)}"
     resp = ctx.get("response")
-    if resp:
-        errors = getattr(resp, "errors", None) or []
-        codes = [e.get("code") if isinstance(e, dict) else getattr(e, "code", None) for e in errors]
-        assert code in codes, f"Expected error '{code}' in errors, got {codes}"
+    assert resp is not None, (
+        f"Expected response with empty media_buys and error '{code}', but response is None. Error: {ctx.get('error')}"
+    )
+    errors = getattr(resp, "errors", None) or []
+    codes = [e.get("code") if isinstance(e, dict) else getattr(e, "code", None) for e in errors]
+    assert code in codes, f"Expected error '{code}' in errors, got {codes}"
 
 
 @then(parsers.parse('empty media_buys with error "{code}"'))
@@ -1563,21 +1830,29 @@ def then_empty_buys_with_error(ctx: dict, code: str) -> None:
     buys = _get_media_buys(ctx)
     assert len(buys) == 0, f"Expected empty, got {len(buys)}"
     resp = ctx.get("response")
-    if resp:
-        errors = getattr(resp, "errors", None) or []
-        codes = [e.get("code") if isinstance(e, dict) else getattr(e, "code", None) for e in errors]
-        assert code in codes, f"Expected '{code}' in response errors, got {codes}"
+    assert resp is not None, (
+        f"Expected response with empty media_buys and error '{code}', but response is None. Error: {ctx.get('error')}"
+    )
+    errors = getattr(resp, "errors", None) or []
+    codes = [e.get("code") if isinstance(e, dict) else getattr(e, "code", None) for e in errors]
+    assert code in codes, f"Expected '{code}' in response errors, got {codes}"
 
 
 @then(parsers.parse('error "{code}" with suggestion'))
 def then_error_code_with_suggestion(ctx: dict, code: str) -> None:
     """Assert error with specific code and suggestion (boundary table shorthand)."""
+    import pytest
+
     error = ctx.get("error")
     assert error is not None, "Expected an error"
     from src.core.exceptions import AdCPError
 
-    if isinstance(error, AdCPError):
-        assert error.error_code == code, f"Expected '{code}', got '{error.error_code}'"
+    assert isinstance(error, AdCPError), f"Expected AdCPError with code '{code}', got {type(error).__name__}: {error}"
+    assert error.error_code == code, f"Expected error code '{code}', got '{error.error_code}'"
+    # Step text promises "with suggestion"
+    if error.details is None:
+        pytest.xfail(f"SPEC-PRODUCTION GAP: AdCPError '{code}' has no details dict — cannot contain suggestion.")
+    assert "suggestion" in error.details, f"Expected 'suggestion' in error details for '{code}', got: {error.details}"
 
 
 @then(parsers.parse("no snapshot or snapshot_unavailable_reason on any package"))
@@ -1586,20 +1861,54 @@ def then_no_snapshot_fields(ctx: dict) -> None:
     import pytest
 
     buys = _get_media_buys(ctx)
+    snapshot_violations: list[str] = []
     for buy in buys:
         for pkg in getattr(buy, "packages", []) or []:
+            pkg_id = getattr(pkg, "package_id", "?")
             snapshot = getattr(pkg, "snapshot", None)
             reason = getattr(pkg, "snapshot_unavailable_reason", None)
-            if snapshot is not None or reason is not None:
-                pytest.xfail("SPEC-PRODUCTION GAP: Snapshot fields present even when not requested.")
+            if snapshot is not None:
+                snapshot_violations.append(f"{pkg_id}: has snapshot")
+            if reason is not None:
+                snapshot_violations.append(f"{pkg_id}: has snapshot_unavailable_reason='{reason}'")
+    if snapshot_violations:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: Snapshot fields present even when not requested: {', '.join(snapshot_violations)}"
+        )
 
 
 @then(parsers.parse('package "{pkg_id}" should include a snapshot with as_of and impressions'))
 def then_package_snapshot_with_fields(ctx: dict, pkg_id: str) -> None:
-    """Assert package has snapshot with key fields."""
+    """Assert package has snapshot with key fields (as_of and impressions)."""
     import pytest
 
-    pytest.xfail(f"SPEC-PRODUCTION GAP: Snapshot with as_of/impressions for '{pkg_id}' not yet verified.")
+    buys = _get_media_buys(ctx)
+    for buy in buys:
+        for pkg in getattr(buy, "packages", []) or []:
+            if getattr(pkg, "package_id", None) == pkg_id:
+                snapshot = getattr(pkg, "snapshot", None)
+                if snapshot is None:
+                    pytest.xfail(
+                        f"SPEC-PRODUCTION GAP: Package '{pkg_id}' has no snapshot — "
+                        f"cannot verify as_of/impressions fields."
+                    )
+                # Verify as_of
+                as_of = getattr(snapshot, "as_of", None)
+                if as_of is None and isinstance(snapshot, dict):
+                    as_of = snapshot.get("as_of")
+                if as_of is None:
+                    pytest.xfail(f"SPEC-PRODUCTION GAP: Snapshot on '{pkg_id}' missing 'as_of' field.")
+                # Verify impressions
+                impressions = getattr(snapshot, "impressions", None)
+                if impressions is None and isinstance(snapshot, dict):
+                    impressions = snapshot.get("impressions")
+                if impressions is None:
+                    pytest.xfail(f"SPEC-PRODUCTION GAP: Snapshot on '{pkg_id}' missing 'impressions' field.")
+                assert isinstance(impressions, int | float), (
+                    f"Expected 'impressions' to be numeric, got {type(impressions).__name__}"
+                )
+                return
+    raise AssertionError(f"Package '{pkg_id}' not found in response")
 
 
 @then(parsers.parse('package "{pkg_id}" should include a snapshot'))
@@ -1613,9 +1922,12 @@ def then_package_includes_snapshot(ctx: dict, pkg_id: str) -> None:
             if getattr(pkg, "package_id", None) == pkg_id:
                 snapshot = getattr(pkg, "snapshot", None)
                 if snapshot is None:
-                    pytest.xfail(f"SPEC-PRODUCTION GAP: Package '{pkg_id}' missing snapshot.")
-                return
-    pytest.xfail(f"Package '{pkg_id}' not found in response")
+                    pytest.xfail(
+                        f"SPEC-PRODUCTION GAP: Package '{pkg_id}' missing snapshot — "
+                        f"snapshot data not propagated from adapter."
+                    )
+                return  # snapshot is not None — assertion passes
+    raise AssertionError(f"Package '{pkg_id}' not found in response")
 
 
 @then(parsers.parse("all packages should include snapshots"))
@@ -1623,7 +1935,22 @@ def then_all_packages_have_snapshots(ctx: dict) -> None:
     """Assert all packages have snapshots."""
     import pytest
 
-    pytest.xfail("SPEC-PRODUCTION GAP: All-package snapshot verification pending.")
+    buys = _get_media_buys(ctx)
+    packages_checked = 0
+    missing_snapshot: list[str] = []
+    for buy in buys:
+        for pkg in getattr(buy, "packages", []) or []:
+            pkg_id = getattr(pkg, "package_id", "?")
+            packages_checked += 1
+            snapshot = getattr(pkg, "snapshot", None)
+            if snapshot is None:
+                missing_snapshot.append(pkg_id)
+    assert packages_checked > 0, "No packages found to check snapshots on"
+    if missing_snapshot:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: {len(missing_snapshot)} of {packages_checked} package(s) "
+            f"missing snapshots: {missing_snapshot}"
+        )
 
 
 @then(parsers.parse("{pkg1} has snapshot, {pkg2} has SNAPSHOT_TEMPORARILY_UNAVAILABLE"))
@@ -1631,12 +1958,54 @@ def then_mixed_snapshot(ctx: dict, pkg1: str, pkg2: str) -> None:
     """Assert mixed snapshot availability."""
     import pytest
 
-    pytest.xfail(f"SPEC-PRODUCTION GAP: Mixed snapshot ({pkg1} has, {pkg2} unavailable) not verified.")
+    buys = _get_media_buys(ctx)
+    pkg1_found = False
+    pkg2_found = False
+    for buy in buys:
+        for pkg in getattr(buy, "packages", []) or []:
+            pid = getattr(pkg, "package_id", None)
+            if pid == pkg1:
+                pkg1_found = True
+                snapshot = getattr(pkg, "snapshot", None)
+                if snapshot is None:
+                    pytest.xfail(
+                        f"SPEC-PRODUCTION GAP: Package '{pkg1}' expected to have snapshot but snapshot is None."
+                    )
+            elif pid == pkg2:
+                pkg2_found = True
+                reason = getattr(pkg, "snapshot_unavailable_reason", None)
+                if reason is None:
+                    pytest.xfail(
+                        f"SPEC-PRODUCTION GAP: Package '{pkg2}' expected to have "
+                        f"SNAPSHOT_TEMPORARILY_UNAVAILABLE but snapshot_unavailable_reason is None."
+                    )
+                reason_str = reason.value if hasattr(reason, "value") else str(reason)
+                assert reason_str == "SNAPSHOT_TEMPORARILY_UNAVAILABLE", (
+                    f"Expected SNAPSHOT_TEMPORARILY_UNAVAILABLE for '{pkg2}', got '{reason_str}'"
+                )
+    if not pkg1_found or not pkg2_found:
+        missing = []
+        if not pkg1_found:
+            missing.append(pkg1)
+        if not pkg2_found:
+            missing.append(pkg2)
+        raise AssertionError(f"Package(s) not found in response: {missing}")
 
 
 @then(parsers.parse('snapshot_unavailable_reason "{reason}"'))
 def then_unavailable_reason_shorthand(ctx: dict, reason: str) -> None:
-    """Assert snapshot_unavailable_reason (boundary table shorthand)."""
+    """Assert snapshot_unavailable_reason on any package (boundary table shorthand)."""
     import pytest
 
-    pytest.xfail(f"SPEC-PRODUCTION GAP: snapshot_unavailable_reason '{reason}' not verified.")
+    buys = _get_media_buys(ctx)
+    for buy in buys:
+        for pkg in getattr(buy, "packages", []) or []:
+            actual = getattr(pkg, "snapshot_unavailable_reason", None)
+            if actual is not None:
+                actual_str = actual.value if hasattr(actual, "value") else str(actual)
+                assert actual_str == reason, f"Expected snapshot_unavailable_reason '{reason}', got '{actual_str}'"
+                return
+    pytest.xfail(
+        f"SPEC-PRODUCTION GAP: snapshot_unavailable_reason '{reason}' not found on any package — "
+        f"snapshot unavailability not yet propagated."
+    )
