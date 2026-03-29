@@ -6,7 +6,7 @@ import logging
 from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
 from adcp.types import CreateMediaBuySuccessResponse, Package
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
-from flask import Blueprint
+from flask import Blueprint, request
 from sqlalchemy import select
 
 from src.admin.utils import require_auth, require_tenant_access
@@ -76,7 +76,7 @@ def reporting(tenant_id):
                     "error.html",
                     error_title="GAM Reporting Not Available",
                     error_message=f"This tenant is currently using {tenant_obj.ad_server or 'no ad server'}. GAM Reporting is only available for tenants using Google Ad Manager.",
-                    back_url=f"/tenant/{tenant_id}",
+                    back_url=f"{request.script_root}/tenant/{tenant_id}",
                 ),
                 400,
             )

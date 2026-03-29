@@ -322,7 +322,7 @@ async def _handle_landing_page(request: Request):
     )
 
     if result.type == "admin":
-        return RedirectResponse(url="/login", status_code=302)
+        return RedirectResponse(url="/admin/login", status_code=302)
 
     if result.type in ("custom_domain", "subdomain") and result.tenant:
         try:

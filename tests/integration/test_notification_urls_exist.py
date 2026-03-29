@@ -37,8 +37,8 @@ class TestNotificationUrlsExist:
 
         content = slack_notifier_path.read_text()
 
-        # Extract URL patterns like: f"{admin_url}/tenant/{tenant_id}/workflows"
-        # Pattern matches: /tenant/{var}/something or /something
+        # Extract URL patterns like: f"{admin_url}/admin/tenant/{tenant_id}/workflows"
+        # Pattern matches: /admin/tenant/{var}/something or /something
         url_pattern = r'["\'](/[a-z_\-{}/<>]+)["\']'
         urls = re.findall(url_pattern, content)
 
@@ -49,7 +49,7 @@ class TestNotificationUrlsExist:
             if content[content.find(url) - 10 : content.find(url)].find("http") != -1:
                 continue
             # Skip static files and external paths
-            if url.startswith("/static") or url.startswith("/admin/admin"):
+            if url.startswith("/static"):
                 continue
             route_patterns.append(url)
 
@@ -80,8 +80,8 @@ class TestNotificationUrlsExist:
         missing_routes = []
 
         for notification_url in slack_notifier_urls:
-            # Convert our format {tenant_id} to Flask format <tenant_id>
-            flask_route = notification_url.replace("{", "<").replace("}", ">")
+            # Convert public /admin-prefixed URLs to internal Flask route shape.
+            flask_route = notification_url.removeprefix("/admin").replace("{", "<").replace("}", ">")
 
             # Check if route exists (exact match or as a prefix)
             route_exists = any(
@@ -118,8 +118,8 @@ class TestNotificationUrlsExist:
         """
         # Known notification URLs that should exist
         required_routes = [
-            "/tenant/<tenant_id>/workflows",  # Fixed in this PR (was /operations)
-            "/tenant/<tenant_id>/creatives/review",  # Creative review page
+            "/tenant/<tenant_id>/workflows",  # Public URL is /admin/tenant/<tenant_id>/workflows
+            "/tenant/<tenant_id>/creatives/review",  # Public URL is /admin/tenant/<tenant_id>/creatives/review
         ]
 
         missing = []
@@ -150,6 +150,7 @@ class TestNotificationUrlsExist:
         deprecated_patterns = [
             "/operations",  # Global operations (doesn't exist)
             "/tenant/{tenant_id}/operations",  # Tenant operations (doesn't exist)
+            "/admin/tenant/{tenant_id}/operations",  # Canonical public tenant operations (doesn't exist)
         ]
 
         found_deprecated = [pattern for pattern in deprecated_patterns if pattern in slack_notifier_urls]

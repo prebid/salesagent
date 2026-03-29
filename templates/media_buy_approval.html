@@ -148,7 +148,7 @@
     <div class="card" style="background: #f0f8ff;">
         <h3>Approval Actions</h3>
         <div style="display: flex; gap: 1rem;">
-            <form method="POST" action="/tenant/{{ tenant_id }}/media-buy/{{ media_buy.media_buy_id }}/approve" style="display: inline;">
+            <form method="POST" action="{{ request.script_root }}/tenant/{{ tenant_id }}/media-buy/{{ media_buy.media_buy_id }}/approve" style="display: inline;">
                 <input type="hidden" name="action" value="approve">
                 {% if human_task %}
                 <input type="hidden" name="task_id" value="{{ human_task.task_id }}">
@@ -158,7 +158,7 @@
                 </button>
             </form>
 
-            <form method="POST" action="/tenant/{{ tenant_id }}/media-buy/{{ media_buy.media_buy_id }}/approve" style="display: inline;">
+            <form method="POST" action="{{ request.script_root }}/tenant/{{ tenant_id }}/media-buy/{{ media_buy.media_buy_id }}/approve" style="display: inline;">
                 <input type="hidden" name="action" value="reject">
                 {% if human_task %}
                 <input type="hidden" name="task_id" value="{{ human_task.task_id }}">
@@ -168,7 +168,7 @@
                 </button>
             </form>
 
-            <a href="/tenant/{{ tenant_id }}/operations" class="btn btn-secondary">
+            <a href="{{ request.script_root }}/tenant/{{ tenant_id }}/operations" class="btn btn-secondary">
                 Cancel
             </a>
         </div>
@@ -176,7 +176,7 @@
     {% else %}
     <div class="card">
         <p>This media buy has already been processed. Status: <strong>{{ media_buy.status }}</strong></p>
-        <a href="/tenant/{{ tenant_id }}/operations" class="btn btn-secondary">
+        <a href="{{ request.script_root }}/tenant/{{ tenant_id }}/operations" class="btn btn-secondary">
             Back to Operations
         </a>
     </div>

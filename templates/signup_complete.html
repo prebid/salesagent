@@ -43,7 +43,7 @@
                             https://{{ tenant.subdomain }}.{{ sales_agent_domain }}/admin/
                         </a>
                     {% else %}
-                        <a href="/tenant/{{ tenant.tenant_id }}" style="color: #4285F4; text-decoration: none; font-weight: 500;">
+                        <a href="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}" style="color: #4285F4; text-decoration: none; font-weight: 500;">
                             View Your Dashboard
                         </a>
                     {% endif %}

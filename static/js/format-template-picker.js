@@ -154,22 +154,34 @@ class FormatTemplatePicker {
      * Handles both new parameterized formats and legacy formats.
      */
     _parseInitialFormats(formats) {
+        // Build reverse lookup: expanded format ID -> parent template ID
+        // e.g. "video_standard" -> "video", "display_image" -> "display"
+        const expandedToTemplate = {};
+        for (const [templateId, template] of Object.entries(FORMAT_TEMPLATES)) {
+            if (template.expandsTo) {
+                for (const expandedId of template.expandsTo) {
+                    expandedToTemplate[expandedId] = templateId;
+                }
+            }
+        }
+
         for (const fmt of formats) {
             const id = fmt.id || fmt.format_id;
             const agentUrl = fmt.agent_url || DEFAULT_CREATIVE_AGENT_URL;
 
-            // Check if this is a known template
-            if (FORMAT_TEMPLATES[id]) {
-                if (!this.selectedTemplates.has(id)) {
-                    this.selectedTemplates.set(id, new Set());
+            // Check if this is a known template (direct key or expanded ID)
+            const templateId = FORMAT_TEMPLATES[id] ? id : expandedToTemplate[id];
+            if (templateId) {
+                if (!this.selectedTemplates.has(templateId)) {
+                    this.selectedTemplates.set(templateId, new Set());
                 }
 
                 // Add size/duration if present
                 if (fmt.width && fmt.height) {
-                    this.selectedTemplates.get(id).add(`${fmt.width}x${fmt.height}`);
+                    this.selectedTemplates.get(templateId).add(`${fmt.width}x${fmt.height}`);
                 }
                 if (fmt.duration_ms) {
-                    this.selectedTemplates.get(id).add(`d:${fmt.duration_ms}`);
+                    this.selectedTemplates.get(templateId).add(`d:${fmt.duration_ms}`);
                 }
             } else {
                 // Legacy or custom format
