@@ -210,9 +210,9 @@ _XFAIL_TAGS: dict[str, str] = {
     # PackageRequest(extra='forbid') rejects optimization_goals with generic validation error.
     "T-UC-002-partition-optimization-goals": "optimization_goals not in production schemas — spec-production gap",
     "T-UC-002-boundary-optimization-goals": "optimization_goals not in production schemas — spec-production gap",
-    "T-UC-003-partition-optimization-goals": "optimization_goals not in production schemas — spec-production gap",
-    "T-UC-003-boundary-optimization-goals": "optimization_goals not in production schemas — spec-production gap",
-    "T-UC-003-alt-optimization-goals": "optimization_goals not in production schemas — spec-production gap",
+    # STALE: optimization_goals now accepted by production schemas (UC-003).
+    # Removed: T-UC-003-partition-optimization-goals, T-UC-003-boundary-optimization-goals, T-UC-003-alt-optimization-goals
+    # NOTE: principal-ownership error code gap handled in _assert_error_outcome (PERMISSION_DENIED→AUTHORIZATION_ERROR)
     # FIXME(salesagent-9vgz.16): UpdateMediaBuySuccess has no status field
     # Unlike CreateMediaBuyResult which wraps response+status, the update path returns
     # UpdateMediaBuySuccess directly with no status/implementation_date tracking.
