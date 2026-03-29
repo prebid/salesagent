@@ -137,7 +137,21 @@ while [ "$TASK_INDEX" -lt "$TOTAL" ] && [ "$PIPELINE_HALT" = false ]; do
 
     $CLAUDE "/dev-practices:execute $TASK_ID
 
-Context: BDD step wiring task. Wire step definitions for the scenarios in the task title. Use existing harness infrastructure (MediaBuyCreateEnv, MediaBuyUpdateEnv, MediaBuyListEnv). Follow patterns in:
+Context: BDD step wiring task. Wire step definitions for the scenarios in the task title.
+
+CODE INTELLIGENCE — use these tools, do NOT manually grep through source files:
+1. Read .agent-index/ stubs FIRST for type signatures and API surface:
+   - .agent-index/schemas.pyi — all Pydantic models
+   - .agent-index/tools.pyi — all _impl function signatures
+   - .agent-index/factories.pyi — test factory classes
+   - .agent-index/INDEX.md — table of contents
+2. Use ast-grep for structural queries:
+   - ast-grep --pattern '@when(\$_)' tests/bdd/steps/ — find existing When steps
+   - ast-grep --pattern '@then(\$_)' tests/bdd/steps/ — find existing Then steps
+   - ast-grep --pattern 'def \$FUNC(\$_)' tests/bdd/steps/generic/ — find helpers
+3. Use grep/Grep ONLY for text content search (error messages, string literals)
+
+HARNESS: Use existing infrastructure (MediaBuyCreateEnv, MediaBuyUpdateEnv, MediaBuyListEnv). Follow patterns in:
 - tests/bdd/steps/generic/given_media_buy.py
 - tests/bdd/steps/generic/then_media_buy.py
 - tests/bdd/steps/domain/uc002_create_media_buy.py
@@ -253,6 +267,11 @@ print(f'Scoped: {len(scoped)}/{len(findings)} findings in changed files')
           FIX_LOG="$LOGDIR/inspect-fix-${TASK_ID}-iter${ITERATION}.log"
 
           $CLAUDE "You are a BDD assertion fixer (iteration $ITERATION/$MAX_FIX_ITERATIONS). The inspector found $REMAINING weak assertions in files modified by task $TASK_ID.
+
+## CODE INTELLIGENCE — use these, do NOT manually grep source files
+1. .agent-index/*.pyi — pre-computed type stubs (schemas, tools, factories)
+2. ast-grep --pattern '@then(\$_)' tests/bdd/steps/ — find step definitions structurally
+3. Grep for text content only (error messages, string literals)
 
 ## Findings (from inspect_bdd_steps.py)
 $FINDINGS
