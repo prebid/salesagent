@@ -979,7 +979,7 @@ def when_query_nonexistent(ctx: dict) -> None:
     _call_delivery(ctx, media_buy_ids=["mb-nonexistent"])
 
 
-@when(parsers.parse('the Buyer Agent requests delivery metrics for media_buy_ids ["{mb_id}"]'))
+@when(parsers.re(r'the Buyer Agent requests delivery metrics for media_buy_ids \["(?P<mb_id>[^"]+)"\]$'))
 def when_request_single_id_quoted(ctx: dict, mb_id: str) -> None:
     """Request for a single media buy ID (quoted format)."""
     ctx.setdefault("id_format", "quoted")
@@ -2368,8 +2368,16 @@ def _ensure_media_buy_in_db(
             principal_id=owner,
         )
 
-    # Align env identity with DB owner so _impl queries find the media buy
-    if env._principal_id != owner:
+    # Align env identity with the first owner we see (the "Buyer Agent").
+    # Subsequent media buys owned by different principals (mixed ownership tests)
+    # are created in the DB but don't change the requesting identity.
+    if "requesting_principal" not in ctx:
+        ctx["requesting_principal"] = owner
+        if env._principal_id != owner:
+            env._principal_id = owner
+            env._identity_cache.clear()
+    elif ctx["requesting_principal"] == owner and env._principal_id != owner:
+        # Same owner as requesting principal but env was changed — restore
         env._principal_id = owner
         env._identity_cache.clear()
 
