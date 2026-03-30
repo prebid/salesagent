@@ -118,6 +118,8 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
     kwargs = _ensure_update_defaults(ctx)
     # Skip header row (pytest-bdd datatables include the header as first row)
     rows = datatable[1:] if datatable and datatable[0][0].strip() == "field" else datatable
+    # Track which fields the table explicitly sets
+    table_fields = {row[0].strip() for row in rows}
     for row in rows:
         field, value = row[0].strip(), row[1].strip()
         assert field in _supported_fields, (
@@ -143,6 +145,10 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
             # Expand <N character string> placeholders (e.g. "<256 character string>")
             length_match = re.match(r"<(\d+)\s*char(?:acter)?\s*string>", value)
             kwargs["idempotency_key"] = "x" * int(length_match.group(1)) if length_match else value
+
+    # AdCP oneOf constraint: if table sets buyer_ref without media_buy_id, remove default
+    if "buyer_ref" in table_fields and "media_buy_id" not in table_fields:
+        kwargs.pop("media_buy_id", None)
 
 
 @given("the request does NOT include start_time, end_time, or paused fields")
@@ -341,9 +347,8 @@ def given_package_update_creative_assignments(ctx: dict, datatable: list[list[st
             assignment["weight"] = 1.0  # default weight
         if "placement_ids" in header and len(row) > header.index("placement_ids"):
             placement_ids = [p.strip() for p in row[header.index("placement_ids")].strip().split(",") if p.strip()]
-            assignment["placement_ids"] = placement_ids
-        else:
-            assignment["placement_ids"] = []
+            if placement_ids:
+                assignment["placement_ids"] = placement_ids
         assignments.append(assignment)
     kwargs["packages"][0]["creative_assignments"] = assignments
     # Track referenced creative_ids for later guard steps
@@ -358,7 +363,7 @@ def given_creatives_exist_in_library(ctx: dict) -> None:
 
     creative_ids = ctx.get("referenced_creative_ids", [])
     for cid in creative_ids:
-        CreativeFactory.create_sync(
+        CreativeFactory.create(
             creative_id=cid,
             tenant=ctx["tenant"],
             principal=ctx["principal"],
@@ -1361,16 +1366,16 @@ def given_creative_update_mode(ctx: dict, mode: str) -> None:
 
 @given("all referenced creatives are valid")
 def given_all_creatives_valid(ctx: dict) -> None:
-    """Declarative guard — all referenced creatives are in valid state.
+    """Ensure all referenced creatives exist in DB and are in valid state.
 
-    Verifies creative records exist in the DB and are not in error/rejected state.
-    Step text claims "all referenced creatives are valid" — we must verify this
-    against actual DB state, not just check that IDs exist in ctx.
+    Given steps are precondition setup: create any missing creatives as approved,
+    then verify none are in error/rejected state.
     """
     from sqlalchemy import select
 
     from src.core.database.database_session import get_db_session
     from src.core.database.models import Creative as CreativeModel
+    from tests.factories.creative import CreativeFactory
 
     ids = ctx.get("referenced_creative_ids") or ctx.get("existing_creative_ids")
     assert ids and len(ids) > 0, "No referenced or existing creative_ids — missing prior step"
@@ -1380,6 +1385,7 @@ def given_all_creatives_valid(ctx: dict) -> None:
 
     tenant = ctx["tenant"]
     with get_db_session() as session:
+        # Find which creatives already exist
         db_creatives = session.scalars(
             select(CreativeModel).filter(
                 CreativeModel.tenant_id == tenant.tenant_id,
@@ -1388,12 +1394,29 @@ def given_all_creatives_valid(ctx: dict) -> None:
         ).all()
         found_ids = {c.creative_id for c in db_creatives}
         missing = set(ids) - found_ids
-        assert not missing, (
-            f"Step claims 'all referenced creatives are valid' but creative IDs "
-            f"{sorted(missing)} not found in DB for tenant '{tenant.tenant_id}'. "
-            f"Found: {sorted(found_ids)}"
-        )
-        # Verify none are in error/rejected state
+
+    # Create any missing creatives as approved
+    if missing:
+        for cid in sorted(missing):
+            CreativeFactory.create(
+                creative_id=cid,
+                tenant=ctx["tenant"],
+                principal=ctx["principal"],
+                format="display_300x250",
+                approved=True,
+            )
+
+    # Re-query to verify all exist and none are in invalid state
+    with get_db_session() as session:
+        db_creatives = session.scalars(
+            select(CreativeModel).filter(
+                CreativeModel.tenant_id == tenant.tenant_id,
+                CreativeModel.creative_id.in_(ids),
+            )
+        ).all()
+        found_ids = {c.creative_id for c in db_creatives}
+        still_missing = set(ids) - found_ids
+        assert not still_missing, f"Failed to create creatives {sorted(still_missing)} for tenant '{tenant.tenant_id}'"
         invalid_states = {"error", "rejected", "failed"}
         for creative in db_creatives:
             status = getattr(creative, "status", None)

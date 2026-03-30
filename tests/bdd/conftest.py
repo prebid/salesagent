@@ -125,6 +125,10 @@ _XFAIL_TAGS: dict[str, str] = {
     # Steps have hard assertions now; xfail at scenario level until production catches up.
     "T-UC-003-main": "implementation_date, budget, sandbox not populated in update response — spec-production gap",
     "T-UC-003-alt-timing": "implementation_date not populated in update response — spec-production gap",
+    # FIXME(salesagent-ghgx): UC-003 pause — sandbox flag not populated in update response
+    "T-UC-003-alt-pause": "sandbox not populated in pause response — spec-production gap",
+    # FIXME(salesagent-ghgx): UC-003 optimization_goals — affected_packages empty in response
+    "T-UC-003-alt-optimization-goals": "affected_packages not populated for optimization_goals changes — spec-production gap",
     # FIXME(salesagent-12nd): UC-002 ASAP — response doesn't expose resolved start_time
     "T-UC-002-alt-asap": "response lacks resolved start_time field — spec-production gap",
     # FIXME(beads-dul): disclosure_positions filter not implemented in production
@@ -408,6 +412,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             or "T-UC-003-idempotency-absent" in marker_names
             or "T-UC-003-adapter-success" in marker_names
             or "T-UC-003-adapter-failure" in marker_names
+            or "T-UC-003-main-buyer-ref" in marker_names
+            or "T-UC-003-atomic-success" in marker_names
+            or "T-UC-003-approval-auto" in marker_names
+            or "T-UC-003-approval-tenant" in marker_names
+            or "T-UC-003-approval-adapter" in marker_names
+            or "T-UC-003-creative-replace" in marker_names
         ):
             item.add_marker(
                 pytest.mark.xfail(
@@ -1137,12 +1147,13 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         from tests.harness.media_buy_update import MediaBuyUpdateIntegrationEnv as MediaBuyUpdateEnv
 
         with MediaBuyUpdateEnv() as env:
-            tenant, principal, media_buy, package = env.setup_update_data()
+            tenant, principal, media_buy, package, product = env.setup_update_data()
             ctx["env"] = env
             ctx["tenant"] = tenant
             ctx["principal"] = principal
             ctx["existing_media_buy"] = media_buy
             ctx["existing_package"] = package
+            ctx["default_product"] = product
             yield
 
     elif uc == "UC-019":

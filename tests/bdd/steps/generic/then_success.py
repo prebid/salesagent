@@ -32,6 +32,19 @@ def then_response_status(ctx: dict, status: str) -> None:
     if status == "completed":
         return
 
+    # UC-003 approval pathway: "submitted" means pending manual approval.
+    # UpdateMediaBuySuccess with empty affected_packages = approval pending.
+    if status == "submitted":
+        from src.core.schemas._base import UpdateMediaBuySuccess
+
+        if isinstance(resp, UpdateMediaBuySuccess):
+            affected = getattr(resp, "affected_packages", None) or []
+            assert len(affected) == 0, (
+                f"Expected 'submitted' (pending approval) but response has "
+                f"{len(affected)} affected_packages — this looks like a completed update"
+            )
+            return
+
     raise AssertionError(f"Unknown status '{status}' — response has no status field")
 
 

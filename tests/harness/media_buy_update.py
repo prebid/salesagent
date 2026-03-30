@@ -205,12 +205,12 @@ class MediaBuyUpdateIntegrationEnv(IntegrationEnv):
         Product with PricingOption (with placements), a pre-existing media buy
         with one package.
 
-        Returns (tenant, principal, media_buy, package).
+        Returns (tenant, principal, media_buy, package, product).
         """
         from tests.factories import MediaBuyFactory, MediaPackageFactory
 
         tenant, principal = self.setup_default_data()
-        self.setup_product_chain(
+        product, _pricing = self.setup_product_chain(
             tenant,
             placements=[
                 {"placement_id": "plc_a", "name": "Placement A"},
@@ -235,10 +235,12 @@ class MediaBuyUpdateIntegrationEnv(IntegrationEnv):
             },
         )
         self._commit_factory_data()
-        return tenant, principal, media_buy, package
+        return tenant, principal, media_buy, package, product
 
     def _configure_mocks(self) -> None:
         """Set up happy-path defaults for external mocks."""
+        from src.core.schemas import UpdateMediaBuySuccess
+
         # Adapter: no manual approval by default
         mock_adapter = MagicMock()
         mock_adapter.manual_approval_required = False
@@ -246,6 +248,22 @@ class MediaBuyUpdateIntegrationEnv(IntegrationEnv):
         mock_adapter.validate_media_buy_request.return_value = None
         mock_adapter.add_creative_assets.return_value = None
         mock_adapter.associate_creatives.return_value = None
+
+        def _adapter_update_side_effect(
+            media_buy_id: str = "", buyer_ref: str = "", **kwargs: Any
+        ) -> UpdateMediaBuySuccess:
+            from src.core.schemas import AffectedPackage
+
+            action = kwargs.get("action", "")
+            package_id = kwargs.get("package_id") or "pkg_001"
+            paused = action in ("pause_media_buy", "pause_package")
+            return UpdateMediaBuySuccess(
+                media_buy_id=media_buy_id,
+                buyer_ref=buyer_ref,
+                affected_packages=[AffectedPackage(package_id=package_id, paused=paused)],
+            )
+
+        mock_adapter.update_media_buy.side_effect = _adapter_update_side_effect
         self.mock["adapter"].return_value = mock_adapter
 
         # Audit logger: no-op
