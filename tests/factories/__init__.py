@@ -15,6 +15,7 @@ Usage::
 from tests.factories.core import (
     AdapterConfigFactory,
     CurrencyLimitFactory,
+    GAMInventoryFactory,
     PropertyTagFactory,
     PublisherPartnerFactory,
     TenantFactory,
@@ -31,6 +32,7 @@ ALL_FACTORIES = [
     TenantFactory,
     AdapterConfigFactory,
     CurrencyLimitFactory,
+    GAMInventoryFactory,
     PropertyTagFactory,
     PublisherPartnerFactory,
     PrincipalFactory,
@@ -52,6 +54,7 @@ __all__ = [
     "FormatFactory",
     "FormatIdFactory",
     "CurrencyLimitFactory",
+    "GAMInventoryFactory",
     "FormatPerformanceMetricsFactory",
     "MediaBuyFactory",
     "MediaPackageFactory",
