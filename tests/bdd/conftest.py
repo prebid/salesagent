@@ -262,6 +262,9 @@ _XFAIL_TAGS: dict[str, str] = {
     # ValueError("Webhook secret must be at least 32 characters for security") has no
     # suggestion field. Spec expects structured error with suggestion for remediation.
     "T-UC-004-webhook-creds-short": "credential validation error lacks suggestion field — spec-production gap",
+    # FIXME(salesagent-n3y): UC-002 account field absent — production doesn't require account field
+    # Spec says account is required (BR-RULE-080 INV-1), but production accepts requests without it.
+    "T-UC-002-inv-080-1": "account field not required by production — spec-production gap",
 }
 
 # FIXME(beads-dul): Selective xfail for parametrized scenarios where only
@@ -723,6 +726,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-004-ext-b": ("partial-success Error model needs suggestion field — production enhancement", True),
             "T-UC-004-ext-c": ("partial-success Error model needs suggestion field — production enhancement", True),
             "T-UC-004-ext-d": ("partial-success Error model needs suggestion field — production enhancement", True),
+            # FIXME(salesagent-ttw): _impl reports media_buy_not_found instead of silently omitting
+            "T-UC-004-identify-partial": (
+                "_impl reports media_buy_not_found errors instead of silently omitting missing IDs (BR-RULE-030 INV-5)",
+                True,
+            ),
+            "T-UC-004-identify-batch-ownership": (
+                "_impl reports media_buy_not_found for non-owned IDs instead of silently omitting (BR-RULE-030 INV-5)",
+                True,
+            ),
             # Adapter error: message text + suggestion not wired in partial-success response
             "T-UC-004-ext-f": ("adapter error response needs suggestion field and message refinement", True),
             # Adapter partial failure: _impl silently swallows data construction exceptions

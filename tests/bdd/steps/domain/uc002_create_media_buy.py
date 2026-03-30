@@ -131,32 +131,49 @@ def given_request_with_account(ctx: dict, account_id: str) -> None:
 def given_account_not_exists(ctx: dict) -> None:
     """Ensure the referenced account does not exist in DB.
 
-    Verifies that if a prior step set an account_id, no matching Account record
-    exists in the database. This prevents silent lies when a prior step
-    accidentally created an account with this ID.
+    Handles two lookup modes:
+    1. Explicit account_id: ctx["request_account_id"] set by prior Given step
+    2. Natural key (brand + operator): ctx["request_brand"] + ctx["request_operator"]
+    Verifies no matching Account record exists in the database.
     """
-    account_id = ctx.get("request_account_id")
-    assert account_id is not None, (
-        "No request_account_id in ctx — step claims 'account_id does not exist "
-        "in the seller's account store' but no account_id was set by a prior Given step"
-    )
     from sqlalchemy import select
 
     from src.core.database.database_session import get_db_session
     from src.core.database.models import Account
 
+    account_id = ctx.get("request_account_id")
+    brand = ctx.get("request_brand")
+    operator = ctx.get("request_operator")
+    assert account_id is not None or (brand is not None and operator is not None), (
+        "No request_account_id or request_brand/request_operator in ctx — "
+        "step claims account does not exist but no account reference was set by a prior Given step"
+    )
+
     tenant = ctx.get("tenant")
     assert tenant is not None, (
-        "No tenant in ctx — step claims 'account_id does not exist in the seller's "
-        "account store' but cannot verify without a tenant"
+        "No tenant in ctx — step claims account does not exist in the seller's "
+        "account store but cannot verify without a tenant"
     )
     with get_db_session() as session:
-        existing = session.scalars(select(Account).filter_by(account_id=account_id, tenant_id=tenant.tenant_id)).first()
-        assert existing is None, (
-            f"Account '{account_id}' exists in DB for tenant '{tenant.tenant_id}' — "
-            "step claims 'account_id does not exist in the seller's account store' "
-            "but a prior step created it. Clean up or use a different account_id."
-        )
+        if account_id is not None:
+            existing = session.scalars(
+                select(Account).filter_by(account_id=account_id, tenant_id=tenant.tenant_id)
+            ).first()
+            assert existing is None, (
+                f"Account '{account_id}' exists in DB for tenant '{tenant.tenant_id}' — "
+                "step claims account does not exist but a prior step created it."
+            )
+        else:
+            existing = session.scalars(select(Account).filter_by(tenant_id=tenant.tenant_id)).all()
+            matching = [
+                a
+                for a in existing
+                if getattr(a, "brand", {}).get("domain") == brand and getattr(a, "operator", None) == operator
+            ]
+            assert not matching, (
+                f"Account with brand '{brand}' + operator '{operator}' exists in DB for tenant '{tenant.tenant_id}' — "
+                "step claims no account matches but a prior step created one."
+            )
 
 
 @given(parsers.parse('the account "{account_id}" exists but requires setup (billing not configured)'))
@@ -672,10 +689,10 @@ def then_error_has_setup_details(ctx: dict) -> None:
     if isinstance(error, AdCPError):
         assert error.details, f"Expected details on error: {error}"
         details_str = str(error.details).lower()
-        # Step text claims "setup instructions" — only "setup" and "configure" are
-        # synonyms. "billing" is NOT a synonym for setup instructions.
-        assert "setup" in details_str or "configure" in details_str, (
-            f"Expected setup instructions in details (must contain 'setup' or 'configure'): {error.details}"
+        # Step text claims "setup instructions" — "setup", "configure", and "configuration" are
+        # synonyms. "billing" alone is NOT a synonym for setup instructions.
+        assert "setup" in details_str or "configur" in details_str, (
+            f"Expected setup instructions in details (must contain 'setup' or 'configur*'): {error.details}"
         )
     else:
         raise AssertionError(f"Cannot check details on non-AdCPError: {type(error).__name__}")
