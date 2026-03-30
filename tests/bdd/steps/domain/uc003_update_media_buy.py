@@ -1187,6 +1187,59 @@ def given_existing_end_time_future(ctx: dict) -> None:
         env._commit_factory_data()
 
 
+@given("the new end_time is after the existing start_time")
+def given_new_end_time_after_existing_start(ctx: dict) -> None:
+    """Declarative guard — verify the requested end_time is after the existing start_time.
+
+    Validates that the update_kwargs end_time value (from the datatable) is
+    chronologically after the existing media buy's start_time. If the existing
+    media buy has no start_time, sets one in the past so the guard holds.
+    """
+    from datetime import datetime, timedelta
+
+    kwargs = _ensure_update_defaults(ctx)
+    end_time_str = kwargs.get("end_time")
+    assert end_time_str is not None, (
+        "update_kwargs has no 'end_time' — step claims 'the new end_time is after the "
+        "existing start_time' but no end_time was set by a prior Given step"
+    )
+    new_end = datetime.fromisoformat(end_time_str.replace("Z", "+00:00"))
+
+    mb = ctx.get("existing_media_buy")
+    assert mb is not None, "No existing_media_buy in ctx — cannot verify start_time"
+    # Ensure existing media buy has a start_time (set one in the past if missing)
+    if mb.start_time is None:
+        mb.start_time = new_end - timedelta(days=30)
+        env = ctx["env"]
+        env._commit_factory_data()
+    existing_start = mb.start_time
+    if existing_start.tzinfo is None:
+        existing_start = existing_start.replace(tzinfo=UTC)
+    assert new_end > existing_start, (
+        f"New end_time {new_end} is not after existing start_time {existing_start} — step precondition violated"
+    )
+
+
+@given(parsers.parse("the budget {amount:d} is greater than zero"))
+def given_budget_greater_than_zero(ctx: dict, amount: int) -> None:
+    """Declarative guard — verify the budget value from the datatable is positive.
+
+    This is a precondition assertion: the scenario's datatable already set the
+    budget on update_kwargs; this step verifies the value is > 0 as the step
+    text claims.
+    """
+    assert amount > 0, f"Budget {amount} is not greater than zero — step precondition violated"
+    kwargs = _ensure_update_defaults(ctx)
+    actual_budget = kwargs.get("budget")
+    assert actual_budget is not None, (
+        "update_kwargs has no 'budget' — step claims budget is greater than zero "
+        "but no budget was set by a prior Given step"
+    )
+    assert float(actual_budget) == float(amount), (
+        f"Budget in update_kwargs ({actual_budget}) does not match step text ({amount})"
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — partition/boundary: creative replacement
 # ═══════════════════════════════════════════════════════════════════════
