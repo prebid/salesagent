@@ -1,7 +1,6 @@
 """Step definitions for COMPAT-001: deprecated field normalization.
 
 Tests that normalize_request_params translates deprecated fields correctly.
-These scenarios test the normalizer directly — no harness env needed.
 """
 
 from __future__ import annotations
@@ -15,7 +14,14 @@ from src.core.request_compat import normalize_request_params
 
 @given("a tenant with products configured")
 def given_tenant_with_products(ctx: dict) -> None:
-    """Compat scenarios test normalizer directly — no tenant setup needed."""
+    """Create a tenant with at least one product and pricing option."""
+    from tests.factories import PricingOptionFactory, ProductFactory, TenantFactory
+
+    tenant = TenantFactory(tenant_id="compat_tenant")
+    product = ProductFactory(tenant=tenant, product_id="compat_prod", name="Compat Product")
+    PricingOptionFactory(tenant_id=tenant.tenant_id, product_id=product.product_id)
+    ctx["tenant"] = tenant
+    ctx["product"] = product
 
 
 # ── When ──────────────────────────────────────────────────────────────
