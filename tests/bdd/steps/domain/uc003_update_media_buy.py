@@ -990,6 +990,23 @@ def given_media_buy_flight_duration(ctx: dict, flight_days: str) -> None:
     env = ctx["env"]
     env._commit_factory_data()
 
+    # Verify persistence: re-read from DB to confirm flight duration was committed
+    from sqlalchemy import select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import MediaBuy as MediaBuyModel
+
+    with get_db_session() as session:
+        persisted = session.scalars(
+            select(MediaBuyModel).filter_by(media_buy_id=mb.media_buy_id, tenant_id=mb.tenant_id)
+        ).first()
+        assert persisted is not None, f"Media buy {mb.media_buy_id} not found in DB after _commit_factory_data()"
+        actual_days = (persisted.end_time - persisted.start_time).days
+        assert actual_days == days, (
+            f"Flight duration not persisted: expected {days} days, "
+            f"got {actual_days} (start={persisted.start_time}, end={persisted.end_time})"
+        )
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — partition/boundary: media buy identification
@@ -1384,9 +1401,15 @@ def given_creative_assignments_with_state(ctx: dict, creative_state: str) -> Non
             cr = session.scalars(
                 select(CreativeModel).filter_by(creative_id=cid, tenant_id=ctx["tenant"].tenant_id)
             ).first()
-            if cr is not None:
-                cr.status = "error"
-                session.commit()
+            assert cr is not None, (
+                f"Creative {cid} not found in DB after _commit_factory_data() — "
+                f"factory did not persist the creative for tenant {ctx['tenant'].tenant_id}"
+            )
+            cr.status = "error"
+            session.commit()
+            # Verify the status was persisted
+            session.refresh(cr)
+            assert cr.status == "error", f"Creative {cid} status not persisted as 'error', got '{cr.status}'"
     elif state == "wrong_format":
         CreativeFactory(
             creative_id=cid,
