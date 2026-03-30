@@ -57,14 +57,11 @@ pytest_plugins = [
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo) -> Generator[None, None, None]:
-    """Auto-xfail scenarios that fail due to missing infrastructure.
+    """Auto-xfail scenarios that fail due to genuinely missing step definitions.
 
-    Two categories of "not yet implemented":
-    1. StepDefinitionNotFoundError — no matching step def exists
-    2. Missing harness — step defs match (generic steps) but ctx["env"]
-       is not set because _harness_env doesn't know this UC yet
-
-    Both are converted to xfail at runtime. No metadata tags needed.
+    Only StepDefinitionNotFoundError and NotImplementedError are converted to
+    xfail. KeyError is NOT caught — use pytest.skip() in _harness_env for
+    scenarios without a harness instead of relying on runtime KeyError interception.
     """
     outcome = yield
     report = outcome.get_result()
@@ -75,9 +72,6 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo) -> Gener
         if call.excinfo.errisinstance(StepDefinitionNotFoundError):
             report.outcome = "skipped"
             report.wasxfail = f"Step definition not found: {call.excinfo.value}"
-        elif call.excinfo.errisinstance(KeyError) and "env" in str(call.excinfo.value):
-            report.outcome = "skipped"
-            report.wasxfail = "No harness environment configured for this scenario"
         elif call.excinfo.errisinstance(NotImplementedError):
             report.outcome = "skipped"
             report.wasxfail = f"Not implemented: {call.excinfo.value}"
@@ -640,8 +634,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 ctx["env"] = env
                 yield
         else:
-            # No harness for other UC-002 scenarios yet → auto-xfail via KeyError
-            yield
+            pytest.xfail("UC-002 harness not yet wired for non-account scenarios")
 
     elif uc == "UC-006":
         marker_names = {m.name for m in request.node.iter_markers()}
@@ -655,7 +648,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 ctx["env"] = env
                 yield
         else:
-            yield
+            pytest.xfail("UC-006 harness not yet wired for non-account scenarios")
 
     elif uc == "UC-005":
         request.getfixturevalue("integration_db")
@@ -684,7 +677,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 ctx["env"] = env
                 yield
         else:
-            yield
+            pytest.xfail(f"UC-011 harness not yet wired for markers: {marker_names}")
 
     elif uc == "ADMIN":
         request.getfixturevalue("integration_db")
@@ -726,6 +719,6 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 ctx["env"] = env
                 yield
         else:
-            yield
+            pytest.xfail(f"UC-004 harness not yet wired for type: {harness_type}")
     else:
-        yield
+        pytest.xfail(f"No harness wired for {uc}")
