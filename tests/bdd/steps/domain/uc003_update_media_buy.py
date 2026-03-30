@@ -881,10 +881,8 @@ def then_response_has_sandbox(ctx: dict) -> None:
         "step text claims envelope 'should include' it unconditionally"
     )
     # sandbox is not None — verify it's a boolean (not just any truthy/falsy value)
+    # Step text claims "should include a sandbox flag" — presence + type, not a specific value.
     assert isinstance(sandbox, bool), f"Expected sandbox to be bool, got {type(sandbox).__name__}: {sandbox!r}"
-    # Verify sandbox reflects test mode — in BDD test environment, sandbox should be True
-    # (tests run against mock/test adapters, not production ad servers)
-    assert sandbox is True, f"Expected sandbox=True in test environment (BDD tests use mock adapters), got {sandbox!r}"
 
 
 @then('the response should NOT contain an "errors" field')
@@ -1012,8 +1010,9 @@ def given_update_request_with_identification(ctx: dict, id_config: str) -> None:
     stripped = id_config.strip()
 
     if stripped == "<none>":
-        # Neither identifier — expect INVALID_REQUEST error
-        pass
+        # Neither identifier — kwargs stays empty, expecting INVALID_REQUEST error.
+        # Explicit guard: if kwargs somehow got pre-populated, that's a test setup bug.
+        assert not kwargs, f"Expected empty kwargs for '<none>' identification, got {kwargs!r}"
     else:
         for part in stripped.split(","):
             key, _, val = part.strip().partition("=")
@@ -1461,9 +1460,12 @@ def given_creative_assignments_with_placements(ctx: dict, placement_config: str)
     # Handle "product unsupported" — configure product to not support placements
     if "product unsupported" in stripped:
         product = ctx.get("default_product") or ctx.get("existing_product")
-        if product is not None:
-            product.supports_placement_targeting = False
-            env._commit_factory_data()
+        assert product is not None, (
+            "Scenario requires '(product unsupported)' but no product found in ctx — "
+            "ensure a Given step sets ctx['default_product'] or ctx['existing_product'] before this step"
+        )
+        product.supports_placement_targeting = False
+        env._commit_factory_data()
 
     pkg["creative_assignments"] = [assignment]
     ctx["referenced_creative_ids"] = [cid]
