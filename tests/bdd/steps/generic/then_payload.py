@@ -44,9 +44,27 @@ def _fmt_name(f: Any) -> str | None:
 
 @then("the response should include all registered formats")
 def then_all_formats(ctx: dict) -> None:
+    """Assert response includes ALL registered formats — identity check, not just count."""
     formats = _get_formats(ctx)
     registered = ctx.get("registry_formats", [])
     assert len(formats) == len(registered), f"Expected {len(registered)} formats, got {len(formats)}"
+    # Identity check: returned format IDs must match registered format IDs
+    returned_ids = set()
+    for f in formats:
+        fid = getattr(f, "format_id", None)
+        if fid is not None:
+            returned_ids.add(getattr(fid, "id", None))
+    registered_ids = set()
+    for r in registered:
+        fid = getattr(r, "format_id", None)
+        if fid is not None:
+            registered_ids.add(getattr(fid, "id", None))
+    if registered_ids:
+        assert returned_ids == registered_ids, (
+            f"Format identity mismatch: returned {returned_ids}, "
+            f"registered {registered_ids}. "
+            f"Extra: {returned_ids - registered_ids}, Missing: {registered_ids - returned_ids}"
+        )
 
 
 @then("the response should include an empty formats array")
@@ -198,12 +216,21 @@ def then_returned_type(ctx: dict, fmt_type: str) -> None:
 def _assert_partition_outcome(ctx: dict, expected: str) -> None:
     """Assert partition/boundary test outcome against real production results.
 
-    "valid" means production code returned successfully (response exists).
-    "invalid" means production code raised an error (error exists).
+    "valid" means production code accepted the input (response exists, no error).
+    "invalid" means production code rejected the input (error raised).
+
+    This is intentionally a binary accept/reject gate — it tests whether the
+    production code correctly classifies an input as valid or invalid. Content
+    verification (what the response contains) belongs in separate Then steps
+    that follow this one in the scenario (e.g., then_only_display, then_all_formats).
     """
     if expected == "valid":
         assert "error" not in ctx, f"Expected valid result but got error: {ctx.get('error')}"
         assert "response" in ctx, "Expected response but none found"
+        # Verify the response is non-degenerate (not an empty shell)
+        resp = ctx["response"]
+        if hasattr(resp, "formats"):
+            assert resp.formats is not None, "Response has formats=None — likely a production bug"
     elif expected == "invalid":
         assert "error" in ctx, "Expected error but operation succeeded"
     else:
