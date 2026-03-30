@@ -1594,11 +1594,13 @@ def given_creative_assignments_with_placements(ctx: dict, placement_config: str)
 # ═══════════════════════════════════════════════════════════════════════
 
 
-@given(parsers.re(r"the request includes (?P<update_fields>.+[^:])$"))
+@given(parsers.re(r"the request includes (?P<update_fields>(?!\d+ packages with valid).+[^:])$"))
 def given_request_includes_fields(ctx: dict, update_fields: str) -> None:
     """Configure the update request with specific field combinations.
 
-    Uses regex to avoid matching the datatable step 'the request includes 1 package update with:'.
+    Uses regex to avoid matching the datatable step 'the request includes 1 package update with:'
+    and UC-002 steps like 'the request includes 2 packages with valid product_ids'.
+    The negative lookahead excludes UC-002 package creation patterns (e.g. "2 packages with valid").
     The [^:] at the end ensures this step doesn't capture text ending with ':'.
 
     Matched patterns from adapter-dispatch partition/boundary scenarios:
