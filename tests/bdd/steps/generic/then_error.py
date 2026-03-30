@@ -127,11 +127,16 @@ def then_suggestion_contains(ctx: dict, text: str) -> None:
 
 @then("the error message should indicate tenant context could not be determined")
 def then_error_tenant_context(ctx: dict) -> None:
-    """Assert error message mentions tenant context."""
+    """Assert error message mentions tenant context resolution failure."""
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
     msg = _get_error_message(error).lower()
     assert "tenant" in msg, f"Expected 'tenant' in error message: {_get_error_message(error)}"
+    # Gherkin says "could not be determined" — must indicate a resolution failure
+    resolution_words = ("could not", "cannot", "unable", "not found", "missing", "resolve", "determine")
+    assert any(w in msg for w in resolution_words), (
+        f"Expected tenant resolution failure language, got: {_get_error_message(error)}"
+    )
 
 
 @then("the error message should indicate which parameters are invalid")
@@ -164,12 +169,25 @@ def then_error_invalid_disclosure(ctx: dict, value: str) -> None:
 
 @then("the error message should indicate at least 1 item is required")
 def then_error_min_items(ctx: dict) -> None:
-    """Assert error message mentions minimum items requirement."""
+    """Assert error message mentions minimum items requirement.
+
+    Must reference a quantity constraint, not just generic 'required'.
+    """
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
     msg = _get_error_message(error).lower()
-    assert "at least 1" in msg or "required" in msg or "ensure this" in msg, (
-        f"Expected min-items message: {_get_error_message(error)}"
+    quantity_patterns = (
+        "at least 1",
+        "at least one",
+        "minimum",
+        "min_length",
+        "minlength",
+        "ensure this",
+        "too short",
+        "empty",
+    )
+    assert any(p in msg for p in quantity_patterns), (
+        f"Expected min-items/quantity constraint message, got: {_get_error_message(error)}"
     )
 
 
@@ -240,11 +258,28 @@ def then_error_has_fix_suggestion(ctx: dict) -> None:
     assert "suggestion" in d, f"Expected 'suggestion' in error: {d}"
     suggestion = d["suggestion"]
     assert suggestion, "Expected non-empty suggestion"
-    # A fix suggestion must contain actionable guidance
+    # A fix suggestion must contain actionable guidance — a verb telling the
+    # caller what to DO, not just describing the problem.
     suggestion_lower = suggestion.lower()
-    action_words = ("use", "try", "check", "provide", "include", "ensure", "remove", "specify", "set", "omit")
-    assert any(word in suggestion_lower for word in action_words), (
-        f"Expected actionable fix suggestion (use/try/check/provide/...), got: {suggestion}"
+    # Split into words to avoid substring matches (e.g., "reset" matching "set")
+    words = set(suggestion_lower.split())
+    action_verbs = {
+        "use",
+        "try",
+        "check",
+        "provide",
+        "include",
+        "ensure",
+        "remove",
+        "specify",
+        "set",
+        "omit",
+        "add",
+        "verify",
+    }
+    found = words & action_verbs
+    assert found, (
+        f"Expected actionable fix suggestion with a verb ({', '.join(sorted(action_verbs))}), got: {suggestion}"
     )
 
 
@@ -261,50 +296,80 @@ def then_suggestion_auth(ctx: dict) -> None:
 
 @then("the suggestion should provide valid parameter values")
 def then_suggestion_valid_values(ctx: dict) -> None:
-    """Assert suggestion references valid parameter values, not just generic text."""
+    """Assert suggestion provides valid parameter values — must reference both validity AND values."""
     d = _get_error_dict(ctx.get("error"))
     suggestion = d.get("suggestion", "")
     assert suggestion, "Expected non-empty suggestion"
     suggestion_lower = suggestion.lower()
-    assert any(kw in suggestion_lower for kw in ("valid", "allowed", "values", "accepted", "supported")), (
-        f"Expected suggestion to reference valid parameter values, got: {suggestion}"
+    # Must mention validity concept
+    assert any(kw in suggestion_lower for kw in ("valid", "allowed", "accepted", "supported")), (
+        f"Expected suggestion to indicate valid/allowed/accepted values, got: {suggestion}"
+    )
+    # Must mention values/options concept (not just "use valid X")
+    assert any(kw in suggestion_lower for kw in ("values", "options", ":", "'", '"', "[", ",")), (
+        f"Expected suggestion to enumerate or reference specific values, got: {suggestion}"
     )
 
 
 @then("the suggestion should advise using valid DisclosurePosition enum values")
 def then_suggestion_disclosure_enum(ctx: dict) -> None:
-    """Assert suggestion mentions valid DisclosurePosition values."""
+    """Assert suggestion mentions both DisclosurePosition AND valid values."""
     d = _get_error_dict(ctx.get("error"))
     suggestion = (d.get("suggestion") or "").lower()
-    assert "disclosureposition" in suggestion or "enum" in suggestion or "valid" in suggestion, (
-        f"Expected DisclosurePosition suggestion: {d.get('suggestion')}"
+    # Gherkin requires both concepts: "DisclosurePosition" AND "valid enum values"
+    assert (
+        "disclosureposition" in suggestion or "disclosure_position" in suggestion or "disclosure position" in suggestion
+    ), f"Expected 'DisclosurePosition' in suggestion: {d.get('suggestion')}"
+    assert "valid" in suggestion or "allowed" in suggestion or "enum" in suggestion, (
+        f"Expected valid/allowed/enum values language in suggestion: {d.get('suggestion')}"
     )
 
 
 @then("the suggestion should advise providing at least one position or omitting the filter")
 def then_suggestion_positions_or_omit(ctx: dict) -> None:
-    """Assert suggestion advises providing positions or omitting."""
+    """Assert suggestion advises providing positions OR omitting the filter.
+
+    Gherkin describes two alternatives — the suggestion should mention at least
+    one alternative completely (position + provide/add, or omit/remove).
+    """
     d = _get_error_dict(ctx.get("error"))
     suggestion = (d.get("suggestion") or "").lower()
-    assert "position" in suggestion or "omit" in suggestion, f"Expected position/omit suggestion: {d.get('suggestion')}"
+    has_provide_position = "position" in suggestion and any(
+        w in suggestion for w in ("provide", "add", "include", "at least")
+    )
+    has_omit = "omit" in suggestion or "remove" in suggestion
+    assert has_provide_position or has_omit, (
+        f"Expected suggestion to advise providing positions or omitting filter: {d.get('suggestion')}"
+    )
 
 
 @then("the suggestion should advise removing duplicate positions")
 def then_suggestion_remove_dupes(ctx: dict) -> None:
-    """Assert suggestion advises removing duplicates."""
+    """Assert suggestion advises removing duplicates — both concepts required."""
     d = _get_error_dict(ctx.get("error"))
     suggestion = (d.get("suggestion") or "").lower()
-    assert "duplicate" in suggestion or "remove" in suggestion, (
-        f"Expected duplicate removal suggestion: {d.get('suggestion')}"
+    # Gherkin says "removing duplicate" — both concepts must appear
+    assert "duplicate" in suggestion, f"Expected 'duplicate' in suggestion: {d.get('suggestion')}"
+    assert any(w in suggestion for w in ("remove", "deduplicate", "dedup", "eliminate")), (
+        f"Expected removal action in suggestion: {d.get('suggestion')}"
     )
 
 
 @then("the suggestion should advise providing at least one FormatId or omitting the filter")
 def then_suggestion_format_id_or_omit(ctx: dict) -> None:
-    """Assert suggestion advises providing FormatId or omitting."""
+    """Assert suggestion advises providing FormatId OR omitting the filter.
+
+    Same pattern as positions_or_omit — one complete alternative required.
+    """
     d = _get_error_dict(ctx.get("error"))
     suggestion = (d.get("suggestion") or "").lower()
-    assert "formatid" in suggestion or "omit" in suggestion, f"Expected FormatId/omit suggestion: {d.get('suggestion')}"
+    has_provide_format = ("formatid" in suggestion or "format_id" in suggestion or "format id" in suggestion) and any(
+        w in suggestion for w in ("provide", "add", "include", "at least")
+    )
+    has_omit = "omit" in suggestion or "remove" in suggestion
+    assert has_provide_format or has_omit, (
+        f"Expected suggestion to advise providing FormatId or omitting filter: {d.get('suggestion')}"
+    )
 
 
 @then("the suggestion should advise including agent_url (URI) and id fields")
