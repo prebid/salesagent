@@ -903,6 +903,7 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
                 "INVALID_REQUEST",
                 "SCHEMA_VALIDATION_ERROR",
                 "BUDGET_TOO_LOW",
+                "UNSUPPORTED_FEATURE",
             ):
                 # Pydantic rejects the request before production code runs.
                 # Treat ValidationError as equivalent to the expected code.

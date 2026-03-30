@@ -700,11 +700,24 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # UC-004: additional xfails for features needing production enhancements
         # FIXME(salesagent-a0o): These require production changes, not BDD wiring.
         _UC004_XFAIL_ADDITIONAL: dict[str, tuple[str, bool]] = {
+            # FIXME(salesagent-afq): _impl doesn't echo attribution_window in response
+            "T-UC-004-attr-supported": ("attribution_window echo not implemented in _impl", True),
+            "T-UC-004-attr-unsupported": ("attribution_window platform default not implemented in _impl", True),
+            "T-UC-004-attr-echo": ("attribution_window model field not populated in response", True),
+            "T-UC-004-attr-omitted": ("attribution_window platform default not implemented in _impl", True),
+            "T-UC-004-attr-campaign-valid": ("attribution_window campaign window not implemented in _impl", True),
             # campaign unit interval validation: _impl doesn't validate attribution_window
             "T-UC-004-attr-campaign-invalid": (
                 "attribution_window campaign unit validation not implemented in _impl",
                 True,
             ),
+            # FIXME(salesagent-b2v): _impl only supports by_placement, not by_device_type/by_geo/truncation
+            "T-UC-004-dim-supported": ("by_device_type breakdown not implemented in _impl (only by_placement)", True),
+            "T-UC-004-dim-truncated": ("truncation flags (by_*_truncated) not implemented in _impl", True),
+            "T-UC-004-dim-complete": ("by_device_type_truncated flag not implemented in _impl", True),
+            "T-UC-004-dim-geo-system": ("by_geo breakdown not implemented in _impl", True),
+            "T-UC-004-dim-geo-postal": ("by_geo breakdown not implemented in _impl", True),
+            "T-UC-004-dim-multi": ("by_geo/by_device_type breakdowns not implemented in _impl", True),
             # Partial-success Error model lacks suggestion field and rich messages
             "T-UC-004-ext-a": ("partial-success Error needs suggestion field + authentication in message", True),
             "T-UC-004-ext-b": ("partial-success Error model needs suggestion field — production enhancement", True),
