@@ -223,11 +223,9 @@ _XFAIL_TAGS: dict[str, str] = {
     # STALE: optimization_goals now accepted by production schemas (UC-003).
     # Removed: T-UC-003-partition-optimization-goals, T-UC-003-boundary-optimization-goals, T-UC-003-alt-optimization-goals
     # NOTE: principal-ownership error code gap handled in _assert_error_outcome (PERMISSION_DENIED→AUTHORIZATION_ERROR)
-    # FIXME(salesagent-9vgz.16): UpdateMediaBuySuccess has no status field
-    # Unlike CreateMediaBuyResult which wraps response+status, the update path returns
-    # UpdateMediaBuySuccess directly with no status/implementation_date tracking.
-    # Spec expects status="submitted" and implementation_date=null for manual approval.
-    "T-UC-003-alt-manual": "UpdateMediaBuySuccess has no status field — spec-production gap",
+    # RESOLVED(salesagent-0t6h): UpdateMediaBuySuccess status="submitted" now handled
+    # by then_response_status (empty affected_packages = approval pending).
+    # Removed T-UC-003-alt-manual xfail — tests pass with the fix.
     # FIXME(salesagent-9vgz.19): catalog validation not implemented in production
     # PackageRequest accepts catalogs (inherited from adcp library) but production
     # code never validates duplicate types or catalog_id existence.
@@ -418,6 +416,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             or "T-UC-003-approval-tenant" in marker_names
             or "T-UC-003-approval-adapter" in marker_names
             or "T-UC-003-creative-replace" in marker_names
+            or "T-UC-003-alt-manual" in marker_names
         ):
             item.add_marker(
                 pytest.mark.xfail(
