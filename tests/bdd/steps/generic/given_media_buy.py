@@ -2525,8 +2525,35 @@ def given_bare_create_request(ctx: dict) -> None:
 
 @given(parsers.parse("a valid create_media_buy request that passes all validation"))
 def given_request_passes_validation(ctx: dict) -> None:
-    """Set up a request that passes all validation checks."""
-    _ensure_request_defaults(ctx)
+    """Set up a request that passes all validation checks.
+
+    Includes creative_ids with matching DB records so scenarios that test
+    creative assignment persistence (INV-020-1) have actual creatives.
+    """
+    from tests.factories.creative import CreativeFactory
+
+    kwargs = _ensure_request_defaults(ctx)
+    env = ctx["env"]
+    # Create a creative in the DB and add its ID to the first package
+    creative = CreativeFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        creative_id="cr-all-validation",
+        format="display_300x250",
+        status="approved",
+        data={
+            "assets": {
+                "primary": {
+                    "url": "https://cdn.example.com/cr-all-validation.png",
+                    "width": 300,
+                    "height": 250,
+                }
+            }
+        },
+    )
+    env._commit_factory_data()
+    if kwargs.get("packages"):
+        kwargs["packages"][0]["creative_ids"] = [creative.creative_id]
 
 
 @given("a create_media_buy request that fails validation")

@@ -1418,12 +1418,36 @@ def given_creatives_valid_and_compatible(ctx: dict) -> None:
 
     For inv-026-1: creatives are valid (status=approved) and format-compatible
     (display_300x250 matches default product), so creative assignment should proceed.
+
+    Creates DB records for ALL creative_ids already in the request (e.g. creative-default-001
+    from given_request_with_creative_assignments) plus an additional compatible creative.
     """
     from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
     from tests.factories.creative import CreativeFactory
 
     env = ctx["env"]
     kwargs = _ensure_request_defaults(ctx)
+
+    # Create DB records for any creative_ids already present in the request
+    if kwargs.get("packages"):
+        for cid in kwargs["packages"][0].get("creative_ids", []):
+            CreativeFactory(
+                tenant=ctx["tenant"],
+                principal=ctx["principal"],
+                creative_id=cid,
+                format="display_300x250",
+                status="approved",
+                data={
+                    "assets": {
+                        "primary": {
+                            "url": f"https://cdn.example.com/{cid}.png",
+                            "width": 300,
+                            "height": 250,
+                        }
+                    }
+                },
+            )
+
     creative = CreativeFactory(
         tenant=ctx["tenant"],
         principal=ctx["principal"],
@@ -1444,7 +1468,8 @@ def given_creatives_valid_and_compatible(ctx: dict) -> None:
     if kwargs.get("packages"):
         pkg = kwargs["packages"][0]
         existing = pkg.get("creative_ids") or []
-        existing.append(creative.creative_id)
+        if creative.creative_id not in existing:
+            existing.append(creative.creative_id)
         pkg["creative_ids"] = existing
 
 
