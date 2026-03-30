@@ -796,6 +796,27 @@ def then_affected_packages_include(ctx: dict, package_id: str) -> None:
     assert package_id in pkg_ids, f"Expected '{package_id}' in affected_packages, got {pkg_ids}"
 
 
+@then("the response should contain affected_packages")
+def then_affected_packages_present(ctx: dict) -> None:
+    """Assert affected_packages is present and non-empty on the response.
+
+    Step text: "the response should contain affected_packages"
+    Contract: affected_packages MUST be a non-empty list on a successful update.
+    """
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response — no response in ctx"
+    assert "error" not in ctx, f"Update errored ({ctx.get('error')}) — cannot check affected_packages on error"
+    affected = getattr(resp, "affected_packages", None)
+    assert affected is not None, (
+        f"affected_packages is None on response (type: {type(resp).__name__}) — "
+        "step text claims response should contain affected_packages"
+    )
+    assert isinstance(affected, list), (
+        f"affected_packages should be a list, got {type(affected).__name__}: {affected!r}"
+    )
+    assert len(affected) > 0, "affected_packages is empty — step text claims response should contain affected_packages"
+
+
 @then(parsers.parse("the affected package should show the updated budget of {budget:d}"))
 def then_affected_package_budget(ctx: dict, budget: int) -> None:
     """Assert the affected package shows the updated budget value.
