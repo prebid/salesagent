@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
+from src.core.exceptions import AdCPAdapterError
 
 
 @pytest.fixture
@@ -72,7 +73,7 @@ class TestFetchFormatsAnomalousStatusesMustRaise:
         mock_client = MagicMock()
         mock_client.agent.return_value = mock_agent_proxy
 
-        with pytest.raises((ValueError, RuntimeError)):
+        with pytest.raises(AdCPAdapterError):
             await registry._fetch_formats_from_agent(mock_client, agent)
 
     @pytest.mark.asyncio
@@ -87,7 +88,7 @@ class TestFetchFormatsAnomalousStatusesMustRaise:
         mock_client = MagicMock()
         mock_client.agent.return_value = mock_agent_proxy
 
-        with pytest.raises((ValueError, RuntimeError)):
+        with pytest.raises(AdCPAdapterError):
             await registry._fetch_formats_from_agent(mock_client, agent)
 
     @pytest.mark.asyncio
@@ -101,7 +102,7 @@ class TestFetchFormatsAnomalousStatusesMustRaise:
         mock_client = MagicMock()
         mock_client.agent.return_value = mock_agent_proxy
 
-        with pytest.raises((ValueError, RuntimeError)):
+        with pytest.raises(AdCPAdapterError):
             await registry._fetch_formats_from_agent(mock_client, agent)
 
 
@@ -117,7 +118,7 @@ class TestRawMcpFallbackMustRaise:
         mock_http, _ = _mock_http_json_response(JSONRPC_ERROR)
 
         with patch("httpx.AsyncClient", return_value=mock_http):
-            with pytest.raises(RuntimeError):
+            with pytest.raises(AdCPAdapterError):
                 await registry._fetch_formats_raw_mcp(agent)
 
     @pytest.mark.asyncio
@@ -126,7 +127,7 @@ class TestRawMcpFallbackMustRaise:
         mock_http, _ = _mock_http_json_response(JSONRPC_EMPTY_CONTENT)
 
         with patch("httpx.AsyncClient", return_value=mock_http):
-            with pytest.raises(RuntimeError):
+            with pytest.raises(AdCPAdapterError):
                 await registry._fetch_formats_raw_mcp(agent)
 
 

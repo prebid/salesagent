@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
+from src.core.exceptions import AdCPAdapterError
 
 
 @pytest.fixture
@@ -55,7 +56,7 @@ class TestStructuredContentFallbackTrigger:
 
     @pytest.mark.asyncio
     async def test_failed_status_with_other_error_raises_value_error(self, registry, agent):
-        """SDK returns TaskResult(status='failed', error='some other error') → raises ValueError."""
+        """SDK returns TaskResult(status='failed', error='some other error') → raises AdCPAdapterError."""
         mock_result = MagicMock()
         mock_result.status = "failed"
         mock_result.error = "Connection refused"
@@ -67,7 +68,7 @@ class TestStructuredContentFallbackTrigger:
         mock_client.agent.return_value = mock_agent_proxy
 
         with patch.object(registry, "_build_adcp_client", return_value=mock_client):
-            with pytest.raises(ValueError, match="Creative agent format fetch failed"):
+            with pytest.raises(AdCPAdapterError, match="Creative agent format fetch failed"):
                 await registry._fetch_formats_from_agent(mock_client, agent)
 
 
@@ -125,7 +126,7 @@ class TestFetchFormatsRawMcp:
 
     @pytest.mark.asyncio
     async def test_unexpected_format_raises_runtime_error(self, registry, agent):
-        """Raw HTTP returns unexpected format (no 'result' key) → raises RuntimeError.
+        """Raw HTTP returns unexpected format (no 'result' key) → raises AdCPAdapterError.
 
         Fix for salesagent-kwws: silent return [] masked failures as 'no formats'.
         """
@@ -140,7 +141,7 @@ class TestFetchFormatsRawMcp:
         mock_http.__aexit__ = AsyncMock(return_value=False)
 
         with patch("httpx.AsyncClient", return_value=mock_http):
-            with pytest.raises(RuntimeError, match="No parseable result"):
+            with pytest.raises(AdCPAdapterError, match="No parseable result"):
                 await registry._fetch_formats_raw_mcp(agent)
 
     @pytest.mark.asyncio
@@ -232,23 +233,23 @@ class TestParseMcpToolResult:
         assert formats[0].name == "Display Image"
 
     def test_no_text_content_raises(self, registry):
-        """Content with no text items → raises RuntimeError.
+        """Content with no text items → raises AdCPAdapterError.
 
         Fix for salesagent-kwws: silent return [] masked failures as 'no formats'.
         """
         import logging
 
         result = {"content": [{"type": "image", "data": "..."}]}
-        with pytest.raises(RuntimeError, match="No text content"):
+        with pytest.raises(AdCPAdapterError, match="No text content"):
             registry._parse_mcp_tool_result(result, logging.getLogger())
 
     def test_empty_content_raises(self, registry):
-        """Empty content list → raises RuntimeError.
+        """Empty content list → raises AdCPAdapterError.
 
         Fix for salesagent-kwws: silent return [] masked failures as 'no formats'.
         """
         import logging
 
         result = {"content": []}
-        with pytest.raises(RuntimeError, match="No text content"):
+        with pytest.raises(AdCPAdapterError, match="No text content"):
             registry._parse_mcp_tool_result(result, logging.getLogger())

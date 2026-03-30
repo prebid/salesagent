@@ -6,6 +6,7 @@ import pytest
 from pydantic import AnyUrl
 
 from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
+from src.core.exceptions import AdCPAdapterError
 
 
 class TestCacheKeyAcceptsAnyUrl:
@@ -193,7 +194,7 @@ class TestCreativeAgentRegistry:
 
         # Submitted status is anomalous for list_creative_formats — must raise
         # Fix for salesagent-kwws: silent return [] masked failures as 'no formats'
-        with pytest.raises(ValueError, match="Unexpected submitted status"):
+        with pytest.raises(AdCPAdapterError, match="Unexpected submitted status"):
             await registry._fetch_formats_from_agent(mock_client, test_agent)
 
     @pytest.mark.asyncio
