@@ -44,6 +44,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc006_sync_creatives",
     "tests.bdd.steps.domain.uc011_accounts",
     "tests.bdd.steps.domain.admin_accounts",
+    "tests.bdd.steps.domain.compat_normalization",
 ]
 
 # ---------------------------------------------------------------------------
@@ -584,6 +585,8 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
         return "UC-011"
     if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
         return "ADMIN"
+    if any(t.startswith("T-COMPAT") for t in marker_names):
+        return "COMPAT"
     return None
 
 
@@ -694,6 +697,10 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         with AdminAccountEnv(mode="integration") as env:
             ctx["env"] = env
             yield
+
+    elif uc == "COMPAT":
+        # Compat scenarios test normalizer directly — no harness env needed.
+        yield
 
     elif uc == "UC-004":
         harness_type = _detect_delivery_harness(request)
