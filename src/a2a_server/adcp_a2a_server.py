@@ -1321,6 +1321,12 @@ class AdCPRequestHandler(RequestHandler):
                 else push_notification_config
             )
             parameters = {**parameters, "push_notification_config": pnc_dict}
+        # Normalize deprecated fields before any handler sees the parameters
+        from src.core.request_compat import normalize_request_params
+
+        compat_result = normalize_request_params(skill_name, parameters)
+        parameters = compat_result.params
+
         logger.info(f"Handling explicit skill: {skill_name} with parameters: {list(parameters.keys())}")
 
         # Validate identity for non-discovery skills
