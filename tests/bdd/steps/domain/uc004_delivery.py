@@ -15,6 +15,7 @@ import json
 import re
 from typing import Any
 
+import httpx
 from pytest_bdd import given, parsers, then, when
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -38,6 +39,64 @@ def _call_delivery(ctx: dict, **kwargs: Any) -> None:
             ctx["response"] = env.call_impl(**kwargs)
         except Exception as exc:
             ctx["error"] = exc
+
+
+def _wire_webhook_db(ctx: dict) -> None:
+    """Wire ctx webhook config into the CircuitBreakerEnv mock DB.
+
+    Reads ctx["webhook_config"], ctx["webhook_secret"], ctx["webhook_bearer_token"]
+    and calls env.set_db_webhooks() so _send_webhook_enhanced finds the right configs.
+    """
+    env = ctx["env"]
+    wh_cfgs = ctx.get("webhook_config", {})
+    if not wh_cfgs:
+        return  # default mock config is fine
+
+    configs = []
+    for _mb_id, wh in wh_cfgs.items():
+        url = wh.get("url", "https://buyer.example.com/webhook")
+        scheme = wh.get("auth_scheme")
+        secret = ctx.get("webhook_secret")
+        bearer = ctx.get("webhook_bearer_token")
+
+        auth_type = None
+        auth_token = None
+        if scheme and scheme.lower() == "hmac-sha256":
+            auth_type = "hmac"
+        elif scheme and scheme.lower() == "bearer":
+            auth_type = "bearer"
+            auth_token = bearer
+
+        configs.append(
+            env.make_webhook_config(
+                url=url,
+                auth_type=auth_type,
+                auth_token=auth_token,
+                secret=secret,
+            )
+        )
+    if configs:
+        env.set_db_webhooks(configs)
+
+
+def _call_webhook_service(
+    ctx: dict,
+    mb_id: str = "mb-001",
+    is_final: bool = False,
+    is_adjusted: bool = False,
+    next_expected_interval_seconds: float | None = 3600.0,
+) -> bool:
+    """Dispatch webhook delivery through the CircuitBreakerEnv.call_send."""
+    _wire_webhook_db(ctx)
+    env = ctx["env"]
+    kwargs: dict[str, Any] = {
+        "media_buy_id": mb_id,
+        "is_final": is_final,
+        "is_adjusted": is_adjusted,
+    }
+    if next_expected_interval_seconds is not None:
+        kwargs["next_expected_interval_seconds"] = next_expected_interval_seconds
+    return env.call_send(**kwargs)
 
 
 def _get_webhook_payload(ctx: dict) -> dict:
@@ -330,7 +389,7 @@ def given_webhook_returns_status(ctx: dict, status_code: int, reason: str) -> No
 def given_webhook_unreachable(ctx: dict) -> None:
     """Configure webhook endpoint to timeout."""
     env = ctx["env"]
-    env.mock["post"].side_effect = ConnectionError("Connection timeout")
+    env.mock["post"].side_effect = httpx.ConnectError("Connection timeout")
 
 
 @given(parsers.parse("the webhook endpoint returns {status_code:d} Unauthorized"))
@@ -342,32 +401,59 @@ def given_webhook_unauthorized(ctx: dict, status_code: int) -> None:
 
 @given(parsers.parse("the webhook endpoint has failed {n:d} consecutive delivery attempts"))
 def given_webhook_failed_n_times(ctx: dict, n: int) -> None:
-    """Record n consecutive delivery failures."""
-    ctx["webhook_failure_count"] = n
+    """Record n consecutive delivery failures by making real failing calls.
+
+    Uses set_http_response(500) so each call_send() records a failure on the
+    service's internal CircuitBreaker.
+    """
+    env = ctx["env"]
+    # Configure endpoint to fail
+    env.set_http_response(500)
+    _wire_webhook_db(ctx)
+    for _ in range(n):
+        env.call_send()
+    # Extract the service's internal breaker so later steps can inspect it
+    service = env.get_service()
+    for _key, cb in service._circuit_breakers.items():
+        ctx["circuit_breaker"] = cb
+        break
+    # Restore 200 for subsequent calls (unless overridden by another Given)
+    env.set_http_response(200)
 
 
 @given(parsers.parse('a media buy "{mb_id}" with circuit breaker in "{state}" state'))
 def given_circuit_breaker_state(ctx: dict, mb_id: str, state: str) -> None:
-    """Create a CircuitBreaker and set it to the specified state."""
+    """Create a CircuitBreaker in the specified state and inject into service."""
     from src.services.webhook_delivery_service import CircuitBreaker, CircuitState
 
+    _set_active_webhook(ctx, mb_id)
+    _wire_webhook_db(ctx)
+    env = ctx["env"]
+    service = env.get_service()
     breaker = CircuitBreaker()
     target_state = CircuitState(state.lower())
     breaker.state = target_state
-    # If OPEN, simulate past failures so can_attempt() respects the state
     if target_state == CircuitState.OPEN:
         from datetime import UTC, datetime
 
         breaker.failure_count = breaker.failure_threshold
         breaker.last_failure_time = datetime.now(UTC)
+    # Inject into service's internal dict using the endpoint key format
+    # The service uses "{tenant_id}:{config.url}" as key
+    endpoint_key = f"{env._tenant_id}:https://buyer.example.com/webhook"
+    service._circuit_breakers[endpoint_key] = breaker
     ctx["circuit_breaker"] = breaker
     ctx["circuit_breaker_state"] = state
 
 
 @given("the circuit breaker timeout (60s) has elapsed")
 def given_circuit_breaker_timeout(ctx: dict) -> None:
-    """Circuit breaker timeout has elapsed."""
-    ctx["circuit_breaker_timeout_elapsed"] = True
+    """Backdate the circuit breaker's last_failure_time so timeout has elapsed."""
+    from datetime import UTC, datetime, timedelta
+
+    breaker = ctx.get("circuit_breaker")
+    assert breaker is not None, "No circuit breaker in context — must set state first"
+    breaker.last_failure_time = datetime.now(UTC) - timedelta(seconds=120)
 
 
 @given("the webhook endpoint has recovered and returns 200")
@@ -554,55 +640,48 @@ def when_request_no_auth(ctx: dict) -> None:
 
 @when(parsers.parse('the webhook scheduler fires for "{mb_id}"'))
 def when_webhook_fires(ctx: dict, mb_id: str) -> None:
-    """Webhook scheduler fires for a media buy."""
-    env = ctx["env"]
-    webhook = ctx.get("webhook_config", {})
+    """Webhook scheduler fires for a media buy via WebhookDeliveryService."""
     try:
-        ctx["webhook_result"] = env.call_deliver(
-            payload={"event": "delivery.update", "media_buy_id": mb_id},
-            signing_secret=webhook.get("signing_secret"),
-        )
+        result = _call_webhook_service(ctx, mb_id=mb_id)
+        ctx["webhook_result"] = result
     except Exception as exc:
         ctx["error"] = exc
 
 
 @when(parsers.parse('the system delivers a webhook report for "{mb_id}"'))
 def when_deliver_webhook(ctx: dict, mb_id: str) -> None:
-    """System delivers a webhook report."""
-    env = ctx["env"]
-    webhook = ctx.get("webhook_config", {})
+    """System delivers a webhook report via WebhookDeliveryService."""
     try:
-        ctx["webhook_result"] = env.call_deliver(
-            payload={"event": "delivery.update", "media_buy_id": mb_id},
-            signing_secret=webhook.get("signing_secret"),
-        )
+        result = _call_webhook_service(ctx, mb_id=mb_id)
+        ctx["webhook_result"] = result
     except Exception as exc:
         ctx["error"] = exc
 
 
 @when(parsers.parse('the system delivers a "{report_type}" webhook report for "{mb_id}"'))
 def when_deliver_typed_webhook(ctx: dict, report_type: str, mb_id: str) -> None:
-    """System delivers a typed webhook report."""
+    """System delivers a typed webhook report via WebhookDeliveryService."""
     ctx["report_type"] = report_type
-    env = ctx["env"]
-    webhook = ctx.get("webhook_config", {})
     try:
-        ctx["webhook_result"] = env.call_deliver(
-            payload={"event": "delivery.update", "media_buy_id": mb_id, "notification_type": report_type},
-            signing_secret=webhook.get("signing_secret"),
+        result = _call_webhook_service(
+            ctx,
+            mb_id=mb_id,
+            is_final=(report_type == "final"),
+            is_adjusted=(report_type == "adjusted"),
+            next_expected_interval_seconds=None if report_type == "final" else 3600.0,
         )
+        ctx["webhook_result"] = result
     except Exception as exc:
         ctx["error"] = exc
 
 
 @when(parsers.parse('the system delivers three consecutive webhook reports for "{mb_id}"'))
 def when_deliver_three_reports(ctx: dict, mb_id: str) -> None:
-    """Deliver three consecutive webhook reports."""
+    """Deliver three consecutive webhook reports via WebhookDeliveryService."""
     ctx["webhook_reports"] = []
-    env = ctx["env"]
     for _ in range(3):
         try:
-            result = env.call_deliver(media_buy_id=mb_id)
+            result = _call_webhook_service(ctx, mb_id=mb_id)
             ctx["webhook_reports"].append(result)
         except Exception as exc:
             ctx["error"] = exc
@@ -611,31 +690,64 @@ def when_deliver_three_reports(ctx: dict, mb_id: str) -> None:
 
 @when("the system attempts to deliver a webhook report")
 def when_attempt_webhook(ctx: dict) -> None:
-    """System attempts webhook delivery."""
-    env = ctx["env"]
+    """System attempts webhook delivery via WebhookDeliveryService."""
     try:
-        ctx["webhook_result"] = env.call_deliver()
+        result = _call_webhook_service(ctx)
+        ctx["webhook_result"] = result
     except Exception as exc:
         ctx["error"] = exc
 
 
 @when("the system evaluates the circuit breaker state")
 def when_evaluate_circuit_breaker(ctx: dict) -> None:
-    """Evaluate circuit breaker state."""
+    """Evaluate circuit breaker state by calling can_attempt().
+
+    Drives state machine: OPEN -> HALF_OPEN (if timeout elapsed).
+    """
     env = ctx["env"]
-    # Ensure circuit breaker is in context for Then steps
-    if "circuit_breaker" not in ctx:
-        ctx["circuit_breaker"] = env.get_breaker()
-    try:
-        ctx["circuit_result"] = env.call_impl()
-    except Exception as exc:
-        ctx["error"] = exc
+    breaker = ctx.get("circuit_breaker")
+    if breaker is None:
+        # Try to extract the service's internal breaker
+        service = env.get_service()
+        for _key, cb in service._circuit_breakers.items():
+            breaker = cb
+            break
+        if breaker is None:
+            breaker = env.get_breaker()
+        ctx["circuit_breaker"] = breaker
+    # Snapshot call count before evaluation for suppression assertion
+    ctx["calls_before_breaker_open"] = env.mock["post"].call_count
+    ctx["calls_before_half_open"] = env.mock["post"].call_count
+    # Evaluate: can_attempt() drives OPEN->HALF_OPEN transition
+    can_attempt = breaker.can_attempt()
+    ctx["circuit_can_attempt"] = can_attempt
+    # If half-open and can attempt, do a single probe delivery
+    from src.services.webhook_delivery_service import CircuitState
+
+    if breaker.state == CircuitState.HALF_OPEN and can_attempt:
+        try:
+            result = _call_webhook_service(ctx)
+            ctx["circuit_result"] = result
+        except Exception as exc:
+            ctx["error"] = exc
 
 
 @when(parsers.parse("the system delivers {n:d} successful probe reports"))
 def when_deliver_probe_reports(ctx: dict, n: int) -> None:
-    """Deliver n successful probe reports."""
+    """Deliver n successful probe reports and record successes on breaker."""
     ctx["probe_count"] = n
+    breaker = ctx.get("circuit_breaker")
+    assert breaker is not None, "No circuit breaker in ctx"
+    env = ctx["env"]
+    ctx["calls_before_breaker_close"] = env.mock["post"].call_count
+    for _ in range(n):
+        breaker.record_success()
+    # Deliver one more to verify resumed delivery
+    try:
+        result = _call_webhook_service(ctx)
+        ctx["circuit_result"] = result
+    except Exception as exc:
+        ctx["error"] = exc
 
 
 @when("the system delivers a webhook report with retry")
@@ -643,12 +755,19 @@ def when_deliver_with_retry(ctx: dict) -> None:
     """System delivers webhook with retry on failure."""
     env = ctx["env"]
     try:
-        ctx["webhook_result"] = env.call_send()
+        result = env.call_send()
+        ctx["webhook_result"] = result
+        ctx["circuit_result"] = result
     except Exception as exc:
         ctx["error"] = exc
-    # Expose circuit breaker for Then assertions (retry scenarios need it)
-    if "circuit_breaker" not in ctx:
-        ctx["circuit_breaker"] = env.get_breaker()
+    # Expose the service's internal circuit breaker for Then assertions
+    service = env.get_service()
+    for _key, cb in service._circuit_breakers.items():
+        ctx["circuit_breaker"] = cb
+        break
+    else:
+        if "circuit_breaker" not in ctx:
+            ctx["circuit_breaker"] = env.get_breaker()
 
 
 @when("the system validates the webhook configuration")
@@ -884,7 +1003,7 @@ def when_request_without_field(ctx: dict, mb_id: str, field: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-@then(parsers.parse('the response should include delivery data for "{mb_id}"'))
+@then(parsers.re(r'the response should include delivery data for "(?P<mb_id>[^"]+)"$'))
 def then_includes_delivery_data(ctx: dict, mb_id: str) -> None:
     """Assert response includes delivery data for the given media buy."""
     resp = ctx.get("response")
@@ -894,7 +1013,7 @@ def then_includes_delivery_data(ctx: dict, mb_id: str) -> None:
     assert mb_id in mb_ids, f"Expected delivery data for '{mb_id}', got: {mb_ids}"
 
 
-@then(parsers.parse('the response should include delivery data for "{mb_id1}" and "{mb_id2}"'))
+@then(parsers.re(r'the response should include delivery data for "(?P<mb_id1>[^"]+)" and "(?P<mb_id2>[^"]+)"'))
 def then_includes_delivery_data_both(ctx: dict, mb_id1: str, mb_id2: str) -> None:
     """Assert response includes delivery data for both media buys."""
     resp = ctx.get("response")
@@ -980,15 +1099,13 @@ def then_has_packages(ctx: dict) -> None:
     packages = getattr(d, "by_package", None)
     assert packages is not None, "Delivery data missing by_package"
     assert len(packages) > 0, "Package breakdown is empty"
-    # Validate each package has required content: package_id and totals
+    # Validate each package has required content: package_id and metrics
+    # PackageDelivery has impressions/spend directly (not nested under totals)
     for i, pkg in enumerate(packages):
         pkg_id = getattr(pkg, "package_id", None)
         assert pkg_id is not None, f"Package [{i}] missing package_id"
-        pkg_totals = getattr(pkg, "totals", None)
-        assert pkg_totals is not None, f"Package [{i}] (id={pkg_id}) missing totals"
-        assert isinstance(getattr(pkg_totals, "impressions", None), (int, float)), (
-            f"Package [{i}] (id={pkg_id}) totals.impressions is not numeric"
-        )
+        pkg_impressions = getattr(pkg, "impressions", None)
+        assert isinstance(pkg_impressions, (int, float)), f"Package [{i}] (id={pkg_id}) impressions is not numeric"
 
 
 @then("the response should include the reporting period start and end dates")
@@ -1382,14 +1499,24 @@ def then_log_auth_rejection(ctx: dict) -> None:
 
 @then("the webhook should be marked as failed")
 def then_webhook_marked_failed(ctx: dict) -> None:
-    """Assert webhook delivery returned failure with status 'failed'."""
+    """Assert webhook delivery returned failure.
+
+    Handles both return shapes:
+    - bool (from WebhookDeliveryService.send_delivery_webhook via call_send)
+    - tuple[bool, dict] (from deliver_webhook_with_retry via call_deliver)
+    """
     result = ctx.get("webhook_result")
     assert result is not None, (
         f"Expected webhook_result in ctx — When step must store the delivery result. ctx keys: {list(ctx.keys())}"
     )
-    success, details = result
-    assert not success, f"Expected webhook to fail, but it succeeded: {details}"
-    assert details.get("status") == "failed", f"Expected status 'failed', got '{details.get('status')}'"
+    if isinstance(result, tuple):
+        success, details = result
+        assert not success, f"Expected webhook to fail, but it succeeded: {details}"
+        assert details.get("status") == "failed", f"Expected status 'failed', got '{details.get('status')}'"
+    elif isinstance(result, bool):
+        assert not result, "Expected webhook to fail, but it succeeded (returned True)"
+    else:
+        raise AssertionError(f"Unexpected result type: {type(result).__name__}")
 
 
 @then(parsers.parse('the circuit breaker should be in "{state}" state'))
