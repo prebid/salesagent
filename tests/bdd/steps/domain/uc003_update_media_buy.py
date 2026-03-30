@@ -103,6 +103,7 @@ def given_existing_mb_start_time(ctx: dict, start_time: str) -> None:
 def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> None:
     """Build update request kwargs from a data table."""
     import json
+    import re
 
     _supported_fields = {
         "media_buy_id",
@@ -139,7 +140,9 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
         elif field == "packages":
             kwargs["packages"] = json.loads(value)
         elif field == "idempotency_key":
-            kwargs["idempotency_key"] = value
+            # Expand <N character string> placeholders (e.g. "<256 character string>")
+            length_match = re.match(r"<(\d+)\s*char(?:acter)?\s*string>", value)
+            kwargs["idempotency_key"] = "x" * int(length_match.group(1)) if length_match else value
 
 
 @given("the request does NOT include start_time, end_time, or paused fields")
