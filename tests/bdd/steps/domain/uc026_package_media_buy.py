@@ -219,19 +219,27 @@ def given_product_with_pricing(ctx: dict, product_id: str, options: str) -> None
     if isinstance(expected_ids, list):
         actual_ids = set()
         for opt in actual_options:
-            opt_id = getattr(opt, "pricing_option_id", None) or getattr(opt, "id", None) or str(opt)
+            # ORM PricingOption has integer `id` but no `pricing_option_id`.
+            # Synthesize the canonical string ID from model fields to match
+            # the resolved labels (e.g. "cpm_usd_fixed").
+            opt_id = getattr(opt, "pricing_option_id", None)
+            if opt_id is None:
+                pm = getattr(opt, "pricing_model", None)
+                cur = getattr(opt, "currency", None)
+                fixed = getattr(opt, "is_fixed", None)
+                if pm and cur and fixed is not None:
+                    fixed_str = "fixed" if fixed else "auction"
+                    opt_id = f"{pm}_{cur.lower()}_{fixed_str}"
+            if opt_id is None:
+                opt_id = getattr(opt, "id", None) or str(opt)
             actual_ids.add(opt_id)
         # Map expected labels to resolved IDs for comparison
         resolved_expected = {_resolve_pricing_id(ctx, eid) for eid in expected_ids}
         missing = resolved_expected - actual_ids
-        if missing:
-            # Fall back to label-based check if resolution didn't help
-            label_ids = {str(opt) for opt in actual_options}
-            label_missing = set(expected_ids) - label_ids - actual_ids
-            assert not label_missing, (
-                f"Product pricing_options missing expected IDs {label_missing}. "
-                f"Actual IDs: {actual_ids}, expected: {resolved_expected}"
-            )
+        assert not missing, (
+            f"Product pricing_options missing expected IDs {missing}. "
+            f"Actual IDs: {actual_ids}, expected: {resolved_expected}"
+        )
     ctx["product_pricing_options"] = options
 
 

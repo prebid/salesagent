@@ -216,11 +216,9 @@ _XFAIL_TAGS: dict[str, str] = {
     # not spec-expected UNSUPPORTED_FEATURE / INVALID_REQUEST with structured codes.
     "T-UC-002-ext-u": "optimization_goals not in production schemas — spec-production gap",
     "T-UC-002-ext-u-event": "optimization_goals not in production schemas — spec-production gap",
-    # FIXME(salesagent-9vgz.77): optimization_goals partition/boundary — field not in adcp v3.6.0
-    # PackageRequest(extra='forbid') rejects optimization_goals with generic validation error.
-    "T-UC-002-partition-optimization-goals": "optimization_goals not in production schemas — spec-production gap",
-    "T-UC-002-boundary-optimization-goals": "optimization_goals not in production schemas — spec-production gap",
-    # STALE: optimization_goals now accepted by production schemas (UC-003).
+    # RESOLVED(salesagent-fpi): optimization_goals now accepted by production schemas (UC-003).
+    # Removed stale xfails: T-UC-002-partition-optimization-goals, T-UC-002-boundary-optimization-goals
+    # Valid rows now pass; invalid rows xfail via _assert_error_outcome _SPEC_PRODUCTION_CODE_MAP.
     # Removed: T-UC-003-partition-optimization-goals, T-UC-003-boundary-optimization-goals, T-UC-003-alt-optimization-goals
     # NOTE: principal-ownership error code gap handled in _assert_error_outcome (PERMISSION_DENIED→AUTHORIZATION_ERROR)
     # RESOLVED(salesagent-0t6h): UpdateMediaBuySuccess status="submitted" now handled

@@ -85,9 +85,22 @@ def given_creative_agent_registered(ctx: dict) -> None:
 def given_registry_multi_categories(ctx: dict) -> None:
     """Registry has formats spanning multiple categories (display, video, etc.)."""
     ctx["registry_formats"] = [
-        FormatFactory.build(name="banner", type=CATEGORY_MAP["display"]),
-        FormatFactory.build(name="pre-roll", type=CATEGORY_MAP["video"]),
-        FormatFactory.build(name="audio-spot", type=CATEGORY_MAP["audio"]),
+        FormatFactory.build(
+            name="banner",
+            type=CATEGORY_MAP["display"],
+            assets=[make_asset("image")],
+            renders=[make_fixed_renders(width=300, height=250)],
+        ),
+        FormatFactory.build(
+            name="pre-roll",
+            type=CATEGORY_MAP["video"],
+            assets=[make_asset("video")],
+        ),
+        FormatFactory.build(
+            name="audio-spot",
+            type=CATEGORY_MAP["audio"],
+            assets=[make_asset("audio")],
+        ),
     ]
     _sync_registry(ctx)
 
