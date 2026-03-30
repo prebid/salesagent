@@ -238,9 +238,7 @@ _XFAIL_TAGS: dict[str, str] = {
     # works at ORM level (is_fixed + rate + price_guidance) and doesn't check for both/neither.
     "T-UC-002-inv-006-3": "pricing XOR invariant (both set) not validated in create flow — spec-production gap",
     "T-UC-002-inv-006-4": "pricing XOR invariant (neither set) error lacks suggestion field — spec-production gap",
-    # FIXME(salesagent-9vgz.27): budget positivity error code mismatch
-    # Production raises ValueError → Error(code="validation_error"), spec expects BUDGET_TOO_LOW.
-    "T-UC-002-inv-008-2": "BUDGET_TOO_LOW error code not implemented (returns validation_error) — spec-production gap",
+    # RESOLVED(salesagent-bo6): budget positivity validation now works — removed stale xfail T-UC-002-inv-008-2
     # FIXME(salesagent-9vgz.27): ASAP case sensitivity error code mismatch
     # Production: Pydantic rejects "ASAP" → ValidationError, spec expects INVALID_REQUEST.
     "T-UC-002-inv-013-5": "INVALID_REQUEST error code not implemented for wrong-case ASAP — spec-production gap",
