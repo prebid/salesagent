@@ -249,6 +249,12 @@ _XFAIL_TAGS: dict[str, str] = {
     # sandbox-production passes vacuously (sandbox absent from response by default).
     "T-UC-002-sandbox-happy": "sandbox mode not implemented in create_media_buy — spec-production gap",
     "T-UC-002-sandbox-validation": "sandbox mode not implemented in create_media_buy — spec-production gap",
+    # FIXME(salesagent-9vgz.1): inline creative upload not persisted in create_media_buy
+    # process_and_upload_package_creatives → _sync_creatives_impl should persist
+    # creatives to DB, but the Then step "upload creatives to creative library" fails
+    # because no Creative rows exist after creation. Gap was previously masked by
+    # inline pytest.xfail() in the step body — moved to scenario-level here.
+    "T-UC-002-alt-creatives": "inline creative upload not persisted in create_media_buy — spec-production gap",
 }
 
 # FIXME(beads-dul): Selective xfail for parametrized scenarios where only

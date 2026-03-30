@@ -1044,32 +1044,32 @@ def _assert_persistence_in_pending_state(ctx: dict) -> None:
 def when_seller_rejects_media_buy(ctx: dict, reason: str) -> None:
     """Simulate seller rejecting a pending media buy (admin action).
 
-    Updates the media buy status to 'rejected' and stores the rejection reason
-    on the associated workflow step.
+    Uses MediaBuyRepository.update_status() and WorkflowRepository.update_status()
+    to exercise the production repository code paths.
 
-    SPEC-PRODUCTION GAP: This step bypasses operations.py:approve_media_buy(action='reject')
-    and directly manipulates DB rows. Bugs in the production rejection path will not be caught.
+    SPEC-PRODUCTION GAP: This step still bypasses the full Flask admin rejection path
+    (operations.py:approve_media_buy with action='reject') because it requires Flask
+    request context. However, it exercises the repository layer (tenant-scoped queries,
+    status transitions) rather than raw DB manipulation.
     FIXME(salesagent-9vgz.1): Wire through the production admin flow when the harness
     supports Flask request context.
     Production path: POST /operations/media-buy/<id>/approve with action=reject.
     """
     import warnings
-    from datetime import UTC, datetime
 
     import pytest
-    from sqlalchemy import select
 
     from src.core.database.database_session import get_db_session
-    from src.core.database.models import MediaBuy, ObjectWorkflowMapping, WorkflowStep
+    from src.core.database.repositories.media_buy import MediaBuyRepository
+    from src.core.database.repositories.workflow import WorkflowRepository
 
-    # SPEC-PRODUCTION GAP: This When step directly manipulates DB rows instead of
-    # calling the production rejection path (operations.py:approve_media_buy with
-    # action='reject'). This means bugs in the admin rejection flow won't be caught.
-    # The DB assertions below verify the *outcome* is correct, not the *path*.
+    # SPEC-PRODUCTION GAP: Uses repository methods instead of the full Flask admin
+    # rejection path. The repository layer (tenant scoping, status transitions) is
+    # exercised, but Flask-specific logic (comments, webhooks) is not.
     # FIXME(salesagent-9vgz.1): Wire through production admin flow.
     warnings.warn(
-        "when_seller_rejects_media_buy bypasses production rejection path "
-        "(operations.py:approve_media_buy). DB manipulation only.",
+        "when_seller_rejects_media_buy uses repository methods, not the full Flask "
+        "admin rejection path (operations.py:approve_media_buy). Repository-level only.",
         stacklevel=1,
     )
 
@@ -1082,8 +1082,11 @@ def when_seller_rejects_media_buy(ctx: dict, reason: str) -> None:
 
     workflow_step_id = None
     with get_db_session() as session:
-        # Verify media buy exists and is in a rejectable state
-        mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id, tenant_id=tenant.tenant_id)).first()
+        mb_repo = MediaBuyRepository(session, tenant.tenant_id)
+        wf_repo = WorkflowRepository(session, tenant.tenant_id)
+
+        # Verify media buy exists and is in a rejectable state (via repository)
+        mb = mb_repo.get_by_id(media_buy_id)
         assert mb is not None, f"Media buy {media_buy_id} not found in DB for tenant {tenant.tenant_id}"
         rejectable_statuses = {"pending_approval", "submitted", "requires_approval"}
         assert mb.status in rejectable_statuses, (
@@ -1091,36 +1094,40 @@ def when_seller_rejects_media_buy(ctx: dict, reason: str) -> None:
             f"expected one of {rejectable_statuses} for rejection. "
             "Step claims 'Seller rejects' but media buy is not in a rejectable state."
         )
-        mb.status = "rejected"
 
-        # Find workflow step to store rejection reason
-        mapping = session.scalars(select(ObjectWorkflowMapping).filter_by(object_id=media_buy_id)).first()
+        # Update status via repository (exercises tenant-scoped update_status)
+        updated_mb = mb_repo.update_status(media_buy_id, "rejected")
+        assert updated_mb is not None, (
+            f"MediaBuyRepository.update_status returned None for {media_buy_id} — "
+            "repository could not find the media buy within tenant scope"
+        )
+
+        # Find and update workflow step via repository
+        mapping = wf_repo.get_latest_mapping_for_object("media_buy", media_buy_id)
         no_workflow_mapping = mapping is None
         if mapping:
-            step = session.scalars(select(WorkflowStep).filter_by(step_id=mapping.step_id)).first()
+            step = wf_repo.update_status(
+                mapping.step_id,
+                status="rejected",
+                error_message=reason,
+            )
             if step:
-                step.status = "rejected"
-                step.error_message = reason
-                step.updated_at = datetime.now(UTC)
                 workflow_step_id = step.step_id
 
-        # Always commit the rejection status change — the status update (line above)
-        # must persist even when workflow mapping is missing. The previous code xfailed
-        # before commit, which meant the rejection never persisted.
         session.commit()
 
-    # Verify the rejection actually persisted (tenant-scoped)
+    # Verify the rejection actually persisted (tenant-scoped, fresh session)
     with get_db_session() as session:
-        mb_check = session.scalars(
-            select(MediaBuy).filter_by(media_buy_id=media_buy_id, tenant_id=tenant.tenant_id)
-        ).first()
+        mb_repo = MediaBuyRepository(session, tenant.tenant_id)
+        mb_check = mb_repo.get_by_id(media_buy_id)
         assert mb_check is not None, f"Media buy {media_buy_id} not found after rejection"
         assert mb_check.status == "rejected", (
             f"Expected 'rejected' status after seller rejection, got '{mb_check.status}'"
         )
         # Also verify the workflow step was updated with the rejection reason
         if workflow_step_id:
-            ws = session.scalars(select(WorkflowStep).filter_by(step_id=workflow_step_id)).first()
+            wf_repo = WorkflowRepository(session, tenant.tenant_id)
+            ws = wf_repo.get_by_step_id(workflow_step_id)
             assert ws is not None, f"Workflow step {workflow_step_id} not found after rejection commit"
             assert ws.status == "rejected", f"Expected workflow step status 'rejected', got '{ws.status}'"
             assert ws.error_message == reason, (
@@ -1961,31 +1968,20 @@ def then_creatives_uploaded_to_library(ctx: dict) -> None:
                 expected_ids.add(cid)
     assert expected_ids, "No creative IDs found in request — cannot verify upload"
 
-    import pytest
-
     with get_db_session() as session:
         db_creatives = session.scalars(select(CreativeModel).filter_by(tenant_id=tenant.tenant_id)).all()
         db_creative_ids = {c.creative_id for c in db_creatives}
-        # Hard assert: all expected creatives must exist in DB
+        # Hard assert: all expected creatives must exist in DB.
+        # If production doesn't persist inline creatives yet, the scenario-level
+        # xfail (T-UC-002-alt-creatives tag in conftest.py) handles the gap.
+        # NEVER xfail inside the step body — it silently swallows the check.
         missing = expected_ids - db_creative_ids
-        if missing:
-            # SPEC-PRODUCTION GAP: production may not persist inline creatives yet.
-            # Use xfail BEFORE the assertion — never catch AssertionError to xfail.
-            found = db_creative_ids & expected_ids
-            gap_detail = (
-                f"None of the request creatives {sorted(expected_ids)} were found in DB"
-                if not found
-                else f"Partial upload — missing {sorted(missing)} (found {sorted(found)})"
-            )
-            pytest.xfail(
-                f"SPEC-PRODUCTION GAP: {gap_detail}. "
-                f"DB has {sorted(db_creative_ids)}. Production may not persist inline "
-                f"creatives via this code path yet. FIXME(salesagent-9vgz.1)"
-            )
-        # All expected creatives found in DB — hard assertion for the success case.
-        # Without this, the step silently passes when missing is empty (no assertion).
-        assert expected_ids <= db_creative_ids, (
-            f"Expected all creatives {sorted(expected_ids)} uploaded to DB, but DB only has {sorted(db_creative_ids)}"
+        assert not missing, (
+            f"Expected all creatives {sorted(expected_ids)} uploaded to DB, "
+            f"but missing {sorted(missing)}. "
+            f"DB has {sorted(db_creative_ids)}. "
+            f"SPEC-PRODUCTION GAP: production may not persist inline creatives "
+            f"via this code path yet. FIXME(salesagent-9vgz.1)"
         )
 
 
@@ -2079,10 +2075,24 @@ def given_proposal_exists(ctx: dict, proposal_id: str) -> None:
     else:
         # Ensure request_kwargs exists — the create request needs proposal_id
         ctx.setdefault("request_kwargs", {})["proposal_id"] = proposal_id
+
+    # Postcondition: verify dict intermediaries were set correctly.
+    # These assertions catch bugs in the step itself (e.g., typo in key name,
+    # request_kwargs not wired). They do NOT validate that a proposal entity exists
+    # in the DB — that's the SPEC-PRODUCTION GAP below.
+    assert ctx["expected_proposal_id"] == proposal_id, (
+        f"Postcondition failed: expected_proposal_id={ctx['expected_proposal_id']!r} != {proposal_id!r}"
+    )
+    assert ctx["proposal_not_expired"] is True, "Postcondition failed: proposal_not_expired not set"
+    assert ctx.get("request_kwargs", {}).get("proposal_id") == proposal_id, (
+        f"Postcondition failed: request_kwargs['proposal_id'] not set to {proposal_id!r} — "
+        "the create request will not include the proposal_id"
+    )
+
     # SPEC-PRODUCTION GAP: Step text claims proposal "exists and has not expired"
     # but production has no proposal persistence layer. No proposal entity is created,
     # no expiry date is set, no expiry validation occurs. Dict intermediary only.
-    # Scenario-level xfail (T-UC-002-alt-proposal tag in conftest.py line 229)
+    # Scenario-level xfail (T-UC-002-alt-proposal tag in conftest.py)
     # handles the gap at the correct level. FIXME(salesagent-9vgz.1)
     warnings.warn(
         f"SPEC-PRODUCTION GAP: Proposal '{proposal_id}' — no proposal entity created, "
@@ -2131,12 +2141,27 @@ def given_proposal_allocations(ctx: dict, count: int) -> None:
         f"Allocation percentages count ({len(percentages)}) must match allocation count ({count})"
     )
     assert abs(sum(percentages) - 100.0) < 0.01, f"Allocation percentages must sum to 100%, got {sum(percentages):.2f}%"
+
+    # Postcondition: verify dict intermediaries were set correctly and are
+    # self-consistent. These assertions catch bugs in the step itself (e.g.,
+    # ctx key not written, percentage count mismatch).
+    assert ctx["expected_proposal_allocations"] == count, (
+        f"Postcondition failed: expected_proposal_allocations={ctx['expected_proposal_allocations']} != {count}"
+    )
+    assert len(ctx["expected_allocation_percentages"]) == count, (
+        f"Postcondition failed: allocation percentages length "
+        f"{len(ctx['expected_allocation_percentages'])} != count {count}"
+    )
+    assert ctx.get("expected_proposal_id") is not None, (
+        "Postcondition failed: expected_proposal_id missing — allocations must be linked to a proposal"
+    )
+
     # SPEC-PRODUCTION GAP: Step text claims "the proposal has N product allocations"
     # but no allocation entities are created — only a counter + percentages stored in ctx.
     # Dict intermediaries: ctx["expected_proposal_allocations"] = count,
     # ctx["expected_allocation_percentages"] = [...]. The proposal itself doesn't
     # exist (see given_proposal_exists).
-    # Scenario-level xfail (T-UC-002-alt-proposal tag in conftest.py line 229)
+    # Scenario-level xfail (T-UC-002-alt-proposal tag in conftest.py)
     # handles the gap at the correct level. FIXME(salesagent-9vgz.1)
     import warnings
 

@@ -527,14 +527,18 @@ def given_no_keyword_targets_in_update(ctx: dict) -> None:
     doesn't have keyword_targets set (which would conflict with keyword_targets_add).
     """
     kwargs = _ensure_update_defaults(ctx)
-    if kwargs.get("packages"):
-        pkg = kwargs["packages"][0]
-        overlay = pkg.get("targeting_overlay")
-        if isinstance(overlay, dict):
-            overlay.pop("keyword_targets", None)
-        elif overlay is not None and hasattr(overlay, "keyword_targets"):
-            # Handle Pydantic model overlays (same pattern as negative_keywords guard)
-            overlay.keyword_targets = None
+    assert kwargs.get("packages"), (
+        "No packages in update_kwargs — 'no targeting_overlay.keyword_targets is present' "
+        "requires a prior step that configures at least one package update. "
+        "The context is missing expected structure."
+    )
+    pkg = kwargs["packages"][0]
+    overlay = pkg.get("targeting_overlay")
+    if isinstance(overlay, dict):
+        overlay.pop("keyword_targets", None)
+    elif overlay is not None and hasattr(overlay, "keyword_targets"):
+        # Handle Pydantic model overlays (same pattern as negative_keywords guard)
+        overlay.keyword_targets = None
 
 
 @given("no targeting_overlay.negative_keywords is present in the same package update")
