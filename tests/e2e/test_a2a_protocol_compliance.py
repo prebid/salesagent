@@ -26,6 +26,10 @@ class TestA2AProtocolCompliance:
     """Test A2A protocol compliance with official AdCP schemas."""
 
     @pytest.mark.asyncio
+    @pytest.mark.xfail(
+        reason="AdCP spec does not define oneOf constraint for media_buy_id/buyer_ref on update-media-buy-request",
+        strict=True,
+    )
     async def test_update_media_buy_request_schema_structure(self):
         """
         Test that update_media_buy schema uses 'packages' field.
@@ -123,6 +127,10 @@ class TestA2AProtocolCompliance:
                 )
 
     @pytest.mark.asyncio
+    @pytest.mark.xfail(
+        reason="AdCP spec does not define buyer_refs field on get-media-buy-delivery-request",
+        strict=True,
+    )
     async def test_get_media_buy_delivery_request_schema(self):
         """
         Test that get_media_buy_delivery uses correct parameter names.
