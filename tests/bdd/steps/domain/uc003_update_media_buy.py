@@ -1483,9 +1483,24 @@ def given_creative_assignments_with_placements(ctx: dict, placement_config: str)
     # Handle "product unsupported" — configure product to not support placements
     if "product unsupported" in stripped:
         product = ctx.get("default_product") or ctx.get("existing_product")
+        if product is None:
+            # UC-003 harness doesn't store product in ctx — look up from existing package
+            pkg_obj = ctx.get("existing_package")
+            if pkg_obj is not None:
+                product_id = (pkg_obj.package_config or {}).get("product_id")
+                if product_id:
+                    from sqlalchemy import select
+
+                    from src.core.database.database_session import get_db_session
+                    from src.core.database.models import Product as ProductModel
+
+                    with get_db_session() as session:
+                        product = session.scalars(
+                            select(ProductModel).filter_by(product_id=product_id, tenant_id=ctx["tenant"].tenant_id)
+                        ).first()
         assert product is not None, (
-            "Scenario requires '(product unsupported)' but no product found in ctx — "
-            "ensure a Given step sets ctx['default_product'] or ctx['existing_product'] before this step"
+            "Scenario requires '(product unsupported)' but no product found in ctx or DB — "
+            "ensure a Given step sets ctx['default_product'] or the harness creates a product"
         )
         product.supports_placement_targeting = False
         env._commit_factory_data()
@@ -1568,6 +1583,52 @@ def given_request_with_budget_update(ctx: dict) -> None:
     kwargs["packages"] = [{"package_id": "pkg_001", "budget": 5000.0}]
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# GIVEN steps — partition/boundary: approval workflow flags
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given(parsers.parse("the tenant human_review_required is {tenant_flag}"))
+def given_tenant_human_review_flag(ctx: dict, tenant_flag: str) -> None:
+    """Set the tenant's human_review_required flag for approval workflow tests.
+
+    Delegates to the existing auto-approval / manual-approval helpers in
+    given_media_buy.py, which also configure the adapter mock and identity cache.
+    """
+    from tests.bdd.steps.generic.given_media_buy import (
+        given_tenant_auto_approval,
+        given_tenant_manual_approval,
+    )
+
+    flag = tenant_flag.strip().lower()
+    if flag == "false":
+        given_tenant_auto_approval(ctx)
+    elif flag == "true":
+        given_tenant_manual_approval(ctx)
+    else:
+        raise ValueError(f"Unknown tenant_flag: {tenant_flag}")
+
+
+@given(parsers.parse("the adapter manual_approval_required is {adapter_flag}"))
+def given_adapter_manual_approval_flag(ctx: dict, adapter_flag: str) -> None:
+    """Set the adapter's manual_approval_required flag for approval workflow tests.
+
+    Delegates to the existing adapter approval helpers in given_media_buy.py.
+    """
+    from tests.bdd.steps.generic.given_media_buy import (
+        given_adapter_manual_approval,
+        given_adapter_no_manual_approval,
+    )
+
+    flag = adapter_flag.strip().lower()
+    if flag == "false":
+        given_adapter_no_manual_approval(ctx)
+    elif flag == "true":
+        given_adapter_manual_approval(ctx)
+    else:
+        raise ValueError(f"Unknown adapter_flag: {adapter_flag}")
+
+
 @given(parsers.parse("the tenant approval mode is {approval_mode}"))
 def given_tenant_approval_mode(ctx: dict, approval_mode: str) -> None:
     """Configure the tenant's approval mode.
@@ -1591,13 +1652,16 @@ def given_tenant_approval_mode(ctx: dict, approval_mode: str) -> None:
     env._commit_factory_data()
 
 
-@given(parsers.parse("the adapter {adapter_result}"))
+@given(parsers.re(r"the adapter (?P<adapter_result>returns \w+|not yet called)"))
 def given_adapter_result(ctx: dict, adapter_result: str) -> None:
     """Configure adapter mock behavior for persistence timing tests.
 
     'returns success' — adapter returns normally
     'returns error' — adapter raises an exception
     'not yet called' — adapter not invoked (manual approval path)
+
+    Uses regex to avoid matching 'the adapter manual_approval_required is ...'
+    which is a separate step for approval workflow partition/boundary scenarios.
     """
     stripped = adapter_result.strip()
     env = ctx["env"]
