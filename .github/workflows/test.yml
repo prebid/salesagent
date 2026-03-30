@@ -184,19 +184,20 @@ jobs:
         docker build -t adcp-creative-agent /tmp/adcp-server
 
         # The adcp monolith needs its own Postgres — creative agent is one route in the full app
-        docker run -d --name adcp-postgres \
+        docker network create creative-net
+
+        docker run -d --network creative-net --name adcp-postgres \
           -e POSTGRES_DB=adcp_registry \
           -e POSTGRES_USER=adcp \
           -e POSTGRES_PASSWORD=localdev \
           postgres:16
         sleep 5
 
-        docker run -d --name creative-agent \
+        docker run -d --network creative-net --name creative-agent \
           -p 9999:8080 \
-          --link adcp-postgres:postgres \
           -e NODE_ENV=production \
           -e PORT=8080 \
-          -e DATABASE_URL=postgresql://adcp:localdev@postgres:5432/adcp_registry \
+          -e DATABASE_URL=postgresql://adcp:localdev@adcp-postgres:5432/adcp_registry \
           -e RUN_MIGRATIONS=true \
           -e ALLOW_INSECURE_COOKIES=true \
           -e DEV_USER_EMAIL=ci@test.com \
@@ -401,5 +402,5 @@ jobs:
           echo "❌ Tests failed"
           exit 1
         else
-          echo "✅ All tests passed (security-audit, smoke, unit, integration x4, quickstart, e2e, lint+mypy)"
+          echo "✅ All tests passed (security-audit, smoke, unit, integration x5, quickstart, e2e, lint+mypy)"
         fi
