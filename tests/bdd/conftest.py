@@ -257,6 +257,13 @@ _XFAIL_TAGS: dict[str, str] = {
     # because no Creative rows exist after creation. Gap was previously masked by
     # inline pytest.xfail() in the step body — moved to scenario-level here.
     "T-UC-002-alt-creatives": "inline creative upload not persisted in create_media_buy — spec-production gap",
+    # FIXME(salesagent-0b1): HMAC signature lacks sha256= prefix in WebhookDeliveryService
+    # _generate_hmac_signature returns raw hex digest; spec expects "sha256=" prefix.
+    "T-UC-004-webhook-hmac": "HMAC signature missing sha256= prefix — spec-production gap",
+    # FIXME(salesagent-0b1): WebhookVerifier raises ValueError, not structured AdCPError
+    # ValueError("Webhook secret must be at least 32 characters for security") has no
+    # suggestion field. Spec expects structured error with suggestion for remediation.
+    "T-UC-004-webhook-creds-short": "credential validation error lacks suggestion field — spec-production gap",
 }
 
 # FIXME(beads-dul): Selective xfail for parametrized scenarios where only
@@ -277,6 +284,14 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         "T-UC-005-boundary-asset-types",
         {"brief", "catalog"},
         "brief/catalog asset types not in adcp enum",
+    ),
+    # FIXME(salesagent-0b1): "delayed" notification_type not in production
+    # WebhookDeliveryService.send_delivery_webhook only produces "scheduled",
+    # "final", or "adjusted". Spec also expects "delayed" for late reports.
+    (
+        "T-UC-004-webhook-notification-type",
+        {"delayed"},
+        "delayed notification_type not implemented in production — spec-production gap",
     ),
 ]
 
@@ -371,6 +386,17 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     break
 
         # UC-011 REST: per-request auth implemented (salesagent-xms)
+
+        # FIXME(salesagent-39t): UC-011 push notification — production auto-approves
+        # accounts (status=active immediately), so the Then step asserting
+        # pending_approval->active transition fails. Manual approval not implemented.
+        if "T-UC-011-ext-d-push" in marker_names:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="push notification: production auto-approves accounts, no pending_approval state (spec-production gap)",
+                    strict=True,
+                )
+            )
 
         # FIXME(salesagent-9d5): UC-006 REST — account resolution through CreativeSyncEnv
         # REST route for sync_creatives exists but account kwarg may not be
@@ -1100,7 +1126,10 @@ def _detect_delivery_harness(request: pytest.FixtureRequest) -> str:
     if "webhook-reliability" in marker_names:
         return "circuit-breaker"
     if "webhook" in marker_names:
-        return "webhook"
+        # Webhook scenarios (HMAC, bearer, sequence, notification_type) use
+        # WebhookDeliveryService which lives in CircuitBreakerEnv, not the
+        # older deliver_webhook_with_retry from WebhookEnv.
+        return "circuit-breaker"
     return "poll"
 
 
@@ -1293,7 +1322,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 ctx["env"] = env
                 yield
         elif harness_type == "circuit-breaker":
-            from tests.harness.delivery_circuit_breaker import CircuitBreakerEnv
+            from tests.harness.delivery_circuit_breaker_unit import CircuitBreakerEnv
 
             with CircuitBreakerEnv() as env:
                 ctx["env"] = env
