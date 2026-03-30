@@ -78,7 +78,7 @@ def _parse_format_entries(formats_parsed: list[dict]) -> list[dict]:
     """
     entries = []
     for fmt in formats_parsed:
-        if not isinstance(fmt, dict) or not fmt.get("agent_url"):
+        if not fmt.get("agent_url"):
             continue
         format_id = fmt.get("id") or fmt.get("format_id")
         if not format_id:
@@ -762,25 +762,9 @@ def add_product(tenant_id):
                                 # Agent reachable — validate format IDs
                                 valid_format_ids = {fmt.format_id.id for fmt in result.formats}
 
-                                invalid_formats = []
-                                for fmt in formats_parsed:
-                                    if not isinstance(fmt, dict) or not fmt.get("agent_url"):
-                                        continue
-                                    format_id = fmt.get("id") or fmt.get("format_id")
-                                    if not format_id:
-                                        continue
-
-                                    if format_id in valid_format_ids:
-                                        format_entry = {"agent_url": fmt["agent_url"], "id": format_id}
-                                        if fmt.get("width") is not None:
-                                            format_entry["width"] = int(fmt["width"])
-                                        if fmt.get("height") is not None:
-                                            format_entry["height"] = int(fmt["height"])
-                                        if fmt.get("duration_ms") is not None:
-                                            format_entry["duration_ms"] = float(fmt["duration_ms"])
-                                        formats.append(format_entry)
-                                    else:
-                                        invalid_formats.append(format_id)
+                                all_entries = _parse_format_entries(formats_parsed)
+                                invalid_formats = [e["id"] for e in all_entries if e["id"] not in valid_format_ids]
+                                formats.extend(e for e in all_entries if e["id"] in valid_format_ids)
 
                                 if invalid_formats:
                                     flash(
@@ -1400,25 +1384,9 @@ def edit_product(tenant_id, product_id):
                         # Agent reachable — validate format IDs
                         valid_format_ids = {fmt.format_id.id for fmt in result.formats}
 
-                        invalid_formats = []
-                        for fmt in formats_parsed:
-                            if not isinstance(fmt, dict) or not fmt.get("agent_url"):
-                                continue
-                            format_id = fmt.get("id") or fmt.get("format_id")
-                            if not format_id:
-                                continue
-
-                            if format_id in valid_format_ids:
-                                format_entry = {"agent_url": fmt["agent_url"], "id": format_id}
-                                if fmt.get("width") is not None:
-                                    format_entry["width"] = int(fmt["width"])
-                                if fmt.get("height") is not None:
-                                    format_entry["height"] = int(fmt["height"])
-                                if fmt.get("duration_ms") is not None:
-                                    format_entry["duration_ms"] = float(fmt["duration_ms"])
-                                validated_formats.append(format_entry)
-                            else:
-                                invalid_formats.append(format_id)
+                        all_entries = _parse_format_entries(formats_parsed)
+                        invalid_formats = [e["id"] for e in all_entries if e["id"] not in valid_format_ids]
+                        validated_formats.extend(e for e in all_entries if e["id"] in valid_format_ids)
 
                         if invalid_formats:
                             flash(

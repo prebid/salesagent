@@ -735,11 +735,12 @@ def get_format_by_id(format_id: str, tenant_id: str | None = None) -> Format | N
     Returns:
         Format object or None if not found
     """
+    from src.core.exceptions import AdCPNotFoundError
     from src.core.format_resolver import get_format
 
     try:
         return get_format(format_id, tenant_id=tenant_id)
-    except ValueError:
+    except (ValueError, AdCPNotFoundError):
         return None
 
 

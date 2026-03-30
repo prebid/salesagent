@@ -15,7 +15,7 @@ not the adcp library Format (which does not).
 # Audited: 2026-03-07
 #
 # SPEC_BACKED (2 tests):
-#   test_search_all_agents_no_match_raises_valueerror — AdCP error.json: unknown format_id is an error
+#   test_search_all_agents_no_match_raises_not_found — AdCP error.json: unknown format_id is an error
 #   test_success_returns_formats — AdCP list-creative-formats-response.json: returns formats array
 #
 # DECISION_BACKED (2 tests):
@@ -35,7 +35,7 @@ not the adcp library Format (which does not).
 #   test_no_format_overrides_key_returns_none — locks: None for missing key
 #
 # SUSPECT (3 tests):
-#   test_base_format_lookup_fails_returns_none — salesagent-z4zl: swallows ValueError silently
+#   test_base_format_lookup_fails_returns_none — salesagent-z4zl: swallows AdCPNotFoundError silently
 #   test_registry_creation_fails_returns_empty — salesagent-z60b: infrastructure error → []
 #   test_format_fetch_fails_returns_empty — salesagent-z60b: connection error → []
 # ---
@@ -45,6 +45,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src.core.exceptions import AdCPNotFoundError
 from src.core.schemas import Format
 from tests.helpers.adcp_factories import create_test_format_id
 
@@ -291,8 +292,8 @@ class TestGetFormat:
 
         assert result.name == "Found Format"
 
-    def test_search_all_agents_no_match_raises_valueerror(self):
-        """get_format raises ValueError when format not found in any agent."""
+    def test_search_all_agents_no_match_raises_not_found(self):
+        """get_format raises AdCPNotFoundError when format not found in any agent."""
         mock_fmt = MagicMock()
         mock_fmt.format_id = "video_1920x1080"  # Different format — won't match
 
@@ -302,31 +303,31 @@ class TestGetFormat:
         ):
             from src.core.format_resolver import get_format
 
-            with pytest.raises(ValueError, match="Unknown format_id 'display_300x250'"):
+            with pytest.raises(AdCPNotFoundError, match="Unknown format_id 'display_300x250'"):
                 get_format("display_300x250", tenant_id="t1")
 
     def test_not_found_error_includes_agent_url(self):
-        """ValueError message includes agent_url when provided."""
+        """AdCPNotFoundError message includes agent_url when provided."""
         with (
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg,
             patch("src.core.format_resolver.run_async_in_sync_context", return_value=None),
         ):
             from src.core.format_resolver import get_format
 
-            with pytest.raises(ValueError, match="from agent https://agent.example.com") as exc_info:
+            with pytest.raises(AdCPNotFoundError, match="from agent https://agent.example.com") as exc_info:
                 get_format("display_300x250", agent_url="https://agent.example.com", tenant_id="t1")
 
             assert "for tenant t1" in str(exc_info.value)
 
     def test_not_found_error_no_agent_url_no_tenant(self):
-        """ValueError message is minimal without agent_url and tenant_id."""
+        """AdCPNotFoundError message is minimal without agent_url and tenant_id."""
         with (
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg,
             patch("src.core.format_resolver.run_async_in_sync_context", return_value=[]),
         ):
             from src.core.format_resolver import get_format
 
-            with pytest.raises(ValueError, match="Unknown format_id 'nonexistent'") as exc_info:
+            with pytest.raises(AdCPNotFoundError, match="Unknown format_id 'nonexistent'") as exc_info:
                 get_format("nonexistent")
 
             error_msg = str(exc_info.value)
@@ -380,9 +381,9 @@ class TestProductFormatOverrideEdgeCases:
 
         assert result is None
 
-    # SUSPECT(salesagent-z4zl): swallows ValueError — should override path propagate?
+    # SUSPECT(salesagent-z4zl): swallows AdCPNotFoundError — should override path propagate?
     def test_base_format_lookup_fails_returns_none(self):
-        """Returns None when recursive get_format call raises ValueError."""
+        """Returns None when recursive get_format call raises AdCPNotFoundError."""
         format_overrides = {"display_300x250": {"platform_config": {"gam": {"width": 1}}}}
 
         with (
@@ -390,7 +391,7 @@ class TestProductFormatOverrideEdgeCases:
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg,
             patch(
                 "src.core.format_resolver.get_format",
-                side_effect=ValueError("Format not found"),
+                side_effect=AdCPNotFoundError("Format not found"),
             ),
         ):
             mock_session = mock_db.return_value.__enter__.return_value

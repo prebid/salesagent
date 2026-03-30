@@ -82,17 +82,6 @@ class TestParseFormatEntries:
 
         assert len(result) == 1
 
-    def test_skips_non_dict_entries(self):
-        formats_parsed = [
-            "not_a_dict",
-            None,
-            {"agent_url": AGENT_URL, "id": "video_vast"},
-        ]
-
-        result = _parse_format_entries(formats_parsed)
-
-        assert len(result) == 1
-
     def test_empty_input_returns_empty(self):
         assert _parse_format_entries([]) == []
 

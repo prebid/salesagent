@@ -15,6 +15,7 @@ import pytest
 
 from src.core import creative_agent_registry as creative_agent_registry_module
 from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
+from src.core.exceptions import AdCPNotFoundError
 
 # The live creative agent URL
 CREATIVE_AGENT_URL = "https://creative.adcontextprotocol.org"
@@ -278,7 +279,7 @@ class TestFormatResolverIntegration:
         """Test format_resolver raises clear error for nonexistent format."""
         from src.core.format_resolver import get_format
 
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(AdCPNotFoundError) as exc_info:
             get_format(
                 format_id="nonexistent_format_xyz",
                 agent_url=CREATIVE_AGENT_URL,
