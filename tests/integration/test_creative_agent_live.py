@@ -15,7 +15,7 @@ import pytest
 
 from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
 
-# Configurable via env — CI overrides to local mock server
+# The live creative agent URL — reads env var so CI can point at a containerized agent
 CREATIVE_AGENT_URL = os.environ.get("CREATIVE_AGENT_URL", "https://creative.adcontextprotocol.org")
 CREATIVE_AGENT_URL_WITH_SLASH = CREATIVE_AGENT_URL.rstrip("/") + "/"
 
@@ -170,7 +170,8 @@ class TestURLNormalization:
         print(f"Has trailing slash: {agent_url.endswith('/')}")
 
         # This test documents the behavior - the creative agent returns URLs with trailing slash
-        assert agent_url.startswith("https://creative.adcontextprotocol.org")
+        # Use CREATIVE_AGENT_URL so it works with both live and containerized agents
+        assert agent_url.startswith(CREATIVE_AGENT_URL.rstrip("/"))
 
 
 class TestCacheConsistency:
