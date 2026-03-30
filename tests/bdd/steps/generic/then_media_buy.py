@@ -291,10 +291,16 @@ def then_webhook_notification(ctx: dict) -> None:
     """Assert buyer webhook notification pipeline is configured.
 
     Buyer notifications use push_notification_config — a webhook URL the buyer
-    provides on the request. Production stores this config in PushNotificationConfig;
-    a background worker later POSTs to the URL. This step verifies the config
-    was persisted (proves the buyer WILL be notified), not that the HTTP POST
-    happened (that's async, tested in integration/e2e).
+    provides on the request. Production stores this in PushNotificationConfig;
+    context_manager._send_push_notifications() delivers synchronously on status change.
+
+    This step verifies the config was persisted (proves delivery will happen when
+    the context manager processes the status change). Actual HTTP delivery is behind
+    the mocked context_manager — verifying dispatch requires un-mocking it, which
+    is a harness architecture change tracked separately.
+
+    Verifies: config exists in DB, URL matches request, scoped to tenant.
+    Does NOT verify: HTTP POST to the URL (context_manager is mocked).
     """
     from sqlalchemy import select
 
@@ -528,8 +534,11 @@ def then_creative_assignment_records_persisted(ctx: dict) -> None:
     # Count expected creative assignments from the request
     request_kwargs = ctx.get("request_kwargs", {})
     expected_count = sum(len(pkg.get("creative_ids", []) or []) for pkg in request_kwargs.get("packages", []))
-    if expected_count == 0:
-        return  # No creative assignments expected
+    assert expected_count > 0, (
+        "Step claims 'creative assignment records should be persisted' but request "
+        "contains no creative_ids — either the scenario setup is wrong or this step "
+        "should not be used here"
+    )
 
     from sqlalchemy import func, select
 

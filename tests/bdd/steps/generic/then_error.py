@@ -498,13 +498,15 @@ def then_suggestion_agent_url_id(ctx: dict) -> None:
     """Assert suggestion advises including both agent_url AND id fields."""
     import re
 
-    d = _get_error_dict(ctx.get("error"))
+    error = ctx.get("error")
+    assert error is not None, "No error in ctx — cannot check suggestion"
+    d = _get_error_dict(error)
     suggestion = d.get("suggestion", "")
     assert suggestion, "Expected non-empty suggestion"
     suggestion_lower = suggestion.lower()
-    assert "agent_url" in suggestion_lower or "uri" in suggestion_lower, (
-        f"Expected agent_url/URI in suggestion: {suggestion}"
-    )
+    # Step text says "agent_url (URI)" — parenthetical describes the type, not an alias.
+    # Require "agent_url" specifically.
+    assert "agent_url" in suggestion_lower, f"Expected 'agent_url' in suggestion: {suggestion}"
     # Use word-boundary match to avoid false positives from "valid", "provide", etc.
     assert re.search(r"\bid\b", suggestion_lower), (
         f"Expected 'id' field reference (word-boundary) in suggestion: {suggestion}"
