@@ -12,6 +12,11 @@ if TYPE_CHECKING:
 from adcp import Error
 from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import CreateMediaBuyRequest as LibraryCreateMediaBuyRequest
+from adcp.types import (
+    DeliveryStatus,  # noqa: F401 — used by Snapshot below
+    PriceGuidance,  # Replaces local PriceGuidance class
+    PricingModel,  # Replaces local PricingModel enum (lowercase members: .cpm, .cpc, etc.)
+)
 
 # Import main request/response types from stable API
 from adcp.types import Format as LibraryFormat
@@ -26,11 +31,6 @@ from adcp.types import PackageRequest as LibraryPackageRequest
 # Import types from stable API (per adcp 2.9.0+ - all types now in stable)
 # Note: AffectedPackage was removed in 2.9.0, use Package instead
 from adcp.types import PackageUpdate as LibraryPackageUpdate
-from adcp.types import (
-    PriceGuidance,  # Replaces local PriceGuidance class
-    PricingModel,  # Replaces local PricingModel enum (lowercase members: .cpm, .cpc, etc.)
-)
-from adcp.types import DeliveryStatus  # noqa: F401 — used by Snapshot below
 from adcp.types import UpdateMediaBuyRequest as LibraryUpdateMediaBuyRequest
 from adcp.types.aliases import (
     CreateMediaBuyErrorResponse as AdCPCreateMediaBuyError,
