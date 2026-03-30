@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from src.core.exceptions import AdCPAdapterError
 from src.core.signals_agent_registry import SignalsAgent, SignalsAgentRegistry
 
 
@@ -61,7 +62,7 @@ class TestGetSignalsAnomalousStatusesMustRaise:
 
         mock_client = _mock_adcp_client(mock_result)
 
-        with pytest.raises((ValueError, RuntimeError)):
+        with pytest.raises(AdCPAdapterError):
             await registry._get_signals_from_agent(mock_client, agent, brief="test", tenant_id="test_tenant")
 
     @pytest.mark.asyncio
@@ -73,7 +74,7 @@ class TestGetSignalsAnomalousStatusesMustRaise:
 
         mock_client = _mock_adcp_client(mock_result)
 
-        with pytest.raises((ValueError, RuntimeError)):
+        with pytest.raises(AdCPAdapterError):
             await registry._get_signals_from_agent(mock_client, agent, brief="test", tenant_id="test_tenant")
 
     @pytest.mark.asyncio
@@ -84,7 +85,7 @@ class TestGetSignalsAnomalousStatusesMustRaise:
 
         mock_client = _mock_adcp_client(mock_result)
 
-        with pytest.raises((ValueError, RuntimeError)):
+        with pytest.raises(AdCPAdapterError):
             await registry._get_signals_from_agent(mock_client, agent, brief="test", tenant_id="test_tenant")
 
 
