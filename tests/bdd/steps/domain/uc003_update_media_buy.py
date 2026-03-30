@@ -1581,11 +1581,17 @@ def given_adapter_result(ctx: dict, adapter_result: str) -> None:
 
     if stripped == "returns success":
         # Default behavior — adapter returns normally
-        if "adapter" in env.mock:
-            env.mock["adapter"].return_value.update_order.side_effect = None
+        assert "adapter" in env.mock, (
+            "Step claims 'the adapter returns success' but no adapter mock is registered in env.mock. "
+            "Ensure the test environment sets up the adapter mock before this step."
+        )
+        env.mock["adapter"].return_value.update_order.side_effect = None
     elif stripped == "returns error":
-        if "adapter" in env.mock:
-            env.mock["adapter"].return_value.update_order.side_effect = Exception("Adapter error: update failed")
+        assert "adapter" in env.mock, (
+            "Step claims 'the adapter returns error' but no adapter mock is registered in env.mock. "
+            "Ensure the test environment sets up the adapter mock before this step."
+        )
+        env.mock["adapter"].return_value.update_order.side_effect = Exception("Adapter error: update failed")
     elif stripped == "not yet called":
         # Manual approval — adapter won't be called
         pass
