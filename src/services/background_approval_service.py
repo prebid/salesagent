@@ -96,14 +96,14 @@ def _run_approval_polling_thread(
                 from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
                 adapter_repo = AdapterConfigRepository(db, tenant_id)
-                adapter_config = adapter_repo.get_by_tenant()
+                adapter_config = adapter_repo.find_by_tenant()
                 if not adapter_config or adapter_config.adapter_type != "google_ad_manager":
                     raise ValueError(f"No GAM adapter config found for tenant {tenant_id}")
 
                 if not adapter_config.gam_network_code:
                     raise ValueError(f"GAM network code not configured for tenant {tenant_id}")
 
-                gam_config = adapter_repo.get_gam_config()
+                gam_config = adapter_repo.get_gam_config(adapter_config)
 
             # Initialize GAM client and orders manager
             client_manager = GAMClientManager(gam_config, adapter_config.gam_network_code)

@@ -12,6 +12,8 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+import sqlalchemy.exc
+
 from src.adapters.base_workflow import BaseWorkflowManager
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
@@ -163,7 +165,7 @@ class GAMWorkflowManager(BaseWorkflowManager):
                 tenant_obj = db_session.scalars(select(Tenant).filter_by(tenant_id=self.tenant_id)).first()
                 if tenant_obj:
                     tenant_gemini_key = tenant_obj.gemini_api_key
-        except Exception as e:
+        except sqlalchemy.exc.SQLAlchemyError as e:
             logger.warning(f"Could not load tenant Gemini key: {e}")
 
         naming_context = build_order_name_context(

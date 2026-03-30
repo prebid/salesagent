@@ -4,6 +4,7 @@ Verifies tenant-scoped access to adapter configuration for both OAuth
 and service account GAM authentication methods.
 
 Part of the AdapterConfigRepository introduction (salesagent-zj9 epic).
+Redesigned in salesagent-9buv: fail-loud get_by_tenant, pure logic methods.
 """
 
 import json
@@ -17,7 +18,10 @@ from sqlalchemy import delete
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig
 from src.core.database.models import Tenant as ModelTenant
-from src.core.database.repositories.adapter_config import AdapterConfigRepository
+from src.core.database.repositories.adapter_config import (
+    AdapterConfigRepository,
+    TenantNotConfiguredError,
+)
 
 # Test encryption key
 _TEST_ENCRYPTION_KEY = Fernet.generate_key().decode()
@@ -125,7 +129,7 @@ def _tenants(integration_db, _encryption_key):
 @pytest.mark.integration
 @pytest.mark.requires_db
 class TestAdapterConfigRepositoryRead:
-    """Test read methods of AdapterConfigRepository."""
+    """Test query methods of AdapterConfigRepository."""
 
     def test_get_by_tenant_returns_config(self, _tenants, _encryption_key):
         with get_db_session() as session:
@@ -135,10 +139,25 @@ class TestAdapterConfigRepositoryRead:
         assert config.adapter_type == "google_ad_manager"
         assert config.gam_network_code == "111222333"
 
-    def test_get_by_tenant_returns_none_for_unconfigured(self, _tenants):
+    def test_get_by_tenant_raises_for_unconfigured(self, _tenants):
+        """get_by_tenant raises TenantNotConfiguredError when row missing."""
         with get_db_session() as session:
             repo = AdapterConfigRepository(session, "repo_test_none")
-            config = repo.get_by_tenant()
+            with pytest.raises(TenantNotConfiguredError, match="repo_test_none"):
+                repo.get_by_tenant()
+
+    def test_find_by_tenant_returns_config(self, _tenants, _encryption_key):
+        with get_db_session() as session:
+            repo = AdapterConfigRepository(session, "repo_test_oauth")
+            config = repo.find_by_tenant()
+        assert config is not None
+        assert config.adapter_type == "google_ad_manager"
+
+    def test_find_by_tenant_returns_none_for_unconfigured(self, _tenants):
+        """find_by_tenant returns None when row missing (normal-absence case)."""
+        with get_db_session() as session:
+            repo = AdapterConfigRepository(session, "repo_test_none")
+            config = repo.find_by_tenant()
         assert config is None
 
     def test_get_adapter_type_oauth(self, _tenants):
@@ -151,61 +170,66 @@ class TestAdapterConfigRepositoryRead:
             repo = AdapterConfigRepository(session, "repo_test_none")
             assert repo.get_adapter_type() is None
 
+
+@pytest.mark.integration
+@pytest.mark.requires_db
+class TestAdapterConfigRepositoryLogicMethods:
+    """Test pure logic methods accept pre-loaded config (no DB)."""
+
     def test_has_gam_credentials_oauth(self, _tenants):
         with get_db_session() as session:
             repo = AdapterConfigRepository(session, "repo_test_oauth")
-            assert repo.has_gam_credentials() is True
+            config = repo.find_by_tenant()
+            assert config is not None
+            assert repo.has_gam_credentials(config) is True
 
     def test_has_gam_credentials_service_account(self, _tenants, _encryption_key):
         with get_db_session() as session:
             repo = AdapterConfigRepository(session, "repo_test_sa")
-            assert repo.has_gam_credentials() is True
+            config = repo.find_by_tenant()
+            assert config is not None
+            assert repo.has_gam_credentials(config) is True
 
     def test_has_gam_credentials_false_for_mock(self, _tenants):
         with get_db_session() as session:
             repo = AdapterConfigRepository(session, "repo_test_mock")
-            assert repo.has_gam_credentials() is False
-
-    def test_has_gam_credentials_false_for_unconfigured(self, _tenants):
-        with get_db_session() as session:
-            repo = AdapterConfigRepository(session, "repo_test_none")
-            assert repo.has_gam_credentials() is False
-
-
-@pytest.mark.integration
-@pytest.mark.requires_db
-class TestAdapterConfigRepositoryGAMConfig:
-    """Test GAM-specific config construction methods."""
+            config = repo.find_by_tenant()
+            assert config is not None
+            assert repo.has_gam_credentials(config) is False
 
     def test_get_gam_config_oauth(self, _tenants, _encryption_key):
         with get_db_session() as session:
             repo = AdapterConfigRepository(session, "repo_test_oauth")
-            config = repo.get_gam_config()
-        assert config["refresh_token"] == "test_refresh"
-        assert "service_account_json" not in config
-        assert config["network_code"] == "111222333"
-        assert config["manual_approval_required"] is True
+            config = repo.get_by_tenant()
+            gam_config = repo.get_gam_config(config)
+        assert gam_config["refresh_token"] == "test_refresh"
+        assert "service_account_json" not in gam_config
+        assert gam_config["network_code"] == "111222333"
+        assert gam_config["manual_approval_required"] is True
 
     def test_get_gam_config_service_account(self, _tenants, _encryption_key):
         with get_db_session() as session:
             repo = AdapterConfigRepository(session, "repo_test_sa")
-            config = repo.get_gam_config()
-        assert "service_account_json" in config
-        parsed = json.loads(config["service_account_json"])
+            config = repo.get_by_tenant()
+            gam_config = repo.get_gam_config(config)
+        assert "service_account_json" in gam_config
+        parsed = json.loads(gam_config["service_account_json"])
         assert parsed["type"] == "service_account"
-        assert "refresh_token" not in config
-        assert config["network_code"] == "444555666"
+        assert "refresh_token" not in gam_config
+        assert gam_config["network_code"] == "444555666"
 
     def test_get_gam_config_raises_for_non_gam(self, _tenants):
         with get_db_session() as session:
             repo = AdapterConfigRepository(session, "repo_test_mock")
+            config = repo.get_by_tenant()
             with pytest.raises(ValueError, match="not a GAM adapter"):
-                repo.get_gam_config()
+                repo.get_gam_config(config)
 
     def test_get_gam_targeting_config(self, _tenants):
         with get_db_session() as session:
             repo = AdapterConfigRepository(session, "repo_test_oauth")
-            targeting = repo.get_gam_targeting_config()
+            config = repo.get_by_tenant()
+            targeting = repo.get_gam_targeting_config(config)
         assert targeting["axe_include_key"] == "hb_pb"
         assert targeting["axe_exclude_key"] == "hb_exclude"
         assert targeting["custom_targeting_keys"]["hb_pb"] == "123"
@@ -213,13 +237,28 @@ class TestAdapterConfigRepositoryGAMConfig:
     def test_get_gam_naming_templates(self, _tenants):
         with get_db_session() as session:
             repo = AdapterConfigRepository(session, "repo_test_oauth")
-            order_tmpl, li_tmpl = repo.get_gam_naming_templates()
+            config = repo.get_by_tenant()
+            order_tmpl, li_tmpl = repo.get_gam_naming_templates(config)
         assert order_tmpl == "Order: {buyer}"
         assert li_tmpl == "LI: {product}"
 
     def test_get_gam_naming_templates_none_when_unset(self, _tenants, _encryption_key):
         with get_db_session() as session:
             repo = AdapterConfigRepository(session, "repo_test_sa")
-            order_tmpl, li_tmpl = repo.get_gam_naming_templates()
+            config = repo.get_by_tenant()
+            order_tmpl, li_tmpl = repo.get_gam_naming_templates(config)
         assert order_tmpl is None
         assert li_tmpl is None
+
+
+@pytest.mark.integration
+@pytest.mark.requires_db
+class TestAdapterConfigRepositoryWrite:
+    """Test write methods raise on missing config."""
+
+    def test_update_custom_targeting_keys_raises_when_missing(self, _tenants):
+        """update_custom_targeting_keys raises TenantNotConfiguredError when row missing."""
+        with get_db_session() as session:
+            repo = AdapterConfigRepository(session, "repo_test_none")
+            with pytest.raises(TenantNotConfiguredError, match="repo_test_none"):
+                repo.update_custom_targeting_keys({"key": "value"})

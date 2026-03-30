@@ -140,7 +140,7 @@ def _run_approval_thread(
             from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
             adapter_repo = AdapterConfigRepository(db, tenant_id)
-            adapter_config = adapter_repo.get_by_tenant()
+            adapter_config = adapter_repo.find_by_tenant()
 
             if not adapter_config or not adapter_config.gam_network_code:
                 _mark_approval_failed(
@@ -148,7 +148,7 @@ def _run_approval_thread(
                 )
                 return
 
-            gam_config = adapter_repo.get_gam_config()
+            gam_config = adapter_repo.get_gam_config(adapter_config)
 
         # Create GAM client
         from src.adapters.gam.client import GAMClientManager

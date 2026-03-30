@@ -1509,13 +1509,13 @@ def create_inventory_endpoints(app):
             from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
             adapter_repo = AdapterConfigRepository(db_session, tenant_id)
-            adapter_config = adapter_repo.get_by_tenant()
+            adapter_config = adapter_repo.find_by_tenant()
 
             if not adapter_config:
                 db_session.remove()
                 return jsonify({"error": "GAM configuration not found"}), 400
 
-            gam_config = adapter_repo.get_gam_config()
+            gam_config = adapter_repo.get_gam_config(adapter_config)
 
             # Create dummy principal for client initialization
             from src.core.schemas import Principal
@@ -1718,13 +1718,13 @@ def create_inventory_endpoints(app):
             from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
             adapter_repo = AdapterConfigRepository(db_session, tenant_id)
-            adapter_config = adapter_repo.get_by_tenant()
+            adapter_config = adapter_repo.find_by_tenant()
 
             if not adapter_config:
                 db_session.remove()
                 return jsonify({"error": "GAM configuration not found"}), 400
 
-            gam_config = adapter_repo.get_gam_config()
+            gam_config = adapter_repo.get_gam_config(adapter_config)
 
             # Create dummy principal
             from src.core.schemas import Principal

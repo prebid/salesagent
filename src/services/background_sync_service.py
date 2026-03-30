@@ -179,7 +179,7 @@ def _run_sync_thread(
             from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
             adapter_repo = AdapterConfigRepository(db, tenant_id)
-            adapter_config = adapter_repo.get_by_tenant()
+            adapter_config = adapter_repo.find_by_tenant()
 
             if (
                 not adapter_config

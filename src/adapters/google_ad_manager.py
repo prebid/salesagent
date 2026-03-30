@@ -17,6 +17,8 @@ import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+import sqlalchemy.exc
+
 if TYPE_CHECKING:
     from src.core.schemas import Snapshot
 
@@ -93,6 +95,8 @@ class GoogleAdManager(AdServerAdapter):
         dry_run: bool = False,
         audit_logger: AuditLogger | None = None,
         tenant_id: str | None = None,
+        targeting_config: dict[str, Any] | None = None,
+        naming_templates: tuple[str | None, str | None] | None = None,
     ):
         """Initialize Google Ad Manager adapter with modular managers.
 
@@ -105,6 +109,10 @@ class GoogleAdManager(AdServerAdapter):
             dry_run: Whether to run in dry-run mode
             audit_logger: Audit logging instance
             tenant_id: Tenant identifier
+            targeting_config: Pre-loaded targeting config from AdapterConfigRepository.
+                If None, uses empty defaults (caller should pre-load via repository).
+            naming_templates: Pre-loaded (order_template, line_item_template) tuple.
+                If None, uses (None, None) defaults.
         """
         super().__init__(config, principal, dry_run, None, tenant_id)
         assert self.tenant_id is not None  # Guaranteed by base class validation
@@ -134,22 +142,11 @@ class GoogleAdManager(AdServerAdapter):
 
         # advertiser_id is only required for order/campaign operations, not inventory sync
 
-        # Pre-load targeting config and naming templates from repository
-        # (eliminates circular dependency: adapter managers no longer query the DB)
-        self._targeting_config: dict | None = None
-        self._order_name_template: str | None = None
-        self._line_item_name_template: str | None = None
+        # Use pre-loaded config from caller (no DB query in __init__)
+        self._targeting_config = targeting_config
+        self._order_name_template: str | None = naming_templates[0] if naming_templates else None
+        self._line_item_name_template: str | None = naming_templates[1] if naming_templates else None
         self._placement_targeting_map: dict[str, str] = {}
-        try:
-            from src.core.database.database_session import get_db_session
-            from src.core.database.repositories.adapter_config import AdapterConfigRepository
-
-            with get_db_session() as session:
-                repo = AdapterConfigRepository(session, self.tenant_id)
-                self._targeting_config = repo.get_gam_targeting_config()
-                self._order_name_template, self._line_item_name_template = repo.get_gam_naming_templates()
-        except Exception as e:
-            logger.warning(f"Could not pre-load adapter config for tenant {self.tenant_id}: {e}")
 
         # Skip auth validation in dry_run mode (for testing)
         if not self.dry_run:
@@ -630,7 +627,7 @@ class GoogleAdManager(AdServerAdapter):
                 tenant_obj = db_session.scalars(tenant_stmt).first()
                 if tenant_obj:
                     tenant_gemini_key = tenant_obj.gemini_api_key
-        except Exception as e:
+        except sqlalchemy.exc.SQLAlchemyError as e:
             logger.warning(f"Could not load tenant Gemini key: {e}")
 
         context = build_order_name_context(request, packages, start_time, end_time, tenant_gemini_key=tenant_gemini_key)
