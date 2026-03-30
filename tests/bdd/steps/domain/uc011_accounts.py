@@ -35,7 +35,11 @@ def _setup_tenant_and_principal(ctx: dict) -> tuple[Any, Any]:
 
 
 def _create_accessible_account(ctx: dict, status: str = "active", **kwargs: Any) -> Any:
-    """Create an account and grant agent access to it."""
+    """Create an account and grant agent access to it.
+
+    Tracks created account IDs in ctx["expected_account_ids"] and statuses
+    in ctx["created_statuses"] for assertion verification.
+    """
     tenant, principal = _setup_tenant_and_principal(ctx)
     account = AccountFactory(tenant=tenant, status=status, **kwargs)
     AgentAccountAccessFactory(
@@ -43,6 +47,8 @@ def _create_accessible_account(ctx: dict, status: str = "active", **kwargs: Any)
         principal=principal,
         account=account,
     )
+    ctx.setdefault("expected_account_ids", set()).add(account.account_id)
+    ctx.setdefault("created_statuses", set()).add(status)
     return account
 
 
@@ -420,30 +426,38 @@ def then_accounts_array_count(ctx: dict, count: int) -> None:
 
 @then("each account includes account_id, name, status, advertiser, rate_card, and payment_terms")
 def then_accounts_have_fields(ctx: dict) -> None:
-    """Assert each account has the required fields."""
+    """Assert each account has the required fields with non-None values.
+
+    account_id, name, status are always required.
+    advertiser, rate_card, payment_terms: Gherkin says "includes" so we verify
+    they are not None (not just that the attribute exists on the Pydantic model).
+    """
     resp = ctx["response"]
     for i, acct in enumerate(resp.accounts):
         assert acct.account_id is not None, f"Account {i} missing account_id"
         assert acct.name is not None, f"Account {i} missing name"
         assert acct.status is not None, f"Account {i} missing status"
-        # advertiser, rate_card, payment_terms may be None but the fields should exist
-        assert hasattr(acct, "advertiser"), f"Account {i} missing advertiser field"
-        assert hasattr(acct, "rate_card"), f"Account {i} missing rate_card field"
-        assert hasattr(acct, "payment_terms"), f"Account {i} missing payment_terms field"
+        assert acct.advertiser is not None, f"Account {i} has advertiser=None (expected populated)"
+        assert acct.rate_card is not None, f"Account {i} has rate_card=None (expected populated)"
+        assert acct.payment_terms is not None, f"Account {i} has payment_terms=None (expected populated)"
 
 
 @then("the accounts are only those accessible to the authenticated agent")
 def then_accounts_are_agent_scoped(ctx: dict) -> None:
-    """Assert returned accounts are scoped to the authenticated agent.
+    """Assert returned accounts are exactly those created for the authenticated agent.
 
-    All accounts should belong to our test agent — verified by the fact that
-    we created exactly N accounts with agent access and got N back.
+    Compares returned account_ids against the set created by Given steps
+    (tracked in ctx["expected_account_ids"]).
     """
     resp = ctx["response"]
     assert resp is not None, "Expected a response"
-    # The Given step created accounts with access for our principal,
-    # so if the count matches, scoping is working.
-    assert len(resp.accounts) > 0, "Expected at least one account for scoping test"
+    expected_ids = ctx.get("expected_account_ids", set())
+    assert expected_ids, "Test setup error: no expected_account_ids tracked by Given steps"
+    returned_ids = {acct.account_id for acct in resp.accounts}
+    assert returned_ids == expected_ids, (
+        f"Scoping mismatch: returned {returned_ids}, expected {expected_ids}. "
+        f"Extra: {returned_ids - expected_ids}, Missing: {expected_ids - returned_ids}"
+    )
 
 
 @then(parsers.parse('the response contains only accounts with status "{status}"'))
@@ -458,14 +472,25 @@ def then_only_status(ctx: dict, status: str) -> None:
 
 @then("accounts with other statuses are excluded")
 def then_other_statuses_excluded(ctx: dict) -> None:
-    """Assert no accounts with different statuses are present.
+    """Assert no accounts with statuses other than the filtered one are present.
 
-    This is a vacuous truth assertion — if only_status passed,
-    other statuses are by definition excluded.
+    Uses ctx["created_statuses"] (all statuses from Given) and the response
+    to verify that non-matching statuses were actually excluded, not just
+    that matching ones are present.
     """
-    # Already verified by the only_status step above
     resp = ctx["response"]
     assert resp is not None, "Expected a response"
+    created_statuses = ctx.get("created_statuses", set())
+    returned_statuses = {_status_str(acct.status) for acct in resp.accounts}
+    # The previous only_status step already verified all returned have the target.
+    # This step verifies the exclusion is real: created statuses that aren't in
+    # the response were actually filtered out (not just absent by coincidence).
+    assert len(created_statuses) > 1, "Test setup should create accounts with multiple statuses to verify exclusion"
+    excluded = created_statuses - returned_statuses
+    assert len(excluded) > 0, (
+        f"Expected some statuses to be excluded, but all created statuses "
+        f"({created_statuses}) appear in response ({returned_statuses})"
+    )
 
 
 @then("the response contains an empty accounts array")
