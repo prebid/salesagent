@@ -421,6 +421,13 @@ json.dump(scoped, open('$REINSPECT_REPORT', 'w'), indent=2)
     # Parse JSON test reports
     LATEST_REPORT=$(ls -td test-results/*/ 2>/dev/null | head -1)
     if [ -n "$LATEST_REPORT" ]; then
+      # Guard: if the results directory is empty (Docker crash), force STOP
+      JSON_COUNT=$(find "$LATEST_REPORT" -name "*.json" -maxdepth 1 2>/dev/null | wc -l | tr -d ' ')
+      if [ "$JSON_COUNT" -eq 0 ]; then
+        echo "  ⚠ EMPTY TEST RESULTS — Docker likely crashed during test run" > "$RESULTS_SUMMARY"
+        echo "  Directory: $LATEST_REPORT (0 JSON files)"  >> "$RESULTS_SUMMARY"
+        echo "  STOP: empty results, cannot evaluate" >> "$RESULTS_SUMMARY"
+      fi
       echo "Test results from $LATEST_REPORT:" > "$RESULTS_SUMMARY"
       for f in "$LATEST_REPORT"*.json; do
         SUITE=$(basename "$f" .json)
