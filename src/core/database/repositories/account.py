@@ -75,6 +75,32 @@ class AccountRepository:
             stmt = stmt.where(Account.sandbox.is_(None) | (Account.sandbox == False))  # noqa: E712
         return self._session.scalars(stmt).first()
 
+    def list_by_natural_key(
+        self,
+        operator: str,
+        brand_domain: str,
+        brand_id: str | None = None,
+        sandbox: bool | None = None,
+        limit: int = 2,
+    ) -> list[Account]:
+        """List accounts matching a natural key (up to limit, for ambiguity detection).
+
+        Single query replaces the previous count_by_natural_key + get_by_natural_key
+        two-round-trip pattern. Check len(result) for ambiguity.
+        """
+        stmt = select(Account).where(
+            Account.tenant_id == self._tenant_id,
+            Account.operator == operator,
+            Account.brand["domain"].as_string() == brand_domain,
+        )
+        if brand_id is not None:
+            stmt = stmt.where(Account.brand["brand_id"].as_string() == brand_id)
+        if sandbox is not None:
+            stmt = stmt.where(Account.sandbox == sandbox)
+        else:
+            stmt = stmt.where(Account.sandbox.is_(None) | (Account.sandbox == False))  # noqa: E712
+        return list(self._session.scalars(stmt.limit(limit)).all())
+
     def count_by_natural_key(
         self,
         operator: str,
@@ -82,7 +108,10 @@ class AccountRepository:
         brand_id: str | None = None,
         sandbox: bool | None = None,
     ) -> int:
-        """Count accounts matching a natural key (for ambiguity detection)."""
+        """Count accounts matching a natural key (for ambiguity detection).
+
+        Deprecated: prefer list_by_natural_key(limit=2) to avoid double query.
+        """
         from sqlalchemy import func
 
         stmt = (

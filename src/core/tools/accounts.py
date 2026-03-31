@@ -124,15 +124,13 @@ def _list_accounts_impl(
         req = ListAccountsRequest()
 
     # BR-RULE-055 INV-3: unauthenticated → auth error (consistent with sync_accounts)
-    if identity is None or identity.tenant_id is None:
+    if identity is None or identity.principal_id is None or identity.tenant_id is None:
         from src.core.exceptions import AdCPAuthenticationError
 
         raise AdCPAuthenticationError("Authentication required for list_accounts")
 
     tenant_id = identity.tenant_id
     principal_id = identity.principal_id
-    assert tenant_id is not None  # guarded above
-    assert principal_id is not None  # guarded above
 
     with AccountUoW(tenant_id) as uow:
         assert uow.accounts is not None
@@ -289,8 +287,11 @@ def _account_fields_changed(db_account: DBAccount, entry: Any) -> dict[str, Any]
         changes["sandbox"] = entry.sandbox
 
     # Compare governance_agents (JSON field)
+    # Both sides must be serialized to dicts for comparison — db_account.governance_agents
+    # is hydrated to list[GovernanceAgent] by JSONType, while incoming is already serialized.
     incoming_gov = _serialize_governance_agents(entry.governance_agents)
-    if db_account.governance_agents != incoming_gov:
+    db_gov = _serialize_governance_agents(db_account.governance_agents)
+    if db_gov != incoming_gov:
         changes["governance_agents"] = incoming_gov
 
     return changes
