@@ -48,12 +48,11 @@ def start_inventory_sync_background(
 
     # Create sync job record
     with get_db_session() as db:
-        # Get adapter type for the tenant
-        from src.core.database.models import AdapterConfig
+        # Get adapter type for the tenant via repository
+        from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
-        adapter_config_stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id)
-        adapter_config = db.scalars(adapter_config_stmt).first()
-        adapter_type = adapter_config.adapter_type if adapter_config else "mock"
+        adapter_repo = AdapterConfigRepository(db, tenant_id)
+        adapter_type = adapter_repo.get_adapter_type() or "mock"
 
         # Check if sync already running
         stmt = select(SyncJob).where(
@@ -167,7 +166,7 @@ def _run_sync_thread(
         from googleads import ad_manager, oauth2
 
         from src.adapters.gam_inventory_discovery import GAMInventoryDiscovery
-        from src.core.database.models import AdapterConfig, Tenant
+        from src.core.database.models import Tenant
         from src.services.gam_inventory_service import GAMInventoryService
 
         # Get tenant and adapter config (fresh session per thread)
@@ -177,11 +176,16 @@ def _run_sync_thread(
                 _mark_sync_failed(sync_id, "Tenant not found")
                 return
 
-            adapter_config = db.scalars(
-                select(AdapterConfig).filter_by(tenant_id=tenant_id, adapter_type="google_ad_manager")
-            ).first()
+            from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
-            if not adapter_config or not adapter_config.gam_network_code:
+            adapter_repo = AdapterConfigRepository(db, tenant_id)
+            adapter_config = adapter_repo.find_by_tenant()
+
+            if (
+                not adapter_config
+                or adapter_config.adapter_type != "google_ad_manager"
+                or not adapter_config.gam_network_code
+            ):
                 _mark_sync_failed(sync_id, "GAM not configured")
                 return
 

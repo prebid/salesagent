@@ -387,18 +387,12 @@ def sync_orders(tenant_id):
             if not tenant:
                 return jsonify({"error": "Tenant not found"}), 404
 
-            # Get GAM configuration from adapter_config
-            adapter_config = tenant.adapter_config
+            # Validate GAM configuration via repository
+            from src.admin.blueprints.gam import _validate_gam_config
 
-            if not adapter_config or not adapter_config.gam_network_code or not adapter_config.gam_refresh_token:
-                return (
-                    jsonify(
-                        {
-                            "error": "Please connect your GAM account before trying to sync inventory. Go to Ad Server settings to configure GAM."
-                        }
-                    ),
-                    400,
-                )
+            adapter_config, gam_error = _validate_gam_config(db_session, tenant_id)
+            if gam_error:
+                return jsonify({"error": gam_error}), 400
 
             # Import GAM sync functionality
             from src.adapters.gam_order_sync import sync_gam_orders

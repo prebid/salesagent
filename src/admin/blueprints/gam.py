@@ -14,12 +14,25 @@ from src.adapters.gam_reporting_service import GAMReportingService
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
-from src.core.database.models import GAMLineItem, GAMOrder, Tenant
+from src.core.database.models import AdapterConfig, GAMLineItem, GAMOrder, Tenant
+from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
 logger = logging.getLogger(__name__)
 
 # Create blueprint
 gam_bp = Blueprint("gam", __name__, url_prefix="/tenant/<tenant_id>/gam")
+
+
+def _validate_gam_config(session, tenant_id: str) -> tuple[AdapterConfig | None, str | None]:
+    """Validate that a tenant has a complete GAM configuration.
+
+    Returns (adapter_config, None) on success, or (None, error_message) on failure.
+    """
+    repo = AdapterConfigRepository(session, tenant_id)
+    config = repo.find_by_tenant()
+    if not config or not config.gam_network_code or not repo.has_gam_credentials(config):
+        return None, "Please connect your GAM account first. Go to Ad Server settings to configure GAM."
+    return config, None
 
 
 def validate_gam_network_response(network) -> tuple[bool, str | None]:
@@ -488,19 +501,10 @@ def view_gam_line_item(tenant_id, line_item_id):
                 if not tenant:
                     return render_template("error.html", error="Tenant not found"), 404
 
-                # Get GAM configuration from adapter_config
-                from src.core.database.models import AdapterConfig
-
-                adapter_config = db_session.scalars(select(AdapterConfig).filter_by(tenant_id=tenant_id)).first()
-
-                if not adapter_config or not adapter_config.gam_network_code or not adapter_config.gam_refresh_token:
-                    return (
-                        render_template(
-                            "error.html",
-                            error="Please connect your GAM account first. Go to Ad Server settings to configure GAM.",
-                        ),
-                        400,
-                    )
+                # Validate GAM configuration via repository
+                adapter_config, gam_error = _validate_gam_config(db_session, tenant_id)
+                if gam_error:
+                    return render_template("error.html", error=gam_error), 400
 
                 # Initialize GAM reporting service
                 reporting_service = GAMReportingService(
@@ -586,18 +590,10 @@ def get_gam_custom_targeting_keys(tenant_id):
             if not tenant:
                 return jsonify({"error": "Tenant not found"}), 404
 
-            # Get GAM configuration from adapter_config
-            from src.core.database.models import AdapterConfig
-
-            adapter_config = db_session.scalars(select(AdapterConfig).filter_by(tenant_id=tenant_id)).first()
-
-            if not adapter_config or not adapter_config.gam_network_code or not adapter_config.gam_refresh_token:
-                return (
-                    jsonify(
-                        {"error": "Please connect your GAM account first. Go to Ad Server settings to configure GAM."}
-                    ),
-                    400,
-                )
+            # Validate GAM configuration via repository
+            adapter_config, gam_error = _validate_gam_config(db_session, tenant_id)
+            if gam_error:
+                return jsonify({"error": gam_error}), 400
 
             # Create OAuth2 client
             oauth2_client = oauth2.GoogleRefreshTokenClient(
@@ -1117,20 +1113,10 @@ def get_gam_line_item_api(tenant_id, line_item_id):
                 if not tenant:
                     return jsonify({"error": "Tenant not found"}), 404
 
-                # Get GAM configuration from adapter_config
-                from src.core.database.models import AdapterConfig
-
-                adapter_config = db_session.scalars(select(AdapterConfig).filter_by(tenant_id=tenant_id)).first()
-
-                if not adapter_config or not adapter_config.gam_network_code or not adapter_config.gam_refresh_token:
-                    return (
-                        jsonify(
-                            {
-                                "error": "Please connect your GAM account first. Go to Ad Server settings to configure GAM."
-                            }
-                        ),
-                        400,
-                    )
+                # Validate GAM configuration via repository
+                adapter_config, gam_error = _validate_gam_config(db_session, tenant_id)
+                if gam_error:
+                    return jsonify({"error": gam_error}), 400
 
                 # Initialize GAM reporting service
                 reporting_service = GAMReportingService(

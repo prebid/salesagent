@@ -132,13 +132,9 @@ def trigger_sync(tenant_id: str) -> tuple[Response, int]:
             )
 
             # Build GAM config
-            gam_config: dict[str, Any] = {
-                "enabled": True,
-                "network_code": adapter_config.gam_network_code,
-                "refresh_token": adapter_config.gam_refresh_token,
-                "trafficker_id": adapter_config.gam_trafficker_id,
-                "manual_approval_required": adapter_config.gam_manual_approval_required,
-            }
+            from src.adapters.gam import build_gam_config_from_adapter
+
+            gam_config = build_gam_config_from_adapter(adapter_config)
 
             # Create GAM adapter with new modular architecture
             # NOTE: advertiser_id=None is fine for inventory sync operations
@@ -510,13 +506,9 @@ def sync_tenant_orders(tenant_id: str) -> tuple[Response, int]:
             )
 
             # Build GAM config
-            gam_config: dict[str, Any] = {
-                "enabled": True,
-                "network_code": adapter_config.gam_network_code,
-                "refresh_token": adapter_config.gam_refresh_token,
-                "trafficker_id": adapter_config.gam_trafficker_id,
-                "manual_approval_required": adapter_config.gam_manual_approval_required,
-            }
+            from src.adapters.gam import build_gam_config_from_adapter
+
+            gam_config = build_gam_config_from_adapter(adapter_config)
 
             adapter = GoogleAdManager(
                 gam_config,

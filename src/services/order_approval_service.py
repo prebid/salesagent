@@ -134,12 +134,13 @@ def _run_approval_thread(
 
         # Import here to avoid circular dependencies
         from src.adapters.gam.managers.orders import GAMOrdersManager
-        from src.core.database.models import AdapterConfig
 
-        # Get adapter config
+        # Get adapter config via repository
         with get_db_session() as db:
-            stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id, adapter_type="google_ad_manager")
-            adapter_config = db.scalars(stmt).first()
+            from src.core.database.repositories.adapter_config import AdapterConfigRepository
+
+            adapter_repo = AdapterConfigRepository(db, tenant_id)
+            adapter_config = adapter_repo.find_by_tenant()
 
             if not adapter_config or not adapter_config.gam_network_code:
                 _mark_approval_failed(
@@ -147,15 +148,12 @@ def _run_approval_thread(
                 )
                 return
 
+            gam_config = adapter_repo.get_gam_config(adapter_config)
+
         # Create GAM client
         from src.adapters.gam.client import GAMClientManager
 
-        # Build config dict from adapter_config
-        config_dict = {
-            "refresh_token": adapter_config.gam_refresh_token,
-            "service_account_json": adapter_config.gam_service_account_json,
-        }
-        client_manager = GAMClientManager(config_dict, adapter_config.gam_network_code)
+        client_manager = GAMClientManager(gam_config, adapter_config.gam_network_code)
         orders_manager = GAMOrdersManager(client_manager, dry_run=False)
 
         # Poll GAM approval endpoint

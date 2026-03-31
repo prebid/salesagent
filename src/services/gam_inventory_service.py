@@ -19,7 +19,7 @@ from src.adapters.gam_inventory_discovery import (
     GAMInventoryDiscovery,
 )
 from src.core.database.db_config import DatabaseConfig
-from src.core.database.models import AdapterConfig, GAMInventory, Product, ProductInventoryMapping
+from src.core.database.models import GAMInventory, Product, ProductInventoryMapping
 
 # Create database session factory
 engine = create_engine(DatabaseConfig.get_connection_string())
@@ -611,18 +611,15 @@ class GAMInventoryService:
             key_mapping = {row.name: row.inventory_id for row in results}
 
             if key_mapping:
-                # Update adapter_config
-                adapter_config = self.db.scalars(select(AdapterConfig).filter_by(tenant_id=tenant_id)).first()
-                if adapter_config:
-                    adapter_config.custom_targeting_keys = key_mapping
-                    self.db.commit()
-                    logger.info(
-                        f"Updated adapter_config.custom_targeting_keys with {len(key_mapping)} keys for tenant {tenant_id}"
-                    )
-                else:
-                    logger.warning(
-                        f"No adapter_config found for tenant {tenant_id}, skipping targeting key mapping update"
-                    )
+                # Update adapter_config via repository
+                from src.core.database.repositories.adapter_config import AdapterConfigRepository
+
+                adapter_repo = AdapterConfigRepository(self.db, tenant_id)
+                adapter_repo.update_custom_targeting_keys(key_mapping)
+                self.db.commit()
+                logger.info(
+                    f"Updated adapter_config.custom_targeting_keys with {len(key_mapping)} keys for tenant {tenant_id}"
+                )
             else:
                 logger.info(f"No custom targeting keys found in gam_inventory for tenant {tenant_id}")
         except Exception as e:
@@ -1495,7 +1492,7 @@ def create_inventory_endpoints(app):
         try:
             # Get GAM client
             from src.adapters.google_ad_manager import GoogleAdManager
-            from src.core.database.models import AdapterConfig, Tenant
+            from src.core.database.models import Tenant
 
             stmt = select(Tenant).filter_by(tenant_id=tenant_id)
             tenant = db_session.scalars(stmt).first()
@@ -1508,20 +1505,17 @@ def create_inventory_endpoints(app):
                 db_session.remove()
                 return jsonify({"error": "GAM not enabled for tenant"}), 400
 
-            # Get adapter config from adapter_config table
-            stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id)
-            adapter_config = db_session.scalars(stmt).first()
+            # Get GAM config via repository
+            from src.core.database.repositories.adapter_config import AdapterConfigRepository
+
+            adapter_repo = AdapterConfigRepository(db_session, tenant_id)
+            adapter_config = adapter_repo.find_by_tenant()
 
             if not adapter_config:
                 db_session.remove()
                 return jsonify({"error": "GAM configuration not found"}), 400
 
-            # Build GAM config from adapter_config columns
-            gam_config = {
-                "enabled": True,
-                "refresh_token": adapter_config.gam_refresh_token,
-                "manual_approval_required": adapter_config.gam_manual_approval_required,
-            }
+            gam_config = adapter_repo.get_gam_config(adapter_config)
 
             # Create dummy principal for client initialization
             from src.core.schemas import Principal
@@ -1707,7 +1701,7 @@ def create_inventory_endpoints(app):
 
             # Get GAM client
             from src.adapters.google_ad_manager import GoogleAdManager
-            from src.core.database.models import AdapterConfig, Tenant
+            from src.core.database.models import Tenant
 
             stmt = select(Tenant).filter_by(tenant_id=tenant_id)
             tenant = db_session.scalars(stmt).first()
@@ -1720,20 +1714,17 @@ def create_inventory_endpoints(app):
                 db_session.remove()
                 return jsonify({"error": "GAM not enabled for tenant"}), 400
 
-            # Get adapter config
-            stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id)
-            adapter_config = db_session.scalars(stmt).first()
+            # Get GAM config via repository
+            from src.core.database.repositories.adapter_config import AdapterConfigRepository
+
+            adapter_repo = AdapterConfigRepository(db_session, tenant_id)
+            adapter_config = adapter_repo.find_by_tenant()
 
             if not adapter_config:
                 db_session.remove()
                 return jsonify({"error": "GAM configuration not found"}), 400
 
-            # Build GAM config
-            gam_config = {
-                "enabled": True,
-                "refresh_token": adapter_config.gam_refresh_token,
-                "manual_approval_required": adapter_config.gam_manual_approval_required,
-            }
+            gam_config = adapter_repo.get_gam_config(adapter_config)
 
             # Create dummy principal
             from src.core.schemas import Principal

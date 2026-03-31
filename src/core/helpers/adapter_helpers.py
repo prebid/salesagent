@@ -44,14 +44,11 @@ def build_agent_config(agent: _HasAgentFields) -> AgentConfig:
     )
 
 
-from sqlalchemy import select
-
 from src.adapters.google_ad_manager import GoogleAdManager
 from src.adapters.kevel import Kevel
 from src.adapters.mock_ad_server import MockAdServer as MockAdServerAdapter
 from src.adapters.triton_digital import TritonDigital
 from src.core.database.database_session import get_db_session
-from src.core.database.models import AdapterConfig
 from src.core.schemas import Principal
 
 
@@ -86,10 +83,15 @@ def get_adapter(
         selected_adapter = tenant.ad_server or "mock"
     logger.info(f"[ADAPTER_SELECT] Initial selected_adapter from tenant.ad_server: {selected_adapter}")
 
-    # Get adapter config from adapter_config table
+    # Get adapter config via repository
+    from src.core.database.repositories.adapter_config import AdapterConfigRepository
+
+    targeting_config: dict[str, Any] | None = None
+    naming_templates: tuple[str | None, str | None] | None = None
+
     with get_db_session() as session:
-        stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id)
-        config_row = session.scalars(stmt).first()
+        repo = AdapterConfigRepository(session, tenant_id)
+        config_row = repo.find_by_tenant()
 
         adapter_config: dict[str, Any] = {"enabled": True}
         if config_row:
@@ -108,15 +110,9 @@ def get_adapter(
                     else True
                 )
             elif adapter_type == "google_ad_manager":
-                adapter_config["network_code"] = config_row.gam_network_code or ""
-                adapter_config["refresh_token"] = config_row.gam_refresh_token or ""
-                adapter_config["trafficker_id"] = config_row.gam_trafficker_id or ""
-                # Default to True (require approval) for safety
-                adapter_config["manual_approval_required"] = (
-                    config_row.gam_manual_approval_required
-                    if config_row.gam_manual_approval_required is not None
-                    else True
-                )
+                adapter_config = repo.get_gam_config(config_row)
+                targeting_config = repo.get_gam_targeting_config(config_row)
+                naming_templates = repo.get_gam_naming_templates(config_row)
 
                 # Get advertiser_id from principal's platform_mappings (per-principal, not tenant-level)
                 # Support both old format (nested under "google_ad_manager") and new format (root "gam_advertiser_id")
@@ -183,6 +179,8 @@ def get_adapter(
             trafficker_id=adapter_config.get("trafficker_id"),
             dry_run=dry_run,
             tenant_id=tenant_id,
+            targeting_config=targeting_config,
+            naming_templates=naming_templates,
         )
     elif selected_adapter == "kevel":
         return Kevel(adapter_config, principal, dry_run, tenant_id=tenant_id)

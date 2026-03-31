@@ -352,6 +352,7 @@ class GAMOrdersManager:
         order_name: str | None = None,
         package_pricing_info: dict[str, dict] | None = None,
         package_targeting: dict[str, dict] | None = None,
+        line_item_name_template: str | None = None,
     ) -> list[str]:
         """Create line items for an order.
 
@@ -388,19 +389,9 @@ class GAMOrdersManager:
             else:
                 logger.info(msg)
 
-        # Get line item naming template from adapter config
-        line_item_name_template = "{product_name}"  # Default
-        if tenant_id:
-            from sqlalchemy import select
-
-            from src.core.database.database_session import get_db_session
-            from src.core.database.models import AdapterConfig
-
-            with get_db_session() as db_session:
-                stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id)
-                adapter_config = db_session.scalars(stmt).first()
-                if adapter_config and adapter_config.gam_line_item_name_template:
-                    line_item_name_template = adapter_config.gam_line_item_name_template
+        # Use pre-loaded naming template or fallback to default
+        if not line_item_name_template:
+            line_item_name_template = "{product_name}"
 
         created_line_item_ids: list[str] = []
         flight_duration_days = (end_time - start_time).days

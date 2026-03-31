@@ -189,7 +189,8 @@
                             </button>
                         </div>
                         <div class="card-body" style="max-height: 600px; overflow-y: auto;">
-                            <div id="adUnitTree" class="tree-view">
+                            <input type="hidden" id="_inventorySelectedIds" value="">
+                            <div id="adUnitTree" class="inventory-tree-container">
                                 <div class="text-muted">Loading ad unit tree...</div>
                             </div>
                         </div>
@@ -362,46 +363,9 @@
     </div>
 </div>
 
+{% include 'partials/hierarchical_tree_styles.html' %}
+
 <style>
-/* Tree view styles */
-.tree-view {
-    font-family: monospace;
-}
-
-.tree-node {
-    margin-left: 20px;
-    cursor: pointer;
-    user-select: none;
-    padding: 4px;
-}
-
-.tree-node:hover {
-    background-color: #f0f0f0;
-}
-
-.tree-node.selected {
-    background-color: #e3f2fd;
-}
-
-.tree-toggle {
-    display: inline-block;
-    width: 20px;
-    text-align: center;
-}
-
-.node-icon {
-    margin-right: 5px;
-}
-
-.node-status {
-    font-size: 0.8em;
-    margin-left: 10px;
-}
-
-.node-status.active { color: #28a745; }
-.node-status.inactive { color: #6c757d; }
-.node-status.archived { color: #dc3545; }
-
 /* Format selection styles */
 .format-card {
     border: 2px solid #e0e0e0;
@@ -437,11 +401,6 @@
     font-weight: bold;
 }
 
-/* Selection checkbox */
-.tree-node input[type="checkbox"] {
-    margin-right: 8px;
-}
-
 /* Bootstrap tab styles */
 .tab-content {
     display: block !important;
@@ -455,6 +414,8 @@
     display: block;
 }
 </style>
+
+{% include 'partials/hierarchical_tree_scripts.html' %}
 
 <script>
 const tenantId = '{{ tenant_id }}';
@@ -483,6 +444,7 @@ let selectedInventory = null;
 let inventoryTree = null;
 let selectedAdUnitsMap = new Map();  // id -> {id, name, path}
 let selectedPlacementsMap = new Map();  // id -> {id, name}
+const inventoryCache = new Map();  // Cache for shared tree partial
 
 // Show/hide Create Profile button based on active tab
 function updateCreateProfileButtonVisibility() {
@@ -781,17 +743,16 @@ function loadInventoryStatus() {
     const stats = document.getElementById('inventoryStats');
     if (!syncStatus || !stats) return;  // Non-GAM tenant, skip
 
+    // Load stats via the tree API
     fetch(API_URLS.inventoryTree, {
         credentials: 'same-origin'
     })
         .then(response => {
-            // Handle authentication errors (401) by redirecting to login
             if (response.status === 401) {
                 const loginUrl = scriptRoot + '/login?redirect=' + encodeURIComponent(window.location.pathname);
                 window.location.href = loginUrl;
                 return Promise.reject(new Error('Session expired'));
             }
-            // Handle 404 and other errors
             if (!response.ok) {
                 return Promise.reject(new Error(`HTTP ${response.status}: ${response.statusText}`));
             }
@@ -818,7 +779,6 @@ function loadInventoryStatus() {
             `;
 
             inventoryTree = data;
-            renderAdUnitTree(data.root_units || []);
         })
         .catch(error => {
             if (error.message !== 'Session expired') {
@@ -828,6 +788,25 @@ function loadInventoryStatus() {
                 }
             }
         });
+
+    // Load tree via shared partial (fetches and renders independently)
+    loadInventoryTree('', API_URLS.inventoryTree, 'adUnitTree', '_inventorySelectedIds', inventoryCache, attachNodeClickHandlers);
+}
+
+function attachNodeClickHandlers() {
+    document.querySelectorAll('#adUnitTree .tree-node-label').forEach(label => {
+        label.addEventListener('click', function(e) {
+            if (e.target.closest('.tree-toggle')) return;
+            e.preventDefault();
+            e.stopPropagation();
+            const nodeHeader = this.closest('.tree-node-header');
+            const node = this.closest('.tree-node');
+            const unitId = node.dataset.unitId;
+            document.querySelectorAll('#adUnitTree .tree-node-header.selected').forEach(n => n.classList.remove('selected'));
+            nodeHeader.classList.add('selected');
+            selectNode(unitId);
+        });
+    });
 }
 
 function getTimeAgo(date) {
@@ -994,101 +973,7 @@ function performSelectiveSync() {
         });
 }
 
-function renderAdUnitTree(units, container = null) {
-    if (!container) {
-        container = document.getElementById('adUnitTree');
-        container.innerHTML = '';
-    }
-
-    if (units.length === 0) {
-        container.innerHTML = '<p class="text-muted">No ad units found</p>';
-        return;
-    }
-
-    units.forEach(unit => {
-        const node = createTreeNode(unit);
-        container.appendChild(node);
-    });
-}
-
-function createTreeNode(unit) {
-    const div = document.createElement('div');
-    div.className = 'tree-node';
-    div.dataset.unitId = unit.id;
-
-    const hasChildren = unit.children && unit.children.length > 0;
-    const isChecked = selectedAdUnitsMap.has(unit.id);
-
-    // Create checkbox programmatically (prevents XSS)
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
-    checkbox.checked = isChecked;
-    checkbox.onchange = function() {
-        toggleAdUnitSelection(unit.id, unit.name, (unit.path || []).join(' > '), this.checked);
-    };
-
-    // Create toggle span
-    const toggle = document.createElement('span');
-    toggle.className = 'tree-toggle';
-    toggle.textContent = hasChildren ? '▼' : '\u00A0';
-    toggle.onclick = function(e) { toggleNode(this, e); };
-
-    // Create icon span
-    const icon = document.createElement('span');
-    icon.className = 'node-icon';
-    icon.textContent = '📁';
-
-    // Create name span (textContent auto-escapes)
-    const nameSpan = document.createElement('span');
-    nameSpan.className = 'node-name';
-    nameSpan.textContent = unit.name;
-    nameSpan.onclick = function(e) { selectNode(unit.id, e); };
-
-    // Create status span (textContent auto-escapes)
-    const statusSpan = document.createElement('span');
-    statusSpan.className = 'node-status ' + unit.status.toLowerCase();
-    statusSpan.textContent = '[' + unit.status + ']';
-
-    // Append all elements in order
-    div.appendChild(checkbox);
-    div.appendChild(toggle);
-    div.appendChild(icon);
-    div.appendChild(nameSpan);
-    div.appendChild(statusSpan);
-
-    if (hasChildren) {
-        const childContainer = document.createElement('div');
-        childContainer.className = 'tree-children';
-        childContainer.style.display = 'block';
-        renderAdUnitTree(unit.children, childContainer);
-        div.appendChild(childContainer);
-    }
-
-    return div;
-}
-
-function toggleNode(toggle, event) {
-    event.stopPropagation();
-    const node = toggle.parentElement;
-    const children = node.querySelector('.tree-children');
-
-    if (children) {
-        if (children.style.display === 'none') {
-            children.style.display = 'block';
-            toggle.textContent = '▼';
-        } else {
-            children.style.display = 'none';
-            toggle.textContent = '▶';
-        }
-    }
-}
-
-function selectNode(unitId, event) {
-    event.stopPropagation();
-
-    document.querySelectorAll('.tree-node').forEach(n => n.classList.remove('selected'));
-    event.target.closest('.tree-node').classList.add('selected');
-
+function selectNode(unitId) {
     const unit = findUnitById(inventoryTree.root_units, unitId);
     if (unit) {
         showInventoryDetail(unit, 'ad_unit');
@@ -1213,23 +1098,30 @@ function displaySearchResults(results) {
     detailDiv.innerHTML = html;
 }
 
-function toggleAdUnitSelection(id, name, path, checked) {
-    if (checked) {
+// Override shared partial's handleTreeCheckboxChange to track selections
+handleTreeCheckboxChange = function(checkbox) {
+    const id = checkbox.value;
+    const name = checkbox.dataset.name || '';
+    const path = checkbox.dataset.path ? JSON.parse(checkbox.dataset.path).join(' > ') : '';
+
+    if (checkbox.checked) {
         selectedAdUnitsMap.set(id, { id, name, path });
     } else {
         selectedAdUnitsMap.delete(id);
     }
     updateSelectionDisplay();
-}
+};
 
 function toggleSelectAll() {
-    const anyChecked = document.querySelectorAll('.tree-node input[type="checkbox"]:checked').length > 0;
-    const checkboxes = document.querySelectorAll('.tree-node input[type="checkbox"]');
+    const checkboxes = document.querySelectorAll('#adUnitTree .tree-checkbox');
+    const anyChecked = document.querySelectorAll('#adUnitTree .tree-checkbox:checked').length > 0;
+
+    // Expand all nodes first so all checkboxes are visible
+    expandAllTreeNodes();
 
     checkboxes.forEach(cb => {
         cb.checked = !anyChecked;
-        // Trigger change event to update selection
-        cb.dispatchEvent(new Event('change'));
+        handleTreeCheckboxChange(cb);
     });
 }
 
