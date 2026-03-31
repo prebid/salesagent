@@ -15,6 +15,8 @@ Usage:
         # auto-commits on clean exit, rolls back on exception
 """
 
+from src.core.database.repositories.adapter_config import AdapterConfigRepository, TenantNotConfiguredError
+from src.core.database.repositories.currency_limit import CurrencyLimitRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.product import ProductRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
@@ -22,6 +24,9 @@ from src.core.database.repositories.uow import MediaBuyUoW, ProductUoW, TenantCo
 from src.core.database.repositories.workflow import WorkflowRepository
 
 __all__ = [
+    "AdapterConfigRepository",
+    "TenantNotConfiguredError",
+    "CurrencyLimitRepository",
     "MediaBuyRepository",
     "MediaBuyUoW",
     "ProductRepository",

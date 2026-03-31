@@ -17,6 +17,7 @@ BDD scenario cross-references:
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from itertools import repeat
 from unittest.mock import ANY, MagicMock, Mock, patch
 
 import pytest
@@ -78,83 +79,8 @@ def _make_mock_currency_limit(max_daily=None):
     """Create a mock CurrencyLimit with proper numeric values."""
     cl = MagicMock()
     cl.max_daily_package_spend = Decimal(str(max_daily)) if max_daily else None
+    cl.min_package_budget = Decimal("0")
     return cl
-
-
-@pytest.fixture
-def standard_mocks():
-    """Context manager that patches all common dependencies for _update_media_buy_impl.
-
-    Patches MediaBuyUoW to provide a mock session and repository,
-    and patches all other common dependencies.
-
-    Yields a dict of mock objects keyed by short name.
-    """
-    mock_session, mock_cm = _make_mock_db_session()
-
-    # Build a mock UoW that provides session and media_buys repo
-    mock_uow = MagicMock()
-    mock_uow.session = mock_session
-    mock_uow.media_buys = MagicMock()
-    mock_uow.__enter__ = Mock(return_value=mock_uow)
-    mock_uow.__exit__ = Mock(return_value=False)
-
-    with (
-        patch("src.core.helpers.context_helpers.ensure_tenant_context") as m_tenant,
-        patch(f"{MODULE}.get_principal_object") as m_principal_obj,
-        patch(f"{MODULE}._verify_principal") as m_verify,
-        patch(f"{MODULE}.get_context_manager") as m_ctx_mgr,
-        patch(f"{MODULE}.get_adapter") as m_adapter,
-        patch(f"{MODULE}.get_audit_logger") as m_audit,
-        patch(f"{MODULE}.MediaBuyUoW") as m_uow,
-        patch(f"{DB_MODULE}.get_db_session") as m_db,
-    ):
-        # Standard setup: authenticated principal, test tenant, no dry_run
-        m_tenant.return_value = {"tenant_id": "tenant_test", "name": "Test"}
-        m_principal_obj.return_value = MagicMock(
-            principal_id="principal_test",
-            name="Test Principal",
-            platform_mappings={},
-        )
-
-        # UoW mock
-        m_uow.return_value = mock_uow
-
-        # Context manager with workflow step
-        mock_step = MagicMock()
-        mock_step.step_id = "step_001"
-        mock_ctx_mgr_instance = MagicMock()
-        mock_ctx_mgr_instance.get_or_create_context.return_value = MagicMock(context_id="ctx_001")
-        mock_ctx_mgr_instance.create_workflow_step.return_value = mock_step
-        m_ctx_mgr.return_value = mock_ctx_mgr_instance
-
-        # Adapter: no manual approval, standard config
-        mock_adapter_instance = MagicMock()
-        mock_adapter_instance.manual_approval_required = False
-        mock_adapter_instance.manual_approval_operations = []
-        m_adapter.return_value = mock_adapter_instance
-
-        # Audit logger
-        m_audit.return_value = MagicMock()
-
-        # DB session: return the shared mock context manager
-        m_db.return_value = mock_cm
-
-        yield {
-            "tenant": m_tenant,
-            "principal_obj": m_principal_obj,
-            "verify_principal": m_verify,
-            "ctx_mgr": m_ctx_mgr,
-            "ctx_mgr_instance": mock_ctx_mgr_instance,
-            "adapter": m_adapter,
-            "adapter_instance": mock_adapter_instance,
-            "audit": m_audit,
-            "uow": m_uow,
-            "uow_instance": mock_uow,
-            "db": m_db,
-            "db_session": mock_session,
-            "step": mock_step,
-        }
 
 
 def _setup_db_session(standard_mocks):
@@ -198,6 +124,24 @@ def test_principal_not_found_returns_error(standard_mocks):
     )
 
 
+def test_workflow_step_receives_request_model_with_protocol_metadata(standard_mocks):
+    """Workflow persistence should serialize at the ContextManager boundary, not in _impl."""
+    identity = _make_identity()
+    req = UpdateMediaBuyRequest(media_buy_id="mb_workflow_meta")
+
+    _update_media_buy_impl(req=req, identity=identity)
+
+    standard_mocks["ctx_mgr_instance"].create_workflow_step.assert_called_once_with(
+        context_id="ctx_001",
+        step_type="tool_call",
+        owner="principal",
+        status="in_progress",
+        tool_name="update_media_buy",
+        request_data=req,
+        request_metadata={"protocol": "mcp"},
+    )
+
+
 # ---------------------------------------------------------------------------
 # HIGH_RISK Test 2: Combined campaign + package update
 # BDD: T-UC-003-combined-update
@@ -237,7 +181,7 @@ def test_combined_campaign_and_package_update(standard_mocks):
 
     # Session scalars for currency limit lookup
     mock_scalars = MagicMock()
-    mock_scalars.first.side_effect = [mock_currency_limit]
+    mock_scalars.first.side_effect = repeat(mock_currency_limit)
     mock_session.scalars.return_value = mock_scalars
 
     identity = _make_identity()
@@ -291,7 +235,12 @@ def test_multi_package_update_processes_all_packages(standard_mocks):
     mock_currency_limit = _make_mock_currency_limit(max_daily=100000)
     standard_mocks["uow_instance"].media_buys.get_by_id.return_value = mock_media_buy
     mock_scalars = MagicMock()
-    mock_scalars.first.side_effect = [mock_currency_limit]
+    mock_scalars.first.side_effect = [
+        mock_currency_limit,
+        mock_currency_limit,
+        mock_currency_limit,
+        mock_currency_limit,
+    ]
     mock_session.scalars.return_value = mock_scalars
 
     identity = _make_identity()
@@ -368,7 +317,7 @@ def test_main_flow_package_budget_update(standard_mocks):
     standard_mocks["uow_instance"].media_buys.get_by_id.return_value = _make_mock_media_buy("mb_main")
     mock_currency_limit = _make_mock_currency_limit(max_daily=100000)
     mock_scalars = MagicMock()
-    mock_scalars.first.side_effect = [mock_currency_limit]
+    mock_scalars.first.side_effect = repeat(mock_currency_limit)
     mock_session.scalars.return_value = mock_scalars
 
     identity = _make_identity()
@@ -450,9 +399,8 @@ class TestFlightDateValidationAndPersistence:
             mock_existing_mb,
         ]
         mock_scalars = MagicMock()
-        mock_scalars.first.side_effect = [
-            _make_mock_currency_limit(),
-        ]
+        mock_currency_limit = _make_mock_currency_limit()
+        mock_scalars.first.side_effect = repeat(mock_currency_limit)
         mock_session.scalars.return_value = mock_scalars
 
         # end_time BEFORE start_time
@@ -487,9 +435,8 @@ class TestFlightDateValidationAndPersistence:
             mock_existing_mb,
         ]
         mock_scalars = MagicMock()
-        mock_scalars.first.side_effect = [
-            _make_mock_currency_limit(),
-        ]
+        mock_currency_limit = _make_mock_currency_limit()
+        mock_scalars.first.side_effect = repeat(mock_currency_limit)
         mock_session.scalars.return_value = mock_scalars
 
         identity = _make_identity()
@@ -522,7 +469,7 @@ class TestCampaignBudgetValidationAndPersistence:
 
         mock_currency_limit = _make_mock_currency_limit()
         mock_scalars = MagicMock()
-        mock_scalars.first.side_effect = [mock_currency_limit]
+        mock_scalars.first.side_effect = repeat(mock_currency_limit)
         mock_session.scalars.return_value = mock_scalars
 
         # Mock packages for campaign budget affected tracking (via repo)
@@ -805,6 +752,7 @@ class TestTimezoneHandlingRegression:
         mock_scalars = MagicMock()
         mock_scalars.first.side_effect = [
             _make_mock_currency_limit(),
+            _make_mock_currency_limit(),
         ]
         mock_session.scalars.return_value = mock_scalars
 
@@ -836,6 +784,7 @@ class TestTimezoneHandlingRegression:
         ]
         mock_scalars = MagicMock()
         mock_scalars.first.side_effect = [
+            _make_mock_currency_limit(),
             _make_mock_currency_limit(),
         ]
         mock_session.scalars.return_value = mock_scalars
@@ -888,7 +837,7 @@ class TestUC003MainObligations:
 
         Covers: UC-003-MAIN-05
         """
-        mock_session = _setup_db_session(standard_mocks)
+        _setup_db_session(standard_mocks)
 
         # 30-day flight, max_daily=$1000
         mock_mb = _make_mock_media_buy("mb_cur_limit")
@@ -897,9 +846,7 @@ class TestUC003MainObligations:
         standard_mocks["uow_instance"].media_buys.get_by_id.return_value = mock_mb
 
         mock_cl = _make_mock_currency_limit(max_daily=1000)
-        mock_scalars = MagicMock()
-        mock_scalars.first.return_value = mock_cl
-        mock_session.scalars.return_value = mock_scalars
+        standard_mocks["uow_instance"].currency_limits.get_for_currency.return_value = mock_cl
 
         identity = _make_identity()
         # daily = 50000/30 = 1666.67 > 1000
@@ -1137,7 +1084,7 @@ class TestUC003CampaignLevelBudget:
 
         Covers: UC-003-ALT-CAMPAIGN-LEVEL-BUDGET-04
         """
-        mock_session = _setup_db_session(standard_mocks)
+        _setup_db_session(standard_mocks)
 
         # 10-day flight, max_daily=$500
         mock_mb = _make_mock_media_buy("mb_recalc")
@@ -1146,9 +1093,7 @@ class TestUC003CampaignLevelBudget:
         standard_mocks["uow_instance"].media_buys.get_by_id.return_value = mock_mb
 
         mock_cl = _make_mock_currency_limit(max_daily=500)
-        mock_scalars = MagicMock()
-        mock_scalars.first.return_value = mock_cl
-        mock_session.scalars.return_value = mock_scalars
+        standard_mocks["uow_instance"].currency_limits.get_for_currency.return_value = mock_cl
 
         identity = _make_identity()
         # daily = 10000/10 = 1000 > 500
@@ -1879,12 +1824,13 @@ class TestUC003ManualApproval:
         # The workflow step was created (step_id="step_001")
         # and the response allows the buyer to track the status
         standard_mocks["ctx_mgr_instance"].create_workflow_step.assert_called_once_with(
-            context_id=ANY,
-            step_type=ANY,
-            owner=ANY,
-            status=ANY,
+            context_id="ctx_001",
+            step_type="tool_call",
+            owner="principal",
+            status="in_progress",
             tool_name="update_media_buy",
-            request_data=ANY,
+            request_data=req,
+            request_metadata={"protocol": "mcp"},
         )
 
 
@@ -2077,16 +2023,14 @@ class TestUC003ExtF:
 
         Covers: UC-003-EXT-F-01
         """
-        mock_session = _setup_db_session(standard_mocks)
+        _setup_db_session(standard_mocks)
 
         mock_mb = _make_mock_media_buy("mb_gbp")
         mock_mb.currency = "GBP"
         standard_mocks["uow_instance"].media_buys.get_by_id.return_value = mock_mb
 
         # Currency limit NOT found (GBP not configured)
-        mock_scalars = MagicMock()
-        mock_scalars.first.return_value = None
-        mock_session.scalars.return_value = mock_scalars
+        standard_mocks["uow_instance"].currency_limits.get_for_currency.return_value = None
 
         identity = _make_identity()
         req = UpdateMediaBuyRequest(
@@ -2112,7 +2056,7 @@ class TestUC003ExtG:
 
         Covers: UC-003-EXT-G-01
         """
-        mock_session = _setup_db_session(standard_mocks)
+        _setup_db_session(standard_mocks)
 
         mock_mb = _make_mock_media_buy("mb_daily")
         mock_mb.start_time = datetime(2025, 1, 1, tzinfo=UTC)
@@ -2120,9 +2064,7 @@ class TestUC003ExtG:
         standard_mocks["uow_instance"].media_buys.get_by_id.return_value = mock_mb
 
         mock_cl = _make_mock_currency_limit(max_daily=500)
-        mock_scalars = MagicMock()
-        mock_scalars.first.return_value = mock_cl
-        mock_session.scalars.return_value = mock_scalars
+        standard_mocks["uow_instance"].currency_limits.get_for_currency.return_value = mock_cl
 
         identity = _make_identity()
         # daily = 10000/10 = 1000 > 500

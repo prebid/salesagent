@@ -54,13 +54,22 @@ console = Console()
 
 
 def validate_agent_url(url: str | None) -> bool:
-    """Validate agent_url is a valid HTTP(S) URL per AdCP spec.
+    """Validate agent_url is a well-formed HTTP(S) URL per AdCP spec.
+
+    This validates format/structure only (scheme + netloc). It does NOT
+    perform DNS resolution or SSRF network checks because it is called
+    during approval processing against URLs that are already stored in
+    the database — not against live user-supplied input.
+
+    SSRF protection for user-supplied agent URLs is enforced at the admin
+    ingestion boundary in src/admin/blueprints/signals_agents.py using
+    check_url_ssrf(), which includes DNS resolution.
 
     Args:
         url: URL string to validate
 
     Returns:
-        True if valid HTTP(S) URL, False otherwise
+        True if valid HTTP(S) URL with a non-empty netloc.
     """
     if not url or not isinstance(url, str):
         return False
@@ -112,6 +121,7 @@ from src.core.schemas import (
 )
 from src.core.testing_hooks import AdCPTestContext, TestingContext, apply_testing_hooks
 from src.core.tool_context import ToolContext
+from src.core.tools.financial_validation import validate_max_daily_package_spend, validate_min_package_budget
 
 # Import get_product_catalog from main (after refactor)
 from src.core.validation_helpers import format_validation_error
@@ -340,7 +350,7 @@ def _validate_creatives_before_adapter_call(
             accepted_formats: set[str] = set()
             if product.format_ids:
                 for fmt in product.format_ids:
-                    fmt_id = fmt.get("id") if isinstance(fmt, dict) else getattr(fmt, "id", None)
+                    fmt_id = fmt.get("id")
                     if fmt_id:
                         accepted_formats.add(str(fmt_id))
             product_format_map[product.product_id] = accepted_formats
@@ -648,7 +658,6 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
 
                     # Convert formats to FormatId objects with comprehensive validation
                     from src.core.schemas import FormatId as FormatIdType
-                    from src.core.schemas import FormatReference
 
                     format_ids_list: list[FormatIdType] = []
                     formats = product.format_ids or []
@@ -657,56 +666,11 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
 
                     for idx, fmt in enumerate(formats):
                         try:
-                            # Most common case: dict from database (JSONB field returns dicts)
-                            if isinstance(fmt, dict):
-                                agent_url = fmt.get("agent_url")
-                                format_id = fmt.get("format_id") or fmt.get("id")
-
-                                # Validate required fields exist and are non-empty strings
-                                if not agent_url or not isinstance(agent_url, str):
-                                    raise ValueError(f"Format missing or invalid agent_url: agent_url={agent_url!r}")
-                                if not validate_agent_url(agent_url):
-                                    raise ValueError(f"agent_url must be valid HTTP(S) URL: {agent_url!r}")
-                                if not format_id or not isinstance(format_id, str):
-                                    raise ValueError(f"Format missing or invalid id: id={format_id!r}")
-
-                                # Pydantic automatically converts string to AnyUrl per FormatId schema
-                                # IMPORTANT: Include width, height, duration_ms from database (parameterized formats)
-                                # Convert to correct types (database may return int or need conversion)
-                                fmt_width = fmt.get("width")
-                                fmt_height = fmt.get("height")
-                                fmt_duration_ms = fmt.get("duration_ms")
-
-                                format_ids_list.append(
-                                    FormatIdType(
-                                        agent_url=make_url(agent_url),
-                                        id=format_id,
-                                        width=int(fmt_width) if fmt_width is not None else None,
-                                        height=int(fmt_height) if fmt_height is not None else None,
-                                        duration_ms=float(fmt_duration_ms) if fmt_duration_ms is not None else None,
-                                    )
-                                )
-
-                            # Already correct type (no conversion needed)
-                            elif isinstance(fmt, FormatIdType):
-                                # Defensive validation even for FormatId objects
-                                if not fmt.agent_url or not validate_agent_url(fmt.agent_url):
-                                    raise ValueError(f"FormatId has invalid agent_url: {fmt.agent_url!r}")
-                                if not fmt.id:
-                                    raise ValueError(f"FormatId has empty id: {fmt.id!r}")
-                                format_ids_list.append(fmt)
-
-                            # Legacy FormatReference object (convert format_id -> id)
-                            elif isinstance(fmt, FormatReference):
-                                if not fmt.agent_url or not validate_agent_url(fmt.agent_url):
-                                    raise ValueError(f"FormatReference has invalid agent_url: {fmt.agent_url!r}")
-                                if not fmt.format_id:
-                                    raise ValueError(f"FormatReference has empty format_id: {fmt.format_id!r}")
-                                format_ids_list.append(FormatIdType(agent_url=fmt.agent_url, id=fmt.format_id))
-
-                            else:
-                                raise ValueError(f"Unknown format type: {type(fmt).__name__}")
-
+                            validated = FormatIdType.model_validate(fmt)
+                            url_str = str(validated.agent_url)
+                            if not url_str.startswith(("http://", "https://")):
+                                raise ValueError(f"agent_url must be HTTP(S), got: {url_str}")
+                            format_ids_list.append(validated)
                         except (ValueError, ValidationError) as e:
                             error_msg = (
                                 f"Failed to reconstruct package {package_id}: "
@@ -1243,19 +1207,16 @@ async def _validate_and_convert_format_ids(
                 details={"error_code": "FORMAT_VALIDATION_ERROR"},
             )
 
-        # Extract agent_url and id from dict/object
-        if isinstance(fmt_id, dict):
-            agent_url = fmt_id.get("agent_url")
-            format_id = fmt_id.get("id")
-        elif isinstance(fmt_id, FormatId):
-            agent_url = fmt_id.agent_url
-            format_id = fmt_id.id
-        else:
+        # Coerce to FormatId via Pydantic validation (handles dicts and FormatId objects)
+        try:
+            validated_fmt = FormatId.model_validate(fmt_id, from_attributes=True)
+        except (ValueError, ValidationError) as e:
             raise AdCPValidationError(
-                f"Package {package_idx + 1}, format_ids[{idx}]: Invalid format_id structure. "
-                f"Expected FormatId object with {{agent_url, id}}, got: {type(fmt_id).__name__}",
+                f"Package {package_idx + 1}, format_ids[{idx}]: Invalid format_id structure: {e}",
                 details={"error_code": "FORMAT_VALIDATION_ERROR"},
-            )
+            ) from e
+        agent_url = str(validated_fmt.agent_url).rstrip("/")
+        format_id = validated_fmt.id
 
         if not agent_url or not format_id:
             raise AdCPValidationError(
@@ -1297,7 +1258,7 @@ async def _validate_and_convert_format_ids(
             )
 
         # Format validated - add to results
-        validated_format_ids.append({"agent_url": agent_url, "id": format_id})
+        validated_format_ids.append({"agent_url": str(agent_url), "id": format_id})
 
     return validated_format_ids
 
@@ -1628,7 +1589,7 @@ async def _create_media_buy_impl(
                             )
 
             # Get currency from product pricing options (per AdCP spec)
-            request_currency = None
+            request_currency: str | None = None
 
             # First, try to get currency from first package's pricing option
             if req.packages and len(req.packages) > 0:
@@ -1808,12 +1769,18 @@ async def _create_media_buy_impl(
                                         package_min_spend = Decimal(str(currency_limit.min_package_budget))
 
                                 # Validate if minimum spend is set
-                                if package_min_spend and package_budget < package_min_spend:
-                                    error_msg = (
-                                        f"Package budget ({package_budget} {package_currency}) does not meet minimum spend requirement "
-                                        f"({package_min_spend} {package_currency}) for products in this package"
+                                min_budget_error: str | None = (
+                                    validate_min_package_budget(
+                                        package_budget=package_budget,
+                                        min_package_budget=package_min_spend,
+                                        currency=package_currency,
+                                        context="for products in this package",
                                     )
-                                    raise ValueError(error_msg)
+                                    if package_min_spend
+                                    else None
+                                )
+                                if min_budget_error:
+                                    raise ValueError(min_budget_error)
                     else:
                         # Legacy mode: single total_budget for all products
                         applicable_min_spends = list(product_min_spends.values())
@@ -1821,12 +1788,15 @@ async def _create_media_buy_impl(
                             required_min_spend = max(applicable_min_spends)
                             budget_decimal = Decimal(str(total_budget))
 
-                            if budget_decimal < required_min_spend:
-                                error_msg = (
-                                    f"Total budget ({total_budget} {request_currency}) does not meet minimum spend requirement "
-                                    f"({required_min_spend} {request_currency}) for the selected products"
-                                )
-                                raise ValueError(error_msg)
+                            legacy_min_budget_error: str | None = validate_min_package_budget(
+                                package_budget=budget_decimal,
+                                min_package_budget=required_min_spend,
+                                currency=request_currency,
+                                subject="Total",
+                                context="for the selected products",
+                            )
+                            if legacy_min_budget_error:
+                                raise ValueError(legacy_min_budget_error)
 
             # Validate maximum daily spend per package (if set)
             # This is per-package to prevent buyers from splitting large budgets across many packages
@@ -1845,27 +1815,30 @@ async def _create_media_buy_impl(
                             continue
                         # Package.budget is now always float | None (per AdCP spec)
                         package_budget = Decimal(str(package.budget))
-                        package_daily_budget = package_budget / Decimal(str(flight_days))
-
-                        if package_daily_budget > currency_limit.max_daily_package_spend:
-                            error_msg = (
-                                f"Package daily budget ({package_daily_budget} {request_currency}) exceeds "
-                                f"maximum daily spend per package ({currency_limit.max_daily_package_spend} {request_currency}). "
-                                f"This protects against accidental large budgets and prevents GAM line item proliferation."
-                            )
-                            raise ValueError(error_msg)
+                        daily_package_spend_error: str | None = validate_max_daily_package_spend(
+                            package_budget=package_budget,
+                            flight_days=flight_days,
+                            max_daily_spend=Decimal(str(currency_limit.max_daily_package_spend)),
+                            currency=request_currency,
+                            limit_label="maximum daily spend per package",
+                            context="This protects against accidental large budgets and prevents GAM line item proliferation.",
+                        )
+                        if daily_package_spend_error:
+                            raise ValueError(daily_package_spend_error)
                 else:
                     # Legacy mode: validate total budget
-                    legacy_daily_budget: Decimal = Decimal(str(total_budget)) / Decimal(str(flight_days))
-                    max_daily_spend: Decimal = Decimal(str(currency_limit.max_daily_package_spend))
+                    legacy_daily_spend_error: str | None = validate_max_daily_package_spend(
+                        package_budget=Decimal(str(total_budget)),
+                        flight_days=flight_days,
+                        max_daily_spend=Decimal(str(currency_limit.max_daily_package_spend)),
+                        currency=request_currency,
+                        subject="Daily",
+                        limit_label="maximum daily spend",
+                        context="This protects against accidental large budgets.",
+                    )
 
-                    if legacy_daily_budget > max_daily_spend:
-                        error_msg = (
-                            f"Daily budget ({legacy_daily_budget} {request_currency}) exceeds maximum daily spend "
-                            f"({currency_limit.max_daily_package_spend} {request_currency}). "
-                            f"This protects against accidental large budgets."
-                        )
-                        raise ValueError(error_msg)
+                    if legacy_daily_spend_error:
+                        raise ValueError(legacy_daily_spend_error)
 
         # Validate targeting doesn't use managed-only dimensions (targeting_overlay is at package level per AdCP spec)
         if req.packages:
@@ -2596,10 +2569,9 @@ async def _create_media_buy_impl(
                 product_format_keys: set[tuple[str | None, str]] = set()
                 if pkg_product.format_ids:
                     for fmt in pkg_product.format_ids:
-                        # pkg_product.format_ids are dicts from database JSONB (type annotation says FormatId but runtime is dict)
-                        agent_url = fmt["agent_url"]  # type: ignore[index]
+                        agent_url = fmt.agent_url
                         normalized_url = str(agent_url).rstrip("/") if agent_url else None
-                        product_format_keys.add((normalized_url, fmt["id"]))  # type: ignore[index]
+                        product_format_keys.add((normalized_url, fmt.id))
 
                 # Build set of requested format keys for comparison
                 requested_format_keys: set[tuple[str | None, str]] = set()
@@ -2672,24 +2644,15 @@ async def _create_media_buy_impl(
                 ] = {}
                 if pkg_product.format_ids:
                     for fmt in pkg_product.format_ids:
-                        # pkg_product.format_ids are dicts from database JSONB
-                        if isinstance(fmt, dict):
-                            agent_url = fmt.get("agent_url")
-                            fmt_id = fmt.get("id")
-                        else:
-                            agent_url = getattr(fmt, "agent_url", None)
-                            fmt_id = getattr(fmt, "id", None)
+                        agent_url = fmt.agent_url
+                        fmt_id = fmt.id
                         normalized_url = str(agent_url).rstrip("/") if agent_url else None
                         if fmt_id:
-                            if isinstance(fmt, dict):
-                                width = fmt.get("width")
-                                height = fmt.get("height")
-                                duration_ms = fmt.get("duration_ms")
-                            else:
-                                width = getattr(fmt, "width", None)
-                                height = getattr(fmt, "height", None)
-                                duration_ms = getattr(fmt, "duration_ms", None)
-                            product_format_dimensions[(normalized_url, fmt_id)] = (width, height, duration_ms)
+                            product_format_dimensions[(normalized_url, fmt_id)] = (
+                                fmt.width,
+                                fmt.height,
+                                fmt.duration_ms,
+                            )
 
                 # Process request format_ids, merging dimensions from product if missing
                 for req_fmt in matching_package.format_ids:

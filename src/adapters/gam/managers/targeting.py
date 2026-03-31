@@ -29,12 +29,20 @@ class GAMTargetingManager:
     # Supported media types
     SUPPORTED_MEDIA_TYPES = {"video", "display", "native"}
 
-    def __init__(self, tenant_id: str, gam_client: Any | None = None):
+    def __init__(
+        self,
+        tenant_id: str,
+        gam_client: Any | None = None,
+        targeting_config: dict[str, Any] | None = None,
+    ):
         """Initialize targeting manager.
 
         Args:
             tenant_id: Tenant ID for loading adapter configuration
             gam_client: Optional GAM client for syncing custom targeting keys
+            targeting_config: Pre-loaded targeting config from AdapterConfigRepository.
+                If provided, skips DB queries. Dict keys: axe_include_key,
+                axe_exclude_key, axe_macro_key, custom_targeting_keys.
         """
         self.tenant_id = tenant_id
         self.gam_client = gam_client
@@ -46,8 +54,23 @@ class GAMTargetingManager:
         self.axe_macro_key: str | None = None
         self.custom_targeting_key_ids: dict[str, str] = {}  # Maps key names → GAM key IDs
         self._load_geo_mappings()
-        self._load_axe_keys()
-        self._load_custom_targeting_key_ids()
+        if targeting_config:
+            # Use pre-loaded config (eliminates adapter→DB circular dependency)
+            self.axe_include_key = targeting_config.get("axe_include_key")
+            self.axe_exclude_key = targeting_config.get("axe_exclude_key")
+            self.axe_macro_key = targeting_config.get("axe_macro_key")
+            self.custom_targeting_key_ids = targeting_config.get("custom_targeting_keys", {})
+            logger.info(
+                f"Loaded AXE keys for tenant {tenant_id} from injected config: "
+                f"include={self.axe_include_key}, exclude={self.axe_exclude_key}, macro={self.axe_macro_key}"
+            )
+            logger.info(
+                f"Loaded {len(self.custom_targeting_key_ids)} custom targeting key IDs for tenant {tenant_id} from injected config"
+            )
+        else:
+            # Fallback: load from DB (backward compat for callers that don't pass config)
+            self._load_axe_keys()
+            self._load_custom_targeting_key_ids()
 
     def _load_geo_mappings(self):
         """Load static geo mappings from JSON file on disk.
@@ -173,10 +196,7 @@ class GAMTargetingManager:
         if not self.gam_client:
             raise ValueError("GAM client required for syncing custom targeting keys")
 
-        from sqlalchemy import select
-
         from src.core.database.database_session import get_db_session
-        from src.core.database.models import AdapterConfig
 
         try:
             # Fetch all custom targeting keys from GAM
@@ -207,23 +227,19 @@ class GAMTargetingManager:
                 else:
                     break
 
-            # Store mapping in database
+            # Store mapping in database via repository
+            from src.core.database.database_session import get_db_session
+            from src.core.database.repositories.adapter_config import AdapterConfigRepository
+
             with get_db_session() as session:
-                stmt = select(AdapterConfig).filter_by(tenant_id=self.tenant_id)
-                adapter_config = session.scalars(stmt).first()
+                repo = AdapterConfigRepository(session, self.tenant_id)
+                repo.update_custom_targeting_keys(key_name_to_id)
+                session.commit()
 
-                if adapter_config:
-                    adapter_config.custom_targeting_keys = key_name_to_id
-                    session.commit()
+                # Update in-memory cache
+                self.custom_targeting_key_ids = key_name_to_id
 
-                    # Update in-memory cache
-                    self.custom_targeting_key_ids = key_name_to_id
-
-                    logger.info(
-                        f"Synced {len(key_name_to_id)} custom targeting keys from GAM for tenant {self.tenant_id}"
-                    )
-                else:
-                    raise ValueError(f"No adapter config found for tenant {self.tenant_id}")
+                logger.info(f"Synced {len(key_name_to_id)} custom targeting keys from GAM for tenant {self.tenant_id}")
 
             return {
                 "synced_keys": key_name_to_id,

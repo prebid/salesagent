@@ -44,8 +44,9 @@ class TestA2AProtocolCompliance:
             assert "packages" in schema["properties"], "AdCP schema should define 'packages' field"
             assert "updates" not in schema["properties"], "AdCP schema should NOT have legacy 'updates' field"
 
-            # Verify other required structure
-            assert "oneOf" in schema, "Schema should have oneOf constraint for media_buy_id/buyer_ref"
+            # Verify media_buy_id is required (spec uses required array, not oneOf)
+            assert "media_buy_id" in schema.get("properties", {}), "Schema should define media_buy_id"
+            assert "media_buy_id" in schema.get("required", []), "media_buy_id should be required"
 
     @pytest.mark.asyncio
     async def test_update_media_buy_schema_validates_correctly(self):
@@ -134,7 +135,7 @@ class TestA2AProtocolCompliance:
 
             # Verify expected fields from AdCP spec
             assert "media_buy_ids" in schema["properties"], "Should accept media_buy_ids (plural) per AdCP spec"
-            assert "buyer_refs" in schema["properties"], "Should accept buyer_refs for querying by buyer reference"
+            assert "status_filter" in schema["properties"], "Should accept status_filter for filtering by status"
 
             # Validate a minimal valid request
             valid_request = {"media_buy_ids": ["mb_1", "mb_2"]}

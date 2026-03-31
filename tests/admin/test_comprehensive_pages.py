@@ -115,7 +115,7 @@ def test_all_admin_pages():
     }
 
     try:
-        response = session.post(f"{base_url}/test/auth", json=auth_data)
+        response = session.post(f"{base_url}/admin/test/auth", json=auth_data)
     except (requests.ConnectionError, requests.Timeout):
         pytest.skip(f"Server not running at {base_url}")
 
@@ -129,18 +129,18 @@ def test_all_admin_pages():
     print("-" * 40)
 
     main_pages = [
-        (f"/tenant/{TENANT_ID}", "Dashboard"),
-        (f"/tenant/{TENANT_ID}/settings", "Settings Main"),
-        (f"/tenant/{TENANT_ID}/operations", "Operations"),
-        (f"/tenant/{TENANT_ID}/products", "Products List"),
-        (f"/tenant/{TENANT_ID}/products/new", "New Product"),
-        (f"/tenant/{TENANT_ID}/advertisers", "Advertisers List"),
-        (f"/tenant/{TENANT_ID}/advertisers/new", "New Advertiser"),
-        (f"/tenant/{TENANT_ID}/formats", "Creative Formats"),
-        (f"/tenant/{TENANT_ID}/integrations", "Integrations"),
-        (f"/tenant/{TENANT_ID}/api-tokens", "API Tokens"),
-        (f"/tenant/{TENANT_ID}/users", "Users"),
-        (f"/tenant/{TENANT_ID}/activity", "Activity Log"),
+        (f"/admin/tenant/{TENANT_ID}", "Dashboard"),
+        (f"/admin/tenant/{TENANT_ID}/settings", "Settings Main"),
+        (f"/admin/tenant/{TENANT_ID}/operations", "Operations"),
+        (f"/admin/tenant/{TENANT_ID}/products", "Products List"),
+        (f"/admin/tenant/{TENANT_ID}/products/new", "New Product"),
+        (f"/admin/tenant/{TENANT_ID}/advertisers", "Advertisers List"),
+        (f"/admin/tenant/{TENANT_ID}/advertisers/new", "New Advertiser"),
+        (f"/admin/tenant/{TENANT_ID}/formats", "Creative Formats"),
+        (f"/admin/tenant/{TENANT_ID}/integrations", "Integrations"),
+        (f"/admin/tenant/{TENANT_ID}/api-tokens", "API Tokens"),
+        (f"/admin/tenant/{TENANT_ID}/users", "Users"),
+        (f"/admin/tenant/{TENANT_ID}/activity", "Activity Log"),
     ]
 
     for path, description in main_pages:
@@ -165,7 +165,7 @@ def test_all_admin_pages():
     ]
 
     for section in settings_sections:
-        path = f"/tenant/{TENANT_ID}/settings/{section}"
+        path = f"/admin/tenant/{TENANT_ID}/settings/{section}"
         _check_page(session, path, f"Settings: {section.title()}", base_url=base_url)
 
     print()
@@ -175,14 +175,14 @@ def test_all_admin_pages():
     print("-" * 40)
 
     api_endpoints = [
-        (f"/api/tenant/{TENANT_ID}/products", "API: Products List"),
-        (f"/api/tenant/{TENANT_ID}/advertisers", "API: Advertisers List"),
-        (f"/api/tenant/{TENANT_ID}/formats", "API: Formats List"),
-        (f"/api/tenant/{TENANT_ID}/metrics", "API: Metrics"),
-        (f"/api/tenant/{TENANT_ID}/activity", "API: Activity"),
-        (f"/api/tenant/{TENANT_ID}/config", "API: Config"),
-        (f"/api/tenant/{TENANT_ID}/products/suggestions", "API: Product Suggestions"),
-        (f"/api/tenant/{TENANT_ID}/products/templates", "API: Product Templates"),
+        (f"/admin/api/tenant/{TENANT_ID}/products", "API: Products List"),
+        (f"/admin/api/tenant/{TENANT_ID}/advertisers", "API: Advertisers List"),
+        (f"/admin/api/tenant/{TENANT_ID}/formats", "API: Formats List"),
+        (f"/admin/api/tenant/{TENANT_ID}/metrics", "API: Metrics"),
+        (f"/admin/api/tenant/{TENANT_ID}/activity", "API: Activity"),
+        (f"/admin/api/tenant/{TENANT_ID}/config", "API: Config"),
+        (f"/admin/api/tenant/{TENANT_ID}/products/suggestions", "API: Product Suggestions"),
+        (f"/admin/api/tenant/{TENANT_ID}/products/templates", "API: Product Templates"),
     ]
 
     for path, description in api_endpoints:
@@ -197,10 +197,10 @@ def test_all_admin_pages():
     special_routes = [
         ("/", "Root"),
         ("/health", "Health Check"),
-        ("/login", "Login Page"),
-        (f"/tenant/{TENANT_ID}/login", "Tenant Login"),
-        ("/tenants", "Tenants List (Super Admin)"),
-        ("/test/login", "Test Login Page"),
+        ("/admin/login", "Login Page"),
+        (f"/admin/tenant/{TENANT_ID}/login", "Tenant Login"),
+        ("/admin/tenants", "Tenants List (Super Admin)"),
+        ("/admin/test/login", "Test Login Page"),
     ]
 
     for path, description in special_routes:

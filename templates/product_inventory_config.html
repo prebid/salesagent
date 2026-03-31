@@ -8,9 +8,9 @@
         <div class="col-12">
             <nav aria-label="breadcrumb">
                 <ol class="breadcrumb">
-                    <li class="breadcrumb-item"><a href="/tenant/{{ tenant_id }}">{{ tenant_name }}</a></li>
-                    <li class="breadcrumb-item"><a href="/tenant/{{ tenant_id }}/products">Products</a></li>
-                    <li class="breadcrumb-item"><a href="/tenant/{{ tenant_id }}/products/{{ product.product_id }}/edit">{{ product.name }}</a></li>
+                    <li class="breadcrumb-item"><a href="{{ request.script_root }}/tenant/{{ tenant_id }}">{{ tenant_name }}</a></li>
+                    <li class="breadcrumb-item"><a href="{{ request.script_root }}/tenant/{{ tenant_id }}/products">Products</a></li>
+                    <li class="breadcrumb-item"><a href="{{ request.script_root }}/tenant/{{ tenant_id }}/products/{{ product.product_id }}/edit">{{ product.name }}</a></li>
                     <li class="breadcrumb-item active">Configure Inventory</li>
                 </ol>
             </nav>
@@ -102,7 +102,7 @@
                         <button class="btn btn-primary" onclick="saveConfiguration()">
                             Save Configuration
                         </button>
-                        <a href="/tenant/{{ tenant_id }}/products/{{ product.product_id }}/edit"
+                        <a href="{{ request.script_root }}/tenant/{{ tenant_id }}/products/{{ product.product_id }}/edit"
                            class="btn btn-secondary">Cancel</a>
                     </div>
                 </div>
@@ -111,43 +111,12 @@
     </div>
 </div>
 
+<!-- Hidden field to sync selected IDs with the shared tree partial -->
+<input type="hidden" id="selectedAdUnitIds" value="">
+
+{% include 'partials/hierarchical_tree_styles.html' %}
+
 <style>
-.inventory-item {
-    padding: 8px;
-    margin: 2px 0;
-    border-radius: 4px;
-    cursor: pointer;
-    user-select: none;
-}
-
-.inventory-item:hover {
-    background-color: #f0f0f0;
-}
-
-.inventory-item.selected {
-    background-color: #e3f2fd;
-    border: 1px solid #2196f3;
-}
-
-.inventory-checkbox {
-    margin-right: 8px;
-}
-
-.inventory-path {
-    font-size: 0.9em;
-    color: #666;
-}
-
-.inventory-size {
-    display: inline-block;
-    padding: 2px 6px;
-    margin: 0 2px;
-    background-color: #f8f9fa;
-    border: 1px solid #dee2e6;
-    border-radius: 3px;
-    font-size: 0.8em;
-}
-
 .suggestion-item {
     padding: 10px;
     margin-bottom: 10px;
@@ -162,20 +131,43 @@
 }
 </style>
 
+{% include 'partials/hierarchical_tree_scripts.html' %}
+
 <script>
+const scriptRoot = '{{ request.script_root }}' || '';
 const tenantId = '{{ tenant_id }}';
 const productId = '{{ product.product_id }}';
+const treeApiUrl = `${scriptRoot}/api/tenant/${tenantId}/inventory/tree`;
 let selectedAdUnits = new Set();
-let inventoryData = null;
+const inventoryCache = new Map();
 
-// Load current configuration on page load
+// Sync the selectedAdUnits Set to the hidden field so the shared partial can read it
+function syncSelectedField() {
+    document.getElementById('selectedAdUnitIds').value = Array.from(selectedAdUnits).join(',');
+}
+
+// Override shared partial's checkbox handler to update our Set
+handleTreeCheckboxChange = function(checkbox) {
+    const unitId = checkbox.value;
+    if (checkbox.checked) {
+        selectedAdUnits.add(unitId);
+    } else {
+        selectedAdUnits.delete(unitId);
+    }
+    syncSelectedField();
+    updateSelectedDisplay();
+};
+
+// Load current configuration on page load, then load tree
 document.addEventListener('DOMContentLoaded', function() {
-    loadCurrentConfig();
-    loadInventoryTree();
+    loadCurrentConfig().then(() => {
+        syncSelectedField();
+        loadInventoryTree('', treeApiUrl, 'inventoryTree', 'selectedAdUnitIds', inventoryCache);
+    });
 });
 
 function loadCurrentConfig() {
-    fetch(`{{ script_name }}/api/tenant/${tenantId}/product/${productId}/inventory`)
+    return fetch(`${scriptRoot}/api/tenant/${tenantId}/product/${productId}/inventory`)
         .then(response => response.json())
         .then(data => {
             const configDiv = document.getElementById('currentConfig');
@@ -219,78 +211,6 @@ function loadCurrentConfig() {
         });
 }
 
-function loadInventoryTree() {
-    fetch(`{{ script_name }}/api/tenant/${tenantId}/inventory/tree`)
-        .then(response => response.json())
-        .then(data => {
-            inventoryData = data;
-            renderInventoryTree(data.root_units || []);
-            updateSelectedDisplay();
-        })
-        .catch(error => {
-            console.error('Error loading inventory:', error);
-            document.getElementById('inventoryTree').innerHTML =
-                '<p class="text-danger">Error loading inventory</p>';
-        });
-}
-
-function renderInventoryTree(units, container = null, level = 0) {
-    if (!container) {
-        container = document.getElementById('inventoryTree');
-        container.innerHTML = '';
-    }
-
-    units.forEach(unit => {
-        if (unit.status !== 'ACTIVE') return; // Only show active units
-
-        const div = document.createElement('div');
-        div.className = 'inventory-item';
-        div.style.marginLeft = (level * 20) + 'px';
-        if (selectedAdUnits.has(unit.id)) {
-            div.classList.add('selected');
-        }
-
-        let html = `
-            <input type="checkbox" class="inventory-checkbox"
-                   value="${unit.id}"
-                   ${selectedAdUnits.has(unit.id) ? 'checked' : ''}
-                   onchange="toggleSelection('${unit.id}')">
-            <span>${unit.name}</span>
-        `;
-
-        if (unit.metadata && unit.metadata.sizes && unit.metadata.sizes.length > 0) {
-            unit.metadata.sizes.forEach(size => {
-                html += ` <span class="inventory-size">${size.width}x${size.height}</span>`;
-            });
-        }
-
-        div.innerHTML = html;
-        div.onclick = function(e) {
-            if (e.target.type !== 'checkbox') {
-                const checkbox = div.querySelector('input[type="checkbox"]');
-                checkbox.checked = !checkbox.checked;
-                toggleSelection(unit.id);
-            }
-        };
-
-        container.appendChild(div);
-
-        // Render children
-        if (unit.children && unit.children.length > 0) {
-            renderInventoryTree(unit.children, container, level + 1);
-        }
-    });
-}
-
-function toggleSelection(unitId) {
-    if (selectedAdUnits.has(unitId)) {
-        selectedAdUnits.delete(unitId);
-    } else {
-        selectedAdUnits.add(unitId);
-    }
-    updateSelectedDisplay();
-}
-
 function updateSelectedDisplay() {
     const display = document.getElementById('selectedInventory');
 
@@ -303,9 +223,11 @@ function updateSelectedDisplay() {
     html += '<ul class="list-unstyled">';
 
     selectedAdUnits.forEach(unitId => {
-        const unit = findUnitById(inventoryData.root_units, unitId);
-        if (unit) {
-            html += `<li>• ${unit.path.join(' > ')}</li>`;
+        const cached = inventoryCache.get(unitId);
+        if (cached && cached.path) {
+            html += `<li>• ${cached.path.join(' > ')}</li>`;
+        } else {
+            html += `<li>• ${unitId}</li>`;
         }
     });
 
@@ -313,20 +235,9 @@ function updateSelectedDisplay() {
     display.innerHTML = html;
 }
 
-function findUnitById(units, unitId) {
-    for (const unit of units) {
-        if (unit.id === unitId) return unit;
-        if (unit.children) {
-            const found = findUnitById(unit.children, unitId);
-            if (found) return found;
-        }
-    }
-    return null;
-}
-
 function refreshInventory() {
     // Redirect to Inventory Browser for syncing
-    window.location.href = `/tenant/${tenantId}/inventory`;
+    window.location.href = scriptRoot + `/tenant/${tenantId}/inventory`;
 }
 
 function getSuggestions() {
@@ -341,7 +252,7 @@ function getSuggestions() {
     const params = new URLSearchParams();
     sizes.forEach(size => params.append('sizes', size));
 
-    fetch(`{{ script_name }}/api/tenant/${tenantId}/inventory/suggest?${params}`)
+    fetch(`${scriptRoot}/api/tenant/${tenantId}/inventory/suggest?${params}`)
         .then(response => response.json())
         .then(data => {
             showSuggestions(data.suggestions || []);
@@ -383,7 +294,8 @@ function showSuggestions(suggestions) {
 
 function addSuggestion(unitId) {
     selectedAdUnits.add(unitId);
-    loadInventoryTree(); // Reload the tree view
+    syncSelectedField();
+    loadInventoryTree('', treeApiUrl, 'inventoryTree', 'selectedAdUnitIds', inventoryCache);
 }
 
 function saveConfiguration() {
@@ -397,7 +309,7 @@ function saveConfiguration() {
         placement_ids: [] // Not implemented in this basic version
     };
 
-    fetch(`{{ script_name }}/api/tenant/${tenantId}/product/${productId}/inventory`, {
+    fetch(`${scriptRoot}/api/tenant/${tenantId}/product/${productId}/inventory`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
@@ -408,7 +320,7 @@ function saveConfiguration() {
     .then(result => {
         if (result.status === 'success') {
             alert('Configuration saved successfully!');
-            window.location.href = `/tenant/${tenantId}/products/${productId}/edit`;
+            window.location.href = scriptRoot + `/tenant/${tenantId}/products/${productId}/edit`;
         } else {
             alert('Error saving configuration: ' + (result.error || 'Unknown error'));
         }

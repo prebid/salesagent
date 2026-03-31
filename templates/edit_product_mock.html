@@ -148,7 +148,7 @@
         {% if tenant_adapter == 'google_ad_manager' %}
         <div class="alert" style="background: #f3e5f5; border-color: #ce93d8; color: #6a1b9a; margin-top: 1rem;">
             <strong>Inventory Targeting:</strong> Configure which ad units this product targets.
-            <a href="/tenant/{{ tenant_id }}/product/{{ product.product_id }}/inventory" class="btn btn-sm"
+            <a href="{{ request.script_root }}/tenant/{{ tenant_id }}/product/{{ product.product_id }}/inventory" class="btn btn-sm"
                style="background: #6a1b9a; color: white; margin-left: 1rem;">Configure Inventory →</a>
         </div>
         {% endif %}

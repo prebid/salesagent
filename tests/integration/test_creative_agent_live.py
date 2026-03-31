@@ -13,7 +13,9 @@ import os
 
 import pytest
 
+from src.core import creative_agent_registry as creative_agent_registry_module
 from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
+from src.core.exceptions import AdCPNotFoundError
 
 # The live creative agent URL — reads env var so CI can point at a containerized agent
 CREATIVE_AGENT_URL = os.environ.get("CREATIVE_AGENT_URL", "https://creative.adcontextprotocol.org")
@@ -31,10 +33,21 @@ def enable_live_mode(monkeypatch):
     monkeypatch.setenv("ADCP_TESTING", "false")
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def registry():
-    """Fresh registry instance for each test."""
-    return CreativeAgentRegistry()
+    """Shared registry instance so live tests reuse the format cache.
+
+    A per-test registry defeats caching and can hammer the public creative
+    agent hard enough to trigger rate limiting in CI.
+    """
+    previous_registry = creative_agent_registry_module._registry
+    shared_registry = CreativeAgentRegistry()
+    shared_registry._format_cache.clear()
+    creative_agent_registry_module._registry = shared_registry
+    try:
+        yield shared_registry
+    finally:
+        creative_agent_registry_module._registry = previous_registry
 
 
 class TestCreativeAgentLiveConnection:
@@ -267,7 +280,7 @@ class TestFormatResolverIntegration:
         """Test format_resolver raises clear error for nonexistent format."""
         from src.core.format_resolver import get_format
 
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(AdCPNotFoundError) as exc_info:
             get_format(
                 format_id="nonexistent_format_xyz",
                 agent_url=CREATIVE_AGENT_URL,

@@ -56,26 +56,14 @@ class CustomProxyFix:
     Also fixes hardcoded URLs in redirects to include the script name prefix.
     """
 
-    def __init__(self, app, script_name="/admin"):
+    def __init__(self, app):
         self.app = app
-        self.script_name = script_name
 
     def __call__(self, environ, start_response):
         # Handle X-Script-Name (standard for mounting path) or X-Forwarded-Prefix
         script_name = environ.get("HTTP_X_SCRIPT_NAME", "")
         if not script_name:
             script_name = environ.get("HTTP_X_FORWARDED_PREFIX", "")
-
-        # Use configured script_name if provided in production
-        # BUT only if this is NOT a custom domain request (via Approximated)
-        # Custom domains should have empty script_root to show landing page
-        if not script_name and os.environ.get("PRODUCTION") == "true":
-            # Check if this is a custom domain request via Approximated
-            apx_host = environ.get("HTTP_APX_INCOMING_HOST", "")
-            if not apx_host:
-                # No Approximated header - use default /admin script_name
-                script_name = self.script_name
-            # If apx_host is set, leave script_name empty for custom domains
 
         if script_name:
             # Store for use in response wrapper
@@ -318,11 +306,7 @@ def create_app(config=None):
 
         context = {}
 
-        # Inject script_name
-        if os.environ.get("PRODUCTION") == "true":
-            context["script_name"] = "/admin"
-        else:
-            context["script_name"] = ""
+        context["script_name"] = request.script_root or request.environ.get("SCRIPT_NAME", "")
 
         # Inject support email (configurable via SUPPORT_EMAIL env var)
         context["support_email"] = get_support_email()
@@ -343,26 +327,6 @@ def create_app(config=None):
                 logger.warning(f"Could not load tenant {tenant_id} for context: {e}")
 
         return context
-
-    # Add after_request handler to fix hardcoded URLs in HTML responses
-    @app.after_request
-    def fix_hardcoded_urls(response):
-        """Fix hardcoded URLs in HTML responses to include script_name prefix."""
-        if os.environ.get("PRODUCTION") == "true" and response.content_type and "text/html" in response.content_type:
-            # Only process HTML responses
-            try:
-                html = response.get_data(as_text=True)
-                # Fix common hardcoded patterns
-                html = html.replace('href="/', 'href="/admin/')
-                html = html.replace("href='/", "href='/admin/")
-                html = html.replace('action="/', 'action="/admin/')
-                html = html.replace("action='/", "action='/admin/")
-                # Fix any that were already prefixed (avoid double prefixing)
-                html = html.replace("/admin/admin/", "/admin/")
-                response.set_data(html)
-            except Exception as e:
-                logger.error(f"Error fixing URLs in response: {e}")
-        return response
 
     # Register blueprints
     app.register_blueprint(public_bp)  # Public routes (no auth required) - MUST BE FIRST

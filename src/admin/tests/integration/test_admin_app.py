@@ -79,6 +79,15 @@ class TestAdminAppIntegration:
         response = client.get("/login")
         assert response.status_code == 200
 
+    def test_context_processor_uses_request_script_root(self, app):
+        """Template prefixing should follow request context rather than env mode."""
+        with app.test_request_context("/tenant/test_tenant", environ_overrides={"SCRIPT_NAME": "/admin"}):
+            context = {}
+            for processor in app.template_context_processors[None]:
+                context.update(processor())
+
+        assert context["script_name"] == "/admin"
+
     def test_tenant_login_page(self, client):
         """Test tenant-specific login page."""
         # Need to patch in the auth blueprint where it's actually used
