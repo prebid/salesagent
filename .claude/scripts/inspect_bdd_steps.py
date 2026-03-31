@@ -6,6 +6,9 @@ Two-pass pipeline:
 
 Usage:
   python .claude/scripts/inspect_bdd_steps.py [--pass1-only] [--steps-dir PATH]
+
+Delta-only mode (pre-commit gate):
+  python .claude/scripts/inspect_bdd_steps.py --delta-only --fail-on-flag --pass1-only
 """
 
 from __future__ import annotations
@@ -19,6 +22,38 @@ from datetime import datetime
 from pathlib import Path
 
 STEP_DECORATOR_NAMES = {"given", "when", "then"}
+
+# ── Delta detection ──────────────────────────────────────────────────
+
+
+def get_delta_step_files(steps_dir: Path) -> list[Path]:
+    """Get BDD step files that have changed since the last commit.
+
+    Uses ``git diff --name-only HEAD -- <steps_dir>`` to find files with
+    uncommitted changes (staged + unstaged).  Returns absolute Paths for
+    files that still exist on disk.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", "HEAD", "--", str(steps_dir)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            return []
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return []
+
+    files: list[Path] = []
+    for line in result.stdout.strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        p = Path(line)
+        if p.exists() and p.suffix == ".py":
+            files.append(p)
+    return files
 
 # ── Data classes ────────────────────────────────────────────────────
 
@@ -203,7 +238,7 @@ def _run_claude(prompt: str, model: str = "sonnet") -> str:
         capture_output=True,
         text=True,
         env=env,
-        timeout=120,
+        timeout=600,
     )
     return result.stdout.strip()
 
@@ -510,12 +545,33 @@ def main() -> None:
         action="store_true",
         help="Also write machine-readable JSON alongside the markdown report",
     )
+    parser.add_argument(
+        "--delta-only",
+        action="store_true",
+        help="Only inspect Then steps in files changed since last commit (git diff HEAD)",
+    )
+    parser.add_argument(
+        "--fail-on-flag",
+        action="store_true",
+        help="Exit with code 1 if any step is FLAG'd by Sonnet triage",
+    )
     args = parser.parse_args()
 
     # Determine output path
     if args.output is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M")
         args.output = Path(f".claude/reports/bdd-step-audit-{timestamp}.md")
+
+    # --delta-only: override file list with git-changed step files
+    if args.delta_only:
+        delta_files = get_delta_step_files(args.steps_dir)
+        if not delta_files:
+            print("No changed step files found — nothing to inspect.")
+            raise SystemExit(0)
+        print(f"Delta mode: {len(delta_files)} changed file(s)")
+        for f in delta_files:
+            print(f"  {f}")
+        args.files = delta_files
 
     if args.files:
         print(f"Scanning {len(args.files)} specific files for BDD step functions...")
@@ -573,6 +629,11 @@ def main() -> None:
             )
         json_path.write_text(json.dumps(findings, indent=2))
         print(f"JSON written to {json_path}")
+
+    # --fail-on-flag: exit non-zero if any step was flagged
+    if args.fail_on_flag and flagged:
+        print(f"\nFAILED: {len(flagged)} step(s) flagged — see report for details.")
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
