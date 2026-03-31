@@ -112,9 +112,23 @@ jobs:
       run: uv run pytest tests/unit/ -v --tb=short --cov=. --cov-report=term-missing
 
   integration-tests:
-    name: Integration Tests (Legacy - 174 passing)
+    name: Integration (${{ matrix.group }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: creative
+            marker: creative
+          - group: product
+            marker: product
+          - group: media-buy
+            marker: media_buy or delivery
+          - group: infra
+            marker: transport or auth or adapter or schema or admin or infra or inventory or targeting or workflow or policy or agent
+          - group: other
+            marker: not (creative or product or media_buy or delivery or transport or auth or adapter or schema or admin or infra or inventory or targeting or workflow or policy or agent)
 
     services:
       postgres:
@@ -155,7 +169,6 @@ jobs:
     - name: Install dependencies
       run: |
         uv sync --extra dev
-        # Clear Python bytecode cache to prevent stale imports
         find . -type d -name __pycache__ -exec rm -rf {} + || true
         find . -type f -name '*.pyc' -delete || true
 
@@ -164,80 +177,62 @@ jobs:
         DATABASE_URL: postgresql://adcp_user:test_password@localhost:5432/adcp_test
       run: uv run python scripts/ops/migrate.py
 
-    - name: Run integration tests
+    - name: Start reference creative agent
+      if: matrix.group == 'creative'
+      run: |
+        # Build the adcp server (includes the reference creative agent)
+        git clone --depth 1 https://github.com/adcontextprotocol/adcp.git /tmp/adcp-server
+        docker build -t adcp-creative-agent /tmp/adcp-server
+
+        # The adcp monolith needs its own Postgres — creative agent is one route in the full app
+        docker network create creative-net
+
+        docker run -d --network creative-net --name adcp-postgres \
+          -e POSTGRES_DB=adcp_registry \
+          -e POSTGRES_USER=adcp \
+          -e POSTGRES_PASSWORD=localdev \
+          postgres:16
+        sleep 5
+
+        docker run -d --network creative-net --name creative-agent \
+          -p 9999:8080 \
+          -e NODE_ENV=production \
+          -e PORT=8080 \
+          -e DATABASE_URL=postgresql://adcp:localdev@adcp-postgres:5432/adcp_registry \
+          -e RUN_MIGRATIONS=true \
+          -e ALLOW_INSECURE_COOKIES=true \
+          -e DEV_USER_EMAIL=ci@test.com \
+          -e DEV_USER_ID=ci-user \
+          -e AGENT_TOKEN_ENCRYPTION_SECRET=local-ci-encryption-key-32chars!! \
+          -e WORKOS_API_KEY=sk_test_dummy \
+          -e WORKOS_CLIENT_ID=client_dummy \
+          adcp-creative-agent
+
+        echo "Waiting for creative agent..."
+        for i in $(seq 1 60); do
+          if curl -sf http://localhost:9999/api/creative-agent/health > /dev/null 2>&1; then
+            echo "Creative agent healthy on :9999"
+            break
+          fi
+          sleep 2
+        done
+        curl -sf http://localhost:9999/api/creative-agent/health || {
+          echo "Creative agent failed to start"; docker logs creative-agent | tail -20; exit 1;
+        }
+
+    - name: Run integration tests (${{ matrix.group }})
       env:
         DATABASE_URL: postgresql://adcp_user:test_password@localhost:5432/adcp_test
         GEMINI_API_KEY: test_key_for_mocking
         GOOGLE_CLIENT_ID: test_client_id
         GOOGLE_CLIENT_SECRET: test_client_secret
         SUPER_ADMIN_EMAILS: test@example.com
-        ENCRYPTION_KEY: PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk=  # TEST ONLY — never use in production
+        ENCRYPTION_KEY: PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk=
         ADCP_TESTING: true
+        CREATIVE_AGENT_URL: ${{ matrix.group == 'creative' && 'http://localhost:9999/api/creative-agent' || '' }}
       run: |
-        uv run pytest tests/integration/ -v --tb=short --cov=. --cov-report=term-missing --timeout=60 -m "not requires_server and not skip_ci"
-
-  integration-tests-v2:
-    name: Integration Tests V2 (Pricing Migration Fixed)
-    runs-on: ubuntu-latest
-
-    services:
-      postgres:
-        image: postgres:15
-        env:
-          POSTGRES_USER: adcp_user
-          POSTGRES_PASSWORD: test_password
-          POSTGRES_DB: adcp_test_v2
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
-        ports:
-          - 5432:5432
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
-
-    - name: Install uv
-      uses: astral-sh/setup-uv@v4
-      with:
-        version: ${{ env.UV_VERSION }}
-
-    - name: Cache uv dependencies
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cache/uv
-          .venv
-        key: ${{ runner.os }}-uv-v2-${{ hashFiles('**/uv.lock') }}
-
-    - name: Install dependencies
-      run: |
-        uv sync --extra dev
-        # Clear Python bytecode cache to prevent stale imports
-        find . -type d -name __pycache__ -exec rm -rf {} + || true
-        find . -type f -name '*.pyc' -delete || true
-
-    - name: Run database migrations
-      env:
-        DATABASE_URL: postgresql://adcp_user:test_password@localhost:5432/adcp_test_v2
-      run: uv run python scripts/ops/migrate.py
-
-    - name: Run integration tests (V2 — pricing migration)
-      env:
-        DATABASE_URL: postgresql://adcp_user:test_password@localhost:5432/adcp_test_v2
-        GEMINI_API_KEY: test_key_for_mocking
-        GOOGLE_CLIENT_ID: test_client_id
-        GOOGLE_CLIENT_SECRET: test_client_secret
-        SUPER_ADMIN_EMAILS: test@example.com
-        ENCRYPTION_KEY: PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk=  # TEST ONLY — never use in production
-        ADCP_TESTING: true
-      run: uv run pytest tests/integration/ -v --tb=short --cov=. --cov-report=term-missing -m "not requires_server and not skip_ci"
+        uv run pytest tests/integration/ -v --tb=short --timeout=60 \
+          -m "(${{ matrix.marker }}) and not requires_server and not skip_ci"
 
   quickstart-test:
     name: Quickstart Docker Compose Test
@@ -398,15 +393,15 @@ jobs:
   test-summary:
     name: Test Summary
     runs-on: ubuntu-latest
-    needs: [security-audit, smoke-tests, unit-tests, integration-tests, integration-tests-v2, quickstart-test, e2e-tests, lint]
+    needs: [security-audit, smoke-tests, unit-tests, integration-tests, quickstart-test, e2e-tests, lint]
     if: always()
 
     steps:
     - name: Check test results
       run: |
-        if [ "${{ needs.security-audit.result }}" = "failure" ] || [ "${{ needs.unit-tests.result }}" = "failure" ] || [ "${{ needs.integration-tests.result }}" = "failure" ] || [ "${{ needs.integration-tests-v2.result }}" = "failure" ] || [ "${{ needs.quickstart-test.result }}" = "failure" ] || [ "${{ needs.e2e-tests.result }}" = "failure" ] || [ "${{ needs.lint.result }}" = "failure" ]; then
+        if [ "${{ needs.security-audit.result }}" = "failure" ] || [ "${{ needs.unit-tests.result }}" = "failure" ] || [ "${{ needs.integration-tests.result }}" = "failure" ] || [ "${{ needs.quickstart-test.result }}" = "failure" ] || [ "${{ needs.e2e-tests.result }}" = "failure" ] || [ "${{ needs.lint.result }}" = "failure" ]; then
           echo "❌ Tests failed"
           exit 1
         else
-          echo "✅ All tests passed (security-audit, smoke, unit, integration, integration-v2, quickstart, e2e, lint+mypy)"
+          echo "✅ All tests passed (security-audit, smoke, unit, integration x5, quickstart, e2e, lint+mypy)"
         fi
