@@ -971,58 +971,43 @@ def then_package_details(ctx: dict) -> None:
 
 @then("each package should include creative approval state when creatives are assigned")
 def then_creative_approval_state(ctx: dict) -> None:
-    """Assert packages include creative_approval_state with meaningful values.
+    """Assert packages include creative approval info with meaningful values.
 
     Step text: "when creatives are assigned" — so we check:
-    1. Field must exist on the schema
-    2. When creatives ARE assigned, the value must be a recognized approval state
+    1. The creative_approvals field must be present on the schema
+    2. When creatives ARE assigned, creative_approvals must be populated
+    3. Each approval entry must have a valid approval_status
     """
-    import pytest
+    from src.core.schemas._base import ApprovalStatus
 
-    valid_states = ("pending_review", "approved", "rejected", "not_applicable", None)
+    valid_statuses = {s.value for s in ApprovalStatus}
     buys = _get_media_buys(ctx)
     assert len(buys) > 0, "No media buys in response"
     packages_checked = 0
-    packages_with_creatives = 0
+    packages_with_approvals = 0
     for buy in buys:
         for pkg in getattr(buy, "packages", []) or []:
             packages_checked += 1
-            has_field = hasattr(pkg, "creative_approval_state") or (
-                isinstance(pkg, dict) and "creative_approval_state" in pkg
-            )
-            if not has_field:
-                # Check if the schema type defines the field (even if value is absent)
-                schema_has_field = False
-                if hasattr(type(pkg), "model_fields"):
-                    schema_has_field = "creative_approval_state" in type(pkg).model_fields
-                pytest.xfail(
-                    f"SPEC-PRODUCTION GAP: creative_approval_state field not present on package "
-                    f"(schema defines field: {schema_has_field}, type: {type(pkg).__name__}). "
-                    f"Checked {packages_checked} packages so far. FIXME(salesagent-9vgz.1)"
-                )
-            # Extract value
-            state = (
-                getattr(pkg, "creative_approval_state", None)
-                if not isinstance(pkg, dict)
-                else pkg.get("creative_approval_state")
-            )
-            # When creatives exist on the package, verify state is meaningful
-            creatives = (
-                getattr(pkg, "creatives", None) or getattr(pkg, "creative_ids", None)
-                if not isinstance(pkg, dict)
-                else pkg.get("creatives") or pkg.get("creative_ids")
-            )
-            if creatives:
-                packages_with_creatives += 1
-                assert state is not None, (
-                    "Package has creatives assigned but creative_approval_state is None — "
-                    "step claims state should be present 'when creatives are assigned'"
-                )
-                state_str = state.value if hasattr(state, "value") else str(state)
-                assert state_str in valid_states, (
-                    f"Unexpected creative_approval_state '{state_str}', expected one of {valid_states}"
-                )
-    assert packages_checked > 0, "No packages found to check creative_approval_state on"
+            approvals = getattr(pkg, "creative_approvals", None)
+            if approvals:
+                packages_with_approvals += 1
+                for approval in approvals:
+                    cid = getattr(approval, "creative_id", None)
+                    assert cid is not None, "CreativeApproval entry missing creative_id"
+                    status = getattr(approval, "approval_status", None)
+                    assert status is not None, f"CreativeApproval for '{cid}' has no approval_status"
+                    status_str = status.value if hasattr(status, "value") else str(status)
+                    assert status_str in valid_statuses, (
+                        f"Unexpected approval_status '{status_str}' for creative '{cid}', "
+                        f"expected one of {valid_statuses}"
+                    )
+    assert packages_checked > 0, "No packages found to check creative approvals on"
+    # Step text says "when creatives are assigned" — verify at least one package
+    # actually had creative approvals to check
+    assert packages_with_approvals > 0, (
+        f"Step claims 'when creatives are assigned' but none of the {packages_checked} "
+        f"packages had creative_approvals populated — test setup must assign creatives"
+    )
 
 
 @then("each media buy should include buyer_ref and buyer_campaign_ref for correlation")
@@ -1242,6 +1227,7 @@ def then_status_handles_missing_date(ctx: dict, mb_id: str) -> None:
     1. The buy is returned with a valid (non-error) status, OR
     2. An appropriate error was raised (AdCPError or ValueError, not crash)
     """
+    from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
 
     from src.core.exceptions import AdCPError
 
@@ -1255,6 +1241,7 @@ def then_status_handles_missing_date(ctx: dict, mb_id: str) -> None:
         )
         return
 
+    valid_statuses = {s.value for s in MediaBuyStatus}
     buys = _get_media_buys(ctx)
     assert buys, "No media buys returned — expected at least one for missing date handling"
     matching = [b for b in buys if getattr(b, "media_buy_id", None) == mb_id]
@@ -1262,6 +1249,12 @@ def then_status_handles_missing_date(ctx: dict, mb_id: str) -> None:
     # If found, verify it has a valid status (graceful = didn't crash)
     status = getattr(matching[0], "status", None)
     assert status is not None, f"Media buy '{mb_id}' returned but has no status — not graceful handling"
+    status_str = status.value if hasattr(status, "value") else str(status)
+    assert status_str in valid_statuses, (
+        f"Media buy '{mb_id}' has status '{status_str}' which is not a valid MediaBuyStatus. "
+        f"Graceful handling should produce a recognized status, not '{status_str}'. "
+        f"Valid statuses: {valid_statuses}"
+    )
 
 
 @then(parsers.parse("the error message should include field-level validation details"))
@@ -1292,10 +1285,10 @@ def then_error_recovery_correctable(ctx: dict) -> None:
 
 @then(parsers.parse('the error should include a "suggestion" field'))
 def then_error_has_suggestion(ctx: dict) -> None:
-    """Assert error includes a suggestion field.
+    """Assert error includes a suggestion field with actionable content.
 
     Step text: 'the error should include a "suggestion" field'.
-    Checks AdCPError.details first, then falls back to response.errors.
+    Checks AdCPError.details for a non-empty suggestion string.
     """
     import pytest
 
@@ -1312,12 +1305,20 @@ def then_error_has_suggestion(ctx: dict) -> None:
                 f"Correct assertion: assert error.details is not None and 'suggestion' in error.details."
             )
         assert "suggestion" in error.details, f"Expected 'suggestion' in error details: {error.details}"
+        suggestion = error.details["suggestion"]
+        assert isinstance(suggestion, str) and suggestion.strip(), (
+            f"Expected non-empty suggestion string, got {suggestion!r}"
+        )
         return
     # For non-AdCPError, check response errors (fallback)
     resp = ctx.get("response")
     if resp and hasattr(resp, "errors"):
         for e in getattr(resp, "errors", []) or []:
             if isinstance(e, dict) and "suggestion" in e:
+                suggestion = e["suggestion"]
+                assert isinstance(suggestion, str) and suggestion.strip(), (
+                    f"Expected non-empty suggestion string in response error, got {suggestion!r}"
+                )
                 return
     pytest.xfail(
         f"SPEC-PRODUCTION GAP: Error is {type(error).__name__}, not AdCPError with suggestion. "
@@ -1550,7 +1551,8 @@ def then_package_unavailable_reason(ctx: dict, pkg_id: str, reason: str) -> None
 
 @then(parsers.parse('the snapshot for package "{pkg_id}" should include "{field}" timestamp'))
 def then_snapshot_field_timestamp(ctx: dict, pkg_id: str, field: str) -> None:
-    """Assert snapshot has a timestamp field."""
+    """Assert snapshot has a timestamp field with valid ISO 8601 format."""
+    from datetime import datetime
 
     buys = _get_media_buys(ctx)
     for buy in buys:
@@ -1562,17 +1564,30 @@ def then_snapshot_field_timestamp(ctx: dict, pkg_id: str, field: str) -> None:
                 if val is None and isinstance(snapshot, dict):
                     val = snapshot.get(field)
                 assert val is not None, f"Snapshot field '{field}' not present on package '{pkg_id}'"
+                # Accept both datetime objects and ISO 8601 strings
+                if isinstance(val, datetime):
+                    return  # Already a datetime — valid timestamp
                 assert isinstance(val, str), (
-                    f"Expected '{field}' to be a timestamp string, got {type(val).__name__}: {val!r}"
+                    f"Expected '{field}' to be a timestamp (datetime or ISO 8601 string), "
+                    f"got {type(val).__name__}: {val!r}"
                 )
+                try:
+                    datetime.fromisoformat(val.replace("Z", "+00:00"))
+                except ValueError as exc:
+                    raise AssertionError(
+                        f"Snapshot field '{field}' value '{val}' is not a valid ISO 8601 timestamp: {exc}"
+                    ) from exc
                 return
     raise AssertionError(f"Package '{pkg_id}' not found in response")
 
 
 @then(parsers.parse('the snapshot should include "{field}" integer'))
 def then_snapshot_field_integer(ctx: dict, field: str) -> None:
-    """Assert snapshot has an integer field (step text says 'integer', not 'numeric')."""
+    """Assert snapshot has a non-negative integer field.
 
+    Snapshot integer fields (e.g. staleness_seconds) represent metrics that
+    must be non-negative per the Snapshot schema (ge=0 constraint).
+    """
     buys = _get_media_buys(ctx)
     for buy in buys:
         for pkg in getattr(buy, "packages", []) or []:
@@ -1583,14 +1598,18 @@ def then_snapshot_field_integer(ctx: dict, field: str) -> None:
                     val = snapshot.get(field)
                 assert val is not None, f"Snapshot field '{field}' not present — snapshot data propagation incomplete"
                 assert isinstance(val, int), f"Expected '{field}' to be an integer, got {type(val).__name__}: {val!r}"
+                assert val >= 0, f"Expected '{field}' to be non-negative, got {val}"
                 return
     raise AssertionError(f"No snapshots found — cannot verify '{field}' integer")
 
 
 @then(parsers.parse('the snapshot should include "{field}" count'))
 def then_snapshot_field_count(ctx: dict, field: str) -> None:
-    """Assert snapshot has a count field."""
+    """Assert snapshot has a non-negative numeric count field.
 
+    Step text says "count" — the value must be numeric (int or float, since
+    Snapshot fields like impressions are float in the schema) and non-negative.
+    """
     buys = _get_media_buys(ctx)
     for buy in buys:
         for pkg in getattr(buy, "packages", []) or []:
@@ -1600,8 +1619,8 @@ def then_snapshot_field_count(ctx: dict, field: str) -> None:
                 if val is None and isinstance(snapshot, dict):
                     val = snapshot.get(field)
                 assert val is not None, f"Snapshot field '{field}' count not present on package"
-                assert isinstance(val, int), (
-                    f"Expected '{field}' to be an integer count, got {type(val).__name__}: {val!r}"
+                assert isinstance(val, (int, float)), (
+                    f"Expected '{field}' to be a numeric count, got {type(val).__name__}: {val!r}"
                 )
                 assert val >= 0, f"Expected '{field}' count to be non-negative, got {val}"
                 return
@@ -1669,11 +1688,12 @@ def then_response_count_scoped(ctx: dict, count: int, principal_id: str) -> None
 
 @then(parsers.parse('the response should contain "media_buys" array'))
 def then_response_has_media_buys_array(ctx: dict) -> None:
-    """Assert response has a media_buys array."""
+    """Assert response has a media_buys field that is a list (array)."""
     resp = ctx.get("response")
     assert resp is not None, f"Expected response, got error: {ctx.get('error')}"
     buys = getattr(resp, "media_buys", None)
     assert buys is not None, "Response missing media_buys field"
+    assert isinstance(buys, list), f"Expected media_buys to be a list (array), got {type(buys).__name__}"
 
 
 @then("the response should include sandbox equals true")
@@ -1685,16 +1705,19 @@ def then_sandbox_true(ctx: dict) -> None:
     """
     import pytest
 
+    from src.core.schemas._base import GetMediaBuysResponse
+
     resp = ctx.get("response")
     assert resp is not None, f"Expected response, got error: {ctx.get('error')}"
+    assert isinstance(resp, GetMediaBuysResponse), f"Expected GetMediaBuysResponse, got {type(resp).__name__}"
+    # Check schema-level field definition first
+    has_sandbox_field = "sandbox" in type(resp).model_fields if hasattr(type(resp), "model_fields") else False
     sandbox = getattr(resp, "sandbox", None)
-    if sandbox is None and hasattr(resp, "model_dump"):
-        sandbox = resp.model_dump().get("sandbox")
-    if sandbox is None:
+    if sandbox is None and not has_sandbox_field:
         pytest.xfail(
-            "SPEC-PRODUCTION GAP: sandbox flag not present in response schema. "
-            "Correct assertion: assert sandbox is True. "
-            "FIXME(salesagent-9vgz.1): Implement sandbox flag in GetMediaBuysResponse."
+            "SPEC-PRODUCTION GAP: sandbox field not defined in GetMediaBuysResponse schema. "
+            "Correct assertion: assert resp.sandbox is True. "
+            "FIXME(salesagent-9vgz.1): Add sandbox: bool | None field to GetMediaBuysResponse."
         )
     assert sandbox is True, f"Expected sandbox=true, got {sandbox!r}"
 
@@ -1720,24 +1743,35 @@ def then_no_sandbox_field(ctx: dict) -> None:
 def then_no_real_api_calls(ctx: dict) -> None:
     """Assert no real adapter API calls (sandbox mode).
 
-    Step text claims 'no real API calls' — must verify at least one method
-    was checked, not vacuously pass when no methods exist on mock.
+    Two verification paths:
+    1. If the env has adapter mocks (e.g. create/update envs), verify no methods were called.
+    2. If the env has NO adapter patches (e.g. MediaBuyListEnv — pure DB read),
+       this proves no adapter calls are possible by design. Verify EXTERNAL_PATCHES
+       is empty to confirm the operation is adapter-free.
     """
-
     env = ctx["env"]
-    assert "adapter" in env.mock, "Step claims 'no real API calls' but no adapter mock is available to verify"
-    adapter_mock = env.mock["adapter"].return_value
-    methods_checked = 0
-    for method_name in ("create_line_item", "get_report", "sync_creative"):
-        method = getattr(adapter_mock, method_name, None)
-        if method is not None and hasattr(method, "called"):
-            methods_checked += 1
-            assert not method.called, f"Real adapter method '{method_name}' was called in sandbox mode"
-    assert methods_checked > 0, (
-        "Step claims 'no real API calls' but no callable adapter methods found to verify — "
-        f"adapter mock type: {type(adapter_mock).__name__}. "
-        "Expected at least one of: create_line_item, get_report, sync_creative"
-    )
+    if "adapter" in env.mock:
+        # Path 1: adapter mock exists — verify no methods were called
+        adapter_mock = env.mock["adapter"].return_value
+        methods_checked = 0
+        for method_name in ("create_line_item", "get_report", "sync_creative"):
+            method = getattr(adapter_mock, method_name, None)
+            if method is not None and hasattr(method, "called"):
+                methods_checked += 1
+                assert not method.called, f"Real adapter method '{method_name}' was called in sandbox mode"
+        assert methods_checked > 0, (
+            "Adapter mock exists but no callable methods found to verify — "
+            f"adapter mock type: {type(adapter_mock).__name__}"
+        )
+    else:
+        # Path 2: no adapter mock — operation is adapter-free by design
+        assert env.EXTERNAL_PATCHES == {}, (
+            f"No adapter mock but EXTERNAL_PATCHES is non-empty: {env.EXTERNAL_PATCHES}. "
+            f"If the env patches external services, it should include an adapter mock "
+            f"to verify no real calls were made in sandbox mode."
+        )
+        # Confirm response was successful (operation completed without adapter)
+        assert ctx.get("response") is not None, "No adapter mock and no response — operation may have failed silently"
 
 
 @then("the response should indicate a validation error")
@@ -1789,7 +1823,11 @@ def then_real_validation_error(ctx: dict) -> None:
 
 @then("the error should include a suggestion for how to fix the issue")
 def then_error_suggestion_for_fix(ctx: dict) -> None:
-    """Assert error includes a suggestion."""
+    """Assert error includes a suggestion with actionable fix guidance.
+
+    Step text: 'suggestion for how to fix the issue' — the suggestion must be
+    a non-empty string with enough content to be actionable (at least 5 chars).
+    """
     import pytest
 
     error = ctx.get("error")
@@ -1805,8 +1843,12 @@ def then_error_suggestion_for_fix(ctx: dict) -> None:
             f"SPEC-PRODUCTION GAP: AdCPError has no details dict — "
             f"cannot contain suggestion. error_code={error.error_code}"
         )
-    suggestion = error.details.get("suggestion", "")
-    assert suggestion, f"Expected non-empty suggestion in error details, got: {error.details}"
+    suggestion = error.details.get("suggestion")
+    assert isinstance(suggestion, str) and len(suggestion.strip()) >= 5, (
+        f"Expected actionable suggestion string (>= 5 chars) in error details, "
+        f"got {suggestion!r}. Step claims 'how to fix the issue' — suggestion "
+        f"must contain meaningful guidance."
+    )
 
 
 @then(parsers.parse('only media buys with status "{status}" are returned'))
@@ -1902,6 +1944,10 @@ def then_error_code_with_suggestion(ctx: dict, code: str) -> None:
             f"Correct assertion: assert error.details is not None and 'suggestion' in error.details."
         )
     assert "suggestion" in error.details, f"Expected 'suggestion' in error details for '{code}', got: {error.details}"
+    suggestion = error.details["suggestion"]
+    assert isinstance(suggestion, str) and suggestion.strip(), (
+        f"Expected non-empty suggestion string for error code '{code}', got {suggestion!r}"
+    )
 
 
 @then(parsers.parse("no snapshot or snapshot_unavailable_reason on any package"))
