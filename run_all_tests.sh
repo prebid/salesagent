@@ -102,7 +102,7 @@ elif [ "$MODE" = "ci" ]; then
 else
     echo "Usage: ./run_all_tests.sh [quick|ci]"
     echo "  ci (default) — Docker + all 5 suites via tox"
-    echo "  quick        — no Docker: unit + integration + integration_v2"
+    echo "  quick        — no Docker: unit + integration"
     exit 1
 fi
 

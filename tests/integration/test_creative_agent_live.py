@@ -194,14 +194,17 @@ class TestCacheConsistency:
 
     @pytest.mark.asyncio
     async def test_cache_key_matches_default_agent(self, registry):
-        """Verify cache is populated after fetching formats."""
+        """Verify cache key matches DEFAULT_AGENT URL."""
         # Fetch formats (populates cache)
         await registry.list_all_formats(tenant_id=None)
+
+        # DEFAULT_AGENT uses URL without trailing slash
+        expected_key = CREATIVE_AGENT_URL
 
         cache_keys = list(registry._format_cache.keys())
         print(f"Cache keys: {cache_keys}")
 
-        assert len(cache_keys) > 0, "Cache should be populated after fetch"
+        assert expected_key in cache_keys, f"Expected cache key '{expected_key}' not found. Keys: {cache_keys}"
 
     @pytest.mark.asyncio
     async def test_url_variations_share_single_cache_entry(self, registry):
