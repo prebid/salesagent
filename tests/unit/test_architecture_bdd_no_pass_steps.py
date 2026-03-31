@@ -13,21 +13,8 @@ beads: beads-5rt
 from __future__ import annotations
 
 import ast
-from pathlib import Path
 
-_BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
-
-
-def _is_then_decorated(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    """Check if function is decorated with @then(...)."""
-    for dec in func.decorator_list:
-        if isinstance(dec, ast.Call):
-            func_node = dec.func
-            if isinstance(func_node, ast.Name) and func_node.id == "then":
-                return True
-        if isinstance(dec, ast.Name) and dec.id == "then":
-            return True
-    return False
+from tests.unit._bdd_guard_helpers import iter_then_functions
 
 
 def _body_is_empty(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
@@ -72,23 +59,11 @@ def _body_has_assert_or_call(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bo
 def _scan_bdd_steps() -> list[str]:
     """Find Then steps with empty or assertion-free bodies."""
     violations = []
-    for py_file in sorted(_BDD_STEPS_DIR.rglob("*.py")):
-        if py_file.name.startswith("_"):
-            continue
-        source = py_file.read_text()
-        tree = ast.parse(source, filename=str(py_file))
-        relative = py_file.relative_to(_BDD_STEPS_DIR.parent.parent)
-
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            if not _is_then_decorated(node):
-                continue
-            if _body_is_empty(node):
-                violations.append(f"{relative}:{node.lineno} {node.name} — empty body (pass/docstring-only)")
-            elif not _body_has_assert_or_call(node):
-                violations.append(f"{relative}:{node.lineno} {node.name} — no assert or function call")
-
+    for key, node in iter_then_functions():
+        if _body_is_empty(node):
+            violations.append(f"{key} — empty body (pass/docstring-only)")
+        elif not _body_has_assert_or_call(node):
+            violations.append(f"{key} — no assert or function call")
     return violations
 
 
