@@ -4802,6 +4802,24 @@ mappings:
       upstream_refs: ["BR-RULE-055"]
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-011-list-cross-agent"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-054", "BR-RULE-055"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-list-no-principal"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-055"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-sync-cross-agent"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-054", "BR-RULE-055"]
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-011-list-pagination"
       adcp_feature: "BR-UC-011-manage-accounts.feature"
       obligation_id: null

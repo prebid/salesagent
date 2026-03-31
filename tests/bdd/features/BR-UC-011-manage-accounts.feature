@@ -76,6 +76,34 @@ Feature: BR-UC-011 Manage Accounts
     And the error message describes the authentication requirement
     # @bva authentication (account operations): no token on list
 
+  # ── Hand-authored: authorization boundary scenarios (PR #1170 review) ──
+
+  @T-UC-011-list-cross-agent @list @auth @security @hand-authored
+  Scenario: List accounts returns only the authenticated agent's accounts
+    Given agent "agent-A" has an authenticated connection with 2 accessible accounts
+    And agent "agent-B" has 3 accessible accounts in the same tenant
+    When agent "agent-A" sends a list_accounts request
+    Then the response contains an accounts array with 2 items
+    And none of the returned accounts belong to agent "agent-B"
+    # Security: cross-agent isolation — agent A must not see agent B's accounts
+
+  @T-UC-011-list-no-principal @list @auth @security @hand-authored
+  Scenario: List accounts with valid tenant but missing principal_id returns auth error
+    Given the Buyer Agent has a connection with tenant resolved but no principal_id
+    When the Buyer Agent sends a list_accounts request with no principal_id
+    Then the response is an error variant with no accounts array
+    And the error code is "AUTH_TOKEN_INVALID"
+    # Security: identity with tenant_id but missing principal_id must be rejected
+
+  @T-UC-011-sync-cross-agent @sync @auth @security @hand-authored
+  Scenario: Sync accounts are scoped to the authenticated agent
+    Given agent "agent-A" has an authenticated connection
+    And agent "agent-A" previously synced account for brand domain "a-brand.com"
+    And agent "agent-B" previously synced account for brand domain "b-brand.com"
+    When agent "agent-A" sends a list_accounts request
+    Then none of the returned accounts have brand domain "b-brand.com"
+    # Security: agent A cannot see agent B's accounts via list_accounts
+
   @T-UC-011-list-pagination @list @pagination @post-s4
   Scenario: List accounts with pagination
     Given the Buyer Agent has an authenticated connection

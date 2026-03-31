@@ -1973,3 +1973,85 @@ def then_no_modifications_for_domain(ctx: dict, domain: str) -> None:
             f"Expected billing='operator' (unchanged by dry-run) for {domain}, "
             f"got billing='{account.billing}' — dry_run failed to prevent DB writes"
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Hand-authored: Authorization boundary steps (PR #1170 review)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given(parsers.parse('agent "{name}" has an authenticated connection with {count:d} accessible accounts'))
+def given_agent_with_n_accounts(ctx: dict, name: str, count: int) -> None:
+    """Create a named agent with N accessible accounts."""
+    _setup_tenant_and_principal(ctx)
+    agent = _create_agent(ctx, name)
+    from tests.factories.account import AccountFactory, AgentAccountAccessFactory
+
+    tenant = ctx["tenant"]
+    agent_account_ids: set[str] = set()
+    for _ in range(count):
+        account = AccountFactory(tenant=tenant, status="active")
+        AgentAccountAccessFactory(
+            tenant_id=tenant.tenant_id,
+            principal=agent,
+            account=account,
+        )
+        agent_account_ids.add(account.account_id)
+    ctx.setdefault("agent_account_ids", {})[name] = agent_account_ids
+
+
+@given(parsers.parse('agent "{name}" has {count:d} accessible accounts in the same tenant'))
+def given_agent_b_accounts_same_tenant(ctx: dict, name: str, count: int) -> None:
+    """Create a second agent with N accessible accounts in the same tenant."""
+    given_agent_with_n_accounts(ctx, name, count)
+
+
+@given("the Buyer Agent has a connection with tenant resolved but no principal_id")
+def given_connection_no_principal(ctx: dict) -> None:
+    """Set up identity with tenant_id but principal_id=None."""
+    _setup_tenant_and_principal(ctx)
+    ctx["override_identity_no_principal"] = True
+
+
+@when(parsers.parse('agent "{name}" sends a list_accounts request'))
+def when_agent_list_accounts(ctx: dict, name: str) -> None:
+    """Send list_accounts as a specific named agent."""
+    identity = _make_identity_for_agent(ctx, name)
+    dispatch_request(ctx, identity=identity)
+
+
+@when("the Buyer Agent sends a list_accounts request with no principal_id")
+def when_list_accounts_no_principal(ctx: dict) -> None:
+    """Send list_accounts with an identity that has tenant_id but no principal_id."""
+    from src.core.resolved_identity import ResolvedIdentity
+
+    tenant = ctx["tenant"]
+    broken_identity = ResolvedIdentity(
+        tenant_id=tenant.tenant_id,
+        principal_id=None,
+        protocol="test",
+    )
+    dispatch_request(ctx, identity=broken_identity)
+
+
+@then(parsers.parse('none of the returned accounts belong to agent "{name}"'))
+def then_none_belong_to_agent(ctx: dict, name: str) -> None:
+    """Assert no returned accounts are in the other agent's set."""
+    resp = ctx["response"]
+    other_ids = ctx.get("agent_account_ids", {}).get(name, set())
+    assert other_ids, f"Test setup error: no account IDs tracked for agent '{name}'"
+    returned_ids = {acct.account_id for acct in resp.accounts}
+    leaked = returned_ids & other_ids
+    assert not leaked, f"Cross-agent leak: accounts {leaked} belong to agent '{name}' but appeared in response"
+
+
+@then(parsers.parse('none of the returned accounts have brand domain "{domain}"'))
+def then_none_have_brand_domain(ctx: dict, domain: str) -> None:
+    """Assert no returned account has the specified brand domain."""
+    resp = ctx["response"]
+    for acct in resp.accounts:
+        if hasattr(acct, "brand") and acct.brand and hasattr(acct.brand, "domain"):
+            assert acct.brand.domain != domain, (
+                f"Cross-agent leak: account {acct.account_id} has brand domain '{domain}' "
+                f"but should not be visible to this agent"
+            )
