@@ -1080,6 +1080,8 @@ Feature: BR-UC-006 Sync Creative Assets
       | account_setup_required     | {"account_id": "acc_new_unconfigured"}                                      | the error should be ACCOUNT_SETUP_REQUIRED with suggestion    |
       | account_payment_required   | {"account_id": "acc_overdue"}                                               | the error should be ACCOUNT_PAYMENT_REQUIRED with suggestion  |
       | account_suspended          | {"account_id": "acc_suspended"}                                             | the error should be ACCOUNT_SUSPENDED with suggestion         |
+      | access_denied_id           | {"account_id": "acc_other_agent"}                                           | the error should be AUTHORIZATION_ERROR with suggestion       |
+      | access_denied_natural_key  | {"brand": {"domain": "other-agent.com"}, "operator": "other-agent.com"}    | the error should be AUTHORIZATION_ERROR with suggestion       |
 
   @T-UC-006-partition-idempotency-key @partition @idempotency-key
   Scenario Outline: Idempotency key validation — <partition>

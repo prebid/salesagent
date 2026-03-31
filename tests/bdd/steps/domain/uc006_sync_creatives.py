@@ -81,11 +81,14 @@ def given_account_is(ctx: dict, account_setup: str) -> None:
 
 def _setup_account_by_id(account_id: str, tenant: object, principal: object) -> None:
     """Create DB state for account_id-based scenarios."""
+    from tests.factories.principal import PrincipalFactory
+
     status_map = {
         "acc_acme_001": "active",
         "acc_new_unconfigured": "pending_approval",
         "acc_overdue": "payment_required",
         "acc_suspended": "suspended",
+        "acc_other_agent": "active",  # Exists but accessible to a different agent
     }
     status = status_map.get(account_id)
     if status is None:
@@ -102,7 +105,12 @@ def _setup_account_by_id(account_id: str, tenant: object, principal: object) -> 
         brand={"domain": domain},
         operator=domain,
     )
-    AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
+    if account_id == "acc_other_agent":
+        # Grant access to a DIFFERENT principal — tests authorization boundary
+        other_principal = PrincipalFactory(tenant=tenant)
+        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=other_principal, account=account)
+    else:
+        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
 
 
 def _setup_account_by_natural_key(brand_domain: str, operator: str, tenant: object, principal: object) -> None:
@@ -120,6 +128,19 @@ def _setup_account_by_natural_key(brand_domain: str, operator: str, tenant: obje
     elif brand_domain in ("unknown.com",):
         # Not found — don't create anything
         pass
+    elif brand_domain == "other-agent.com":
+        # Access denied: account exists but belongs to a different agent
+        from tests.factories.principal import PrincipalFactory
+
+        account = AccountFactory(
+            tenant=tenant,
+            account_id="acc-other-agent",
+            status="active",
+            brand={"domain": brand_domain},
+            operator=operator,
+        )
+        other_principal = PrincipalFactory(tenant=tenant)
+        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=other_principal, account=account)
     else:
         # Single match — create one active account
         account = AccountFactory(
