@@ -455,18 +455,13 @@ def given_package_creative_ref_nonexistent(ctx: dict, pkg_id: str, creative_id: 
 
 @given(parsers.parse('no snapshot data is available for package "{pkg_id}"'))
 def given_no_snapshot_for_package(ctx: dict, pkg_id: str) -> None:
-    """Record snapshot unavailability — cannot verify actual DB absence.
+    """Establish that no snapshot data exists for a package.
 
-    FIXME(salesagent-9vgz.1): When SnapshotFactory exists, verify actual absence
-    in DB rather than using ctx-only sentinels.
+    The default state in the harness is no snapshot data — the adapter mock
+    (when present) returns no data unless explicitly configured. Record the
+    expectation in ctx so Then steps can verify the correct unavailable_reason.
     """
-    import pytest
-
-    pytest.xfail(
-        f"SPEC-PRODUCTION GAP: Cannot enforce snapshot absence for '{pkg_id}' — "
-        f"no SnapshotFactory to verify or control DB state. "
-        f"FIXME(salesagent-9vgz.1): Verify actual DB absence."
-    )
+    ctx.setdefault("snapshot_unavailable_packages", set()).add(pkg_id)
 
 
 @given("the ad platform adapter supports realtime reporting")
@@ -513,16 +508,53 @@ def given_adapter_exists(ctx: dict) -> None:
 def given_adapter_reporting_with_data(ctx: dict) -> None:
     """Adapter supports reporting AND snapshot data is available.
 
-    FIXME(salesagent-9vgz.1): No mock return_value is configured for the
-    adapter's reporting method — cannot fulfill 'data is available'.
+    Patches get_adapter in the media_buy_list module to return a mock adapter
+    whose get_packages_snapshot returns realistic snapshot data keyed by the
+    packages created in earlier Given steps.
     """
-    import pytest
+    from datetime import UTC, datetime
+    from unittest.mock import MagicMock, patch
 
-    pytest.xfail(
-        "SPEC-PRODUCTION GAP: Adapter mock has no return_value for reporting data — "
-        "cannot fulfill 'data is available'. "
-        "FIXME(salesagent-9vgz.1): Configure adapter mock to return snapshot data."
+    from src.core.schemas._base import Snapshot
+
+    ctx["adapter_supports_reporting"] = True
+
+    # Build snapshot data from seeded media buys
+    snapshot_data: dict[str, dict[str, Snapshot]] = {}
+    seeded = ctx.get("seeded_media_buys", {})
+    for mb_id, mb in seeded.items():
+        packages = getattr(mb, "packages", None) or []
+        # Also check MediaPackage objects created via factory (stored in session)
+        env = ctx["env"]
+        if env._session is not None:
+            from sqlalchemy import select
+
+            from src.core.database.models import MediaPackage as DBMediaPackage
+
+            pkgs = env._session.scalars(select(DBMediaPackage).filter_by(media_buy_id=mb_id)).all()
+            for pkg in pkgs:
+                snapshot_data.setdefault(mb_id, {})[pkg.package_id] = Snapshot(
+                    as_of=datetime.now(UTC),
+                    impressions=1500.0,
+                    spend=75.50,
+                    staleness_seconds=30,
+                    clicks=120.0,
+                    pacing_index=1.05,
+                    delivery_status="delivering",
+                    currency="USD",
+                )
+
+    adapter_mock = MagicMock()
+    adapter_mock.capabilities.supports_realtime_reporting = True
+    adapter_mock.get_packages_snapshot.return_value = snapshot_data
+
+    patcher = patch(
+        "src.core.tools.media_buy_list.get_adapter",
+        return_value=adapter_mock,
     )
+    patcher.start()
+    ctx.setdefault("_patchers", []).append(patcher)
+    ctx["adapter_snapshot_data"] = snapshot_data
 
 
 @given(parsers.parse("the adapter supports realtime reporting but no data for {pkg_id}"))
@@ -692,20 +724,63 @@ def given_production_account(ctx: dict) -> None:
 
 @given(parsers.parse('snapshot data is available for package "{pkg_id}"'))
 def given_snapshot_available(ctx: dict, pkg_id: str) -> None:
-    """Record expected snapshot data for a package in ctx.
+    """Ensure snapshot data will be returned for a specific package.
 
-    FIXME(salesagent-9vgz.1): No SnapshotFactory or adapter mock return values
-    exist to make snapshot data available to the production query path.
-    When a SnapshotFactory exists, seed real DB records OR configure adapter
-    mock return values.
+    Patches get_adapter in the media_buy_list module so that the adapter
+    returns snapshot data for the specified package. If a patcher already
+    exists (from given_adapter_reporting_with_data), update its return data.
     """
-    import pytest
+    from datetime import UTC, datetime
+    from unittest.mock import MagicMock, patch
 
-    pytest.xfail(
-        "SPEC-PRODUCTION GAP: No SnapshotFactory — cannot seed real snapshot data. "
-        "FIXME(salesagent-9vgz.1): Step claims 'snapshot data is available' but no "
-        "adapter mock return values or DB records can be created."
+    from src.core.schemas._base import Snapshot
+
+    test_snapshot = Snapshot(
+        as_of=datetime.now(UTC),
+        impressions=1500.0,
+        spend=75.50,
+        staleness_seconds=30,
+        clicks=120.0,
+        pacing_index=1.05,
+        delivery_status="delivering",
+        currency="USD",
     )
+
+    ctx.setdefault("expected_snapshots", {})[pkg_id] = test_snapshot
+
+    # Find the media_buy_id that owns this package
+    seeded = ctx.get("seeded_media_buys", {})
+    target_mb_id: str | None = None
+    env = ctx["env"]
+    if env._session is not None:
+        from sqlalchemy import select
+
+        from src.core.database.models import MediaPackage as DBMediaPackage
+
+        pkg_row = env._session.scalars(select(DBMediaPackage).filter_by(package_id=pkg_id)).first()
+        if pkg_row:
+            target_mb_id = pkg_row.media_buy_id
+    if target_mb_id is None and seeded:
+        target_mb_id = next(iter(seeded))
+
+    # Build or update snapshot_data mapping
+    snapshot_data = ctx.get("adapter_snapshot_data", {})
+    if target_mb_id:
+        snapshot_data.setdefault(target_mb_id, {})[pkg_id] = test_snapshot
+    ctx["adapter_snapshot_data"] = snapshot_data
+
+    # If no adapter patcher exists yet, create one
+    if not any(getattr(p, "attribute", "") == "get_adapter" for p in ctx.get("_patchers", [])):
+        adapter_mock = MagicMock()
+        adapter_mock.capabilities.supports_realtime_reporting = True
+        adapter_mock.get_packages_snapshot.return_value = snapshot_data
+
+        patcher = patch(
+            "src.core.tools.media_buy_list.get_adapter",
+            return_value=adapter_mock,
+        )
+        patcher.start()
+        ctx.setdefault("_patchers", []).append(patcher)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1221,52 +1296,43 @@ def then_media_buy_has_status(ctx: dict, mb_id: str, expected_status: str) -> No
 
 @then(parsers.parse('the media buy "{mb_id}" status computation should handle the missing date gracefully'))
 def then_status_handles_missing_date(ctx: dict, mb_id: str) -> None:
-    """Assert that a media buy with missing dates has a graceful status.
+    """Assert that a media buy with missing dates raises a structured error.
 
-    'Graceful handling' means either:
-    1. The buy is returned with a valid (non-error) status, OR
-    2. An appropriate error was raised (AdCPError or ValueError, not crash)
+    This step is used in @error-tagged scenarios where missing dates should
+    cause a graceful failure (structured AdCPError), not a silent success.
+    The scenario's follow-up steps check for suggestion fields, confirming
+    an error is the expected outcome.
     """
-    from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
-
     from src.core.exceptions import AdCPError
 
-    # If we reach here, the Given step didn't xfail — so data exists
     error = ctx.get("error")
-    if error is not None:
-        # An error was raised — verify it's a structured error, not a crash
-        assert isinstance(error, (AdCPError, ValueError, TypeError)), (
-            f"Expected graceful error handling (AdCPError/ValueError/TypeError) "
-            f"for missing date, got unhandled {type(error).__name__}: {error}"
-        )
-        return
-
-    valid_statuses = {s.value for s in MediaBuyStatus}
-    buys = _get_media_buys(ctx)
-    assert buys, "No media buys returned — expected at least one for missing date handling"
-    matching = [b for b in buys if getattr(b, "media_buy_id", None) == mb_id]
-    assert matching, f"Media buy '{mb_id}' not found in response"
-    # If found, verify it has a valid status (graceful = didn't crash)
-    status = getattr(matching[0], "status", None)
-    assert status is not None, f"Media buy '{mb_id}' returned but has no status — not graceful handling"
-    status_str = status.value if hasattr(status, "value") else str(status)
-    assert status_str in valid_statuses, (
-        f"Media buy '{mb_id}' has status '{status_str}' which is not a valid MediaBuyStatus. "
-        f"Graceful handling should produce a recognized status, not '{status_str}'. "
-        f"Valid statuses: {valid_statuses}"
+    assert error is not None, (
+        f"Expected a structured error for media buy '{mb_id}' with missing dates, "
+        f"but no error was raised — production returned a response instead. "
+        f"Missing dates should cause a validation/computation error, not succeed silently."
+    )
+    assert isinstance(error, (AdCPError, ValueError, TypeError)), (
+        f"Expected graceful error handling (AdCPError/ValueError/TypeError) "
+        f"for missing date, got unhandled {type(error).__name__}: {error}"
     )
 
 
 @then(parsers.parse("the error message should include field-level validation details"))
 def then_error_field_validation(ctx: dict) -> None:
-    """Assert error includes field-level validation details."""
+    """Assert error includes field-level validation details with actual field names.
+
+    Step text claims "field-level validation details" — the error must reference
+    specific field names or paths (media_buy_ids, status_filter, buyer_refs, etc.),
+    not just generic words like "type" or "expected" that appear in any error.
+    """
     error = ctx.get("error")
     assert error is not None, "Expected a validation error"
     msg = str(error)
-    # Step text claims "field-level validation details" — must contain field names or paths
-    field_indicators = ("field", "media_buy_ids", "status_filter", "buyer_refs", "parameter", "type", "expected")
-    assert any(indicator in msg.lower() for indicator in field_indicators), (
-        f"Expected field-level validation details (containing field names/paths) in error message, got: {msg}"
+    # Require actual field names from GetMediaBuysRequest schema
+    field_names = ("media_buy_ids", "status_filter", "buyer_refs", "account_id")
+    assert any(field_name in msg.lower() for field_name in field_names), (
+        f"Expected field-level validation details (containing actual field names like "
+        f"{field_names}) in error message, got: {msg}"
     )
 
 
@@ -1288,42 +1354,24 @@ def then_error_has_suggestion(ctx: dict) -> None:
     """Assert error includes a suggestion field with actionable content.
 
     Step text: 'the error should include a "suggestion" field'.
-    Checks AdCPError.details for a non-empty suggestion string.
+    The error must be an AdCPError with a details dict containing a non-empty
+    suggestion string. No xfail escape — if production omits the suggestion,
+    the test must fail.
     """
-    import pytest
-
     error = ctx.get("error")
     assert error is not None, "Expected an error"
     from src.core.exceptions import AdCPError
 
-    # Check AdCPError path (primary)
-    if isinstance(error, AdCPError):
-        if error.details is None:
-            pytest.xfail(
-                f"SPEC-PRODUCTION GAP: AdCPError(error_code={error.error_code!r}) has "
-                f"no details dict — cannot contain 'suggestion' field. "
-                f"Correct assertion: assert error.details is not None and 'suggestion' in error.details."
-            )
-        assert "suggestion" in error.details, f"Expected 'suggestion' in error details: {error.details}"
-        suggestion = error.details["suggestion"]
-        assert isinstance(suggestion, str) and suggestion.strip(), (
-            f"Expected non-empty suggestion string, got {suggestion!r}"
-        )
-        return
-    # For non-AdCPError, check response errors (fallback)
-    resp = ctx.get("response")
-    if resp and hasattr(resp, "errors"):
-        for e in getattr(resp, "errors", []) or []:
-            if isinstance(e, dict) and "suggestion" in e:
-                suggestion = e["suggestion"]
-                assert isinstance(suggestion, str) and suggestion.strip(), (
-                    f"Expected non-empty suggestion string in response error, got {suggestion!r}"
-                )
-                return
-    pytest.xfail(
-        f"SPEC-PRODUCTION GAP: Error is {type(error).__name__}, not AdCPError with suggestion. "
-        f"Checked: 1) error as AdCPError (no), 2) response.errors for suggestion dict (no). "
-        f"Production may use different error format."
+    assert isinstance(error, AdCPError), (
+        f"Expected AdCPError with suggestion field, got {type(error).__name__}: {error}"
+    )
+    assert error.details is not None, (
+        f"AdCPError(error_code={error.error_code!r}) has no details dict — cannot contain 'suggestion' field"
+    )
+    assert "suggestion" in error.details, f"Expected 'suggestion' in error details: {error.details}"
+    suggestion = error.details["suggestion"]
+    assert isinstance(suggestion, str) and suggestion.strip(), (
+        f"Expected non-empty suggestion string, got {suggestion!r}"
     )
 
 
@@ -1467,9 +1515,11 @@ def then_rejection_reason_null_or_absent(ctx: dict) -> None:
 
 @then(parsers.parse('the creative approvals for package "{pkg_id}" should not include an entry for "{creative_id}"'))
 def then_no_approval_for_creative(ctx: dict, pkg_id: str, creative_id: str) -> None:
-    """Assert missing creative is not in approvals (INV-152-4)."""
-    import pytest
+    """Assert missing creative is not in approvals (INV-152-4).
 
+    The package MUST be found in the response — if it's missing, that's a hard
+    failure, not an xfail.
+    """
     buys = _get_media_buys(ctx)
     for buy in buys:
         for pkg in getattr(buy, "packages", []) or []:
@@ -1480,10 +1530,7 @@ def then_no_approval_for_creative(ctx: dict, pkg_id: str, creative_id: str) -> N
                     f"Expected creative '{creative_id}' to NOT appear in approvals for package '{pkg_id}', but found it"
                 )
                 return
-    pytest.xfail(
-        f"SPEC-PRODUCTION GAP: Creative approval omission for nonexistent creative "
-        f"'{creative_id}' on package '{pkg_id}' — package not found in response."
-    )
+    raise AssertionError(f"Package '{pkg_id}' not found in response — cannot verify creative '{creative_id}' omission")
 
 
 @then(parsers.parse("no error should be raised for the missing creative"))
@@ -1605,10 +1652,12 @@ def then_snapshot_field_integer(ctx: dict, field: str) -> None:
 
 @then(parsers.parse('the snapshot should include "{field}" count'))
 def then_snapshot_field_count(ctx: dict, field: str) -> None:
-    """Assert snapshot has a non-negative numeric count field.
+    """Assert snapshot has a positive numeric count field matching seeded data.
 
-    Step text says "count" — the value must be numeric (int or float, since
-    Snapshot fields like impressions are float in the schema) and non-negative.
+    Step text says "count" — the value must be numeric and positive (> 0),
+    verifying that the production code correctly propagated real data from
+    the adapter snapshot, not just a default/zero value.
+    When expected_snapshots are available in ctx, verify value matches.
     """
     buys = _get_media_buys(ctx)
     for buy in buys:
@@ -1622,7 +1671,20 @@ def then_snapshot_field_count(ctx: dict, field: str) -> None:
                 assert isinstance(val, (int, float)), (
                     f"Expected '{field}' to be a numeric count, got {type(val).__name__}: {val!r}"
                 )
-                assert val >= 0, f"Expected '{field}' count to be non-negative, got {val}"
+                assert val > 0, (
+                    f"Expected '{field}' count to be positive (> 0) — a zero value suggests "
+                    f"snapshot data was not propagated from adapter. Got {val}"
+                )
+                # Verify against seeded snapshot data if available
+                pkg_id = getattr(pkg, "package_id", None)
+                expected = ctx.get("expected_snapshots", {}).get(pkg_id)
+                if expected is not None:
+                    expected_val = getattr(expected, field, None)
+                    if expected_val is not None:
+                        assert val == expected_val, (
+                            f"Snapshot '{field}' value {val} does not match seeded "
+                            f"value {expected_val} for package '{pkg_id}'"
+                        )
                 return
     raise AssertionError(f"No snapshots found — cannot verify '{field}' count")
 
@@ -1827,22 +1889,18 @@ def then_error_suggestion_for_fix(ctx: dict) -> None:
 
     Step text: 'suggestion for how to fix the issue' — the suggestion must be
     a non-empty string with enough content to be actionable (at least 5 chars).
+    No xfail escape — if production omits suggestions, the test must fail.
     """
-    import pytest
-
     error = ctx.get("error")
     assert error is not None, "Expected an error to check suggestion on"
     from src.core.exceptions import AdCPError
 
-    if not isinstance(error, AdCPError):
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: Error is {type(error).__name__}, not AdCPError — cannot verify suggestion field."
-        )
-    if error.details is None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: AdCPError has no details dict — "
-            f"cannot contain suggestion. error_code={error.error_code}"
-        )
+    assert isinstance(error, AdCPError), (
+        f"Expected AdCPError with suggestion field, got {type(error).__name__}: {error}"
+    )
+    assert error.details is not None, (
+        f"AdCPError(error_code={error.error_code!r}) has no details dict — cannot contain suggestion"
+    )
     suggestion = error.details.get("suggestion")
     assert isinstance(suggestion, str) and len(suggestion.strip()) >= 5, (
         f"Expected actionable suggestion string (>= 5 chars) in error details, "
@@ -1880,17 +1938,23 @@ def then_either_status_returned(ctx: dict) -> None:
 
 @then("media buys in any status are returned")
 def then_any_status_returned(ctx: dict) -> None:
-    """Assert media buys returned with all-status filter — all seeded statuses present."""
+    """Assert all seeded media buys are returned with all-status filter.
+
+    Step text claims "any status are returned" — this requires seeded data
+    to exist (to verify completeness) and all seeded IDs to appear in response.
+    """
     buys = _get_media_buys(ctx)
     assert len(buys) > 0, "Expected media buys for all-status filter"
-    # "any status" with all-status filter: all seeded buys should be returned
     seeded = ctx.get("seeded_media_buys", {})
-    if seeded:
-        returned_ids = {getattr(b, "media_buy_id", None) for b in buys}
-        for mb_id in seeded:
-            assert mb_id in returned_ids, (
-                f"All-status filter should return all media buys, but '{mb_id}' is missing. Returned: {returned_ids}"
-            )
+    assert seeded, (
+        "Step claims 'media buys in any status are returned' but no media buys "
+        "were seeded — cannot verify completeness without seeded data"
+    )
+    returned_ids = {getattr(b, "media_buy_id", None) for b in buys}
+    for mb_id in seeded:
+        assert mb_id in returned_ids, (
+            f"All-status filter should return all media buys, but '{mb_id}' is missing. Returned: {returned_ids}"
+        )
 
 
 @then(parsers.parse('the response should include an empty media_buys array with error "{code}"'))
