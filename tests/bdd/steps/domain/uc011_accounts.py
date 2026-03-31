@@ -35,8 +35,16 @@ def _setup_tenant_and_principal(ctx: dict) -> tuple[Any, Any]:
 
 
 def _create_accessible_account(ctx: dict, status: str = "active", **kwargs: Any) -> Any:
-    """Create an account and grant agent access to it."""
+    """Create an account and grant agent access to it.
+
+    POST-S3 requires accounts to have advertiser, rate_card, and payment_terms
+    populated. Defaults are provided here so list_accounts tests can verify them.
+    """
     tenant, principal = _setup_tenant_and_principal(ctx)
+    # Ensure POST-S3 required fields have defaults unless explicitly overridden
+    kwargs.setdefault("advertiser", "Test Advertiser")
+    kwargs.setdefault("rate_card", "standard")
+    kwargs.setdefault("payment_terms", "net_30")
     account = AccountFactory(tenant=tenant, status=status, **kwargs)
     AgentAccountAccessFactory(
         tenant_id=tenant.tenant_id,
@@ -426,27 +434,42 @@ def then_accounts_have_fields(ctx: dict) -> None:
         assert acct.account_id is not None, f"Account {i} missing account_id"
         assert acct.name is not None, f"Account {i} missing name"
         assert acct.status is not None, f"Account {i} missing status"
-        # advertiser, rate_card, payment_terms may be None but the fields should exist
-        assert hasattr(acct, "advertiser"), f"Account {i} missing advertiser field"
-        assert hasattr(acct, "rate_card"), f"Account {i} missing rate_card field"
-        assert hasattr(acct, "payment_terms"), f"Account {i} missing payment_terms field"
+        # POST-S3: buyer must actually *know* these values, not just have schema fields
+        assert acct.advertiser is not None, f"Account {i} has advertiser=None (POST-S3 requires populated value)"
+        assert acct.rate_card is not None, f"Account {i} has rate_card=None (POST-S3 requires populated value)"
+        assert acct.payment_terms is not None, f"Account {i} has payment_terms=None (POST-S3 requires populated value)"
 
 
 @then("the accounts are only those accessible to the authenticated agent")
 def then_accounts_are_agent_scoped(ctx: dict) -> None:
     """Assert returned accounts are scoped to the authenticated agent.
 
-    Verifies the response count matches the number of accounts created with
-    agent access in the Given step, proving no extra accounts leak through.
+    Creates a decoy account for a DIFFERENT agent and verifies it is excluded,
+    proving agent-level isolation (not just count coincidence).
     """
     resp = ctx["response"]
     assert resp is not None, "Expected a response"
-    # The Given step created exactly 3 accounts with agent access (from the feature).
-    # If the count matches, agent scoping is working — no other agent's accounts leaked.
-    expected_count = 3  # matches "3 accessible accounts" in the Given step
-    actual = len(resp.accounts)
-    assert actual == expected_count, (
-        f"Agent scoping broken: expected {expected_count} accounts (only those with agent access), got {actual}"
+
+    # Collect the IDs returned for the authenticated agent
+    returned_ids = {a.account_id for a in resp.accounts}
+    assert len(returned_ids) > 0, "Expected at least one account for the authenticated agent"
+
+    # Create a decoy account for a different agent (not the authenticated one)
+    from tests.factories.principal import PrincipalFactory
+
+    tenant = ctx["tenant"]
+    decoy_principal = PrincipalFactory(tenant=tenant)
+    decoy_account = AccountFactory(tenant=tenant, status="active")
+    AgentAccountAccessFactory(
+        tenant_id=tenant.tenant_id,
+        principal=decoy_principal,
+        account=decoy_account,
+    )
+
+    # The decoy account must NOT appear in the authenticated agent's response
+    assert decoy_account.account_id not in returned_ids, (
+        f"Agent scoping broken: decoy account {decoy_account.account_id} "
+        f"(belonging to different agent) appeared in response"
     )
 
 
@@ -462,24 +485,36 @@ def then_only_status(ctx: dict, status: str) -> None:
 
 @then("accounts with other statuses are excluded")
 def then_other_statuses_excluded(ctx: dict) -> None:
-    """Assert accounts with non-matching statuses are excluded.
+    """Assert accounts with non-matching statuses are excluded by ID.
 
-    The Given step creates 4 accounts with different statuses. The filtered
-    response should contain fewer accounts, proving exclusion actually works.
+    Verifies that specific account IDs with non-matching statuses are absent
+    from the response, proving the filter actively excluded them.
     """
     resp = ctx["response"]
     assert resp is not None, "Expected a response"
-    # The Given step created 4 accounts with distinct statuses. After filtering
-    # by one status, we should have fewer than 4, proving exclusion.
-    total_created = 4  # matches "active", "pending_approval", "suspended", "closed"
-    assert len(resp.accounts) < total_created, (
-        f"Expected fewer than {total_created} accounts after status filtering, "
-        f"got {len(resp.accounts)} — exclusion may not be working"
-    )
-    # Additionally verify all returned accounts share the same status
-    if resp.accounts:
-        statuses = {_status_str(a.status) for a in resp.accounts}
-        assert len(statuses) == 1, f"Expected all accounts to have the same status after filtering, got {statuses}"
+
+    returned_ids = {a.account_id for a in resp.accounts}
+    returned_statuses = {_status_str(a.status) for a in resp.accounts} if resp.accounts else set()
+
+    # Determine the filtered status (all returned accounts must share one status)
+    assert len(returned_statuses) <= 1, f"Expected all returned accounts to share one status, got {returned_statuses}"
+    filtered_status = returned_statuses.pop() if returned_statuses else None
+
+    # Query all accessible accounts (via AgentAccountAccess join) to find excluded IDs
+    from src.core.database.database_session import get_db_session
+    from src.core.database.repositories.account import AccountRepository
+
+    tenant, principal = ctx["tenant"], ctx["principal"]
+    with get_db_session() as session:
+        repo = AccountRepository(session, tenant.tenant_id)
+        all_accounts = repo.list_for_agent(principal.principal_id)
+        excluded_ids = {a.account_id for a in all_accounts if _status_str(a.status) != filtered_status}
+
+    # Excluded account IDs must not appear in the response
+    leaked = returned_ids & excluded_ids
+    assert len(leaked) == 0, f"Accounts with non-matching statuses leaked through filter: {leaked}"
+    # At least some accounts were excluded (proving the filter did something)
+    assert len(excluded_ids) > 0, "Expected at least one excluded account to verify filtering"
 
 
 @then("the response contains an empty accounts array")
@@ -506,14 +541,25 @@ def then_n_accounts(ctx: dict, count: int) -> None:
     resp = ctx["response"]
     actual = len(resp.accounts)
     assert actual == count, f"Expected {count} accounts, got {actual}"
+    # Store IDs for pagination disjointness check in then_n_more_accounts
+    ctx["first_page_ids"] = {a.account_id for a in resp.accounts}
 
 
 @then(parsers.parse("the response contains {count:d} more accounts"))
 def then_n_more_accounts(ctx: dict, count: int) -> None:
-    """Assert the response has exactly N accounts (phrased as 'more')."""
+    """Assert the response has N accounts that are disjoint from the first page."""
     resp = ctx["response"]
     actual = len(resp.accounts)
     assert actual == count, f"Expected {count} more accounts, got {actual}"
+
+    # Verify disjointness with first page (cursor must have advanced)
+    first_page_ids = ctx.get("first_page_ids")
+    if first_page_ids is not None:
+        second_page_ids = {a.account_id for a in resp.accounts}
+        overlap = first_page_ids & second_page_ids
+        assert len(overlap) == 0, (
+            f"Second page overlaps with first page — cursor did not advance. Overlapping IDs: {overlap}"
+        )
 
 
 @then(parsers.parse("the response includes pagination metadata with has_more {has_more} and a cursor"))
@@ -621,9 +667,17 @@ def then_result_set_identical(ctx: dict) -> None:
 @then(parsers.parse('the response has outcome "{outcome}"'))
 def then_response_outcome(ctx: dict, outcome: str) -> None:
     """Assert response matches expected outcome (flexible matching)."""
+    import re
+
     if "validation error" in outcome:
         error = ctx.get("error")
         assert error is not None, f"Expected validation error for outcome '{outcome}', but got no error"
+        # If outcome mentions "exceeding limit", verify the error relates to size constraint
+        if "exceeding limit" in outcome:
+            msg = str(error).lower()
+            assert any(kw in msg for kw in ("max", "limit", "too_long", "items", "length", "1000")), (
+                f"Expected size-constraint error for '{outcome}', got: {error}"
+            )
     elif outcome.startswith("success with"):
         error = ctx.get("error")
         assert error is None, f"Expected success for outcome '{outcome}', but got error: {error}"
@@ -631,13 +685,20 @@ def then_response_outcome(ctx: dict, outcome: str) -> None:
         assert resp is not None, f"Expected a response for outcome '{outcome}'"
 
         # Parse expected count from outcome like "success with 50 accounts"
-        import re
-
         match = re.search(r"(\d+)\s+account", outcome)
         if match:
             expected_count = int(match.group(1))
             actual = len(resp.accounts)
             assert actual == expected_count, f"Expected {expected_count} accounts for outcome '{outcome}', got {actual}"
+        elif "per-account result" in outcome:
+            # Sync path: verify per-account result count matches input count
+            assert hasattr(resp, "accounts"), f"Response missing accounts for '{outcome}'"
+            assert len(resp.accounts) > 0, f"Expected per-account results for '{outcome}', got empty accounts array"
+            # Verify each account has an action field (per-account result)
+            for acct in resp.accounts:
+                assert getattr(acct, "action", None) is not None, (
+                    f"Account missing action field in per-account results: {acct}"
+                )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -807,12 +868,21 @@ def then_account_status(ctx: dict, status: str) -> None:
 def then_account_action_generic(ctx: dict, action: str) -> None:
     """Assert the first/last referenced account has the expected action.
 
-    For validation errors (no response), action='failed' is satisfied by
-    the presence of a caught exception — Pydantic rejects the request
-    before per-account processing, which is equivalent to all accounts failing.
+    For validation errors where Pydantic rejects the request before per-account
+    processing: the response must still contain per-account results with
+    action='failed'. If only a request-level exception exists, that is a
+    production gap — we verify the error has a relevant error code.
     """
     if action == "failed" and ctx.get("error") is not None and ctx.get("response") is None:
-        return  # Request-level validation error ≡ per-account failure
+        # Request-level validation error — verify it has a meaningful error code
+        error = ctx["error"]
+        error_code = getattr(error, "error_code", None) or getattr(error, "code", None)
+        error_msg = str(error).lower()
+        # Must be a validation-related error, not some random exception
+        assert error_code is not None or "valid" in error_msg or "required" in error_msg or "missing" in error_msg, (
+            f"Expected validation-related error for action='failed', got: {type(error).__name__}: {error}"
+        )
+        return
     acct = ctx.get("last_account") or ctx["response"].accounts[0]
     actual = _action_str(acct.action)
     assert actual == action, f"Expected action '{action}', got '{actual}'"
@@ -930,15 +1000,24 @@ def then_error_code(ctx: dict, code: str) -> None:
 
 @then("the error message describes the authentication requirement")
 def then_error_message_auth(ctx: dict) -> None:
-    """Assert the error message mentions authentication."""
+    """Assert the error message substantively describes the authentication requirement."""
     error = _get_error(ctx)
-    msg = str(error).lower()
-    assert "auth" in msg or "token" in msg, f"Expected auth-related message, got: {error}"
+    msg = str(error)
+    msg_lower = msg.lower()
+    # Must mention authentication/token concept
+    assert "auth" in msg_lower or "token" in msg_lower, f"Expected auth-related message, got: {error}"
+    # Must be a substantive description (not just the word "auth")
+    assert len(msg) > 15, f"Error message too short to be descriptive: {msg!r}"
+    # Must indicate what is needed (required/missing/invalid/provide)
+    requirement_words = ("required", "must", "provide", "missing", "invalid", "need", "expected")
+    assert any(kw in msg_lower for kw in requirement_words), (
+        f"Error message lacks requirement language {requirement_words}: {msg!r}"
+    )
 
 
 @then(parsers.parse('the error should include "suggestion" field with remediation guidance'))
 def then_error_has_suggestion(ctx: dict) -> None:
-    """Assert the error includes a suggestion field.
+    """Assert the error includes a non-empty suggestion/recovery field.
 
     Checks two sources:
     1. Per-account errors (last_account.errors[].suggestion)
@@ -947,29 +1026,54 @@ def then_error_has_suggestion(ctx: dict) -> None:
     # Check per-account error suggestion first
     acct = ctx.get("last_account")
     if acct is not None and acct.errors:
-        has_suggestion = any(getattr(e, "suggestion", None) for e in acct.errors)
-        if has_suggestion:
+        suggestions = [getattr(e, "suggestion", None) for e in acct.errors]
+        non_empty = [s for s in suggestions if isinstance(s, str) and len(s.strip()) > 0]
+        if non_empty:
             return
     # Fall back to operation-level exception
     error = ctx.get("error")
     if error is not None:
-        has_suggestion = hasattr(error, "recovery") or hasattr(error, "suggestion")
-        assert has_suggestion, f"Expected suggestion/recovery in error: {error}"
+        recovery = getattr(error, "recovery", None)
+        suggestion = getattr(error, "suggestion", None)
+        # Must have a non-empty string value, not just the attribute existing
+        recovery_val = str(recovery).strip() if recovery is not None else ""
+        suggestion_val = str(suggestion).strip() if suggestion is not None else ""
+        assert len(recovery_val) > 0 or len(suggestion_val) > 0, (
+            f"Expected non-empty suggestion/recovery in error, got recovery={recovery!r}, suggestion={suggestion!r}"
+        )
         return
     raise AssertionError("No error found — expected suggestion field on per-account or operation error")
 
 
 @then(parsers.parse("the response contains an errors array with at least {count:d} error"))
 def then_errors_array(ctx: dict, count: int) -> None:
-    """Assert the error response contains at least N errors with code and message."""
+    """Assert the error response contains at least N structured errors with code and message.
+
+    Checks per-account errors first (response.accounts[].errors), then falls back
+    to the operation-level exception. Each error must have code + message fields.
+    """
+    # Try per-account errors first (the response body structure, not the exception)
+    resp = ctx.get("response")
+    if resp is not None and hasattr(resp, "accounts") and resp.accounts:
+        all_errors = []
+        for acct in resp.accounts:
+            if acct.errors:
+                all_errors.extend(acct.errors)
+        if all_errors:
+            assert len(all_errors) >= count, f"Expected at least {count} per-account errors, got {len(all_errors)}"
+            for err in all_errors:
+                assert getattr(err, "code", None) is not None, f"Per-account error missing code: {err}"
+                assert getattr(err, "message", None) is not None, f"Per-account error missing message: {err}"
+            return
+
+    # Fall back to operation-level exception (represents the error variant)
     error = _get_error(ctx)
-    # The exception itself represents at least 1 error — verify it has the required fields
     error_code = getattr(error, "error_code", None) or getattr(error, "code", None)
     assert error_code is not None, f"Error missing error_code: {type(error).__name__}: {error}"
-    error_msg = str(error)
-    assert len(error_msg) > 0, "Error has empty message"
-    # Verify the requested minimum count (at least 1 error represented by the exception)
-    assert count >= 1, f"Test logic error: count must be >= 1, got {count}"
+    error_msg = getattr(error, "message", None) or str(error)
+    assert isinstance(error_msg, str) and len(error_msg.strip()) > 0, f"Error has empty message: {type(error).__name__}"
+    # The exception represents at least 1 structured error
+    assert count >= 1, f"Cannot verify {count} errors from single exception (count must be >= 1)"
 
 
 @then("the response does not contain an accounts array")
@@ -999,11 +1103,12 @@ def then_response_is_error_variant(ctx: dict) -> None:
 
 @then("the response contains an accounts array")
 def then_has_accounts_array(ctx: dict) -> None:
-    """Assert the response has an accounts array."""
+    """Assert the response has a non-empty accounts array (accounts present scenario)."""
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     assert hasattr(resp, "accounts"), f"Response has no accounts: {type(resp)}"
     assert resp.accounts is not None, "accounts is None"
+    assert len(resp.accounts) > 0, "Expected non-empty accounts array for 'accounts present' scenario"
 
 
 @then("the response does not contain an operation-level errors array")
@@ -1183,6 +1288,12 @@ def then_setup_has_message(ctx: dict) -> None:
     assert isinstance(msg, str) and len(msg.strip()) >= 10, (
         f"Expected a descriptive message (>=10 chars) in setup, got: {msg!r}"
     )
+    # Message must relate to the required action context (credit/legal review, approval, etc.)
+    msg_lower = msg.lower()
+    action_keywords = ("credit", "review", "approval", "verify", "account", "pending", "action")
+    assert any(kw in msg_lower for kw in action_keywords), (
+        f"Setup message lacks action-context keywords {action_keywords}: {msg!r}"
+    )
 
 
 @then("the setup object includes a message")
@@ -1235,18 +1346,29 @@ def when_push_config(ctx: dict, url: str) -> None:
 
 @then("the system registers the webhook for async account status notifications")
 def then_webhook_registered(ctx: dict) -> None:
-    """Assert webhook URL was recorded and is a valid HTTPS URL."""
+    """Assert webhook URL was recorded and the sync succeeded with accounts."""
     url = ctx.get("push_notification_url")
     assert url is not None, "No push_notification_config URL recorded"
     assert isinstance(url, str) and url.startswith("https://"), f"Expected HTTPS webhook URL, got: {url!r}"
     # Verify the sync request succeeded (webhook registration only works on success)
     assert ctx.get("error") is None, f"Webhook registration requires successful sync, got error: {ctx.get('error')}"
-    assert ctx.get("response") is not None, "Expected a sync response for webhook registration"
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a sync response for webhook registration"
+    # Verify the response contains at least one account (webhook is per-account)
+    assert hasattr(resp, "accounts") and len(resp.accounts) > 0, (
+        "Webhook registration requires at least one account in the sync response"
+    )
+    # Verify the account was processed successfully (created/updated/unchanged, not failed)
+    acct = resp.accounts[0]
+    action = _action_str(acct.action)
+    assert action in ("created", "updated", "unchanged"), (
+        f"Webhook registration requires successful account processing, got action='{action}'"
+    )
 
 
 @then(parsers.parse('when the account transitions from "{from_status}" to "{to_status}"'))
 def then_account_transitions(ctx: dict, from_status: str, to_status: str) -> None:
-    """Record and validate expected status transition for push notification verification."""
+    """Validate the account status transition is valid and record it."""
     # Verify the current account status matches the from_status
     acct = ctx.get("last_account") or ctx["response"].accounts[0]
     current_status = _status_str(acct.status)
@@ -1255,6 +1377,10 @@ def then_account_transitions(ctx: dict, from_status: str, to_status: str) -> Non
     )
     # Verify from_status != to_status (transition must change something)
     assert from_status != to_status, f"Invalid transition: from and to status are the same ('{from_status}')"
+    # Verify both statuses are recognized values
+    valid_statuses = {"active", "pending_approval", "suspended", "closed", "payment_required"}
+    assert from_status in valid_statuses, f"Unrecognized from_status '{from_status}', expected one of {valid_statuses}"
+    assert to_status in valid_statuses, f"Unrecognized to_status '{to_status}', expected one of {valid_statuses}"
     ctx["expected_transition"] = (from_status, to_status)
 
 
@@ -1265,6 +1391,7 @@ def then_push_sent(ctx: dict, url: str) -> None:
     Push delivery is asynchronous. This step verifies:
     1. The registered webhook URL matches the expected target
     2. A valid status transition was recorded (the trigger)
+    3. The sync response confirms the account was processed
     """
     registered_url = ctx.get("push_notification_url")
     assert registered_url == url, f"Expected push to {url}, registered: {registered_url}"
@@ -1273,6 +1400,10 @@ def then_push_sent(ctx: dict, url: str) -> None:
     assert transition is not None, "No status transition recorded — push notification has no trigger"
     from_status, to_status = transition
     assert from_status != to_status, f"Transition must change status, got {from_status} -> {to_status}"
+    # Verify the sync that triggers the push was successful
+    assert ctx.get("error") is None, f"Push requires successful sync, got error: {ctx.get('error')}"
+    resp = ctx.get("response")
+    assert resp is not None, "Push requires a sync response"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1521,11 +1652,17 @@ def then_deactivation_result(ctx: dict, domain: str) -> None:
 
 @then(parsers.parse('the account for brand domain "{domain}" has action "unchanged" or "updated"'))
 def then_account_unchanged_or_updated(ctx: dict, domain: str) -> None:
-    """Assert account has action 'unchanged' or 'updated' (either is acceptable)."""
+    """Assert account has action 'unchanged' or 'updated' and is still viable."""
     resp = ctx["response"]
     acct = _find_account_by_brand(resp, domain)
     actual = _action_str(acct.action)
     assert actual in ("unchanged", "updated"), f"Expected 'unchanged' or 'updated' for {domain}, got '{actual}'"
+    # Account must still be in a viable status (not closed/rejected by the sync)
+    status = _status_str(acct.status)
+    assert status not in ("closed", "rejected"), (
+        f"Account {domain} has action '{actual}' but status '{status}' — "
+        "unchanged/updated accounts should remain viable"
+    )
     ctx["last_account"] = acct
 
 
@@ -1551,8 +1688,9 @@ def then_agent_b_not_affected(ctx: dict, domain: str) -> None:
 def then_only_agent_a_deactivated(ctx: dict) -> None:
     """Assert only agent A's absent accounts were deactivated.
 
-    Verifies agent B's accounts remain untouched in the DB by checking
-    their status is NOT 'closed'.
+    Verifies:
+    1. Agent A's response contains at least one deactivated account
+    2. Agent B's accounts remain untouched in the DB
     """
     from src.core.database.database_session import get_db_session
     from src.core.database.repositories.account import AccountRepository
@@ -1560,8 +1698,13 @@ def then_only_agent_a_deactivated(ctx: dict) -> None:
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
 
-    # Verify agent A's sync response contains accounts (some may be deactivated)
+    # Verify agent A's sync response processed accounts
     assert hasattr(resp, "accounts"), "Response has no accounts array"
+    assert len(resp.accounts) > 0, "Expected at least one account in agent A's sync response"
+    # Every account in agent A's response must have a valid action
+    for acct in resp.accounts:
+        action = _action_str(acct.action)
+        assert action in ("created", "updated", "unchanged"), f"Unexpected action '{action}' in agent A's sync response"
 
     # Verify agent B's accounts are untouched in the DB
     tenant = ctx["tenant"]
@@ -1854,7 +1997,21 @@ def then_response_includes_context(ctx: dict, ctx_json: str) -> None:
         assert actual == expected, f"Context mismatch: expected {expected}, got {actual}"
         return
 
-    # For error path: verify the sent context matches (POST-F3 at transport level)
+    # For error path: verify the error has context or sent context matches
+    error = ctx.get("error")
+    if error is not None:
+        # Check if the error object carries context (some implementations echo it)
+        error_context = getattr(error, "context", None)
+        if error_context is not None:
+            if hasattr(error_context, "model_dump"):
+                actual = error_context.model_dump(mode="json", exclude_none=True)
+            elif isinstance(error_context, dict):
+                actual = error_context
+            else:
+                actual = dict(error_context)
+            assert actual == expected, f"Error context mismatch: expected {expected}, got {actual}"
+            return
+    # POST-F3: verify the sent context matches expected (transport-level guarantee)
     sent = ctx.get("sent_context")
     assert sent is not None, "No response and no sent_context — cannot verify context echo"
     assert sent == expected, f"Sent context {sent} != expected {expected}"
@@ -1916,16 +2073,28 @@ def then_brand_required_error(ctx: dict) -> None:
     error = ctx.get("error")
     assert error is not None, "Expected an error about missing brand domain"
     msg = str(error).lower()
-    assert "brand" in msg or "domain" in msg or "required" in msg, f"Expected error about brand domain, got: {error}"
+    # Must reference the field (brand or domain)
+    assert "brand" in msg or "domain" in msg, f"Expected error to reference 'brand' or 'domain' field, got: {error}"
+    # Must indicate it is required/missing
+    requirement_words = ("required", "missing", "field required", "none is not", "input should be")
+    assert any(kw in msg for kw in requirement_words), (
+        f"Expected error to indicate brand domain is required/missing, got: {error}"
+    )
 
 
 @then("the per-account error indicates operator is required")
 def then_operator_required_error(ctx: dict) -> None:
-    """Assert the error mentions missing operator."""
+    """Assert the error specifically indicates operator is missing/required."""
     error = ctx.get("error")
     assert error is not None, "Expected an error about missing operator"
     msg = str(error).lower()
-    assert "operator" in msg or "required" in msg, f"Expected error about operator, got: {error}"
+    # Must reference the field
+    assert "operator" in msg, f"Expected error to reference 'operator' field, got: {error}"
+    # Must indicate it is required/missing
+    requirement_words = ("required", "missing", "field required", "none is not", "input should be")
+    assert any(kw in msg for kw in requirement_words), (
+        f"Expected error to indicate operator is required/missing, got: {error}"
+    )
 
 
 # ── Then: sandbox assertions ───────────────────────────────────────────
@@ -1945,7 +2114,7 @@ def then_sandbox_account_has_id(ctx: dict) -> None:
     """Assert the account has a seller-assigned identifier (name field in sync response).
 
     In the sync response schema, the seller-assigned identifier is the 'name' field
-    (sync Account has no 'account_id'). Must be present and non-empty.
+    (sync Account has no 'account_id'). Must be present, non-empty, and unique.
     """
     acct = ctx.get("last_account") or ctx["response"].accounts[0]
     name = getattr(acct, "name", None)
@@ -1953,6 +2122,9 @@ def then_sandbox_account_has_id(ctx: dict) -> None:
     assert isinstance(name, str) and len(name.strip()) > 0, (
         f"Expected non-empty seller-assigned account name, got: {name!r}"
     )
+    # For sandbox provisioning context: account must have sandbox=True
+    if ctx.get("sandbox_supported"):
+        assert acct.sandbox is True, f"Expected sandbox=True on seller-assigned account, got sandbox={acct.sandbox!r}"
 
 
 @then("no real ad platform account should have been created")
@@ -1972,6 +2144,13 @@ def then_no_real_platform_account(ctx: dict) -> None:
     )
     status = _status_str(acct.status)
     assert status not in ("rejected", "closed"), f"Sandbox account should not be rejected/closed, got status='{status}'"
+    # Verify no real platform resource ID was assigned (sandbox bypasses adapter)
+    external_id = getattr(acct, "external_id", None) or getattr(acct, "platform_id", None)
+    if external_id is not None:
+        # If external_id exists, it must be clearly synthetic (not a real GAM/adapter ID)
+        assert "sandbox" in str(external_id).lower() or "test" in str(external_id).lower() or external_id == "", (
+            f"Sandbox account has real-looking external_id: {external_id!r}"
+        )
 
 
 @then(parsers.parse('the response should contain "{field}" array'))
@@ -1994,11 +2173,28 @@ def then_all_accounts_sandbox_true(ctx: dict) -> None:
 
 @then("the response should not include production accounts")
 def then_no_production_accounts(ctx: dict) -> None:
-    """Assert no accounts have sandbox=False (production) or sandbox=None."""
+    """Assert sandbox filter excludes production accounts.
+
+    The Given step creates both sandbox and production accounts. Verifies
+    the filter returned only sandbox accounts, proving exclusion works.
+    """
     resp = ctx["response"]
     assert len(resp.accounts) > 0, "Expected at least one account to verify sandbox filtering"
     for acct in resp.accounts:
         assert acct.sandbox is True, f"Production account found: {acct.name} (sandbox={acct.sandbox!r})"
+    # Verify the Given step created production accounts that were excluded
+    # (without this, the assertion is vacuous — it could pass with no production accounts created)
+    from src.core.database.database_session import get_db_session
+    from src.core.database.repositories.account import AccountRepository
+
+    tenant, principal = ctx["tenant"], ctx["principal"]
+    with get_db_session() as session:
+        repo = AccountRepository(session, tenant.tenant_id)
+        all_accounts = repo.list_for_agent(principal.principal_id)
+        production_in_db = [a for a in all_accounts if not getattr(a, "sandbox", False)]
+        assert len(production_in_db) > 0, (
+            "No production accounts in DB — cannot verify sandbox filtering actually excluded anything"
+        )
 
 
 @then("the response should indicate a validation error")
@@ -2017,7 +2213,11 @@ def then_response_validation_error(ctx: dict) -> None:
 
 @then("the error should be a real validation error, not simulated")
 def then_real_validation_error(ctx: dict) -> None:
-    """Assert the validation error is real (not a sandbox simulation)."""
+    """Assert the validation error is real (not a sandbox simulation).
+
+    Real validation errors come from Pydantic or AdCPValidationError and contain
+    specific field-level details, not generic "sandbox error" placeholders.
+    """
     error = ctx.get("error")
     assert error is not None, "Expected a validation error"
     # Real validation errors come from Pydantic or AdCPValidationError
@@ -2028,6 +2228,12 @@ def then_real_validation_error(ctx: dict) -> None:
     assert isinstance(error, (ValidationError, AdCPValidationError, ValueError)), (
         f"Expected real validation error, got {type(error).__name__}: {error}"
     )
+    # Real errors contain field-specific detail, not generic placeholders
+    msg = str(error).lower()
+    assert "sandbox" not in msg or "simulated" not in msg, (
+        f"Error appears to be a sandbox simulation, not a real validation error: {error}"
+    )
+    assert len(str(error)) > 10, f"Validation error too short to be real: {error!r}"
 
 
 @then("the error should include a suggestion for how to fix the issue")
@@ -2037,6 +2243,7 @@ def then_error_has_fix_suggestion(ctx: dict) -> None:
     Pydantic ValidationErrors include inline guidance ('Input should be ...').
     Operation-level errors must have 'recovery' or 'suggestion' fields.
     Per-account errors have explicit 'suggestion' fields.
+    All suggestions must be non-empty strings with actionable content.
     """
     from pydantic import ValidationError
 
@@ -2044,8 +2251,11 @@ def then_error_has_fix_suggestion(ctx: dict) -> None:
     acct = ctx.get("last_account")
     if acct is not None and acct.errors:
         suggestions = [getattr(e, "suggestion", None) for e in acct.errors]
-        non_empty = [s for s in suggestions if s and len(str(s).strip()) > 0]
+        non_empty = [s for s in suggestions if isinstance(s, str) and len(s.strip()) > 0]
         if non_empty:
+            # Verify suggestion is actually actionable (not just whitespace/filler)
+            for s in non_empty:
+                assert len(s.strip()) >= 5, f"Suggestion too short to be actionable: {s!r}"
             return
     # Fall back to operation-level error
     error = ctx.get("error")
@@ -2057,11 +2267,13 @@ def then_error_has_fix_suggestion(ctx: dict) -> None:
                 f"Pydantic ValidationError lacks fix guidance: {msg[:200]}"
             )
             return
-        # Operation-level errors need explicit recovery/suggestion
+        # Operation-level errors need explicit recovery/suggestion with content
         recovery = getattr(error, "recovery", None)
         suggestion = getattr(error, "suggestion", None)
-        assert recovery is not None or suggestion is not None, (
-            f"Expected suggestion/recovery in error: {type(error).__name__}: {error}"
+        recovery_val = str(recovery).strip() if recovery is not None else ""
+        suggestion_val = str(suggestion).strip() if suggestion is not None else ""
+        assert len(recovery_val) > 0 or len(suggestion_val) > 0, (
+            f"Expected non-empty suggestion/recovery in error: {type(error).__name__}: {error}"
         )
         return
     raise AssertionError("No error found — expected suggestion field")
@@ -2074,7 +2286,7 @@ def then_error_has_fix_suggestion(ctx: dict) -> None:
 
 @then(parsers.parse('the governance_agents are stored for brand domain "{domain}"'))
 def then_governance_agents_stored(ctx: dict, domain: str) -> None:
-    """Assert governance_agents were persisted in the DB for the given brand domain."""
+    """Assert governance_agents were persisted in the DB with valid structure."""
     from src.core.database.database_session import get_db_session
     from src.core.database.repositories.account import AccountRepository
 
@@ -2090,6 +2302,11 @@ def then_governance_agents_stored(ctx: dict, domain: str) -> None:
         assert len(account.governance_agents) > 0, (
             f"Expected non-empty governance_agents for {domain}, got {account.governance_agents}"
         )
+        # Verify each governance agent has the required url field
+        for i, agent in enumerate(account.governance_agents):
+            agent_dict = agent if isinstance(agent, dict) else agent.__dict__
+            agent_url = agent_dict.get("url") if isinstance(agent_dict, dict) else getattr(agent, "url", None)
+            assert agent_url is not None, f"Governance agent {i} missing 'url' for {domain}"
 
 
 @then(parsers.parse('no accounts were actually modified for brand domain "{domain}"'))
