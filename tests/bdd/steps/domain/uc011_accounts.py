@@ -2283,6 +2283,12 @@ def then_one_access_grant(ctx: dict, domain: str) -> None:
         assert count == 1, f"Expected 1 access grant for {domain}, got {count}"
 
 
+@given("the database is experiencing a transient failure")
+def given_db_failure(ctx: dict) -> None:
+    """Configure the harness to simulate a DB failure on the next query."""
+    ctx["simulate_db_failure"] = True
+
+
 @then(parsers.parse('the list includes an account with brand domain "{domain}"'))
 def then_list_includes_domain(ctx: dict, domain: str) -> None:
     """Assert the list_accounts response contains an account with the given brand domain."""

@@ -767,6 +767,12 @@ mappings:
       upstream_refs: ["BR-RULE-055"]
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-002-sandbox-access-denied"
+      adcp_feature: "BR-UC-002-create-media-buy.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-055", "BR-RULE-209"]
+      business_rules: ["BR-RULE-209"]
+      status: new
     - adcp_scenario_id: "T-UC-002-ext-u"
       adcp_feature: "BR-UC-002-create-media-buy.feature"
       obligation_id: null
@@ -4869,6 +4875,12 @@ mappings:
       business_rules: []
       status: new
     - adcp_scenario_id: "T-UC-011-list-malformed-cursor"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-list-service-error"
       adcp_feature: "BR-UC-011-manage-accounts.feature"
       obligation_id: null
       upstream_refs: ["BR-UC-011"]

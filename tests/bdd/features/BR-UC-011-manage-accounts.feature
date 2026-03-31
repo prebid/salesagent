@@ -157,6 +157,14 @@ Feature: BR-UC-011 Manage Accounts
     And the response contains 5 accounts
     # @bva pagination cursor: malformed base64 string falls back to offset 0
 
+  @T-UC-011-list-service-error @list @error @hand-authored
+  Scenario: List accounts returns error on service failure
+    Given the Buyer Agent has an authenticated connection
+    And the database is experiencing a transient failure
+    When the Buyer Agent sends a list_accounts request
+    Then the response is an error variant
+    # Edge case: service-level DB failure propagates as error, not empty result
+
   @T-UC-011-list-status-all @list @status-filter @partition @boundary
   Scenario: List accounts with no status filter returns all statuses (status filter = 'all')
     Given the Buyer Agent has an authenticated connection

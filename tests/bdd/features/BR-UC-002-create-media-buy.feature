@@ -530,6 +530,15 @@ Feature: BR-UC-002 Create Media Buy
     And the error message should contain "access"
     # Security: natural key resolution must have same auth behavior as ID resolution
 
+  @T-UC-002-sandbox-access-denied @extension @account @sandbox @security @hand-authored
+  Scenario: Sandbox account resolution denied when agent lacks access
+    Given a valid create_media_buy request with account_id "acc_sandbox_other"
+    And the sandbox account exists but is accessible only to a different agent
+    When the Buyer Agent sends the create_media_buy request
+    Then the operation should fail
+    And the error code should be "AUTHORIZATION_ERROR"
+    # Edge case: sandbox flag doesn't bypass access checks
+
     # --- ext-u: Optimization Goal Validation Failure ---
 
   @T-UC-002-ext-u @extension @ext-u @error @post-f1 @post-f2 @post-f3

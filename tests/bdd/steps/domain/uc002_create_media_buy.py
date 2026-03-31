@@ -508,3 +508,29 @@ def given_natural_key_other_agent(ctx: dict) -> None:
     )
     other_principal = PrincipalFactory(tenant=tenant)
     AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=other_principal, account=account)
+
+
+@given("the sandbox account exists but is accessible only to a different agent")
+def given_sandbox_account_other_agent(ctx: dict) -> None:
+    """Create a sandbox account with access to a different principal."""
+    from tests.factories.principal import PrincipalFactory
+
+    env = ctx["env"]
+    if "tenant" not in ctx:
+        tenant, principal = env.setup_default_data()
+        ctx["tenant"] = tenant
+        ctx["principal"] = principal
+    else:
+        tenant = ctx["tenant"]
+
+    account_id = ctx.get("request_account_id", "acc_sandbox_other")
+    account = AccountFactory(
+        tenant=tenant,
+        account_id=account_id,
+        status="active",
+        sandbox=True,
+        brand={"domain": f"{account_id}.com"},
+        operator=f"{account_id}.com",
+    )
+    other_principal = PrincipalFactory(tenant=tenant)
+    AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=other_principal, account=account)
