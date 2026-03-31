@@ -299,6 +299,24 @@ Feature: BR-UC-011 Manage Accounts
     And the error should include "suggestion" field with remediation guidance
     # @bva authentication (account operations): invalid token on sync
 
+  @T-UC-011-sync-no-principal @sync @auth @security @hand-authored
+  Scenario: Sync accounts with valid tenant but missing principal_id returns auth error
+    Given the Buyer Agent has a connection with tenant resolved but no principal_id
+    When the Buyer Agent sends a sync_accounts request with no principal_id and:
+    | brand.domain    | operator      | billing  |
+    | acme-corp.com   | acme-corp.com | operator |
+    Then the response is an error variant with no accounts array
+    And the error code is "AUTH_TOKEN_INVALID"
+    # Security: parity with list_accounts no-principal guard
+
+  @T-UC-011-list-expired @list @auth @hand-authored
+  Scenario: List accounts with expired token returns auth error
+    Given the Buyer Agent has an A2A connection with an expired token
+    When the Buyer Agent sends a list_accounts request without an authentication token
+    Then the response is an error variant with no accounts array
+    And the error code is "AUTH_TOKEN_INVALID"
+    # Auth parity: list mirrors sync expired-token behavior
+
   @T-UC-011-ext-b-partial @sync @partial-failure @invariant @partition @boundary
   Scenario: Sync partial_failure -- success_partial_failure with action=failed (action=failed with errors)
     Given the Buyer Agent has an authenticated connection

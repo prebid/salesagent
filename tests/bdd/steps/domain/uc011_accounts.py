@@ -2034,6 +2034,23 @@ def when_list_accounts_no_principal(ctx: dict) -> None:
     dispatch_request(ctx, identity=broken_identity)
 
 
+@when("the Buyer Agent sends a sync_accounts request with no principal_id and:")
+def when_sync_no_principal(ctx: dict, datatable: Any) -> None:
+    """Send sync_accounts with an identity that has tenant_id but no principal_id."""
+    from src.core.resolved_identity import ResolvedIdentity
+    from src.core.schemas.account import SyncAccountsRequest
+
+    tenant = ctx["tenant"]
+    broken_identity = ResolvedIdentity(
+        tenant_id=tenant.tenant_id,
+        principal_id=None,
+        protocol="test",
+    )
+    accounts = _datatable_to_account_entries(datatable)
+    req = SyncAccountsRequest(accounts=accounts)
+    dispatch_request(ctx, req=req, identity=broken_identity)
+
+
 @then(parsers.parse('none of the returned accounts belong to agent "{name}"'))
 def then_none_belong_to_agent(ctx: dict, name: str) -> None:
     """Assert no returned accounts are in the other agent's set."""
