@@ -98,7 +98,7 @@
                         <td>{{ buy.created_at.strftime('%Y-%m-%d %H:%M') if buy.created_at else 'N/A' }}</td>
                         <td>
                             {% if buy.status == 'pending_approval' %}
-                            <a href="/tenant/{{ tenant.tenant_id }}/media-buy/{{ buy.media_buy_id }}/approve" class="btn btn-sm btn-primary" title="Review and Approve">
+                            <a href="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/media-buy/{{ buy.media_buy_id }}/approve" class="btn btn-sm btn-primary" title="Review and Approve">
                                 Review & Approve
                             </a>
                             {% elif buy.status == 'active' %}

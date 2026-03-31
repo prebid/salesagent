@@ -436,7 +436,7 @@
             Configure {{ tenant.name }}
         </p>
     </div>
-    <a href="/tenant/{{ tenant.tenant_id }}" class="btn btn-secondary">
+    <a href="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}" class="btn btn-secondary">
         ← Back to Dashboard
     </a>
 </div>
@@ -519,7 +519,7 @@
                 <p>Organization identity, virtual host configuration, and access control</p>
             </div>
 
-            <form id="account-settings-form" method="POST" action="/tenant/{{ tenant.tenant_id }}/settings/general">
+            <form id="account-settings-form" method="POST" action="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/settings/general">
                 <div class="form-section">
                     <h3>Organization Information</h3>
                     <div class="form-grid">
@@ -2035,7 +2035,7 @@ Exclude any products that don't match the brand's tone.</pre>
                             Create your first advertising product to start offering inventory to buyers.
                         </p>
                     </div>
-                    <a href="/tenant/{{ tenant.tenant_id }}/products/add" class="btn btn-success">
+                    <a href="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/products/add" class="btn btn-success">
                         <i class="fas fa-plus"></i> Create Product
                     </a>
                 </div>
@@ -2051,8 +2051,8 @@ Exclude any products that don't match the brand's tone.</pre>
                         </p>
                     </div>
                     <div style="display: flex; gap: 0.5rem;">
-                        <a href="/tenant/{{ tenant.tenant_id }}/products" class="btn btn-small">Manage</a>
-                        <a href="/tenant/{{ tenant.tenant_id }}/products/add" class="btn btn-primary btn-small">Add New</a>
+                        <a href="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/products" class="btn btn-small">Manage</a>
+                        <a href="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/products/add" class="btn btn-primary btn-small">Add New</a>
                     </div>
                 </div>
             </div>
@@ -2077,7 +2077,7 @@ Exclude any products that don't match the brand's tone.</pre>
                             {{ active_advertisers }} active this month
                         </p>
                     </div>
-                    <a href="/tenant/{{ tenant.tenant_id }}/principals/create" class="btn btn-primary btn-small">
+                    <a href="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/principals/create" class="btn btn-primary btn-small">
                         Add Advertiser
                     </a>
                 </div>
@@ -2185,7 +2185,7 @@ Exclude any products that don't match the brand's tone.</pre>
             <div class="card" style="margin-top: 1rem;">
                 <div class="card-body text-center text-muted">
                     <p>No advertisers registered yet.</p>
-                    <a href="/tenant/{{ tenant.tenant_id }}/principals/create" class="btn btn-primary">
+                    <a href="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/principals/create" class="btn btn-primary">
                         Create First Advertiser
                     </a>
                 </div>
@@ -2227,7 +2227,7 @@ Exclude any products that don't match the brand's tone.</pre>
                     </div>
                 </details>
 
-                <form method="POST" action="/tenant/{{ tenant.tenant_id }}/settings/slack">
+                <form method="POST" action="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/settings/slack">
                     <div class="form-group">
                         <label for="slack_webhook_url">Task Notifications Webhook URL</label>
                         <input type="url" id="slack_webhook_url" name="slack_webhook_url"
@@ -2285,7 +2285,7 @@ Exclude any products that don't match the brand's tone.</pre>
                 </div>
                 {% endif %}
 
-                <form method="POST" action="/tenant/{{ tenant.tenant_id }}/settings/ai">
+                <form method="POST" action="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/settings/ai">
                     <div class="form-group">
                         <label for="ai_provider">AI Provider</label>
                         <select id="ai_provider" name="ai_provider" onchange="updateModelOptions()">
@@ -2676,7 +2676,7 @@ result = await client.tools.get_products(brief="video ads")</pre>
 
             <div class="form-section">
                 <h3>Raw Configuration (JSON)</h3>
-                <form method="POST" action="/tenant/{{ tenant.tenant_id }}/settings/raw">
+                <form method="POST" action="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/settings/raw">
                     <div class="form-group">
                         <textarea id="raw_config" name="config" rows="20"
                                   style="font-family: monospace;">{{ tenant.config_json }}</textarea>
@@ -2717,7 +2717,7 @@ result = await client.tools.get_products(brief="video ads")</pre>
                     <li><strong>Preserve all data</strong> - you can reactivate later by contacting support</li>
                 </ul>
 
-                <form id="deactivate-form" method="POST" action="/tenant/{{ tenant.tenant_id }}/deactivate" onsubmit="return confirmDeactivation()">
+                <form id="deactivate-form" method="POST" action="{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/deactivate" onsubmit="return confirmDeactivation()">
                     <div class="form-group">
                         <label for="confirm-name" style="color: #991b1b;">
                             Type <strong>{{ tenant.name }}</strong> to confirm:
