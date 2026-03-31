@@ -172,18 +172,62 @@ def _ensure_tenant_principal(ctx: dict, env: object) -> None:
 
 @then("the request should proceed with resolved account")
 def then_proceed_with_resolved_account(ctx: dict) -> None:
-    """Assert account resolution succeeded — sync_creatives returned a response.
+    """Assert account resolution succeeded and the resolved account matches Given state.
 
-    When dispatched through transport wrappers, successful account resolution
-    means the wrapper called enrich_identity_with_account() without error
-    and the _impl returned a SyncCreativesResponse.
+    Verifies three things:
+    1. The transport dispatch succeeded (no error, correct response type).
+    2. The Given step provided an account reference (request_account_id or
+       request_brand/request_operator exists in ctx).
+    3. The account that was set up in the DB is active — confirming the
+       production resolve_account() path found and validated it during
+       enrich_identity_with_account().
     """
     from src.core.schemas import SyncCreativesResponse
 
+    # 1. Response succeeded with correct type
     assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
     resp = ctx.get("response")
     assert resp is not None, "Expected a response (SyncCreativesResponse)"
     assert isinstance(resp, SyncCreativesResponse), f"Expected SyncCreativesResponse, got {type(resp).__name__}"
+
+    # 2. Verify an account reference was provided by the Given step
+    has_account_id = "request_account_id" in ctx
+    has_natural_key = "request_brand" in ctx and "request_operator" in ctx
+    assert has_account_id or has_natural_key, (
+        "Then step claims 'proceed with resolved account' but no account reference "
+        "was set up by a Given step (missing request_account_id and request_brand/request_operator)"
+    )
+
+    # 3. Verify the account exists and is active in the DB — proving
+    #    resolve_account() found a valid, active account during dispatch
+    from sqlalchemy import select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import Account
+
+    tenant_id = ctx["tenant"].tenant_id
+    with get_db_session() as session:
+        if has_account_id:
+            account = session.scalars(
+                select(Account).filter_by(tenant_id=tenant_id, account_id=ctx["request_account_id"])
+            ).first()
+            assert account is not None, (
+                f"Account {ctx['request_account_id']} not found in DB — "
+                "resolve_account() should have matched this account"
+            )
+            assert account.status == "active", (
+                f"Account {ctx['request_account_id']} has status '{account.status}', "
+                "expected 'active' for successful resolution"
+            )
+        else:
+            # Natural key lookup — verify at least one active account with matching brand
+            brand_domain = ctx["request_brand"]
+            accounts = session.scalars(select(Account).filter_by(tenant_id=tenant_id)).all()
+            matching = [a for a in accounts if a.brand and a.brand.domain == brand_domain and a.status == "active"]
+            assert len(matching) == 1, (
+                f"Expected exactly 1 active account with brand domain '{brand_domain}', "
+                f"found {len(matching)} — resolve_account() requires unambiguous match"
+            )
 
 
 @then(parsers.parse("the error should be {error_code} with suggestion"))

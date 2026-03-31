@@ -49,12 +49,20 @@ def given_buyer_owns_media_buy(ctx: dict, media_buy_id: str) -> None:
 
 @given(parsers.parse('the media buy is in "{status}" status'))
 def given_media_buy_status(ctx: dict, status: str) -> None:
-    """Set the existing media buy to the specified status."""
+    """Set precondition: mutate the existing media buy to the specified status.
+
+    This is a Given step (precondition setup), NOT a Then assertion.
+    The phrasing "is in X status" describes the desired precondition state,
+    not an assertion on production code output.  The function sets mb.status
+    and commits so that subsequent When/Then steps operate against a media
+    buy in the specified status.
+    """
     mb = ctx.get("existing_media_buy")
     assert mb is not None, (
         "No existing_media_buy in ctx — step claims 'the media buy is in "
         f'"{status}" status\' but no media buy exists to set status on'
     )
+    # Precondition mutation: set status and persist to DB
     mb.status = status
     env = ctx["env"]
     env._commit_factory_data()
