@@ -2154,3 +2154,86 @@ def then_none_have_brand_domain(ctx: dict, domain: str) -> None:
                 f"Cross-agent leak: account {acct.account_id} has brand domain '{domain}' "
                 f"but should not be visible to this agent"
             )
+
+
+# ── delete_missing semantics steps ──────────────────────────────────
+
+
+@when("the Buyer Agent sends a sync_accounts request with dry_run true and delete_missing true and:")
+def when_sync_dryrun_and_delete_missing(ctx: dict, datatable: Any) -> None:
+    """Send sync_accounts with both dry_run=True and delete_missing=True."""
+    from src.core.schemas.account import SyncAccountsRequest
+
+    headers = datatable[0]
+    rows = [dict(zip(headers, row, strict=True)) for row in datatable[1:]]
+    accounts = _parse_sync_table(rows)
+    req = SyncAccountsRequest(accounts=accounts, dry_run=True, delete_missing=True)
+    dispatch_request(ctx, req=req)
+
+
+@when(parsers.parse('agent "{name}" sends a sync_accounts request with delete_missing true and:'))
+def when_named_agent_sync_delete_missing(ctx: dict, name: str, datatable: Any) -> None:
+    """Send sync_accounts under a named agent's identity with delete_missing=True."""
+    from src.core.schemas.account import SyncAccountsRequest
+
+    identity = _make_identity_for_agent(ctx, name)
+    headers = datatable[0]
+    rows = [dict(zip(headers, row, strict=True)) for row in datatable[1:]]
+    accounts = _parse_sync_table(rows)
+    req = SyncAccountsRequest(accounts=accounts, delete_missing=True)
+    dispatch_request(ctx, req=req, identity=identity)
+
+
+@given(parsers.parse('agent "{name}" created account for brand domain "{domain}"'))
+def given_agent_created_account(ctx: dict, name: str, domain: str) -> None:
+    """Create an account under a specific agent's identity via sync."""
+    _setup_tenant_and_principal(ctx)
+    agent = _create_agent(ctx, name)
+    identity = _make_identity_for_agent(ctx, name)
+    from src.core.schemas.account import SyncAccountsRequest
+
+    req = SyncAccountsRequest(
+        accounts=[{"brand": {"domain": domain}, "operator": domain, "billing": "operator"}],
+    )
+    dispatch_request(ctx, req=req, identity=identity)
+    ctx.pop("response", None)
+    ctx.pop("error", None)
+
+
+@given(parsers.parse('agent "{a}" was granted access to the account for brand domain "{domain}"'))
+def given_agent_granted_access(ctx: dict, a: str, domain: str) -> None:
+    """Grant agent A access to an existing account (created by another agent)."""
+    from src.core.database.database_session import get_db_session
+    from src.core.database.repositories.account import AccountRepository
+
+    tenant = ctx["tenant"]
+    agent = _create_agent(ctx, a)
+    with get_db_session() as session:
+        repo = AccountRepository(session, tenant.tenant_id)
+        # Find the account by domain
+        from sqlalchemy import select
+
+        from src.core.database.models import Account
+
+        account = session.scalars(
+            select(Account).where(
+                Account.tenant_id == tenant.tenant_id,
+                Account.brand["domain"].as_string() == domain,
+            )
+        ).first()
+        assert account is not None, f"Account for domain {domain} not found"
+        repo.grant_access(agent.principal_id, account.account_id)
+        session.commit()
+
+
+@then(parsers.parse('the response does not include a result for brand domain "{domain}"'))
+def then_no_result_for_domain(ctx: dict, domain: str) -> None:
+    """Assert the sync response has no account entry for the given domain."""
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    for acct in resp.accounts:
+        acct_domain = acct.brand.domain if hasattr(acct, "brand") and acct.brand else None
+        assert acct_domain != domain, (
+            f"Expected no result for domain '{domain}' but found account "
+            f"{acct.account_id} with action={getattr(acct, 'action', '?')}"
+        )

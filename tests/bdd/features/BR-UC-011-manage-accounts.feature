@@ -499,6 +499,41 @@ Feature: BR-UC-011 Manage Accounts
     Then brand domain "old-brand.com" remains in its current state
     And only the included accounts are processed
 
+  # ── Hand-authored: delete_missing semantics (coverage gap analysis) ──
+
+  @T-UC-011-dryrun-delete-missing @sync @dry-run @delete-missing @hand-authored
+  Scenario: dry_run=true suppresses delete_missing — no deactivation preview
+    Given the Buyer Agent has an authenticated connection
+    And the agent previously synced accounts for brand domain "acme-corp.com" and "old-brand.com"
+    When the Buyer Agent sends a sync_accounts request with dry_run true and delete_missing true and:
+    | brand.domain    | operator      | billing  |
+    | acme-corp.com   | acme-corp.com | operator |
+    Then the response includes dry_run true
+    And the response does not include a result for brand domain "old-brand.com"
+    # Documents: dry_run suppresses delete_missing entirely — no preview of closures
+
+  @T-UC-011-delete-missing-granted-access @sync @delete-missing @security @hand-authored
+  Scenario: delete_missing does not close accounts the agent was granted access to
+    Given agent "agent-A" has an authenticated connection
+    And agent "agent-B" created account for brand domain "b-brand.com"
+    And agent "agent-A" was granted access to the account for brand domain "b-brand.com"
+    And agent "agent-A" previously synced account for brand domain "a-brand.com"
+    When agent "agent-A" sends a sync_accounts request with delete_missing true and:
+    | brand.domain  | operator      | billing  |
+    | a-brand.com   | a-brand.com   | operator |
+    Then agent B's account for brand domain "b-brand.com" is not affected
+    # Documents: delete_missing scopes by creator (principal_id), not by access grant
+
+  @T-UC-011-delete-missing-own-only @sync @delete-missing @hand-authored
+  Scenario: delete_missing only closes accounts the agent created
+    Given the Buyer Agent has an authenticated connection
+    And the agent previously synced accounts for brand domain "keep.com" and "drop.com"
+    When the Buyer Agent sends a sync_accounts request with delete_missing true and:
+    | brand.domain | operator   | billing  |
+    | keep.com     | keep.com   | operator |
+    Then the response includes a result for brand domain "drop.com" showing deactivation
+    And the account for brand domain "keep.com" has action "unchanged" or "updated"
+
   @T-UC-011-ext-g-echo @context-echo @post-f3 @partition @boundary
   Scenario Outline: context_provided -- context echoed in <operation> response (context with properties)
     Given the Buyer is authenticated with a valid principal_id

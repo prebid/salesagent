@@ -5198,6 +5198,24 @@ mappings:
       upstream_refs: ["BR-UC-011-main-sync", "BR-RULE-056"]
       business_rules: ["BR-RULE-056"]
       status: new
+    - adcp_scenario_id: "T-UC-011-dryrun-delete-missing"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-061", "BR-RULE-062"]
+      business_rules: ["BR-RULE-061", "BR-RULE-062"]
+      status: new
+    - adcp_scenario_id: "T-UC-011-delete-missing-granted-access"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-061"]
+      business_rules: ["BR-RULE-061"]
+      status: new
+    - adcp_scenario_id: "T-UC-011-delete-missing-own-only"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-061"]
+      business_rules: ["BR-RULE-061"]
+      status: new
     - adcp_scenario_id: "T-UC-011-dryrun-update"
       adcp_feature: "BR-UC-011-manage-accounts.feature"
       obligation_id: null
