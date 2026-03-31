@@ -508,6 +508,28 @@ Feature: BR-UC-002 Create Media Buy
     # POST-F1: System state is unchanged on failure
     # POST-F2: Buyer knows what failed
     # POST-F3: Buyer knows how to fix the issue
+    # ── Hand-authored: authorization boundary (PR #1170 review) ──
+
+  @T-UC-002-account-access-denied-id @extension @account @auth @security @hand-authored
+  Scenario: Account resolution by ID denied when agent lacks access
+    Given a valid create_media_buy request with account_id "acc_other_agent"
+    And the account exists but is accessible only to a different agent
+    When the Buyer Agent sends the create_media_buy request
+    Then the operation should fail
+    And the error code should be "AUTHORIZATION_ERROR"
+    And the error message should contain "access"
+    # Security: ID resolution enforces has_access() — agent cannot use another agent's account
+
+  @T-UC-002-account-access-denied-natural-key @extension @account @auth @security @hand-authored
+  Scenario: Account resolution by natural key denied when agent lacks access
+    Given a valid create_media_buy request with account natural key brand "other-agent.com" operator "other-agent.com"
+    And the natural key resolves to an account accessible only to a different agent
+    When the Buyer Agent sends the create_media_buy request
+    Then the operation should fail
+    And the error code should be "AUTHORIZATION_ERROR"
+    And the error message should contain "access"
+    # Security: natural key resolution must have same auth behavior as ID resolution
+
     # --- ext-u: Optimization Goal Validation Failure ---
 
   @T-UC-002-ext-u @extension @ext-u @error @post-f1 @post-f2 @post-f3

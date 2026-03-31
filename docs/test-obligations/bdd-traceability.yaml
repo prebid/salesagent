@@ -755,6 +755,18 @@ mappings:
       upstream_refs: ["BR-UC-002-ext-t"]
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-002-account-access-denied-id"
+      adcp_feature: "BR-UC-002-create-media-buy.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-055"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-002-account-access-denied-natural-key"
+      adcp_feature: "BR-UC-002-create-media-buy.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-055"]
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-002-ext-u"
       adcp_feature: "BR-UC-002-create-media-buy.feature"
       obligation_id: null

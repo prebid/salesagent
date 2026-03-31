@@ -453,3 +453,58 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
                 assert "suggestion" in error.details, f"Expected suggestion in details: {error.details}"
     else:
         raise ValueError(f"Unknown outcome: {outcome}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Hand-authored: Authorization boundary steps (PR #1170 review)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given("the account exists but is accessible only to a different agent")
+def given_account_other_agent(ctx: dict) -> None:
+    """Create an account with access granted to a different principal."""
+    from tests.factories.principal import PrincipalFactory
+
+    env = ctx["env"]
+    if "tenant" not in ctx:
+        tenant, principal = env.setup_default_data()
+        ctx["tenant"] = tenant
+        ctx["principal"] = principal
+    else:
+        tenant = ctx["tenant"]
+
+    account_id = ctx.get("request_account_id", "acc_other_agent")
+    # Create account
+    account = AccountFactory(
+        tenant=tenant,
+        account_id=account_id,
+        status="active",
+        brand={"domain": f"{account_id}.com"},
+        operator=f"{account_id}.com",
+    )
+    # Grant access to a DIFFERENT principal — not the requesting agent
+    other_principal = PrincipalFactory(tenant=tenant)
+    AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=other_principal, account=account)
+
+
+@given("the natural key resolves to an account accessible only to a different agent")
+def given_natural_key_other_agent(ctx: dict) -> None:
+    """Create an account matching the natural key with access to a different principal."""
+    from tests.factories.principal import PrincipalFactory
+
+    env = ctx["env"]
+    if "tenant" not in ctx:
+        tenant, principal = env.setup_default_data()
+        ctx["tenant"] = tenant
+        ctx["principal"] = principal
+    else:
+        tenant = ctx["tenant"]
+
+    account = AccountFactory(
+        tenant=tenant,
+        status="active",
+        brand={"domain": "other-agent.com"},
+        operator="other-agent.com",
+    )
+    other_principal = PrincipalFactory(tenant=tenant)
+    AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=other_principal, account=account)
