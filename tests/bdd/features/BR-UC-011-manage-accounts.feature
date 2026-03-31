@@ -779,6 +779,39 @@ Feature: BR-UC-011 Manage Accounts
     | stable.com   | stable.com | agent   | net_30        |
     Then the account for brand domain "stable.com" has action "unchanged"
 
+  # ── Hand-authored: field preservation + access persistence invariants ──
+
+  @T-UC-011-sync-immutable-preserved @sync @upsert @invariant @hand-authored
+  Scenario: Sync update preserves immutable fields (name, advertiser, rate_card)
+    Given the Buyer Agent has an authenticated connection
+    And an account for brand domain "acme-corp.com" already exists with billing "operator"
+    When the Buyer Agent sends a sync_accounts request with:
+    | brand.domain    | operator      | billing |
+    | acme-corp.com   | acme-corp.com | agent   |
+    Then the account for brand domain "acme-corp.com" has action "updated"
+    And the account name in the database is unchanged from the original
+    And the account rate_card in the database is unchanged from the original
+
+  @T-UC-011-sync-no-dup-access @sync @invariant @hand-authored
+  Scenario: Re-syncing an existing account does not duplicate access grants
+    Given the Buyer Agent has an authenticated connection
+    And an account for brand domain "resync.com" already exists with billing "operator"
+    When the Buyer Agent sends a sync_accounts request with:
+    | brand.domain | operator    | billing |
+    | resync.com   | resync.com  | agent   |
+    Then the account for brand domain "resync.com" has action "updated"
+    And the agent has exactly one access grant for brand domain "resync.com"
+
+  @T-UC-011-sync-then-list @sync @list @invariant @hand-authored
+  Scenario: Newly synced account appears in list_accounts
+    Given the Buyer Agent has an authenticated connection
+    When the Buyer Agent sends a sync_accounts request with:
+    | brand.domain    | operator        | billing  |
+    | new-brand.com   | new-brand.com   | operator |
+    Then the account for brand domain "new-brand.com" has action "created"
+    When the Buyer Agent sends a list_accounts request
+    Then the list includes an account with brand domain "new-brand.com"
+
   @T-UC-011-dryrun-update @sync @dry-run @upsert @partition
   Scenario: Dry-run detects billing change on existing account
     Given the Buyer Agent has an authenticated connection
