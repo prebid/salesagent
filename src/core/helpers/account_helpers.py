@@ -99,7 +99,10 @@ def _resolve_by_id(
 
     principal_id = identity.principal_id
     if principal_id and not repo.has_access(principal_id, account_id):
-        raise AdCPAuthorizationError(f"Agent '{principal_id}' does not have access to account '{account_id}'.")
+        raise AdCPAuthorizationError(
+            f"Agent '{principal_id}' does not have access to account '{account_id}'.",
+            details={"suggestion": "Use list_accounts to find accounts accessible to this agent."},
+        )
 
     _check_account_status(account_id, account.status)
 
@@ -141,7 +144,10 @@ def _resolve_by_natural_key(
     # Access check — parity with _resolve_by_id (lines 100-102)
     principal_id = identity.principal_id
     if principal_id and not repo.has_access(principal_id, account.account_id):
-        raise AdCPAuthorizationError(f"Agent '{principal_id}' does not have access to account '{account.account_id}'.")
+        raise AdCPAuthorizationError(
+            f"Agent '{principal_id}' does not have access to account '{account.account_id}'.",
+            details={"suggestion": "Use list_accounts to find accounts accessible to this agent."},
+        )
 
     _check_account_status(account.account_id, account.status)
 

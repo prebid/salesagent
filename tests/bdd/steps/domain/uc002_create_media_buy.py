@@ -479,8 +479,8 @@ def given_account_other_agent(ctx: dict) -> None:
         tenant=tenant,
         account_id=account_id,
         status="active",
-        brand={"domain": f"{account_id}.com"},
-        operator=f"{account_id}.com",
+        brand={"domain": "other-agent-denied.com"},
+        operator="other-agent-denied.com",
     )
     # Grant access to a DIFFERENT principal — not the requesting agent
     other_principal = PrincipalFactory(tenant=tenant)
@@ -529,8 +529,8 @@ def given_sandbox_account_other_agent(ctx: dict) -> None:
         account_id=account_id,
         status="active",
         sandbox=True,
-        brand={"domain": f"{account_id}.com"},
-        operator=f"{account_id}.com",
+        brand={"domain": "sandbox-denied.com"},
+        operator="sandbox-denied.com",
     )
     other_principal = PrincipalFactory(tenant=tenant)
     AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=other_principal, account=account)

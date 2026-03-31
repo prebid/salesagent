@@ -588,14 +588,20 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
 
 
 def _detect_uc011_harness(marker_names: set[str]) -> str:
-    """Detect which UC-011 harness a scenario needs based on tags."""
-    if "list" in marker_names:
-        return "list"
-    if "sync" in marker_names:
+    """Detect which UC-011 harness a scenario needs based on tags.
+
+    When both @sync and @list are present (cross-cutting scenarios like
+    sync-then-list), use sync harness — it's the superset and already has
+    a cross-cutting list path via _list_accounts_impl.
+    """
+    has_list = "list" in marker_names
+    has_sync = "sync" in marker_names
+    if has_sync and has_list:
         return "sync"
-    # Context-echo and sandbox scenarios are cross-cutting: they test both
-    # list_accounts and sync_accounts. Use sync harness as default since
-    # it's the superset (context-echo When step creates its own env if needed).
+    if has_list:
+        return "list"
+    if has_sync:
+        return "sync"
     if "context-echo" in marker_names or "sandbox" in marker_names:
         return "sync"
     return "unknown"
