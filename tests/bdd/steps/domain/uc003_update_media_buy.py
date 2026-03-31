@@ -721,11 +721,17 @@ def then_response_media_buy_id(ctx: dict, media_buy_id: str) -> None:
 
 @then("the response should contain media_buy_id")
 def then_response_has_media_buy_id(ctx: dict) -> None:
-    """Assert response contains a media_buy_id (any value)."""
+    """Assert response contains media_buy_id matching the existing media buy."""
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     actual = getattr(resp, "media_buy_id", None)
     assert actual is not None, f"Expected media_buy_id in response, got {actual!r}"
+    mb = ctx.get("existing_media_buy")
+    if mb is not None:
+        expected = mb.media_buy_id
+        assert actual == expected, (
+            f"media_buy_id mismatch: expected '{expected}' from existing media buy, got '{actual}'"
+        )
 
 
 @then("the response should contain buyer_ref")
@@ -807,10 +813,11 @@ def then_affected_packages_include(ctx: dict, package_id: str) -> None:
 
 @then("the response should contain affected_packages")
 def then_affected_packages_present(ctx: dict) -> None:
-    """Assert affected_packages is present and non-empty on the response.
+    """Assert affected_packages is present, non-empty, and contains expected package_ids.
 
     Step text: "the response should contain affected_packages"
-    Contract: affected_packages MUST be a non-empty list on a successful update.
+    Contract: affected_packages MUST be a non-empty list containing the package(s)
+    belonging to the media buy being updated.
     """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response — no response in ctx"
@@ -824,6 +831,18 @@ def then_affected_packages_present(ctx: dict) -> None:
         f"affected_packages should be a list, got {type(affected).__name__}: {affected!r}"
     )
     assert len(affected) > 0, "affected_packages is empty — step text claims response should contain affected_packages"
+    # Verify affected_packages contains the expected package_ids from the media buy
+    existing_pkg = ctx.get("existing_package")
+    if existing_pkg is not None:
+        expected_pkg_id = getattr(existing_pkg, "package_id", None)
+        if expected_pkg_id is not None:
+            actual_pkg_ids = [
+                getattr(p, "package_id", None) or (p.get("package_id") if isinstance(p, dict) else None)
+                for p in affected
+            ]
+            assert expected_pkg_id in actual_pkg_ids, (
+                f"Expected package '{expected_pkg_id}' in affected_packages, got {actual_pkg_ids}"
+            )
 
 
 @then(parsers.parse("the affected package should show the updated budget of {budget:d}"))

@@ -635,21 +635,23 @@ def then_error_recovery_field(ctx: dict, value: str) -> None:
 def then_no_db_records_modified(ctx: dict) -> None:
     """Assert that no database records were modified (POST-F1: system state unchanged).
 
-    Verifies ALL mutable fields on the existing media buy in DB match
-    their pre-operation state — not just status.
+    Verifies ALL mutable fields on the existing MediaBuy AND its child
+    MediaPackage records match their pre-operation state.
     """
     from sqlalchemy import select
 
     from src.core.database.database_session import get_db_session
-    from src.core.database.models import MediaBuy
+    from src.core.database.models import MediaBuy, MediaPackage
 
     mb = ctx.get("existing_media_buy")
     assert mb is not None, "No existing_media_buy in ctx — cannot verify DB state"
+    existing_pkg = ctx.get("existing_package")
+
     with get_db_session() as session:
+        # --- MediaBuy: verify all mutable fields unchanged ---
         db_mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=mb.media_buy_id)).first()
         assert db_mb is not None, f"Media buy {mb.media_buy_id} not found in DB"
-        # Verify all mutable fields haven't changed from pre-operation state
-        _MUTABLE_FIELDS = (
+        _MB_MUTABLE_FIELDS = (
             "status",
             "buyer_ref",
             "budget",
@@ -664,13 +666,33 @@ def then_no_db_records_modified(ctx: dict) -> None:
             "order_name",
             "advertiser_name",
         )
-        for field in _MUTABLE_FIELDS:
+        for field in _MB_MUTABLE_FIELDS:
             original = getattr(mb, field, None)
             actual = getattr(db_mb, field, None)
             assert actual == original, (
-                f"DB field '{field}' changed from {original!r} to {actual!r} — "
+                f"MediaBuy field '{field}' changed from {original!r} to {actual!r} — "
                 "POST-F1 violated: system state should be unchanged on failure"
             )
+
+        # --- MediaPackage: verify child records unchanged ---
+        db_pkgs = session.scalars(select(MediaPackage).filter_by(media_buy_id=mb.media_buy_id)).all()
+
+        if existing_pkg is not None:
+            # Verify the specific package we know about hasn't changed
+            original_pkg_id = existing_pkg.package_id
+            db_pkg = next((p for p in db_pkgs if p.package_id == original_pkg_id), None)
+            assert db_pkg is not None, (
+                f"MediaPackage '{original_pkg_id}' disappeared from DB — POST-F1 violated: package deleted on failure"
+            )
+            _PKG_MUTABLE_FIELDS = ("budget", "bid_price", "pacing", "package_config")
+            for field in _PKG_MUTABLE_FIELDS:
+                original = getattr(existing_pkg, field, None)
+                actual = getattr(db_pkg, field, None)
+                assert actual == original, (
+                    f"MediaPackage '{original_pkg_id}' field '{field}' changed "
+                    f"from {original!r} to {actual!r} — "
+                    "POST-F1 violated: package state should be unchanged on failure"
+                )
 
 
 @then(parsers.parse('the suggestion should contain "{text1}" or "{text2}"'))
