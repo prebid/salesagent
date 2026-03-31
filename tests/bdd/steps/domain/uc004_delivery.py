@@ -897,12 +897,14 @@ def when_boundary_account(ctx: dict, value: str) -> None:
 @when(parsers.re(r'the Buyer Agent requests delivery metrics with status_filter "(?P<partition_value>[^"]+)"'))
 def when_partition_status_filter(ctx: dict, partition_value: str) -> None:
     """Partition test: status_filter value."""
+    ctx.setdefault("request_params", {})["status_filter"] = [partition_value]
     _call_delivery(ctx, status_filter=[partition_value])
 
 
 @when(parsers.re(r'the Buyer Agent requests delivery metrics at status_filter boundary "(?P<boundary_value>[^"]+)"'))
 def when_boundary_status_filter(ctx: dict, boundary_value: str) -> None:
     """Boundary test: status_filter value."""
+    ctx.setdefault("request_params", {})["status_filter"] = [boundary_value]
     _call_delivery(ctx, status_filter=[boundary_value])
 
 
@@ -932,14 +934,14 @@ def when_boundary_credentials(ctx: dict, boundary_point: str) -> None:
 
 @when(parsers.re(r'the Buyer Agent requests delivery metrics with resolution "(?P<partition>[^"]+)"'))
 def when_partition_resolution(ctx: dict, partition: str) -> None:
-    """Partition test: resolution."""
-    _dispatch_partition(ctx, "resolution", partition)
+    """Partition test: resolution — translate partition name to actual request params."""
+    _dispatch_resolution(ctx, partition)
 
 
 @when(parsers.re(r'the Buyer Agent requests delivery metrics at resolution boundary "(?P<boundary_point>[^"]+)"'))
 def when_boundary_resolution(ctx: dict, boundary_point: str) -> None:
-    """Boundary test: resolution."""
-    _dispatch_partition(ctx, "resolution", boundary_point)
+    """Boundary test: resolution — translate boundary name to actual request params."""
+    _dispatch_resolution(ctx, boundary_point)
 
 
 @when(parsers.re(r'the Buyer Agent requests delivery metrics with principal "(?P<partition>[^"]+)"'))
@@ -1430,16 +1432,25 @@ def then_no_aggregated_in_payload(ctx: dict) -> None:
 
 @then("the system should retry up to 3 times")
 def then_retry_3_times(ctx: dict) -> None:
-    """Assert retry count: exactly 3 attempts for permanently-failing endpoint.
+    """Assert retry count for permanently-failing endpoint (5xx).
 
-    Production _deliver_with_backoff uses range(max_retries=3), so a persistent
-    failure exhausts all 3 attempts (1 initial + 2 retries).
+    Production _deliver_with_backoff: ``for attempt in range(max_retries=3)``
+    yields 3 total HTTP calls. The step text says "retry up to 3 times" but
+    max_retries=3 means 3 total attempts (1 initial + 2 retries), not 3 retries
+    after the initial. We assert the exact production behavior.
+
+    Also verifies sleep was called between retries (backoff applied).
     """
     env = ctx["env"]
     call_count = env.mock["post"].call_count
     assert call_count == 3, (
-        f"Expected exactly 3 calls (1 initial + 2 retries) for permanently-failing endpoint, got {call_count}"
+        f"Expected exactly 3 calls (1 initial + 2 retries, "
+        f"production max_retries=3 means range(3) total), got {call_count}"
     )
+    # Verify retries actually happened (sleep between attempts)
+    sleep_mock = env.mock.get("sleep")
+    if sleep_mock is not None:
+        assert sleep_mock.call_count == 2, f"Expected 2 sleep calls between 3 attempts, got {sleep_mock.call_count}"
 
 
 @then("retries should use exponential backoff (1s, 2s, 4s + jitter)")
@@ -1461,19 +1472,27 @@ def then_exponential_backoff(ctx: dict) -> None:
 
 @then("the system should retry up to 3 times with exponential backoff")
 def then_retry_with_backoff(ctx: dict) -> None:
-    """Assert retry count (2-4 calls) and exponential backoff pattern."""
+    """Assert retry count and exponential backoff for permanently-failing endpoint.
+
+    Production _deliver_with_backoff: for attempt in range(max_retries=3),
+    so a persistent failure (connection timeout) exhausts all 3 attempts.
+    """
     env = ctx["env"]
     call_count = env.mock["post"].call_count
-    assert call_count >= 2, f"Expected at least 2 calls (1 initial + at least 1 retry), got {call_count}"
-    assert call_count <= 4, f"Expected at most 4 calls (1 initial + up to 3 retries), got {call_count}"
+    assert call_count == 3, (
+        f"Expected exactly 3 calls (1 initial + 2 retries) for permanently-failing endpoint, "
+        f"got {call_count}. Production max_retries=3 means range(3) = 3 total attempts."
+    )
     # Verify exponential backoff intervals via sleep mock
     sleep_mock = env.mock.get("sleep")
     assert sleep_mock is not None, "Sleep mock must be wired for backoff verification"
-    assert sleep_mock.call_count > 0, "Sleep mock exists but was never called — backoff was not applied"
+    assert sleep_mock.call_count == 2, (
+        f"Expected exactly 2 sleep calls (backoff between attempts 1→2 and 2→3), got {sleep_mock.call_count}"
+    )
     intervals = [call.args[0] for call in sleep_mock.call_args_list]
     for i, interval in enumerate(intervals):
-        base = 2**i  # 1, 2, 4, ...
-        assert interval >= base, f"Backoff interval {i} was {interval}s, expected >= {base}s (2^{i})"
+        base = 2 ** (i + 1)  # 2, 4 (delay = base_delay * 2^attempt for attempt 1, 2)
+        assert interval >= base, f"Backoff interval {i} was {interval}s, expected >= {base}s"
 
 
 @then("the system should not retry the delivery")
@@ -1602,10 +1621,12 @@ def then_deliveries_resume(ctx: dict) -> None:
 
 @then("the delivery should be recorded as successful")
 def then_delivery_successful(ctx: dict) -> None:
-    """Assert delivery was recorded as successful.
+    """Assert delivery was recorded as successful on retry.
 
-    Verifies both the return value AND that the POST mock was actually called,
-    proving the production code executed a real delivery attempt that succeeded.
+    The scenario is "Successful retry records delivery" — the endpoint fails on
+    first attempt but succeeds on second. So we verify:
+    1. The return value indicates success
+    2. Exactly 2 POST calls were made (1 failed + 1 succeeded)
     """
     result = ctx.get("webhook_result") or ctx.get("circuit_result")
     assert result is not None, (
@@ -1621,11 +1642,12 @@ def then_delivery_successful(ctx: dict) -> None:
         raise AssertionError(
             f"Unexpected result type {type(result).__name__}: {result!r} — expected tuple (success, details) or bool"
         )
-    # Verify the production code actually made a POST call (persistence signal)
+    # Verify exactly 2 POST calls: 1 failed initial + 1 successful retry
+    # (scenario Given: "fails on first attempt but succeeds on second")
     env = ctx["env"]
     post_mock = env.mock["post"]
-    assert post_mock.call_count > 0, (
-        "Delivery returned success but no POST was made — the webhook was not actually sent to the endpoint"
+    assert post_mock.call_count == 2, (
+        f"Expected exactly 2 POST calls (1 failed + 1 succeeded on retry), got {post_mock.call_count}"
     )
 
 
@@ -2030,7 +2052,11 @@ def then_packages_include_field(ctx: dict, field: str) -> None:
 
 @then(parsers.parse('the response packages should include "{f1}" and "{f2}" breakdowns'))
 def then_packages_include_two(ctx: dict, f1: str, f2: str) -> None:
-    """Assert packages include both named breakdowns."""
+    """Assert packages include both named breakdowns with populated content.
+
+    Not just key existence — verifies each breakdown is a non-empty list,
+    proving the dimension was actually computed and populated.
+    """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
@@ -2041,8 +2067,13 @@ def then_packages_include_two(ctx: dict, f1: str, f2: str) -> None:
     pkg_dict = pkg.model_dump() if hasattr(pkg, "model_dump") else pkg.__dict__
     key1 = f"by_{f1}" if not f1.startswith("by_") else f1
     key2 = f"by_{f2}" if not f2.startswith("by_") else f2
-    assert key1 in pkg_dict, f"Package missing '{key1}', fields: {list(pkg_dict.keys())}"
-    assert key2 in pkg_dict, f"Package missing '{key2}', fields: {list(pkg_dict.keys())}"
+    for key, label in [(key1, f1), (key2, f2)]:
+        assert key in pkg_dict, f"Package missing '{key}', fields: {list(pkg_dict.keys())}"
+        breakdown = pkg_dict[key]
+        assert isinstance(breakdown, list), (
+            f"Expected '{key}' to be a list, got {type(breakdown).__name__}: {breakdown!r}"
+        )
+        assert len(breakdown) > 0, f"'{key}' breakdown is empty — dimension '{label}' was not populated"
 
 
 @then(parsers.parse('the response packages should NOT include "{field}"'))
@@ -2209,7 +2240,13 @@ def then_attribution_default(ctx: dict) -> None:
 
 @then('the response attribution_window should include "model" field (required)')
 def then_attribution_has_model(ctx: dict) -> None:
-    """Assert attribution window includes model field (required by spec)."""
+    """Assert attribution window echoes applied model (required by spec).
+
+    The scenario is "Response always echoes applied attribution window with model."
+    Verifies:
+    1. attribution_window is present with a model field
+    2. model matches the applied/requested value or the platform default
+    """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     resp_dict = resp.model_dump() if hasattr(resp, "model_dump") else resp
@@ -2221,6 +2258,15 @@ def then_attribution_has_model(ctx: dict) -> None:
     assert isinstance(model, str) and len(model) > 0, (
         f"Expected model to be a non-empty string, got {type(model).__name__}: {model!r}"
     )
+    # Verify the model echoes the applied or default value (the echo invariant)
+    applied_model = ctx.get("applied_attribution_model")
+    platform_default = ctx.get("platform_default_model")
+    if applied_model:
+        assert model == applied_model, f"Model doesn't echo applied value: expected '{applied_model}', got '{model}'"
+    elif platform_default:
+        assert model == platform_default, (
+            f"Model doesn't match platform default: expected '{platform_default}', got '{model}'"
+        )
 
 
 @then("the response should include attribution_window with the seller's platform default model")
@@ -2479,6 +2525,60 @@ def _dispatch_partition(ctx: dict, field: str, value: str) -> None:
     _call_delivery(ctx, **{field: value_stripped})
 
 
+def _dispatch_resolution(ctx: dict, partition: str) -> None:
+    """Translate resolution partition name to concrete request parameters.
+
+    Maps abstract partition names (media_buy_ids_only, buyer_refs_only, etc.)
+    to real request fields so Then steps can verify the correct media buys
+    were resolved, not just that the request was accepted.
+    """
+    media_buys = ctx.get("media_buys", {})
+    mb_ids = list(media_buys.keys())
+    partition_clean = partition.strip()
+    request_params = ctx.setdefault("request_params", {})
+
+    # Normalize boundary-style names to partition names
+    # (e.g., "media_buy_ids only (primary)" -> "media_buy_ids_only")
+    partition_norm = partition_clean.lower().replace(" ", "_")
+
+    if "media_buy_ids" in partition_norm and "only" in partition_norm:
+        # Resolve by media_buy_ids only
+        request_params["media_buy_ids"] = mb_ids
+        _call_delivery(ctx, media_buy_ids=mb_ids)
+    elif "buyer_refs" in partition_norm and "only" in partition_norm:
+        # Resolve by buyer_refs only — use mb_ids as refs (Given step may not set refs)
+        refs = [media_buys[k].get("buyer_ref", k) for k in mb_ids]
+        request_params["buyer_refs"] = refs
+        _call_delivery(ctx, buyer_refs=refs)
+    elif "both_provided" in partition_norm or "both" in partition_norm and "provided" in partition_norm:
+        # Both media_buy_ids and buyer_refs provided
+        refs = [media_buys[k].get("buyer_ref", k) for k in mb_ids]
+        request_params["media_buy_ids"] = mb_ids
+        request_params["buyer_refs"] = refs
+        _call_delivery(ctx, media_buy_ids=mb_ids, buyer_refs=refs)
+    elif "neither_provided" in partition_norm or "neither" in partition_norm:
+        # Neither IDs nor refs — should return all owned media buys
+        _call_delivery(ctx)
+    elif "partial" in partition_norm:
+        # Partial resolution — request includes a nonexistent ID alongside a real one
+        partial_ids = mb_ids[:1] + ["mb-nonexistent"]
+        request_params["media_buy_ids"] = partial_ids
+        _call_delivery(ctx, media_buy_ids=partial_ids)
+    elif "zero" in partition_norm:
+        # Zero resolution — request IDs that don't exist
+        request_params["media_buy_ids"] = ["mb-nonexistent-1", "mb-nonexistent-2"]
+        _call_delivery(ctx, media_buy_ids=["mb-nonexistent-1", "mb-nonexistent-2"])
+    elif "empty_array" in partition_norm or "empty" in partition_norm and "array" in partition_norm:
+        # Empty array — schema rejection expected
+        _call_delivery(ctx, media_buy_ids=[])
+    elif "all_buys" in partition_norm or "all" in partition_norm:
+        # All media buys — same as neither_provided
+        _call_delivery(ctx)
+    else:
+        # Fallback: pass through to generic dispatch
+        _dispatch_partition(ctx, "resolution", partition)
+
+
 # ── Partition/boundary Then steps ────────────────────────────────
 
 
@@ -2492,11 +2592,19 @@ def _assert_valid_content(ctx: dict, field: str) -> None:
     resp = ctx["response"]
 
     if field in ("status_filter", "filter"):
-        # Verify returned statuses match the filter
+        # Verify returned deliveries actually match the requested status filter
         deliveries = getattr(resp, "media_buy_deliveries", None) or []
         request_params = ctx.get("request_params", {})
         requested_filter = request_params.get("status_filter")
-        if requested_filter and deliveries:
+        if requested_filter:
+            # Check if Given-step media buys have matching statuses
+            setup_buys = ctx.get("media_buys", {})
+            has_matching_setup = any(mb.get("status") in requested_filter for mb in setup_buys.values())
+            if has_matching_setup:
+                assert len(deliveries) > 0, (
+                    f"Status filter {requested_filter}: expected non-empty deliveries (setup has matching media buys)"
+                )
+            # Every returned delivery must match the filter
             for d in deliveries:
                 actual_status = getattr(d, "status", None)
                 if actual_status:
@@ -2505,16 +2613,29 @@ def _assert_valid_content(ctx: dict, field: str) -> None:
                     )
 
     elif field == "resolution":
-        # Verify resolved media buys match requested IDs/refs
+        # Verify resolved media buys match resolution method
         deliveries = getattr(resp, "media_buy_deliveries", None) or []
         request_params = ctx.get("request_params", {})
         requested_ids = request_params.get("media_buy_ids")
+        requested_refs = request_params.get("buyer_refs")
+        setup_buys = ctx.get("media_buys", {})
         if requested_ids and deliveries:
             returned_ids = {getattr(d, "media_buy_id", None) for d in deliveries}
             for req_id in requested_ids:
                 assert req_id in returned_ids, (
                     f"Resolution violation: requested media_buy_id '{req_id}' not in response: {returned_ids}"
                 )
+        elif requested_refs and deliveries:
+            returned_refs = {getattr(d, "buyer_ref", None) for d in deliveries}
+            for req_ref in requested_refs:
+                assert req_ref in returned_refs, (
+                    f"Resolution violation: requested buyer_ref '{req_ref}' not in response: {returned_refs}"
+                )
+        elif setup_buys:
+            # Neither IDs nor refs requested — should return all owned media buys
+            assert len(deliveries) > 0, (
+                f"Valid resolution: expected non-empty deliveries (setup has {len(setup_buys)} media buys)"
+            )
 
     elif field in ("reporting_dimensions", "reporting dimensions"):
         # Verify response contains delivery data (field was accepted and processed)
