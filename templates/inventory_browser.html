@@ -222,8 +222,9 @@
 {% include 'partials/hierarchical_tree_scripts.html' %}
 
 <script>
+const scriptRoot = '{{ request.script_root }}' || '';
 const tenantId = '{{ tenant.tenant_id }}';
-const treeApiUrl = `{{ script_name }}/api/tenant/${tenantId}/inventory/tree`;
+const treeApiUrl = `${scriptRoot}/api/tenant/${tenantId}/inventory/tree`;
 let selectedInventory = null;
 let inventoryTree = null;
 const inventoryCache = new Map();
@@ -345,7 +346,7 @@ function syncInventory() {
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Syncing...';
 
-    fetch(`{{ script_name }}/api/tenant/${tenantId}/inventory/sync`, {
+    fetch(`${scriptRoot}/api/tenant/${tenantId}/inventory/sync`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: {
@@ -384,7 +385,7 @@ function syncInventory() {
 
 function pollInventorySyncStatus(syncId, btn) {
     const checkStatus = () => {
-        fetch(`{{ script_name }}/tenant/${tenantId}/gam/sync-status/${syncId}`)
+        fetch(`${scriptRoot}/tenant/${tenantId}/gam/sync-status/${syncId}`)
             .then(response => response.json())
             .then(data => {
                 if (data.status === 'completed') {
@@ -505,7 +506,7 @@ function searchInventory() {
     if (type) params.append('type', type);
     if (status) params.append('status', status);
 
-    fetch(`{{ script_name }}/api/tenant/${tenantId}/inventory/search?${params}`, {
+    fetch(`${scriptRoot}/api/tenant/${tenantId}/inventory/search?${params}`, {
         credentials: 'same-origin'
     })
         .then(response => response.json())
@@ -559,14 +560,14 @@ async function assignToProduct() {
     try {
         // Load products and check for existing assignments
         const [productsResponse, ...assignmentResponses] = await Promise.all([
-            fetch(`{{ script_name }}/api/tenant/${tenantId}/products`).then(r => r.json()),
+            fetch(`${scriptRoot}/api/tenant/${tenantId}/products`).then(r => r.json()),
             // Fetch assignments for all products to find which one has this inventory
-            fetch(`{{ script_name }}/api/tenant/${tenantId}/products`).then(r => r.json())
+            fetch(`${scriptRoot}/api/tenant/${tenantId}/products`).then(r => r.json())
                 .then(data => {
                     // For each product, check if it has this inventory assigned
                     return Promise.all(
                         data.products.map(p =>
-                            fetch(`{{ script_name }}/tenant/${tenantId}/products/${p.product_id}/inventory`)
+                            fetch(`${scriptRoot}/tenant/${tenantId}/products/${p.product_id}/inventory`)
                                 .then(r => r.json())
                                 .then(inv => ({ product_id: p.product_id, inventory: inv.inventory || [] }))
                                 .catch(() => ({ product_id: p.product_id, inventory: [] }))
@@ -659,7 +660,7 @@ async function saveProductAssignment() {
 
         // Add new assignments
         for (const productId of toAdd) {
-            const response = await fetch(`/tenant/{{ tenant_id }}/products/${productId}/inventory`, {
+            const response = await fetch(`${scriptRoot}/tenant/{{ tenant_id }}/products/${productId}/inventory`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -678,7 +679,7 @@ async function saveProductAssignment() {
 
         // Remove old assignments
         for (const { productId, mappingId } of toRemove) {
-            const response = await fetch(`/tenant/{{ tenant_id }}/products/${productId}/inventory/${mappingId}`, {
+            const response = await fetch(`${scriptRoot}/tenant/{{ tenant_id }}/products/${productId}/inventory/${mappingId}`, {
                 method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' }
             });
@@ -738,7 +739,7 @@ function performSelectiveSync() {
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Syncing...';
 
-    fetch(`{{ script_name }}/api/tenant/${tenantId}/inventory/sync`, {
+    fetch(`${scriptRoot}/api/tenant/${tenantId}/inventory/sync`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },

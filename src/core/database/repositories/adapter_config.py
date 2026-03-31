@@ -15,7 +15,7 @@ Design rules (PR #1171 review):
      never query the DB internally.
   3. No bare except: callers handle specific exceptions.
 
-beads: salesagent-zj9 (epic), salesagent-g3m (creation), salesagent-9buv (redesign)
+Introduced in PR #1163, redesigned in PR #1171.
 """
 
 from __future__ import annotations

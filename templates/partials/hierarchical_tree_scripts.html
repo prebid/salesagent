@@ -20,7 +20,7 @@ let isLoadingTree = false;
  * @param {string} selectedFieldId - DOM element ID for selected items field
  * @param {object} inventoryCache - Cache object for storing loaded items
  */
-function loadInventoryTree(searchTerm = '', treeApiUrl, containerId, selectedFieldId, inventoryCache) {
+function loadInventoryTree(searchTerm = '', treeApiUrl, containerId, selectedFieldId, inventoryCache, onRendered) {
     if (isLoadingTree) {
         return;
     }
@@ -72,6 +72,7 @@ function loadInventoryTree(searchTerm = '', treeApiUrl, containerId, selectedFie
                     } else if (selectedIds.size > 0) {
                         expandToSelected();
                     }
+                    if (onRendered) onRendered();
                 }, 200);
             });
 
