@@ -1430,11 +1430,16 @@ def then_no_aggregated_in_payload(ctx: dict) -> None:
 
 @then("the system should retry up to 3 times")
 def then_retry_3_times(ctx: dict) -> None:
-    """Assert retry count: at least 1 retry, at most 3 retries."""
+    """Assert retry count: exactly 3 attempts for permanently-failing endpoint.
+
+    Production _deliver_with_backoff uses range(max_retries=3), so a persistent
+    failure exhausts all 3 attempts (1 initial + 2 retries).
+    """
     env = ctx["env"]
     call_count = env.mock["post"].call_count
-    assert call_count >= 2, f"Expected at least 2 calls (1 initial + at least 1 retry), got {call_count}"
-    assert call_count <= 4, f"Expected at most 4 calls (1 initial + up to 3 retries), got {call_count}"
+    assert call_count == 3, (
+        f"Expected exactly 3 calls (1 initial + 2 retries) for permanently-failing endpoint, got {call_count}"
+    )
 
 
 @then("retries should use exponential backoff (1s, 2s, 4s + jitter)")
@@ -1597,7 +1602,11 @@ def then_deliveries_resume(ctx: dict) -> None:
 
 @then("the delivery should be recorded as successful")
 def then_delivery_successful(ctx: dict) -> None:
-    """Assert delivery was recorded as successful."""
+    """Assert delivery was recorded as successful.
+
+    Verifies both the return value AND that the POST mock was actually called,
+    proving the production code executed a real delivery attempt that succeeded.
+    """
     result = ctx.get("webhook_result") or ctx.get("circuit_result")
     assert result is not None, (
         "No success indicator found: neither 'webhook_result' nor 'circuit_result' "
@@ -1612,6 +1621,12 @@ def then_delivery_successful(ctx: dict) -> None:
         raise AssertionError(
             f"Unexpected result type {type(result).__name__}: {result!r} — expected tuple (success, details) or bool"
         )
+    # Verify the production code actually made a POST call (persistence signal)
+    env = ctx["env"]
+    post_mock = env.mock["post"]
+    assert post_mock.call_count > 0, (
+        "Delivery returned success but no POST was made — the webhook was not actually sent to the endpoint"
+    )
 
 
 @then("the circuit breaker state should remain healthy")
@@ -1651,8 +1666,15 @@ def then_error_min_credential_length(ctx: dict) -> None:
 
 @then("the configuration should be accepted")
 def then_config_accepted(ctx: dict) -> None:
-    """Assert configuration was accepted (webhook/circuit-breaker config)."""
+    """Assert configuration was positively accepted (not just absence of error).
+
+    The When step sets ctx["webhook_validated"] = True on successful validation.
+    We assert that positive signal exists, not just absence of "error".
+    """
     assert "error" not in ctx, f"Config rejected: {ctx.get('error')}"
+    assert ctx.get("webhook_validated") is True, (
+        "No positive acceptance signal: ctx['webhook_validated'] not set to True — validation may not have run at all"
+    )
 
 
 # ── HMAC / auth header assertions ─────────────────────────────────
@@ -1833,7 +1855,12 @@ def then_error_no_reveal(ctx: dict) -> None:
 
 @then(parsers.parse('the system should skip "{mb_id}" (no webhook to deliver to)'))
 def then_skip_no_webhook(ctx: dict, mb_id: str) -> None:
-    """Assert no POST was made for the given media buy (webhook not configured)."""
+    """Assert no POST was made for the given media buy (webhook not configured).
+
+    Only checks the behavioral outcome (no POST for this mb_id). The previous
+    check #2 re-validated the Given precondition (webhook_config inactive),
+    which is a tautology — removed per inspector finding.
+    """
     env = ctx["env"]
     post_mock = env.mock["post"]
     # Check that no POST call was made containing this mb_id in its payload
@@ -1853,11 +1880,6 @@ def then_skip_no_webhook(ctx: dict, mb_id: str) -> None:
                     f"Expected no webhook POST for '{mb_id}', "
                     f"but call [{call_idx}] payload media_buy_deliveries contains '{mb_id}'"
                 )
-    # Verify the webhook config shows this mb_id as inactive/missing
-    wh_config = ctx.get("webhook_config", {}).get(mb_id, {})
-    assert not wh_config.get("active", False), (
-        f"Expected webhook for '{mb_id}' to be inactive, but config shows active=True"
-    )
 
 
 @then("no delivery attempt should be made")
@@ -1911,7 +1933,7 @@ def then_packages_exclude_breakdown(ctx: dict, field: str) -> None:
 
 @then(parsers.parse('the response packages should include "{field}" with at most {n:d} entries'))
 def then_packages_limited(ctx: dict, field: str, n: int) -> None:
-    """Assert breakdown limited to n entries across ALL deliveries and packages."""
+    """Assert breakdown truncated to exactly n entries (Given guarantees surplus)."""
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
@@ -1924,9 +1946,9 @@ def then_packages_limited(ctx: dict, field: str, n: int) -> None:
             total_packages += 1
             pkg_dict = pkg.model_dump() if hasattr(pkg, "model_dump") else pkg.__dict__
             breakdown = pkg_dict.get(breakdown_key, [])
-            assert len(breakdown) <= n, (
-                f"Delivery[{d_idx}] package[{p_idx}]: expected at most {n} entries "
-                f"in '{breakdown_key}', got {len(breakdown)}"
+            assert len(breakdown) == n, (
+                f"Delivery[{d_idx}] package[{p_idx}]: expected exactly {n} entries "
+                f"in '{breakdown_key}' (Given guarantees surplus), got {len(breakdown)}"
             )
     assert total_packages > 0, "No packages found across any delivery"
 
@@ -2244,40 +2266,58 @@ def then_attribution_campaign_length(ctx: dict) -> None:
 
 @then(parsers.parse('the response should indicate "{mb_id}" has partial_data or delayed metrics'))
 def then_partial_data(ctx: dict, mb_id: str) -> None:
-    """Assert partial data indication for the media buy."""
+    """Assert the response communicates partial/delayed data for the media buy.
+
+    The response itself must signal the partial failure to the buyer — either
+    via a delivery entry with delayed status, a response-level partial_data flag,
+    or a response-level errors/partial_failures field naming the affected mb_id.
+    Never falls back to test harness ctx state.
+    """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
-    # Check response-level partial_data flag or delivery-level status
     resp_dict = resp.model_dump() if hasattr(resp, "model_dump") else resp
     deliveries = resp_dict.get("media_buy_deliveries", [])
-    found = False
+    # Check if mb_id is in deliveries with a partial/delayed signal
     for d in deliveries:
         if d.get("media_buy_id") == mb_id:
-            found = True
             has_partial = (
                 resp_dict.get("partial_data") is True
                 or d.get("status") == "reporting_delayed"
                 or d.get("expected_availability") is not None
             )
             assert has_partial, f"Expected partial_data or delayed status for '{mb_id}', got status='{d.get('status')}'"
-            break
-    if not found:
-        # If mb_id not in deliveries, check for errors
-        assert "error" in ctx, f"No delivery data or error for '{mb_id}'"
+            return
+    # mb_id not in deliveries — response must communicate the failure itself
+    errors = resp_dict.get("errors") or resp_dict.get("partial_failures") or []
+    has_error_signal = resp_dict.get("partial_data") is True or any(mb_id in str(e) for e in errors)
+    assert has_error_signal, (
+        f"'{mb_id}' absent from deliveries and response has no partial_data flag, "
+        f"errors, or partial_failures field naming it — buyer cannot see the failure"
+    )
 
 
 @then(parsers.parse('the response should include "{mb_id}" with zero impressions and zero spend'))
 def then_zero_metrics(ctx: dict, mb_id: str) -> None:
-    """Assert zero metrics for the media buy."""
+    """Assert explicit zero metrics for the media buy.
+
+    The scenario requires the system to report a known-zero result (not omit data).
+    totals must not be None — the buyer must see explicit zeros.
+    """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
     for d in deliveries:
         if d.media_buy_id == mb_id:
             totals = getattr(d, "totals", None)
-            if totals:
-                assert getattr(totals, "impressions", None) == 0.0
-                assert getattr(totals, "spend", None) == 0.0
+            assert totals is not None, (
+                f"Delivery for '{mb_id}' has totals=None — scenario requires explicit zero metrics, not omitted data"
+            )
+            assert getattr(totals, "impressions", None) == 0.0, (
+                f"Expected impressions=0.0 for '{mb_id}', got {getattr(totals, 'impressions', None)}"
+            )
+            assert getattr(totals, "spend", None) == 0.0, (
+                f"Expected spend=0.0 for '{mb_id}', got {getattr(totals, 'spend', None)}"
+            )
             return
     raise AssertionError(f"No delivery found for '{mb_id}'")
 
