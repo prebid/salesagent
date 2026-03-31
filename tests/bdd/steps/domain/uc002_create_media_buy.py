@@ -929,39 +929,44 @@ def _assert_request_proceeds_outcome(ctx: dict, outcome: str) -> None:
     resp = ctx.get("response")
     assert resp is not None, f"Expected a response for '{outcome}'"
 
+    # Common success assertion: response must have observable content.
+    # For product discovery pipelines, that means a products list.
+    # For other "request proceeds" outcomes, response existence suffices.
+    products = _get_response_field(resp, "products")
+
     # Pipeline-specific outcome assertions
     if "to brief pipeline" in outcome or "defaults to brief pipeline" in outcome:
         # Brief pipeline should return products with relevance scores.
-        # Check for response structure that indicates brief-mode processing.
-        products = _get_response_field(resp, "products")
-        if products and isinstance(products, list) and len(products) > 0:
+        assert products is not None, f"Brief pipeline ({outcome}): expected 'products' in response, got None"
+        if isinstance(products, list) and len(products) > 0:
             first = products[0]
             score = (
                 getattr(first, "relevance_score", None) if not isinstance(first, dict) else first.get("relevance_score")
             )
-            # If relevance scores are present, brief pipeline is confirmed.
-            # If absent, the pipeline identity isn't observable yet — assert success only.
             if score is not None:
                 assert isinstance(score, (int, float)), (
                     f"Brief pipeline: expected numeric relevance_score, got {type(score).__name__}"
                 )
+            # FIXME(salesagent-s271): When response metadata exposes pipeline identity,
+            # assert relevance_score IS present (not just check when available).
     elif "to wholesale pipeline" in outcome:
         # Wholesale pipeline returns catalog-style unranked results.
-        products = _get_response_field(resp, "products")
-        if products and isinstance(products, list) and len(products) > 0:
+        assert products is not None, f"Wholesale pipeline ({outcome}): expected 'products' in response, got None"
+        if isinstance(products, list) and len(products) > 0:
             first = products[0]
             score = (
                 getattr(first, "relevance_score", None) if not isinstance(first, dict) else first.get("relevance_score")
             )
             # Wholesale should NOT have relevance scores (unranked catalog).
-            # If present, that's an unexpected pipeline behavior.
             if score is not None:
                 assert score == 0 or score is None, (
                     f"Wholesale pipeline should not rank products, but got relevance_score={score}"
                 )
     elif "to refine pipeline" in outcome:
-        # Refine pipeline filters against a prior result set — verify success.
-        pass  # No additional observable distinction beyond success.
+        # Refine pipeline filters against a prior result set.
+        assert products is not None, f"Refine pipeline ({outcome}): expected 'products' in response, got None"
+        # FIXME(salesagent-s271): When response metadata exposes pipeline identity,
+        # verify refine-specific behavior (e.g., result set is a subset of prior query).
     # All other "request proceeds (...)" outcomes are policy/gate verifications.
     # The key assertion is that the request succeeded (no error, valid response).
     # Policy metadata enrichment is not yet available in response shape.
@@ -1282,6 +1287,12 @@ def given_package_references_creative_id(ctx: dict, creative_id: str) -> None:
     existing = pkg.get("creative_ids") or []
     existing.append(creative_id)
     pkg["creative_ids"] = existing
+
+    # Postcondition: verify creative_id was actually appended
+    assert creative_id in pkg["creative_ids"], (
+        f"Postcondition failed: creative_id '{creative_id}' not found in "
+        f"package creative_ids {pkg['creative_ids']} after append"
+    )
 
 
 @given("a creative's format_id does not match any of the product's supported format_ids")
@@ -2461,6 +2472,7 @@ def then_response_has_derived_packages(ctx: dict) -> None:
     1. media_buy_id is present
     2. Each package has a product_id (evidence of derivation from proposal)
     3. packages count matches expected_proposal_allocations (from Given step)
+    4. package product_ids match known products from context (cross-check)
     """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
@@ -2468,8 +2480,22 @@ def then_response_has_derived_packages(ctx: dict) -> None:
     assert media_buy_id, "No media_buy_id in response"
     packages = _get_response_field_from_resp(resp, "packages")
     assert packages is not None and len(packages) > 0, "No derived packages in response"
-    # Verify each package has a product_id (derivation evidence)
-    missing_product_ids = []
+
+    # Collect known product_ids from context for cross-checking derivation.
+    # Products come from request_kwargs packages and/or default_product.
+    known_product_ids: set[str] = set()
+    default_product = ctx.get("default_product")
+    if default_product is not None:
+        known_product_ids.add(default_product.product_id)
+    request_pkgs = ctx.get("request_kwargs", {}).get("packages", [])
+    for rp in request_pkgs:
+        pid = rp.get("product_id") if isinstance(rp, dict) else getattr(rp, "product_id", None)
+        if pid:
+            known_product_ids.add(pid)
+
+    # Verify each package has a product_id AND it matches a known product
+    missing_product_ids: list[int] = []
+    unknown_product_ids: list[tuple[int, str]] = []
     for i, pkg in enumerate(packages):
         product_id = getattr(pkg, "product_id", None)
         if product_id is None and isinstance(pkg, dict):
@@ -2480,6 +2506,12 @@ def then_response_has_derived_packages(ctx: dict) -> None:
             assert isinstance(product_id, str) and len(product_id.strip()) > 0, (
                 f"Package {i} product_id is empty — derived packages must reference a product"
             )
+            # Cross-check: product_id must be one of the known products from the
+            # scenario setup. This catches bugs where packages have arbitrary product_ids
+            # that don't match the proposal's allocations.
+            if known_product_ids and product_id not in known_product_ids:
+                unknown_product_ids.append((i, product_id))
+
     # Verify package count matches expected proposal allocations
     expected_count = ctx.get("expected_proposal_allocations")
     if expected_count is not None:
@@ -2488,6 +2520,12 @@ def then_response_has_derived_packages(ctx: dict) -> None:
         )
     assert not missing_product_ids, (
         f"Packages {missing_product_ids} have no product_id — cannot confirm derivation from proposal allocations"
+    )
+    assert not unknown_product_ids, (
+        f"Packages have product_ids not matching known products from scenario setup: "
+        f"{unknown_product_ids}. Known product_ids: {known_product_ids}. "
+        f"'Derived from proposal allocations' requires each package's product_id to reference "
+        f"a product configured in the scenario."
     )
 
 
