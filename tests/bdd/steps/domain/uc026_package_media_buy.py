@@ -1784,17 +1784,21 @@ def then_package_formats_to_provide_based_on_creatives(ctx: dict) -> None:
     # formats that already have creative assets assigned
     format_ids = _pkg_field(pkg, "format_ids") or []
     creative_assignments = _pkg_field(pkg, "creative_assignments") or []
-    if format_ids and creative_assignments:
-        assigned_format_ids = set()
-        for ca in creative_assignments:
-            ca_fids = ca.get("format_ids") if isinstance(ca, dict) else getattr(ca, "format_ids", None)
-            if ca_fids:
-                for f in ca_fids:
-                    assigned_format_ids.add(_extract_format_id(f))
-        if assigned_format_ids:
-            provide_set = {_extract_format_id(f) for f in formats_to_provide}
-            overlap = provide_set & assigned_format_ids
-            assert not overlap, f"format_ids_to_provide contains {overlap} which already have creative assignments"
+    assigned_format_ids: set[str] = set()
+    for ca in creative_assignments:
+        ca_fids = ca.get("format_ids") if isinstance(ca, dict) else getattr(ca, "format_ids", None)
+        if ca_fids:
+            for f in ca_fids:
+                assigned_format_ids.add(_extract_format_id(f))
+    provide_set = {_extract_format_id(f) for f in formats_to_provide}
+    if assigned_format_ids:
+        overlap = provide_set & assigned_format_ids
+        assert not overlap, f"format_ids_to_provide contains {overlap} which already have creative assignments"
+    if format_ids:
+        # format_ids_to_provide should be a subset of package format_ids
+        pkg_format_set = {_extract_format_id(f) for f in format_ids}
+        extra = provide_set - pkg_format_set
+        assert not extra, f"format_ids_to_provide contains {extra} not in package format_ids {pkg_format_set}"
 
 
 @then("the package should contain the seller-assigned package_id")
@@ -1819,7 +1823,7 @@ def then_package_explicit_formats(ctx: dict, fmt_ids: str) -> None:
 
     actual_ids = {_extract_format_id(f) for f in format_ids}
     expected_ids = set(expected)
-    assert expected_ids <= actual_ids, f"Expected format_ids {expected_ids}, got {actual_ids}"
+    assert expected_ids == actual_ids, f"Expected format_ids {expected_ids} (exact match), got {actual_ids}"
 
 
 @then("the response should contain a package with all provided fields echoed")
@@ -1835,18 +1839,43 @@ def then_package_all_fields(ctx: dict) -> None:
     # Verify all fields from the request are echoed in the response
     request_kwargs = ctx.get("request_kwargs", {})
     req_packages = request_kwargs.get("packages", [])
-    if req_packages:
-        req_pkg = req_packages[0]
-        missing_fields = []
-        for field, _value in req_pkg.items():
-            actual = _pkg_field(pkg, field)
-            if actual is None:
-                missing_fields.append(field)
-        if missing_fields:
-            pytest.xfail(
-                f"SPEC-PRODUCTION GAP: Package created but fields {missing_fields} not echoed "
-                f"in response. FIXME(salesagent-9vgz.1)"
-            )
+    assert req_packages, "No packages in request_kwargs — cannot verify echoed fields"
+    req_pkg = req_packages[0]
+    missing_fields = []
+    mismatched_fields = []
+    for field, expected_value in req_pkg.items():
+        actual = _pkg_field(pkg, field)
+        if actual is None:
+            missing_fields.append(field)
+            continue
+        # Compare scalar fields for value echo
+        if isinstance(expected_value, (str, int, float, bool)):
+            _compare_echoed_scalar(field, expected_value, actual, mismatched_fields)
+    if missing_fields:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: Package created but fields {missing_fields} not echoed "
+            f"in response. FIXME(salesagent-9vgz.1)"
+        )
+    if mismatched_fields:
+        details = "; ".join(mismatched_fields)
+        raise AssertionError(f"Echoed fields have wrong values: {details}")
+
+
+def _compare_echoed_scalar(field: str, expected: str | int | float | bool, actual: Any, mismatches: list[str]) -> None:
+    """Compare a scalar echoed field value, appending to mismatches if different."""
+    if isinstance(expected, bool):
+        if actual != expected:
+            mismatches.append(f"{field}: expected {expected!r}, got {actual!r}")
+    elif isinstance(expected, (int, float)):
+        try:
+            if float(actual) != float(expected):
+                mismatches.append(f"{field}: expected {expected}, got {actual}")
+        except (TypeError, ValueError):
+            mismatches.append(f"{field}: expected {expected}, got {actual!r} (not numeric)")
+    elif isinstance(expected, str):
+        actual_str = str(actual) if actual is not None else None
+        if actual_str != expected:
+            mismatches.append(f"{field}: expected '{expected}', got '{actual_str}'")
 
 
 # --- Operation outcome ---
@@ -1941,12 +1970,15 @@ def then_no_delivery(ctx: dict) -> None:
     """Assert package should not deliver (paused=true implies no delivery)."""
     import pytest
 
+    _assert_no_error(ctx)
     packages = _get_packages(ctx)
     pkg = packages[0]
+    pkg_id = _pkg_field(pkg, "package_id")
+    assert pkg_id is not None, "Package missing package_id — cannot verify delivery state"
     paused = _pkg_field(pkg, "paused")
     if paused is None:
         pytest.xfail("SPEC-PRODUCTION GAP: paused field absent — cannot verify no-delivery. FIXME(salesagent-9vgz.1)")
-    assert paused is True, f"Expected paused=true (no delivery), got paused={paused}"
+    assert paused is True, f"Expected paused=true (no delivery), got paused={paused!r}"
 
 
 @then("the package should deliver impressions")
@@ -2155,6 +2187,16 @@ def then_keyword_bid_ceiling(ctx: dict, price: str) -> None:
             break
     if found_with_bid is None:
         pytest.xfail(f"SPEC-PRODUCTION GAP: no keyword with bid_price={price} found. FIXME(salesagent-9vgz.1)")
+    # Verify the bid_price value matches expected (ceiling semantics: price is maximum)
+    actual_bid = _keyword_field(found_with_bid, "bid_price")
+    assert float(actual_bid) == expected_price, (
+        f"Expected keyword bid_price {expected_price} (ceiling), got {actual_bid}"
+    )
+    # Verify max_bid semantics from pricing option context
+    pricing_max_bids = ctx.get("pricing_option_max_bid", {})
+    if pricing_max_bids:
+        has_max_bid = any(v is True for v in pricing_max_bids.values())
+        assert has_max_bid, f"Ceiling semantics expected but no pricing_option has max_bid=true: {pricing_max_bids}"
 
 
 # --- Dedup Then steps ---
@@ -2193,10 +2235,29 @@ def then_new_pkg_in_mb(ctx: dict, mb_id: str) -> None:
     pkg = packages[0]
     pkg_id = _pkg_field(pkg, "package_id")
     assert pkg_id is not None, "Package missing package_id"
+    assert isinstance(pkg_id, str) and len(pkg_id.strip()) > 0, (
+        f"Expected non-empty seller-assigned package_id, got {pkg_id!r}"
+    )
     # Verify this is a NEW package_id (different from any existing one)
     existing_pkg_id = ctx.get("existing_package_id")
-    if existing_pkg_id:
-        assert pkg_id != existing_pkg_id, f"Expected a NEW package_id but got the same as existing: '{pkg_id}'"
+    assert existing_pkg_id is not None, (
+        "No existing_package_id in context — Given step should have created an existing media buy"
+    )
+    assert pkg_id != existing_pkg_id, (
+        f"Expected a NEW package_id for '{mb_id}' but got the same as existing: '{pkg_id}'"
+    )
+    # Verify the response media_buy_id matches the target (different from original)
+    named_mb_ids = ctx.get("named_media_buy_ids", {})
+    original_mb_id = named_mb_ids.get("mb-A") or ctx.get("existing_media_buy_id")
+    resp = ctx.get("response")
+    if resp is not None:
+        inner = getattr(resp, "response", resp)
+        resp_mb_id = getattr(inner, "media_buy_id", None)
+        if resp_mb_id and original_mb_id:
+            assert resp_mb_id != original_mb_id, (
+                f"Expected package in NEW media buy '{mb_id}' but response media_buy_id "
+                f"'{resp_mb_id}' matches original '{original_mb_id}'"
+            )
 
 
 @then("a new package should be created with a seller-assigned package_id")
@@ -2255,7 +2316,12 @@ def then_bid_ceiling(ctx: dict, price: str) -> None:
             f"SPEC-PRODUCTION GAP: bid_price not echoed in response. "
             f"Expected {price} (ceiling). FIXME(salesagent-9vgz.1)"
         )
-    assert float(actual_bid) == float(price), f"Expected bid_price {price}, got {actual_bid}"
+    assert float(actual_bid) == float(price), f"Expected bid_price {price} (ceiling), got {actual_bid}"
+    # Verify ceiling semantics context: pricing option should have max_bid=true
+    pricing_max_bids = ctx.get("pricing_option_max_bid", {})
+    if pricing_max_bids:
+        has_max_bid = any(v is True for v in pricing_max_bids.values())
+        assert has_max_bid, f"Ceiling semantics claimed but no pricing_option has max_bid=true: {pricing_max_bids}"
 
 
 @then(parsers.parse("the package should be created with bid_price {price} interpreted as exact bid"))
@@ -2269,7 +2335,12 @@ def then_bid_exact(ctx: dict, price: str) -> None:
         pytest.xfail(
             f"SPEC-PRODUCTION GAP: bid_price not echoed in response. Expected {price} (exact). FIXME(salesagent-9vgz.1)"
         )
-    assert float(actual_bid) == float(price), f"Expected bid_price {price}, got {actual_bid}"
+    assert float(actual_bid) == float(price), f"Expected bid_price {price} (exact), got {actual_bid}"
+    # Verify exact semantics context: pricing option should have max_bid=false (or absent)
+    pricing_max_bids = ctx.get("pricing_option_max_bid", {})
+    if pricing_max_bids:
+        all_false = all(v is False for v in pricing_max_bids.values())
+        assert all_false, f"Exact bid semantics claimed but pricing_option has max_bid=true: {pricing_max_bids}"
 
 
 @then("the package should be created without a bid_price")
@@ -2284,11 +2355,24 @@ def then_no_bid_price(ctx: dict) -> None:
 @then("pricing should be determined by pricing option defaults")
 def then_pricing_defaults(ctx: dict) -> None:
     """Assert pricing is determined by pricing option defaults (no bid_price override)."""
+    import pytest
+
     _assert_no_error(ctx)
     pkgs = _assert_has_packages(ctx)
+    pkg = pkgs[0]
     # With no bid_price, pricing defaults apply — verify bid_price is absent
-    actual_bid = _pkg_field(pkgs[0], "bid_price")
+    actual_bid = _pkg_field(pkg, "bid_price")
     assert actual_bid is None, f"Expected no bid_price (pricing by defaults), got {actual_bid}"
+    # The package should still have a pricing_option_id (defaults come from the option)
+    po_id = _pkg_field(pkg, "pricing_option_id")
+    if po_id is None:
+        pytest.xfail(
+            "SPEC-PRODUCTION GAP: pricing_option_id not echoed — cannot verify "
+            "pricing defaults source. FIXME(salesagent-9vgz.1)"
+        )
+    assert isinstance(po_id, str) and len(po_id.strip()) > 0, (
+        f"Expected non-empty pricing_option_id for default pricing, got {po_id!r}"
+    )
 
 
 @then(parsers.parse("the package should be created with format_ids {fmt_ids}"))
@@ -2340,6 +2424,13 @@ def then_created_with_catalogs(ctx: dict) -> None:
         )
     assert isinstance(catalogs, list), f"Expected catalogs to be a list, got {type(catalogs)}"
     assert len(catalogs) == 2, f"Expected 2 catalogs, got {len(catalogs)}"
+    # Verify catalogs have distinct types (per BR-RULE-089 INV-2)
+    types = set()
+    for cat in catalogs:
+        cat_type = cat.get("type") if isinstance(cat, dict) else getattr(cat, "type", None)
+        if cat_type:
+            types.add(cat_type)
+    assert len(types) == 2, f"Expected 2 distinct catalog types, got types: {types}"
 
 
 @then("the package should be created without catalogs")
@@ -2387,6 +2478,24 @@ def then_pkg_catalogs(ctx: dict, expected: str) -> None:
         assert len(actual_normalized) == len(expected_parsed), (
             f"Expected {len(expected_parsed)} catalogs, got {len(actual_normalized)}"
         )
+        # Verify each expected catalog is present with matching fields
+        for exp_cat in expected_parsed:
+            if isinstance(exp_cat, dict):
+                _assert_catalog_in_list(exp_cat, actual_normalized)
+
+
+def _assert_catalog_in_list(expected: dict, actual_list: list[dict]) -> None:
+    """Assert expected catalog dict is found in actual list (matching key fields)."""
+    exp_type = expected.get("type")
+    exp_id = expected.get("catalog_id")
+    for actual in actual_list:
+        a_type = actual.get("type")
+        a_id = actual.get("catalog_id")
+        if exp_type and a_type == exp_type and exp_id and a_id == exp_id:
+            return
+        if exp_id and a_id == exp_id:
+            return
+    raise AssertionError(f"Expected catalog {expected} not found in actual catalogs {actual_list}")
 
 
 @then("the package catalogs should be unchanged")
@@ -2402,8 +2511,15 @@ def then_catalogs_unchanged(ctx: dict) -> None:
             "SPEC-PRODUCTION GAP: catalogs not echoed in update response — "
             "cannot verify unchanged. FIXME(salesagent-9vgz.1)"
         )
-    # Catalogs should exist (preserved from original) — at minimum non-empty
     assert isinstance(actual_catalogs, list), f"Expected catalogs to be a list, got {type(actual_catalogs)}"
+    # Compare with original package's catalogs if available
+    existing_pkg = ctx.get("existing_package")
+    if existing_pkg is not None:
+        original_catalogs = _pkg_field(existing_pkg, "catalogs")
+        if original_catalogs is not None:
+            assert len(actual_catalogs) == len(original_catalogs), (
+                f"Catalogs count changed: was {len(original_catalogs)}, now {len(actual_catalogs)}"
+            )
 
 
 @then("the package optimization_goals should be unchanged")
@@ -2420,6 +2536,14 @@ def then_goals_unchanged(ctx: dict) -> None:
             "cannot verify unchanged. FIXME(salesagent-9vgz.1)"
         )
     assert isinstance(actual_goals, list), f"Expected optimization_goals to be a list, got {type(actual_goals)}"
+    # Compare with original package's goals if available
+    existing_pkg = ctx.get("existing_package")
+    if existing_pkg is not None:
+        original_goals = _pkg_field(existing_pkg, "optimization_goals")
+        if original_goals is not None:
+            assert len(actual_goals) == len(original_goals), (
+                f"optimization_goals count changed: was {len(original_goals)}, now {len(actual_goals)}"
+            )
 
 
 @then(parsers.parse("the package optimization_goals should be {expected}"))
@@ -2442,6 +2566,18 @@ def then_pkg_goals(ctx: dict, expected: str) -> None:
         assert len(actual_goals) == len(expected_parsed), (
             f"Expected {len(expected_parsed)} optimization_goals, got {len(actual_goals)}"
         )
+        # Verify each expected goal is present with matching key fields
+        for exp_goal in expected_parsed:
+            if isinstance(exp_goal, dict):
+                exp_metric = exp_goal.get("metric")
+                if exp_metric:
+                    actual_metrics = []
+                    for ag in actual_goals:
+                        g = ag if isinstance(ag, dict) else (ag.model_dump() if hasattr(ag, "model_dump") else {})
+                        actual_metrics.append(g.get("metric"))
+                    assert exp_metric in actual_metrics, (
+                        f"Expected goal metric '{exp_metric}' not found in actual goals: {actual_metrics}"
+                    )
 
 
 @then(parsers.parse("the package creative_assignments should be {expected}"))
@@ -2464,6 +2600,16 @@ def then_pkg_creatives(ctx: dict, expected: str) -> None:
         assert len(actual_ca) == len(expected_parsed), (
             f"Expected {len(expected_parsed)} creative_assignments, got {len(actual_ca)}"
         )
+        # Verify each expected creative is present with matching creative_id
+        for exp_ca in expected_parsed:
+            if isinstance(exp_ca, dict):
+                exp_id = exp_ca.get("creative_id")
+                if exp_id:
+                    actual_ids = []
+                    for aca in actual_ca:
+                        a = aca if isinstance(aca, dict) else (aca.model_dump() if hasattr(aca, "model_dump") else {})
+                        actual_ids.append(a.get("creative_id"))
+                    assert exp_id in actual_ids, f"Expected creative_id '{exp_id}' not found in actual: {actual_ids}"
 
 
 @then(parsers.parse('the package targeting_overlay should contain only audience "{audience_id}"'))
