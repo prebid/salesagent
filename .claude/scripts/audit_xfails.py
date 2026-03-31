@@ -27,11 +27,9 @@ from __future__ import annotations
 import ast
 import json
 import re
-import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-
 
 # ── Data classes ──────────────────────────────────────────────────────
 
@@ -124,9 +122,7 @@ def parse_conftest_xfail_tags(conftest_path: Path) -> dict[str, tuple[str, str]]
                 tag_map[tag] = (f"partition/boundary from {set_name}", "partial_impl")
 
     # _UC005_PARTIAL_TAGS
-    for set_match in re.finditer(
-        r"(_UC\d+_PARTIAL_TAGS)\s*=\s*\{([^}]+)\}", text, re.DOTALL
-    ):
+    for set_match in re.finditer(r"(_UC\d+_PARTIAL_TAGS)\s*=\s*\{([^}]+)\}", text, re.DOTALL):
         block = set_match.group(2)
         for tag_m in re.finditer(r'"(T-[^"]+)"', block):
             tag = tag_m.group(1)
@@ -140,25 +136,19 @@ def parse_conftest_xfail_tags(conftest_path: Path) -> dict[str, tuple[str, str]]
             tag_map[tag] = (reason, "transport_gap")
 
     # _UC002_VALIDATION_XFAIL, _UC006_VALIDATION_XFAIL — selective xfails
-    for match in re.finditer(
-        r'\(\s*"(T-[^"]+)",\s*\{[^}]*\},\s*"([^"]+)"\s*\)', text
-    ):
+    for match in re.finditer(r'\(\s*"(T-[^"]+)",\s*\{[^}]*\},\s*"([^"]+)"\s*\)', text):
         tag, reason = match.group(1), match.group(2)
         if tag not in tag_map:
             tag_map[tag] = (reason, "production_gap")
 
     # _UC004_XFAIL_TAGS dict with tuples: tag → (reason, strict)
-    for match in re.finditer(
-        r'"(T-UC-004[^"]+)":\s*\(\s*"([^"]+)",\s*(True|False)\s*\)', text
-    ):
+    for match in re.finditer(r'"(T-UC-004[^"]+)":\s*\(\s*"([^"]+)",\s*(True|False)\s*\)', text):
         tag, reason = match.group(1), match.group(2)
         if tag not in tag_map:
             tag_map[tag] = (reason, "production_gap")
 
     # _UC003_EXT_XFAILS dict
-    for match in re.finditer(
-        r'"(T-UC-003[^"]+)":\s*"([^"]+)"', text
-    ):
+    for match in re.finditer(r'"(T-UC-003[^"]+)":\s*"([^"]+)"', text):
         tag, reason = match.group(1), match.group(2)
         if tag not in tag_map:
             tag_map[tag] = (reason, "production_gap")
@@ -405,7 +395,7 @@ def classify_xfail(
         else:
             entry.category = "PRODUCTION_GAP"
             entry.reason = f"from conftest xfail (tag {sample_tag})"
-        entry.xfail_source = f"conftest:inferred:tag-prefix"
+        entry.xfail_source = "conftest:inferred:tag-prefix"
         return entry
 
     # Priority 5: Check wasxfail reason text for clues
@@ -458,7 +448,9 @@ def classify_xpassed(
             by_scenario[base].add(transport)
 
     all4 = {base for base, transports in by_scenario.items() if transports == {"impl", "a2a", "mcp", "rest"}}
-    partial = {base: transports for base, transports in by_scenario.items() if transports != {"impl", "a2a", "mcp", "rest"}}
+    partial = {
+        base: transports for base, transports in by_scenario.items() if transports != {"impl", "a2a", "mcp", "rest"}
+    }
 
     return all4, partial
 
@@ -471,7 +463,7 @@ def generate_report(report: AuditReport, output_path: Path | None = None) -> str
     lines = [
         "# BDD Xfail Audit Report",
         "",
-        f"Generated from test results. Deterministic classification.",
+        "Generated from test results. Deterministic classification.",
         "",
         "## Summary",
         "",
@@ -496,8 +488,17 @@ def generate_report(report: AuditReport, output_path: Path | None = None) -> str
         "UNCLASSIFIED": "No matching pattern found",
     }
 
-    for cat in ["PRODUCTION_GAP", "TRANSPORT_GAP", "HARNESS_GAP", "PARTIAL_IMPL",
-                 "MISSING_STEP", "PREMATURE_XFAIL", "STALE", "PARTIAL_PASS", "UNCLASSIFIED"]:
+    for cat in [
+        "PRODUCTION_GAP",
+        "TRANSPORT_GAP",
+        "HARNESS_GAP",
+        "PARTIAL_IMPL",
+        "MISSING_STEP",
+        "PREMATURE_XFAIL",
+        "STALE",
+        "PARTIAL_PASS",
+        "UNCLASSIFIED",
+    ]:
         entries = report.by_category.get(cat, [])
         pct = len(entries) / report.total_xfailed * 100 if report.total_xfailed else 0
         desc = category_desc.get(cat, "")
@@ -519,14 +520,16 @@ def generate_report(report: AuditReport, output_path: Path | None = None) -> str
         )
 
     # Xpassed section
-    lines.extend([
-        "",
-        "## Xpassed Tests (marked xfail but pass)",
-        "",
-        f"- **All 4 transports (graduation candidates)**: {len([e for e in report.xpassed_entries if e.category == 'STALE'])}",
-        f"- **Partial pass (keep investigating)**: {len([e for e in report.xpassed_entries if e.category == 'PARTIAL_PASS'])}",
-        "",
-    ])
+    lines.extend(
+        [
+            "",
+            "## Xpassed Tests (marked xfail but pass)",
+            "",
+            f"- **All 4 transports (graduation candidates)**: {len([e for e in report.xpassed_entries if e.category == 'STALE'])}",
+            f"- **Partial pass (keep investigating)**: {len([e for e in report.xpassed_entries if e.category == 'PARTIAL_PASS'])}",
+            "",
+        ]
+    )
 
     # STALE details
     stale = [e for e in report.xpassed_entries if e.category == "STALE"]
@@ -557,22 +560,24 @@ def generate_report(report: AuditReport, output_path: Path | None = None) -> str
             lines.append(f"- {short} — passes: {sorted(transports)}, missing: {sorted(missing)}")
 
     # Actionable summary
-    lines.extend([
-        "",
-        "## Actionable Summary",
-        "",
-        "### Immediate actions",
-        f"1. **Graduate {len(stale)} stale scenarios** — remove xfail tags from conftest (all 4 transports pass with strong assertions)",
-        f"2. **Fix {len(report.by_category.get('PREMATURE_XFAIL', []))} premature xfails** — step calls pytest.xfail() before production code",
-        "",
-        "### Tracked debt",
-        f"3. **{len(report.by_category.get('PRODUCTION_GAP', []))} production gaps** — legitimate, needs src/ implementation",
-        f"4. **{len(report.by_category.get('TRANSPORT_GAP', []))} transport gaps** — REST/MCP/A2A wrappers missing params",
-        f"5. **{len(report.by_category.get('HARNESS_GAP', []))} harness gaps** — test env not wired, fixable in tests/",
-        f"6. **{len(report.by_category.get('PARTIAL_IMPL', []))} partial implementations** — partition/boundary values vary",
-        f"7. **{len(report.by_category.get('MISSING_STEP', []))} missing steps** — step definitions needed",
-        f"8. **{len(report.by_category.get('UNCLASSIFIED', []))} unclassified** — need manual review",
-    ])
+    lines.extend(
+        [
+            "",
+            "## Actionable Summary",
+            "",
+            "### Immediate actions",
+            f"1. **Graduate {len(stale)} stale scenarios** — remove xfail tags from conftest (all 4 transports pass with strong assertions)",
+            f"2. **Fix {len(report.by_category.get('PREMATURE_XFAIL', []))} premature xfails** — step calls pytest.xfail() before production code",
+            "",
+            "### Tracked debt",
+            f"3. **{len(report.by_category.get('PRODUCTION_GAP', []))} production gaps** — legitimate, needs src/ implementation",
+            f"4. **{len(report.by_category.get('TRANSPORT_GAP', []))} transport gaps** — REST/MCP/A2A wrappers missing params",
+            f"5. **{len(report.by_category.get('HARNESS_GAP', []))} harness gaps** — test env not wired, fixable in tests/",
+            f"6. **{len(report.by_category.get('PARTIAL_IMPL', []))} partial implementations** — partition/boundary values vary",
+            f"7. **{len(report.by_category.get('MISSING_STEP', []))} missing steps** — step definitions needed",
+            f"8. **{len(report.by_category.get('UNCLASSIFIED', []))} unclassified** — need manual review",
+        ]
+    )
 
     text = "\n".join(lines)
     if output_path:
@@ -662,8 +667,15 @@ def main() -> None:
     else:
         # Print summary to stdout
         print("\n=== SUMMARY ===")
-        for cat in ["PRODUCTION_GAP", "TRANSPORT_GAP", "HARNESS_GAP", "PARTIAL_IMPL",
-                     "MISSING_STEP", "PREMATURE_XFAIL", "UNCLASSIFIED"]:
+        for cat in [
+            "PRODUCTION_GAP",
+            "TRANSPORT_GAP",
+            "HARNESS_GAP",
+            "PARTIAL_IMPL",
+            "MISSING_STEP",
+            "PREMATURE_XFAIL",
+            "UNCLASSIFIED",
+        ]:
             count = len(report.by_category.get(cat, []))
             if count > 0:
                 print(f"  {cat}: {count}")
