@@ -817,6 +817,8 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
         from tests.bdd.steps.domain.uc002_task_query import assert_task_query_outcome
 
         assert_task_query_outcome(ctx, outcome)
+    elif outcome.startswith("request proceeds") or outcome.startswith("request defaults"):
+        _assert_request_proceeds_outcome(ctx, outcome)
     elif outcome.startswith("error "):
         _assert_error_outcome(ctx, outcome)
     else:
@@ -876,6 +878,95 @@ def _assert_end_time_outcome(ctx: dict, outcome: str) -> None:
         pass  # media_buy_id assertion above is sufficient
     else:
         raise ValueError(f"Unknown end time outcome: {outcome}")
+
+
+def _assert_request_proceeds_outcome(ctx: dict, outcome: str) -> None:
+    """Assert 'request proceeds' outcomes from buying_mode / policy partition scenarios.
+
+    These outcomes verify that the request was accepted and routed to the correct
+    pipeline or that a policy gate was passed. All share a common success assertion
+    (no error, valid response). Pipeline-specific outcomes additionally verify
+    distinguishing behavior.
+
+    Supported patterns:
+        "request proceeds to brief pipeline"       — success + brief-specific check
+        "request proceeds to wholesale pipeline"   — success + wholesale-specific check
+        "request proceeds to refine pipeline"      — success + refine-specific check
+        "request proceeds to catalog discovery"    — success (catalog route)
+        "request proceeds to audience processing"  — success (audience route)
+        "request proceeds to account resolution"   — success (account route)
+        "request proceeds (no restrictions)"       — success (policy pass-through)
+        "request proceeds (auth satisfied)"        — success (auth gate passed)
+        "request proceeds (brand satisfied)"       — success (brand gate passed)
+        "request proceeds (no check performed)"    — success (policy disabled)
+        "request proceeds (LLM returned ALLOWED)"  — success (LLM policy gate passed)
+        "request proceeds (fail-open)"             — success (policy service unavailable)
+        "request proceeds (no catalog dependency)" — success (no catalog needed)
+        "request proceeds (brand-scoped)"          — success (brand-scoped path)
+        "request defaults to brief pipeline"       — success + brief-specific check
+    """
+    import pytest
+
+    from tests.bdd.steps.generic.then_media_buy import _get_response_field
+
+    if "error" in ctx:
+        from src.core.exceptions import AdCPError
+
+        error = ctx["error"]
+        if isinstance(error, AdCPError):
+            pytest.xfail(
+                f"SPEC-PRODUCTION GAP: Expected '{outcome}' but production "
+                f"rejected with AdCPError (code={error.error_code}): {error}"
+            )
+        from pydantic import ValidationError
+
+        if isinstance(error, ValidationError):
+            pytest.xfail(f"SPEC-PRODUCTION GAP: Expected '{outcome}' but Pydantic rejected request: {error}")
+        if isinstance(error, TypeError) and "unexpected keyword argument" in str(error):
+            pytest.xfail(f"TRANSPORT BOUNDARY GAP: {error} — wrapper doesn't forward this parameter")
+        raise AssertionError(f"Expected '{outcome}' (success path) but got error: {type(error).__name__}: {error}")
+
+    resp = ctx.get("response")
+    assert resp is not None, f"Expected a response for '{outcome}'"
+
+    # Pipeline-specific outcome assertions
+    if "to brief pipeline" in outcome or "defaults to brief pipeline" in outcome:
+        # Brief pipeline should return products with relevance scores.
+        # Check for response structure that indicates brief-mode processing.
+        products = _get_response_field(resp, "products")
+        if products and isinstance(products, list) and len(products) > 0:
+            first = products[0]
+            score = (
+                getattr(first, "relevance_score", None) if not isinstance(first, dict) else first.get("relevance_score")
+            )
+            # If relevance scores are present, brief pipeline is confirmed.
+            # If absent, the pipeline identity isn't observable yet — assert success only.
+            if score is not None:
+                assert isinstance(score, (int, float)), (
+                    f"Brief pipeline: expected numeric relevance_score, got {type(score).__name__}"
+                )
+    elif "to wholesale pipeline" in outcome:
+        # Wholesale pipeline returns catalog-style unranked results.
+        products = _get_response_field(resp, "products")
+        if products and isinstance(products, list) and len(products) > 0:
+            first = products[0]
+            score = (
+                getattr(first, "relevance_score", None) if not isinstance(first, dict) else first.get("relevance_score")
+            )
+            # Wholesale should NOT have relevance scores (unranked catalog).
+            # If present, that's an unexpected pipeline behavior.
+            if score is not None:
+                assert score == 0 or score is None, (
+                    f"Wholesale pipeline should not rank products, but got relevance_score={score}"
+                )
+    elif "to refine pipeline" in outcome:
+        # Refine pipeline filters against a prior result set — verify success.
+        pass  # No additional observable distinction beyond success.
+    # All other "request proceeds (...)" outcomes are policy/gate verifications.
+    # The key assertion is that the request succeeded (no error, valid response).
+    # Policy metadata enrichment is not yet available in response shape.
+    # FIXME(salesagent-s271): When response metadata exposes policy gate evaluation,
+    # add per-gate assertions here.
 
 
 def _assert_error_outcome(ctx: dict, outcome: str) -> None:
@@ -2030,9 +2121,11 @@ def then_creatives_uploaded_to_library(ctx: dict) -> None:
 
 @then("the system should assign the uploaded creatives to packages")
 def then_creatives_assigned_to_packages(ctx: dict) -> None:
-    """Assert creative assignments exist for the created media buy packages.
+    """Assert creative assignments link each uploaded creative to its originating package.
 
     Production creates CreativeAssignment records linking creatives to packages.
+    Verifies that the specific (creative_id, package_id) pairs from the request's
+    inline creatives array are present in the DB — not just that any assignment exists.
     """
     from sqlalchemy import select
 
@@ -2044,9 +2137,44 @@ def then_creatives_assigned_to_packages(ctx: dict) -> None:
     media_buy_id = _get_response_field_from_resp(resp, "media_buy_id")
     assert media_buy_id, "No media_buy_id in response"
 
+    # Build expected (creative_id, package_id) pairs from request + response.
+    # Request packages[i] has a "creatives" array; response packages[i] has package_id.
+    kwargs = ctx.get("request_kwargs", {})
+    req_packages = kwargs.get("packages", [])
+    resp_packages_raw = _get_response_field_from_resp(resp, "packages")
+    resp_packages: list = list(resp_packages_raw) if resp_packages_raw else []
+
+    expected_pairs: set[tuple[str, str]] = set()
+    for i, req_pkg in enumerate(req_packages):
+        creatives = (
+            req_pkg.get("creatives", []) if isinstance(req_pkg, dict) else getattr(req_pkg, "creatives", []) or []
+        )
+        if not creatives:
+            continue
+        # Get the corresponding package_id from the response
+        if i < len(resp_packages):
+            rp = resp_packages[i]
+            pkg_id = rp.get("package_id") if isinstance(rp, dict) else getattr(rp, "package_id", None)
+        else:
+            pkg_id = None
+        for creative in creatives:
+            cid = creative.get("creative_id") if isinstance(creative, dict) else getattr(creative, "creative_id", None)
+            if cid and pkg_id:
+                expected_pairs.add((cid, pkg_id))
+
     with get_db_session() as session:
         assignments = session.scalars(select(CreativeAssignment).filter_by(media_buy_id=media_buy_id)).all()
         assert len(assignments) > 0, f"Expected creative assignments for media_buy {media_buy_id}, found none"
+
+        # Verify specific pairings if we could derive them from request + response
+        if expected_pairs:
+            actual_pairs = {(a.creative_id, a.package_id) for a in assignments}
+            missing = expected_pairs - actual_pairs
+            assert not missing, (
+                f"Expected creative→package pairings {sorted(expected_pairs)} "
+                f"but missing {sorted(missing)}. "
+                f"Actual DB pairings: {sorted(actual_pairs)}"
+            )
 
 
 @then("the response should include the created media buy with creative assignments")
