@@ -5162,6 +5162,24 @@ mappings:
       upstream_refs: ["BR-UC-011-main-sync"]
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-011-sync-governance-unchanged"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011-main-sync", "BR-RULE-056"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-sync-governance-update"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011-main-sync"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-sync-unchanged-all-fields"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011-main-sync", "BR-RULE-056"]
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-011-sync-unchanged-full"
       adcp_feature: "BR-UC-011-manage-accounts.feature"
       obligation_id: null

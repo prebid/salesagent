@@ -692,6 +692,31 @@ Feature: BR-UC-011 Manage Accounts
     Then the account for brand domain "governed.com" has action "created"
     And the governance_agents are stored for brand domain "governed.com"
 
+  # ── Hand-authored: implementation fidelity (PR #1170 review) ──
+
+  @T-UC-011-sync-governance-unchanged @sync @governance @idempotent @hand-authored
+  Scenario: Sync unchanged governance_agents is idempotent
+    Given the Buyer Agent has an authenticated connection
+    And an account for brand domain "governed.com" already exists with governance_agents
+    When the Buyer Agent re-syncs with identical governance_agents for brand "governed.com"
+    Then the account for brand domain "governed.com" has action "unchanged"
+    # Regression: catches model-vs-dict comparison bug in change detection
+
+  @T-UC-011-sync-governance-update @sync @governance @hand-authored
+  Scenario: Sync with modified governance_agents detects the change
+    Given the Buyer Agent has an authenticated connection
+    And an account for brand domain "governed.com" already exists with governance_agents
+    When the Buyer Agent sends a sync with different governance_agents for brand "governed.com"
+    Then the account for brand domain "governed.com" has action "updated"
+
+  @T-UC-011-sync-unchanged-all-fields @sync @idempotent @hand-authored
+  Scenario: Sync with all fields identical reports unchanged (full idempotency)
+    Given the Buyer Agent has an authenticated connection
+    And an account for brand domain "full.com" exists with billing "agent", payment_terms "net_30", and governance_agents
+    When the Buyer Agent re-syncs with identical billing, payment_terms, and governance_agents for brand "full.com"
+    Then the account for brand domain "full.com" has action "unchanged"
+    # Regression: change detection must work across ALL field types
+
   @T-UC-011-sync-unchanged-full @sync @upsert @partition
   Scenario: Sync existing account with identical values is unchanged
     Given the Buyer Agent has an authenticated connection

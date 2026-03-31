@@ -2045,6 +2045,88 @@ def then_none_belong_to_agent(ctx: dict, name: str) -> None:
     assert not leaked, f"Cross-agent leak: accounts {leaked} belong to agent '{name}' but appeared in response"
 
 
+# ── Governance idempotency steps ────────────────────────────────────
+
+
+@given(parsers.parse('an account for brand domain "{domain}" already exists with governance_agents'))
+def given_existing_account_with_governance(ctx: dict, domain: str) -> None:
+    """Pre-create an account with governance_agents via sync_accounts."""
+    _setup_tenant_and_principal(ctx)
+    gov = [{"name": "compliance-bot", "url": "https://compliance.example.com"}]
+    _sync_pre_create(ctx, brand_domain=domain, operator=domain, billing="operator", governance_agents=gov)
+    ctx["governance_agents_fixture"] = gov
+
+
+@given(
+    parsers.parse(
+        'an account for brand domain "{domain}" exists with billing "{billing}", '
+        'payment_terms "{pt}", and governance_agents'
+    )
+)
+def given_existing_account_all_fields(ctx: dict, domain: str, billing: str, pt: str) -> None:
+    """Pre-create an account with all mutable fields populated."""
+    _setup_tenant_and_principal(ctx)
+    gov = [{"name": "compliance-bot", "url": "https://compliance.example.com"}]
+    _sync_pre_create(
+        ctx, brand_domain=domain, operator=domain, billing=billing, payment_terms=pt, governance_agents=gov
+    )
+    ctx["governance_agents_fixture"] = gov
+
+
+@when(parsers.parse('the Buyer Agent re-syncs with identical governance_agents for brand "{domain}"'))
+def when_resync_identical_governance(ctx: dict, domain: str) -> None:
+    """Re-sync with the same governance_agents that were used during creation."""
+    from src.core.schemas.account import SyncAccountsRequest
+
+    gov = ctx["governance_agents_fixture"]
+    req = SyncAccountsRequest(
+        accounts=[{"brand": {"domain": domain}, "operator": domain, "billing": "operator", "governance_agents": gov}],
+    )
+    dispatch_request(ctx, req=req)
+
+
+@when(parsers.parse('the Buyer Agent sends a sync with different governance_agents for brand "{domain}"'))
+def when_sync_different_governance(ctx: dict, domain: str) -> None:
+    """Sync with modified governance_agents."""
+    from src.core.schemas.account import SyncAccountsRequest
+
+    req = SyncAccountsRequest(
+        accounts=[
+            {
+                "brand": {"domain": domain},
+                "operator": domain,
+                "billing": "operator",
+                "governance_agents": [{"name": "new-bot", "url": "https://new-bot.example.com"}],
+            }
+        ],
+    )
+    dispatch_request(ctx, req=req)
+
+
+@when(
+    parsers.parse(
+        'the Buyer Agent re-syncs with identical billing, payment_terms, and governance_agents for brand "{domain}"'
+    )
+)
+def when_resync_identical_all_fields(ctx: dict, domain: str) -> None:
+    """Re-sync with all fields identical to creation."""
+    from src.core.schemas.account import SyncAccountsRequest
+
+    gov = ctx["governance_agents_fixture"]
+    req = SyncAccountsRequest(
+        accounts=[
+            {
+                "brand": {"domain": domain},
+                "operator": domain,
+                "billing": "agent",
+                "payment_terms": "net_30",
+                "governance_agents": gov,
+            }
+        ],
+    )
+    dispatch_request(ctx, req=req)
+
+
 @then(parsers.parse('none of the returned accounts have brand domain "{domain}"'))
 def then_none_have_brand_domain(ctx: dict, domain: str) -> None:
     """Assert no returned account has the specified brand domain."""
