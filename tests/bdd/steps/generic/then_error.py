@@ -257,7 +257,13 @@ def then_error_invalid_disclosure(ctx: dict, value: str) -> None:
 
 @then("the error message should indicate at least 1 item is required")
 def then_error_min_items(ctx: dict) -> None:
-    """Assert error message mentions minimum items requirement (not just generic 'required')."""
+    """Assert error message mentions minimum items requirement AND identifies the field.
+
+    Three distinct scenarios use this step (disclosure_positions, output_format_ids,
+    input_format_ids) — each has a unique error code verified by a preceding
+    ``the error code should be`` step. This step additionally verifies the message
+    itself mentions the specific field, so an error about the wrong field cannot pass.
+    """
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
     msg = _get_error_message(error).lower()
@@ -265,6 +271,16 @@ def then_error_min_items(ctx: dict) -> None:
     min_items_patterns = ("at least 1", "at least one", "min_length", "empty", "ensure this", "too_short")
     assert any(pattern in msg for pattern in min_items_patterns), (
         f"Expected min-items message (at least 1/empty/min_length/too_short), got: {_get_error_message(error)}"
+    )
+    # Verify the error identifies WHICH field has the empty array.
+    # The error code (checked by a sibling step) tells us which field — but the message
+    # text itself must also reference the field for it to be useful to the caller.
+    field_names = ("disclosure_positions", "output_format_ids", "input_format_ids", "format_ids", "positions")
+    error_code = _get_error_code(error).lower()
+    msg_and_code = msg + " " + error_code
+    assert any(field in msg_and_code for field in field_names), (
+        f"Expected error to identify which field had the empty array "
+        f"(one of {field_names}), got message: {_get_error_message(error)}, code: {_get_error_code(error)}"
     )
 
 

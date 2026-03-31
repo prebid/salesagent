@@ -69,8 +69,16 @@ def then_only_display(ctx: dict) -> None:
 
 @then("no video formats should be present in the results")
 def then_no_video(ctx: dict) -> None:
-    for f in _get_formats(ctx):
-        assert _fmt_type_str(f) != "video", f"Unexpected video format: {_fmt_name(f)}"
+    """Assert no video formats AND no other non-display types are in the results.
+
+    The scenario applies a 'display' type filter, so any non-display format
+    (video, native, audio, etc.) reaching the result is a filtering bug.
+    """
+    non_display = [(f, _fmt_type_str(f)) for f in _get_formats(ctx) if _fmt_type_str(f) != "display"]
+    assert not non_display, (
+        f"Expected only display formats but found non-display types: "
+        f"{[(n, t) for n, t in [(_fmt_name(f), t) for f, t in non_display]]}"
+    )
 
 
 @then("the response should include creative_agents referrals")
@@ -89,11 +97,22 @@ def then_has_referrals(ctx: dict) -> None:
 
 @then("each referral should include the agent URL and supported capabilities")
 def then_referral_fields(ctx: dict) -> None:
+    """Assert each referral has a well-formed agent_url AND non-empty capabilities list.
+
+    Strengthens then_has_referrals by verifying:
+    - agent_url looks like a URL (starts with http)
+    - capabilities is a non-empty list (not just truthy)
+    """
     resp = ctx.get("response")
     referrals = getattr(resp, "creative_agents", None) or []
+    assert len(referrals) > 0, "No referrals to verify — expected at least one creative agent"
     for ref in referrals:
-        assert getattr(ref, "agent_url", None), f"Missing agent_url in referral: {ref}"
-        assert getattr(ref, "capabilities", None), f"Missing capabilities in referral: {ref}"
+        url = getattr(ref, "agent_url", None)
+        assert url, f"Missing agent_url in referral: {ref}"
+        assert isinstance(url, str) and url.startswith("http"), f"agent_url should be a URL (http/https), got: {url!r}"
+        caps = getattr(ref, "capabilities", None)
+        assert caps is not None, f"Missing capabilities in referral: {ref}"
+        assert isinstance(caps, list) and len(caps) > 0, f"capabilities should be a non-empty list, got: {caps!r}"
 
 
 # ── Format field presence ────────────────────────────────────────────
@@ -125,32 +144,36 @@ def then_format_name_type(ctx: dict) -> None:
 
 @then("each format should include asset requirements with type and dimensions")
 def then_format_assets(ctx: dict) -> None:
-    """Assert formats have asset requirements with type (asset_type) AND dimensions (on renders)."""
+    """Assert EVERY format has asset requirements with type (asset_type) AND dimensions (on renders).
+
+    Step text says 'each format' — a format missing asset requirements entirely is a failure,
+    not a format to silently skip.
+    """
     formats = _get_formats(ctx)
-    # At least some formats should have assets or renders (otherwise no "requirements" to check)
-    formats_with_assets = [f for f in formats if hasattr(f, "assets") and f.assets]
-    for f in formats_with_assets:
-        for a in f.assets:
-            # Assets must have a type indicator (asset_type or the object type itself)
-            has_type = hasattr(a, "asset_type") or hasattr(a, "type") or hasattr(a, "asset_id")
-            assert has_type, f"Asset in format '{_fmt_name(f)}' missing type indicator"
-    # Check renders have dimensions (the "dimensions" part of the step claim)
-    formats_with_renders = [f for f in formats if hasattr(f, "renders") and f.renders]
-    for f in formats_with_renders:
-        for r in f.renders:
-            dims = getattr(r, "dimensions", None)
-            assert dims is not None, f"Render in format '{_fmt_name(f)}' missing dimensions"
-            # Dimensions should have width and height
-            assert getattr(dims, "width", None) is not None or getattr(dims, "min_width", None) is not None, (
-                f"Render dimensions in format '{_fmt_name(f)}' missing width"
-            )
-    # Guard against vacuous truth: step claims "each format" so at least one must have been checked
-    formats_checked = len(formats_with_assets) + len(formats_with_renders)
-    assert formats_checked > 0, (
-        f"No formats had asset requirements — step claims 'each format' but none were checked. "
-        f"Total formats: {len(formats)}, with assets: {len(formats_with_assets)}, "
-        f"with renders: {len(formats_with_renders)}"
-    )
+    assert len(formats) > 0, "No formats in response — cannot verify asset requirements"
+
+    for f in formats:
+        has_assets = hasattr(f, "assets") and f.assets
+        has_renders = hasattr(f, "renders") and f.renders
+        # Step says "each format should include asset requirements" — every format must have
+        # at least assets or renders (not silently skip formats without them)
+        assert has_assets or has_renders, (
+            f"Format '{_fmt_name(f)}' has neither assets nor renders — "
+            f"step requires 'each format' to include asset requirements"
+        )
+        # Verify assets have type indicators
+        if has_assets:
+            for a in f.assets:
+                has_type = hasattr(a, "asset_type") or hasattr(a, "type") or hasattr(a, "asset_id")
+                assert has_type, f"Asset in format '{_fmt_name(f)}' missing type indicator"
+        # Verify renders have dimensions
+        if has_renders:
+            for r in f.renders:
+                dims = getattr(r, "dimensions", None)
+                assert dims is not None, f"Render in format '{_fmt_name(f)}' missing dimensions"
+                assert getattr(dims, "width", None) is not None or getattr(dims, "min_width", None) is not None, (
+                    f"Render dimensions in format '{_fmt_name(f)}' missing width"
+                )
 
 
 # ── Sorting assertions ──────────────────────────────────────────────
@@ -241,6 +264,8 @@ _KNOWN_FILTER_FIELDS = frozenset(
         "disclosure",
         "output_format_ids",
         "input_format_ids",
+        "creative agent type",
+        "creative agent asset type",
     }
 )
 
@@ -248,8 +273,8 @@ _KNOWN_FILTER_FIELDS = frozenset(
 def _assert_partition_outcome(ctx: dict, field: str, expected: str) -> None:
     """Assert partition/boundary test outcome against real production results.
 
-    "valid" means production code returned successfully (response exists).
-    "invalid" means production code raised an error (error exists).
+    "valid" means production code returned successfully AND produced a well-formed
+    response with a formats array. "invalid" means production code raised an error.
     The field parameter is validated against known filter fields to catch Gherkin typos.
     """
     assert field in _KNOWN_FILTER_FIELDS, (
@@ -257,7 +282,12 @@ def _assert_partition_outcome(ctx: dict, field: str, expected: str) -> None:
     )
     if expected == "valid":
         assert "error" not in ctx, f"Expected valid result but got error: {ctx.get('error')}"
-        assert "response" in ctx, "Expected response but none found"
+        resp = ctx.get("response")
+        assert resp is not None, "Expected response but none found"
+        # "valid" means the filter was accepted and a well-formed response was produced.
+        # Verify response has the expected structure (formats array present).
+        if hasattr(resp, "formats"):
+            assert isinstance(resp.formats, list), f"Expected formats to be a list, got {type(resp.formats)}"
     elif expected == "invalid":
         assert "error" in ctx, "Expected error but operation succeeded"
     else:

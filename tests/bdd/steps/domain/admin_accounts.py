@@ -223,12 +223,18 @@ def then_page_shows_status(ctx: dict, status: str) -> None:
 
 @then(parsers.parse('the page shows action buttons for "{buttons_str}"'))
 def then_page_shows_action_buttons(ctx: dict, buttons_str: str) -> None:
-    """Assert action buttons are present on the detail page."""
+    """Assert action buttons are present on the detail page with correct labels and handlers."""
     html = ctx["response"].data.decode()
     buttons = [b.strip().strip('"') for b in buttons_str.split(" and ")]
     for button_text in buttons:
+        # Verify the JS handler exists for this status transition
         assert f"onclick=\"changeStatus('{button_text.lower()}')" in html, (
-            f"Action button for '{button_text}' not found"
+            f"Action button onclick handler for '{button_text}' not found"
+        )
+        # Verify the button label text is visible on the page (not just the handler)
+        assert button_text in html, (
+            f"Button label '{button_text}' not found in page HTML — "
+            f"handler exists but button may be hidden or mis-labeled"
         )
 
 
@@ -253,22 +259,30 @@ def then_page_no_action_buttons(ctx: dict) -> None:
 
 @then("the admin is redirected to the accounts list")
 def then_redirected_to_list(ctx: dict) -> None:
-    """Assert redirect to accounts list page."""
+    """Assert redirect to accounts list page (not a detail/create/edit subpage)."""
+    import re
+
     response = ctx["response"]
     assert response.status_code in (302, 303), f"Expected redirect, got {response.status_code}"
     location = response.headers.get("Location", "")
-    assert "/accounts/" in location or location.endswith("/accounts"), (
-        f"Expected redirect to accounts list, got: {location}"
+    # Must end with /accounts or /accounts/ — NOT /accounts/<id> or /accounts/create
+    assert re.search(r"/accounts/?$", location), (
+        f"Expected redirect to accounts list (/accounts or /accounts/), got: {location}"
     )
 
 
 @then("the admin is redirected to the account detail page")
 def then_redirected_to_detail(ctx: dict) -> None:
-    """Assert redirect to account detail page."""
+    """Assert redirect to account detail page (has an account ID after /accounts/)."""
+    import re
+
     response = ctx["response"]
     assert response.status_code in (302, 303), f"Expected redirect, got {response.status_code}"
     location = response.headers.get("Location", "")
-    assert "/accounts/" in location, f"Expected redirect to account page, got: {location}"
+    # Must match /accounts/<id> where <id> is a non-empty path segment (not list, create, edit)
+    assert re.search(r"/accounts/[^/]+$", location) and not location.rstrip("/").endswith("/accounts"), (
+        f"Expected redirect to account detail page (/accounts/<id>), got: {location}"
+    )
 
 
 @then("the admin is redirected back to the create page")
@@ -289,10 +303,12 @@ def then_redirect_to_login(ctx: dict) -> None:
 
 @then(parsers.parse('the database contains an account named "{name}"'))
 def then_db_has_account(ctx: dict, name: str) -> None:
-    """Assert an account with the given name exists in DB."""
+    """Assert an account with the given name exists in DB and has the correct name."""
     env = _env(ctx)
     account = env.get_account_from_db(name=name)
     assert account is not None, f"Account '{name}' not found in database"
+    # Verify the name field was persisted correctly (not just existence)
+    assert account.name == name, f"Account found but name mismatch: expected '{name}', got '{account.name}'"
 
 
 @then(parsers.parse('the database does not contain an account with brand domain "{domain}"'))

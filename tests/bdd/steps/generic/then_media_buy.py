@@ -72,12 +72,23 @@ def then_response_field_matches(ctx: dict, field: str, value: str) -> None:
 
 @then("the response should include packages with allocations")
 def then_response_has_packages(ctx: dict) -> None:
-    """Assert response includes packages array with allocated packages (product_id assigned)."""
+    """Assert response includes packages array with allocated packages (product_id assigned).
+
+    Verifies the exact expected count from request_kwargs (not just > 0) and that
+    each package has a product_id proving allocation occurred.
+    """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response but none found"
     packages = _get_response_field(resp, "packages")
     assert packages is not None, "Expected 'packages' in response"
     assert len(packages) > 0, "Expected at least one package in response"
+    # Verify exact count matches what was requested (scenario sets up N packages)
+    request_kwargs = ctx.get("request_kwargs", {})
+    expected_packages = request_kwargs.get("packages")
+    if expected_packages is not None:
+        assert len(packages) == len(expected_packages), (
+            f"Expected {len(expected_packages)} packages (matching request), got {len(packages)}"
+        )
     # "with allocations" means each package has a product_id (allocation to a product)
     for i, pkg in enumerate(packages):
         pkg_dict = pkg if isinstance(pkg, dict) else (pkg.model_dump() if hasattr(pkg, "model_dump") else vars(pkg))
@@ -301,11 +312,24 @@ def then_webhook_notification(ctx: dict) -> None:
 
     Verifies: config exists in DB, URL matches request, scoped to tenant.
     Does NOT verify: HTTP POST to the URL (context_manager is mocked).
+
+    .. warning::
+
+        FIXME(salesagent-zaww): This step verifies config persistence as a PROXY for
+        "buyer notified". True dispatch verification requires un-mocking context_manager.
     """
+    import warnings
+
     from sqlalchemy import select
 
     from src.core.database.database_session import get_db_session
     from src.core.database.models import PushNotificationConfig
+
+    warnings.warn(
+        "FIXME(salesagent-zaww): then_webhook_notification verifies config persistence, "
+        "not actual HTTP POST dispatch. See salesagent-zaww.",
+        stacklevel=1,
+    )
 
     # --- Extract media_buy_id and tenant ---
     resp = ctx.get("response")
