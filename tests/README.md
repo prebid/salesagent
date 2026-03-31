@@ -1,282 +1,128 @@
 # AdCP Sales Agent Test Suite
 
-## Test Organization
+> For AI agent instructions, see [`CLAUDE.md`](CLAUDE.md) in this directory.
 
-Our test suite is organized into four main categories:
+## Test Suites
 
-### 1. Unit Tests (`tests/unit/`)
-Fast, isolated tests that verify individual components without external dependencies.
-
-**Run:** `pytest tests/unit/ -v`
-**Purpose:** Test business logic, data transformations, and utility functions
-**Mocking:** Minimal - only external services
-**Runtime:** < 1 second per test
-
-### 2. Integration Tests (`tests/integration/`)
-Tests that verify component interactions with real databases and services.
-
-**Run:** `pytest tests/integration/ -v`
-**Purpose:** Test database operations, API endpoints, and service integrations
-**Mocking:** External APIs only (GAM, Slack, etc.)
-**Runtime:** < 5 seconds per test
-
-### 3. End-to-End Tests (`tests/e2e/`)
-Complete workflow tests that simulate real user journeys.
-
-**Run:** `pytest tests/e2e/ -v`
-**Purpose:** Test complete user workflows from start to finish
-**Mocking:** None - uses real services in test mode
-**Runtime:** < 30 seconds per test
-
-### 4. Admin UI Tests (`tests/admin/`)
-Tests for the Admin UI web interface.
-
-**Run:** `pytest tests/admin/ -v`
-**Purpose:** Test page rendering, forms, and user interactions
-**Mocking:** Backend services when appropriate
-**Runtime:** < 10 seconds per test
+| Suite | Directory | tox env | Needs Docker? | Count |
+|-------|-----------|---------|---------------|-------|
+| Unit | `tests/unit/` | `unit` | No | ~4100 |
+| Integration | `tests/integration/` | `integration` | Postgres only | ~1770 |
+| BDD | `tests/bdd/` | `bdd` | Postgres only | ~820 |
+| E2E | `tests/e2e/` | `e2e` | Full stack | ~80 |
+| Admin | `tests/admin/` | `admin` | Full stack | ~4 |
 
 ## Running Tests
 
-### Quick Test Commands
-
 ```bash
-# Run all tests
-pytest
+# Quick quality check (format + lint + typecheck + unit tests)
+make quality
 
-# Run by category
-pytest tests/unit/              # Fast unit tests
-pytest tests/integration/       # Integration tests
-pytest tests/e2e/              # End-to-end tests
+# Full suite — starts Docker, runs all 5 suites in parallel, tears down
+./run_all_tests.sh
 
-# Run with markers
-pytest -m unit                  # Unit tests only
-pytest -m integration          # Integration tests only
-pytest -m "not slow"           # Skip slow tests
-pytest -m requires_db          # Tests requiring database
+# Individual suites via tox
+tox -e unit
+tox -e integration
+tox -e bdd
+tox -e integration -- -k test_name    # Pass pytest args after --
 
-# Run with coverage
-pytest --cov=. --cov-report=html
+# Single integration test with auto-DB
+scripts/run-test.sh tests/integration/test_foo.py -x
 
-# Run specific test file
-pytest tests/integration/test_main.py -v
+# Entity-scoped (runs across unit + integration + e2e + admin)
+make test-entity ENTITY=delivery
 
-# Run specific test function
-pytest tests/integration/test_main.py::test_product_catalog -v
+# Coverage report
+make test-cov
 ```
 
-### Test Markers
+Test results are saved as JSON in `test-results/<ddmmyy_HHmm>/` (last 10 runs kept).
 
-We use pytest markers to categorize tests:
+## Test Architecture
 
-- `@pytest.mark.unit` - Fast, isolated unit tests
-- `@pytest.mark.integration` - Tests requiring database or services
-- `@pytest.mark.e2e` - End-to-end workflow tests
-- `@pytest.mark.requires_db` - Tests needing database with tables
-- `@pytest.mark.requires_server` - Tests needing running MCP server
-- `@pytest.mark.slow` - Tests taking >5 seconds
-- `@pytest.mark.ai` - Tests involving AI/LLM features
+### Harness System (`tests/harness/`)
 
-## Critical Test Coverage
-
-### Must-Have Integration Tests
-
-These tests are critical for preventing regressions:
-
-1. **GAM Configuration Flow** (`test_gam_tenant_setup.py`)
-   - Tests OAuth → network code retrieval
-   - Tests tenant creation without network code
-   - Would have caught the major regression
-
-2. **Database Operations** (`test_database_integration.py`)
-   - Tests real database operations (not mocked)
-   - Tests SQLite vs PostgreSQL compatibility
-   - Tests migration integrity
-
-3. **MCP Server** (`test_main.py`)
-   - Tests all MCP tools
-   - Tests authentication flow
-   - Tests request/response validation
-
-4. **Tenant Management** (`test_tenant_settings_comprehensive.py`)
-   - Tests complete tenant setup
-   - Tests adapter switching
-   - Tests configuration updates
-
-## Writing New Tests
-
-### Guidelines
-
-1. **Choose the right category:**
-   - Unit: Testing a single function/class
-   - Integration: Testing multiple components
-   - E2E: Testing complete workflows
-   - UI: Testing web interface
-
-2. **Use appropriate mocking:**
-   - Unit tests: Mock all external dependencies
-   - Integration tests: Mock only external APIs
-   - E2E tests: No mocking (use test mode)
-
-3. **Follow naming conventions:**
-   - Test files: `test_feature_name.py`
-   - Test classes: `TestFeatureName`
-   - Test methods: `test_specific_behavior`
-
-4. **Use fixtures from `conftest.py`:**
-   ```python
-   def test_with_tenant(test_tenant):
-       # test_tenant fixture provides a configured tenant
-       assert test_tenant['tenant_id'] == 'test'
-   ```
-
-5. **Add proper markers:**
-   ```python
-   @pytest.mark.integration
-   @pytest.mark.requires_db
-   def test_database_operation():
-       # Test that needs database
-       pass
-   ```
-
-### Example Test Structure
+The test harness provides domain-specific environments that manage mocks, database sessions,
+identity, and multi-transport dispatch. Each environment is a context manager:
 
 ```python
-import pytest
-from unittest.mock import Mock, patch
+from tests.harness import DeliveryPollEnv
+from tests.factories import TenantFactory, PrincipalFactory, MediaBuyFactory
 
-@pytest.mark.integration
-@pytest.mark.requires_db
-class TestFeatureName:
-    """Test suite for specific feature."""
+with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+    tenant = TenantFactory(tenant_id="t1")
+    principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+    buy = MediaBuyFactory(tenant=tenant, principal=principal)
 
-    @pytest.fixture(autouse=True)
-    def setup(self):
-        """Setup before each test."""
-        # Setup code
-        yield
-        # Teardown code
-
-    def test_happy_path(self, test_db):
-        """Test normal successful operation."""
-        # Arrange
-        data = {"key": "value"}
-
-        # Act
-        result = function_under_test(data)
-
-        # Assert
-        assert result['status'] == 'success'
-
-    def test_error_handling(self):
-        """Test error scenarios."""
-        with pytest.raises(ValueError):
-            function_under_test(invalid_data)
+    env.set_adapter_response(buy.media_buy_id, impressions=5000)
+    result = env.call_impl(media_buy_ids=[buy.media_buy_id])
+    assert result.deliveries[0].impressions == 5000
 ```
 
-## Test Data Management
+Environments auto-patch external dependencies, bind database sessions to factories,
+and support dispatching through all 4 transports (IMPL, A2A, MCP, REST).
 
-### Fixtures
+See [`CLAUDE.md`](CLAUDE.md) for the full environment table and API reference.
 
-Common fixtures are defined in `tests/conftest.py`:
+### Factory System (`tests/factories/`)
 
-- `test_db` - Provides test database connection
-- `test_tenant` - Creates test tenant
-- `test_principal` - Creates test principal
-- `mock_gam_client` - Mocked GAM client for testing
-
-### Factories
-
-We use factory patterns for test data:
+All test data is created via [factory-boy](https://factoryboy.readthedocs.io/) factories:
 
 ```python
-from tests.fixtures import TenantFactory, PrincipalFactory
+from tests.factories import TenantFactory, PrincipalFactory, MediaBuyFactory
 
-def test_with_factory():
-    tenant = TenantFactory.create(name="Test Publisher")
-    principal = PrincipalFactory.create(tenant_id=tenant['tenant_id'])
+tenant = TenantFactory(tenant_id="t1")
+principal = PrincipalFactory(tenant=tenant)
+buy = MediaBuyFactory(tenant=tenant, principal=principal)
+identity = PrincipalFactory.make_identity(tenant_id="t1", principal_id="p1")
 ```
 
-## Continuous Integration
+ORM factories live in `tests/factories/` (core, principal, product, media_buy, creative,
+metrics, webhook). Pydantic model factories (Format, FormatId) are also available.
 
-Tests run automatically on GitHub Actions:
+### BDD Tests (`tests/bdd/`)
 
-1. **Unit Tests** - Run on every push
-2. **Integration Tests** - Run on PRs
-3. **E2E Tests** - Run before releases
-4. **Coverage Reports** - Generated for main branch
+Behavioral tests derived from AdCP requirements using pytest-bdd. Feature files in
+`tests/bdd/features/` are auto-generated from the AdCP spec — do not hand-edit.
 
-## Common Issues and Solutions
+Step definitions are organized in two layers:
+- **`steps/generic/`** — Reusable steps shared across use cases
+- **`steps/domain/`** — Use-case-specific steps
 
-### Issue: Test database not cleaned up
-**Solution:** Use pytest fixtures with proper teardown:
-```python
-@pytest.fixture
-def clean_db():
-    # Setup
-    yield db
-    # Teardown - always runs
-    cleanup_database()
-```
+Every scenario is automatically parametrized across all 4 transports unless tagged
+with a specific one (`@rest`, `@mcp`, `@a2a`).
 
-### Issue: Tests pass locally but fail in CI
-**Solution:** Check for:
-- Environment variable differences
-- Database state assumptions
-- File system dependencies
-- Timezone differences
+### Obligation Tests
 
-### Issue: Flaky tests
-**Solution:**
-- Remove time-dependent assertions
-- Use proper test isolation
-- Mock external services consistently
-- Add retry logic for network calls
+Tests tagged with `Covers: <obligation-id>` verify behavioral contracts from
+`docs/test-obligations/`. Two structural guards enforce that every behavioral
+obligation has a corresponding test and that the test actually calls production code.
 
-## Test Coverage Goals
+## Structural Guards
 
-| Component | Current | Target | Priority |
-|-----------|---------|--------|----------|
-| Unit Tests | 70% | 85% | Medium |
-| Integration Tests | 40% | 80% | High |
-| E2E Tests | 5% | 50% | High |
-| UI Tests | 30% | 60% | Medium |
+AST-scanning tests in `tests/unit/` enforce architecture invariants on every
+`make quality` run. See [structural-guards.md](../docs/development/structural-guards.md)
+for the full list. Key testing guards:
 
-## Running Tests in Docker
+- **Repository pattern** — no `get_db_session()` or `session.add()` outside repositories
+- **Obligation coverage** — behavioral obligations have matching tests
+- **Obligation test quality** — obligation tests call production code
+- **BDD no-op steps** — Then steps must assert, not delegate to no-ops
+- **BDD trivial assertions** — Then steps must compare values, not just check truthiness
+- **BDD no dict registry** — Given steps must use factories, not raw dicts
 
-```bash
-# Run tests in container
-docker-compose exec adcp-server pytest tests/unit/
+## Markers
 
-# Run with coverage
-docker-compose exec adcp-server pytest --cov=. --cov-report=term-missing
+- `@pytest.mark.requires_db` — needs PostgreSQL (integration, BDD)
+- `@pytest.mark.requires_server` — needs running MCP server (E2E)
+- **Entity markers** (auto-applied by filename): `delivery`, `creative`, `product`,
+  `media_buy`, `tenant`, `auth`, `adapter`, `inventory`, `schema`, `admin`,
+  `architecture`, `targeting`, `transport`, `workflow`, `policy`, `agent`, `infra`
 
-# Run specific test file
-docker-compose exec adcp-server pytest tests/integration/test_main.py -v
-```
+## Coverage
 
-## Performance Testing
-
-For performance-critical code:
-
-```python
-@pytest.mark.benchmark
-def test_performance(benchmark):
-    result = benchmark(expensive_function, arg1, arg2)
-    assert result < threshold
-```
-
-## Security Testing
-
-Security tests are in `tests/security/`:
-
-```bash
-# Run security tests
-pytest tests/security/ -v
-
-# Test SQL injection protection
-pytest tests/security/test_sql_injection.py
-
-# Test auth vulnerabilities
-pytest tests/security/test_auth.py
-```
+Coverage is collected per-suite and combined automatically:
+- HTML report: `htmlcov/index.html` (open with `make test-cov`)
+- JSON report: `coverage.json`
+- Per-entity thresholds: `tests/coverage_scopes.yaml`

@@ -87,9 +87,11 @@ def _run_sync_with_mode(sync_mode, mocks):
     """
     mock_tenant = MagicMock()
     mock_adapter_config = MagicMock()
+    mock_adapter_config.adapter_type = "google_ad_manager"
     mock_adapter_config.gam_network_code = "12345"
     mock_adapter_config.gam_auth_method = "oauth"
     mock_adapter_config.gam_refresh_token = "fake-token"
+    mock_adapter_config.gam_service_account_json = None
 
     # For incremental mode, we need a previous successful sync
     mock_last_sync = MagicMock()
@@ -102,14 +104,13 @@ def _run_sync_with_mode(sync_mode, mocks):
         call_count[0] += 1
         result = MagicMock()
         if call_count[0] == 1:
+            # First call: Tenant lookup
             result.first.return_value = mock_tenant
-        elif call_count[0] == 2:
-            result.first.return_value = mock_adapter_config
-        elif call_count[0] == 3 and sync_mode == "incremental":
-            # Last successful sync for incremental mode
-            result.first.return_value = mock_last_sync
         else:
-            result.first.return_value = None
+            # All subsequent calls: return adapter_config (covers repository's
+            # get_by_tenant which may be called multiple times, plus any
+            # incremental sync last-sync lookup returns adapter_config harmlessly)
+            result.first.return_value = mock_adapter_config
         return result
 
     scalar_return = 0 if sync_mode == "incremental" else None

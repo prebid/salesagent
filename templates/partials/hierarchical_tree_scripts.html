@@ -1,17 +1,12 @@
-<!-- ============================================================================
+{# ===========================================================================
      HIERARCHICAL TREE VIEW JAVASCRIPT
      Reusable tree view functionality for inventory selection
 
      Usage:
-     {% include 'partials/hierarchical_tree_scripts.html' with {
-         'tree_api_url': url_for('inventory.get_inventory_tree', tenant_id=tenant_id),
-         'container_id': 'inventory-list',
-         'selected_field_id': 'targeted_ad_unit_ids',
-         'checkbox_class': 'tree-checkbox',
-         'cache_name': 'inventoryCache',
-         'on_change_callback': 'handleSelectionChange'
-     } %}
-     ============================================================================ -->
+     {% include 'partials/hierarchical_tree_scripts.html' %}
+     (Set template variables before including: tree_api_url, container_id,
+      selected_field_id, checkbox_class, cache_name, on_change_callback)
+   =========================================================================== #}
 
 <script>
 // Guard against double-loading
@@ -25,7 +20,7 @@ let isLoadingTree = false;
  * @param {string} selectedFieldId - DOM element ID for selected items field
  * @param {object} inventoryCache - Cache object for storing loaded items
  */
-function loadInventoryTree(searchTerm = '', treeApiUrl, containerId, selectedFieldId, inventoryCache) {
+function loadInventoryTree(searchTerm = '', treeApiUrl, containerId, selectedFieldId, inventoryCache, onRendered) {
     if (isLoadingTree) {
         return;
     }
@@ -77,6 +72,7 @@ function loadInventoryTree(searchTerm = '', treeApiUrl, containerId, selectedFie
                     } else if (selectedIds.size > 0) {
                         expandToSelected();
                     }
+                    if (onRendered) onRendered();
                 }, 200);
             });
 
