@@ -56,47 +56,107 @@ def given_tenant_has_min_order(ctx: dict) -> None:
 
 @then("the system should validate authentication before any business logic")
 def then_auth_before_business_logic(ctx: dict) -> None:
-    """Assert authentication was validated before business logic executed.
+    """Assert authentication is the first gate before any business logic.
 
-    Production flow: _create_media_buy_impl checks identity.principal_id
-    and identity.tenant before any DB access or validation. A successful
-    response proves auth ran first (no auth = AdCPAuthenticationError).
-
-    The harness provides a valid identity, so a successful response means
-    auth validation passed before business logic.
+    Sends a SECOND request with invalid credentials (no principal_id) and
+    verifies: (1) AdCPAuthenticationError is raised, and (2) no adapter
+    calls were made — proving auth blocks before business logic side effects.
     """
+    from src.core.exceptions import AdCPAuthenticationError
+    from tests.factories.principal import PrincipalFactory
+
+    env = ctx["env"]
+
+    # First, verify the original request (with valid creds) succeeded
     resp = ctx.get("response")
     error = ctx.get("error")
-
     if error is not None:
-        # If there's an error, it should NOT be an auth error (we have valid creds)
-        from src.core.exceptions import AdCPAuthenticationError
-
         assert not isinstance(error, AdCPAuthenticationError), (
             f"Authentication failed despite valid credentials: {error}"
         )
     else:
-        # Successful response proves: identity was valid, principal was found,
-        # tenant was resolved — all before business logic ran.
         assert resp is not None, "Expected either a response or an error"
+
+    # Now make a SECOND call with invalid credentials to prove ordering.
+    # Build an identity with no principal_id — auth should reject before
+    # any business logic (adapter, DB writes) executes.
+    invalid_identity = PrincipalFactory.make_identity(
+        principal_id=None,
+        tenant_id=env._tenant_id,
+    )
+
+    # Reset adapter mock call count to detect any side effects
+    mock_adapter = env.mock["adapter"].return_value
+    mock_adapter.create_media_buy.reset_mock()
+
+    # Build a valid request so we test auth, not Pydantic parsing
+    from src.core.schemas import CreateMediaBuyRequest
+
+    request_kwargs = ctx.get("request_kwargs", {})
+    req = CreateMediaBuyRequest(**request_kwargs)
+
+    # Call impl with invalid identity — expect auth error
+    auth_error = None
+    try:
+        env.call_impl(req=req, identity=invalid_identity)
+    except AdCPAuthenticationError as exc:
+        auth_error = exc
+
+    assert auth_error is not None, (
+        "Expected AdCPAuthenticationError with no principal_id, but the request succeeded — auth is not the first gate"
+    )
+    assert "Principal ID not found" in str(auth_error), f"Expected 'Principal ID not found' error, got: {auth_error}"
+
+    # Verify no business logic side effects occurred
+    assert not mock_adapter.create_media_buy.called, (
+        "Adapter.create_media_buy was called despite auth failure — business logic ran before authentication"
+    )
 
 
 @then("the system should enforce rate limiting on the endpoint")
 def then_rate_limiting_enforced(ctx: dict) -> None:
     """Assert rate limiting is enforced on create_media_buy.
 
-    SPEC-PRODUCTION GAP: AdCPRateLimitError class exists in src/core/exceptions.py
-    but is never raised anywhere. No rate limiting middleware, no per-principal
-    counter, no per-tenant counter exists.
+    Sends N+1 rapid requests and checks whether any is rejected with
+    AdCPRateLimitError. Since rate limiting is not implemented, all
+    requests succeed — the xfail captures a real observed behavioral gap.
 
     FIXME(salesagent-9vgz.92): Implement rate limiting middleware for create_media_buy.
     """
-    pytest.xfail(
-        "SPEC-PRODUCTION GAP: Rate limiting not implemented. "
-        "AdCPRateLimitError class exists but is never raised. "
-        "No rate limiting middleware or counters exist. "
-        "FIXME(salesagent-9vgz.92)"
-    )
+    from src.core.exceptions import AdCPRateLimitError
+
+    # The original request already succeeded (from the When step).
+    # Make one additional rapid call to see if the second request triggers
+    # rate limiting. Production should reject with AdCPRateLimitError when
+    # the threshold is exceeded, but no middleware exists yet.
+    env = ctx["env"]
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a successful response from the original request"
+
+    rate_limit_hit = False
+    try:
+        import uuid
+        from copy import deepcopy
+
+        from src.core.schemas import CreateMediaBuyRequest
+
+        request_kwargs = deepcopy(ctx.get("request_kwargs", {}))
+        request_kwargs["buyer_ref"] = f"rate-limit-{uuid.uuid4().hex[:8]}"
+        req = CreateMediaBuyRequest(**request_kwargs)
+        env.call_impl(req=req)
+    except AdCPRateLimitError:
+        rate_limit_hit = True
+    except Exception:
+        # Other errors (duplicate key, etc.) — not rate limiting
+        pass
+
+    if not rate_limit_hit:
+        pytest.xfail(
+            "SPEC-PRODUCTION GAP: Rate limiting not implemented. "
+            "Sent a rapid follow-up request — not rejected with AdCPRateLimitError. "
+            "AdCPRateLimitError class exists but is never raised. "
+            "FIXME(salesagent-9vgz.92)"
+        )
 
 
 @then("the system should validate payload size limits")
@@ -149,13 +209,20 @@ def then_protocol_audit_logged(ctx: dict) -> None:
 
 @then("the approval decision should be logged")
 def then_approval_logged(ctx: dict) -> None:
-    """Assert the approval decision was logged via audit_logger.
+    """Assert the approval decision was logged with approval-specific content.
 
     Production logs approval decisions at two points:
-    - Auto-approved (success path): log_operation(operation='create_media_buy', success=True)
-    - Pending approval: log_operation(operation='create_media_buy_pending_approval', success=True)
+    - Auto-approved (success path): log_operation(operation='create_media_buy',
+      success=True, details={media_buy_id, total_budget, ...}) at line 3706.
+    - Pending approval: log_operation(operation='create_media_buy_pending_approval',
+      success=True, details={media_buy_id, workflow_step_id, ...}) at line 2212.
 
-    Either call proves the approval decision was captured in the audit trail.
+    This step verifies approval-SPECIFIC content that distinguishes it from the
+    protocol audit entry (which checks only for operation name presence). The
+    approval log must contain either:
+    - 'create_media_buy_pending_approval' operation (explicitly approval), OR
+    - 'create_media_buy' with success=True AND details containing 'media_buy_id'
+      (the post-approval business activity entry, distinct from protocol activity).
     """
     env = ctx["env"]
     mock_audit = env.mock["audit"].return_value
@@ -164,20 +231,30 @@ def then_approval_logged(ctx: dict) -> None:
         "Expected audit_logger.log_operation to be called for approval decision logging"
     )
 
-    # Check that at least one call captures the approval path
-    approval_logged = False
+    # Find a call with approval-specific content (not just operation name)
+    approval_call = None
     for call in mock_audit.log_operation.call_args_list:
         op = call.kwargs.get("operation") or (call.args[0] if call.args else None)
-        if op in ("create_media_buy", "create_media_buy_pending_approval"):
-            # On success path, success=True means auto-approved and executed
-            # On pending path, operation name itself captures the approval decision
-            approval_logged = True
+
+        # Pending approval path: operation name is explicitly approval-related
+        if op == "create_media_buy_pending_approval":
+            approval_call = call
             break
 
-    assert approval_logged, (
-        f"Expected audit log entry for approval decision "
-        f"(operation='create_media_buy' or 'create_media_buy_pending_approval'), "
-        f"got: {[c.kwargs for c in mock_audit.log_operation.call_args_list]}"
+        # Auto-approved path: success=True with details containing media_buy_id
+        # This is the post-adapter audit entry at line 3706, NOT the protocol entry.
+        if op == "create_media_buy":
+            success = call.kwargs.get("success")
+            details = call.kwargs.get("details") or {}
+            if success is True and "media_buy_id" in details:
+                approval_call = call
+                break
+
+    assert approval_call is not None, (
+        f"Expected audit log entry with approval-specific content: either "
+        f"operation='create_media_buy_pending_approval', or "
+        f"operation='create_media_buy' with success=True and details.media_buy_id. "
+        f"Got calls: {[c.kwargs for c in mock_audit.log_operation.call_args_list]}"
     )
 
 
@@ -244,67 +321,69 @@ def then_response_within_sla(ctx: dict) -> None:
 
 @then("the system should validate budget against minimum order requirements")
 def then_budget_validated_against_min_order(ctx: dict) -> None:
-    """Assert budget was validated against minimum order size requirements.
+    """Assert budget enforcement works by testing the rejection path.
 
-    Production flow: _create_media_buy_impl checks each package budget
-    against CurrencyLimit.min_package_budget (and per-product overrides
-    via PricingOption.min_spend_per_package). Uses validate_min_package_budget()
-    from financial_validation.py.
+    The happy path (budget >= minimum, original request succeeded) is
+    tautological — it only proves the budget was already adequate.
+    True enforcement verification requires a budget BELOW the minimum
+    triggering a specific rejection.
 
-    A successful response with a budget >= min_package_budget proves the
-    validation ran and passed. The Given step confirmed min_package_budget
-    is configured (default: 100.00 from CurrencyLimitFactory).
+    This step:
+    1. Verifies the original request succeeded (budget was adequate).
+    2. Makes a SECOND call with budget below min_package_budget.
+    3. Asserts the rejection contains "minimum spend" — proving the
+       enforcement mechanism actually fires.
     """
+    from copy import deepcopy
+    from decimal import Decimal
+
     min_budget = ctx.get("min_package_budget")
     assert min_budget is not None, (
         "min_package_budget not in ctx — 'the tenant has minimum order size requirements' Given step must run first"
     )
 
+    # Step 1: Original request should have succeeded (budget >= min)
     resp = ctx.get("response")
     error = ctx.get("error")
+    assert resp is not None and error is None, (
+        f"Expected the original request to succeed (budget >= min_package_budget), but got error: {error}"
+    )
 
-    if error is not None:
-        # If the request had a budget below minimum, we'd expect BUDGET_TOO_LOW
-        error_str = str(error)
-        if "BUDGET_TOO_LOW" in error_str or "minimum" in error_str.lower():
-            # Validation correctly rejected — budget was below minimum
-            return
-        # Other errors are fine too — validation still ran before this point
+    # Step 2: Make a second call with budget below minimum to test enforcement
+    import uuid
 
-    if resp is not None:
-        # Successful response means budget passed validation.
-        # Verify the persisted package budgets actually meet the minimum.
-        from decimal import Decimal
+    from src.core.schemas import CreateMediaBuyRequest
 
-        from sqlalchemy import select
+    env = ctx["env"]
+    request_kwargs = deepcopy(ctx.get("request_kwargs", {}))
 
-        from src.core.database.database_session import get_db_session
-        from src.core.database.models import MediaPackage
-        from tests.bdd.steps.generic.then_media_buy import _get_response_field
+    # Generate a unique buyer_ref to avoid duplicate-key rejection
+    request_kwargs["buyer_ref"] = f"nfr-budget-{uuid.uuid4().hex[:8]}"
 
-        media_buy_id = _get_response_field(resp, "media_buy_id")
-        assert media_buy_id, (
-            "Expected media_buy_id in response — budget validation should have "
-            "either passed (creating media buy) or failed (BUDGET_TOO_LOW error)"
-        )
+    # Set each package budget to 1 cent below the minimum
+    below_min = float(Decimal(str(min_budget)) - Decimal("0.01"))
+    if "packages" in request_kwargs:
+        for pkg in request_kwargs["packages"]:
+            pkg["budget"] = below_min
 
-        # Verify each package budget >= min_package_budget in the DB
-        min_decimal = Decimal(str(min_budget))
-        with get_db_session() as session:
-            packages = session.scalars(select(MediaPackage).filter_by(media_buy_id=media_buy_id)).all()
-            assert packages, (
-                f"No packages found for media buy {media_buy_id} — "
-                "cannot verify budget validation against minimum order"
-            )
-            for pkg in packages:
-                assert pkg.budget is not None, (
-                    f"Package {pkg.package_id} has no budget — budget validation requires a numeric budget"
-                )
-                assert pkg.budget >= min_decimal, (
-                    f"Package {pkg.package_id} budget {pkg.budget} is below "
-                    f"min_package_budget {min_decimal} — validation should "
-                    "have rejected this (BUDGET_TOO_LOW)"
-                )
-        return
+    low_budget_req = CreateMediaBuyRequest(**request_kwargs)
 
-    raise AssertionError("No response or error in ctx — cannot verify budget validation ran")
+    low_budget_error = None
+    try:
+        result = env.call_impl(req=low_budget_req)
+        # Check if the result wraps an error response
+        if hasattr(result, "response") and hasattr(result.response, "errors") and result.response.errors:
+            low_budget_error = result.response.errors[0]
+    except Exception as exc:
+        low_budget_error = exc
+
+    # Step 3: Assert the specific minimum spend rejection
+    assert low_budget_error is not None, (
+        f"Expected rejection for budget {below_min} below min_package_budget {min_budget}, but the request succeeded"
+    )
+    error_str = str(low_budget_error)
+    error_code = getattr(low_budget_error, "code", "")
+    assert "minimum spend" in error_str.lower() or error_code == "BUDGET_TOO_LOW", (
+        f"Expected minimum spend rejection (message containing 'minimum spend' "
+        f"or code 'BUDGET_TOO_LOW'), got: code={error_code!r}, message={error_str!r}"
+    )
