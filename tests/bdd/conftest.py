@@ -575,9 +575,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # Must run BEFORE selective xfails (which use strict=True) to avoid
         # XPASS failures on transport variants that now pass.
         _UC005_PARTIAL_TAGS = {
-            "T-UC-005-partition-disclosure",
-            "T-UC-005-boundary-disclosure",
-            "T-UC-005-boundary-asset-types",
+            # Graduated (all 4 transports pass with strong assertions):
+            # T-UC-005-partition-disclosure, T-UC-005-boundary-disclosure,
+            # T-UC-005-boundary-asset-types
             "T-UC-005-inv-049-8-violated",
             "T-UC-005-inv-049-8-nofield",
         }
@@ -790,7 +790,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # UC-004 date range: custom dates partially work
         _UC004_DATE_SELECTIVE: list[tuple[str, set[str], str]] = [
             ("T-UC-004-daterange", set(), "custom date range partially applied"),
-            ("T-UC-004-daterange-start-only", set(), "start-only date range partially applied"),
+            # Graduated: T-UC-004-daterange-start-only (all 4 transports pass)
             ("T-UC-004-daterange-end-only", set(), "end-only date range not applied"),
         ]
         if any(t.startswith("T-UC-004-daterange") for t in marker_names):
@@ -822,15 +822,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # Partition tests exercise valid/invalid value ranges per field.
         # strict=False: some partition values pass, others fail depending on schema version.
         _UC004_PARTITION_TAGS = {
-            "T-UC-004-partition-reporting-dims",
-            "T-UC-004-partition-attribution",
-            "T-UC-004-partition-daily-breakdown",
-            "T-UC-004-partition-account",
-            "T-UC-004-partition-sampling",
-            "T-UC-004-partition-status-filter",
-            "T-UC-004-partition-date-range",
-            "T-UC-004-partition-resolution",
-            "T-UC-004-partition-ownership",
+            # Graduated (all 4 transports pass with strong assertions):
+            # T-UC-004-partition-reporting-dims, T-UC-004-partition-attribution,
+            # T-UC-004-partition-daily-breakdown, T-UC-004-partition-account,
+            # T-UC-004-partition-sampling, T-UC-004-partition-status-filter,
+            # T-UC-004-partition-date-range, T-UC-004-partition-resolution,
+            # T-UC-004-partition-ownership
             "T-UC-004-partition-credentials",
         }
         if marker_names & _UC004_PARTITION_TAGS:
@@ -841,10 +838,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # FIXME(salesagent-9vgz.80): catalog distinct type partition/boundary
         # Production accepts catalogs but never validates duplicate types or catalog_id
         # existence. Valid partitions pass; invalid partitions succeed when they should fail.
-        _UC002_CATALOG_TAGS = {
-            "T-UC-002-partition-catalog-distinct-type",
-            "T-UC-002-boundary-catalog-distinct-type",
-        }
+        # Graduated (all 4 transports pass with strong assertions):
+        # T-UC-002-partition-catalog-distinct-type, T-UC-002-boundary-catalog-distinct-type
+        _UC002_CATALOG_TAGS: set[str] = set()
         if marker_names & _UC002_CATALOG_TAGS:
             item.add_marker(
                 pytest.mark.xfail(
@@ -939,9 +935,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-026-alt-negative-keyword-add",
             "T-UC-026-alt-negative-keyword-remove-noop",
             "T-UC-026-alt-dedup",
-            "T-UC-026-alt-dedup-crossbuy",
+            # Graduated: T-UC-026-alt-dedup-crossbuy (all 4 transports pass)
             # Extension error scenarios — error codes/suggestions not implemented
-            "T-UC-026-ext-a",
+            # Graduated: T-UC-026-ext-a (all 4 transports pass)
             "T-UC-026-ext-b",
             "T-UC-026-ext-c",
             "T-UC-026-ext-d",
@@ -956,19 +952,19 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-026-ext-h-cross-reverse",
             "T-UC-026-ext-i",
             # Invariant scenarios — update wiring or validation not implemented
-            "T-UC-026-inv-194-1",
+            # Graduated: T-UC-026-inv-194-1 (all 4 transports pass)
             "T-UC-026-inv-194-2",
             "T-UC-026-inv-195-1",
             "T-UC-026-inv-195-2",
             "T-UC-026-inv-195-3",
             "T-UC-026-inv-195-4",
-            "T-UC-026-inv-196-3",
+            # Graduated: T-UC-026-inv-196-3 (all 4 transports pass)
             "T-UC-026-inv-197-3",
             "T-UC-026-inv-197-4",
             "T-UC-026-inv-198-4",
             "T-UC-026-inv-199-3",
             "T-UC-026-inv-199-4",
-            "T-UC-026-inv-200-1",
+            # Graduated: T-UC-026-inv-200-1 (all 4 transports pass)
             "T-UC-026-inv-200-2",
             "T-UC-026-inv-201-1",
             "T-UC-026-inv-201-2",
@@ -976,33 +972,26 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-026-inv-201-4",
             "T-UC-026-inv-201-5",
             "T-UC-026-inv-089-2",
-            "T-UC-026-inv-089-3",
-            # Partition/boundary scenarios — need update env + validation wiring
-            "T-UC-026-partition-required-fields",
-            "T-UC-026-boundary-required-fields",
-            "T-UC-026-partition-bid-price",
+            # Graduated: T-UC-026-inv-089-3 (all 4 transports pass)
+            # Partition/boundary scenarios — graduated tags removed, remaining need wiring
+            # Graduated: T-UC-026-partition-required-fields, T-UC-026-boundary-required-fields,
+            # T-UC-026-partition-bid-price, T-UC-026-partition-buyer-ref,
+            # T-UC-026-partition-format-ids, T-UC-026-partition-pricing-option,
+            # T-UC-026-partition-immutable, T-UC-026-partition-keyword-add,
+            # T-UC-026-partition-keyword-remove, T-UC-026-partition-neg-kw-add,
+            # T-UC-026-partition-neg-kw-remove, T-UC-026-boundary-neg-kw-add,
+            # T-UC-026-boundary-neg-kw-remove, T-UC-026-partition-paused
             "T-UC-026-boundary-bid-price",
-            "T-UC-026-partition-buyer-ref",
             "T-UC-026-boundary-buyer-ref",
-            "T-UC-026-partition-format-ids",
             "T-UC-026-boundary-format-ids",
-            "T-UC-026-partition-pricing-option",
             "T-UC-026-boundary-pricing-option",
-            "T-UC-026-partition-immutable",
             "T-UC-026-boundary-immutable",
-            "T-UC-026-partition-keyword-add",
             "T-UC-026-boundary-keyword-add",
-            "T-UC-026-partition-keyword-remove",
             "T-UC-026-boundary-keyword-remove",
             "T-UC-026-partition-kw-add-shared",
             "T-UC-026-partition-kw-remove-shared",
-            "T-UC-026-partition-neg-kw-add",
-            "T-UC-026-partition-neg-kw-remove",
             "T-UC-026-boundary-kw-add-shared",
             "T-UC-026-boundary-kw-remove-shared",
-            "T-UC-026-boundary-neg-kw-add",
-            "T-UC-026-boundary-neg-kw-remove",
-            "T-UC-026-partition-paused",
             "T-UC-026-boundary-paused",
             "T-UC-026-partition-replacement",
             "T-UC-026-boundary-replacement",

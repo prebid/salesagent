@@ -204,9 +204,7 @@ class TestGetDeltaStepFiles:
         step_file = tmp_path / "test_steps.py"
         step_file.write_text("# step file")
 
-        mock_result = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout=f"{step_file}\n", stderr=""
-        )
+        mock_result = subprocess.CompletedProcess(args=[], returncode=0, stdout=f"{step_file}\n", stderr="")
         with patch("inspect_bdd_steps.subprocess.run", return_value=mock_result):
             files = get_delta_step_files(tmp_path)
 
@@ -220,9 +218,7 @@ class TestGetDeltaStepFiles:
         txt_file = tmp_path / "notes.txt"
         txt_file.write_text("notes")
 
-        mock_result = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout=f"{txt_file}\n", stderr=""
-        )
+        mock_result = subprocess.CompletedProcess(args=[], returncode=0, stdout=f"{txt_file}\n", stderr="")
         with patch("inspect_bdd_steps.subprocess.run", return_value=mock_result):
             files = get_delta_step_files(tmp_path)
 
@@ -232,9 +228,7 @@ class TestGetDeltaStepFiles:
         """Should skip files that git reports but no longer exist on disk."""
         from inspect_bdd_steps import get_delta_step_files
 
-        mock_result = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="deleted_file.py\n", stderr=""
-        )
+        mock_result = subprocess.CompletedProcess(args=[], returncode=0, stdout="deleted_file.py\n", stderr="")
         with patch("inspect_bdd_steps.subprocess.run", return_value=mock_result):
             files = get_delta_step_files(tmp_path)
 
@@ -244,9 +238,7 @@ class TestGetDeltaStepFiles:
         """Should return empty list if git command fails."""
         from inspect_bdd_steps import get_delta_step_files
 
-        mock_result = subprocess.CompletedProcess(
-            args=[], returncode=128, stdout="", stderr="fatal: not a git repo"
-        )
+        mock_result = subprocess.CompletedProcess(args=[], returncode=128, stdout="", stderr="fatal: not a git repo")
         with patch("inspect_bdd_steps.subprocess.run", return_value=mock_result):
             files = get_delta_step_files(tmp_path)
 
@@ -256,9 +248,7 @@ class TestGetDeltaStepFiles:
         """Should return empty list when git diff reports no changes."""
         from inspect_bdd_steps import get_delta_step_files
 
-        mock_result = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="", stderr=""
-        )
+        mock_result = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
         with patch("inspect_bdd_steps.subprocess.run", return_value=mock_result):
             files = get_delta_step_files(tmp_path)
 
@@ -268,9 +258,7 @@ class TestGetDeltaStepFiles:
         """Should pass the steps directory to git diff as a path filter."""
         from inspect_bdd_steps import get_delta_step_files
 
-        mock_result = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="", stderr=""
-        )
+        mock_result = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
         with patch("inspect_bdd_steps.subprocess.run", return_value=mock_result) as mock_run:
             get_delta_step_files(tmp_path)
 
