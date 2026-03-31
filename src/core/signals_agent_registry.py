@@ -31,10 +31,9 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from adcp import ADCPMultiAgentClient, GetSignalsRequest, PlatformDestination
+from adcp import ADCPMultiAgentClient, PlatformDestination
 from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPError, ADCPTimeoutError
 from adcp.types import DeliverTo
-from adcp.types import GetSignalsRequest as AdcpGetSignalsRequest
 
 from src.core.exceptions import AdCPAdapterError
 from src.core.schemas import GetSignalsRequest
