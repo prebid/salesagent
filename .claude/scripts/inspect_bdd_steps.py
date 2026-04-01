@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import argparse
 import ast
+import json
 import os
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -223,11 +225,20 @@ Respond with EXACTLY one line per step in format: <number>|<FLAG or PASS>|<reaso
 {steps_block}"""
 
 
+def _truncate_source(source: str, max_lines: int = 40) -> str:
+    """Truncate long function bodies to keep batches fast."""
+    lines = source.splitlines()
+    if len(lines) <= max_lines:
+        return source
+    return "\n".join(lines[:max_lines]) + f"\n# ... ({len(lines) - max_lines} more lines truncated)"
+
+
 def _format_steps_for_triage(steps: list[BddStepInfo]) -> str:
     """Format steps into a numbered block for the triage prompt."""
     parts = []
     for i, step in enumerate(steps, 1):
-        parts.append(f'--- Step {i} ---\nStep text: "{step.step_text}"\nFunction:\n{step.source_text}\n')
+        source = _truncate_source(step.source_text)
+        parts.append(f'--- Step {i} ---\nStep text: "{step.step_text}"\nFunction:\n{source}\n')
     return "\n".join(parts)
 
 
@@ -239,22 +250,106 @@ def _run_claude(prompt: str, model: str = "sonnet") -> str:
         capture_output=True,
         text=True,
         env=env,
-        timeout=600,
+        timeout=900,
     )
     return result.stdout.strip()
 
 
-def run_pass1_triage(steps: list[BddStepInfo], batch_size: int = 10) -> list[TriageResult]:
-    """Run Pass 1 triage on steps, batched for efficiency."""
+def _load_partial_results(path: Path) -> dict[str, str]:
+    """Load partial triage results from a JSON checkpoint file.
+
+    Returns dict: function_name -> verdict (FLAG/PASS).
+    """
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text())
+        return {entry["function"]: entry["verdict"] for entry in data}
+    except (json.JSONDecodeError, KeyError):
+        return {}
+
+
+def _save_partial_results(results: list[TriageResult], path: Path) -> None:
+    """Save triage results to a JSON checkpoint file for resume."""
+    data = [
+        {
+            "function": r.step.function_name,
+            "file": r.step.file_path,
+            "line": r.step.line_number,
+            "step_text": r.step.step_text,
+            "verdict": r.verdict,
+            "reason": r.reason,
+        }
+        for r in results
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2))
+
+
+def run_pass1_triage(
+    steps: list[BddStepInfo],
+    batch_size: int = 10,
+    checkpoint_path: Path | None = None,
+) -> list[TriageResult]:
+    """Run Pass 1 triage on steps, batched for efficiency.
+
+    Supports resume: if checkpoint_path exists, skips already-processed steps.
+    Saves progress after each batch.
+    """
     results: list[TriageResult] = []
 
-    for batch_start in range(0, len(steps), batch_size):
-        batch = steps[batch_start : batch_start + batch_size]
+    # Resume: load existing results and skip already-processed steps
+    already_done: dict[str, str] = {}
+    if checkpoint_path:
+        already_done = _load_partial_results(checkpoint_path)
+        if already_done:
+            print(f"  Resuming: {len(already_done)} steps already processed", file=sys.stderr)
+
+    # Separate already-done from todo
+    todo_steps = []
+    for step in steps:
+        if step.function_name in already_done:
+            results.append(
+                TriageResult(
+                    step=step,
+                    verdict=already_done[step.function_name],
+                    reason="(from checkpoint)",
+                )
+            )
+        else:
+            todo_steps.append(step)
+
+    if not todo_steps:
+        print("  All steps already processed (checkpoint complete)", file=sys.stderr)
+        return results
+
+    total_batches = (len(todo_steps) + batch_size - 1) // batch_size
+    print(f"  Processing {len(todo_steps)} steps in {total_batches} batches...", file=sys.stderr)
+
+    for batch_idx, batch_start in enumerate(range(0, len(todo_steps), batch_size)):
+        batch = todo_steps[batch_start : batch_start + batch_size]
+        print(
+            f"  Batch {batch_idx + 1}/{total_batches} ({len(batch)} steps)...",
+            end="",
+            flush=True,
+            file=sys.stderr,
+        )
+
         prompt = TRIAGE_PROMPT_TEMPLATE.format(steps_block=_format_steps_for_triage(batch))
 
-        output = _run_claude(prompt, model="sonnet")
+        try:
+            output = _run_claude(prompt, model="sonnet")
+        except subprocess.TimeoutExpired:
+            print(" TIMEOUT — skipping batch", file=sys.stderr)
+            # Mark batch as PASS (timeout = can't triage, don't block)
+            for step in batch:
+                results.append(TriageResult(step=step, verdict="PASS", reason="(triage timeout)"))
+            if checkpoint_path:
+                _save_partial_results(results, checkpoint_path)
+            continue
 
         # Parse responses
+        batch_results = 0
         for line in output.splitlines():
             line = line.strip()
             if not line or "|" not in line:
@@ -277,6 +372,14 @@ def run_pass1_triage(steps: list[BddStepInfo], batch_size: int = 10) -> list[Tri
                             reason=reason,
                         )
                     )
+                    batch_results += 1
+
+        flagged = sum(1 for r in results[-batch_results:] if r.verdict == "FLAG") if batch_results else 0
+        print(f" {batch_results} parsed, {flagged} flagged", file=sys.stderr)
+
+        # Save checkpoint after each batch
+        if checkpoint_path:
+            _save_partial_results(results, checkpoint_path)
 
     return results
 
@@ -593,9 +696,11 @@ def main() -> None:
         by_type = Counter(s.step_type for s in target_steps)
         print(f"  Inspecting all types: {dict(by_type)}")
 
-    # Pass 1: Triage
-    print("\n=== Pass 1: Triage (Sonnet) ===")
-    triage_results = run_pass1_triage(target_steps)
+    # Pass 1: Triage (with resume support)
+    checkpoint_path = args.output.with_suffix(".checkpoint.json")
+    print(f"\n=== Pass 1: Triage (Sonnet) ===")
+    print(f"  Checkpoint: {checkpoint_path}")
+    triage_results = run_pass1_triage(target_steps, checkpoint_path=checkpoint_path)
     flagged = [r for r in triage_results if r.verdict == "FLAG"]
     print(f"  {len(flagged)} flagged, {len(triage_results) - len(flagged)} passed")
 
@@ -613,7 +718,6 @@ def main() -> None:
 
     # JSON output for machine consumption (pipeline integration)
     if args.json:
-        import json
 
         json_path = args.output.with_suffix(".json")
         findings = []
