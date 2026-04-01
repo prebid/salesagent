@@ -182,8 +182,8 @@ jobs:
       run: |
         # Build the adcp server (includes the reference creative agent)
         # Pin to known-good commit — upstream HEAD has broken migrations (community_points FK violation)
-        git clone https://github.com/adcontextprotocol/adcp.git /tmp/adcp-server --no-checkout
-        cd /tmp/adcp-server && git fetch --depth=1 origin ca70dd1e2a6c && git checkout FETCH_HEAD && cd -
+        mkdir -p /tmp/adcp-server
+        curl -sL https://github.com/adcontextprotocol/adcp/archive/ca70dd1e2a6c.tar.gz | tar xz -C /tmp/adcp-server --strip-components=1
         docker build -t adcp-creative-agent /tmp/adcp-server
 
         # The adcp monolith needs its own Postgres — creative agent is one route in the full app
