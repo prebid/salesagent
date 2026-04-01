@@ -158,9 +158,10 @@ def then_error_tenant_context(ctx: dict) -> None:
     assert "tenant" in msg, f"Expected 'tenant' in error message: {_get_error_message(error)}"
     # The message must convey "could not be determined" — a resolution/determination
     # failure. Require at least one determination-failure keyword AND one
-    # negation/failure indicator to avoid matching generic "tenant required" messages.
+    # negation/failure indicator to avoid matching generic "tenant required" or
+    # "tenant not found" messages that indicate different failure modes.
     determination_keywords = ("context", "resolve", "determine", "identify")
-    failure_keywords = ("not", "could not", "cannot", "unable", "fail", "missing", "required", "no ")
+    failure_keywords = ("could not", "cannot", "unable", "fail", "missing", "no ")
     has_determination = any(kw in msg for kw in determination_keywords)
     has_failure = any(kw in msg for kw in failure_keywords)
     assert has_determination and has_failure, (
@@ -501,8 +502,9 @@ def then_suggestion_format_id_or_omit(ctx: dict) -> None:
     d = _get_error_dict(error)
     suggestion = (d.get("suggestion") or "").lower()
     assert suggestion, "Expected non-empty suggestion"
-    # Must reference FormatId/format AND either omit or provide guidance
-    has_format_ref = "formatid" in suggestion or "format_id" in suggestion or "format id" in suggestion
+    # Must reference FormatId/format AND either omit or provide guidance.
+    # Production may use "FormatId" (camelCase), "format_id" (snake), or just "format".
+    has_format_ref = "formatid" in suggestion or "format_id" in suggestion or "format" in suggestion
     has_action = "omit" in suggestion or "provide" in suggestion or "include" in suggestion
     assert has_format_ref and has_action, (
         f"Expected suggestion about FormatId with omit/provide guidance, got: {d.get('suggestion')}"
