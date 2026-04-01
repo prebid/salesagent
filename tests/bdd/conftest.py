@@ -277,19 +277,15 @@ _XFAIL_TAGS: dict[str, str] = {
 _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     (
         "T-UC-005-partition-disclosure",
-        {"single_position", "multiple_positions_all_match", "all_positions", "no_matching_formats"},
+        {"all_positions", "no_matching_formats"},
         "disclosure_positions filter not implemented",
     ),
     (
         "T-UC-005-boundary-disclosure",
-        {"single position", "all 8 positions", "format has no"},
+        {"all 8 positions", "format has no"},
         "disclosure_positions filter not implemented",
     ),
-    (
-        "T-UC-005-boundary-asset-types",
-        {"brief", "catalog"},
-        "brief/catalog asset types not in adcp enum",
-    ),
+    # Graduated: T-UC-005-boundary-asset-types (all 4 transports pass — brief/catalog now in enum)
     # FIXME(salesagent-0b1): "delayed" notification_type not in production
     # WebhookDeliveryService.send_delivery_webhook only produces "scheduled",
     # "final", or "adjusted". Spec also expects "delayed" for late reports.
