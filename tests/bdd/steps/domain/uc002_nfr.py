@@ -11,7 +11,6 @@ beads: salesagent-9vgz.92
 
 from __future__ import annotations
 
-import pytest
 from pytest_bdd import given, then
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -117,59 +116,85 @@ def then_auth_before_business_logic(ctx: dict) -> None:
 def then_rate_limiting_enforced(ctx: dict) -> None:
     """Assert rate limiting is enforced on create_media_buy.
 
-    Sends N+1 rapid requests and checks whether any is rejected with
-    AdCPRateLimitError. Since rate limiting is not implemented, all
-    requests succeed — the xfail captures a real observed behavioral gap.
+    Sends a rapid follow-up request and asserts it is rejected with
+    AdCPRateLimitError. Production should reject when the threshold is
+    exceeded, but no rate-limiting middleware exists yet.
 
     FIXME(salesagent-9vgz.92): Implement rate limiting middleware for create_media_buy.
     """
+    import uuid
+    from copy import deepcopy
+
     from src.core.exceptions import AdCPRateLimitError
+    from src.core.schemas import CreateMediaBuyRequest
 
     # The original request already succeeded (from the When step).
-    # Make one additional rapid call to see if the second request triggers
-    # rate limiting. Production should reject with AdCPRateLimitError when
-    # the threshold is exceeded, but no middleware exists yet.
     env = ctx["env"]
     resp = ctx.get("response")
     assert resp is not None, "Expected a successful response from the original request"
 
+    # Make a rapid follow-up call to trigger rate limiting.
     rate_limit_hit = False
+    request_kwargs = deepcopy(ctx.get("request_kwargs", {}))
+    request_kwargs["buyer_ref"] = f"rate-limit-{uuid.uuid4().hex[:8]}"
+    req = CreateMediaBuyRequest(**request_kwargs)
     try:
-        import uuid
-        from copy import deepcopy
-
-        from src.core.schemas import CreateMediaBuyRequest
-
-        request_kwargs = deepcopy(ctx.get("request_kwargs", {}))
-        request_kwargs["buyer_ref"] = f"rate-limit-{uuid.uuid4().hex[:8]}"
-        req = CreateMediaBuyRequest(**request_kwargs)
         env.call_impl(req=req)
     except AdCPRateLimitError:
         rate_limit_hit = True
     except Exception:
-        # Other errors (duplicate key, etc.) — not rate limiting
+        # Other errors (duplicate key, etc.) are not rate limiting
         pass
 
-    if not rate_limit_hit:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: Rate limiting not implemented. "
-            "Sent a rapid follow-up request — not rejected with AdCPRateLimitError. "
-            "AdCPRateLimitError class exists but is never raised. "
-            "FIXME(salesagent-9vgz.92)"
-        )
+    assert rate_limit_hit, (
+        "SPEC-PRODUCTION GAP: Rate limiting not implemented. "
+        "Sent a rapid follow-up request — not rejected with AdCPRateLimitError. "
+        "AdCPRateLimitError class exists but is never raised. "
+        "FIXME(salesagent-9vgz.92)"
+    )
 
 
 @then("the system should validate payload size limits")
 def then_payload_size_limits(ctx: dict) -> None:
     """Assert payload size limits are enforced.
 
-    SPEC-PRODUCTION GAP: No ASGI middleware checks content-length or rejects
-    oversized request bodies on the MCP or A2A path.
+    Sends a request with an oversized buyer_ref payload and asserts it is
+    rejected with a payload-too-large error. Production has no ASGI middleware
+    that checks content-length or rejects oversized request bodies.
 
     FIXME(salesagent-9vgz.92): Implement payload size validation middleware.
     """
-    pytest.xfail(
+    import uuid
+    from copy import deepcopy
+
+    from src.core.schemas import CreateMediaBuyRequest
+
+    env = ctx["env"]
+
+    # Build a request with an oversized field to trigger payload validation.
+    # A 1 MB buyer_ref string simulates an oversized body.
+    request_kwargs = deepcopy(ctx.get("request_kwargs", {}))
+    request_kwargs["buyer_ref"] = f"oversize-{uuid.uuid4().hex[:8]}-{'X' * (1024 * 1024)}"
+
+    payload_rejected = False
+    try:
+        req = CreateMediaBuyRequest(**request_kwargs)
+        env.call_impl(req=req)
+    except Exception as exc:
+        error_str = str(exc).lower()
+        error_code = getattr(exc, "error_code", "")
+        # Accept any payload-size-related rejection
+        if (
+            "payload" in error_str
+            or "too large" in error_str
+            or "content-length" in error_str
+            or error_code == "PAYLOAD_TOO_LARGE"
+        ):
+            payload_rejected = True
+
+    assert payload_rejected, (
         "SPEC-PRODUCTION GAP: Payload size validation not implemented. "
+        "Sent a request with a 1 MB buyer_ref — not rejected for payload size. "
         "No ASGI middleware checks content-length for oversized bodies. "
         "FIXME(salesagent-9vgz.92)"
     )
@@ -300,18 +325,39 @@ def then_adapter_execution_logged(ctx: dict) -> None:
 def then_response_within_sla(ctx: dict) -> None:
     """Assert response latency is within the 15s p95 SLA.
 
-    SPEC-PRODUCTION GAP: Production measures latency via request_start_time
-    and log_tool_activity but does not enforce an SLA. There is no timeout,
-    alarm, or rejection for slow responses.
+    Measures elapsed time of a call through the harness and asserts it
+    completes within 15 seconds. In test harness (mock adapter), this
+    always passes. The real SLA enforcement gap is tracked separately.
 
     FIXME(salesagent-9vgz.92): Implement SLA enforcement or monitoring alert.
     """
-    pytest.xfail(
-        "SPEC-PRODUCTION GAP: Response latency SLA not enforced. "
-        "Production measures latency (request_start_time + log_tool_activity) "
-        "but has no SLA check, timeout, or alarm. "
-        "FIXME(salesagent-9vgz.92)"
-    )
+    import time
+    import uuid
+    from copy import deepcopy
+
+    from src.core.schemas import CreateMediaBuyRequest
+
+    env = ctx["env"]
+
+    # Verify the original request succeeded
+    resp = ctx.get("response")
+    error = ctx.get("error")
+    assert resp is not None and error is None, f"Expected a successful response to measure latency, got error: {error}"
+
+    # Time a follow-up call to measure actual latency through the harness
+    request_kwargs = deepcopy(ctx.get("request_kwargs", {}))
+    request_kwargs["buyer_ref"] = f"sla-check-{uuid.uuid4().hex[:8]}"
+    req = CreateMediaBuyRequest(**request_kwargs)
+
+    start = time.monotonic()
+    try:
+        env.call_impl(req=req)
+    except Exception:
+        pass  # Even if the call fails, we measured latency
+    elapsed = time.monotonic() - start
+
+    sla_seconds = 15.0
+    assert elapsed < sla_seconds, f"Response latency {elapsed:.2f}s exceeds {sla_seconds}s p95 SLA"
 
 
 # ═══════════════════════════════════════════════════════════════════════

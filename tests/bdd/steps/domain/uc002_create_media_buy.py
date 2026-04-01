@@ -2288,18 +2288,19 @@ def given_proposal_exists(ctx: dict, proposal_id: str) -> None:
 
 @given(parsers.parse("the proposal has {count:d} product allocations"))
 def given_proposal_allocations(ctx: dict, count: int) -> None:
-    """Record expected proposal allocations (spec-production gap).
+    """Create real Product entities for each proposal allocation.
 
     SPEC-PRODUCTION GAP: Production has no proposal allocation mechanism.
-    This step records the expected allocation count AND default equal-percentage
-    allocations for Then-step assertions. When no explicit percentages are given
-    in the scenario, equal distribution is assumed.
+    Proposals are accepted on CreateMediaBuyRequest but never processed.
+    Scenario-level xfail (T-UC-002-alt-proposal tag in conftest.py)
+    handles the gap. FIXME(salesagent-9vgz.1)
 
-    When production implements proposals, this step must:
-    1. Create N allocation records linked to the proposal
-    2. Each allocation must reference a valid product_id
-    3. Default to equal-percentage distribution
+    This step creates real DB-backed products (one per allocation) and wires
+    request_kwargs packages so the create request reflects the allocation
+    structure. Then steps can cross-check product_ids against these real entities.
     """
+    from tests.factories import PricingOptionFactory, ProductFactory
+
     assert isinstance(count, int), f"count must be an int, got {type(count).__name__}"
     assert count > 0, "Proposal must have at least 1 product allocation"
     proposal_id = ctx.get("expected_proposal_id")
@@ -2307,53 +2308,67 @@ def given_proposal_allocations(ctx: dict, count: int) -> None:
         "No expected_proposal_id in ctx — 'the proposal has N product allocations' "
         "requires a prior 'proposal X exists' step"
     )
-    # Verify products exist so allocations can reference them
-    assert "default_product" in ctx or ctx.get("request_kwargs", {}).get("product_ids"), (
-        "No products configured — proposal allocations require products to distribute across"
-    )
-    ctx["expected_proposal_allocations"] = count
+    env = ctx["env"]
+    tenant = ctx["tenant"]
+
     # Default to equal allocation percentages when scenario doesn't specify them.
-    # Scenarios with non-equal splits should set ctx["expected_allocation_percentages"]
-    # explicitly via a dedicated Given step.
     if "expected_allocation_percentages" not in ctx:
         ctx["expected_allocation_percentages"] = [100.0 / count] * count
-    # Validate allocation percentages sum to ~100% (floating-point tolerance)
     percentages = ctx["expected_allocation_percentages"]
     assert len(percentages) == count, (
         f"Allocation percentages count ({len(percentages)}) must match allocation count ({count})"
     )
     assert abs(sum(percentages) - 100.0) < 0.01, f"Allocation percentages must sum to 100%, got {sum(percentages):.2f}%"
 
-    # Postcondition: verify dict intermediaries were set correctly and are
-    # self-consistent. These assertions catch bugs in the step itself (e.g.,
-    # ctx key not written, percentage count mismatch).
-    assert ctx["expected_proposal_allocations"] == count, (
-        f"Postcondition failed: expected_proposal_allocations={ctx['expected_proposal_allocations']} != {count}"
-    )
-    assert len(ctx["expected_allocation_percentages"]) == count, (
-        f"Postcondition failed: allocation percentages length "
-        f"{len(ctx['expected_allocation_percentages'])} != count {count}"
-    )
-    assert ctx.get("expected_proposal_id") is not None, (
-        "Postcondition failed: expected_proposal_id missing — allocations must be linked to a proposal"
-    )
+    # Create real Product + PricingOption entities for each allocation
+    allocation_products = []
+    for i in range(count):
+        product = ProductFactory(
+            tenant=tenant,
+            product_id=f"alloc-prod-{i}",
+            property_tags=["all_inventory"],
+        )
+        pricing_option = PricingOptionFactory(
+            product=product,
+            pricing_model="cpm",
+            currency="USD",
+            is_fixed=True,
+        )
+        allocation_products.append((product, pricing_option))
+    env._commit_factory_data()
 
-    # SPEC-PRODUCTION GAP: Step text claims "the proposal has N product allocations"
-    # but no allocation entities are created — only a counter + percentages stored in ctx.
-    # Dict intermediaries: ctx["expected_proposal_allocations"] = count,
-    # ctx["expected_allocation_percentages"] = [...]. The proposal itself doesn't
-    # exist (see given_proposal_exists).
-    # Scenario-level xfail (T-UC-002-alt-proposal tag in conftest.py)
-    # handles the gap at the correct level. FIXME(salesagent-9vgz.1)
-    import warnings
+    # Wire request_kwargs packages from the real products.
+    # Budget distribution uses the allocation percentages.
+    kwargs = ctx.setdefault("request_kwargs", {})
+    total_budget = kwargs.get("total_budget", {})
+    if isinstance(total_budget, dict):
+        total_amount = total_budget.get("amount", 5000.0)
+    else:
+        total_amount = getattr(total_budget, "amount", 5000.0)
 
-    warnings.warn(
-        f"SPEC-PRODUCTION GAP: Proposal '{proposal_id}' allocations — {count} allocations "
-        "recorded as counter+percentages only, no allocation entities created. "
-        "Dict intermediary. Scenario-level xfail via T-UC-002-alt-proposal tag "
-        "handles the gap. "
-        "FIXME(salesagent-9vgz.1): Create AllocationFactory linked to proposal.",
-        stacklevel=1,
+    packages = []
+    for i, (product, pricing_option) in enumerate(allocation_products):
+        po_id = f"{pricing_option.pricing_model}_{pricing_option.currency.lower()}_"
+        po_id += "fixed" if pricing_option.is_fixed else "auction"
+        packages.append(
+            {
+                "product_id": product.product_id,
+                "buyer_ref": f"alloc-pkg-{i}",
+                "budget": total_amount * (percentages[i] / 100.0),
+                "pricing_option_id": po_id,
+            }
+        )
+    kwargs["packages"] = packages
+
+    ctx["expected_proposal_allocations"] = count
+    ctx["allocation_products"] = allocation_products
+
+    # Postconditions
+    assert ctx["expected_proposal_allocations"] == count
+    assert len(ctx["expected_allocation_percentages"]) == count
+    assert len(kwargs["packages"]) == count
+    assert all(pkg["product_id"] == allocation_products[i][0].product_id for i, pkg in enumerate(kwargs["packages"])), (
+        "Package product_ids must match created allocation products"
     )
 
 

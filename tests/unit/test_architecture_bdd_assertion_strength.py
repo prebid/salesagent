@@ -49,19 +49,19 @@ _HASATTR_ALLOWLIST: set[str] = {
     "bdd/steps/domain/uc011_accounts.py:669 then_accounts_from_first_page",
     "bdd/steps/domain/uc011_accounts.py:771 then_response_outcome",
     "bdd/steps/domain/uc011_accounts.py:926 then_success_with_accounts",
-    "bdd/steps/domain/uc019_query_media_buys.py:998 then_package_details",
+    "bdd/steps/domain/uc019_query_media_buys.py:1033 then_package_details",
 }
 
 _GETATTR_EXISTENCE_ALLOWLIST: set[str] = {
     # FIXME(salesagent-beq4): replace getattr existence check with value comparison
     "bdd/steps/domain/uc003_update_media_buy.py:746 then_response_has_buyer_ref",
-    "bdd/steps/domain/uc019_query_media_buys.py:998 then_package_details",
+    "bdd/steps/domain/uc019_query_media_buys.py:1033 then_package_details",
 }
 
 _COUNT_ONLY_ALLOWLIST: set[str] = {
     # FIXME(salesagent-beq4): replace count-only check with element-level assertion
     "bdd/steps/domain/uc002_create_media_buy.py:2134 then_creatives_assigned_to_packages",
-    "bdd/steps/domain/uc002_nfr.py:184 then_protocol_audit_logged",
+    "bdd/steps/domain/uc002_nfr.py:209 then_protocol_audit_logged",
     "bdd/steps/domain/uc003_update_media_buy.py:823 then_affected_packages_present",
     "bdd/steps/domain/uc003_update_media_buy.py:857 then_affected_package_budget",
     "bdd/steps/domain/uc004_delivery.py:1112 then_has_metrics",
@@ -95,11 +95,11 @@ _COUNT_ONLY_ALLOWLIST: set[str] = {
     "bdd/steps/domain/uc011_accounts.py:541 then_only_status",
     "bdd/steps/domain/uc011_accounts.py:559 then_other_statuses_excluded",
     "bdd/steps/domain/uc011_accounts.py:771 then_response_outcome",
-    "bdd/steps/domain/uc019_query_media_buys.py:1048 then_creative_approval_state",
-    "bdd/steps/domain/uc019_query_media_buys.py:1089 then_buyer_refs_for_correlation",
-    "bdd/steps/domain/uc019_query_media_buys.py:1923 then_either_status_returned",
-    "bdd/steps/domain/uc019_query_media_buys.py:1940 then_any_status_returned",
-    "bdd/steps/domain/uc019_query_media_buys.py:998 then_package_details",
+    "bdd/steps/domain/uc019_query_media_buys.py:1083 then_creative_approval_state",
+    "bdd/steps/domain/uc019_query_media_buys.py:1124 then_buyer_refs_for_correlation",
+    "bdd/steps/domain/uc019_query_media_buys.py:1933 then_either_status_returned",
+    "bdd/steps/domain/uc019_query_media_buys.py:1950 then_any_status_returned",
+    "bdd/steps/domain/uc019_query_media_buys.py:1033 then_package_details",
     "bdd/steps/domain/uc026_package_media_buy.py:1653 then_package_has_id",
     "bdd/steps/domain/uc026_package_media_buy.py:1739 then_package_default_formats",
     "bdd/steps/domain/uc026_package_media_buy.py:1806 then_package_formats_to_provide",

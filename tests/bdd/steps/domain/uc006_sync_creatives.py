@@ -146,15 +146,11 @@ def when_sync_creative(ctx: dict) -> None:
     The wrappers call enrich_identity_with_account() → resolve_account(),
     exercising the full account resolution chain across all transports.
 
-    Pre-resolution validation (missing/invalid account_ref) is handled via
-    the shared validate_account_ref() helper.
+    Always dispatches — even when account_ref is None or invalid — because
+    the step text says "syncs the creative". Error handling is the production
+    code's responsibility, not the step's.
     """
-    from tests.bdd.steps.generic._account_resolution import validate_account_ref
-
-    account_ref = validate_account_ref(ctx)
-    if account_ref is None:
-        return  # ctx["error"] already set
-
+    account_ref = ctx.get("account_ref")
     dispatch_request(ctx, account=account_ref, creatives=[])
 
 

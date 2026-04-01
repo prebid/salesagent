@@ -269,6 +269,10 @@ _XFAIL_TAGS: dict[str, str] = {
     # FIXME(salesagent-n3y): UC-002 account field absent — production doesn't require account field
     # Spec says account is required (BR-RULE-080 INV-1), but production accepts requests without it.
     "T-UC-002-inv-080-1": "account field not required by production — spec-production gap",
+    # FIXME(salesagent-9vgz.92): rate limiting + payload size validation not implemented
+    # Rate limiting middleware does not exist (AdCPRateLimitError never raised).
+    # No ASGI middleware checks content-length for oversized bodies.
+    "T-UC-002-nfr-001": "rate limiting + payload size validation not implemented — spec-production gap",
 }
 
 # FIXME(beads-dul): Selective xfail for parametrized scenarios where only

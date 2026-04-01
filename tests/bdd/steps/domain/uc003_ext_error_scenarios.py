@@ -349,12 +349,33 @@ def given_creative_format_incompatible(ctx: dict, creative_id: str) -> None:
     env = ctx["env"]
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    # Use a deliberately incompatible format
+
+    # Dynamically determine an incompatible format by reading the product's actual format_ids
+    product = _get_product(ctx)
+    product_format_ids: set[str] = set()
+    if product is not None:
+        raw_formats = getattr(product, "format_ids", None) or []
+        product_format_ids = {
+            f.get("id", str(f)) if isinstance(f, dict) else getattr(f, "id", str(f)) for f in raw_formats
+        }
+
+    # Pick a format guaranteed not to be in the product's format_ids
+    incompatible_candidates = [
+        "video_1920x1080",
+        "audio_podcast_30s",
+        "native_in_feed_900x600",
+        "display_interstitial_320x480",
+    ]
+    incompatible_format = next(
+        (fmt for fmt in incompatible_candidates if fmt not in product_format_ids),
+        f"deliberately_incompatible_{id(ctx)}",
+    )
+
     CreativeFactory(
         creative_id=creative_id,
         tenant=tenant,
         principal=principal,
-        format="video_1920x1080",  # Product uses display_300x250
+        format=incompatible_format,
         approved=True,
         data={"assets": {"primary": {"url": "https://example.com/video.mp4"}}},
     )

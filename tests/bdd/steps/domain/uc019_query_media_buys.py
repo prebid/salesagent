@@ -15,7 +15,29 @@ from typing import Any
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps.generic._dispatch import dispatch_request
-from tests.factories import MediaBuyFactory, MediaPackageFactory
+from tests.factories import (
+    CreativeAssignmentFactory,
+    CreativeFactory,
+    MediaBuyFactory,
+    MediaPackageFactory,
+)
+
+# ═══════════════════════════════════════════════════════════════════════
+# Helpers
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _find_media_buy_for_package(ctx: dict, pkg_id: str) -> Any:
+    """Find the seeded media buy ORM object that owns the given package_id."""
+    pkgs = ctx.get("seeded_packages", {})
+    mb = pkgs.get(pkg_id)
+    assert mb is not None, (
+        f"Package '{pkg_id}' not found in seeded_packages. "
+        f"Ensure a prior Given step created the media buy with this package. "
+        f"Known packages: {list(pkgs)}"
+    )
+    return mb
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — seed media buys in DB
@@ -135,6 +157,7 @@ def given_principal_owns_with_package(ctx: dict, principal_id: str, mb_id: str, 
     )
     env._commit_factory_data()
     ctx.setdefault("seeded_media_buys", {})[mb_id] = mb
+    ctx.setdefault("seeded_packages", {})[pkg_id] = mb
 
 
 @given(parsers.parse('the principal "{principal_id}" owns no media buys'))
@@ -300,6 +323,7 @@ def given_principal_owns_mb_with_named_package(ctx: dict, principal_id: str, mb_
     )
     env._commit_factory_data()
     ctx.setdefault("seeded_media_buys", {})[mb_id] = mb
+    ctx.setdefault("seeded_packages", {})[pkg_id] = mb
 
 
 @given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with packages "{pkg1}" and "{pkg2}"'))
@@ -325,41 +349,52 @@ def given_principal_owns_mb_with_two_packages(ctx: dict, principal_id: str, mb_i
                 "status": "active",
             },
         )
+        ctx.setdefault("seeded_packages", {})[pkg_id] = mb
     env._commit_factory_data()
     ctx.setdefault("seeded_media_buys", {})[mb_id] = mb
 
 
 @given(parsers.parse('package "{pkg_id}" has a creative with internal status "{status}"'))
 def given_package_creative_status(ctx: dict, pkg_id: str, status: str) -> None:
-    """Record expected creative state — cannot seed real DB records.
-
-    FIXME(salesagent-vov): When CreativeAssignmentFactory exists, seed real DB
-    records. Currently no factory exists to create creative DB rows.
-    """
-    import pytest
-
-    pytest.xfail(
-        f"SPEC-PRODUCTION GAP: No CreativeAssignmentFactory — cannot seed creative with "
-        f"status='{status}' on package '{pkg_id}'. "
-        f"FIXME(salesagent-vov): Create factory to seed real DB records."
+    """Seed a creative with the given internal status, assigned to the package."""
+    env = ctx["env"]
+    # Resolve the media buy that owns this package from seeded_media_buys
+    media_buy = _find_media_buy_for_package(ctx, pkg_id)
+    # Feature file passes "null" as literal string for null status.
+    # DB column is NOT NULL, so store as-is — _map_creative_status treats
+    # unrecognized values (including "null" and "") as pending_review.
+    creative = CreativeFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        status=status,
     )
+    CreativeAssignmentFactory(
+        creative=creative,
+        media_buy=media_buy,
+        package_id=pkg_id,
+    )
+    env._commit_factory_data()
 
 
 @given(
     parsers.parse('package "{pkg_id}" has a creative with internal status "{status}" and rejection_reason "{reason}"')
 )
 def given_package_creative_rejected(ctx: dict, pkg_id: str, status: str, reason: str) -> None:
-    """Record rejected creative — cannot seed real DB records.
-
-    FIXME(salesagent-vov): When CreativeAssignmentFactory exists, seed real DB records.
-    """
-    import pytest
-
-    pytest.xfail(
-        f"SPEC-PRODUCTION GAP: No CreativeAssignmentFactory — cannot seed creative with "
-        f"status='{status}', rejection_reason='{reason}' on package '{pkg_id}'. "
-        f"FIXME(salesagent-vov): Create factory to seed real DB records."
+    """Seed a creative with the given internal status and rejection_reason, assigned to the package."""
+    env = ctx["env"]
+    media_buy = _find_media_buy_for_package(ctx, pkg_id)
+    creative = CreativeFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        status=status,
+        data={"rejection_reason": reason},
     )
+    CreativeAssignmentFactory(
+        creative=creative,
+        media_buy=media_buy,
+        package_id=pkg_id,
+    )
+    env._commit_factory_data()
 
 
 @given(parsers.parse('package "{pkg_id}" has a creative assignment with creative_id "{creative_id}"'))
@@ -1092,8 +1127,6 @@ def then_buyer_refs_for_correlation(ctx: dict) -> None:
     Step text says 'for correlation' — both fields must be non-None (a None value
     cannot be used for correlation).
     """
-    import pytest
-
     buys = _get_media_buys(ctx)
     assert len(buys) > 0, "No media buys in response"
     for buy in buys:
@@ -1104,22 +1137,13 @@ def then_buyer_refs_for_correlation(ctx: dict) -> None:
         assert isinstance(buyer_ref, str) and buyer_ref, (
             f"buyer_ref on {mb_id} must be a non-empty string, got {buyer_ref!r}"
         )
-        # Step text claims buyer_campaign_ref for correlation — must be present AND non-None
+        # buyer_campaign_ref must be present and non-None for correlation
         bcr = getattr(buy, "buyer_campaign_ref", None)
         if bcr is None and isinstance(buy, dict):
             bcr = buy.get("buyer_campaign_ref")
-        if not hasattr(buy, "buyer_campaign_ref") and not (isinstance(buy, dict) and "buyer_campaign_ref" in buy):
-            # Check if the schema type defines the field
-            schema_has_field = False
-            if hasattr(type(buy), "model_fields"):
-                schema_has_field = "buyer_campaign_ref" in type(buy).model_fields
-            pytest.xfail(
-                f"SPEC-PRODUCTION GAP: buyer_campaign_ref field not present on media buy schema "
-                f"(schema defines field: {schema_has_field}, type: {type(buy).__name__}). "
-                f"buyer_ref '{buyer_ref}' IS present. FIXME(salesagent-9vgz.1)"
-            )
         assert bcr is not None, (
-            f"buyer_campaign_ref is None on {mb_id} — step claims 'for correlation', implying a populated value"
+            f"buyer_campaign_ref is None or absent on {mb_id} (type: {type(buy).__name__}) — "
+            f"step claims 'for correlation', implying a populated value"
         )
 
 
@@ -1167,13 +1191,9 @@ def then_snapshot_fields(ctx: dict) -> None:
 
     Must check ALL packages with snapshots, not just the first one found.
     """
-    import pytest
-
     required_fields = ("as_of", "staleness_seconds", "impressions", "spend")
     buys = _get_media_buys(ctx)
     checked_any = False
-    missing_fields: list[str] = []
-    present_fields: list[str] = []
     for buy in buys:
         for pkg in getattr(buy, "packages", []) or []:
             snapshot = getattr(pkg, "snapshot", None)
@@ -1183,20 +1203,10 @@ def then_snapshot_fields(ctx: dict) -> None:
                     val = getattr(snapshot, field, None)
                     if val is None and isinstance(snapshot, dict):
                         val = snapshot.get(field)
-                    if val is None:
-                        missing_fields.append(field)
-                    else:
-                        present_fields.append(field)
+                    assert val is not None, (
+                        f"Snapshot on package '{getattr(pkg, 'package_id', '?')}' missing required field '{field}'"
+                    )
     assert checked_any, "No snapshots found — this step requires at least one snapshot to verify"
-    if missing_fields:
-        unique_missing = sorted(set(missing_fields))
-        unique_present = sorted(set(present_fields))
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: Snapshot missing fields: {unique_missing} "
-            f"(present: {unique_present}). "
-            f"Step claims all 4 (as_of, staleness_seconds, impressions, spend) are present. "
-            f"FIXME(salesagent-9vgz.1)"
-        )
 
 
 @then("the response should include an empty media_buys array")
@@ -1992,8 +2002,6 @@ def then_error_code_with_suggestion(ctx: dict, code: str) -> None:
     Step text: 'error "{code}" with suggestion'. Asserts both error code AND
     presence of suggestion in details dict.
     """
-    import pytest
-
     error = ctx.get("error")
     assert error is not None, "Expected an error"
     from src.core.exceptions import AdCPError
@@ -2001,12 +2009,7 @@ def then_error_code_with_suggestion(ctx: dict, code: str) -> None:
     assert isinstance(error, AdCPError), f"Expected AdCPError with code '{code}', got {type(error).__name__}: {error}"
     assert error.error_code == code, f"Expected error code '{code}', got '{error.error_code}'"
     # Step text promises "with suggestion" — details dict must exist and contain it
-    if error.details is None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: AdCPError(error_code={code!r}) has no details dict — "
-            f"cannot contain suggestion. "
-            f"Correct assertion: assert error.details is not None and 'suggestion' in error.details."
-        )
+    assert error.details is not None, f"AdCPError(error_code={code!r}) has no details dict — cannot contain suggestion"
     assert "suggestion" in error.details, f"Expected 'suggestion' in error details for '{code}', got: {error.details}"
     suggestion = error.details["suggestion"]
     assert isinstance(suggestion, str) and suggestion.strip(), (
