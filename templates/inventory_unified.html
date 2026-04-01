@@ -553,7 +553,7 @@ function loadProfiles() {
         .then(response => {
             // Handle authentication errors (401) by redirecting to login
             if (response.status === 401) {
-                const loginUrl = scriptRoot + '/auth/login?redirect=' + encodeURIComponent(window.location.pathname);
+                const loginUrl = scriptRoot + '/login?redirect=' + encodeURIComponent(window.location.pathname);
                 window.location.href = loginUrl;
                 return Promise.reject(new Error('Session expired'));
             }
@@ -679,7 +679,7 @@ function editProfile(profileId) {
         .then(response => {
             // Handle authentication errors (401) by redirecting to login
             if (response.status === 401) {
-                const loginUrl = scriptRoot + '/auth/login?redirect=' + encodeURIComponent(window.location.pathname);
+                const loginUrl = scriptRoot + '/login?redirect=' + encodeURIComponent(window.location.pathname);
                 window.location.href = loginUrl;
                 return Promise.reject(new Error('Session expired'));
             }
@@ -711,7 +711,7 @@ function deleteProfile(profileId, profileName) {
         .then(response => {
             // Handle authentication errors (401) by redirecting to login
             if (response.status === 401) {
-                const loginUrl = scriptRoot + '/auth/login?redirect=' + encodeURIComponent(window.location.pathname);
+                const loginUrl = scriptRoot + '/login?redirect=' + encodeURIComponent(window.location.pathname);
                 window.location.href = loginUrl;
                 return Promise.reject(new Error('Session expired'));
             }
@@ -749,7 +749,7 @@ function loadInventoryStatus() {
     })
         .then(response => {
             if (response.status === 401) {
-                const loginUrl = scriptRoot + '/auth/login?redirect=' + encodeURIComponent(window.location.pathname);
+                const loginUrl = scriptRoot + '/login?redirect=' + encodeURIComponent(window.location.pathname);
                 window.location.href = loginUrl;
                 return Promise.reject(new Error('Session expired'));
             }
@@ -790,7 +790,23 @@ function loadInventoryStatus() {
         });
 
     // Load tree via shared partial (fetches and renders independently)
-    loadInventoryTree('', API_URLS.inventoryTree, 'adUnitTree', '_inventorySelectedIds', inventoryCache);
+    loadInventoryTree('', API_URLS.inventoryTree, 'adUnitTree', '_inventorySelectedIds', inventoryCache, attachNodeClickHandlers);
+}
+
+function attachNodeClickHandlers() {
+    document.querySelectorAll('#adUnitTree .tree-node-label').forEach(label => {
+        label.addEventListener('click', function(e) {
+            if (e.target.closest('.tree-toggle')) return;
+            e.preventDefault();
+            e.stopPropagation();
+            const nodeHeader = this.closest('.tree-node-header');
+            const node = this.closest('.tree-node');
+            const unitId = node.dataset.unitId;
+            document.querySelectorAll('#adUnitTree .tree-node-header.selected').forEach(n => n.classList.remove('selected'));
+            nodeHeader.classList.add('selected');
+            selectNode(unitId);
+        });
+    });
 }
 
 function getTimeAgo(date) {
@@ -827,7 +843,7 @@ function syncInventory() {
         .then(response => {
             // Handle authentication errors (401) by redirecting to login
             if (response.status === 401) {
-                const loginUrl = scriptRoot + '/auth/login?redirect=' + encodeURIComponent(window.location.pathname);
+                const loginUrl = scriptRoot + '/login?redirect=' + encodeURIComponent(window.location.pathname);
                 window.location.href = loginUrl;
                 return Promise.reject(new Error('Session expired'));
             }
@@ -866,7 +882,7 @@ function pollInventorySyncStatus(syncId, btn) {
             .then(response => {
                 // Handle authentication errors (401) by redirecting to login
                 if (response.status === 401) {
-                    const loginUrl = scriptRoot + '/auth/login?redirect=' + encodeURIComponent(window.location.pathname);
+                    const loginUrl = scriptRoot + '/login?redirect=' + encodeURIComponent(window.location.pathname);
                     window.location.href = loginUrl;
                     return Promise.reject(new Error('Session expired'));
                 }
@@ -932,7 +948,7 @@ function performSelectiveSync() {
         .then(response => {
             // Handle authentication errors (401) by redirecting to login
             if (response.status === 401) {
-                const loginUrl = scriptRoot + '/auth/login?redirect=' + encodeURIComponent(window.location.pathname);
+                const loginUrl = scriptRoot + '/login?redirect=' + encodeURIComponent(window.location.pathname);
                 window.location.href = loginUrl;
                 return Promise.reject(new Error('Session expired'));
             }
@@ -957,12 +973,7 @@ function performSelectiveSync() {
         });
 }
 
-function selectNode(unitId, event) {
-    event.stopPropagation();
-
-    document.querySelectorAll('.tree-node').forEach(n => n.classList.remove('selected'));
-    event.target.closest('.tree-node').classList.add('selected');
-
+function selectNode(unitId) {
     const unit = findUnitById(inventoryTree.root_units, unitId);
     if (unit) {
         showInventoryDetail(unit, 'ad_unit');
@@ -1038,7 +1049,7 @@ function searchInventory() {
         .then(response => {
             // Handle authentication errors (401) by redirecting to login
             if (response.status === 401) {
-                const loginUrl = scriptRoot + '/auth/login?redirect=' + encodeURIComponent(window.location.pathname);
+                const loginUrl = scriptRoot + '/login?redirect=' + encodeURIComponent(window.location.pathname);
                 window.location.href = loginUrl;
                 return Promise.reject(new Error('Session expired'));
             }

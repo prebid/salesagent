@@ -159,7 +159,7 @@ class TestCreativeSchemaCompliance:
         library type at adcp-client-python media_buy/list_creatives_response.py.
         Existing: test_architecture_schema_inheritance.py (structural guard)
         """
-        from adcp.types.generated_poc.media_buy.list_creatives_response import (
+        from adcp.types.generated_poc.creative.list_creatives_response import (
             Creative as ListingCreative,
         )
 
@@ -363,7 +363,9 @@ class TestSyncCreativesResponseSchema:
         assert len(response.creatives) == 1
         assert response.creatives[0].creative_id == "c_1"
         assert response.dry_run is False
-        assert response.errors is None
+        # adcp 3.9: SyncCreativesResponse subclasses success variant only;
+        # error variant is a separate type (handled by ToolError), no .errors attr
+        assert not hasattr(response, "errors")
 
     def test_str_method_summary(self):
         """__str__ returns human-readable summary.
@@ -483,19 +485,27 @@ class TestSyncCreativesRequestSchema:
         )
         assert req.creative_ids == ["c_test_1"]
 
-    def test_accepts_assignments_dict(self):
-        """assignments parameter (creative_id -> package_ids) accepted.
+    def test_accepts_assignments_list(self):
+        """assignments parameter (list of Assignment objects) accepted.
 
-        Spec: CONFIRMED -- sync-creatives-request.json defines assignments
-        as optional object with pattern-keyed string arrays.
+        Spec: CONFIRMED -- adcp 3.9: sync-creatives-request.json defines
+        assignments as optional list of Assignment objects (creative_id + package_id).
         Covers: UC-006-ASSIGNMENT-PACKAGE-VALIDATION-01
         """
+        from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
+
         creative = _make_creative()
         req = SyncCreativesRequest(
             creatives=[creative],
-            assignments={"c_test_1": ["pkg_1", "pkg_2"]},
+            assignments=[
+                Assignment(creative_id="c_test_1", package_id="pkg_1"),
+                Assignment(creative_id="c_test_1", package_id="pkg_2"),
+            ],
         )
-        assert req.assignments == {"c_test_1": ["pkg_1", "pkg_2"]}
+        assert len(req.assignments) == 2
+        assert req.assignments[0].creative_id == "c_test_1"
+        assert req.assignments[0].package_id == "pkg_1"
+        assert req.assignments[1].package_id == "pkg_2"
 
 
 class TestCreativeAssignmentSchema:
@@ -1545,6 +1555,68 @@ class TestListCreativesRawBoundaryCompleteness:
             list_creatives_raw(include_assignments=True, identity=identity)
             mock_impl.assert_called_once()
             assert mock_impl.call_args.kwargs["include_assignments"] is True
+
+
+class TestListCreativesRequestRejectsInternalFlags:
+    """Regression: internal behavior flags must NOT be on ListCreativesRequest.
+
+    External callers must never control _impl behavior through request objects.
+    The flags include_performance and include_sub_assets are not part of the
+    AdCP ListCreativesRequest spec (adcp 3.10). They must be passed as explicit
+    _impl parameters by transport wrappers, never accepted from buyers.
+    """
+
+    def test_include_performance_rejected(self):
+        """ListCreativesRequest must reject include_performance.
+
+        Covers: SEC-001 — internal flags must not be in request objects.
+        """
+        from pydantic import ValidationError
+
+        from src.core.schemas import ListCreativesRequest
+
+        with pytest.raises(ValidationError, match="include_performance"):
+            ListCreativesRequest(include_performance=True)
+
+    def test_include_sub_assets_rejected(self):
+        """ListCreativesRequest must reject include_sub_assets.
+
+        Covers: SEC-001 — internal flags must not be in request objects.
+        """
+        from pydantic import ValidationError
+
+        from src.core.schemas import ListCreativesRequest
+
+        with pytest.raises(ValidationError, match="include_sub_assets"):
+            ListCreativesRequest(include_sub_assets=False)
+
+    def test_include_assignments_is_spec_field(self):
+        """include_assignments IS a valid AdCP spec field (adcp 3.10).
+
+        Covers: SEC-001 — only non-spec fields are extracted.
+        """
+        from src.core.schemas import ListCreativesRequest
+
+        req = ListCreativesRequest(include_assignments=True)
+        assert req.include_assignments is True
+
+    def test_impl_receives_flags_as_parameters_not_from_request(self):
+        """_list_creatives_impl must use function params for include_* flags.
+
+        The request object should NOT carry include_performance or
+        include_sub_assets. Transport wrappers pass them as explicit kwargs.
+
+        Covers: SEC-001 — separation of external request from internal flags.
+        """
+        import inspect
+
+        from src.core.tools.creatives.listing import _list_creatives_impl
+
+        sig = inspect.signature(_list_creatives_impl)
+        params = list(sig.parameters.keys())
+        assert "include_performance" in params, "_impl must accept include_performance as param"
+        assert "include_sub_assets" in params, "_impl must accept include_sub_assets as param"
+        assert "include_assignments" in params, "_impl must accept include_assignments as param"
 
 
 # ============================================================================
@@ -2852,7 +2924,7 @@ class TestCreativeWrongBaseClass:
         from adcp.types.generated_poc.creative.get_creative_delivery_response import (
             Creative as DeliveryCreative,
         )
-        from adcp.types.generated_poc.media_buy.list_creatives_response import (
+        from adcp.types.generated_poc.creative.list_creatives_response import (
             Creative as ListingCreative,
         )
 
@@ -4613,12 +4685,12 @@ class TestAsyncLifecycle:
 
     Spec: CONFIRMED -- adcp spec defines sync-creatives-async-response-submitted,
     sync-creatives-async-response-working, sync-creatives-async-response-input-required.
-    https://github.com/adcontextprotocol/adcp-client-python/blob/a08805d6345c96d43ba9369bb0afe0597182871f/src/adcp/types/generated_poc/media_buy/sync_creatives_async_response_submitted.py
+    https://github.com/adcontextprotocol/adcp-client-python/blob/a08805d6345c96d43ba9369bb0afe0597182871f/src/adcp.types.generated_poc.creative.sync_creatives_async_response_submitted.py
     """
 
     def test_async_submitted_response(self):
         """Async submitted acknowledgment conforms to adcp 3.6.0 schema."""
-        from adcp.types.generated_poc.media_buy.sync_creatives_async_response_submitted import (
+        from adcp.types.generated_poc.creative.sync_creatives_async_response_submitted import (
             SyncCreativesSubmitted,
         )
 
@@ -4633,7 +4705,7 @@ class TestAsyncLifecycle:
 
     def test_async_working_response(self):
         """Async working response includes progress percentage and counts."""
-        from adcp.types.generated_poc.media_buy.sync_creatives_async_response_working import (
+        from adcp.types.generated_poc.creative.sync_creatives_async_response_working import (
             SyncCreativesWorking,
         )
 
@@ -4653,7 +4725,7 @@ class TestAsyncLifecycle:
 
     def test_async_input_required_response(self):
         """Async input-required response indicates what input is needed."""
-        from adcp.types.generated_poc.media_buy.sync_creatives_async_response_input_required import (
+        from adcp.types.generated_poc.creative.sync_creatives_async_response_input_required import (
             Reason,
             SyncCreativesInputRequired,
         )
@@ -4921,7 +4993,7 @@ class TestProvenanceModel:
         )
         data = prov.model_dump(mode="json")
         assert data["digital_source_type"] == "composite_with_trained_model"
-        assert data["ai_tool"] == "DALL-E 3"
+        assert data["ai_tool"] == {"name": "DALL-E 3"}
         assert data["human_oversight"] is True
         assert data["declared_by"] == "Agency XYZ"
         assert data["c2pa"] == "https://c2pa.example.com/manifest/123"
@@ -4975,12 +5047,12 @@ class TestProvenanceModel:
         )
         assert creative.provenance is not None
         assert creative.provenance.digital_source_type == DigitalSourceType.digital_creation
-        assert creative.provenance.ai_tool == "Stable Diffusion"
+        assert creative.provenance.ai_tool.name == "Stable Diffusion"
 
         # Provenance included in model_dump
-        data = creative.model_dump()
+        data = creative.model_dump(mode="json")
         assert "provenance" in data
-        assert data["provenance"]["ai_tool"] == "Stable Diffusion"
+        assert data["provenance"]["ai_tool"] == {"name": "Stable Diffusion"}
 
     def test_creative_without_provenance(self):
         """Creative without provenance serializes correctly (backward compat)."""

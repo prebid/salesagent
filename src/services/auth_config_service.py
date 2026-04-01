@@ -242,7 +242,7 @@ def get_tenant_redirect_uri(tenant: Tenant) -> str:
         port = os.environ.get("ADCP_SALES_PORT", "8080")
         base = f"http://localhost:{port}"
 
-    return f"{base}/auth/oidc/callback"
+    return f"{base}/admin/auth/oidc/callback"
 
 
 def is_oidc_config_valid(tenant_id: str) -> bool:

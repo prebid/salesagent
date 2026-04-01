@@ -2,10 +2,11 @@
 
 After adcp 3.6.0, CreateMediaBuyRequest no longer has brand_manifest.
 It was replaced by brand (BrandReference with .domain and optional .brand_id).
+Since adcp 3.9, account (AccountReference) is also required.
 
 These tests demonstrate that the naming code in src/core/utils/naming.py,
 src/adapters/gam/utils/naming.py, and src/adapters/xandr.py fail to extract
-brand information from real adcp 3.6.0 request objects because they still
+brand information from real adcp request objects because they still
 look for the removed brand_manifest attribute.
 """
 
@@ -23,12 +24,13 @@ gam_build_order_name_context = build_order_name_context
 
 
 def _make_request(domain: str = "nike.com", brand_id: str | None = None):
-    """Create a real adcp 3.6.0 CreateMediaBuyRequest with brand field."""
+    """Create a real adcp 3.9 CreateMediaBuyRequest with brand field."""
     brand = {"domain": domain}
     if brand_id:
         brand["brand_id"] = brand_id
     return LibraryCreateMediaBuyRequest(
         buyer_ref="TEST-001",
+        account={"account_id": "acc_test"},
         brand=brand,
         packages=[
             LibraryPackageRequest(

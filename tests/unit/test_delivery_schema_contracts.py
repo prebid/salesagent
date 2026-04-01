@@ -52,9 +52,10 @@ class TestDeliveryStatusEnum:
         actual = {m.value for m in DeliveryStatus}
         assert actual == self.EXPECTED_MEMBERS
 
-    def test_is_str_enum(self):
-        assert issubclass(DeliveryStatus, str)
-        assert DeliveryStatus.delivering == "delivering"
+    def test_values_are_strings(self):
+        """DeliveryStatus members have string values (adcp library uses plain Enum, not str Enum)."""
+        assert all(isinstance(m.value, str) for m in DeliveryStatus)
+        assert DeliveryStatus.delivering.value == "delivering"
 
 
 class TestDeliveryTypeEnum:

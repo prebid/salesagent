@@ -8,9 +8,9 @@
         <div class="col-12">
             <nav aria-label="breadcrumb">
                 <ol class="breadcrumb">
-                    <li class="breadcrumb-item"><a href="/tenant/{{ tenant_id }}">{{ tenant_name }}</a></li>
-                    <li class="breadcrumb-item"><a href="/tenant/{{ tenant_id }}/products">Products</a></li>
-                    <li class="breadcrumb-item"><a href="/tenant/{{ tenant_id }}/products/{{ product.product_id }}/edit">{{ product.name }}</a></li>
+                    <li class="breadcrumb-item"><a href="{{ request.script_root }}/tenant/{{ tenant_id }}">{{ tenant_name }}</a></li>
+                    <li class="breadcrumb-item"><a href="{{ request.script_root }}/tenant/{{ tenant_id }}/products">Products</a></li>
+                    <li class="breadcrumb-item"><a href="{{ request.script_root }}/tenant/{{ tenant_id }}/products/{{ product.product_id }}/edit">{{ product.name }}</a></li>
                     <li class="breadcrumb-item active">Configure Inventory</li>
                 </ol>
             </nav>
@@ -102,7 +102,7 @@
                         <button class="btn btn-primary" onclick="saveConfiguration()">
                             Save Configuration
                         </button>
-                        <a href="/tenant/{{ tenant_id }}/products/{{ product.product_id }}/edit"
+                        <a href="{{ request.script_root }}/tenant/{{ tenant_id }}/products/{{ product.product_id }}/edit"
                            class="btn btn-secondary">Cancel</a>
                     </div>
                 </div>
@@ -134,9 +134,10 @@
 {% include 'partials/hierarchical_tree_scripts.html' %}
 
 <script>
+const scriptRoot = '{{ request.script_root }}' || '';
 const tenantId = '{{ tenant_id }}';
 const productId = '{{ product.product_id }}';
-const treeApiUrl = `{{ script_name }}/api/tenant/${tenantId}/inventory/tree`;
+const treeApiUrl = `${scriptRoot}/api/tenant/${tenantId}/inventory/tree`;
 let selectedAdUnits = new Set();
 const inventoryCache = new Map();
 
@@ -166,7 +167,7 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 function loadCurrentConfig() {
-    return fetch(`{{ script_name }}/api/tenant/${tenantId}/product/${productId}/inventory`)
+    return fetch(`${scriptRoot}/api/tenant/${tenantId}/product/${productId}/inventory`)
         .then(response => response.json())
         .then(data => {
             const configDiv = document.getElementById('currentConfig');
@@ -236,7 +237,7 @@ function updateSelectedDisplay() {
 
 function refreshInventory() {
     // Redirect to Inventory Browser for syncing
-    window.location.href = `/tenant/${tenantId}/inventory`;
+    window.location.href = scriptRoot + `/tenant/${tenantId}/inventory`;
 }
 
 function getSuggestions() {
@@ -251,7 +252,7 @@ function getSuggestions() {
     const params = new URLSearchParams();
     sizes.forEach(size => params.append('sizes', size));
 
-    fetch(`{{ script_name }}/api/tenant/${tenantId}/inventory/suggest?${params}`)
+    fetch(`${scriptRoot}/api/tenant/${tenantId}/inventory/suggest?${params}`)
         .then(response => response.json())
         .then(data => {
             showSuggestions(data.suggestions || []);
@@ -308,7 +309,7 @@ function saveConfiguration() {
         placement_ids: [] // Not implemented in this basic version
     };
 
-    fetch(`{{ script_name }}/api/tenant/${tenantId}/product/${productId}/inventory`, {
+    fetch(`${scriptRoot}/api/tenant/${tenantId}/product/${productId}/inventory`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
@@ -319,7 +320,7 @@ function saveConfiguration() {
     .then(result => {
         if (result.status === 'success') {
             alert('Configuration saved successfully!');
-            window.location.href = `/tenant/${tenantId}/products/${productId}/edit`;
+            window.location.href = scriptRoot + `/tenant/${tenantId}/products/${productId}/edit`;
         } else {
             alert('Error saving configuration: ' + (result.error || 'Unknown error'));
         }

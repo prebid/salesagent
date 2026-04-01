@@ -12,6 +12,8 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+import sqlalchemy.exc
+
 from src.adapters.base_workflow import BaseWorkflowManager
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
@@ -130,6 +132,7 @@ class GAMWorkflowManager(BaseWorkflowManager):
         start_time: datetime,
         end_time: datetime,
         media_buy_id: str,
+        order_name_template: str | None = None,
     ) -> str | None:
         """Creates a workflow step for manual creation of GAM order (manual mode).
 
@@ -145,33 +148,30 @@ class GAMWorkflowManager(BaseWorkflowManager):
         """
         step_id = f"c{uuid.uuid4().hex[:8]}"  # 9 chars total
 
-        # Use naming template from adapter config, or fallback to default
-        from sqlalchemy import select
-
-        from src.core.database.database_session import get_db_session
-        from src.core.database.models import AdapterConfig
+        # Use pre-loaded naming template or fallback to default
         from src.core.utils.naming import apply_naming_template, build_order_name_context
 
-        order_name_template = "{campaign_name|brand_name} - {date_range}"  # Default
+        effective_template = order_name_template or "{campaign_name|brand_name} - {date_range}"
         tenant_gemini_key = None
-        with get_db_session() as db_session:
+
+        # Get tenant's Gemini key for auto_name generation
+        try:
+            from sqlalchemy import select
+
+            from src.core.database.database_session import get_db_session
             from src.core.database.models import Tenant
 
-            stmt = select(AdapterConfig).filter_by(tenant_id=self.tenant_id)
-            adapter_config = db_session.scalars(stmt).first()
-            if adapter_config and adapter_config.gam_order_name_template:
-                order_name_template = adapter_config.gam_order_name_template
-
-            # Get tenant's Gemini key for auto_name generation
-            tenant_stmt = select(Tenant).filter_by(tenant_id=self.tenant_id)
-            tenant = db_session.scalars(tenant_stmt).first()
-            if tenant:
-                tenant_gemini_key = tenant.gemini_api_key
+            with get_db_session() as db_session:
+                tenant_obj = db_session.scalars(select(Tenant).filter_by(tenant_id=self.tenant_id)).first()
+                if tenant_obj:
+                    tenant_gemini_key = tenant_obj.gemini_api_key
+        except sqlalchemy.exc.SQLAlchemyError as e:
+            logger.warning(f"Could not load tenant Gemini key: {e}")
 
         naming_context = build_order_name_context(
             request, packages, start_time, end_time, tenant_gemini_key=tenant_gemini_key
         )
-        order_name = apply_naming_template(order_name_template, naming_context)
+        order_name = apply_naming_template(effective_template, naming_context)
 
         # Build detailed action list for humans to manually create the order
         # Calculate total budget from package budgets (AdCP v2.2.0)

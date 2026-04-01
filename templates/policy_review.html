@@ -9,8 +9,8 @@
             <h1>Policy Review Task</h1>
             <nav aria-label="breadcrumb">
                 <ol class="breadcrumb">
-                    <li class="breadcrumb-item"><a href="/tenant/{{ tenant_id }}">Dashboard</a></li>
-                    <li class="breadcrumb-item"><a href="/tenant/{{ tenant_id }}/policy">Policy Settings</a></li>
+                    <li class="breadcrumb-item"><a href="{{ request.script_root }}/tenant/{{ tenant_id }}">Dashboard</a></li>
+                    <li class="breadcrumb-item"><a href="{{ request.script_root }}/tenant/{{ tenant_id }}/policy">Policy Settings</a></li>
                     <li class="breadcrumb-item active">Review Task</li>
                 </ol>
             </nav>
@@ -79,7 +79,7 @@
                     <h5 class="mb-0">Review Action</h5>
                 </div>
                 <div class="card-body">
-                    <form action="/tenant/{{ tenant_id }}/policy/review/{{ task_id }}" method="POST">
+                    <form action="{{ request.script_root }}/tenant/{{ tenant_id }}/policy/review/{{ task_id }}" method="POST">
                         <div class="form-group">
                             <label for="review_notes">Review Notes</label>
                             <textarea class="form-control" id="review_notes" name="review_notes"
@@ -95,7 +95,7 @@
                             </button>
                         </div>
 
-                        <a href="/tenant/{{ tenant_id }}/policy" class="btn btn-secondary btn-block">
+                        <a href="{{ request.script_root }}/tenant/{{ tenant_id }}/policy" class="btn btn-secondary btn-block">
                             Cancel
                         </a>
                     </form>

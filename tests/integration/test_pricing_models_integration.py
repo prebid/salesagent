@@ -7,12 +7,11 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
-from adcp import GetProductsRequest
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import CurrencyLimit, PricingOption, Principal, Product, PropertyTag, Tenant
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schemas import CreateMediaBuyRequest, PricingModel
+from src.core.schemas import CreateMediaBuyRequest, GetProductsRequest, PricingModel
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from src.core.tools.products import _get_products_impl

@@ -590,10 +590,10 @@ def _transform_scenario_tags(
         elif status in ("stale", "conflict"):
             if "@skip" not in output_tags:
                 output_tags.append("@skip")
+        # status=new: no tag needed — pytest_runtest_makereport auto-xfails
+        # scenarios with missing step definitions at runtime
     else:
-        # New scenario — add @pending tag and create a new mapping entry
-        if "@pending" not in output_tags:
-            output_tags.append("@pending")
+        # New scenario — create a mapping entry (no @pending tag needed)
         business_rules = _extract_business_rules(scenario.tags)
         new_mapping = {
             "adcp_scenario_id": scenario_id,
@@ -605,6 +605,98 @@ def _transform_scenario_tags(
         }
 
     return output_tags, new_mapping
+
+
+# Transport phrases that should be stripped from Given/When steps.
+# Transport is injected by pytest_generate_tests, not the feature file.
+_TRANSPORT_SUFFIXES = [
+    # Exact transport names (UC-011 patterns)
+    " via MCP",
+    " via A2A",
+    " via REST",
+    " via <transport>",
+    # UC-006 patterns
+    " via the MCP tool",
+    " via the REST/A2A endpoint",
+]
+
+
+def _transform_step_text(keyword: str, text: str) -> str:
+    """Strip transport-specific suffixes from Given/When step text.
+
+    Transport is a test parameter injected by pytest_generate_tests,
+    not a domain precondition. Given/When steps that embed transport
+    (e.g., "via MCP") cause the step definition to clobber the
+    parametrized transport value.
+    """
+    if keyword not in ("Given", "When"):
+        return text
+    for suffix in _TRANSPORT_SUFFIXES:
+        if text.endswith(suffix):
+            return text[: -len(suffix)]
+    return text
+
+
+def _strip_transport_from_scenario(scenario: Scenario) -> None:
+    """Strip <transport> placeholder from Scenario Outline if fully removed from steps.
+
+    When _transform_step_text removes all transport references from steps:
+    1. Strip " via <transport>" from scenario name
+    2. Remove `transport` column from Examples tables
+    3. If an Examples table has only 1 data row after column removal and no other
+       placeholders remain, convert Scenario Outline to plain Scenario
+    """
+    # Check if <transport> appears in any step text after transformation
+    has_transport_in_steps = any("<transport>" in step.text for step in scenario.steps)
+    if has_transport_in_steps:
+        return  # Still used in steps — don't strip
+
+    # Check if the scenario name uses <transport>
+    if "<transport>" not in scenario.name:
+        return  # Not a transport-parametrized Outline
+
+    # Strip from scenario name
+    scenario.name = re.sub(r"\s*via\s+<transport>\s*", " ", scenario.name).strip()
+    # Also clean up trailing parens with just whitespace inside
+    scenario.name = re.sub(r"\s+\(", " (", scenario.name)
+
+    # Strip transport column from Examples tables
+    for eb in scenario.examples:
+        if not eb.rows:
+            continue
+        # Parse the header row to find transport column index
+        header = eb.rows[0]
+        cols = [c.strip() for c in header.strip().strip("|").split("|")]
+        transport_idx = None
+        for i, col in enumerate(cols):
+            if col == "transport":
+                transport_idx = i
+                break
+        if transport_idx is None:
+            continue
+        # Remove transport column from all rows
+        new_rows: list[str] = []
+        for row in eb.rows:
+            parts = [p.strip() for p in row.strip().strip("|").split("|")]
+            parts.pop(transport_idx)
+            if parts:
+                new_rows.append("| " + " | ".join(f"{p:<17}" for p in parts) + " |")
+            # If no columns remain, this Examples block is empty
+        eb.rows = new_rows
+
+    # If all remaining Examples have only 1 data row and no other placeholders
+    # in the scenario, convert to plain Scenario
+    remaining_placeholders = set()
+    for step in scenario.steps:
+        remaining_placeholders.update(re.findall(r"<(\w+)>", step.text))
+    remaining_placeholders.discard("transport")
+
+    if not remaining_placeholders and scenario.keyword == "Scenario Outline":
+        # Check if all Examples blocks have at most 1 data row (header + 1 row)
+        all_trivial = all(len(eb.rows) <= 2 for eb in scenario.examples)
+        if all_trivial:
+            scenario.keyword = "Scenario"
+            scenario.examples = []
 
 
 def _render_feature(
@@ -649,6 +741,13 @@ def _render_feature(
         output_tags, new_mapping = _transform_scenario_tags(scenario, traceability, uc_key, feature_filename)
         if new_mapping is not None:
             new_mappings.append(new_mapping)
+
+        # Transform step text first (strip transport suffixes)
+        for step in scenario.steps:
+            step.text = _transform_step_text(step.keyword, step.text)
+
+        # Strip <transport> from Scenario Outline if fully removed from steps
+        _strip_transport_from_scenario(scenario)
 
         # Tags line
         if output_tags:

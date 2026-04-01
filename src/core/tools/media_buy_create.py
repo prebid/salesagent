@@ -350,7 +350,7 @@ def _validate_creatives_before_adapter_call(
             accepted_formats: set[str] = set()
             if product.format_ids:
                 for fmt in product.format_ids:
-                    fmt_id = fmt.get("id") if isinstance(fmt, dict) else getattr(fmt, "id", None)
+                    fmt_id = fmt.get("id")
                     if fmt_id:
                         accepted_formats.add(str(fmt_id))
             product_format_map[product.product_id] = accepted_formats
@@ -658,7 +658,6 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
 
                     # Convert formats to FormatId objects with comprehensive validation
                     from src.core.schemas import FormatId as FormatIdType
-                    from src.core.schemas import FormatReference
 
                     format_ids_list: list[FormatIdType] = []
                     formats = product.format_ids or []
@@ -667,56 +666,11 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
 
                     for idx, fmt in enumerate(formats):
                         try:
-                            # Most common case: dict from database (JSONB field returns dicts)
-                            if isinstance(fmt, dict):
-                                agent_url = fmt.get("agent_url")
-                                format_id = fmt.get("format_id") or fmt.get("id")
-
-                                # Validate required fields exist and are non-empty strings
-                                if not agent_url or not isinstance(agent_url, str):
-                                    raise ValueError(f"Format missing or invalid agent_url: agent_url={agent_url!r}")
-                                if not validate_agent_url(agent_url):
-                                    raise ValueError(f"agent_url must be valid HTTP(S) URL: {agent_url!r}")
-                                if not format_id or not isinstance(format_id, str):
-                                    raise ValueError(f"Format missing or invalid id: id={format_id!r}")
-
-                                # Pydantic automatically converts string to AnyUrl per FormatId schema
-                                # IMPORTANT: Include width, height, duration_ms from database (parameterized formats)
-                                # Convert to correct types (database may return int or need conversion)
-                                fmt_width = fmt.get("width")
-                                fmt_height = fmt.get("height")
-                                fmt_duration_ms = fmt.get("duration_ms")
-
-                                format_ids_list.append(
-                                    FormatIdType(
-                                        agent_url=make_url(agent_url),
-                                        id=format_id,
-                                        width=int(fmt_width) if fmt_width is not None else None,
-                                        height=int(fmt_height) if fmt_height is not None else None,
-                                        duration_ms=float(fmt_duration_ms) if fmt_duration_ms is not None else None,
-                                    )
-                                )
-
-                            # Already correct type (no conversion needed)
-                            elif isinstance(fmt, FormatIdType):
-                                # Defensive validation even for FormatId objects
-                                if not fmt.agent_url or not validate_agent_url(fmt.agent_url):
-                                    raise ValueError(f"FormatId has invalid agent_url: {fmt.agent_url!r}")
-                                if not fmt.id:
-                                    raise ValueError(f"FormatId has empty id: {fmt.id!r}")
-                                format_ids_list.append(fmt)
-
-                            # Legacy FormatReference object (convert format_id -> id)
-                            elif isinstance(fmt, FormatReference):
-                                if not fmt.agent_url or not validate_agent_url(fmt.agent_url):
-                                    raise ValueError(f"FormatReference has invalid agent_url: {fmt.agent_url!r}")
-                                if not fmt.format_id:
-                                    raise ValueError(f"FormatReference has empty format_id: {fmt.format_id!r}")
-                                format_ids_list.append(FormatIdType(agent_url=fmt.agent_url, id=fmt.format_id))
-
-                            else:
-                                raise ValueError(f"Unknown format type: {type(fmt).__name__}")
-
+                            validated = FormatIdType.model_validate(fmt)
+                            url_str = str(validated.agent_url)
+                            if not url_str.startswith(("http://", "https://")):
+                                raise ValueError(f"agent_url must be HTTP(S), got: {url_str}")
+                            format_ids_list.append(validated)
                         except (ValueError, ValidationError) as e:
                             error_msg = (
                                 f"Failed to reconstruct package {package_id}: "
@@ -1253,19 +1207,16 @@ async def _validate_and_convert_format_ids(
                 details={"error_code": "FORMAT_VALIDATION_ERROR"},
             )
 
-        # Extract agent_url and id from dict/object
-        if isinstance(fmt_id, dict):
-            agent_url = fmt_id.get("agent_url")
-            format_id = fmt_id.get("id")
-        elif isinstance(fmt_id, FormatId):
-            agent_url = fmt_id.agent_url
-            format_id = fmt_id.id
-        else:
+        # Coerce to FormatId via Pydantic validation (handles dicts and FormatId objects)
+        try:
+            validated_fmt = FormatId.model_validate(fmt_id, from_attributes=True)
+        except (ValueError, ValidationError) as e:
             raise AdCPValidationError(
-                f"Package {package_idx + 1}, format_ids[{idx}]: Invalid format_id structure. "
-                f"Expected FormatId object with {{agent_url, id}}, got: {type(fmt_id).__name__}",
+                f"Package {package_idx + 1}, format_ids[{idx}]: Invalid format_id structure: {e}",
                 details={"error_code": "FORMAT_VALIDATION_ERROR"},
-            )
+            ) from e
+        agent_url = str(validated_fmt.agent_url).rstrip("/")
+        format_id = validated_fmt.id
 
         if not agent_url or not format_id:
             raise AdCPValidationError(
@@ -1307,7 +1258,7 @@ async def _validate_and_convert_format_ids(
             )
 
         # Format validated - add to results
-        validated_format_ids.append({"agent_url": agent_url, "id": format_id})
+        validated_format_ids.append({"agent_url": str(agent_url), "id": format_id})
 
     return validated_format_ids
 
@@ -2129,6 +2080,7 @@ async def _create_media_buy_impl(
                     order_name=f"{req.buyer_ref} - {start_time.strftime('%Y-%m-%d')}",
                     package_id_map=package_id_map,
                     by_alias=True,
+                    account_id=identity.account_id if identity else None,
                     created_at=datetime.now(UTC),
                 )
                 logger.info(f"✅ Created media buy {media_buy_id} with status=pending_approval")
@@ -2618,10 +2570,9 @@ async def _create_media_buy_impl(
                 product_format_keys: set[tuple[str | None, str]] = set()
                 if pkg_product.format_ids:
                     for fmt in pkg_product.format_ids:
-                        # pkg_product.format_ids are dicts from database JSONB (type annotation says FormatId but runtime is dict)
-                        agent_url = fmt["agent_url"]  # type: ignore[index]
+                        agent_url = fmt.agent_url
                         normalized_url = str(agent_url).rstrip("/") if agent_url else None
-                        product_format_keys.add((normalized_url, fmt["id"]))  # type: ignore[index]
+                        product_format_keys.add((normalized_url, fmt.id))
 
                 # Build set of requested format keys for comparison
                 requested_format_keys: set[tuple[str | None, str]] = set()
@@ -2694,24 +2645,15 @@ async def _create_media_buy_impl(
                 ] = {}
                 if pkg_product.format_ids:
                     for fmt in pkg_product.format_ids:
-                        # pkg_product.format_ids are dicts from database JSONB
-                        if isinstance(fmt, dict):
-                            agent_url = fmt.get("agent_url")
-                            fmt_id = fmt.get("id")
-                        else:
-                            agent_url = getattr(fmt, "agent_url", None)
-                            fmt_id = getattr(fmt, "id", None)
+                        agent_url = fmt.agent_url
+                        fmt_id = fmt.id
                         normalized_url = str(agent_url).rstrip("/") if agent_url else None
                         if fmt_id:
-                            if isinstance(fmt, dict):
-                                width = fmt.get("width")
-                                height = fmt.get("height")
-                                duration_ms = fmt.get("duration_ms")
-                            else:
-                                width = getattr(fmt, "width", None)
-                                height = getattr(fmt, "height", None)
-                                duration_ms = getattr(fmt, "duration_ms", None)
-                            product_format_dimensions[(normalized_url, fmt_id)] = (width, height, duration_ms)
+                            product_format_dimensions[(normalized_url, fmt_id)] = (
+                                fmt.width,
+                                fmt.height,
+                                fmt.duration_ms,
+                            )
 
                 # Process request format_ids, merging dimensions from product if missing
                 for req_fmt in matching_package.format_ids:
@@ -3004,6 +2946,7 @@ async def _create_media_buy_impl(
                 status=media_buy_status,
                 campaign_objective=getattr(req, "campaign_objective", "") or "",
                 kpi_goal=getattr(req, "kpi_goal", "") or "",
+                account_id=identity.account_id if identity else None,
             )
             # UoW auto-commits on clean exit
 
@@ -3825,6 +3768,12 @@ async def create_media_buy(
     # Read identity and context_id pre-resolved by MCPAuthMiddleware
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     _ctx_id = (await ctx.get_state("context_id")) if isinstance(ctx, Context) else None
+
+    # Resolve account at transport boundary (before _impl)
+    from src.core.transport_helpers import enrich_identity_with_account
+
+    identity = enrich_identity_with_account(identity, req.account)
+
     # Serialize PushNotificationConfig model to dict for _impl (which accepts dict|None)
     pnc_dict = push_notification_config.model_dump() if push_notification_config else None
     result = await _create_media_buy_impl(
@@ -3915,6 +3864,11 @@ async def create_media_buy_raw(
         from src.core.transport_helpers import resolve_identity_from_context
 
         identity = resolve_identity_from_context(ctx, require_valid_token=True)
+
+    # Resolve account at transport boundary (before _impl)
+    from src.core.transport_helpers import enrich_identity_with_account
+
+    identity = enrich_identity_with_account(identity, req.account)
 
     # FIXME(salesagent-v0kb): boundary-completeness — context_id not passed to _impl
     return await _create_media_buy_impl(
