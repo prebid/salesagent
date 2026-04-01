@@ -2023,10 +2023,12 @@ def then_outcome(ctx: dict, outcome: str) -> None:
             if actual_code is None and isinstance(error, dict):
                 actual_code = error.get("code")
             assert actual_code, f"Expected error with code but got empty code. Error: {error}"
+            assert actual_code == expected_code, (
+                f"Expected error code '{expected_code}', got '{actual_code}'. Error: {error}"
+            )
 
         # Verify suggestion only when the error code matches the scenario
-        # expectation.  If production emits a different code, the mismatch
-        # is a production-side issue — we still confirm an error was raised.
+        # expectation.
         codes_match = actual_code is not None and actual_code == expected_code
         if "with suggestion" in outcome and is_adcp_error and codes_match:
             suggestion = getattr(error, "suggestion", None)
@@ -2079,19 +2081,21 @@ def then_paused_unchanged(ctx: dict) -> None:
     actual_paused = _pkg_field(pkg, "paused")
     # The existing package was created with a known paused state; verify it didn't change
     existing_pkg = ctx.get("existing_package")
-    if existing_pkg is not None:
-        original_paused = _pkg_field(existing_pkg, "paused")
-        if actual_paused is not None and original_paused is not None:
-            assert actual_paused == original_paused, (
-                f"Paused state changed: was {original_paused!r}, now {actual_paused!r}"
-            )
-        elif actual_paused is None:
-            pytest.xfail(
-                "SPEC-PRODUCTION GAP: paused not echoed in update response — "
-                "cannot verify unchanged. FIXME(salesagent-9vgz.1)"
-            )
-    elif actual_paused is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: paused not echoed in update response. FIXME(salesagent-9vgz.1)")
+    assert existing_pkg is not None, (
+        "existing_package missing from context — Given step must record the pre-update package"
+    )
+    original_paused = _pkg_field(existing_pkg, "paused")
+    if actual_paused is None:
+        pytest.xfail(
+            "SPEC-PRODUCTION GAP: paused not echoed in update response — "
+            "cannot verify unchanged. FIXME(salesagent-9vgz.1)"
+        )
+    if original_paused is None:
+        pytest.xfail(
+            "SPEC-PRODUCTION GAP: paused not present on existing package — "
+            "cannot verify unchanged. FIXME(salesagent-9vgz.1)"
+        )
+    assert actual_paused == original_paused, f"Paused state changed: was {original_paused!r}, now {actual_paused!r}"
 
 
 @then(parsers.parse("the response should contain the package with paused={paused}"))
@@ -2240,17 +2244,17 @@ def then_targeting_unchanged(ctx: dict) -> None:
     assert _pkg_field(pkg, "package_id"), "Package has no package_id"
     # Compare keyword_targets with the pre-update state
     existing_pkg = ctx.get("existing_package")
-    if existing_pkg is not None:
-        original_kws = _get_overlay_keywords(existing_pkg, "keyword_targets")
-        actual_kws = _get_overlay_keywords(pkg, "keyword_targets")
-        # Normalize: None and [] are both "no keywords"
-        original_set = {
-            (_keyword_field(kw, "keyword"), str(_keyword_field(kw, "match_type"))) for kw in (original_kws or [])
-        }
-        actual_set = {
-            (_keyword_field(kw, "keyword"), str(_keyword_field(kw, "match_type"))) for kw in (actual_kws or [])
-        }
-        assert actual_set == original_set, f"Targeting changed: original keywords {original_set}, now {actual_set}"
+    assert existing_pkg is not None, (
+        "existing_package missing from context — Given step must record the pre-update package"
+    )
+    original_kws = _get_overlay_keywords(existing_pkg, "keyword_targets")
+    actual_kws = _get_overlay_keywords(pkg, "keyword_targets")
+    # Normalize: None and [] are both "no keywords"
+    original_set = {
+        (_keyword_field(kw, "keyword"), str(_keyword_field(kw, "match_type"))) for kw in (original_kws or [])
+    }
+    actual_set = {(_keyword_field(kw, "keyword"), str(_keyword_field(kw, "match_type"))) for kw in (actual_kws or [])}
+    assert actual_set == original_set, f"Targeting changed: original keywords {original_set}, now {actual_set}"
 
 
 @then(parsers.parse('the response should contain negative keyword "{keyword}" in targeting_overlay'))
@@ -2279,17 +2283,17 @@ def then_negative_keywords_unchanged(ctx: dict) -> None:
     assert _pkg_field(pkg, "package_id"), "Package has no package_id"
     # Compare negative_keywords with the pre-update state
     existing_pkg = ctx.get("existing_package")
-    if existing_pkg is not None:
-        original_neg = _get_overlay_keywords(existing_pkg, "negative_keywords")
-        actual_neg = _get_overlay_keywords(pkg, "negative_keywords")
-        # Normalize: None and [] are both "no negative keywords"
-        original_set = {
-            (_keyword_field(kw, "keyword"), str(_keyword_field(kw, "match_type"))) for kw in (original_neg or [])
-        }
-        actual_set = {
-            (_keyword_field(kw, "keyword"), str(_keyword_field(kw, "match_type"))) for kw in (actual_neg or [])
-        }
-        assert actual_set == original_set, f"Negative keywords changed: original {original_set}, now {actual_set}"
+    assert existing_pkg is not None, (
+        "existing_package missing from context — Given step must record the pre-update package"
+    )
+    original_neg = _get_overlay_keywords(existing_pkg, "negative_keywords")
+    actual_neg = _get_overlay_keywords(pkg, "negative_keywords")
+    # Normalize: None and [] are both "no negative keywords"
+    original_set = {
+        (_keyword_field(kw, "keyword"), str(_keyword_field(kw, "match_type"))) for kw in (original_neg or [])
+    }
+    actual_set = {(_keyword_field(kw, "keyword"), str(_keyword_field(kw, "match_type"))) for kw in (actual_neg or [])}
+    assert actual_set == original_set, f"Negative keywords changed: original {original_set}, now {actual_set}"
 
 
 @then("the response should contain updated keyword targets and negative keywords")
@@ -2380,16 +2384,19 @@ def then_existing_package(ctx: dict, pkg_id: str) -> None:
     pkgs = _assert_has_packages(ctx)
     # Use the actual existing_package_id from the Given step (pkg_id is a label)
     actual_existing = ctx.get("expected_existing_package_id") or ctx.get("existing_package_id")
-    if actual_existing:
-        found = False
-        for pkg in pkgs:
-            if _pkg_field(pkg, "package_id") == actual_existing:
-                found = True
-                break
-        assert found, (
-            f"Expected existing package with package_id '{actual_existing}' in response. "
-            f"Got: {[_pkg_field(p, 'package_id') for p in pkgs]}"
-        )
+    assert actual_existing, (
+        "expected_existing_package_id/existing_package_id missing from context — "
+        "Given step must record the existing package ID"
+    )
+    found = False
+    for pkg in pkgs:
+        if _pkg_field(pkg, "package_id") == actual_existing:
+            found = True
+            break
+    assert found, (
+        f"Expected existing package with package_id '{actual_existing}' in response. "
+        f"Got: {[_pkg_field(p, 'package_id') for p in pkgs]}"
+    )
 
 
 @then("no duplicate package should be created")
@@ -2452,9 +2459,9 @@ def then_existing_returned(ctx: dict) -> None:
     assert len(pkgs) == 1, f"Expected 1 package (no duplicate), got {len(pkgs)}"
     # Verify the returned package matches the existing one
     existing_pkg_id = ctx.get("existing_package_id")
-    if existing_pkg_id:
-        actual_id = _pkg_field(pkgs[0], "package_id")
-        assert actual_id == existing_pkg_id, f"Expected existing package_id '{existing_pkg_id}' but got '{actual_id}'"
+    assert existing_pkg_id, "existing_package_id missing from context — Given step must record the existing package ID"
+    actual_id = _pkg_field(pkgs[0], "package_id")
+    assert actual_id == existing_pkg_id, f"Expected existing package_id '{existing_pkg_id}' but got '{actual_id}'"
 
 
 # --- Invariant-specific Then steps ---

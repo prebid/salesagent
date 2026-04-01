@@ -290,14 +290,17 @@ def then_redirected_to_create(ctx: dict) -> None:
     response = ctx["response"]
     assert response.status_code in (302, 303), f"Expected redirect, got {response.status_code}"
     location = response.headers.get("Location", "")
-    assert "create" in location, f"Expected redirect to create page, got: {location}"
+    assert "/create" in location, f"Expected redirect to create page URL (containing '/create'), got: {location}"
 
 
 @then("the page returns a redirect to the login page")
 def then_redirect_to_login(ctx: dict) -> None:
-    """Assert unauthenticated users are redirected."""
+    """Assert unauthenticated users are redirected to login."""
     response = ctx["response"]
     assert response.status_code in (302, 303, 401), f"Expected redirect/unauthorized, got {response.status_code}"
+    if response.status_code in (302, 303):
+        location = response.headers.get("Location", "")
+        assert "/login" in location, f"Expected redirect to login page URL (containing '/login'), got: {location}"
 
 
 @then(parsers.parse('the database contains an account named "{name}"'))

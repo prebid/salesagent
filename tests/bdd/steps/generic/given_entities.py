@@ -126,11 +126,14 @@ def given_registry_two_types(ctx: dict, type_a: str, type_b: str) -> None:
 @given("the seller has additional creative agents beyond the default")
 def given_additional_creative_agents(ctx: dict) -> None:
     """Seller has additional creative agent referrals."""
+    from adcp.types import CreativeAgent as LibraryCreativeAgent
+    from adcp.types.generated_poc.enums.creative_agent_capability import CreativeAgentCapability
+
     ctx["creative_agent_referrals"] = [
-        {
-            "agent_url": "https://extra-creatives.example.com",
-            "capabilities": ["display", "video"],
-        },
+        LibraryCreativeAgent(
+            agent_url="https://extra-creatives.example.com",
+            capabilities=[CreativeAgentCapability.assembly, CreativeAgentCapability.delivery],
+        ),
     ]
 
 
@@ -278,10 +281,10 @@ def given_seller_various_input_formats(ctx: dict) -> None:
 def given_seller_creative_agent_various_types(ctx: dict) -> None:
     """Seller has creative agent formats of various types (partition/boundary)."""
     ctx["creative_agent_formats"] = [
-        {"name": "audio-format", "type": "audio"},
-        {"name": "video-format", "type": "video"},
-        {"name": "display-format", "type": "display"},
-        {"name": "dooh-format", "type": "dooh"},
+        FormatFactory.build(name="audio-format", type=CATEGORY_MAP["audio"]),
+        FormatFactory.build(name="video-format", type=CATEGORY_MAP["video"]),
+        FormatFactory.build(name="display-format", type=CATEGORY_MAP["display"]),
+        FormatFactory.build(name="dooh-format", type=CATEGORY_MAP["dooh"]),
     ]
 
 
@@ -289,7 +292,7 @@ def given_seller_creative_agent_various_types(ctx: dict) -> None:
 def given_seller_creative_agent_various_assets(ctx: dict) -> None:
     """Seller has creative agent formats with various asset types (partition/boundary)."""
     ctx["creative_agent_formats"] = [
-        {"name": "image-format", "assets": [{"type": "image"}]},
-        {"name": "video-format", "assets": [{"type": "video"}]},
-        {"name": "text-format", "assets": [{"type": "text"}]},
+        FormatFactory.build(name="image-format", assets=[make_asset("image")]),
+        FormatFactory.build(name="video-format", assets=[make_asset("video")]),
+        FormatFactory.build(name="text-format", assets=[make_asset("text")]),
     ]

@@ -27,6 +27,41 @@ from tests.factories import (
 # ═══════════════════════════════════════════════════════════════════════
 
 
+def _make_test_snapshot() -> Any:
+    """Create a realistic Snapshot instance for adapter reporting tests."""
+    from datetime import UTC, datetime
+
+    from src.core.schemas._base import Snapshot
+
+    return Snapshot(
+        as_of=datetime.now(UTC),
+        impressions=1500.0,
+        spend=75.50,
+        staleness_seconds=30,
+        clicks=120.0,
+        pacing_index=1.05,
+        delivery_status="delivering",
+        currency="USD",
+    )
+
+
+def _patch_adapter_with_snapshot(ctx: dict, snapshot_data: dict) -> None:
+    """Patch get_adapter to return a mock adapter with the given snapshot data."""
+    from unittest.mock import MagicMock, patch
+
+    adapter_mock = MagicMock()
+    adapter_mock.capabilities.supports_realtime_reporting = True
+    adapter_mock.get_packages_snapshot.return_value = snapshot_data
+
+    patcher = patch(
+        "src.core.tools.media_buy_list.get_adapter",
+        return_value=adapter_mock,
+    )
+    patcher.start()
+    ctx.setdefault("_patchers", []).append(patcher)
+    ctx["adapter_snapshot_data"] = snapshot_data
+
+
 def _find_media_buy_for_package(ctx: dict, pkg_id: str) -> Any:
     """Find the seeded media buy ORM object that owns the given package_id."""
     pkgs = ctx.get("seeded_packages", {})
@@ -547,20 +582,12 @@ def given_adapter_reporting_with_data(ctx: dict) -> None:
     whose get_packages_snapshot returns realistic snapshot data keyed by the
     packages created in earlier Given steps.
     """
-    from datetime import UTC, datetime
-    from unittest.mock import MagicMock, patch
-
-    from src.core.schemas._base import Snapshot
-
     ctx["adapter_supports_reporting"] = True
 
-    # Build snapshot data from seeded media buys
-    snapshot_data: dict[str, dict[str, Snapshot]] = {}
+    snapshot_data: dict[str, dict] = {}
     seeded = ctx.get("seeded_media_buys", {})
-    for mb_id, mb in seeded.items():
-        packages = getattr(mb, "packages", None) or []
-        # Also check MediaPackage objects created via factory (stored in session)
-        env = ctx["env"]
+    env = ctx["env"]
+    for mb_id in seeded:
         if env._session is not None:
             from sqlalchemy import select
 
@@ -568,76 +595,101 @@ def given_adapter_reporting_with_data(ctx: dict) -> None:
 
             pkgs = env._session.scalars(select(DBMediaPackage).filter_by(media_buy_id=mb_id)).all()
             for pkg in pkgs:
-                snapshot_data.setdefault(mb_id, {})[pkg.package_id] = Snapshot(
-                    as_of=datetime.now(UTC),
-                    impressions=1500.0,
-                    spend=75.50,
-                    staleness_seconds=30,
-                    clicks=120.0,
-                    pacing_index=1.05,
-                    delivery_status="delivering",
-                    currency="USD",
-                )
+                snapshot_data.setdefault(mb_id, {})[pkg.package_id] = _make_test_snapshot()
 
-    adapter_mock = MagicMock()
-    adapter_mock.capabilities.supports_realtime_reporting = True
-    adapter_mock.get_packages_snapshot.return_value = snapshot_data
-
-    patcher = patch(
-        "src.core.tools.media_buy_list.get_adapter",
-        return_value=adapter_mock,
-    )
-    patcher.start()
-    ctx.setdefault("_patchers", []).append(patcher)
-    ctx["adapter_snapshot_data"] = snapshot_data
+    _patch_adapter_with_snapshot(ctx, snapshot_data)
 
 
 @given(parsers.parse("the adapter supports realtime reporting but no data for {pkg_id}"))
 def given_adapter_reporting_no_data(ctx: dict, pkg_id: str) -> None:
     """Adapter supports reporting but no snapshot for specified package.
 
-    FIXME(salesagent-9vgz.1): No mock side_effect or return_value is configured
-    to raise/return nothing for the specified package — cannot fulfill 'no data for X'.
+    Configures adapter mock to support realtime reporting but return an empty
+    snapshot dict for the media buy owning ``pkg_id``, so the package has no
+    snapshot data available.
     """
-    import pytest
+    ctx["adapter_supports_reporting"] = True
 
-    pytest.xfail(
-        f"SPEC-PRODUCTION GAP: Adapter mock has no side_effect/return_value for '{pkg_id}' — "
-        f"cannot fulfill 'no data for {pkg_id}'. "
-        f"FIXME(salesagent-9vgz.1): Configure adapter mock to return empty for this package."
-    )
+    # Build snapshot_data with the target package's media buy present but
+    # with NO entry for the specific pkg_id — simulating "no data for X".
+    snapshot_data: dict[str, dict] = {}
+    seeded = ctx.get("seeded_media_buys", {})
+    env = ctx["env"]
+    if env._session is not None:
+        from sqlalchemy import select
+
+        from src.core.database.models import MediaPackage as DBMediaPackage
+
+        pkg_row = env._session.scalars(select(DBMediaPackage).filter_by(package_id=pkg_id)).first()
+        if pkg_row:
+            # Media buy exists but has empty snapshot dict — no data for pkg_id
+            snapshot_data[pkg_row.media_buy_id] = {}
+    elif seeded:
+        # Fallback: use first seeded media buy with empty snapshot
+        snapshot_data[next(iter(seeded))] = {}
+
+    _patch_adapter_with_snapshot(ctx, snapshot_data)
 
 
 @given(parsers.parse("the adapter supports realtime reporting and data for all pkgs"))
 def given_adapter_reporting_all_data(ctx: dict) -> None:
-    """Adapter supports reporting with data for all packages.
+    """Adapter supports reporting with snapshot data for every seeded package.
 
-    FIXME(salesagent-9vgz.1): No mock return_value is configured to actually
-    return snapshot data for any package — cannot fulfill 'data for all pkgs'.
+    Builds snapshot entries for all packages across all seeded media buys,
+    so every package has data available when include_snapshot is requested.
     """
-    import pytest
+    ctx["adapter_supports_reporting"] = True
 
-    pytest.xfail(
-        "SPEC-PRODUCTION GAP: Adapter mock has no return_value for snapshot data — "
-        "cannot fulfill 'data for all pkgs'. "
-        "FIXME(salesagent-9vgz.1): Configure adapter mock to return snapshot data."
-    )
+    snapshot_data: dict[str, dict] = {}
+    seeded = ctx.get("seeded_media_buys", {})
+    env = ctx["env"]
+
+    for mb_id in seeded:
+        if env._session is not None:
+            from sqlalchemy import select
+
+            from src.core.database.models import MediaPackage as DBMediaPackage
+
+            pkgs = env._session.scalars(select(DBMediaPackage).filter_by(media_buy_id=mb_id)).all()
+            for pkg in pkgs:
+                snapshot_data.setdefault(mb_id, {})[pkg.package_id] = _make_test_snapshot()
+
+    _patch_adapter_with_snapshot(ctx, snapshot_data)
 
 
 @given(parsers.parse("the adapter supports reporting, data for {pkg1} but not {pkg2}"))
 def given_adapter_reporting_mixed(ctx: dict, pkg1: str, pkg2: str) -> None:
-    """Adapter supports reporting with mixed snapshot availability.
+    """Adapter supports reporting with mixed per-package snapshot availability.
 
-    FIXME(salesagent-9vgz.1): Adapter mock is never configured with per-package
-    return values or side effects — cannot fulfill 'data for X but not Y'.
+    Configures adapter mock so ``pkg1`` has snapshot data and ``pkg2`` does not.
+    The snapshot dict includes an entry for pkg1 but omits pkg2.
     """
-    import pytest
+    ctx["adapter_supports_reporting"] = True
 
-    pytest.xfail(
-        "SPEC-PRODUCTION GAP: Adapter mock has no per-package return_value/side_effect — "
-        "cannot fulfill mixed snapshot availability. "
-        "FIXME(salesagent-9vgz.1): Configure adapter mock with per-package responses."
-    )
+    snapshot_data: dict[str, dict] = {}
+    seeded = ctx.get("seeded_media_buys", {})
+    env = ctx["env"]
+
+    # Find which media buy owns pkg1 and pkg2
+    if env._session is not None:
+        from sqlalchemy import select
+
+        from src.core.database.models import MediaPackage as DBMediaPackage
+
+        for pkg_id in (pkg1, pkg2):
+            pkg_row = env._session.scalars(select(DBMediaPackage).filter_by(package_id=pkg_id)).first()
+            if pkg_row:
+                mb_id = pkg_row.media_buy_id
+                if pkg_id == pkg1:
+                    snapshot_data.setdefault(mb_id, {})[pkg_id] = _make_test_snapshot()
+                else:
+                    # pkg2's media buy key exists but no entry for pkg2
+                    snapshot_data.setdefault(mb_id, {})
+    elif seeded:
+        mb_id = next(iter(seeded))
+        snapshot_data[mb_id] = {pkg1: _make_test_snapshot()}
+
+    _patch_adapter_with_snapshot(ctx, snapshot_data)
 
 
 @given(parsers.parse('an authenticated principal "{principal_id}" who owns {count:d} media buys'))
@@ -729,20 +781,48 @@ def given_principal_owns_mb_simple(ctx: dict, principal_id: str, mb_id: str) -> 
 
 @given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with no start_time and no start_date'))
 def given_principal_owns_mb_no_start(ctx: dict, principal_id: str, mb_id: str) -> None:
-    """Media buy with no start_date — DB doesn't allow NULL, so xfail."""
-    import pytest
+    """Create media buy with no start_time and no start_date.
 
-    pytest.xfail(
-        "SPEC-PRODUCTION GAP: DB schema requires NOT NULL start_date. Cannot create media buy without start_date."
+    DB schema enforces NOT NULL on start_date, so this will raise an
+    IntegrityError on commit. The scenario-level xfail (T-UC-019-partition-status-invalid)
+    handles the expected failure.
+    """
+    assert ctx["principal"].principal_id == principal_id
+    env = ctx["env"]
+    mb = MediaBuyFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        media_buy_id=mb_id,
+        buyer_ref=f"ref_{mb_id}",
+        status="active",
+        start_date=None,
+        start_time=None,
     )
+    env._commit_factory_data()
+    ctx.setdefault("seeded_media_buys", {})[mb_id] = mb
 
 
 @given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with no end_time and no end_date'))
 def given_principal_owns_mb_no_end(ctx: dict, principal_id: str, mb_id: str) -> None:
-    """Media buy with no end_date — DB doesn't allow NULL, so xfail."""
-    import pytest
+    """Create media buy with no end_time and no end_date.
 
-    pytest.xfail("SPEC-PRODUCTION GAP: DB schema requires NOT NULL end_date. Cannot create media buy without end_date.")
+    DB schema enforces NOT NULL on end_date, so this will raise an
+    IntegrityError on commit. The scenario-level xfail (T-UC-019-partition-status-invalid)
+    handles the expected failure.
+    """
+    assert ctx["principal"].principal_id == principal_id
+    env = ctx["env"]
+    mb = MediaBuyFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        media_buy_id=mb_id,
+        buyer_ref=f"ref_{mb_id}",
+        status="active",
+        end_date=None,
+        end_time=None,
+    )
+    env._commit_factory_data()
+    ctx.setdefault("seeded_media_buys", {})[mb_id] = mb
 
 
 @given(parsers.parse("the request targets a sandbox account"))
@@ -765,22 +845,7 @@ def given_snapshot_available(ctx: dict, pkg_id: str) -> None:
     returns snapshot data for the specified package. If a patcher already
     exists (from given_adapter_reporting_with_data), update its return data.
     """
-    from datetime import UTC, datetime
-    from unittest.mock import MagicMock, patch
-
-    from src.core.schemas._base import Snapshot
-
-    test_snapshot = Snapshot(
-        as_of=datetime.now(UTC),
-        impressions=1500.0,
-        spend=75.50,
-        staleness_seconds=30,
-        clicks=120.0,
-        pacing_index=1.05,
-        delivery_status="delivering",
-        currency="USD",
-    )
-
+    test_snapshot = _make_test_snapshot()
     ctx.setdefault("expected_snapshots", {})[pkg_id] = test_snapshot
 
     # Find the media_buy_id that owns this package
@@ -806,16 +871,7 @@ def given_snapshot_available(ctx: dict, pkg_id: str) -> None:
 
     # If no adapter patcher exists yet, create one
     if not any(getattr(p, "attribute", "") == "get_adapter" for p in ctx.get("_patchers", [])):
-        adapter_mock = MagicMock()
-        adapter_mock.capabilities.supports_realtime_reporting = True
-        adapter_mock.get_packages_snapshot.return_value = snapshot_data
-
-        patcher = patch(
-            "src.core.tools.media_buy_list.get_adapter",
-            return_value=adapter_mock,
-        )
-        patcher.start()
-        ctx.setdefault("_patchers", []).append(patcher)
+        _patch_adapter_with_snapshot(ctx, snapshot_data)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1772,25 +1828,12 @@ def then_response_has_media_buys_array(ctx: dict) -> None:
 def then_sandbox_true(ctx: dict) -> None:
     """Assert response includes sandbox=true.
 
-    Step text: 'should include sandbox equals true'. Missing sandbox field
-    means the feature isn't implemented yet (spec gap).
+    Scenario-level xfail (T-UC-019-sandbox-happy) handles the expected failure
+    when sandbox mode is not yet implemented in production.
     """
-    import pytest
-
-    from src.core.schemas._base import GetMediaBuysResponse
-
     resp = ctx.get("response")
     assert resp is not None, f"Expected response, got error: {ctx.get('error')}"
-    assert isinstance(resp, GetMediaBuysResponse), f"Expected GetMediaBuysResponse, got {type(resp).__name__}"
-    # Check schema-level field definition first
-    has_sandbox_field = "sandbox" in type(resp).model_fields if hasattr(type(resp), "model_fields") else False
     sandbox = getattr(resp, "sandbox", None)
-    if sandbox is None and not has_sandbox_field:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: sandbox field not defined in GetMediaBuysResponse schema. "
-            "Correct assertion: assert resp.sandbox is True. "
-            "FIXME(salesagent-9vgz.1): Add sandbox: bool | None field to GetMediaBuysResponse."
-        )
     assert sandbox is True, f"Expected sandbox=true, got {sandbox!r}"
 
 
