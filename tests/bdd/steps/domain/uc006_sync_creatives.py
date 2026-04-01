@@ -26,8 +26,25 @@ from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 
 @given("a creative with a known format_id")
 def given_creative_with_format(ctx: dict) -> None:
-    """Set up a creative with a known format — no-op for account resolution tests."""
-    ctx.setdefault("creative_format_id", "display_300x250")
+    """Set up a creative payload with a known format_id for sync_creatives dispatch.
+
+    Ensures tenant/principal exist, then builds a creative payload dict matching
+    the shape that _sync_creatives_impl expects (CreativeAsset-compatible dict).
+    Stores the payload in ctx["creatives"] for the When step to consume.
+    """
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+
+    format_id = "display_300x250"
+    creative_id = "creative-known-fmt-001"
+    creative_payload = {
+        "creative_id": creative_id,
+        "name": "Test Creative with Known Format",
+        "format_id": {"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
+        "media_url": "https://example.com/banner.png",
+    }
+    ctx.setdefault("creatives", []).append(creative_payload)
+    ctx["creative_format_id"] = format_id
 
 
 @given(parsers.parse("account is {account_setup}"))
@@ -151,7 +168,8 @@ def when_sync_creative(ctx: dict) -> None:
     code's responsibility, not the step's.
     """
     account_ref = ctx.get("account_ref")
-    dispatch_request(ctx, account=account_ref, creatives=[])
+    creatives = ctx.get("creatives", [])
+    dispatch_request(ctx, account=account_ref, creatives=creatives)
 
 
 def _ensure_tenant_principal(ctx: dict, env: object) -> None:

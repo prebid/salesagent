@@ -53,6 +53,12 @@ def given_buyer_authenticated_as(ctx: dict, principal_id: str) -> None:
     env = ctx["env"]
     env._identity_cache.clear()
     env._principal_id = principal_id
+    # Post-condition: verify the identity mutation took effect
+    actual = env.identity.principal_id
+    assert actual == principal_id, (
+        f"env.identity.principal_id is {actual!r} after setting "
+        f"env._principal_id to {principal_id!r} — cache not rebuilt"
+    )
 
 
 @given(parsers.parse('the principal "{principal_id}" does not exist in the database'))
