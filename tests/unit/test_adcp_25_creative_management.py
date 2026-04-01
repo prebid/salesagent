@@ -172,22 +172,13 @@ class TestUpdateMediaBuyInlineCreatives:
 
     def test_update_media_buy_package_creatives_field_exists(self):
         """Verify update_media_buy accepts package.creatives field."""
-        # V3 Migration: PackageUpdate is a wrapper with root field containing union variants
-        # Check the union variants (PackageUpdate1/PackageUpdate2) for the creatives field
-        from adcp.types.generated_poc.media_buy.package_update import PackageUpdate1, PackageUpdate2
+        # adcp 3.9: PackageUpdate1/PackageUpdate2 union variants merged into single PackageUpdate
+        from adcp.types.generated_poc.media_buy.package_update import PackageUpdate
 
-        # Check PackageUpdate1 structure has creatives field
-        fields1 = PackageUpdate1.model_fields
-        assert "creatives" in fields1, "PackageUpdate1 should have creatives field (AdCP 2.5)"
-        assert "creative_assignments" in fields1, "PackageUpdate1 should have creative_assignments field (AdCP 2.5)"
-
-        # V3 removed creative_ids from update - use creative_assignments instead
-        # assert "creative_ids" in fields1, "PackageUpdate1 should have creative_ids field"
-
-        # Same for PackageUpdate2
-        fields2 = PackageUpdate2.model_fields
-        assert "creatives" in fields2, "PackageUpdate2 should have creatives field (AdCP 2.5)"
-        assert "creative_assignments" in fields2, "PackageUpdate2 should have creative_assignments field (AdCP 2.5)"
+        # Check PackageUpdate structure has creatives field
+        fields = PackageUpdate.model_fields
+        assert "creatives" in fields, "PackageUpdate should have creatives field (AdCP 2.5)"
+        assert "creative_assignments" in fields, "PackageUpdate should have creative_assignments field (AdCP 2.5)"
 
 
 class TestUpdateMediaBuyCreativeAssignments:

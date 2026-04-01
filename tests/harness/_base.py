@@ -208,6 +208,18 @@ class BaseTestEnv:
         3. Extract structured_content from ToolResult
         4. Parse into response_cls
 
+        Identity handling (mirrors production auth middleware):
+        - identity is None → Context returns None (no token)
+        - identity is ResolvedIdentity → Context returns it (valid token)
+        - identity absent → uses default self.identity_for(Transport.MCP)
+
+        Context extraction (mirrors production FastMCP parameter dispatch):
+        In production, FastMCP extracts ``context`` from the tool schema
+        and passes it as a separate kwarg to the MCP wrapper. When the
+        harness receives a ``req`` object with ``req.context`` set, we
+        extract it and pass it as a separate ``context`` kwarg to exercise
+        the MCP wrapper's context merge branch (``if context is not None``).
+
         Subclass call_mcp() should do any pre-processing (enum coercion,
         kwarg popping) then delegate here.
         """
@@ -220,20 +232,109 @@ class BaseTestEnv:
 
         self._commit_factory_data()
 
+        # Pop identity — it goes on the mock Context, not to the wrapper function.
+        _NO_OVERRIDE = object()
+        identity = kwargs.pop("identity", _NO_OVERRIDE)
+        mcp_identity = self.identity_for(Transport.MCP) if identity is _NO_OVERRIDE else identity
+
+        # Extract context from req if present and no explicit context kwarg.
+        # Mirrors FastMCP behavior: tool parameters are passed as separate kwargs.
+        if "context" not in kwargs:
+            req = kwargs.get("req")
+            if req is not None and hasattr(req, "context") and req.context is not None:
+                kwargs["context"] = req.context
+
         mock_ctx = MagicMock(spec=Context)
-        mock_ctx.get_state = AsyncMock(return_value=self.identity_for(Transport.MCP))
+        mock_ctx.get_state = AsyncMock(return_value=mcp_identity)
 
         tool_result = asyncio.run(wrapper_fn(ctx=mock_ctx, **kwargs))
         return response_cls(**tool_result.structured_content)
 
+    def _run_rest_request(self, endpoint: str, **kwargs: Any) -> Any:
+        """Shared REST dispatch: configure auth → build body → POST → return Response.
+
+        Symmetric with ``_run_mcp_wrapper``. Handles the full REST lifecycle:
+        1. Pop ``identity`` from kwargs and configure dep override for this request
+        2. Commit factory data
+        3. Build request body from remaining kwargs
+        4. POST via TestClient
+        5. Return raw httpx.Response
+
+        Identity handling (mirrors production auth middleware):
+        - identity is None → dep raises AdCPAuthenticationError (no token)
+        - identity is ResolvedIdentity → dep returns it (valid token)
+        - identity absent → uses default self.identity_for(Transport.REST)
+        """
+        from src.app import app
+        from src.core.auth_context import _require_auth_dep, _resolve_auth_dep
+        from tests.harness.transport import Transport
+
+        _NO_OVERRIDE = object()
+        identity = kwargs.pop("identity", _NO_OVERRIDE)
+        if identity is _NO_OVERRIDE:
+            identity = self.identity_for(Transport.REST)
+
+        self._commit_factory_data()
+
+        # Get client first (may set default dep overrides on first call),
+        # then override per-request auth AFTER.
+        client = self.get_rest_client()
+
+        # Configure per-request auth (must be after get_rest_client)
+        if identity is None:
+            from src.core.exceptions import AdCPAuthenticationError
+
+            def _no_auth() -> None:
+                raise AdCPAuthenticationError("Authentication required")
+
+            app.dependency_overrides[_require_auth_dep] = _no_auth
+            app.dependency_overrides[_resolve_auth_dep] = lambda: None
+        else:
+            app.dependency_overrides[_require_auth_dep] = lambda: identity
+            app.dependency_overrides[_resolve_auth_dep] = lambda: identity
+
+        body = self.build_rest_body(**kwargs)
+        return client.post(endpoint, json=body)
+
+    def call_rest(self, **kwargs: Any) -> Any:
+        """Call the REST endpoint and parse the response.
+
+        Symmetric with ``call_impl``, ``call_a2a``, ``call_mcp``.
+        Pops identity, configures auth, POSTs, parses response.
+        Raises on HTTP errors (dispatcher catches and wraps in TransportResult).
+        """
+        endpoint = self.REST_ENDPOINT  # type: ignore[attr-defined]
+        response = self._run_rest_request(endpoint, **kwargs)
+
+        if response.status_code >= 400:
+            raise self.parse_rest_error(response.status_code, response.json())
+
+        return self.parse_rest_response(response.json())
+
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert call_impl kwargs to the REST endpoint body shape.
 
-        Override in subclass. Must match the Pydantic body model
-        defined in src/routes/api_v1.py.
+        Default: if ``req`` is a Pydantic model, delegates serialization to it
+        via ``model_dump(mode="json", exclude_none=True)``.  Enums, nested
+        models, and optional fields are handled by Pydantic — no manual
+        field-by-field extraction needed.
+
+        If no ``req`` is present, returns empty dict (valid for endpoints
+        where all parameters are optional).
+
+        Subclasses that receive flat kwargs (not a ``req`` object) must
+        override to build the body dict themselves.
         """
+        from pydantic import BaseModel as PydanticBaseModel
+
+        req = kwargs.get("req")
+        if req is not None and isinstance(req, PydanticBaseModel):
+            return req.model_dump(mode="json", exclude_none=True)
+        if req is None:
+            return {}
         raise NotImplementedError(
-            f"{type(self).__name__} does not implement build_rest_body(). Override to enable Transport.REST dispatch."
+            f"{type(self).__name__}.build_rest_body() received non-Pydantic 'req': {type(req)}. "
+            "Override build_rest_body() to handle this type."
         )
 
     def parse_rest_response(self, data: dict[str, Any]) -> BaseModel:
@@ -399,11 +500,12 @@ class IntegrationEnv(BaseTestEnv):
         return tenant, principal
 
     def get_rest_client(self) -> Any:
-        """Return FastAPI TestClient with auth overridden to return self.identity.
+        """Return FastAPI TestClient with default auth dep override.
 
-        The TestClient uses the same app instance as production. Auth
-        dependencies are overridden to inject the test identity directly,
-        bypassing real token resolution.
+        The default dep override returns ``self.identity_for(Transport.REST)``.
+        ``_run_rest_request`` overrides this per-request for multi-agent and
+        no-auth scenarios. Direct callers of ``get_rest_client()`` get the
+        default identity.
         """
         if self._rest_client is None:
             from starlette.testclient import TestClient

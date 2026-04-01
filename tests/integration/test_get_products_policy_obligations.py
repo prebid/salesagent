@@ -104,8 +104,7 @@ class TestBrandManifestPolicyRequireBrand:
         When brand_manifest_policy=require_brand and no brand provided,
         request is rejected with AdCPAuthorizationError.
         """
-        from adcp import GetProductsRequest as GetProductsRequestGenerated
-
+        from src.core.schemas import GetProductsRequest as GetProductsRequestGenerated
         from src.core.tools.products import _get_products_impl
 
         with ProductEnv(tenant_id="bmp-brand-no", principal_id="p1") as env:

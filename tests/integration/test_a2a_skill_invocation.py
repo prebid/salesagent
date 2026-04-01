@@ -673,6 +673,8 @@ class TestA2ASkillInvocation:
                     "list_creative_formats",  # Keep existing creative format endpoint
                     "list_authorized_properties",  # Added for AdCP compliance
                     "get_media_buys",
+                    "list_accounts",  # Added for account management (UC-011)
+                    "sync_accounts",  # Added for account sync (UC-011)
                 ], f"Skill {skill_name} not in expected skill list"
             except Exception as e:
                 pytest.fail(f"Skill {skill_name} should be handled but caused error: {e}")

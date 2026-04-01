@@ -138,7 +138,7 @@ jobs:
           POSTGRES_PASSWORD: test_password
           POSTGRES_DB: adcp_test
         options: >-
-          --health-cmd pg_isready
+          --health-cmd "pg_isready -U adcp_user"
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
@@ -181,7 +181,9 @@ jobs:
       if: matrix.group == 'creative'
       run: |
         # Build the adcp server (includes the reference creative agent)
-        git clone --depth 1 https://github.com/adcontextprotocol/adcp.git /tmp/adcp-server
+        # Pin to known-good commit — upstream HEAD has broken migrations (community_points FK violation)
+        mkdir -p /tmp/adcp-server
+        curl -sL https://github.com/adcontextprotocol/adcp/archive/ca70dd1e2a6c.tar.gz | tar xz -C /tmp/adcp-server --strip-components=1
         docker build -t adcp-creative-agent /tmp/adcp-server
 
         # The adcp monolith needs its own Postgres — creative agent is one route in the full app

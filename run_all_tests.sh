@@ -85,7 +85,7 @@ elif [ "$MODE" = "ci" ]; then
         set -e
         [ "$TOX_RC" -ne 0 ] && FAILURES="targeted"
     else
-        echo -e "${BLUE}Running all 5 suites in parallel via tox...${NC}"
+        echo -e "${BLUE}Running all 6 suites in parallel via tox...${NC}"
         set +e
         tox -p -o > >(tee "$RESULTS_DIR/tox.log") 2>&1
         TOX_RC=$?

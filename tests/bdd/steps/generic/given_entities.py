@@ -31,7 +31,15 @@ def given_seller_operational(ctx: dict) -> None:
     ctx["seller_operational"] = True
 
 
+@given("a tenant is resolvable from the request context")
+def given_tenant_resolvable(ctx: dict) -> None:
+    """Tenant can be resolved from request context (Background)."""
+    ctx["has_tenant"] = True
+    ctx.setdefault("tenant_id", "test_tenant")
+
+
 @given("a tenant has completed setup checklist")
+@given("a tenant exists with completed setup checklist")
 def given_tenant_setup_complete(ctx: dict) -> None:
     """Tenant has completed all setup steps (Background)."""
     ctx["tenant_setup_complete"] = True
@@ -77,21 +85,9 @@ def given_creative_agent_registered(ctx: dict) -> None:
 def given_registry_multi_categories(ctx: dict) -> None:
     """Registry has formats spanning multiple categories (display, video, etc.)."""
     ctx["registry_formats"] = [
-        FormatFactory.build(
-            name="banner",
-            type=CATEGORY_MAP["display"],
-            assets=[make_asset("image", with_requirements=True)],
-        ),
-        FormatFactory.build(
-            name="pre-roll",
-            type=CATEGORY_MAP["video"],
-            assets=[make_asset("video", with_requirements=True)],
-        ),
-        FormatFactory.build(
-            name="audio-spot",
-            type=CATEGORY_MAP["audio"],
-            assets=[make_asset("audio", with_requirements=True)],
-        ),
+        FormatFactory.build(name="banner", type=CATEGORY_MAP["display"]),
+        FormatFactory.build(name="pre-roll", type=CATEGORY_MAP["video"]),
+        FormatFactory.build(name="audio-spot", type=CATEGORY_MAP["audio"]),
     ]
     _sync_registry(ctx)
 
@@ -100,8 +96,8 @@ def given_registry_multi_categories(ctx: dict) -> None:
 def given_registry_two_types(ctx: dict, type_a: str, type_b: str) -> None:
     """Registry has formats of exactly two specified types."""
     ctx["registry_formats"] = [
-        FormatFactory.build(name=f"{type_a}-format", type=CATEGORY_MAP[type_a]),
-        FormatFactory.build(name=f"{type_b}-format", type=CATEGORY_MAP[type_b]),
+        FormatFactory.build(name=f"{type_a}-format", type=CATEGORY_MAP.get(type_a)),
+        FormatFactory.build(name=f"{type_b}-format", type=CATEGORY_MAP.get(type_b)),
     ]
     _sync_registry(ctx)
 

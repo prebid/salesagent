@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Accounts - {{ tenant_id }}{% endblock %}
+{% block content %}
+<style>
+    .accounts-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
+    .accounts-header h2 { margin: 0; color: #111827; }
+    .filter-bar { display: flex; gap: 1rem; align-items: center; margin-bottom: 1rem; }
+    .filter-bar select { padding: 0.4rem 0.8rem; border: 1px solid #d1d5db; border-radius: 6px; }
+    .accounts-table { width: 100%; border-collapse: collapse; }
+    .accounts-table th { text-align: left; padding: 0.75rem 1rem; color: #6b7280; font-size: 0.85rem; border-bottom: 2px solid #e5e7eb; }
+    .accounts-table td { padding: 0.75rem 1rem; border-bottom: 1px solid #f3f4f6; }
+    .accounts-table tr:hover { background: #f9fafb; }
+    .status-badge { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 12px; font-size: 0.8rem; font-weight: 500; }
+    .status-active { background: #d1fae5; color: #065f46; }
+    .status-pending_approval { background: #fef3c7; color: #92400e; }
+    .status-rejected { background: #fee2e2; color: #991b1b; }
+    .status-payment_required { background: #fef3c7; color: #92400e; }
+    .status-suspended { background: #fee2e2; color: #991b1b; }
+    .status-closed { background: #f3f4f6; color: #6b7280; }
+    .empty-state { text-align: center; padding: 3rem; color: #6b7280; }
+    .brand-domain { color: #3b82f6; font-family: monospace; font-size: 0.9rem; }
+</style>
+
+<div class="accounts-header">
+    <h2>Accounts</h2>
+    <a href="{{ url_for('accounts.create_account', tenant_id=tenant_id) }}" class="btn btn-primary">
+        <i class="fas fa-plus"></i> New Account
+    </a>
+</div>
+
+<div class="filter-bar">
+    <label>Status:</label>
+    <select onchange="window.location.href='{{ url_for('accounts.list_accounts', tenant_id=tenant_id) }}' + (this.value ? '?status=' + this.value : '')">
+        <option value="">All</option>
+        {% for s in statuses %}
+        <option value="{{ s }}" {{ 'selected' if status_filter == s }}>{{ s | replace('_', ' ') | title }}</option>
+        {% endfor %}
+    </select>
+</div>
+
+{% if accounts %}
+<table class="accounts-table">
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Brand</th>
+            <th>Operator</th>
+            <th>Billing</th>
+            <th>Status</th>
+            <th>Created</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for acct in accounts %}
+        <tr onclick="window.location='{{ url_for('accounts.account_detail', tenant_id=tenant_id, account_id=acct.account_id) }}'" style="cursor: pointer;">
+            <td><strong>{{ acct.name }}</strong><br><small style="color: #9ca3af;">{{ acct.account_id }}</small></td>
+            <td>
+                {% if acct.brand %}
+                <span class="brand-domain">{{ acct.brand.domain or '-' }}</span>
+                {% else %}-{% endif %}
+            </td>
+            <td>{{ acct.operator or '-' }}</td>
+            <td>{{ acct.billing or '-' }}</td>
+            <td><span class="status-badge status-{{ acct.status }}">{{ acct.status | replace('_', ' ') | title }}</span></td>
+            <td>{{ acct.created_at.strftime('%Y-%m-%d') if acct.created_at else '-' }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<div class="empty-state">
+    <i class="fas fa-building" style="font-size: 3rem; margin-bottom: 1rem; display: block;"></i>
+    <p>No accounts yet.</p>
+    <a href="{{ url_for('accounts.create_account', tenant_id=tenant_id) }}" class="btn btn-primary">Create First Account</a>
+</div>
+{% endif %}
+{% endblock %}

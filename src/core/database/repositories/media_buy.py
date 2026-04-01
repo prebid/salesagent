@@ -278,6 +278,7 @@ class MediaBuyRepository:
         package_id_map: dict[int, str] | None = None,
         by_alias: bool = False,
         created_at: datetime.datetime | None = None,
+        account_id: str | None = None,
     ) -> MediaBuy:
         """Create a MediaBuy from a request model, serializing raw_request at the DB boundary.
 
@@ -334,6 +335,8 @@ class MediaBuyRepository:
             kwargs["kpi_goal"] = kpi_goal
         if created_at is not None:
             kwargs["created_at"] = created_at
+        if account_id is not None:
+            kwargs["account_id"] = account_id
 
         media_buy = MediaBuy(**kwargs)
         self._session.add(media_buy)

@@ -75,9 +75,15 @@ def _validate_creative_input(
         schema_data["approved"] = approved
 
     # Pass through AI provenance metadata (EU AI Act Article 50)
+    # Library Provenance model must be converted to dict — our local Provenance
+    # is not a subclass and Pydantic rejects cross-hierarchy model instances.
     provenance = getattr(creative, "provenance", None)
     if provenance is not None:
-        schema_data["provenance"] = provenance
+        from pydantic import BaseModel
+
+        schema_data["provenance"] = (
+            provenance.model_dump(mode="json") if isinstance(provenance, BaseModel) else provenance
+        )
 
     # Validate by creating a Creative schema object
     # This will fail if required fields are missing or invalid (like empty name)

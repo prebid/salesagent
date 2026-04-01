@@ -65,6 +65,7 @@ class TestSignalsAgentRegistry:
         from adcp import GetSignalsResponse
 
         # Signals are dicts (not typed objects) in GetSignalsResponse
+        # adcp 3.9: pricing is now empty, pricing details moved to pricing_options (required)
         mock_signals = [
             {
                 "signal_agent_segment_id": "seg1",
@@ -81,7 +82,10 @@ class TestSignalsAgentRegistry:
                         "deployed_at": "2025-01-01T00:00:00Z",
                     }
                 ],
-                "pricing": {"cpm": 2.50, "currency": "USD"},
+                "pricing": {},
+                "pricing_options": [
+                    {"pricing_option_id": "cpm_usd", "cpm": 2.50, "currency": "USD", "model": "cpm"},
+                ],
             }
         ]
 
