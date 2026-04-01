@@ -64,8 +64,8 @@ def _get_first_prop(ctx: dict) -> Any:
 def given_tenant(ctx: dict) -> None:
     """Create a tenant with required config for get_products."""
     tenant = TenantFactory(
-        tenant_id="inv-profile-test",
-        subdomain="inv-profile-test",
+        tenant_id="test_tenant",
+        subdomain="test_tenant",
         ad_server="mock",
     )
     ctx["tenant"] = tenant

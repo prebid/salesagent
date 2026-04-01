@@ -81,34 +81,31 @@ class ProductEnv(ProductMixin, IntegrationEnv):
     def _configure_mocks(self) -> None:
         self._configure_product_mocks()
 
-    def call_impl(self, **kwargs: Any) -> GetProductsResponse:  # type: ignore[override]
-        """Sync/async-safe wrapper around ProductMixin's async call_impl.
+    async def call_impl_async(self, **kwargs: Any) -> GetProductsResponse:
+        """Call _get_products_impl with real DB (async version).
 
-        Works in both contexts:
-        - Sync (BDD steps, ImplDispatcher): uses asyncio.run()
-        - Async (@pytest.mark.asyncio tests): returns coroutine for await
+        For use in @pytest.mark.asyncio tests with ``await``.
         """
-        coro = super().call_impl(**kwargs)
-        try:
-            asyncio.get_running_loop()
-            # Already in async context — return the coroutine for the caller to await
-            return coro  # type: ignore[return-value]
-        except RuntimeError:
-            # No running loop — bridge to sync
-            return asyncio.run(coro)
+        return await super().call_impl(**kwargs)
 
-    def call_a2a(self, **kwargs: Any) -> GetProductsResponse:
-        """Call get_products_raw (A2A wrapper)."""
+    def call_impl(self, **kwargs: Any) -> GetProductsResponse:  # type: ignore[override]
+        """Call _get_products_impl with real DB (sync wrapper).
+
+        Bridges async _impl for sync callers (BDD steps, dispatchers).
+        """
+        return asyncio.run(self.call_impl_async(**kwargs))
+
+    async def call_a2a_async(self, **kwargs: Any) -> GetProductsResponse:
+        """Call get_products_raw (A2A wrapper) with real DB (async version)."""
         from src.core.tools.products import get_products_raw
 
         self._commit_factory_data()
         identity = kwargs.pop("identity", None) or self.identity
-        coro = get_products_raw(identity=identity, **kwargs)
-        try:
-            asyncio.get_running_loop()
-            return coro  # type: ignore[return-value]
-        except RuntimeError:
-            return asyncio.run(coro)
+        return await get_products_raw(identity=identity, **kwargs)
+
+    def call_a2a(self, **kwargs: Any) -> GetProductsResponse:
+        """Call get_products_raw (A2A wrapper) with real DB (sync wrapper)."""
+        return asyncio.run(self.call_a2a_async(**kwargs))
 
     def call_mcp(self, **kwargs: Any) -> GetProductsResponse:
         """Call get_products MCP wrapper with mock Context."""

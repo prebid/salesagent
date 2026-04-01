@@ -733,7 +733,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         request.getfixturevalue("integration_db")
         from tests.harness.product import ProductEnv
 
-        with ProductEnv(tenant_id="inv-profile-test") as env:
+        with ProductEnv() as env:
             ctx["env"] = env
             yield
     else:
