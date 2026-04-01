@@ -53,8 +53,7 @@ def given_admin_authenticated(ctx: dict, tenant_id: str) -> None:
     Overrides the harness default tenant to match the Gherkin scenario.
     """
     env = _env(ctx)
-    # Use the harness's actual tenant (already created in DB)
-    env.authenticate(env.tenant_id)
+    env.authenticate(tenant_id)
 
 
 @given(parsers.parse('the tenant "{tenant_id}" exists in the database'))

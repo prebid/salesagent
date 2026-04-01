@@ -23,7 +23,7 @@ import json
 import re
 import sys
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -52,14 +52,16 @@ def parse_inspector_json(path: Path) -> list[InspectorFlag]:
     data = json.loads(path.read_text())
     flags = []
     for entry in data:
-        flags.append(InspectorFlag(
-            function=entry["function"],
-            file=entry.get("file", ""),
-            line=entry.get("line", 0),
-            step_text=entry.get("step_text", ""),
-            reason=entry.get("reason", ""),
-            severity=entry.get("severity", ""),
-        ))
+        flags.append(
+            InspectorFlag(
+                function=entry["function"],
+                file=entry.get("file", ""),
+                line=entry.get("line", 0),
+                step_text=entry.get("step_text", ""),
+                reason=entry.get("reason", ""),
+                severity=entry.get("severity", ""),
+            )
+        )
     return flags
 
 
@@ -83,12 +85,14 @@ def parse_test_results(path: Path) -> list[TestOutcome]:
                 error = line.strip()[2:].strip()
                 break
 
-        outcomes.append(TestOutcome(
-            nodeid=nodeid,
-            outcome=t["outcome"],
-            transport=transport,
-            error=error,
-        ))
+        outcomes.append(
+            TestOutcome(
+                nodeid=nodeid,
+                outcome=t["outcome"],
+                transport=transport,
+                error=error,
+            )
+        )
     return outcomes
 
 
@@ -128,7 +132,24 @@ def find_tests_using_step(
     # Extract keywords from function name (e.g., "then_budget_validated" -> ["budget", "validated"])
     func_keywords = set(step_function.replace("then_", "").replace("given_", "").replace("when_", "").split("_"))
     # Remove very common words
-    func_keywords -= {"the", "is", "a", "an", "and", "or", "not", "should", "be", "has", "have", "with", "for", "in", "of", "to"}
+    func_keywords -= {
+        "the",
+        "is",
+        "a",
+        "an",
+        "and",
+        "or",
+        "not",
+        "should",
+        "be",
+        "has",
+        "have",
+        "with",
+        "for",
+        "in",
+        "of",
+        "to",
+    }
 
     # Extract UC from file path
     matching = []
@@ -166,7 +187,9 @@ def generate_report(
     lines.append("## Data Sources")
     lines.append("")
     lines.append(f"- **Inspector flags**: {len(flags)} step functions flagged")
-    lines.append(f"- **Test results**: {len(outcomes)} tests ({outcome_counts['passed']} passed, {outcome_counts['failed']} failed, {outcome_counts['xfailed']} xfailed, {outcome_counts['xpassed']} xpassed)")
+    lines.append(
+        f"- **Test results**: {len(outcomes)} tests ({outcome_counts['passed']} passed, {outcome_counts['failed']} failed, {outcome_counts['xfailed']} xfailed, {outcome_counts['xpassed']} xpassed)"
+    )
     lines.append("")
 
     # Group flags by UC
@@ -236,8 +259,9 @@ def generate_report(
     # Action summary
     lines.append("## Action Summary")
     lines.append("")
-    high_risk = [uc for uc, flags in by_uc.items()
-                 if flags and any(o.outcome == "passed" for o in outcomes_by_uc.get(uc, []))]
+    high_risk = [
+        uc for uc, flags in by_uc.items() if flags and any(o.outcome == "passed" for o in outcomes_by_uc.get(uc, []))
+    ]
     lines.append(f"- **High-risk UCs** (flags + passing tests): {', '.join(sorted(high_risk)) or 'none'}")
     lines.append(f"- **Total flags to address**: {len(flags)}")
     lines.append(f"- **Zero test failures**: {'YES' if outcome_counts['failed'] == 0 else 'NO'}")

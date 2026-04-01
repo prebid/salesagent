@@ -698,7 +698,7 @@ def main() -> None:
 
     # Pass 1: Triage (with resume support)
     checkpoint_path = args.output.with_suffix(".checkpoint.json")
-    print(f"\n=== Pass 1: Triage (Sonnet) ===")
+    print("\n=== Pass 1: Triage (Sonnet) ===")
     print(f"  Checkpoint: {checkpoint_path}")
     triage_results = run_pass1_triage(target_steps, checkpoint_path=checkpoint_path)
     flagged = [r for r in triage_results if r.verdict == "FLAG"]
@@ -718,7 +718,6 @@ def main() -> None:
 
     # JSON output for machine consumption (pipeline integration)
     if args.json:
-
         json_path = args.output.with_suffix(".json")
         findings = []
         for r in flagged:

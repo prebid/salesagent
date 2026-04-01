@@ -75,7 +75,15 @@ def given_authenticated_request(ctx: dict, principal_id: str) -> None:
 def given_creative_agent_registered(ctx: dict) -> None:
     """At least one creative agent has format definitions (Background)."""
     ctx["creative_agents_registered"] = True
-    ctx.setdefault("registry_formats", [])
+    ctx["registry_formats"] = [
+        FormatFactory.build(
+            name="default-display",
+            type=CATEGORY_MAP["display"],
+            assets=[make_asset("image")],
+            renders=[make_fixed_renders(width=300, height=250)],
+        ),
+    ]
+    _sync_registry(ctx)
 
 
 # ── Creative agent registry: multi-category / type-specific ──────────

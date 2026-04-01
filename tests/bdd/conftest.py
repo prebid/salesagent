@@ -342,8 +342,18 @@ _MCP_SELECTIVE_XFAIL: list[tuple[str, set[str], str, bool]] = [
     ("T-UC-005-inv-049-10-violated", set(), "MCP wrapper does not accept input_format_ids (vacuous pass)", False),
     ("T-UC-005-inv-049-10-nofield", set(), "MCP wrapper does not accept input_format_ids (vacuous pass)", False),
     # MCP wrapper does not accept disclosure_positions keyword (strict=False: some variants xpass)
-    ("T-UC-005-partition-disclosure", {"single_position", "multiple_positions_all_match", "duplicate_positions"}, "MCP wrapper: disclosure_positions not accepted or not validated", False),
-    ("T-UC-005-boundary-disclosure", {"single position", "duplicate positions"}, "MCP wrapper: disclosure_positions not accepted or not validated", False),
+    (
+        "T-UC-005-partition-disclosure",
+        {"single_position", "multiple_positions_all_match", "duplicate_positions"},
+        "MCP wrapper: disclosure_positions not accepted or not validated",
+        False,
+    ),
+    (
+        "T-UC-005-boundary-disclosure",
+        {"single position", "duplicate positions"},
+        "MCP wrapper: disclosure_positions not accepted or not validated",
+        False,
+    ),
 ]
 
 # REST xfails: REST endpoint drops all filter params (build_rest_body returns {}).

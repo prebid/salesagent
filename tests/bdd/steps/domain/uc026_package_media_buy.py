@@ -270,73 +270,83 @@ def _ensure_update_kwargs(ctx: dict) -> dict[str, Any]:
 
 @given(parsers.parse('the seller has a product "{product_id}" in inventory with pricing_options {options}'))
 def given_product_with_pricing(ctx: dict, product_id: str, options: str) -> None:
-    """Verify product exists in DB with pricing_options matching the step parameter."""
+    """Establish a product with specified pricing_options in the database.
+
+    Given steps set up preconditions — they create/configure state rather than
+    assert it.  This step ensures the product identified by *product_id* exists
+    with pricing options that match *options*.
+    """
+    from tests.factories import PricingOptionFactory
+
+    env = ctx["env"]
     product = ctx.get("default_product")
-    assert product is not None, "No default_product in ctx"
+    assert product is not None, "No default_product in ctx — conftest must seed one"
     assert product.product_id == product_id, f"Expected product '{product_id}', got '{product.product_id}'"
-    actual_options = getattr(product, "pricing_options", None)
-    assert actual_options is not None, (
-        f"Product '{product_id}' has no pricing_options attribute — step claims 'with pricing_options {options}'"
-    )
-    assert len(actual_options) > 0, (
-        f"Product '{product_id}' has empty pricing_options — step claims 'with pricing_options {options}'"
-    )
-    # Verify actual option IDs match expected list
+
+    # Parse the option labels from the feature file (e.g. ["cpm-standard", "cpm-auction"])
     try:
-        expected_ids = json.loads(options)
+        expected_labels = json.loads(options)
     except (json.JSONDecodeError, TypeError):
-        ctx["product_pricing_options"] = options
-        return
-    if isinstance(expected_ids, list):
-        actual_ids = set()
-        for opt in actual_options:
-            # ORM PricingOption has integer `id` but no `pricing_option_id`.
-            # Synthesize the canonical string ID from model fields to match
-            # the resolved labels (e.g. "cpm_usd_fixed").
-            opt_id = getattr(opt, "pricing_option_id", None)
-            if opt_id is None:
-                pm = getattr(opt, "pricing_model", None)
-                cur = getattr(opt, "currency", None)
-                fixed = getattr(opt, "is_fixed", None)
-                if pm and cur and fixed is not None:
-                    fixed_str = "fixed" if fixed else "auction"
-                    opt_id = f"{pm}_{cur.lower()}_{fixed_str}"
-            if opt_id is None:
-                opt_id = getattr(opt, "id", None) or str(opt)
-            actual_ids.add(opt_id)
-        # Map expected labels to resolved IDs for comparison
-        resolved_expected = {_resolve_pricing_id(ctx, eid) for eid in expected_ids}
-        missing = resolved_expected - actual_ids
-        assert not missing, (
-            f"Product pricing_options missing expected IDs {missing}. "
-            f"Actual IDs: {actual_ids}, expected: {resolved_expected}"
-        )
+        expected_labels = None
+
+    if isinstance(expected_labels, list):
+        # Label → canonical pricing_option_id mapping
+        _LABEL_SPEC: dict[str, dict[str, Any]] = {
+            "cpm-standard": {"pricing_model": "cpm", "currency": "USD", "is_fixed": True},
+            "cpm-auction": {
+                "pricing_model": "cpm",
+                "currency": "USD",
+                "is_fixed": False,
+                "price_guidance": {"floor": 1.0, "p25": 2.0, "p50": 3.0, "p75": 4.0, "p90": 5.0},
+            },
+        }
+
+        # Remove existing pricing options so we start fresh
+        existing = list(product.pricing_options or [])
+        for po in existing:
+            env._session.delete(po)
+        env._session.flush()
+
+        pricing_map: dict[str, str] = {}
+        for label in expected_labels:
+            spec = _LABEL_SPEC.get(label)
+            if spec:
+                PricingOptionFactory(product=product, **spec)
+                fixed_str = "fixed" if spec["is_fixed"] else "auction"
+                canonical_id = f"{spec['pricing_model']}_{spec['currency'].lower()}_{fixed_str}"
+                pricing_map[label] = canonical_id
+            else:
+                # Unknown label — create a generic CPM fixed option keyed by label
+                PricingOptionFactory(product=product)
+                pricing_map[label] = label
+
+        env._commit_factory_data()
+        ctx["pricing_option_map"] = pricing_map
+
     ctx["product_pricing_options"] = options
 
 
 @given(parsers.parse('the product "{product_id}" supports format_ids {format_ids}'))
 def given_product_format_ids(ctx: dict, product_id: str, format_ids: str) -> None:
-    """Verify product supports the specified format_ids."""
+    """Establish the product's format_ids to the specified values.
+
+    Given steps set up preconditions — this configures the product's format_ids
+    rather than merely asserting they already match.
+    """
+    env = ctx["env"]
     product = ctx.get("default_product")
-    assert product is not None, "No default_product in ctx"
+    assert product is not None, "No default_product in ctx — conftest must seed one"
     assert product.product_id == product_id, f"Expected product '{product_id}', got '{product.product_id}'"
-    actual_format_ids = getattr(product, "format_ids", None)
-    assert actual_format_ids is not None, (
-        f"Product '{product_id}' has no format_ids attribute — step claims 'supports format_ids {format_ids}'"
-    )
-    assert len(actual_format_ids) > 0, (
-        f"Product '{product_id}' has empty format_ids — step claims 'supports format_ids {format_ids}'"
-    )
+
     try:
         expected = json.loads(format_ids)
     except (json.JSONDecodeError, TypeError):
-        ctx["product_format_ids"] = format_ids
-        return
+        expected = None
+
     if isinstance(expected, list):
-        actual_set = {_extract_format_id(f) for f in actual_format_ids}
-        for ef in expected:
-            ef_id = _extract_format_id(ef)
-            assert ef_id in actual_set, f"Expected format '{ef_id}' not found in product's format_ids {actual_set}"
+        product.format_ids = _to_format_id_dicts(expected)
+        env._commit_factory_data()
+
     ctx["product_format_ids"] = format_ids
 
 
