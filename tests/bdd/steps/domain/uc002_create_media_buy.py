@@ -2228,58 +2228,57 @@ def then_response_has_creative_assignments(ctx: dict) -> None:
 
 @given(parsers.parse('proposal "{proposal_id}" exists and has not expired'))
 def given_proposal_exists(ctx: dict, proposal_id: str) -> None:
-    """Record that a proposal exists and has not expired.
+    """Set up proposal state and wire it into the create request.
 
     SPEC-PRODUCTION GAP: Production has no proposal store. proposal_id is
     accepted on CreateMediaBuyRequest (from adcp library) but never validated.
-    This step records the expected proposal for Then-step assertions.
+    This step records the expected proposal with a future expiry datetime so
+    Then-step assertions can verify the proposal was carried through.
 
     When production implements proposal storage, this step must:
     1. Create a proposal record via ProposalFactory
     2. Set expiry to a future date (step text says "has not expired")
     3. Link it to the tenant/principal
+    FIXME(salesagent-9vgz.1)
     """
     import warnings
+    from datetime import UTC, datetime, timedelta
+
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
 
     assert proposal_id, "proposal_id must be non-empty — step claims proposal 'exists'"
     assert isinstance(proposal_id, str), f"proposal_id must be a string, got {type(proposal_id).__name__}"
     # Verify tenant and principal exist — proposals are tenant+principal scoped
     assert "tenant" in ctx, "No tenant in ctx — proposal requires a tenant context"
     assert "principal" in ctx, "No principal in ctx — proposal requires a principal context"
-    ctx["expected_proposal_id"] = proposal_id
-    # Explicit state tracking for "has not expired" — no real expiry enforced, but
-    # Then steps can assert this was set up. When production adds a proposal store,
-    # this must be replaced with a real expiry date on the proposal entity.
-    ctx["proposal_not_expired"] = True
-    # Record in request_kwargs so the create request includes proposal_id
-    if "request_kwargs" in ctx:
-        ctx["request_kwargs"]["proposal_id"] = proposal_id
-    else:
-        # Ensure request_kwargs exists — the create request needs proposal_id
-        ctx.setdefault("request_kwargs", {})["proposal_id"] = proposal_id
 
-    # Postcondition: verify dict intermediaries were set correctly.
-    # These assertions catch bugs in the step itself (e.g., typo in key name,
-    # request_kwargs not wired). They do NOT validate that a proposal entity exists
-    # in the DB — that's the SPEC-PRODUCTION GAP below.
+    # Record proposal identity and expiry for Then-step assertions.
+    # "has not expired" → future expiry datetime (not a boolean flag).
+    ctx["expected_proposal_id"] = proposal_id
+    ctx["proposal_expiry"] = datetime.now(tz=UTC) + timedelta(days=30)
+
+    # Wire proposal_id into request_kwargs so the create request includes it.
+    kwargs = _ensure_request_defaults(ctx)
+    kwargs["proposal_id"] = proposal_id
+
+    # Postconditions: verify state was wired correctly.
     assert ctx["expected_proposal_id"] == proposal_id, (
         f"Postcondition failed: expected_proposal_id={ctx['expected_proposal_id']!r} != {proposal_id!r}"
     )
-    assert ctx["proposal_not_expired"] is True, "Postcondition failed: proposal_not_expired not set"
-    assert ctx.get("request_kwargs", {}).get("proposal_id") == proposal_id, (
+    assert ctx["proposal_expiry"] > datetime.now(tz=UTC), (
+        "Postcondition failed: proposal_expiry must be in the future ('has not expired')"
+    )
+    assert kwargs.get("proposal_id") == proposal_id, (
         f"Postcondition failed: request_kwargs['proposal_id'] not set to {proposal_id!r} — "
         "the create request will not include the proposal_id"
     )
 
-    # SPEC-PRODUCTION GAP: Step text claims proposal "exists and has not expired"
-    # but production has no proposal persistence layer. No proposal entity is created,
-    # no expiry date is set, no expiry validation occurs. Dict intermediary only.
-    # Scenario-level xfail (T-UC-002-alt-proposal tag in conftest.py)
-    # handles the gap at the correct level. FIXME(salesagent-9vgz.1)
+    # SPEC-PRODUCTION GAP: No proposal entity created in DB — production has no
+    # proposal persistence layer. Scenario-level xfail (T-UC-002-alt-proposal tag
+    # in conftest.py) handles the gap. FIXME(salesagent-9vgz.1)
     warnings.warn(
         f"SPEC-PRODUCTION GAP: Proposal '{proposal_id}' — no proposal entity created, "
-        "'has not expired' expiry not enforced. Dict intermediary "
-        "(ctx['expected_proposal_id'] + ctx['proposal_not_expired']). "
+        f"expiry set to {ctx['proposal_expiry'].isoformat()} but not enforced by production. "
         "Scenario-level xfail via T-UC-002-alt-proposal tag handles the gap. "
         "FIXME(salesagent-9vgz.1): Create ProposalFactory with future expiry.",
         stacklevel=1,
