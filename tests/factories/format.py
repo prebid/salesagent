@@ -33,6 +33,13 @@ from adcp.types.generated_poc.core.format import (
     Assets7,
     Assets8,
     Assets9,
+    Assets18,
+    Assets19,
+    Assets20,
+    Assets21,
+    Assets22,
+    Assets23,
+    Assets24,
     Dimensions,
     Renders,
     Responsive,
@@ -64,6 +71,45 @@ def make_asset(asset_type: str, asset_id: str | None = None) -> Assets:
     """
     cls = _ASSET_CLASS_MAP.get(asset_type, Assets)
     return cls(asset_id=asset_id or f"{asset_type}_asset", required=True)
+
+
+# Inner asset classes used inside repeatable groups (Assets18)
+_INNER_ASSET_CLASS_MAP = {
+    "image": Assets19,
+    "video": Assets20,
+    "audio": Assets21,
+    "text": Assets22,
+    "markdown": Assets23,
+    "html": Assets24,
+}
+
+
+def make_asset_group(
+    *asset_types: str,
+    group_id: str = "asset_group",
+    min_count: int = 1,
+    max_count: int = 10,
+) -> Assets18:
+    """Create a repeatable asset group containing typed inner assets.
+
+    >>> g = make_asset_group("image", "text")
+    >>> g.item_type
+    'repeatable_group'
+    >>> len(g.assets)
+    2
+    """
+    inner_assets = []
+    for at in asset_types:
+        cls = _INNER_ASSET_CLASS_MAP.get(at, Assets19)
+        inner_assets.append(cls(asset_id=f"{at}_asset", required=True))
+    return Assets18(
+        item_type="repeatable_group",
+        asset_group_id=group_id,
+        required=True,
+        min_count=min_count,
+        max_count=max_count,
+        assets=inner_assets,
+    )
 
 
 def make_renders(

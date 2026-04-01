@@ -406,35 +406,27 @@ def given_packages_positive_budget(ctx: dict) -> None:
 
 @given(parsers.parse('all packages use the same currency "{currency}"'))
 def given_packages_same_currency(ctx: dict, currency: str) -> None:
-    """Ensure all packages use the specified currency via their pricing options.
+    """Configure all packages to use the specified currency.
 
-    Verifies every package's pricing option currency matches the claimed currency.
-    Currency comes from the pricing option, not the package directly.
-    The pricing_option_id format is "{model}_{currency}_{type}" (e.g. "cpm_usd_fixed").
+    Creates a pricing option with the requested currency and updates every
+    package's pricing_option_id to reference it. This is a Given step — it
+    SETS state rather than merely asserting it.
     """
     ctx["expected_currency"] = currency
-    # Verify the default pricing option actually uses this currency
-    po = ctx.get("default_pricing_option")
-    assert po is not None, (
-        "No default_pricing_option in ctx — step claims 'all packages use the same currency' "
-        "but no pricing option exists to verify currency against"
+    env = ctx["env"]
+    kwargs = _ensure_request_defaults(ctx)
+    # Create a pricing option with the desired currency
+    po = PricingOptionFactory(
+        product=ctx["default_product"],
+        pricing_model="cpm",
+        currency=currency,
+        is_fixed=True,
     )
-    assert po.currency.upper() == currency.upper(), (
-        f"Step claims all packages use currency '{currency}' but default pricing option "
-        f"has currency '{po.currency}' — setup mismatch"
-    )
-    # Verify ALL packages' pricing_option_ids embed the claimed currency
-    kwargs = ctx.get("request_kwargs", {})
-    for i, pkg in enumerate(kwargs.get("packages", [])):
-        po_id = pkg.get("pricing_option_id", "")
-        # pricing_option_id format: "{model}_{currency}_{type}" e.g. "cpm_usd_fixed"
-        parts = po_id.split("_") if po_id else []
-        if len(parts) >= 2:
-            po_currency = parts[1].upper()
-            assert po_currency == currency.upper(), (
-                f"Step claims 'all packages use the same currency \"{currency}\"' but "
-                f"package[{i}] pricing_option_id '{po_id}' embeds currency '{po_currency}'"
-            )
+    env._commit_factory_data()
+    new_po_id = _pricing_option_id(po)
+    # Update ALL packages to use this pricing option
+    for pkg in kwargs.get("packages", []):
+        pkg["pricing_option_id"] = new_po_id
 
 
 @given("each package has a valid pricing_option_id")
@@ -628,6 +620,11 @@ def given_unsupported_currency(ctx: dict, currency: str) -> None:
 def given_duplicate_product(ctx: dict, product_id: str) -> None:
     """Set both packages to reference the same product_id."""
     kwargs = _ensure_request_defaults(ctx)
+    packages = kwargs.get("packages", [])
+    assert len(packages) >= 2, (
+        f"Step claims 'both packages' but only {len(packages)} package(s) exist in the request. "
+        "A preceding step must set up at least 2 packages."
+    )
     # Create the product if it doesn't match default
     if ctx["default_product"].product_id != product_id:
         env = ctx["env"]
@@ -637,7 +634,7 @@ def given_duplicate_product(ctx: dict, product_id: str) -> None:
             property_tags=["all_inventory"],
         )
         env._commit_factory_data()
-    for pkg in kwargs.get("packages", []):
+    for pkg in packages:
         pkg["product_id"] = product_id
 
 

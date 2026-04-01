@@ -21,6 +21,7 @@ from tests.factories.format import (
     FormatFactory,
     FormatIdFactory,
     make_asset,
+    make_asset_group,
     make_fixed_renders,
     make_renders,
     make_responsive_renders,
@@ -85,9 +86,10 @@ def given_registry_format_with_two_assets(ctx: dict, name: str, type_a: str, typ
 def given_registry_format_with_asset_group(ctx: dict, name: str, type_a: str, type_b: str) -> None:
     """Register a format with a repeatable asset group.
 
-    Asset groups are flattened to individual assets for filtering purposes.
+    Uses the AdCP Assets18 repeatable_group structure which groups assets
+    that repeat together as a unit, distinct from individual assets.
     """
-    fmt = FormatFactory.build(name=name, assets=[make_asset(type_a), make_asset(type_b)])
+    fmt = FormatFactory.build(name=name, assets=[make_asset_group(type_a, type_b)])
     ctx.setdefault("registry_formats", []).append(fmt)
     _sync_registry(ctx)
 
@@ -166,7 +168,7 @@ def given_registry_format_disclosure(ctx: dict, name: str, positions: str) -> No
 @given(parsers.parse('the registry has format "{name}" with no supported_disclosure_positions field'))
 def given_registry_format_no_disclosure(ctx: dict, name: str) -> None:
     """Register a format without a supported_disclosure_positions field."""
-    fmt = FormatFactory.build(name=name)
+    fmt = FormatFactory.build(name=name, supported_disclosure_positions=None)
     ctx.setdefault("registry_formats", []).append(fmt)
     _sync_registry(ctx)
 
@@ -187,7 +189,7 @@ def given_registry_format_output_ids(ctx: dict, name: str, datatable: Sequence[S
 @given(parsers.parse('the registry has format "{name}" with no output_format_ids field'))
 def given_registry_format_no_output_ids(ctx: dict, name: str) -> None:
     """Register a format without output_format_ids."""
-    fmt = FormatFactory.build(name=name)
+    fmt = FormatFactory.build(name=name, output_format_ids=None)
     ctx.setdefault("registry_formats", []).append(fmt)
     _sync_registry(ctx)
 
@@ -205,7 +207,7 @@ def given_registry_format_input_ids(ctx: dict, name: str, datatable: Sequence[Se
 @given(parsers.parse('the registry has format "{name}" with no input_format_ids field'))
 def given_registry_format_no_input_ids(ctx: dict, name: str) -> None:
     """Register a format without input_format_ids."""
-    fmt = FormatFactory.build(name=name)
+    fmt = FormatFactory.build(name=name, input_format_ids=None)
     ctx.setdefault("registry_formats", []).append(fmt)
     _sync_registry(ctx)
 

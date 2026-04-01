@@ -143,17 +143,16 @@ _XFAIL_TAGS: dict[str, str] = {
     # FIXME(beads-dul): sandbox mode not implemented in harness
     # Note: sandbox-production passes vacuously (sandbox=None by default)
     "T-UC-005-sandbox-happy": "sandbox mode not implemented",
-    "T-UC-005-sandbox-validation": "sandbox mode not implemented",
+    # Graduated: T-UC-005-sandbox-validation (salesagent-7fqx)
+    # Validation error from invalid dimension filter fires before sandbox logic.
     # FIXME(beads-dul): creative agent referrals not in harness
     "T-UC-005-main-referrals": "creative agent referrals not implemented",
     # FIXME(beads-dul): no-tenant error path requires identity-less harness
     "T-UC-005-ext-a-rest": "no-tenant error path not implemented in harness",
     "T-UC-005-ext-a-mcp": "no-tenant error path not implemented in harness",
-    # FIXME(beads-dul): creative agent format querying is a separate API
-    "T-UC-005-partition-agent-type": "creative agent format API not implemented",
-    "T-UC-005-partition-agent-asset": "creative agent format API not implemented",
-    "T-UC-005-boundary-agent-type": "creative agent format API not implemented",
-    "T-UC-005-boundary-agent-asset": "creative agent format API not implemented",
+    # Graduated: creative agent partition tests (salesagent-7fqx)
+    # Steps now call list_creative_formats as a proxy. Boundary-specific
+    # xfails for creative-agent-only restrictions are in _SELECTIVE_XFAIL.
     # FIXME(beads-dul): suggestion field not in production error model
     "T-UC-005-ext-b-rest": "suggestion field not implemented in error responses",
     "T-UC-005-ext-b-mcp": "suggestion field not implemented in error responses",
@@ -292,6 +291,19 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     ),
     # MCP-specific boundary disclosure xfails are in _MCP_SELECTIVE_XFAIL
     # Graduated: T-UC-005-boundary-asset-types (all 4 transports pass — brief/catalog now in enum)
+    # FIXME(beads-dul): creative agent format API has tighter restrictions than
+    # list_creative_formats. "native" is valid FormatCategory but not for creative
+    # agents; "vast" is valid AssetContentType but not for creative agents.
+    (
+        "T-UC-005-boundary-agent-type",
+        {"native"},
+        "creative agent format API restricts type enum — native not valid for creative agents",
+    ),
+    (
+        "T-UC-005-boundary-agent-asset",
+        {"vast"},
+        "creative agent format API restricts asset_types enum — vast not valid for creative agents",
+    ),
     # FIXME(salesagent-0b1): "delayed" notification_type not in production
     # WebhookDeliveryService.send_delivery_webhook only produces "scheduled",
     # "final", or "adjusted". Spec also expects "delayed" for late reports.

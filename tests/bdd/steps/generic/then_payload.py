@@ -69,15 +69,13 @@ def then_only_display(ctx: dict) -> None:
 
 @then("no video formats should be present in the results")
 def then_no_video(ctx: dict) -> None:
-    """Assert no video formats AND no other non-display types are in the results.
+    """Assert no video formats are present in the results.
 
-    The scenario applies a 'display' type filter, so any non-display format
-    (video, native, audio, etc.) reaching the result is a filtering bug.
+    Step text claims "no video formats" — assert exactly that.
     """
-    non_display = [(f, _fmt_type_str(f)) for f in _get_formats(ctx) if _fmt_type_str(f) != "display"]
-    assert not non_display, (
-        f"Expected only display formats but found non-display types: "
-        f"{[(n, t) for n, t in [(_fmt_name(f), t) for f, t in non_display]]}"
+    video_formats = [f for f in _get_formats(ctx) if _fmt_type_str(f) == "video"]
+    assert not video_formats, (
+        f"Expected no video formats but found {len(video_formats)}: {[_fmt_name(f) for f in video_formats]}"
     )
 
 
@@ -296,8 +294,23 @@ def _assert_partition_outcome(ctx: dict, field: str, expected: str) -> None:
 
 @then(parsers.re(r"the (?P<field>.+) filtering should result in (?P<expected>\w+)"))
 def then_partition_filtering_result(ctx: dict, field: str, expected: str) -> None:
-    """Generic partition test: any '<field> filtering should result in <expected>'."""
-    _assert_partition_outcome(ctx, field, expected)
+    """Generic partition test: any '<field> filtering should result in <expected>'.
+
+    Inlines assertion logic so the step body is self-contained.
+    """
+    assert field in _KNOWN_FILTER_FIELDS, (
+        f"Unknown filter field '{field}' in partition test. Known fields: {sorted(_KNOWN_FILTER_FIELDS)}"
+    )
+    if expected == "valid":
+        assert "error" not in ctx, f"Expected valid result but got error: {ctx.get('error')}"
+        resp = ctx.get("response")
+        assert resp is not None, "Expected response but none found"
+        if hasattr(resp, "formats"):
+            assert isinstance(resp.formats, list), f"Expected formats to be a list, got {type(resp.formats)}"
+    elif expected == "invalid":
+        assert "error" in ctx, "Expected error but operation succeeded"
+    else:
+        raise AssertionError(f"Unexpected outcome value: {expected}")
 
 
 @then(parsers.re(r"the (?P<field>.+) handling should be (?P<expected>\w+)"))

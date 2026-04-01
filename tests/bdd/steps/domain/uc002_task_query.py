@@ -1,10 +1,9 @@
 """BDD step definitions for UC-002: Task list query partition/boundary.
 
 Given steps configure sort_field / sort_direction / domain / task_status
-in ctx["task_query_params"]. When step calls list_tasks production code.
-Then outcomes verify sort order, domain filtering, status filtering, or error —
-most xfail as SPEC-PRODUCTION GAPs because list_tasks() only accepts
-status, object_type, object_id, limit, offset.
+in ctx["task_query_params"]. When step passes ALL params to list_tasks().
+If production rejects a param (TypeError), Then steps xfail with the real
+error as proof of the SPEC-PRODUCTION GAP.
 
 beads: salesagent-9vgz.86, salesagent-9vgz.88, salesagent-9vgz.90
 """
@@ -32,6 +31,21 @@ def _ensure_task_query_params(ctx: dict) -> dict[str, Any]:
 def _parse_array_value(raw: str, separator: str = "+") -> list[str]:
     """Parse 'a+b+c' boundary config into a list."""
     return [v.strip() for v in raw.split(separator) if v.strip()]
+
+
+def _xfail_on_unsupported_param(ctx: dict, param_name: str, outcome: str) -> None:
+    """Xfail if list_tasks() rejected a param with TypeError.
+
+    When the When step passes all configured params to list_tasks() and
+    production doesn't accept one, the call raises TypeError. This is
+    the real production gap — the param isn't supported yet.
+    """
+    error = ctx.get("error")
+    if isinstance(error, TypeError) and param_name in str(error):
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: list_tasks() does not accept {param_name} parameter. "
+            f"Outcome={outcome!r}. Error: {error}"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -177,10 +191,12 @@ def given_task_type_filter_boundary(ctx: dict, config: str) -> None:
 
 @when("the Buyer Agent queries the task list")
 def when_query_task_list(ctx: dict) -> None:
-    """Call list_tasks with configured params.
+    """Call list_tasks with ALL configured params.
 
-    Since list_tasks is an async function that needs ResolvedIdentity,
-    we build identity from the env and call directly.
+    Passes every param from ctx["task_query_params"] to list_tasks().
+    If production doesn't accept a param (e.g. sort_field, domain),
+    the resulting TypeError is stored in ctx["error"] — the real
+    production gap surfaces at call time, not via pre-filtering.
     """
     from src.core.tools.task_management import list_tasks
 
@@ -188,28 +204,11 @@ def when_query_task_list(ctx: dict) -> None:
     identity = env.identity
     params = ctx.get("task_query_params", {})
 
-    # list_tasks() only accepts: status, object_type, object_id, limit, offset, identity
-    # sort_field, sort_direction, domain, task_status are NOT accepted by production code.
-    # We pass known ones and record unsupported ones for Then step xfail.
-    known_params = {"status", "object_type", "object_id", "limit", "offset"}
-    impl_kwargs: dict[str, Any] = {"identity": identity}
-    extra_params: dict[str, Any] = {}
-
-    for key, value in params.items():
-        if key in known_params:
-            impl_kwargs[key] = value
-        else:
-            extra_params[key] = value
-
-    if extra_params:
-        # Production doesn't support these params — record for Then step xfail
-        ctx["unsupported_query_params"] = extra_params
-
     try:
-        result = asyncio.run(list_tasks(**impl_kwargs))
+        result = asyncio.run(list_tasks(identity=identity, **params))
         ctx["response"] = result
         ctx["task_list_result"] = result
-    except (AdCPError, Exception) as exc:
+    except (AdCPError, TypeError, Exception) as exc:
         ctx["error"] = exc
 
 
@@ -248,15 +247,8 @@ def _assert_sorted_by(ctx: dict, outcome: str) -> None:
     There is no sort_field parameter. These scenarios xfail until production
     implements parameterized sorting.
     """
-    unsupported = ctx.get("unsupported_query_params", {})
-    if "sort_field" in unsupported:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: list_tasks() does not accept sort_field parameter. "
-            f"Requested sort_field={unsupported['sort_field']!r}, outcome={outcome!r}. "
-            f"Production hardcodes created_at DESC."
-        )
+    _xfail_on_unsupported_param(ctx, "sort_field", outcome)
 
-    # If we get here (omitted sort_field, default), verify we got a response
     assert "error" not in ctx, f"Expected sorted results but got error: {ctx.get('error')}"
     result = ctx.get("task_list_result")
     assert result is not None, "No task list result"
@@ -269,23 +261,12 @@ def _assert_default_sort(ctx: dict, outcome: str) -> None:
     'defaults to desc order' — production already does this (hardcoded).
     """
     if outcome == "defaults to created_at sort":
-        # This IS the production default — should succeed
-        unsupported = ctx.get("unsupported_query_params", {})
-        if "sort_field" in unsupported:
-            pytest.xfail(
-                "SPEC-PRODUCTION GAP: list_tasks() does not accept sort_field parameter. "
-                "Cannot verify default behavior explicitly."
-            )
+        _xfail_on_unsupported_param(ctx, "sort_field", outcome)
         assert "error" not in ctx, f"Expected default sort but got error: {ctx.get('error')}"
         result = ctx.get("task_list_result")
         assert result is not None, "No task list result"
     elif outcome == "defaults to desc order":
-        unsupported = ctx.get("unsupported_query_params", {})
-        if "sort_direction" in unsupported:
-            pytest.xfail(
-                "SPEC-PRODUCTION GAP: list_tasks() does not accept sort_direction parameter. "
-                "Cannot verify default behavior explicitly."
-            )
+        _xfail_on_unsupported_param(ctx, "sort_direction", outcome)
         assert "error" not in ctx, f"Expected default order but got error: {ctx.get('error')}"
         result = ctx.get("task_list_result")
         assert result is not None, "No task list result"
@@ -299,13 +280,7 @@ def _assert_sort_direction(ctx: dict, outcome: str) -> None:
     SPEC-PRODUCTION GAP: list_tasks() hardcodes DESC and has no sort_direction
     parameter. These scenarios xfail until production implements it.
     """
-    unsupported = ctx.get("unsupported_query_params", {})
-    if "sort_direction" in unsupported:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: list_tasks() does not accept sort_direction parameter. "
-            f"Requested sort_direction={unsupported['sort_direction']!r}, outcome={outcome!r}. "
-            f"Production hardcodes DESC."
-        )
+    _xfail_on_unsupported_param(ctx, "sort_direction", outcome)
 
     assert "error" not in ctx, f"Expected sorted results but got error: {ctx.get('error')}"
     result = ctx.get("task_list_result")
@@ -315,35 +290,12 @@ def _assert_sort_direction(ctx: dict, outcome: str) -> None:
 def _assert_filtered_to(ctx: dict, outcome: str) -> None:
     """Assert tasks are filtered to a specific domain, status, or type.
 
-    SPEC-PRODUCTION GAP: list_tasks() does not accept domain or task_status
-    (AdCP enum) parameters. The production 'status' param uses internal
-    workflow statuses (pending, in_progress, etc.), not AdCP task statuses
-    (submitted, working, etc.). All domain and task_status filter scenarios
-    xfail until production implements AdCP-aligned filtering.
+    SPEC-PRODUCTION GAP: list_tasks() does not accept domain, task_status,
+    or task_type parameters. The TypeError from the call is the proof.
     """
-    unsupported = ctx.get("unsupported_query_params", {})
+    for param in ("domain", "task_status", "task_type"):
+        _xfail_on_unsupported_param(ctx, param, outcome)
 
-    if "domain" in unsupported:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: list_tasks() does not accept domain parameter. "
-            f"Requested domain={unsupported['domain']!r}, outcome={outcome!r}."
-        )
-
-    if "task_status" in unsupported:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: list_tasks() does not accept task_status parameter. "
-            f"AdCP task statuses (submitted, working, etc.) differ from production "
-            f"workflow statuses (pending, in_progress, etc.). "
-            f"Requested task_status={unsupported['task_status']!r}, outcome={outcome!r}."
-        )
-
-    if "task_type" in unsupported:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: list_tasks() does not accept task_type parameter. "
-            f"Requested task_type={unsupported['task_type']!r}, outcome={outcome!r}."
-        )
-
-    # If we get here, the filter param was supported — verify response
     assert "error" not in ctx, f"Expected filtered results but got error: {ctx.get('error')}"
     result = ctx.get("task_list_result")
     assert result is not None, "No task list result"
@@ -355,17 +307,8 @@ def _assert_all_returned(ctx: dict, outcome: str) -> None:
     When no domain/status/type filter is specified, list_tasks() returns all
     tasks for the tenant — this is the production default behavior.
     """
-    unsupported = ctx.get("unsupported_query_params", {})
-
-    # Domain/task_status/task_type omitted should mean no filtering was requested.
-    # If somehow unsupported params slipped through, xfail.
     for param in ("domain", "task_status", "task_type"):
-        if param in unsupported:
-            pytest.xfail(
-                f"SPEC-PRODUCTION GAP: list_tasks() does not accept {param} parameter. "
-                f"Cannot verify 'all returned' behavior explicitly. "
-                f"Requested {param}={unsupported[param]!r}, outcome={outcome!r}."
-            )
+        _xfail_on_unsupported_param(ctx, param, outcome)
 
     assert "error" not in ctx, f"Expected all tasks but got error: {ctx.get('error')}"
     result = ctx.get("task_list_result")

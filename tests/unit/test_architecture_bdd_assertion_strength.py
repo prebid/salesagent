@@ -105,12 +105,11 @@ _COUNT_ONLY_ALLOWLIST: set[str] = {
     "bdd/steps/domain/uc026_package_media_buy.py:1939 then_package_all_fields",
     "bdd/steps/domain/uc026_package_media_buy.py:2410 then_new_pkg_in_mb",
     "bdd/steps/domain/uc026_package_media_buy.py:2443 then_new_pkg_created",
-    "bdd/steps/generic/then_media_buy.py:301 then_webhook_notification",
     "bdd/steps/generic/then_media_buy.py:74 then_response_has_packages",
-    "bdd/steps/generic/then_media_buy.py:738 then_response_has_success_fields",
-    "bdd/steps/generic/then_payload.py:146 then_format_assets",
-    "bdd/steps/generic/then_payload.py:85 then_has_referrals",
-    "bdd/steps/generic/then_payload.py:99 then_referral_fields",
+    "bdd/steps/generic/then_media_buy.py:750 then_response_has_success_fields",
+    "bdd/steps/generic/then_payload.py:144 then_format_assets",
+    "bdd/steps/generic/then_payload.py:83 then_has_referrals",
+    "bdd/steps/generic/then_payload.py:97 then_referral_fields",
 }
 
 # Pattern 4 has zero current violations — purely regression prevention.
