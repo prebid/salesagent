@@ -156,8 +156,9 @@ class CreativeAgentRegistry:
     # Default creative agent (always available)
     # Note: agent_url is the base URL for the creative agent (e.g., https://creative.adcontextprotocol.org)
     # The MCP server endpoint (/mcp) is appended by the MCP client when connecting
+    # Reads CREATIVE_AGENT_URL env var so CI can point at a containerized agent.
     DEFAULT_AGENT = CreativeAgent(
-        agent_url="https://creative.adcontextprotocol.org",
+        agent_url=os.environ.get("CREATIVE_AGENT_URL", "https://creative.adcontextprotocol.org"),
         name="AdCP Standard Creative Agent",
         enabled=True,
         priority=1,

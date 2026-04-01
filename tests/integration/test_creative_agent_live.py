@@ -1,15 +1,15 @@
-"""Integration tests against live creative agent.
+"""Integration tests against creative agent (live or local mock).
 
-These tests call the real creative agent at https://creative.adcontextprotocol.org
-to verify format discovery and resolution works correctly.
-
-The creative agent is stable production infrastructure that doesn't change frequently,
-making it suitable for integration testing.
+By default, tests hit the real creative agent at https://creative.adcontextprotocol.org.
+In CI, set CREATIVE_AGENT_URL to point at the local mock server started by the workflow
+(e.g., http://localhost:9999/mcp/) to eliminate network flakiness and rate limits.
 
 NOTE: The conftest test_environment fixture sets ADCP_TESTING=true globally,
 which enables mock mode. These tests override it back to false via the
-enable_live_mode fixture so they call the real creative agent.
+enable_live_mode fixture so they exercise the real MCP code path.
 """
+
+import os
 
 import pytest
 
@@ -17,9 +17,9 @@ from src.core import creative_agent_registry as creative_agent_registry_module
 from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
 from src.core.exceptions import AdCPNotFoundError
 
-# The live creative agent URL
-CREATIVE_AGENT_URL = "https://creative.adcontextprotocol.org"
-CREATIVE_AGENT_URL_WITH_SLASH = "https://creative.adcontextprotocol.org/"
+# The live creative agent URL — reads env var so CI can point at a containerized agent
+CREATIVE_AGENT_URL = os.environ.get("CREATIVE_AGENT_URL", "https://creative.adcontextprotocol.org")
+CREATIVE_AGENT_URL_WITH_SLASH = CREATIVE_AGENT_URL.rstrip("/") + "/"
 
 
 @pytest.fixture(autouse=True)
@@ -183,7 +183,8 @@ class TestURLNormalization:
         print(f"Has trailing slash: {agent_url.endswith('/')}")
 
         # This test documents the behavior - the creative agent returns URLs with trailing slash
-        assert agent_url.startswith("https://creative.adcontextprotocol.org")
+        # Use CREATIVE_AGENT_URL so it works with both live and containerized agents
+        assert agent_url.startswith(CREATIVE_AGENT_URL.rstrip("/"))
 
 
 class TestCacheConsistency:
@@ -211,7 +212,7 @@ class TestCacheConsistency:
         await registry.list_all_formats(tenant_id=None)
 
         # DEFAULT_AGENT uses URL without trailing slash
-        expected_key = CREATIVE_AGENT_URL  # No trailing slash
+        expected_key = CREATIVE_AGENT_URL
 
         cache_keys = list(registry._format_cache.keys())
         print(f"Cache keys: {cache_keys}")
