@@ -828,141 +828,8 @@ function toggleInventoryMode() {
     }
 }
 
-// Inventory picker functionality
-let currentPickerType = null;
-
-function openInventoryPicker(type) {
-    currentPickerType = type;
-    const modal = document.getElementById('inventory-picker-modal');
-    const title = document.getElementById('picker-modal-title');
-    const treeControls = document.getElementById('tree-controls');
-
-    title.textContent = type === 'ad_unit' ? 'Select Ad Units' : 'Select Placements';
-
-    // Show/hide tree controls based on type
-    if (type === 'ad_unit') {
-        treeControls.style.display = 'flex';
-    } else {
-        treeControls.style.display = 'none';
-    }
-
-    // Clear search
-    const searchInput = document.getElementById('picker-search');
-    if (searchInput) {
-        searchInput.value = '';
-    }
-
-    // Load inventory
-    loadInventory(type);
-
-    // Show modal
-    modal.style.display = 'flex';
-}
-
-function closeInventoryPicker() {
-    document.getElementById('inventory-picker-modal').style.display = 'none';
-    currentPickerType = null;
-}
-
-function loadInventory(type, search = '') {
-    const list = document.getElementById('inventory-list');
-    list.innerHTML = '<div style="padding: 2rem; text-align: center; color: #666;">Loading...</div>';
-
-    if (type === 'ad_unit') {
-        // Load hierarchical tree for ad units
-        loadInventoryTree();
-    } else {
-        // Load flat list for placements (keep existing behavior)
-        const url = `{{ url_for('inventory.get_inventory_list', tenant_id=tenant_id) }}?type=${type}${search ? '&search=' + encodeURIComponent(search) : ''}`;
-
-        fetch(url, { credentials: 'same-origin' })
-            .then(response => response.json())
-            .then(data => {
-                if (data.error) {
-                    list.innerHTML = `<div style="padding: 2rem; text-align: center; color: #dc3545;">${data.error}</div>`;
-                    return;
-                }
-
-                if (data.items.length === 0) {
-                    const inventoryUrl = "{{ url_for('inventory.inventory_browser', tenant_id=tenant_id) }}";
-                    list.innerHTML = `<div style="padding: 2rem; text-align: center; color: #666;">No items found. <a href="${inventoryUrl}">Sync inventory</a> first.</div>`;
-                    return;
-                }
-
-                // Cache all items for later use (including metadata)
-                data.items.forEach(item => {
-                    inventoryCache.placements.set(item.id, item);
-                });
-
-                // Get currently selected IDs
-                const fieldId = 'targeted_placement_ids';
-                const field = document.getElementById(fieldId);
-                const fieldValue = field ? field.value : '';
-                const selectedIds = new Set(fieldValue.split(',').filter(Boolean));
-
-                list.innerHTML = data.items.map(item => {
-                    // Show ad unit count for placements
-                    let metadataHtml = '';
-                    if (item.metadata && item.metadata.ad_unit_ids) {
-                        const count = item.metadata.ad_unit_ids.length;
-                        metadataHtml = `<br><small style="color: #2196f3; font-weight: 500;">${count} ad ${count === 1 ? 'unit' : 'units'}</small>`;
-                    }
-
-                    return `
-                    <label class="inventory-item" style="display: flex; align-items: center; padding: 0.75rem; border-bottom: 1px solid #eee; cursor: pointer;">
-                        <input type="checkbox"
-                               value="${item.id}"
-                               data-sizes='${item.metadata && item.metadata.sizes ? JSON.stringify(item.metadata.sizes) : '[]'}'
-                               data-path='${item.path ? JSON.stringify(item.path) : '[]'}'
-                               ${selectedIds.has(item.id) ? 'checked' : ''}
-                               style="margin-right: 0.75rem;">
-                        <div style="flex: 1;">
-                            <strong>${item.name}</strong> <small style="color: #666;">(${item.id})</small>
-                            ${item.path && item.path.length > 1 ? `<br><small style="color: #666;">${item.path.join(' > ')}</small>` : ''}
-                            ${metadataHtml}
-                        </div>
-                    </label>
-                `}).join('');
-            })
-            .catch(error => {
-                list.innerHTML = `<div style="padding: 2rem; text-align: center; color: #dc3545;">Error loading inventory: ${error.message}</div>`;
-            });
-    }
-}
-
-// Dead inline tree code removed — the shared partial (via inventory_picker.html)
-// now provides loadInventoryTree, renderTree, toggleTreeNode, etc.
-
-async function applyInventorySelection() {
-    const checkboxes = document.querySelectorAll('#inventory-list input[type="checkbox"]:checked');
-    const selectedIds = Array.from(checkboxes).map(cb => cb.value);
-    const selectedNames = Array.from(checkboxes).map(cb => {
-        // For tree nodes, get name from data attribute or label text
-        const dataName = cb.getAttribute('data-name');
-        if (dataName) {
-            return dataName;
-        }
-        // Fallback: get from label (for flat list items)
-        const label = cb.closest('label');
-        const strong = label ? label.querySelector('strong') : null;
-        return strong ? strong.textContent : cb.value;
-    });
-
-    if (currentPickerType === 'ad_unit') {
-        document.getElementById('targeted_ad_unit_ids').value = selectedIds.join(',');
-        updateSelectedDisplay('selected-ad-units', selectedNames, selectedIds);
-    } else {
-        document.getElementById('targeted_placement_ids').value = selectedIds.join(',');
-        updateSelectedDisplay('selected-placements', selectedNames, selectedIds);
-    }
-
-    // Extract sizes from selected inventory and update UI (if function exists)
-    if (typeof extractSizesFromInventory === 'function') {
-        await extractSizesFromInventory();
-    }
-
-    closeInventoryPicker();
-}
+// Inventory picker is handled by the inventory_picker.html component
+// (accessed via window.inventoryPicker.open/close/apply)
 
 function updateSelectedDisplay(containerId, names, ids) {
     const container = document.getElementById(containerId);
@@ -1274,33 +1141,10 @@ async function removeSelectedItem(containerId, idToRemove) {
     }
 }
 
-// Search handler - trigger search on button click or Enter key
-function triggerSearch() {
-    const searchInput = document.getElementById('picker-search');
-    if (!searchInput) return;
-
-    const searchValue = searchInput.value;
-
-    if (currentPickerType === 'ad_unit') {
-        // For tree view, reload from server with search parameter
-        loadInventoryTree(searchValue);
-    } else {
-        // For flat list (placements), reload from server
-        loadInventory(currentPickerType, searchValue);
-    }
-}
+// Search is handled by the inventory_picker.html component
+// (Enter key binding and triggerSearch are managed there)
 
 document.addEventListener('DOMContentLoaded', function() {
-    const searchInput = document.getElementById('picker-search');
-    if (searchInput) {
-        // Trigger search on Enter key
-        searchInput.addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') {
-                triggerSearch();
-            }
-        });
-    }
-
     // Add event listeners to format checkboxes to update summary
     const formatsContainer = document.getElementById('formats-container');
     if (formatsContainer) {

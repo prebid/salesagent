@@ -1,12 +1,12 @@
-<!-- ============================================================================
+{# ===========================================================================
      HIERARCHICAL TREE VIEW JAVASCRIPT — Lazy-Loading Edition
      Reusable tree view with on-demand child loading.
 
      Usage:
-     {# include 'partials/hierarchical_tree_scripts.html' #}
+     {% include 'partials/hierarchical_tree_scripts.html' %}
      <script>
      const tree = initInventoryTree({
-         apiUrl: '{{ script_name }}/api/tenant/{{ tenant_id }}/inventory/tree',
+         apiUrl: scriptRoot + '/api/tenant/' + tenantId + '/inventory/tree',
          containerId: 'treeContainer',
          showCheckboxes: true,
          showSearch: true,
@@ -16,7 +16,7 @@
      });
      // tree.search(term), tree.expandAll(), tree.collapseAll(), tree.getSelectedIds()
      </script>
-     ============================================================================ -->
+   =========================================================================== #}
 
 <script>
 /**
@@ -123,7 +123,12 @@ function initInventoryTree(config) {
                 return;
             }
 
-            // Stats
+            // Stats callback — always fire when data has stats fields
+            if (onStatsLoaded && data.placements !== undefined) {
+                onStatsLoaded(data);
+            }
+
+            // Built-in stats rendering (only when showStats enabled)
             if (showStats && statsEl && data.placements !== undefined) {
                 _renderStats(data);
             }
@@ -402,7 +407,6 @@ function initInventoryTree(config) {
                 <span class="ms-auto">${syncInfo}</span>
             </div>
         `;
-        if (onStatsLoaded) onStatsLoaded(data);
     }
 
     // --- Utility ---

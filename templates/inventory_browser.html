@@ -226,8 +226,7 @@ const scriptRoot = '{{ request.script_root }}' || '';
 const tenantId = '{{ tenant.tenant_id }}';
 const treeApiUrl = `${scriptRoot}/api/tenant/${tenantId}/inventory/tree`;
 let selectedInventory = null;
-let inventoryTree = null;
-const inventoryCache = new Map();
+let adUnitTree = null;
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {
@@ -238,43 +237,37 @@ document.addEventListener('DOMContentLoaded', function() {
         document.getElementById('inventoryType').value = typeParam;
     }
 
-    loadTreeAndStats();
+    adUnitTree = initInventoryTree({
+        apiUrl: treeApiUrl,
+        containerId: 'adUnitTree',
+        showCheckboxes: false,
+        showSearch: false,
+        showStats: false,
+        onStatsLoaded: (data) => {
+            updateSyncStatus(data);
+            updateStats(data);
+        },
+        onRender: (nodeEl, nodeData) => {
+            // Click-to-select for detail panel
+            const label = nodeEl.querySelector('.tree-node-label');
+            label.style.cursor = 'pointer';
+            label.addEventListener('click', (e) => {
+                if (e.target.closest('.tree-toggle')) return;
+                e.preventDefault();
+                e.stopPropagation();
+                document.querySelectorAll('#adUnitTree .tree-node-header.selected')
+                    .forEach(n => n.classList.remove('selected'));
+                nodeEl.querySelector('.tree-node-header').classList.add('selected');
+                showInventoryDetail(nodeData, 'ad_unit');
+            });
+        },
+    });
 
     // If type is specified, do initial search
     if (typeParam) {
         searchInventory();
     }
 });
-
-function loadTreeAndStats() {
-    const container = document.getElementById('adUnitTree');
-    container.innerHTML = '<div class="tree-loading"><div class="spinner-border spinner-border-sm" role="status" style="margin-right: 0.5rem;"></div>Loading...</div>';
-
-    fetch(treeApiUrl, { credentials: 'same-origin' })
-        .then(response => response.json())
-        .then(data => {
-            inventoryTree = data;
-            updateSyncStatus(data);
-            updateStats(data);
-
-            if (!data.root_units || data.root_units.length === 0) {
-                container.innerHTML = '<div class="tree-empty">No ad units found. Try syncing inventory first.</div>';
-                return;
-            }
-
-            // Render tree using shared partial's renderTree()
-            container.innerHTML = renderTree(data.root_units, new Set(), 0, false, inventoryCache);
-
-            // Add click-to-select handlers on tree node labels
-            attachNodeClickHandlers();
-        })
-        .catch(error => {
-            console.error('Error loading inventory:', error);
-            container.innerHTML = '<div class="tree-empty text-danger">Error loading tree: ' + error.message + '</div>';
-            document.getElementById('syncStatus').innerHTML =
-                '<span class="text-danger">Error loading status</span>';
-        });
-}
 
 function updateSyncStatus(data) {
     const syncStatus = document.getElementById('syncStatus');
@@ -316,29 +309,6 @@ function updateStats(data) {
         <div><strong>Targeting Keys:</strong> ${data.custom_targeting_keys || 0}</div>
         <div><strong>Audience Segments:</strong> ${data.audience_segments || 0}</div>
     `;
-}
-
-function attachNodeClickHandlers() {
-    document.querySelectorAll('#adUnitTree .tree-node-label').forEach(label => {
-        label.addEventListener('click', function(e) {
-            // Don't interfere with toggle clicks
-            if (e.target.closest('.tree-toggle')) return;
-
-            e.preventDefault();
-            e.stopPropagation();
-
-            const nodeHeader = this.closest('.tree-node-header');
-            const node = this.closest('.tree-node');
-            const unitId = node.dataset.unitId;
-
-            // Update selection highlight
-            document.querySelectorAll('#adUnitTree .tree-node-header.selected').forEach(n => n.classList.remove('selected'));
-            nodeHeader.classList.add('selected');
-
-            // Show detail panel
-            selectNode(unitId);
-        });
-    });
 }
 
 function syncInventory() {
@@ -413,25 +383,6 @@ function pollInventorySyncStatus(syncId, btn) {
     };
 
     checkStatus();
-}
-
-function selectNode(unitId) {
-    // Find unit data from the tree
-    const unit = findUnitById(inventoryTree.root_units, unitId);
-    if (unit) {
-        showInventoryDetail(unit, 'ad_unit');
-    }
-}
-
-function findUnitById(units, unitId) {
-    for (const unit of units) {
-        if (unit.id === unitId) return unit;
-        if (unit.children) {
-            const found = findUnitById(unit.children, unitId);
-            if (found) return found;
-        }
-    }
-    return null;
 }
 
 function showInventoryDetail(item, type) {

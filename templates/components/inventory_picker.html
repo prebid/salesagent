@@ -79,6 +79,7 @@ Then in your template, add browse buttons:
 
     // State
     let currentPickerType = null;
+    let adUnitTree = null;
     let inventoryPickerCache = {
         adUnits: new Map(),
         placements: new Map()
@@ -93,9 +94,9 @@ Then in your template, add browse buttons:
         close: closeInventoryPicker,
         apply: applyInventorySelection,
         triggerSearch: triggerSearch,
-        expandAll: expandAllTreeNodes,
-        collapseAll: collapseAllTreeNodes,
-        expandToSelected: expandToSelected,
+        expandAll: () => adUnitTree && adUnitTree.expandAll(),
+        collapseAll: () => adUnitTree && adUnitTree.collapseAll(),
+        expandToSelected: () => {}, // Not supported with lazy-loading
         setOnApplyCallback: (callback) => { onApplyCallback = callback; },
         cache: inventoryPickerCache,  // Expose cache for external access
         config: config
@@ -148,8 +149,24 @@ Then in your template, add browse buttons:
 
     function loadInventory(type, search = '') {
         if (type === 'ad_unit') {
-            // Use shared tree partial for ad unit hierarchy
-            loadInventoryTree(search, treeApiUrl, 'inventory-picker-list', config.adUnitFieldId, inventoryPickerCache.adUnits);
+            // Get current selections from hidden field
+            const field = document.getElementById(config.adUnitFieldId);
+            const selectedIds = new Set(field ? field.value.split(',').filter(Boolean) : []);
+
+            if (!adUnitTree) {
+                adUnitTree = initInventoryTree({
+                    apiUrl: treeApiUrl,
+                    containerId: 'inventory-picker-list',
+                    showCheckboxes: true,
+                    selectedIds: selectedIds,
+                    onSelect: (nodeId, nodeData) => {
+                        inventoryPickerCache.adUnits.set(nodeId, nodeData);
+                    },
+                });
+            } else {
+                adUnitTree.setSelectedIds(selectedIds);
+            }
+            if (search) adUnitTree.search(search);
         } else {
             loadPlacementsList(search);
         }
@@ -216,9 +233,10 @@ Then in your template, add browse buttons:
     }
 
     function applyInventorySelection() {
-        const list = document.getElementById('inventory-picker-list');
-        const checkboxes = list.querySelectorAll('input[type="checkbox"]:checked');
-        const selectedIds = Array.from(checkboxes).map(cb => cb.value);
+        const selectedIds = (currentPickerType === 'ad_unit' && adUnitTree)
+            ? Array.from(adUnitTree.getSelectedIds())
+            : Array.from(document.getElementById('inventory-picker-list')
+                .querySelectorAll('input[type="checkbox"]:checked')).map(cb => cb.value);
 
         if (currentPickerType === 'ad_unit') {
             // Update hidden field
@@ -233,9 +251,9 @@ Then in your template, add browse buttons:
                 if (selectedIds.length === 0) {
                     display.innerHTML = '<span class="text-muted">No ad units selected</span>';
                 } else {
-                    // Get names from cache
+                    // Get names from tree cache or picker cache
                     const names = selectedIds.map(id => {
-                        const item = inventoryPickerCache.adUnits.get(id);
+                        const item = (adUnitTree && adUnitTree.getNodeData(id)) || inventoryPickerCache.adUnits.get(id);
                         return item ? item.name : id;
                     });
                     display.innerHTML = names.map((name, idx) =>

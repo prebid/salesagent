@@ -4,7 +4,7 @@
 # Prerequisites: tox + tox-uv (install: uv tool install tox --with tox-uv)
 #
 # Usage:
-#   ./run_all_tests.sh           # Docker + all 5 suites via tox (default)
+#   ./run_all_tests.sh           # Docker + all 6 suites via tox (default)
 #   ./run_all_tests.sh quick     # No Docker: unit + integration
 #   ./run_all_tests.sh ci tests/integration/test_file.py -k test_name
 #   ./run_all_tests.sh ci tests/integration/ -m creative     # scoped by entity
@@ -19,11 +19,11 @@ GREEN='\033[0;32m' RED='\033[0;31m' BLUE='\033[0;34m' NC='\033[0m'
 MODE=${1:-ci}
 PYTEST_TARGET="${2:-}"
 PYTEST_ARGS="${@:3}"
-RESULTS_DIR="test-results/$(date +%d%m%y_%H%M)"
+RESULTS_DIR="$(pwd)/test-results/$(date +%d%m%y_%H%M)"
 mkdir -p "$RESULTS_DIR"
 
 # Keep only the last 10 result directories
-ls -dt test-results/*/ 2>/dev/null | tail -n +11 | xargs rm -rf
+ls -dt "$(pwd)/test-results"/*/ 2>/dev/null | tail -n +11 | xargs rm -rf
 
 echo "Mode: $MODE | Reports: $RESULTS_DIR/"
 
@@ -43,7 +43,8 @@ from src.core.tools.media_buy_create import _create_media_buy_impl
 
 collect_reports() {
     # Copy JSON reports from .tox/ to results dir
-    for name in unit integration e2e admin bdd; do
+    mkdir -p "$RESULTS_DIR"
+    for name in unit integration e2e admin bdd ui; do
         [ -f ".tox/${name}.json" ] && cp ".tox/${name}.json" "$RESULTS_DIR/"
     done
 }
@@ -101,7 +102,7 @@ elif [ "$MODE" = "ci" ]; then
     fi
 else
     echo "Usage: ./run_all_tests.sh [quick|ci]"
-    echo "  ci (default) — Docker + all 5 suites via tox"
+    echo "  ci (default) — Docker + all 6 suites via tox"
     echo "  quick        — no Docker: unit + integration"
     exit 1
 fi

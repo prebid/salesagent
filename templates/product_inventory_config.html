@@ -111,8 +111,6 @@
     </div>
 </div>
 
-<!-- Hidden field to sync selected IDs with the shared tree partial -->
-<input type="hidden" id="selectedAdUnitIds" value="">
 
 {% include 'partials/hierarchical_tree_styles.html' %}
 
@@ -139,30 +137,25 @@ const tenantId = '{{ tenant_id }}';
 const productId = '{{ product.product_id }}';
 const treeApiUrl = `${scriptRoot}/api/tenant/${tenantId}/inventory/tree`;
 let selectedAdUnits = new Set();
-const inventoryCache = new Map();
-
-// Sync the selectedAdUnits Set to the hidden field so the shared partial can read it
-function syncSelectedField() {
-    document.getElementById('selectedAdUnitIds').value = Array.from(selectedAdUnits).join(',');
-}
-
-// Override shared partial's checkbox handler to update our Set
-handleTreeCheckboxChange = function(checkbox) {
-    const unitId = checkbox.value;
-    if (checkbox.checked) {
-        selectedAdUnits.add(unitId);
-    } else {
-        selectedAdUnits.delete(unitId);
-    }
-    syncSelectedField();
-    updateSelectedDisplay();
-};
+let adUnitTree = null;
 
 // Load current configuration on page load, then load tree
 document.addEventListener('DOMContentLoaded', function() {
     loadCurrentConfig().then(() => {
-        syncSelectedField();
-        loadInventoryTree('', treeApiUrl, 'inventoryTree', 'selectedAdUnitIds', inventoryCache);
+        adUnitTree = initInventoryTree({
+            apiUrl: treeApiUrl,
+            containerId: 'inventoryTree',
+            showCheckboxes: true,
+            selectedIds: selectedAdUnits,
+            onSelect: (nodeId, nodeData, checked) => {
+                if (checked) {
+                    selectedAdUnits.add(nodeId);
+                } else {
+                    selectedAdUnits.delete(nodeId);
+                }
+                updateSelectedDisplay();
+            },
+        });
     });
 });
 
@@ -223,7 +216,7 @@ function updateSelectedDisplay() {
     html += '<ul class="list-unstyled">';
 
     selectedAdUnits.forEach(unitId => {
-        const cached = inventoryCache.get(unitId);
+        const cached = adUnitTree ? adUnitTree.getNodeData(unitId) : null;
         if (cached && cached.path) {
             html += `<li>• ${cached.path.join(' > ')}</li>`;
         } else {
@@ -294,8 +287,10 @@ function showSuggestions(suggestions) {
 
 function addSuggestion(unitId) {
     selectedAdUnits.add(unitId);
-    syncSelectedField();
-    loadInventoryTree('', treeApiUrl, 'inventoryTree', 'selectedAdUnitIds', inventoryCache);
+    if (adUnitTree) {
+        adUnitTree.setSelectedIds(selectedAdUnits);
+        adUnitTree.refresh();
+    }
 }
 
 function saveConfiguration() {
