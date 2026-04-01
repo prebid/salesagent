@@ -277,14 +277,16 @@ _XFAIL_TAGS: dict[str, str] = {
 _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     (
         "T-UC-005-partition-disclosure",
-        {"all_positions", "no_matching_formats"},
-        "disclosure_positions filter not implemented",
+        {"all_positions", "no_matching_formats", "duplicate_positions"},
+        "disclosure_positions filter/validation not implemented",
     ),
+    # MCP-specific disclosure xfails are in _MCP_SELECTIVE_XFAIL
     (
         "T-UC-005-boundary-disclosure",
-        {"all 8 positions", "format has no"},
-        "disclosure_positions filter not implemented",
+        {"all 8 positions", "format has no", "duplicate positions"},
+        "disclosure_positions filter/validation not implemented",
     ),
+    # MCP-specific boundary disclosure xfails are in _MCP_SELECTIVE_XFAIL
     # Graduated: T-UC-005-boundary-asset-types (all 4 transports pass — brief/catalog now in enum)
     # FIXME(salesagent-0b1): "delayed" notification_type not in production
     # WebhookDeliveryService.send_delivery_webhook only produces "scheduled",
@@ -339,6 +341,9 @@ _MCP_SELECTIVE_XFAIL: list[tuple[str, set[str], str, bool]] = [
     ("T-UC-005-inv-049-10-holds", set(), "MCP wrapper does not accept input_format_ids", True),
     ("T-UC-005-inv-049-10-violated", set(), "MCP wrapper does not accept input_format_ids (vacuous pass)", False),
     ("T-UC-005-inv-049-10-nofield", set(), "MCP wrapper does not accept input_format_ids (vacuous pass)", False),
+    # MCP wrapper does not accept disclosure_positions keyword (strict=False: some variants xpass)
+    ("T-UC-005-partition-disclosure", {"single_position", "multiple_positions_all_match", "duplicate_positions"}, "MCP wrapper: disclosure_positions not accepted or not validated", False),
+    ("T-UC-005-boundary-disclosure", {"single position", "duplicate positions"}, "MCP wrapper: disclosure_positions not accepted or not validated", False),
 ]
 
 # REST xfails: REST endpoint drops all filter params (build_rest_body returns {}).
