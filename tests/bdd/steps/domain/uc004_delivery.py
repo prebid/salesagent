@@ -1289,18 +1289,19 @@ def then_only_status(ctx: dict, status: str) -> None:
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
-    # Check if any Given-step media buy has this status — if so, results must be non-empty
+    # Check if any Given-step media buy has this status — if so, those IDs must appear
     setup_buys = ctx.get("media_buys", {})
-    has_matching_setup = any(mb.get("status") == status for mb in setup_buys.values())
-    if has_matching_setup:
-        assert len(deliveries) > 0, (
-            f"Expected non-empty deliveries for status '{status}' "
-            f"(setup has matching media buys: {[k for k, v in setup_buys.items() if v.get('status') == status]})"
+    expected_ids = {mb_id for mb_id, mb in setup_buys.items() if mb.get("status") == status}
+    returned_ids = {getattr(d, "media_buy_id", None) for d in deliveries}
+    if expected_ids:
+        missing = expected_ids - returned_ids
+        assert not missing, (
+            f"Expected deliveries for status '{status}' media buys {sorted(expected_ids)}, "
+            f"but missing: {sorted(missing)}"
         )
     else:
-        assert len(deliveries) == 0, (
-            f"Expected empty deliveries for status '{status}' (no setup data matches), "
-            f"but got {len(deliveries)} results"
+        assert not deliveries, (
+            f"Expected no deliveries for status '{status}' (no setup data matches), but got IDs: {sorted(returned_ids)}"
         )
     for d in deliveries:
         actual = getattr(d, "status", None)
