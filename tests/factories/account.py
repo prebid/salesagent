@@ -20,6 +20,12 @@ class AccountFactory(factory.alchemy.SQLAlchemyModelFactory):
     account_id = Sequence(lambda n: f"acc_{n:04d}")
     name = LazyAttribute(lambda o: f"Test Account {o.account_id}")
     status = "active"
+    # POST-S3 required fields: buyer must know advertiser, billing, rate_card, payment_terms
+    advertiser = "Test Advertiser"
+    billing_proxy = "Test Billing Proxy"
+    billing = "operator"
+    rate_card = "standard"
+    payment_terms = "net_30"
 
     class Params:
         """Exclude tenant from model construction (it's only for deriving tenant_id)."""
