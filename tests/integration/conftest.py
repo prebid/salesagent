@@ -25,6 +25,9 @@ from tests.integration.migration_helpers import parse_postgres_url
 # Shared test helpers for media buy repository tests
 # ---------------------------------------------------------------------------
 
+# integration_db fixture moved to tests/conftest_db.py (visible to all test suites including tests/bdd/)
+# It is available here via tests/conftest.py -> from tests.conftest_db import *
+
 
 def cleanup_tenant(tenant_id: str) -> None:
     """Delete tenant and all dependent data (correct FK order)."""
@@ -68,10 +71,6 @@ def make_package(media_buy_id: str, package_id: str, **kwargs) -> MediaPackage:
         package_id=package_id,
         **defaults,
     )
-
-
-# integration_db fixture moved to tests/conftest_db.py (visible to all test suites including tests/bdd/)
-# It is available here via tests/conftest.py -> from tests.conftest_db import *
 
 
 @pytest.fixture
@@ -741,6 +740,56 @@ def test_audit_logger(integration_db):
     yield logger
 
 
+@pytest.fixture(scope="module")
+def migration_db():
+    """Create an isolated PostgreSQL database for migration testing.
+
+    Yields (engine, db_url) and cleans up the database after the test module.
+    Uses Alembic for schema management -- does NOT use Base.metadata.create_all().
+    """
+    parsed = parse_postgres_url()
+    if not parsed:
+        pytest.skip("Requires PostgreSQL DATABASE_URL")
+
+    user, password, host, port = parsed
+    db_name = f"test_migration_{uuid.uuid4().hex[:8]}"
+
+    conn_params = {
+        "host": host,
+        "port": port,
+        "user": user,
+        "password": password,
+        "database": "postgres",
+    }
+
+    conn = psycopg2.connect(**conn_params)
+    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+    cur = conn.cursor()
+    cur.execute(f'CREATE DATABASE "{db_name}"')
+    cur.close()
+    conn.close()
+
+    db_url = f"postgresql://{user}:{password}@{host}:{port}/{db_name}"
+    engine = create_engine(db_url, echo=False)
+
+    yield engine, db_url
+
+    engine.dispose()
+    try:
+        conn = psycopg2.connect(**conn_params)
+        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+            f"WHERE datname = '{db_name}' AND pid <> pg_backend_pid()"
+        )
+        cur.execute(f'DROP DATABASE IF EXISTS "{db_name}"')
+        cur.close()
+        conn.close()
+    except Exception:
+        pass
+
+
 @pytest.fixture
 def mock_identity(sample_tenant, sample_principal):
     """Build a ResolvedIdentity from real test DB fixtures.
@@ -1109,53 +1158,3 @@ def add_required_setup_data(session, tenant_id: str):
         ]
         for item in inventory_items:
             session.add(item)
-
-
-@pytest.fixture(scope="module")
-def migration_db():
-    """Create an isolated PostgreSQL database for migration testing.
-
-    Yields (engine, db_url) and cleans up the database after the test module.
-    Uses Alembic for schema management -- does NOT use Base.metadata.create_all().
-    """
-    parsed = parse_postgres_url()
-    if not parsed:
-        pytest.skip("Requires PostgreSQL DATABASE_URL")
-
-    user, password, host, port = parsed
-    db_name = f"test_migration_{uuid.uuid4().hex[:8]}"
-
-    conn_params = {
-        "host": host,
-        "port": port,
-        "user": user,
-        "password": password,
-        "database": "postgres",
-    }
-
-    conn = psycopg2.connect(**conn_params)
-    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-    cur = conn.cursor()
-    cur.execute(f'CREATE DATABASE "{db_name}"')
-    cur.close()
-    conn.close()
-
-    db_url = f"postgresql://{user}:{password}@{host}:{port}/{db_name}"
-    engine = create_engine(db_url, echo=False)
-
-    yield engine, db_url
-
-    engine.dispose()
-    try:
-        conn = psycopg2.connect(**conn_params)
-        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-        cur = conn.cursor()
-        cur.execute(
-            f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-            f"WHERE datname = '{db_name}' AND pid <> pg_backend_pid()"
-        )
-        cur.execute(f'DROP DATABASE IF EXISTS "{db_name}"')
-        cur.close()
-        conn.close()
-    except Exception:
-        pass

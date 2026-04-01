@@ -43,7 +43,7 @@ def _datatable_to_dicts(datatable: Sequence[Sequence[object]]) -> list[dict[str,
 @given(parsers.parse('the registry has format "{name}" of type "{fmt_type}" with asset type "{asset_type}"'))
 def given_registry_format_typed(ctx: dict, name: str, fmt_type: str, asset_type: str) -> None:
     """Register a single format with explicit type and asset type."""
-    fmt = FormatFactory.build(name=name, type=CATEGORY_MAP[fmt_type], assets=[make_asset(asset_type)])
+    fmt = FormatFactory.build(name=name, type=CATEGORY_MAP.get(fmt_type), assets=[make_asset(asset_type)])
     ctx.setdefault("registry_formats", []).append(fmt)
     _sync_registry(ctx)
 
@@ -217,7 +217,7 @@ def given_registry_format_no_input_ids(ctx: dict, name: str) -> None:
 def given_registry_formats_table(ctx: dict, datatable: Sequence[Sequence[object]]) -> None:
     """Register multiple formats from a data table with name and type columns."""
     rows = _datatable_to_dicts(datatable)
-    formats = [FormatFactory.build(name=row["name"], type=CATEGORY_MAP[row["type"]]) for row in rows]
+    formats = [FormatFactory.build(name=row["name"], type=CATEGORY_MAP.get(row["type"])) for row in rows]
     ctx.setdefault("registry_formats", []).extend(formats)
     _sync_registry(ctx)
 
@@ -232,9 +232,9 @@ def given_registry_three_formats_inline(
     """Register three formats from inline notation."""
     ctx.setdefault("registry_formats", []).extend(
         [
-            FormatFactory.build(name=name_a, type=CATEGORY_MAP[type_a]),
-            FormatFactory.build(name=name_b, type=CATEGORY_MAP[type_b]),
-            FormatFactory.build(name=name_c, type=CATEGORY_MAP[type_c]),
+            FormatFactory.build(name=name_a, type=CATEGORY_MAP.get(type_a)),
+            FormatFactory.build(name=name_b, type=CATEGORY_MAP.get(type_b)),
+            FormatFactory.build(name=name_c, type=CATEGORY_MAP.get(type_c)),
         ]
     )
     _sync_registry(ctx)
@@ -245,8 +245,8 @@ def given_registry_two_formats_inline(ctx: dict, name_a: str, type_a: str, name_
     """Register two formats from inline notation."""
     ctx.setdefault("registry_formats", []).extend(
         [
-            FormatFactory.build(name=name_a, type=CATEGORY_MAP[type_a]),
-            FormatFactory.build(name=name_b, type=CATEGORY_MAP[type_b]),
+            FormatFactory.build(name=name_a, type=CATEGORY_MAP.get(type_a)),
+            FormatFactory.build(name=name_b, type=CATEGORY_MAP.get(type_b)),
         ]
     )
     _sync_registry(ctx)

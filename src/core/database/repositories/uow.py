@@ -34,6 +34,7 @@ from typing import Any, Self
 from sqlalchemy.orm import Session
 
 from src.core.database.database_session import get_db_session
+from src.core.database.repositories.account import AccountRepository
 from src.core.database.repositories.creative import CreativeAssignmentRepository, CreativeRepository
 from src.core.database.repositories.currency_limit import CurrencyLimitRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
@@ -197,6 +198,28 @@ class TenantConfigUoW(BaseUoW):
 
     def _clear_repos(self) -> None:
         self.tenant_config = None
+
+
+class AccountUoW(BaseUoW):
+    """Unit of Work for Account operations.
+
+    Wraps a database session and provides a tenant-scoped AccountRepository.
+    Auto-commits on clean exit, rolls back on exception.
+
+    Args:
+        tenant_id: Tenant scope for all repository queries.
+
+    beads: salesagent-m44
+    """
+
+    accounts: AccountRepository | None
+
+    def _init_repos(self) -> None:
+        assert self._session is not None
+        self.accounts = AccountRepository(self._session, self._tenant_id)
+
+    def _clear_repos(self) -> None:
+        self.accounts = None
 
 
 class CreativeUoW(BaseUoW):

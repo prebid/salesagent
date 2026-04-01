@@ -79,22 +79,22 @@ def _make_db_product(**overrides) -> ProductModel:
 # ---------------------------------------------------------------------------
 
 
-class TestDeliveryMeasurementRequired:
-    """Verify that delivery_measurement is required per AdCP spec."""
+class TestDeliveryMeasurementOptional:
+    """Verify that delivery_measurement is optional per AdCP 3.10 spec."""
 
-    def test_product_without_delivery_measurement_fails_validation(self):
-        """Omitting delivery_measurement raises ValidationError."""
-        with pytest.raises(ValidationError, match="delivery_measurement"):
-            Product(
-                product_id="no_dm",
-                name="No DM",
-                description="Missing delivery_measurement",
-                format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
-                delivery_type="guaranteed",
-                publisher_properties=[create_test_publisher_properties_by_tag()],
-                pricing_options=[create_test_cpm_pricing_option()],
-                # delivery_measurement intentionally omitted
-            )
+    def test_product_without_delivery_measurement_is_valid(self):
+        """Omitting delivery_measurement is valid per adcp 3.10 (was required in 3.6-3.9)."""
+        product = Product(
+            product_id="no_dm",
+            name="No DM",
+            description="Missing delivery_measurement",
+            format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
+            delivery_type="guaranteed",
+            publisher_properties=[create_test_publisher_properties_by_tag()],
+            pricing_options=[create_test_cpm_pricing_option()],
+            # delivery_measurement intentionally omitted — now optional per adcp 3.10
+        )
+        assert product.delivery_measurement is None
 
     def test_product_with_delivery_measurement_passes(self):
         """Product with delivery_measurement passes validation."""

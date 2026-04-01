@@ -17,20 +17,19 @@ Related:
 
 from datetime import UTC, datetime
 
-from src.core.schemas import GetSignalsResponse, Signal, SignalDeployment, SignalPricing
+from src.core.schemas import GetSignalsResponse, Signal, SignalDeployment
 
 
-def test_get_signals_response_excludes_internal_fields():
-    """Test that GetSignalsResponse excludes Signal internal fields."""
-    # Create Signal with internal fields
-    signal = Signal(
-        signal_agent_segment_id="signal_123",
-        name="Test Signal",
-        description="Test signal description",
-        signal_type="marketplace",
-        data_provider="TestProvider",
-        coverage_percentage=85.5,
-        deployments=[
+def _make_signal(signal_agent_segment_id: str = "signal_123", **overrides) -> Signal:
+    """Build a valid Signal with adcp 3.9 pricing_options."""
+    defaults = {
+        "signal_agent_segment_id": signal_agent_segment_id,
+        "name": "Test Signal",
+        "description": "Test signal description",
+        "signal_type": "marketplace",
+        "data_provider": "TestProvider",
+        "coverage_percentage": 85.5,
+        "deployments": [
             SignalDeployment(
                 platform="gam",
                 account=None,
@@ -41,8 +40,18 @@ def test_get_signals_response_excludes_internal_fields():
                 estimated_activation_duration_minutes=None,
             )
         ],
-        pricing=SignalPricing(cpm=2.50, currency="USD"),
-        # Internal fields - should be excluded
+        "pricing_options": [
+            {"pricing_option_id": "cpm_usd", "cpm": 2.50, "currency": "USD", "model": "cpm"},
+        ],
+    }
+    defaults.update(overrides)
+    return Signal(**defaults)
+
+
+def test_get_signals_response_excludes_internal_fields():
+    """Test that GetSignalsResponse excludes Signal internal fields."""
+    # Create Signal with internal fields
+    signal = _make_signal(
         tenant_id="tenant_456",
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
@@ -70,32 +79,20 @@ def test_get_signals_response_excludes_internal_fields():
     assert signal_data["data_provider"] == "TestProvider"
     assert signal_data["coverage_percentage"] == 85.5
     assert "deployments" in signal_data
-    assert "pricing" in signal_data
+    assert "pricing_options" in signal_data
 
 
 def test_get_signals_response_with_multiple_signals():
     """Test that internal fields are excluded from all signals in the list."""
     # Create multiple signals with internal fields
     signals = [
-        Signal(
+        _make_signal(
             signal_agent_segment_id=f"signal_{i}",
             name=f"Test Signal {i}",
             description=f"Description {i}",
             signal_type="marketplace" if i % 2 == 0 else "custom",
             data_provider=f"Provider{i}",
             coverage_percentage=float(80 + i),
-            deployments=[
-                SignalDeployment(
-                    platform="gam",
-                    account=None,
-                    is_live=True,
-                    type="platform",
-                    scope="platform-wide",
-                    decisioning_platform_segment_id=f"seg_{i}",
-                    estimated_activation_duration_minutes=None,
-                )
-            ],
-            pricing=SignalPricing(cpm=2.50 + i, currency="USD"),
             # Internal fields
             tenant_id=f"tenant_{i}",
             created_at=datetime.now(UTC),

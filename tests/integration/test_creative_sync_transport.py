@@ -1282,7 +1282,7 @@ class TestAsyncLifecycleSubmitted:
     )
     def test_queued_sync_returns_submitted(self, integration_db):
         """Queued sync operation returns SyncCreativesSubmitted with context."""
-        from adcp.types.generated_poc.media_buy.sync_creatives_async_response_submitted import (
+        from adcp.types.generated_poc.creative.sync_creatives_async_response_submitted import (
             SyncCreativesSubmitted,
         )
 
@@ -1319,7 +1319,7 @@ class TestAsyncLifecycleWorking:
     )
     def test_in_progress_returns_working_with_progress(self, integration_db):
         """Status check on in-progress async op returns SyncCreativesWorking."""
-        from adcp.types.generated_poc.media_buy.sync_creatives_async_response_working import (
+        from adcp.types.generated_poc.creative.sync_creatives_async_response_working import (
             SyncCreativesWorking,
         )
 
@@ -1369,7 +1369,7 @@ class TestAsyncLifecycleInputRequired:
     )
     def test_approval_needed_returns_input_required(self, integration_db):
         """Async op needing approval returns SyncCreativesInputRequired."""
-        from adcp.types.generated_poc.media_buy.sync_creatives_async_response_input_required import (
+        from adcp.types.generated_poc.creative.sync_creatives_async_response_input_required import (
             Reason,
             SyncCreativesInputRequired,
         )

@@ -12,12 +12,14 @@ Philosophy:
 
 from typing import Any
 
-from adcp import GetProductsRequest, GetProductsResponse, Product
+from adcp import GetProductsResponse, Product
 from adcp.types import PropertyListReference
 from adcp.types.generated_poc.core.brand_ref import BrandReference
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.core.product_filters import ProductFilters
 from adcp.types.generated_poc.core.reporting_webhook import ReportingWebhook
+
+from src.core.schemas.product import GetProductsRequest
 
 
 def to_context_object(context: dict[str, Any] | ContextObject | None) -> ContextObject | None:
@@ -128,7 +130,7 @@ def create_get_products_request(
         elif isinstance(filters, dict):
             filters_obj = ProductFilters(**filters)
 
-    return GetProductsRequest(
+    return GetProductsRequest(  # type: ignore[call-arg]
         brand=to_brand_reference(brand),
         brief=brief or None,
         filters=filters_obj,

@@ -54,9 +54,13 @@ Then in your template, add browse buttons:
     </div>
 </div>
 
+<!-- Shared tree view styles and scripts -->
+{% include 'partials/hierarchical_tree_styles.html' %}
+{% include 'partials/hierarchical_tree_scripts.html' %}
+
 <script>
 // Inventory Picker - Shared Component
-// Creates a global namespace to avoid conflicts
+// Uses shared tree partial for ad unit rendering; keeps picker-specific selection logic
 (function() {
     'use strict';
 
@@ -69,6 +73,9 @@ Then in your template, add browse buttons:
         placementDisplayId: '{{ picker_config.placement_display_id if picker_config else "selected-placements" }}',
         scriptRoot: '{{ request.script_root }}'  // Base path for URLs (e.g., '/admin' or '')
     };
+
+    // Tree API URL for ad units
+    const treeApiUrl = `${config.scriptRoot}/api/tenant/${config.tenantId}/inventory/tree`;
 
     // State
     let currentPickerType = null;
@@ -140,11 +147,9 @@ Then in your template, add browse buttons:
     }
 
     function loadInventory(type, search = '') {
-        const list = document.getElementById('inventory-picker-list');
-        list.innerHTML = '<div style="padding: 2rem; text-align: center; color: #666;">Loading...</div>';
-
         if (type === 'ad_unit') {
-            loadInventoryTree(search);
+            // Use shared tree partial for ad unit hierarchy
+            loadInventoryTree(search, treeApiUrl, 'inventory-picker-list', config.adUnitFieldId, inventoryPickerCache.adUnits);
         } else {
             loadPlacementsList(search);
         }
@@ -158,7 +163,7 @@ Then in your template, add browse buttons:
             .then(response => {
                 // Handle authentication errors (401) by redirecting to login
                 if (response.status === 401) {
-                    const loginUrl = config.scriptRoot + '/auth/login?redirect=' + encodeURIComponent(window.location.pathname);
+                    const loginUrl = config.scriptRoot + '/login?redirect=' + encodeURIComponent(window.location.pathname);
                     window.location.href = loginUrl;
                     return Promise.reject(new Error('Session expired'));
                 }
@@ -203,94 +208,6 @@ Then in your template, add browse buttons:
                     list.innerHTML = `<div style="padding: 2rem; text-align: center; color: #dc3545;">Error: ${error.message}</div>`;
                 }
             });
-    }
-
-    function loadInventoryTree(search = '') {
-        const list = document.getElementById('inventory-picker-list');
-        const baseUrl = `${config.scriptRoot}/api/tenant/${config.tenantId}/inventory/tree`;
-        const url = search ? `${baseUrl}?search=${encodeURIComponent(search)}` : baseUrl;
-
-        list.innerHTML = `<div style="padding: 2rem; text-align: center; color: #666;">
-            <div class="spinner-border spinner-border-sm" role="status" style="margin-right: 0.5rem;"></div>
-            ${search ? 'Searching...' : 'Loading ad units...'}
-        </div>`;
-
-        fetch(url, { credentials: 'same-origin' })
-            .then(response => {
-                // Handle authentication errors (401) by redirecting to login
-                if (response.status === 401) {
-                    const loginUrl = config.scriptRoot + '/auth/login?redirect=' + encodeURIComponent(window.location.pathname);
-                    window.location.href = loginUrl;
-                    return Promise.reject(new Error('Session expired'));
-                }
-                return response.json();
-            })
-            .then(data => {
-                if (data.error) {
-                    list.innerHTML = `<div style="padding: 2rem; text-align: center; color: #dc3545;">${data.error}</div>`;
-                    return;
-                }
-
-                if (!data.root_units || data.root_units.length === 0) {
-                    list.innerHTML = `<div style="padding: 2rem; text-align: center; color: #666;">No ad units found${search ? ` matching "${search}"` : ''}.</div>`;
-                    return;
-                }
-
-                // Cache tree units
-                cacheTreeUnits(data.root_units);
-
-                // Get currently selected IDs
-                const field = document.getElementById(config.adUnitFieldId);
-                const selectedIds = new Set(field ? field.value.split(',').filter(Boolean) : []);
-
-                // Build tree HTML
-                list.innerHTML = '<div style="padding: 1rem;">' +
-                    data.root_units.map(unit => renderTreeNode(unit, selectedIds, 0)).join('') +
-                    '</div>';
-            })
-            .catch(error => {
-                // Don't show error for session expired (we're redirecting)
-                if (error.message !== 'Session expired') {
-                    list.innerHTML = `<div style="padding: 2rem; text-align: center; color: #dc3545;">Error: ${error.message}</div>`;
-                }
-            });
-    }
-
-    function cacheTreeUnits(units) {
-        units.forEach(unit => {
-            inventoryPickerCache.adUnits.set(unit.id, {
-                id: unit.id,
-                name: unit.name,
-                path: unit.path,
-                sizes: unit.sizes || [],
-                children: unit.children || []
-            });
-            if (unit.children && unit.children.length > 0) {
-                cacheTreeUnits(unit.children);
-            }
-        });
-    }
-
-    function renderTreeNode(node, selectedIds, depth) {
-        const hasChildren = node.children && node.children.length > 0;
-        const isChecked = selectedIds.has(node.id);
-        const indent = depth * 20;
-
-        let html = `
-            <div style="margin-left: ${indent}px; margin-bottom: 4px;">
-                <label style="display: flex; align-items: center; padding: 4px; cursor: pointer;">
-                    ${hasChildren ? `<span class="tree-toggle" onclick="event.preventDefault(); window.inventoryPicker.toggleNode(event)">▶</span>` : '<span style="width: 20px; display: inline-block;"></span>'}
-                    <input type="checkbox"
-                           value="${node.id}"
-                           ${isChecked ? 'checked' : ''}
-                           style="margin: 0 8px;">
-                    <span><strong>${node.name}</strong> <small style="color: #666;">(${node.id})</small></span>
-                </label>
-                ${hasChildren ? `<div class="tree-children" style="display: none;">${node.children.map(child => renderTreeNode(child, selectedIds, depth + 1)).join('')}</div>` : ''}
-            </div>
-        `;
-
-        return html;
     }
 
     function triggerSearch() {
@@ -357,54 +274,6 @@ Then in your template, add browse buttons:
         }
 
         closeInventoryPicker();
-    }
-
-    // ==================== TREE MANIPULATION ====================
-
-    window.inventoryPicker.toggleNode = function(event) {
-        const toggle = event.target;
-        const childrenDiv = toggle.parentElement.parentElement.querySelector('.tree-children');
-        if (childrenDiv) {
-            if (childrenDiv.style.display === 'none') {
-                childrenDiv.style.display = 'block';
-                toggle.textContent = '▼';
-            } else {
-                childrenDiv.style.display = 'none';
-                toggle.textContent = '▶';
-            }
-        }
-    };
-
-    function expandAllTreeNodes() {
-        document.querySelectorAll('.tree-children').forEach(div => {
-            div.style.display = 'block';
-        });
-        document.querySelectorAll('.tree-toggle').forEach(toggle => {
-            toggle.textContent = '▼';
-        });
-    }
-
-    function collapseAllTreeNodes() {
-        document.querySelectorAll('.tree-children').forEach(div => {
-            div.style.display = 'none';
-        });
-        document.querySelectorAll('.tree-toggle').forEach(toggle => {
-            toggle.textContent = '▶';
-        });
-    }
-
-    function expandToSelected() {
-        const checkedInputs = document.querySelectorAll('#inventory-picker-list input[type="checkbox"]:checked');
-
-        checkedInputs.forEach(input => {
-            let parent = input.closest('.tree-children');
-            while (parent) {
-                parent.style.display = 'block';
-                const toggle = parent.previousElementSibling?.querySelector('.tree-toggle');
-                if (toggle) toggle.textContent = '▼';
-                parent = parent.parentElement.closest('.tree-children');
-            }
-        });
     }
 })();
 </script>

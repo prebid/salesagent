@@ -1302,7 +1302,7 @@ function handleTask(activityId, taskId) {
         return;
     }
     // Navigate to task approval page
-    window.location.href = `/tenant/{{ tenant.tenant_id }}/tasks/${taskId}/approve`;
+    window.location.href = `{{ request.script_root }}/tenant/{{ tenant.tenant_id }}/tasks/${taskId}/approve`;
 }
 
 // View task details

@@ -11,8 +11,6 @@ import threading
 import time
 from datetime import UTC, datetime
 
-from sqlalchemy import select
-
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories import MediaBuyUoW, WorkflowUoW
 
@@ -94,26 +92,21 @@ def _run_approval_polling_thread(
 
         orders_manager = None
         try:
-            # FIXME(salesagent-bou.4): AdapterConfig needs its own repository
             with get_db_session() as db:
-                from src.core.database.models import AdapterConfig
+                from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
-                stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id, adapter_type="google_ad_manager")
-                adapter_config = db.scalars(stmt).first()
-                if not adapter_config:
+                adapter_repo = AdapterConfigRepository(db, tenant_id)
+                adapter_config = adapter_repo.find_by_tenant()
+                if not adapter_config or adapter_config.adapter_type != "google_ad_manager":
                     raise ValueError(f"No GAM adapter config found for tenant {tenant_id}")
 
                 if not adapter_config.gam_network_code:
                     raise ValueError(f"GAM network code not configured for tenant {tenant_id}")
 
-            # Build config dict from adapter_config
-            config_dict = {
-                "refresh_token": adapter_config.gam_refresh_token,
-                "service_account_json": adapter_config.gam_service_account_json,
-            }
+                gam_config = adapter_repo.get_gam_config(adapter_config)
 
             # Initialize GAM client and orders manager
-            client_manager = GAMClientManager(config_dict, adapter_config.gam_network_code)
+            client_manager = GAMClientManager(gam_config, adapter_config.gam_network_code)
             orders_manager = GAMOrdersManager(client_manager, dry_run=False)
 
         except Exception as e:

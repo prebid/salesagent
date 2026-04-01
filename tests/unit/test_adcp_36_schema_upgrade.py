@@ -135,27 +135,40 @@ class TestPaginationCursorBased:
         assert p.total_count == 100
 
 
-class TestPropertyIdentifierRequired:
-    """Property aligns with adcp 3.6.0 — identifier and type are REQUIRED."""
+class TestPropertyRequiredFields:
+    """Property aligns with adcp 3.10 — property_type, name, identifiers are REQUIRED."""
 
-    def test_property_without_identifier_is_rejected(self):
-        """identifier is REQUIRED in adcp 3.6.0 Property."""
+    def test_property_without_property_type_is_rejected(self):
+        """property_type is REQUIRED in adcp 3.10 Property."""
         from src.core.schemas import Property
 
-        with pytest.raises(ValidationError, match="identifier"):
-            Property(type="website")
+        with pytest.raises(ValidationError, match="property_type"):
+            Property(name="Example", identifiers=[{"type": "domain", "value": "example.com"}])
 
-    def test_property_without_type_is_rejected(self):
-        """type is REQUIRED in adcp 3.6.0 Property."""
+    def test_property_without_name_is_rejected(self):
+        """name is REQUIRED in adcp 3.10 Property."""
         from src.core.schemas import Property
 
-        with pytest.raises(ValidationError, match="type"):
-            Property(identifier="pub.example.com")
+        with pytest.raises(ValidationError, match="name"):
+            Property(property_type="website", identifiers=[{"type": "domain", "value": "example.com"}])
+
+    def test_property_without_identifiers_is_rejected(self):
+        """identifiers is REQUIRED in adcp 3.10 Property."""
+        from src.core.schemas import Property
+
+        with pytest.raises(ValidationError, match="identifiers"):
+            Property(property_type="website", name="Example")
 
     def test_property_with_identifier_and_type_is_valid(self):
-        """Minimum valid Property requires only identifier and type."""
+        """Minimum valid Property requires property_type, name, and identifiers."""
         from src.core.schemas import Property
 
-        p = Property(identifier="pub.example.com", type="website")
-        assert p.identifier == "pub.example.com"
-        assert str(p.type) == "website" or p.type.value == "website"  # type is an enum in 3.6.0
+        p = Property(
+            property_type="website",
+            name="Example",
+            identifiers=[{"type": "domain", "value": "pub.example.com"}],
+        )
+        assert p.name == "Example"
+        assert p.property_type.value == "website"
+        assert len(p.identifiers) == 1
+        assert p.identifiers[0].value == "pub.example.com"

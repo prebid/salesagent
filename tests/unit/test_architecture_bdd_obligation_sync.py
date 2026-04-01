@@ -33,6 +33,8 @@ _OBLIGATION_ID_RE = re.compile(r"[A-Z][A-Z0-9]+-[\w-]+-\d{2}")
 
 # Generation stamp that compile_bdd.py writes at the top of each .feature file
 _GENERATION_STAMP_PREFIX = "# Generated from adcp-req"
+# Hand-authored features (not compiled) use a different stamp
+_HAND_AUTHORED_STAMP_PREFIX = "# Hand-authored feature"
 
 
 # ---------------------------------------------------------------------------
@@ -218,13 +220,16 @@ class TestBDDObligationSync:
         missing_stamp: list[str] = []
         for feature_file in feature_files:
             first_line = feature_file.read_text().split("\n", 1)[0]
-            if not first_line.startswith(_GENERATION_STAMP_PREFIX):
+            if not (
+                first_line.startswith(_GENERATION_STAMP_PREFIX) or first_line.startswith(_HAND_AUTHORED_STAMP_PREFIX)
+            ):
                 missing_stamp.append(f"  {feature_file.name}")
 
         assert not missing_stamp, (
             f"Found {len(missing_stamp)} .feature file(s) without generation stamps.\n"
             f"Compiled features must start with '{_GENERATION_STAMP_PREFIX}'.\n"
-            f"Do not manually edit compiled features — use compile_bdd.py:\n" + "\n".join(missing_stamp)
+            f"Hand-authored features must start with '{_HAND_AUTHORED_STAMP_PREFIX}'.\n"
+            f"Unrecognized:\n" + "\n".join(missing_stamp)
         )
 
     def test_traceability_yaml_validates(self):

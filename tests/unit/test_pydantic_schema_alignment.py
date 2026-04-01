@@ -66,6 +66,7 @@ KNOWN_SCHEMA_LIBRARY_MISMATCHES: dict[str, set[str]] = {
     },
     "/schemas/latest/media-buy/update-media-buy-request.json": {
         "idempotency_key",  # Schema defines request deduplication key, library doesn't have it yet
+        "invoice_recipient",  # Schema refs BusinessEntity type, not in library or our models yet
     },
     "/schemas/latest/media-buy/get-media-buy-delivery-request.json": {
         "account",  # Schema says 'account' (object), library uses 'account_id' (string)

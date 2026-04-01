@@ -37,15 +37,6 @@ from adcp.types.generated_poc.core.format import (
     Renders,
     Responsive,
 )
-from adcp.types.generated_poc.core.requirements.audio_asset_requirements import (
-    AudioAssetRequirements,
-)
-from adcp.types.generated_poc.core.requirements.image_asset_requirements import (
-    ImageAssetRequirements,
-)
-from adcp.types.generated_poc.core.requirements.video_asset_requirements import (
-    VideoAssetRequirements,
-)
 from adcp.types.generated_poc.enums.format_category import FormatCategory
 
 from src.core.schemas import Format, FormatId
@@ -64,39 +55,15 @@ _ASSET_CLASS_MAP = {
 }
 
 
-def _default_requirements(
-    asset_type: str,
-) -> ImageAssetRequirements | VideoAssetRequirements | AudioAssetRequirements | None:
-    """Return sensible default requirements for a given asset type."""
-    if asset_type == "image":
-        return ImageAssetRequirements(min_width=300, min_height=250, max_width=970, max_height=250)
-    if asset_type == "video":
-        return VideoAssetRequirements(min_width=640, min_height=360, max_width=1920, max_height=1080)
-    if asset_type == "audio":
-        return AudioAssetRequirements(min_duration_ms=15000, max_duration_ms=60000)
-    return None
-
-
-def make_asset(
-    asset_type: str,
-    asset_id: str | None = None,
-    *,
-    with_requirements: bool = False,
-) -> Assets:
+def make_asset(asset_type: str, asset_id: str | None = None) -> Assets:
     """Create a typed asset object from an asset type string.
 
     >>> a = make_asset("video")
     >>> a.asset_type
     'video'
-
-    When ``with_requirements=True``, populates the ``requirements`` field
-    with sensible defaults (dimensions for image/video, duration for audio).
     """
     cls = _ASSET_CLASS_MAP.get(asset_type, Assets)
-    kwargs: dict[str, object] = {"asset_id": asset_id or f"{asset_type}_asset", "required": True}
-    if with_requirements:
-        kwargs["requirements"] = _default_requirements(asset_type)
-    return cls(**kwargs)
+    return cls(asset_id=asset_id or f"{asset_type}_asset", required=True)
 
 
 def make_renders(

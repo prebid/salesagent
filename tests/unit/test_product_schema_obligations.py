@@ -128,7 +128,7 @@ class TestPrecondSchemaObligations:
             response = await env.call_impl(
                 brief="test",
                 brand={"domain": "test.com"},
-                product_selectors=[{"product_id": "prod_001"}],
+                product_selectors={"product_id": "prod_001"},
             )
 
             # Verify request with both brand and product_selectors is accepted
@@ -502,7 +502,7 @@ class TestAuthErrorResponseSchema:
 
         err = AdCPAuthenticationError("Authentication required by tenant policy")
         err_dict = err.to_dict()
-        assert err_dict["error_code"] == "AUTHENTICATION_ERROR"
+        assert err_dict["error_code"] == "AUTH_TOKEN_INVALID"
         assert "Authentication required" in err_dict["message"]
 
 
@@ -985,7 +985,8 @@ class TestFilteredDiscoverySchema:
             forecast=low_forecast,
         )
         # mid impressions = 2000 which is below 100000 threshold
-        assert product.forecast.points[0].metrics["impressions"].mid < 100000
+        # adcp 3.9: Metrics is a Pydantic model, use attribute access instead of subscript
+        assert product.forecast.points[0].metrics.impressions.mid < 100000
 
     def test_filter_min_exposures_non_guaranteed_with_price_guidance(self):
         """Non-guaranteed product with price_guidance passes min_exposures.
@@ -1494,14 +1495,14 @@ class TestGetProductsRequestSchema:
         req = GetProductsRequest(
             brief="video ads for sports fans",
             brand={"domain": "nike.com"},
-            account_id="acct_001",
+            account={"account_id": "acct_001"},
             buyer_campaign_ref="camp_ref_001",
             filters={"delivery_type": "guaranteed"},
             pagination={"max_results": 10},
         )
         assert req.brief == "video ads for sports fans"
         assert req.brand is not None
-        assert req.account_id == "acct_001"
+        assert req.account is not None
         assert req.buyer_campaign_ref == "camp_ref_001"
         assert req.filters is not None
         assert req.pagination is not None
