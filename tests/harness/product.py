@@ -71,6 +71,21 @@ class ProductEnv(ProductMixin, IntegrationEnv):
     def _configure_mocks(self) -> None:
         self._configure_product_mocks()
 
+    REST_ENDPOINT = "/api/v1/products"
+
     def call_mcp(self, **kwargs: Any) -> GetProductsResponse:
         """Call get_products via Client(mcp) — full pipeline dispatch."""
         return self._run_mcp_client("get_products", GetProductsResponse, **kwargs)
+
+    def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
+        """Convert kwargs to GetProductsBody shape for REST POST.
+
+        GetProductsBody (src/routes/api_v1.py) accepts:
+            brief, brand, filters, adcp_version
+        """
+        _BODY_FIELDS = ("brief", "brand", "filters", "adcp_version")
+        return {k: kwargs[k] for k in _BODY_FIELDS if k in kwargs and kwargs[k] is not None}
+
+    def parse_rest_response(self, data: dict[str, Any]) -> GetProductsResponse:
+        """Parse REST JSON response into GetProductsResponse."""
+        return GetProductsResponse(**data)
