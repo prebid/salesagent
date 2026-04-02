@@ -17,10 +17,13 @@ import base64
 import logging
 import uuid
 from datetime import UTC
-from typing import Any, cast
+from typing import Any
 
 from adcp.types.generated_poc.account.list_accounts_request import (
     Status as AccountStatus,
+)
+from adcp.types.generated_poc.account.sync_accounts_request import (
+    Account as SyncAccountInput,
 )
 from adcp.types.generated_poc.account.sync_accounts_response import (
     Account as SyncResponseAccount,
@@ -646,29 +649,35 @@ async def _sync_accounts_impl(
 
 
 async def sync_accounts(
-    req: SyncAccountsRequest | None = None,
-    ctx: Context | ToolContext | None = None,
+    accounts: list[SyncAccountInput] | None = None,
+    delete_missing: bool | None = None,
+    dry_run: bool | None = None,
     context: ContextObject | None = None,
+    ctx: Context | ToolContext | None = None,
 ) -> Any:
     """Sync accounts by natural key (MCP tool).
 
+    MCP wrapper that accepts individual parameters per AdCP spec and
+    constructs a SyncAccountsRequest for the shared implementation.
+
     Args:
-        req: Sync request with accounts to upsert.
+        accounts: List of accounts to upsert.
+        delete_missing: Deactivate accounts not in the list.
+        dry_run: Preview changes without persisting.
         context: Application-level context per AdCP spec.
         ctx: FastMCP context for authentication.
 
     Returns:
         ToolResult with human-readable text and structured data.
     """
-    if context is not None:
-        if req is None:
-            req = SyncAccountsRequest(accounts=[], context=context)
-        else:
-            req = cast(SyncAccountsRequest, req)
-            req.context = context
-
+    req = SyncAccountsRequest(
+        accounts=accounts or [],
+        delete_missing=delete_missing,
+        dry_run=dry_run,
+        context=context,
+    )
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
-    response = await _sync_accounts_impl(cast(SyncAccountsRequest | None, req), identity)
+    response = await _sync_accounts_impl(req, identity)
 
     return ToolResult(content=str(response), structured_content=response)
 

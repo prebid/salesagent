@@ -9,7 +9,7 @@ Handles property discovery including:
 
 import logging
 import time
-from typing import Any, cast
+from typing import Any
 
 from adcp.types.generated_poc.core.context import ContextObject
 from fastmcp.server.context import Context
@@ -198,35 +198,34 @@ def _list_authorized_properties_impl(
 
 
 async def list_authorized_properties(
-    req: ListAuthorizedPropertiesRequest | None = None,
+    publisher_domains: list[str] | None = None,
+    property_tags: list[str] | None = None,
     webhook_url: str | None = None,
+    context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
-    context: ContextObject | None = None,  # payload-level context
 ):
     """List all properties this agent is authorized to represent (AdCP spec endpoint).
 
-    MCP tool wrapper that delegates to the shared implementation.
+    MCP wrapper that accepts individual parameters per AdCP spec and
+    constructs a ListAuthorizedPropertiesRequest for the shared implementation.
 
     Args:
-        req: Request parameters including optional tag filters
-        webhook_url: URL for async task completion notifications (AdCP spec, optional)
-        context: Application level context per adcp spec
-        ctx: FastMCP context for authentication
+        publisher_domains: Filter to specific publisher domains.
+        property_tags: Filter by property tags (salesagent extension).
+        webhook_url: URL for async task completion notifications (AdCP spec, optional).
+        context: Application-level context per AdCP spec.
+        ctx: FastMCP context for authentication.
 
     Returns:
-        ToolResult with human-readable text and structured data
+        ToolResult with human-readable text and structured data.
     """
-    # Inject payload-level context into the request object so _impl can echo it back
-    # (follows the same pattern as list_creative_formats and all other MCP wrappers)
-    if context is not None:
-        if req is None:
-            req = ListAuthorizedPropertiesRequest(context=context)
-        else:
-            req = cast(ListAuthorizedPropertiesRequest, req)
-            req.context = context
-
+    req = ListAuthorizedPropertiesRequest(
+        publisher_domains=publisher_domains,
+        property_tags=property_tags,
+        context=context,
+    )
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
-    response = _list_authorized_properties_impl(cast(ListAuthorizedPropertiesRequest | None, req), identity)
+    response = _list_authorized_properties_impl(req, identity)
 
     return ToolResult(content=str(response), structured_content=response)
 
