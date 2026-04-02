@@ -12,6 +12,7 @@ Usage (internal — called by BaseTestEnv.call_via)::
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING, Any
 
 from tests.harness.transport import Transport, TransportResult
@@ -88,9 +89,99 @@ class McpDispatcher:
         return TransportResult(payload=payload, envelope={"transport": "mcp"})
 
 
-DISPATCHERS: dict[Transport, ImplDispatcher | A2ADispatcher | RestDispatcher | McpDispatcher] = {
+class RestE2EDispatcher:
+    """Dispatch via real HTTP through nginx to the Docker stack.
+
+    Uses httpx to send POST requests to the live server, exercising the full
+    stack: nginx -> UnifiedAuthMiddleware -> resolve_identity() ->
+    get_principal_from_token() DB lookup -> route handler -> _impl().
+
+    Environment variables:
+        E2E_BASE_URL: Docker stack URL (default http://localhost:8092)
+        E2E_AUTH_TOKEN: auth token (default ci-test-token)
+        E2E_TENANT: tenant subdomain (default ci-test)
+    """
+
+    def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
+        import httpx
+
+        base_url = os.environ.get("E2E_BASE_URL", "http://localhost:8092")
+        auth_token = os.environ.get("E2E_AUTH_TOKEN", "ci-test-token")
+        tenant = os.environ.get("E2E_TENANT", "ci-test")
+
+        headers = {
+            "x-adcp-auth": auth_token,
+            "x-adcp-tenant": tenant,
+            "Content-Type": "application/json",
+        }
+
+        body = env.build_rest_body(**kwargs)
+        endpoint = env.REST_ENDPOINT  # type: ignore[attr-defined]
+
+        with httpx.Client(base_url=base_url, timeout=30) as client:
+            method = getattr(env, "REST_METHOD", "post")
+            response = getattr(client, method)(endpoint, json=body, headers=headers)
+
+        envelope = {
+            "transport": "e2e_rest",
+            "status_code": response.status_code,
+            "content_type": response.headers.get("content-type", ""),
+        }
+
+        if response.status_code >= 400:
+            try:
+                error = env.parse_rest_error(response.status_code, response.json())
+            except Exception as exc:
+                error = exc
+            return TransportResult(payload=None, envelope=envelope, error=error, raw_response=response)
+
+        try:
+            payload = env.parse_rest_response(response.json())
+        except Exception as exc:
+            return TransportResult(payload=None, envelope=envelope, error=exc, raw_response=response)
+
+        return TransportResult(
+            payload=payload,
+            envelope=envelope,
+            error=None,
+            raw_response=response,
+        )
+
+
+class McpE2EDispatcher:
+    """Placeholder for real MCP E2E dispatch (not yet implemented)."""
+
+    def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
+        raise NotImplementedError(
+            "E2E_MCP dispatcher is not yet implemented. Use Transport.MCP for in-process MCP dispatch."
+        )
+
+
+class A2AE2EDispatcher:
+    """Placeholder for real A2A E2E dispatch (not yet implemented)."""
+
+    def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
+        raise NotImplementedError(
+            "E2E_A2A dispatcher is not yet implemented. Use Transport.A2A for in-process A2A dispatch."
+        )
+
+
+_DispatcherType = (
+    ImplDispatcher
+    | A2ADispatcher
+    | RestDispatcher
+    | McpDispatcher
+    | RestE2EDispatcher
+    | McpE2EDispatcher
+    | A2AE2EDispatcher
+)
+
+DISPATCHERS: dict[Transport, _DispatcherType] = {
     Transport.IMPL: ImplDispatcher(),
     Transport.A2A: A2ADispatcher(),
     Transport.REST: RestDispatcher(),
     Transport.MCP: McpDispatcher(),
+    Transport.E2E_REST: RestE2EDispatcher(),
+    Transport.E2E_MCP: McpE2EDispatcher(),
+    Transport.E2E_A2A: A2AE2EDispatcher(),
 }
