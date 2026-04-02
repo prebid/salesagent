@@ -1274,7 +1274,10 @@ _ADMIN_TAG_PREFIX = "T-ADMIN-"
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
-    """Parametrize BDD scenarios across all 4 transports.
+    """Parametrize BDD scenarios across transports.
+
+    Default: 4 in-process transports (IMPL, A2A, MCP, REST).
+    With BDD_E2E_ENABLED=true: adds E2E_REST (real HTTP through nginx).
 
     Scenarios tagged with @rest, @mcp, or @a2a are transport-specific
     and skip parametrization — they already dispatch through their
@@ -1303,12 +1306,14 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
         if any(t.startswith(tag_prefix) for t in marker_names) and required_tag in marker_names:
             return
 
-    metafunc.parametrize(
-        "ctx",
-        [Transport.IMPL, Transport.A2A, Transport.MCP, Transport.REST],
-        ids=["impl", "a2a", "mcp", "rest"],
-        indirect=True,
-    )
+    transports = [Transport.IMPL, Transport.A2A, Transport.MCP, Transport.REST]
+    ids = ["impl", "a2a", "mcp", "rest"]
+
+    if os.environ.get("BDD_E2E_ENABLED") == "true":
+        transports.append(Transport.E2E_REST)
+        ids.append("e2e_rest")
+
+    metafunc.parametrize("ctx", transports, ids=ids, indirect=True)
 
 
 # ---------------------------------------------------------------------------
