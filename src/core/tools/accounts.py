@@ -19,6 +19,9 @@ import uuid
 from datetime import UTC
 from typing import Any, cast
 
+from adcp.types.generated_poc.account.list_accounts_request import (
+    Status as AccountStatus,
+)
 from adcp.types.generated_poc.account.sync_accounts_response import (
     Account as SyncResponseAccount,
 )
@@ -170,31 +173,36 @@ def _list_accounts_impl(
 
 
 async def list_accounts(
-    req: ListAccountsRequest | None = None,
-    ctx: Context | ToolContext | None = None,
+    status: AccountStatus | None = None,
+    pagination: PaginationRequest | None = None,
+    sandbox: bool | None = None,
     context: ContextObject | None = None,
+    ctx: Context | ToolContext | None = None,
 ) -> Any:
     """List accounts accessible to the authenticated agent (MCP tool).
 
     MCP wrapper that delegates to the shared implementation.
+    FastMCP automatically validates and coerces JSON inputs to Pydantic models.
 
     Args:
-        req: Optional request with status filter and pagination.
+        status: Filter accounts by status (active, closed, etc.).
+        pagination: Pagination parameters (max_results, cursor).
+        sandbox: Filter by sandbox flag.
         context: Application-level context per AdCP spec.
         ctx: FastMCP context for authentication.
 
     Returns:
         ToolResult with human-readable text and structured data.
     """
-    if context is not None:
-        if req is None:
-            req = ListAccountsRequest(context=context)
-        else:
-            req = cast(ListAccountsRequest, req)
-            req.context = context
+    req = ListAccountsRequest(
+        status=status,
+        pagination=pagination,
+        sandbox=sandbox,
+        context=context,
+    )
 
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
-    response = _list_accounts_impl(cast(ListAccountsRequest | None, req), identity)
+    response = _list_accounts_impl(req, identity)
 
     return ToolResult(content=str(response), structured_content=response)
 
