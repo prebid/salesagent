@@ -28,6 +28,25 @@ from tests.factories.format import (
 )
 
 
+def _add_format(ctx: dict, fmt: object) -> None:
+    """Add a format to the registry, clearing Background defaults on first call.
+
+    The Background step (given_creative_agent_registered) pre-populates
+    ctx["registry_formats"] with a default-display format for scenarios that
+    don't set up their own.  When a scenario's Given steps explicitly register
+    formats, the Background default should be replaced — not accumulated.
+
+    We track whether this scenario has already called _add_format via a
+    sentinel key.  On the first call, we replace the list; on subsequent
+    calls, we append.
+    """
+    if "_scenario_formats_initialized" not in ctx:
+        ctx["registry_formats"] = [fmt]
+        ctx["_scenario_formats_initialized"] = True
+    else:
+        ctx["registry_formats"].append(fmt)
+
+
 def _datatable_to_dicts(datatable: Sequence[Sequence[object]]) -> list[dict[str, str]]:
     """Convert pytest-bdd raw datatable (list of lists) to list of dicts.
 
@@ -45,7 +64,7 @@ def _datatable_to_dicts(datatable: Sequence[Sequence[object]]) -> list[dict[str,
 def given_registry_format_typed(ctx: dict, name: str, fmt_type: str, asset_type: str) -> None:
     """Register a single format with explicit type and asset type."""
     fmt = FormatFactory.build(name=name, type=CATEGORY_MAP.get(fmt_type), assets=[make_asset(asset_type)])
-    ctx.setdefault("registry_formats", []).append(fmt)
+    _add_format(ctx, fmt)
     _sync_registry(ctx)
 
 
@@ -57,7 +76,7 @@ def given_registry_format_with_id(ctx: dict, name: str, fmt_id: str) -> None:
     """Register a format with a known format_id."""
     fid = FormatIdFactory.build(agent_url="https://creatives.adcontextprotocol.org", id=fmt_id)
     fmt = FormatFactory.build(name=name, format_id=fid)
-    ctx.setdefault("registry_formats", []).append(fmt)
+    _add_format(ctx, fmt)
     _sync_registry(ctx)
 
 
@@ -68,7 +87,7 @@ def given_registry_format_with_id(ctx: dict, name: str, fmt_id: str) -> None:
 def given_registry_format_with_asset(ctx: dict, name: str, asset_type: str) -> None:
     """Register a format with a single asset type."""
     fmt = FormatFactory.build(name=name, assets=[make_asset(asset_type)])
-    ctx.setdefault("registry_formats", []).append(fmt)
+    _add_format(ctx, fmt)
     _sync_registry(ctx)
 
 
@@ -76,7 +95,7 @@ def given_registry_format_with_asset(ctx: dict, name: str, asset_type: str) -> N
 def given_registry_format_with_two_assets(ctx: dict, name: str, type_a: str, type_b: str) -> None:
     """Register a format with two asset types."""
     fmt = FormatFactory.build(name=name, assets=[make_asset(type_a), make_asset(type_b)])
-    ctx.setdefault("registry_formats", []).append(fmt)
+    _add_format(ctx, fmt)
     _sync_registry(ctx)
 
 
@@ -90,7 +109,7 @@ def given_registry_format_with_asset_group(ctx: dict, name: str, type_a: str, ty
     that repeat together as a unit, distinct from individual assets.
     """
     fmt = FormatFactory.build(name=name, assets=[make_asset_group(type_a, type_b)])
-    ctx.setdefault("registry_formats", []).append(fmt)
+    _add_format(ctx, fmt)
     _sync_registry(ctx)
 
 
@@ -103,7 +122,7 @@ def given_registry_format_with_renders(ctx: dict, name: str, datatable: Sequence
     rows = _datatable_to_dicts(datatable)
     renders = [make_renders(width=int(row["width"]), height=int(row["height"])) for row in rows]
     fmt = FormatFactory.build(name=name, renders=renders)
-    ctx.setdefault("registry_formats", []).append(fmt)
+    _add_format(ctx, fmt)
     _sync_registry(ctx)
 
 
@@ -111,7 +130,7 @@ def given_registry_format_with_renders(ctx: dict, name: str, datatable: Sequence
 def given_registry_format_exact_dimensions(ctx: dict, name: str, width: int, height: int) -> None:
     """Register a format with exact render dimensions."""
     fmt = FormatFactory.build(name=name, renders=[make_renders(width=width, height=height)])
-    ctx.setdefault("registry_formats", []).append(fmt)
+    _add_format(ctx, fmt)
     _sync_registry(ctx)
 
 
@@ -119,7 +138,7 @@ def given_registry_format_exact_dimensions(ctx: dict, name: str, width: int, hei
 def given_registry_format_no_dimensions(ctx: dict, name: str) -> None:
     """Register a format with no render dimension information."""
     fmt = FormatFactory.build(name=name)
-    ctx.setdefault("registry_formats", []).append(fmt)
+    _add_format(ctx, fmt)
     _sync_registry(ctx)
 
 
@@ -127,7 +146,7 @@ def given_registry_format_no_dimensions(ctx: dict, name: str) -> None:
 def given_registry_format_responsive(ctx: dict, name: str) -> None:
     """Register a format with responsive render dimensions."""
     fmt = FormatFactory.build(name=name, renders=[make_responsive_renders()])
-    ctx.setdefault("registry_formats", []).append(fmt)
+    _add_format(ctx, fmt)
     _sync_registry(ctx)
 
 
@@ -135,7 +154,7 @@ def given_registry_format_responsive(ctx: dict, name: str) -> None:
 def given_registry_format_non_responsive(ctx: dict, name: str) -> None:
     """Register a format with non-responsive (fixed) render dimensions."""
     fmt = FormatFactory.build(name=name, renders=[make_fixed_renders()])
-    ctx.setdefault("registry_formats", []).append(fmt)
+    _add_format(ctx, fmt)
     _sync_registry(ctx)
 
 
@@ -146,7 +165,7 @@ def given_registry_format_non_responsive(ctx: dict, name: str) -> None:
 def given_registry_format_named(ctx: dict, name: str) -> None:
     """Register a format with just a name."""
     fmt = FormatFactory.build(name=name)
-    ctx.setdefault("registry_formats", []).append(fmt)
+    _add_format(ctx, fmt)
     _sync_registry(ctx)
 
 
@@ -161,7 +180,7 @@ def given_registry_format_disclosure(ctx: dict, name: str, positions: str) -> No
     """
     parsed = json.loads(positions)
     fmt = FormatFactory.build(name=name, supported_disclosure_positions=parsed)
-    ctx.setdefault("registry_formats", []).append(fmt)
+    _add_format(ctx, fmt)
     _sync_registry(ctx)
 
 
@@ -169,7 +188,7 @@ def given_registry_format_disclosure(ctx: dict, name: str, positions: str) -> No
 def given_registry_format_no_disclosure(ctx: dict, name: str) -> None:
     """Register a format without a supported_disclosure_positions field."""
     fmt = FormatFactory.build(name=name, supported_disclosure_positions=None)
-    ctx.setdefault("registry_formats", []).append(fmt)
+    _add_format(ctx, fmt)
     _sync_registry(ctx)
 
 
@@ -182,7 +201,7 @@ def given_registry_format_output_ids(ctx: dict, name: str, datatable: Sequence[S
     rows = _datatable_to_dicts(datatable)
     ids = [FormatIdFactory.build(agent_url=row["agent_url"], id=row["id"]) for row in rows]
     fmt = FormatFactory.build(name=name, output_format_ids=ids)
-    ctx.setdefault("registry_formats", []).append(fmt)
+    _add_format(ctx, fmt)
     _sync_registry(ctx)
 
 
@@ -190,7 +209,7 @@ def given_registry_format_output_ids(ctx: dict, name: str, datatable: Sequence[S
 def given_registry_format_no_output_ids(ctx: dict, name: str) -> None:
     """Register a format without output_format_ids."""
     fmt = FormatFactory.build(name=name, output_format_ids=None)
-    ctx.setdefault("registry_formats", []).append(fmt)
+    _add_format(ctx, fmt)
     _sync_registry(ctx)
 
 
@@ -200,7 +219,7 @@ def given_registry_format_input_ids(ctx: dict, name: str, datatable: Sequence[Se
     rows = _datatable_to_dicts(datatable)
     ids = [FormatIdFactory.build(agent_url=row["agent_url"], id=row["id"]) for row in rows]
     fmt = FormatFactory.build(name=name, input_format_ids=ids)
-    ctx.setdefault("registry_formats", []).append(fmt)
+    _add_format(ctx, fmt)
     _sync_registry(ctx)
 
 
@@ -208,7 +227,7 @@ def given_registry_format_input_ids(ctx: dict, name: str, datatable: Sequence[Se
 def given_registry_format_no_input_ids(ctx: dict, name: str) -> None:
     """Register a format without input_format_ids."""
     fmt = FormatFactory.build(name=name, input_format_ids=None)
-    ctx.setdefault("registry_formats", []).append(fmt)
+    _add_format(ctx, fmt)
     _sync_registry(ctx)
 
 
@@ -220,7 +239,7 @@ def given_registry_formats_table(ctx: dict, datatable: Sequence[Sequence[object]
     """Register multiple formats from a data table with name and type columns."""
     rows = _datatable_to_dicts(datatable)
     formats = [FormatFactory.build(name=row["name"], type=CATEGORY_MAP.get(row["type"])) for row in rows]
-    ctx.setdefault("registry_formats", []).extend(formats)
+    ctx["registry_formats"] = formats
     _sync_registry(ctx)
 
 
@@ -232,23 +251,14 @@ def given_registry_three_formats_inline(
     ctx: dict, name_a: str, type_a: str, name_b: str, type_b: str, name_c: str, type_c: str
 ) -> None:
     """Register three formats from inline notation."""
-    ctx.setdefault("registry_formats", []).extend(
-        [
-            FormatFactory.build(name=name_a, type=CATEGORY_MAP.get(type_a)),
-            FormatFactory.build(name=name_b, type=CATEGORY_MAP.get(type_b)),
-            FormatFactory.build(name=name_c, type=CATEGORY_MAP.get(type_c)),
-        ]
-    )
+    for name, fmt_type in [(name_a, type_a), (name_b, type_b), (name_c, type_c)]:
+        _add_format(ctx, FormatFactory.build(name=name, type=CATEGORY_MAP.get(fmt_type)))
     _sync_registry(ctx)
 
 
 @given(parsers.parse('the registry has formats: "{name_a}" ({type_a}), "{name_b}" ({type_b})'))
 def given_registry_two_formats_inline(ctx: dict, name_a: str, type_a: str, name_b: str, type_b: str) -> None:
     """Register two formats from inline notation."""
-    ctx.setdefault("registry_formats", []).extend(
-        [
-            FormatFactory.build(name=name_a, type=CATEGORY_MAP.get(type_a)),
-            FormatFactory.build(name=name_b, type=CATEGORY_MAP.get(type_b)),
-        ]
-    )
+    for name, fmt_type in [(name_a, type_a), (name_b, type_b)]:
+        _add_format(ctx, FormatFactory.build(name=name, type=CATEGORY_MAP.get(fmt_type)))
     _sync_registry(ctx)

@@ -861,6 +861,17 @@ def when_sync_accounts_with_table(ctx: dict, datatable: Any) -> None:
 
     # Handle forced identity (unauthenticated/expired token)
     if "force_identity" in ctx:
+        if ctx.get("auth_failure_reason") == "token_expired":
+            # Simulate what resolve_identity() does for expired tokens:
+            # raise AdCPAuthenticationError before _impl is reached.
+            from src.core.exceptions import AdCPAuthenticationError
+
+            err = AdCPAuthenticationError(
+                "Authentication token is expired. Please re-authenticate to obtain a fresh token.",
+            )
+            err.error_code = "AUTH_TOKEN_INVALID"
+            ctx["error"] = err
+            return
         kwargs["identity"] = ctx["force_identity"]
 
     # Handle forced internal error
