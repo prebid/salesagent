@@ -157,3 +157,24 @@ def normalize_request_params(
         inferred_version=inferred,
         translations_applied=translations,
     )
+
+
+def strip_unknown_params(
+    params: dict[str, Any],
+    known_params: set[str],
+) -> tuple[dict[str, Any], list[str]]:
+    """Remove fields not in known_params set.
+
+    Args:
+        params: Request parameters dict (already normalized).
+        known_params: Set of parameter names the tool function accepts.
+            Typically from tool.parameters["properties"].keys().
+
+    Returns:
+        Tuple of (cleaned dict with only known keys, sorted list of stripped key names).
+    """
+    unknown = params.keys() - known_params
+    if not unknown:
+        return params, []
+    cleaned = {k: v for k, v in params.items() if k in known_params}
+    return cleaned, sorted(unknown)
