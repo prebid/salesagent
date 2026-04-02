@@ -73,10 +73,8 @@ class AccountListEnv(IntegrationEnv):
         return list_accounts_raw(**kwargs)
 
     def call_mcp(self, **kwargs: Any) -> ListAccountsResponse:
-        """Call list_accounts MCP wrapper with mock Context."""
-        from src.core.tools.accounts import list_accounts
-
-        return self._run_mcp_wrapper(list_accounts, ListAccountsResponse, **kwargs)
+        """Call list_accounts via Client(mcp) — full pipeline dispatch."""
+        return self._run_mcp_client("list_accounts", ListAccountsResponse, **kwargs)
 
     REST_ENDPOINT = "/api/v1/accounts"
 

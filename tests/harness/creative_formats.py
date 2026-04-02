@@ -96,15 +96,8 @@ class CreativeFormatsEnv(IntegrationEnv):
         return list_creative_formats_raw(**kwargs)
 
     def call_mcp(self, **kwargs: Any) -> ListCreativeFormatsResponse:
-        """Call list_creative_formats MCP wrapper with mock Context.
-
-        Pops 'req' kwarg (MCP wrapper takes individual params, not req object).
-        """
-        from src.core.tools.creative_formats import list_creative_formats
-
-        # MCP wrapper takes individual params, not 'req'
-        kwargs.pop("req", None)
-        return self._run_mcp_wrapper(list_creative_formats, ListCreativeFormatsResponse, **kwargs)
+        """Call list_creative_formats via Client(mcp) — full pipeline dispatch."""
+        return self._run_mcp_client("list_creative_formats", ListCreativeFormatsResponse, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert kwargs to ListCreativeFormatsBody shape for REST POST.

@@ -109,10 +109,8 @@ class AccountSyncEnv(IntegrationEnv):
         return asyncio.run(self.call_a2a_async(**kwargs))
 
     def call_mcp(self, **kwargs: Any) -> SyncAccountsResponse:
-        """Call sync_accounts MCP wrapper with mock Context."""
-        from src.core.tools.accounts import sync_accounts
-
-        return self._run_mcp_wrapper(sync_accounts, SyncAccountsResponse, **kwargs)
+        """Call sync_accounts via Client(mcp) — full pipeline dispatch."""
+        return self._run_mcp_client("sync_accounts", SyncAccountsResponse, **kwargs)
 
     REST_ENDPOINT = "/api/v1/accounts/sync"
 

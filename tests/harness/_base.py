@@ -194,51 +194,87 @@ class BaseTestEnv:
             f"{type(self).__name__} does not implement call_mcp(). Override to enable Transport.MCP dispatch."
         )
 
+    def _run_mcp_client(
+        self,
+        tool_name: str,
+        response_cls: type,
+        **kwargs: Any,
+    ) -> Any:
+        """MCP dispatch via in-memory Client — exercises full FastMCP pipeline.
+
+        Uses FastMCP's in-memory transport (FastMCPTransport) to go through the
+        complete server path: middleware chain → TypeAdapter → tool function.
+
+        Identity is injected by patching ``resolve_identity_from_context`` in
+        MCPAuthMiddleware. This exercises the real middleware dispatch while
+        avoiding DB token lookup.
+
+        Args:
+            tool_name: MCP tool name (e.g., "get_products").
+            response_cls: Pydantic model class to parse structured_content into.
+            **kwargs: Tool arguments. ``identity`` is popped and used for the
+                auth mock; ``req`` is popped and its fields unpacked into the
+                arguments dict.
+        """
+        import asyncio
+        from unittest.mock import patch
+
+        from fastmcp import Client
+
+        from src.core.main import mcp
+
+        self._commit_factory_data()
+
+        # Pop identity — used for the auth mock, not sent as a tool argument.
+        _NO_OVERRIDE = object()
+        identity = kwargs.pop("identity", _NO_OVERRIDE)
+        mcp_identity = self.identity_for(Transport.MCP) if identity is _NO_OVERRIDE else identity
+
+        # Unpack req object into flat arguments if present.
+        # MCP tools accept individual params, not a request model.
+        req = kwargs.pop("req", None)
+        if req is not None and hasattr(req, "model_dump"):
+            req_fields = req.model_dump(exclude_none=True)
+            # kwargs override req fields (explicit > implicit)
+            arguments = {**req_fields, **kwargs}
+        else:
+            arguments = dict(kwargs)
+
+        async def _call():
+            with patch(
+                "src.core.mcp_auth_middleware.resolve_identity_from_context",
+                return_value=mcp_identity,
+            ):
+                async with Client(mcp) as client:
+                    result = await client.call_tool(tool_name, arguments)
+                    return response_cls(**result.structured_content)
+
+        return asyncio.run(_call())
+
     def _run_mcp_wrapper(
         self,
         wrapper_fn: Any,
         response_cls: type,
         **kwargs: Any,
     ) -> Any:
-        """Shared MCP dispatch: mock Context → async wrapper → parse response.
+        """Legacy MCP dispatch: mock Context → async wrapper → parse response.
 
-        Handles the boilerplate that every call_mcp() repeats:
-        1. Create mock Context with get_state returning MCP identity
-        2. Call the async wrapper via asyncio.run()
-        3. Extract structured_content from ToolResult
-        4. Parse into response_cls
-
-        Identity handling (mirrors production auth middleware):
-        - identity is None → Context returns None (no token)
-        - identity is ResolvedIdentity → Context returns it (valid token)
-        - identity absent → uses default self.identity_for(Transport.MCP)
-
-        Context extraction (mirrors production FastMCP parameter dispatch):
-        In production, FastMCP extracts ``context`` from the tool schema
-        and passes it as a separate kwarg to the MCP wrapper. When the
-        harness receives a ``req`` object with ``req.context`` set, we
-        extract it and pass it as a separate ``context`` kwarg to exercise
-        the MCP wrapper's context merge branch (``if context is not None``).
-
-        Subclass call_mcp() should do any pre-processing (enum coercion,
-        kwarg popping) then delegate here.
+        .. deprecated::
+            Use ``_run_mcp_client`` instead for full-pipeline dispatch.
+            This method bypasses FastMCP middleware and TypeAdapter validation.
+            Kept for unit-mode envs that cannot use the in-memory Client.
         """
         import asyncio
         from unittest.mock import AsyncMock, MagicMock
 
         from fastmcp.server.context import Context
 
-        from tests.harness.transport import Transport
-
         self._commit_factory_data()
 
-        # Pop identity — it goes on the mock Context, not to the wrapper function.
         _NO_OVERRIDE = object()
         identity = kwargs.pop("identity", _NO_OVERRIDE)
         mcp_identity = self.identity_for(Transport.MCP) if identity is _NO_OVERRIDE else identity
 
-        # Extract context from req if present and no explicit context kwarg.
-        # Mirrors FastMCP behavior: tool parameters are passed as separate kwargs.
         if "context" not in kwargs:
             req = kwargs.get("req")
             if req is not None and hasattr(req, "context") and req.context is not None:

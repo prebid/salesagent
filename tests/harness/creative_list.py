@@ -70,10 +70,8 @@ class CreativeListEnv(IntegrationEnv):
         return list_creatives_raw(**kwargs)
 
     def call_mcp(self, **kwargs: Any) -> ListCreativesResponse:
-        """Call list_creatives MCP wrapper with mock Context."""
-        from src.core.tools.creatives.listing import list_creatives
-
-        return self._run_mcp_wrapper(list_creatives, ListCreativesResponse, **kwargs)
+        """Call list_creatives via Client(mcp) — full pipeline dispatch."""
+        return self._run_mcp_client("list_creatives", ListCreativesResponse, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert kwargs to ListCreativesBody shape for REST POST."""

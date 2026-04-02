@@ -66,10 +66,8 @@ class DeliveryPollEnv(DeliveryPollMixin, IntegrationEnv):
         return get_media_buy_delivery_raw(**kwargs)
 
     def call_mcp(self, **kwargs: Any) -> GetMediaBuyDeliveryResponse:
-        """Call get_media_buy_delivery MCP wrapper with mock Context."""
-        from src.core.tools.media_buy_delivery import get_media_buy_delivery
-
-        return self._run_mcp_wrapper(get_media_buy_delivery, GetMediaBuyDeliveryResponse, **kwargs)
+        """Call get_media_buy_delivery via Client(mcp) — full pipeline dispatch."""
+        return self._run_mcp_client("get_media_buy_delivery", GetMediaBuyDeliveryResponse, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert kwargs to GetMediaBuyDeliveryBody shape for REST POST."""

@@ -699,8 +699,12 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             yield
 
     elif uc == "COMPAT":
-        # Compat scenarios test normalizer directly — no harness env needed.
-        yield
+        request.getfixturevalue("integration_db")
+        from tests.harness.product import ProductEnv
+
+        with ProductEnv() as env:
+            ctx["env"] = env
+            yield
 
     elif uc == "UC-004":
         harness_type = _detect_delivery_harness(request)

@@ -31,6 +31,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.core.schemas import GetProductsResponse
 from tests.harness._base import IntegrationEnv
 from tests.harness._mixins import ProductMixin
 
@@ -69,3 +70,7 @@ class ProductEnv(ProductMixin, IntegrationEnv):
 
     def _configure_mocks(self) -> None:
         self._configure_product_mocks()
+
+    def call_mcp(self, **kwargs: Any) -> GetProductsResponse:
+        """Call get_products via Client(mcp) — full pipeline dispatch."""
+        return self._run_mcp_client("get_products", GetProductsResponse, **kwargs)
