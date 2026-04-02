@@ -33,16 +33,111 @@ if TYPE_CHECKING:
     from tests.harness.transport import Transport, TransportResult
 
 
+def _adcp_error_from_code(error_code: str, message: str, recovery: str | None = None) -> Exception:
+    """Reconstruct the exact AdCPError subclass from an error_code string.
+
+    Shared by MCP and A2A unwrappers. Maps error codes like 'NOT_FOUND'
+    to AdCPNotFoundError, 'VALIDATION_ERROR' to AdCPValidationError, etc.
+    Falls back to base AdCPError for unknown codes.
+    """
+    from src.core.exceptions import (
+        AdCPAccountAmbiguousError,
+        AdCPAccountNotFoundError,
+        AdCPAccountPaymentRequiredError,
+        AdCPAccountSetupRequiredError,
+        AdCPAccountSuspendedError,
+        AdCPAdapterError,
+        AdCPAuthenticationError,
+        AdCPAuthorizationError,
+        AdCPBudgetExhaustedError,
+        AdCPConflictError,
+        AdCPError,
+        AdCPNotFoundError,
+        AdCPRateLimitError,
+        AdCPServiceUnavailableError,
+        AdCPValidationError,
+    )
+
+    _CODE_TO_CLASS: dict[str, type[AdCPError]] = {
+        cls.error_code: cls
+        for cls in (
+            AdCPValidationError,
+            AdCPAuthenticationError,
+            AdCPAuthorizationError,
+            AdCPNotFoundError,
+            AdCPAccountNotFoundError,
+            AdCPAccountSetupRequiredError,
+            AdCPAccountSuspendedError,
+            AdCPAccountPaymentRequiredError,
+            AdCPConflictError,
+            AdCPAccountAmbiguousError,
+            AdCPBudgetExhaustedError,
+            AdCPRateLimitError,
+            AdCPAdapterError,
+            AdCPServiceUnavailableError,
+        )
+    }
+    exc_cls = _CODE_TO_CLASS.get(error_code, AdCPError)
+    reconstructed = exc_cls(
+        message=message,
+        details=None,
+        recovery=recovery or "contact_support",
+    )
+    if exc_cls is AdCPError:
+        reconstructed.error_code = error_code
+    return reconstructed
+
+
+def _unwrap_mcp_tool_error(exc: Exception) -> Exception:
+    """Translate FastMCP ToolError back to the corresponding AdCPError.
+
+    The MCP tool wrappers (via with_error_logging) convert AdCPError to
+    ToolError(error_code, message, recovery). When the error travels through
+    the MCP Client, the structured args are serialized to a single string:
+    ``"('VALIDATION_ERROR', 'message', 'correctable')"``.
+
+    This parses the string back to a tuple via ast.literal_eval and
+    reconstructs the AdCPError subclass.
+
+    If the exception is not a ToolError or can't be parsed, returns it unchanged.
+    """
+    import ast
+
+    from fastmcp.exceptions import ToolError
+
+    if not isinstance(exc, ToolError):
+        return exc
+
+    # ToolError from Client has a single string arg containing the repr'd tuple.
+    error_str = str(exc)
+
+    # Try to parse as a Python tuple: ('CODE', 'message', 'recovery')
+    try:
+        parsed = ast.literal_eval(error_str)
+        if isinstance(parsed, tuple) and len(parsed) >= 2:
+            error_code = str(parsed[0])
+            message = str(parsed[1])
+            recovery = str(parsed[2]) if len(parsed) > 2 else None
+            return _adcp_error_from_code(error_code, message, recovery)
+    except (ValueError, SyntaxError):
+        pass
+
+    # Fallback: try extract_error_info (handles direct ToolError construction)
+    from src.core.tool_error_logging import extract_error_info
+
+    error_code, message, recovery = extract_error_info(exc)
+    if error_code != "TOOL_ERROR":
+        return _adcp_error_from_code(error_code, message, recovery)
+
+    return exc
+
+
 def _unwrap_a2a_server_error(exc: Exception) -> Exception:
     """Translate a2a ServerError back to the corresponding AdCPError.
 
     The A2A handler wraps AdCPError → ServerError (via _adcp_to_a2a_error).
     This reverses that translation so callers can ``pytest.raises(AdCPAuthenticationError)``
     instead of catching the transport-level wrapper.
-
-    _adcp_to_a2a_error stores ``error_code`` and ``details`` in the A2A error's
-    ``data`` dict.  When present, we reconstruct the exact AdCPError subclass so
-    BDD steps can assert on ``error.error_code`` and ``error.details``.
 
     If the exception is not a ServerError or lacks enough info, returns it unchanged.
     """
@@ -56,61 +151,10 @@ def _unwrap_a2a_server_error(exc: Exception) -> Exception:
     message = getattr(error, "message", str(exc))
     data = getattr(error, "data", None) or {}
 
-    # If _adcp_to_a2a_error stored the error_code, reconstruct the exact AdCPError
-    # subclass so BDD steps can assert on error.error_code and error.details.
+    # If _adcp_to_a2a_error stored the error_code, reconstruct the exact subclass.
     error_code = data.get("error_code")
     if error_code:
-        from src.core.exceptions import (
-            AdCPAccountAmbiguousError,
-            AdCPAccountNotFoundError,
-            AdCPAccountPaymentRequiredError,
-            AdCPAccountSetupRequiredError,
-            AdCPAccountSuspendedError,
-            AdCPAdapterError,
-            AdCPAuthorizationError,
-            AdCPBudgetExhaustedError,
-            AdCPConflictError,
-            AdCPError,
-            AdCPNotFoundError,
-            AdCPRateLimitError,
-            AdCPServiceUnavailableError,
-        )
-        from src.core.exceptions import (
-            AdCPAuthenticationError as _AuthN,
-        )
-        from src.core.exceptions import (
-            AdCPValidationError as _ValErr,
-        )
-
-        _CODE_TO_CLASS: dict[str, type[AdCPError]] = {
-            cls.error_code: cls
-            for cls in (
-                _ValErr,
-                _AuthN,
-                AdCPAuthorizationError,
-                AdCPNotFoundError,
-                AdCPAccountNotFoundError,
-                AdCPAccountSetupRequiredError,
-                AdCPAccountSuspendedError,
-                AdCPAccountPaymentRequiredError,
-                AdCPConflictError,
-                AdCPAccountAmbiguousError,
-                AdCPBudgetExhaustedError,
-                AdCPRateLimitError,
-                AdCPAdapterError,
-                AdCPServiceUnavailableError,
-            )
-        }
-        exc_cls = _CODE_TO_CLASS.get(error_code, AdCPError)
-        reconstructed = exc_cls(
-            message=message,
-            details=data.get("details"),
-            recovery=data.get("recovery", "contact_support"),
-        )
-        # Override error_code for base AdCPError fallback
-        if exc_cls is AdCPError:
-            reconstructed.error_code = error_code
-        return reconstructed
+        return _adcp_error_from_code(error_code, message, data.get("recovery"))
 
     from src.core.exceptions import (
         AdCPAuthenticationError,
@@ -498,7 +542,10 @@ class BaseTestEnv:
                         result = await client.call_tool(tool_name, arguments)
                         return response_cls(**result.structured_content)
 
-        return asyncio.run(_call())
+        try:
+            return asyncio.run(_call())
+        except Exception as exc:
+            raise _unwrap_mcp_tool_error(exc) from exc
 
     def _run_mcp_wrapper(
         self,
