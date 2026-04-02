@@ -1183,7 +1183,9 @@ class TestAIReviewTrigger:
         mock_executor.submit.return_value = MockMaker()  # mock future
 
         with CreativeSyncEnv() as env:
-            env.setup_default_data()
+            tenant, _principal = env.setup_default_data()
+            # Update DB tenant so real auth chain sees ai-powered mode.
+            tenant.approval_mode = "ai-powered"
             env.identity_for(transport).tenant["approval_mode"] = "ai-powered"
 
             with (
@@ -1227,7 +1229,10 @@ class TestAIPoweredApprovalDeferredNotification:
         mock_executor.submit.return_value = MockMaker()
 
         with CreativeSyncEnv() as env:
-            env.setup_default_data()
+            tenant, _principal = env.setup_default_data()
+            # Update DB tenant so real auth chain sees ai-powered mode.
+            tenant.approval_mode = "ai-powered"
+            tenant.slack_webhook_url = "https://hooks.slack.com/test"
             identity = env.identity_for(transport)
             identity.tenant["approval_mode"] = "ai-powered"
             identity.tenant["slack_webhook_url"] = "https://hooks.slack.com/test"
