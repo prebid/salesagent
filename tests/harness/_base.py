@@ -206,10 +206,13 @@ class BaseTestEnv:
         if protocol not in self._identity_cache:
             from tests.factories.principal import PrincipalFactory
 
-            # In integration mode, look up the real access_token from the
-            # factory-created Principal so the identity can be used for
-            # real auth chain testing (header → token → DB lookup).
-            auth_token = self._resolve_auth_token() if self.use_real_db else None
+            # In integration mode, commit factory data first so the token
+            # is visible to other sessions (e.g., get_principal_from_token
+            # in the MCP auth chain uses a separate get_db_session() call).
+            auth_token = None
+            if self.use_real_db:
+                self._commit_factory_data()
+                auth_token = self._resolve_auth_token()
 
             self._identity_cache[protocol] = PrincipalFactory.make_identity(
                 principal_id=self._principal_id,
@@ -467,23 +470,33 @@ class BaseTestEnv:
         auth_token = mcp_identity.auth_token if mcp_identity else None
 
         if auth_token:
-            # Real auth chain: header → token → DB lookup → identity
+            # Real auth chain: header → token → DB lookup → identity.
+            # Patch get_http_headers in BOTH modules that import it:
+            # transport_helpers (called by resolve_identity_from_context) and
+            # mcp_auth_middleware (called for context_id extraction).
             headers = {
                 "x-adcp-auth": auth_token,
                 "x-adcp-tenant": mcp_identity.tenant_id or "",
             }
-            patch_target = "fastmcp.server.dependencies.get_http_headers"
-            patch_value = headers
-        else:
-            # Unit mode: inject identity directly
-            patch_target = "src.core.mcp_auth_middleware.resolve_identity_from_context"
-            patch_value = mcp_identity
 
-        async def _call():
-            with patch(patch_target, return_value=patch_value):
-                async with Client(mcp) as client:
-                    result = await client.call_tool(tool_name, arguments)
-                    return response_cls(**result.structured_content)
+            async def _call():
+                with (
+                    patch("src.core.transport_helpers.get_http_headers", return_value=headers),
+                    patch("src.core.mcp_auth_middleware.get_http_headers", return_value=headers),
+                ):
+                    async with Client(mcp) as client:
+                        result = await client.call_tool(tool_name, arguments)
+                        return response_cls(**result.structured_content)
+        else:
+            # Unit mode: inject identity directly.
+            async def _call():
+                with patch(
+                    "src.core.mcp_auth_middleware.resolve_identity_from_context",
+                    return_value=mcp_identity,
+                ):
+                    async with Client(mcp) as client:
+                        result = await client.call_tool(tool_name, arguments)
+                        return response_cls(**result.structured_content)
 
         return asyncio.run(_call())
 
@@ -677,18 +690,21 @@ class BaseTestEnv:
         Discovery endpoints (list_creative_formats, get_products, etc.) don't
         need a tenant for their logic, but the handler's post-invocation audit
         logging does. This creates a stub tenant so audit logging doesn't fail.
+
+        Uses ``self._session`` (env-managed), not ``get_db_session()``.
         """
+        if not self._session:
+            return
         from sqlalchemy import select
 
-        from src.core.database.database_session import get_db_session
         from src.core.database.models import Tenant
 
-        with get_db_session() as session:
-            exists = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-            if not exists:
-                from tests.factories import TenantFactory
+        exists = self._session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not exists:
+            from tests.factories import TenantFactory
 
-                TenantFactory(tenant_id=tenant_id)
+            TenantFactory(tenant_id=tenant_id)
+            self._session.commit()
 
     # -- Context manager protocol ------------------------------------------
 
