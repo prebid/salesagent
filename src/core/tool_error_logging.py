@@ -159,7 +159,14 @@ def _translate_to_tool_error(error: Exception) -> None:
     if isinstance(error, ToolError):
         raise
     elif isinstance(error, AdCPError):
-        raise ToolError(error.error_code, error.message, error.recovery) from error
+        # Include details as JSON 4th arg so the MCP round-trip preserves them.
+        # The lowlevel server does str(exception) which produces a tuple string:
+        # "('CODE', 'message', 'recovery', '{\"suggestion\": \"...\"}')"
+        # The test harness unwrapper parses this back into a full AdCPError.
+        import json
+
+        details_json = json.dumps(error.details) if error.details else None
+        raise ToolError(error.error_code, error.message, error.recovery, details_json) from error
     elif isinstance(error, ValueError):
         raise ToolError("VALIDATION_ERROR", str(error)) from error
     elif isinstance(error, PermissionError):

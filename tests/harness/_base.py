@@ -33,7 +33,12 @@ if TYPE_CHECKING:
     from tests.harness.transport import Transport, TransportResult
 
 
-def _adcp_error_from_code(error_code: str, message: str, recovery: str | None = None) -> Exception:
+def _adcp_error_from_code(
+    error_code: str,
+    message: str,
+    recovery: str | None = None,
+    details: dict | None = None,
+) -> Exception:
     """Reconstruct the exact AdCPError subclass from an error_code string.
 
     Shared by MCP and A2A unwrappers. Maps error codes like 'NOT_FOUND'
@@ -80,7 +85,7 @@ def _adcp_error_from_code(error_code: str, message: str, recovery: str | None = 
     exc_cls = _CODE_TO_CLASS.get(error_code, AdCPError)
     reconstructed = exc_cls(
         message=message,
-        details=None,
+        details=details,
         recovery=recovery or "contact_support",
     )
     if exc_cls is AdCPError:
@@ -111,14 +116,25 @@ def _unwrap_mcp_tool_error(exc: Exception) -> Exception:
     # ToolError from Client has a single string arg containing the repr'd tuple.
     error_str = str(exc)
 
-    # Try to parse as a Python tuple: ('CODE', 'message', 'recovery')
+    # Try to parse as a Python tuple: ('CODE', 'message', 'recovery', '{"details": ...}')
     try:
         parsed = ast.literal_eval(error_str)
         if isinstance(parsed, tuple) and len(parsed) >= 2:
             error_code = str(parsed[0])
             message = str(parsed[1])
             recovery = str(parsed[2]) if len(parsed) > 2 else None
-            return _adcp_error_from_code(error_code, message, recovery)
+
+            # 4th element is JSON-serialized details dict (if present)
+            details = None
+            if len(parsed) > 3 and parsed[3] is not None:
+                import json
+
+                try:
+                    details = json.loads(str(parsed[3]))
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            return _adcp_error_from_code(error_code, message, recovery, details)
     except (ValueError, SyntaxError):
         pass
 
