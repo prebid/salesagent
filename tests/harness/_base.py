@@ -222,6 +222,7 @@ class BaseTestEnv:
         from fastmcp import Client
 
         from src.core.main import mcp
+        from tests.harness.transport import Transport
 
         self._commit_factory_data()
 

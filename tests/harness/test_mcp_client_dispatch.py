@@ -45,12 +45,11 @@ class TestMcpClientDispatch:
 
         asyncio.run(_call())
 
-    def test_unknown_field_rejected_without_middleware_stripping(self):
-        """Without the schema-aware strip, unknown fields cause TypeAdapter error.
+    def test_unknown_field_stripped_by_middleware(self):
+        """Schema-aware middleware strips unknown fields, call succeeds.
 
-        This test documents the current behavior: FastMCP's TypeAdapter rejects
-        unknown kwargs. After salesagent-xd73 evolves the middleware to strip
-        unknowns, this test should be updated to expect success instead.
+        RequestCompatMiddleware looks up the tool's JSON Schema and removes
+        fields not in properties. The TypeAdapter never sees the unknown field.
         """
         from fastmcp import Client
 
@@ -66,11 +65,9 @@ class TestMcpClientDispatch:
                 async with Client(mcp) as client:
                     result = await client.call_tool(
                         "get_adcp_capabilities",
-                        {"unknown_field": "should_be_rejected"},
-                        raise_on_error=False,
+                        {"unknown_field": "should_be_stripped"},
                     )
-                    # Currently: TypeAdapter rejects unknown kwargs
-                    # After salesagent-xd73: middleware strips it, call succeeds
-                    assert result.is_error, "Expected error for unknown field (pre-strip middleware)"
+                    assert not result.is_error, f"Expected success after strip: {result.content}"
+                    assert result.structured_content is not None
 
         asyncio.run(_call())
