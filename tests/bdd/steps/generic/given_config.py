@@ -29,22 +29,13 @@ from tests.factories.format import (
 
 
 def _add_format(ctx: dict, fmt: object) -> None:
-    """Add a format to the registry, clearing Background defaults on first call.
+    """Add a format to the registry.
 
-    The Background step (given_creative_agent_registered) pre-populates
-    ctx["registry_formats"] with a default-display format for scenarios that
-    don't set up their own.  When a scenario's Given steps explicitly register
-    formats, the Background default should be replaced — not accumulated.
-
-    We track whether this scenario has already called _add_format via a
-    sentinel key.  On the first call, we replace the list; on subsequent
-    calls, we append.
+    Background no longer pre-populates ctx["registry_formats"], so
+    simple append is sufficient. The harness _configure_mocks() owns
+    the default-display format; scenario Given steps build on top.
     """
-    if "_scenario_formats_initialized" not in ctx:
-        ctx["registry_formats"] = [fmt]
-        ctx["_scenario_formats_initialized"] = True
-    else:
-        ctx["registry_formats"].append(fmt)
+    ctx.setdefault("registry_formats", []).append(fmt)
 
 
 def _datatable_to_dicts(datatable: Sequence[Sequence[object]]) -> list[dict[str, str]]:

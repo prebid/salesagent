@@ -44,13 +44,21 @@ class CreativeFormatsEnv(IntegrationEnv):
     def _configure_mocks(self) -> None:
         """Set up happy-path defaults for external mocks.
 
-        Seeds a minimal set of default formats so scenarios that don't
-        explicitly call set_registry_formats() still get non-empty results.
+        Seeds a single default-display format via FormatFactory so scenarios
+        that don't explicitly call set_registry_formats() get a valid baseline.
         Scenarios needing specific formats override via set_registry_formats().
         """
-        from src.core.creative_agent_registry import FormatFetchResult, _get_mock_formats
+        from src.core.creative_agent_registry import FormatFetchResult
+        from tests.factories.format import CATEGORY_MAP, FormatFactory, make_asset, make_fixed_renders
 
-        default_formats = _get_mock_formats()
+        default_formats = [
+            FormatFactory.build(
+                name="default-display",
+                type=CATEGORY_MAP["display"],
+                assets=[make_asset("image")],
+                renders=[make_fixed_renders(width=300, height=250)],
+            ),
+        ]
 
         # Registry: return a mock with async list_all_formats + list_all_formats_with_errors
         mock_registry = MagicMock()

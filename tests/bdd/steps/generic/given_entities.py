@@ -73,17 +73,12 @@ def given_authenticated_request(ctx: dict, principal_id: str) -> None:
 
 @given("at least one creative agent is registered with format definitions")
 def given_creative_agent_registered(ctx: dict) -> None:
-    """At least one creative agent has format definitions (Background)."""
+    """Background precondition: creative agents exist.
+
+    Harness _configure_mocks() provides a default-display format.
+    Scenarios override via their own Given steps.
+    """
     ctx["creative_agents_registered"] = True
-    ctx["registry_formats"] = [
-        FormatFactory.build(
-            name="default-display",
-            type=CATEGORY_MAP["display"],
-            assets=[make_asset("image")],
-            renders=[make_fixed_renders(width=300, height=250)],
-        ),
-    ]
-    _sync_registry(ctx)
 
 
 # ── Creative agent registry: multi-category / type-specific ──────────
