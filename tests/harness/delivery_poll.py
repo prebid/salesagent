@@ -58,12 +58,8 @@ class DeliveryPollEnv(DeliveryPollMixin, IntegrationEnv):
         self._configure_adapter_mock()
 
     def call_a2a(self, **kwargs: Any) -> GetMediaBuyDeliveryResponse:
-        """Call get_media_buy_delivery_raw (A2A wrapper) with real DB."""
-        from src.core.tools.media_buy_delivery import get_media_buy_delivery_raw
-
-        self._commit_factory_data()
-        kwargs.setdefault("identity", self.identity)
-        return get_media_buy_delivery_raw(**kwargs)
+        """Call get_media_buy_delivery via real AdCPRequestHandler — full A2A pipeline."""
+        return self._run_a2a_handler("get_media_buy_delivery", GetMediaBuyDeliveryResponse, **kwargs)
 
     def call_mcp(self, **kwargs: Any) -> GetMediaBuyDeliveryResponse:
         """Call get_media_buy_delivery via Client(mcp) — full pipeline dispatch."""

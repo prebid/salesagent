@@ -65,12 +65,8 @@ class AccountListEnv(IntegrationEnv):
         return _list_accounts_impl(**kwargs)
 
     def call_a2a(self, **kwargs: Any) -> ListAccountsResponse:
-        """Call list_accounts_raw (A2A wrapper) with real DB."""
-        from src.core.tools.accounts import list_accounts_raw
-
-        self._commit_factory_data()
-        kwargs.setdefault("identity", self.identity)
-        return list_accounts_raw(**kwargs)
+        """Call list_accounts via real AdCPRequestHandler — full A2A pipeline."""
+        return self._run_a2a_handler("list_accounts", ListAccountsResponse, **kwargs)
 
     def call_mcp(self, **kwargs: Any) -> ListAccountsResponse:
         """Call list_accounts via Client(mcp) — full pipeline dispatch."""

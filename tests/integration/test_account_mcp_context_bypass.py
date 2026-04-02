@@ -80,11 +80,11 @@ class TestMCPContextParamBypass:
 
             original_list_accounts = accounts_mod.list_accounts
 
-            async def instrumented_list_accounts(req=None, ctx=None, context=None):
+            async def instrumented_list_accounts(ctx=None, context=None, **rest):
                 nonlocal merge_branch_entered
                 if context is not None:
                     merge_branch_entered = True
-                return await original_list_accounts(req=req, ctx=ctx, context=context)
+                return await original_list_accounts(ctx=ctx, context=context, **rest)
 
             # Patch at the module level where call_mcp imports it
             with patch.object(accounts_mod, "list_accounts", instrumented_list_accounts):
@@ -147,7 +147,7 @@ class TestMCPContextDirectCalls:
             mock_ctx = MagicMock(spec=Context)
             mock_ctx.get_state = AsyncMock(return_value=mcp_identity)
 
-            tool_result = asyncio.run(list_accounts(req=None, ctx=mock_ctx, context=context_obj))
+            tool_result = asyncio.run(list_accounts(ctx=mock_ctx, context=context_obj))
             response = ListAccountsResponse(**tool_result.structured_content)
 
         assert response.context is not None

@@ -87,13 +87,8 @@ class CreativeFormatsEnv(IntegrationEnv):
         return _list_creative_formats_impl(**kwargs)
 
     def call_a2a(self, **kwargs: Any) -> ListCreativeFormatsResponse:
-        """Call list_creative_formats_raw (A2A wrapper)."""
-        from src.core.tools.creative_formats import list_creative_formats_raw
-
-        self._commit_factory_data()
-        kwargs.setdefault("identity", self.identity)
-        kwargs.setdefault("req", None)
-        return list_creative_formats_raw(**kwargs)
+        """Call list_creative_formats via real AdCPRequestHandler — full A2A pipeline."""
+        return self._run_a2a_handler("list_creative_formats", ListCreativeFormatsResponse, **kwargs)
 
     def call_mcp(self, **kwargs: Any) -> ListCreativeFormatsResponse:
         """Call list_creative_formats via Client(mcp) — full pipeline dispatch."""

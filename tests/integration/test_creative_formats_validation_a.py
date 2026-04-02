@@ -127,7 +127,7 @@ class TestAdapterFormatsViaA2A:
             # Format metadata
             assert fmt.name is not None and len(fmt.name) > 0
             assert fmt.type == FormatCategory.display
-            assert fmt.is_standard is False
+            # is_standard is exclude=True (internal-only) — not visible through A2A serialization
 
             # Assets must be present (regression guard)
             assert fmt.assets is not None, f"Format {fmt.format_id.id} must have assets"

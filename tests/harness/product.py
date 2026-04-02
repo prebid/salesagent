@@ -73,6 +73,10 @@ class ProductEnv(ProductMixin, IntegrationEnv):
 
     REST_ENDPOINT = "/api/v1/products"
 
+    def call_a2a(self, **kwargs: Any) -> GetProductsResponse:
+        """Call get_products via real AdCPRequestHandler — full A2A pipeline."""
+        return self._run_a2a_handler("get_products", GetProductsResponse, **kwargs)
+
     def call_mcp(self, **kwargs: Any) -> GetProductsResponse:
         """Call get_products via Client(mcp) — full pipeline dispatch."""
         return self._run_mcp_client("get_products", GetProductsResponse, **kwargs)
