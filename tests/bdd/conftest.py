@@ -18,6 +18,7 @@ with a reason (e.g., "MCP wrapper does not accept wcag_level").
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Generator
 from typing import TYPE_CHECKING
@@ -1310,18 +1311,66 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# E2E stack: Docker-based integration (session-scoped)
+# ---------------------------------------------------------------------------
+# Start the Docker E2E stack before running BDD tests with E2E transport:
+#   make test-stack-up && source .test-stack.env
+# Or set E2E_BASE_URL / E2E_AUTH_TOKEN / E2E_TENANT environment variables.
+
+
+@pytest.fixture(scope="session")
+def e2e_stack() -> dict | None:
+    """Detect whether Docker E2E stack is running. Return config or None.
+
+    Unlike most E2E fixtures this does NOT skip — it returns None so that
+    non-E2E transports can run without the stack. Callers that need the
+    stack (e2e_* transports) should skip explicitly when this is None.
+    """
+    import httpx
+
+    base_url = os.environ.get("E2E_BASE_URL", "http://localhost:8092")
+    try:
+        resp = httpx.get(f"{base_url}/health", timeout=5)
+        resp.raise_for_status()
+    except Exception:
+        return None
+
+    return {
+        "base_url": base_url,
+        "auth_token": os.environ.get("E2E_AUTH_TOKEN", "ci-test-token"),
+        "tenant": os.environ.get("E2E_TENANT", "ci-test"),
+        "postgres_url": os.environ.get(
+            "E2E_POSTGRES_URL",
+            "postgresql://adcp_user:secure_password_change_me@localhost:"
+            f"{os.environ.get('POSTGRES_PORT', '5435')}/adcp",
+        ),
+    }
+
+
 @pytest.fixture()
-def ctx(request: pytest.FixtureRequest) -> dict:
+def ctx(request: pytest.FixtureRequest, e2e_stack: dict | None) -> dict:
     """Per-scenario mutable context shared across Given/When/Then steps.
 
     When parametrized by pytest_generate_tests, ``request.param`` is a
     Transport enum injected as ctx["transport"]. Transport-specific
     scenarios (tagged @rest/@mcp/@a2a) are NOT parametrized and get
     an empty ctx (When steps handle dispatch explicitly).
+
+    For E2E transports (e2e_rest, e2e_mcp, e2e_a2a), E2E config is set
+    as environment variables so dispatchers can read them.
     """
     d: dict = {}
     if hasattr(request, "param"):
         d["transport"] = request.param
+        # E2E transports need Docker stack config injected via env vars
+        if hasattr(request.param, "value") and str(request.param.value).startswith("e2e_"):
+            if e2e_stack is None:
+                pytest.skip("Docker E2E stack not running. Start with: make test-stack-up && source .test-stack.env")
+            os.environ["E2E_BASE_URL"] = e2e_stack["base_url"]
+            os.environ["E2E_AUTH_TOKEN"] = e2e_stack["auth_token"]
+            os.environ["E2E_TENANT"] = e2e_stack["tenant"]
+            d["e2e_config"] = e2e_stack
     return d
 
 
