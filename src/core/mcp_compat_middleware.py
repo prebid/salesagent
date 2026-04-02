@@ -1,10 +1,13 @@
 """FastMCP middleware for AdCP backward-compatibility normalization.
 
-Translates deprecated field names and strips unknown fields in tool
-arguments before FastMCP's TypeAdapter validates the function signature.
+Translates deprecated field names, strips unknown fields, and provides
+a production-mode fallback for TypeAdapter structural validation errors.
 Runs after MCPAuthMiddleware.
 """
 
+from __future__ import annotations
+
+import json
 import logging
 
 from fastmcp.server.middleware import Middleware, MiddlewareContext
@@ -17,14 +20,18 @@ logger = logging.getLogger(__name__)
 
 
 class RequestCompatMiddleware(Middleware):
-    """Normalize deprecated fields and strip unknowns before tool dispatch.
+    """Normalize, strip, and provide forward-compatible fallback for MCP tools.
 
-    Two-stage pipeline:
+    Three-stage pipeline:
     1. Translate deprecated field names via normalize_request_params()
     2. Strip fields not in the tool's JSON Schema via strip_unknown_params()
+    3. (Production only) If TypeAdapter rejects the arguments with a structural
+       validation error, erase complex types to raw dicts via JSON round-trip
+       and retry. This lets our Pydantic models (with extra='ignore') be the
+       sole validation gate — matching A2A and REST behavior.
 
-    When either stage modifies arguments, replaces the context message so
-    the TypeAdapter only sees valid, current-version field names.
+    The fallback only catches TypeAdapter ValidationErrors (structural type
+    mismatches). Business logic errors from the tool function propagate normally.
     """
 
     async def on_call_tool(
@@ -65,7 +72,60 @@ class RequestCompatMiddleware(Middleware):
             )
             context = context.copy(message=new_message)
 
-        return await call_next(context)
+        # Step 3: Dispatch — with production fallback on TypeAdapter rejection
+        try:
+            return await call_next(context)
+        except Exception as exc:
+            if not self._should_retry(exc):
+                raise
+
+            # Erase complex types via JSON round-trip. This converts typed
+            # Pydantic-validated objects back to plain dicts/lists/primitives,
+            # so the TypeAdapter sees dict[str, Any] instead of CreativeAsset.
+            # Our Pydantic models inside the tool function do the real validation.
+            erased = json.loads(json.dumps(normalized))
+            logger.warning(
+                "TypeAdapter rejected %s — retrying with type-erased arguments (production forward-compat): %s",
+                tool_name,
+                _summarize_error(exc),
+            )
+            erased_message = CallToolRequestParams(
+                name=tool_name,
+                arguments=erased,
+            )
+            erased_context = context.copy(message=erased_message)
+            return await call_next(erased_context)
+
+    @staticmethod
+    def _should_retry(exc: Exception) -> bool:
+        """Determine if the exception is a TypeAdapter structural error worth retrying.
+
+        Only retries in production mode. Only retries Pydantic ValidationErrors
+        that come from FastMCP's TypeAdapter (not from our business logic).
+        """
+        from src.core.config import is_production
+
+        if not is_production():
+            return False
+
+        # FastMCP wraps TypeAdapter ValidationErrors in ToolError or propagates
+        # pydantic.ValidationError directly depending on the path.
+        from pydantic import ValidationError
+
+        if isinstance(exc, ValidationError):
+            return True
+
+        # FastMCP may wrap in its own ToolError
+        from fastmcp.exceptions import ToolError
+
+        if isinstance(exc, ToolError):
+            error_text = str(exc)
+            # TypeAdapter errors contain these Pydantic signatures
+            return "validation error" in error_text.lower() and (
+                "type=" in error_text or "Field required" in error_text
+            )
+
+        return False
 
     async def _get_known_params(
         self,
@@ -74,7 +134,7 @@ class RequestCompatMiddleware(Middleware):
     ) -> set[str] | None:
         """Look up tool's declared parameter names from its JSON Schema.
 
-        Returns None if lookup fails (defensive -- skip stripping).
+        Returns None if lookup fails (defensive — skip stripping).
         """
         try:
             fastmcp_ctx = context.fastmcp_context
@@ -88,3 +148,11 @@ class RequestCompatMiddleware(Middleware):
         except Exception:
             logger.debug("Could not look up params for %s, skipping strip", tool_name)
             return None
+
+
+def _summarize_error(exc: Exception) -> str:
+    """Extract a short summary from a validation error for logging."""
+    text = str(exc)
+    # Take first line or first 150 chars
+    first_line = text.split("\n")[0]
+    return first_line[:150] if len(first_line) > 150 else first_line
