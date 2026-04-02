@@ -195,6 +195,10 @@ class BaseTestEnv:
         This is the single source of truth for test identity across all
         transports. The identity is cached per protocol so repeated calls
         with the same transport return the same object.
+
+        In integration mode (``use_real_db=True``), the identity carries
+        the real ``auth_token`` from the factory-created Principal row.
+        This enables full auth chain testing: header → token → DB lookup.
         """
         from tests.harness.transport import TRANSPORT_PROTOCOL
 
@@ -202,14 +206,41 @@ class BaseTestEnv:
         if protocol not in self._identity_cache:
             from tests.factories.principal import PrincipalFactory
 
+            # In integration mode, look up the real access_token from the
+            # factory-created Principal so the identity can be used for
+            # real auth chain testing (header → token → DB lookup).
+            auth_token = self._resolve_auth_token() if self.use_real_db else None
+
             self._identity_cache[protocol] = PrincipalFactory.make_identity(
                 principal_id=self._principal_id,
                 tenant_id=self._tenant_id,
                 protocol=protocol,
                 dry_run=self._dry_run,
+                auth_token=auth_token,
                 **self._tenant_overrides,
             )
         return self._identity_cache[protocol]
+
+    def _resolve_auth_token(self) -> str | None:
+        """Look up the real access_token from the session-bound Principal.
+
+        Only called in integration mode where ``self._session`` is bound
+        to factory-created ORM models. Returns None if the principal
+        hasn't been created yet (identity built before Given steps run).
+        """
+        if not self._session:
+            return None
+        from sqlalchemy import select
+
+        from src.core.database.models import Principal
+
+        token = self._session.scalars(
+            select(Principal.access_token).filter_by(
+                principal_id=self._principal_id,
+                tenant_id=self._tenant_id,
+            )
+        ).first()
+        return token
 
     @property
     def identity(self) -> ResolvedIdentity:
@@ -392,9 +423,13 @@ class BaseTestEnv:
         Uses FastMCP's in-memory transport (FastMCPTransport) to go through the
         complete server path: middleware chain → TypeAdapter → tool function.
 
-        Identity is injected by patching ``resolve_identity_from_context`` in
-        MCPAuthMiddleware. This exercises the real middleware dispatch while
-        avoiding DB token lookup.
+        When the identity carries a real ``auth_token`` (integration mode),
+        patches ``get_http_headers`` so the full auth chain runs: header
+        extraction → tenant detection → token-to-principal DB lookup →
+        ResolvedIdentity from real data.
+
+        When no real token is available (unit mode), patches
+        ``resolve_identity_from_context`` directly.
 
         Args:
             tool_name: MCP tool name (e.g., "get_products").
@@ -428,11 +463,24 @@ class BaseTestEnv:
         else:
             arguments = dict(kwargs)
 
+        # Choose auth strategy based on whether we have a real DB token.
+        auth_token = mcp_identity.auth_token if mcp_identity else None
+
+        if auth_token:
+            # Real auth chain: header → token → DB lookup → identity
+            headers = {
+                "x-adcp-auth": auth_token,
+                "x-adcp-tenant": mcp_identity.tenant_id or "",
+            }
+            patch_target = "fastmcp.server.dependencies.get_http_headers"
+            patch_value = headers
+        else:
+            # Unit mode: inject identity directly
+            patch_target = "src.core.mcp_auth_middleware.resolve_identity_from_context"
+            patch_value = mcp_identity
+
         async def _call():
-            with patch(
-                "src.core.mcp_auth_middleware.resolve_identity_from_context",
-                return_value=mcp_identity,
-            ):
+            with patch(patch_target, return_value=patch_value):
                 async with Client(mcp) as client:
                     result = await client.call_tool(tool_name, arguments)
                     return response_cls(**result.structured_content)
