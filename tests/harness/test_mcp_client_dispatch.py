@@ -2,11 +2,15 @@
 
 Verifies that Client(mcp) goes through FastMCP's middleware chain and
 TypeAdapter, not just calling the wrapper function directly.
+
+Environment-aware tests verify that dev mode rejects unknown fields
+(fail loudly) while production mode strips them (forward compatible).
 """
 
 from __future__ import annotations
 
 import asyncio
+import os
 from unittest.mock import patch
 
 from src.core.resolved_identity import ResolvedIdentity
@@ -45,11 +49,11 @@ class TestMcpClientDispatch:
 
         asyncio.run(_call())
 
-    def test_unknown_field_stripped_by_middleware(self):
-        """Schema-aware middleware strips unknown fields, call succeeds.
+    def test_dev_mode_rejects_unknown_fields(self):
+        """In dev mode, unknown fields reach TypeAdapter and are rejected.
 
-        RequestCompatMiddleware looks up the tool's JSON Schema and removes
-        fields not in properties. The TypeAdapter never sees the unknown field.
+        This is the correct behavior — dev mode fails loudly so we detect
+        fields the seller agent doesn't support.
         """
         from fastmcp import Client
 
@@ -65,9 +69,39 @@ class TestMcpClientDispatch:
                 async with Client(mcp) as client:
                     result = await client.call_tool(
                         "get_adcp_capabilities",
+                        {"unknown_field": "should_be_rejected"},
+                        raise_on_error=False,
+                    )
+                    assert result.is_error, "Dev mode should reject unknown fields"
+
+        asyncio.run(_call())
+
+    def test_production_mode_strips_unknown_fields(self):
+        """In production mode, unknown fields are stripped by middleware.
+
+        The call succeeds because the middleware removes the unknown field
+        before TypeAdapter validates.
+        """
+        from fastmcp import Client
+
+        from src.core.main import mcp
+
+        identity = _make_identity()
+
+        async def _call():
+            with (
+                patch(
+                    "src.core.mcp_auth_middleware.resolve_identity_from_context",
+                    return_value=identity,
+                ),
+                patch.dict(os.environ, {"ENVIRONMENT": "production"}),
+            ):
+                async with Client(mcp) as client:
+                    result = await client.call_tool(
+                        "get_adcp_capabilities",
                         {"unknown_field": "should_be_stripped"},
                     )
-                    assert not result.is_error, f"Expected success after strip: {result.content}"
+                    assert not result.is_error, f"Production should strip unknown fields: {result.content}"
                     assert result.structured_content is not None
 
         asyncio.run(_call())

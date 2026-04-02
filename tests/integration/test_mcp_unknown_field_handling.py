@@ -1,12 +1,16 @@
 """Integration tests for MCP unknown field handling.
 
-Verifies that the schema-aware RequestCompatMiddleware strips unknown
-fields and translates deprecated fields through the real FastMCP pipeline.
+Environment-aware: dev mode rejects unknown fields (fail loudly),
+production mode strips them (forward compatible).
+
+Deprecated field translation works in both modes.
 """
 
-import logging
+import os
+from unittest.mock import patch
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 from tests.factories import PricingOptionFactory, ProductFactory, TenantFactory
 
@@ -23,11 +27,11 @@ def _create_tenant_with_product():
     return tenant
 
 
-class TestMcpUnknownFieldStripping:
-    """Unknown fields are stripped by middleware, request succeeds."""
+class TestMcpDevMode:
+    """Dev mode: unknown fields reach TypeAdapter and are rejected."""
 
     def test_known_fields_only(self, integration_db):
-        """Standard call with only known fields works."""
+        """Standard call with only known fields works in dev mode."""
         from tests.harness.product import ProductEnv
 
         with ProductEnv(tenant_id=TENANT_ID) as env:
@@ -35,31 +39,53 @@ class TestMcpUnknownFieldStripping:
             result = env.call_mcp(brief="test ads")
             assert result is not None
 
-    def test_unknown_field_stripped(self, integration_db, caplog):
-        """Unknown field is stripped with WARNING, request succeeds."""
+    def test_unknown_field_rejected(self, integration_db):
+        """Dev mode: unknown field causes ToolError — loud failure for schema drift detection."""
         from tests.harness.product import ProductEnv
 
         with ProductEnv(tenant_id=TENANT_ID) as env:
             _create_tenant_with_product()
-            with caplog.at_level(logging.WARNING):
+            with pytest.raises(ToolError, match="nonsense_field"):
+                env.call_mcp(brief="test ads", nonsense_field="bar")
+
+    def test_deprecated_field_translated_even_in_dev(self, integration_db):
+        """Deprecated field translation works in dev mode (always active)."""
+        from tests.harness.product import ProductEnv
+
+        with ProductEnv(tenant_id=TENANT_ID) as env:
+            _create_tenant_with_product()
+            # brand_manifest is translated to brand — this is a known field
+            # after translation, so TypeAdapter accepts it
+            result = env.call_mcp(
+                brand_manifest="https://acme.com/.well-known/brand.json",
+                brief="test ads",
+            )
+            assert result is not None
+
+
+class TestMcpProductionMode:
+    """Production mode: unknown fields stripped, type errors retried."""
+
+    def test_unknown_field_stripped(self, integration_db):
+        """Production mode: unknown field stripped, request succeeds."""
+        from tests.harness.product import ProductEnv
+
+        with ProductEnv(tenant_id=TENANT_ID) as env:
+            _create_tenant_with_product()
+            with patch.dict(os.environ, {"ENVIRONMENT": "production"}):
                 result = env.call_mcp(brief="test ads", nonsense_field="bar")
             assert result is not None
-            assert "nonsense_field" in caplog.text
 
-    def test_deprecated_translated_unknown_stripped(self, integration_db, caplog):
-        """Deprecated field translated + unknown field stripped in same call."""
+    def test_deprecated_translated_unknown_stripped(self, integration_db):
+        """Production: deprecated field translated + unknown field stripped."""
         from tests.harness.product import ProductEnv
 
         with ProductEnv(tenant_id=TENANT_ID) as env:
             _create_tenant_with_product()
-            with caplog.at_level(logging.INFO):
+            with patch.dict(os.environ, {"ENVIRONMENT": "production"}):
                 result = env.call_mcp(
                     brand_manifest="https://acme.com/.well-known/brand.json",
                     brief="test ads",
                     bogus_param=123,
                 )
             assert result is not None
-            # brand_manifest translated (INFO from normalize_request_params)
-            assert "brand_manifest" in caplog.text
-            # bogus_param stripped (WARNING from middleware)
-            assert "bogus_param" in caplog.text

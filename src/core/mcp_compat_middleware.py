@@ -53,17 +53,24 @@ class RequestCompatMiddleware(Middleware):
         if compat_result.translations_applied:
             modified = True
 
-        # Step 2: Strip unknown fields (schema-aware)
-        known_params = await self._get_known_params(context, tool_name)
-        if known_params is not None:
-            normalized, stripped = strip_unknown_params(normalized, known_params)
-            if stripped:
-                modified = True
-                logger.warning(
-                    "Stripped unknown fields from %s: %s",
-                    tool_name,
-                    ", ".join(stripped),
-                )
+        # Step 2: Strip unknown fields (schema-aware, production only)
+        # In dev mode, unknown fields reach TypeAdapter and fail loudly —
+        # this is how we detect that the seller agent doesn't support a
+        # field the spec requires. In production, strip silently to avoid
+        # rejecting callers using newer schema versions.
+        from src.core.config import is_production
+
+        if is_production():
+            known_params = await self._get_known_params(context, tool_name)
+            if known_params is not None:
+                normalized, stripped = strip_unknown_params(normalized, known_params)
+                if stripped:
+                    modified = True
+                    logger.warning(
+                        "Stripped unknown fields from %s: %s",
+                        tool_name,
+                        ", ".join(stripped),
+                    )
 
         if modified:
             new_message = CallToolRequestParams(
