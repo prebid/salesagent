@@ -349,18 +349,15 @@ def when_list_accounts_unfiltered(ctx: dict) -> None:
     """Send list_accounts request with no filters (matches multiple phrasings).
 
     For cross-cutting scenarios (context-echo) that run under AccountSyncEnv,
-    calls _list_accounts_impl directly since the sync env doesn't dispatch list.
+    dispatches through env.call_list_impl() since the sync env's call_impl()
+    targets sync_accounts, not list_accounts.
     """
     from tests.harness.account_sync import AccountSyncEnv
 
     env = ctx["env"]
     if isinstance(env, AccountSyncEnv):
-        # TRANSPORT-BYPASS: cross-cutting list under sync env
-        from src.core.tools.accounts import _list_accounts_impl
-
-        env._commit_factory_data()
         try:
-            ctx["response"] = _list_accounts_impl(identity=env.identity)
+            ctx["response"] = env.call_list_impl()
         except Exception as exc:
             ctx["error"] = exc
     else:
@@ -436,7 +433,8 @@ def when_list_sandbox_filter(ctx: dict, value: str) -> None:
     """Send list_accounts with sandbox filter.
 
     May run under AccountSyncEnv (sandbox tag). For cross-cutting scenarios
-    that need list dispatch on a sync env, calls _list_accounts_impl directly.
+    that need list dispatch on a sync env, dispatches through
+    env.call_list_impl() instead of the sync env's default call_impl().
     """
     from src.core.schemas.account import ListAccountsRequest
     from tests.harness.account_sync import AccountSyncEnv
@@ -444,13 +442,8 @@ def when_list_sandbox_filter(ctx: dict, value: str) -> None:
     env = ctx["env"]
     req = ListAccountsRequest(sandbox=value.lower() == "true")
     if isinstance(env, AccountSyncEnv):
-        # Cross-cutting: sync env can't dispatch list requests
-        # TRANSPORT-BYPASS: sandbox list under sync env
-        from src.core.tools.accounts import _list_accounts_impl
-
-        env._commit_factory_data()
         try:
-            ctx["response"] = _list_accounts_impl(req=req, identity=env.identity)
+            ctx["response"] = env.call_list_impl(req=req)
         except Exception as exc:
             ctx["error"] = exc
     else:

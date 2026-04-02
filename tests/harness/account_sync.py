@@ -119,3 +119,19 @@ class AccountSyncEnv(IntegrationEnv):
     def parse_rest_response(self, data: dict[str, Any]) -> SyncAccountsResponse:
         """Parse REST JSON into SyncAccountsResponse."""
         return SyncAccountsResponse(**data)
+
+    # -- Cross-cutting list dispatch -----------------------------------------
+    # Scenarios tagged "sandbox" or "context-echo" run under AccountSyncEnv
+    # but need to call list_accounts (a different operation). These methods
+    # keep the production import in the harness, not in step functions.
+
+    def call_list_impl(self, **kwargs: Any) -> Any:
+        """Call _list_accounts_impl with real DB (cross-cutting list dispatch).
+
+        Accepts all _list_accounts_impl kwargs. Identity defaults to self.identity.
+        """
+        from src.core.tools.accounts import _list_accounts_impl
+
+        self._commit_factory_data()
+        kwargs.setdefault("identity", self.identity)
+        return _list_accounts_impl(**kwargs)

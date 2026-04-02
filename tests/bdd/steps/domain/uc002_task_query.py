@@ -189,6 +189,14 @@ def given_task_type_filter_boundary(ctx: dict, config: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
+def _dispatch_list_tasks(env: Any, **params: Any) -> Any:
+    """Dispatch list_tasks through the env, keeping production import in harness layer."""
+    from src.core.tools.task_management import list_tasks
+
+    env._commit_factory_data()
+    return asyncio.run(list_tasks(identity=env.identity, **params))
+
+
 @when("the Buyer Agent queries the task list")
 def when_query_task_list(ctx: dict) -> None:
     """Call list_tasks with ALL configured params.
@@ -198,14 +206,11 @@ def when_query_task_list(ctx: dict) -> None:
     the resulting TypeError is stored in ctx["error"] — the real
     production gap surfaces at call time, not via pre-filtering.
     """
-    from src.core.tools.task_management import list_tasks
-
     env = ctx["env"]
-    identity = env.identity
     params = ctx.get("task_query_params", {})
 
     try:
-        result = asyncio.run(list_tasks(identity=identity, **params))
+        result = _dispatch_list_tasks(env, **params)
         ctx["response"] = result
         ctx["task_list_result"] = result
     except (AdCPError, TypeError, Exception) as exc:
