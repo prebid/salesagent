@@ -7,7 +7,7 @@ The normalizer translates known deprecated AdCP field names to their current
 equivalents, mirroring the JS adcp-client's normalizeRequestParams() logic.
 """
 
-from src.core.request_compat import normalize_request_params
+from src.core.request_compat import normalize_request_params, strip_unknown_params
 
 # ---------------------------------------------------------------------------
 # 1. brand_manifest → brand (BrandReference)
@@ -284,3 +284,49 @@ class TestEdgeCases:
         )
         assert "brand" not in result.params
         assert "brand_manifest" not in result.params
+
+
+# ---------------------------------------------------------------------------
+# 13–17. strip_unknown_params
+# ---------------------------------------------------------------------------
+
+
+class TestStripUnknownParams:
+    """strip_unknown_params removes fields not in the known set."""
+
+    def test_all_known_fields_pass_through(self):
+        cleaned, stripped = strip_unknown_params(
+            {"brief": "ads", "brand": {"domain": "acme.com"}},
+            {"brief", "brand"},
+        )
+        assert cleaned == {"brief": "ads", "brand": {"domain": "acme.com"}}
+        assert stripped == []
+
+    def test_unknown_fields_removed(self):
+        cleaned, stripped = strip_unknown_params(
+            {"brief": "ads", "foo": "bar", "baz": 123},
+            {"brief"},
+        )
+        assert cleaned == {"brief": "ads"}
+        assert set(stripped) == {"foo", "baz"}
+
+    def test_all_unknown_returns_empty(self):
+        cleaned, stripped = strip_unknown_params(
+            {"foo": 1, "bar": 2},
+            {"brief", "brand"},
+        )
+        assert cleaned == {}
+        assert set(stripped) == {"foo", "bar"}
+
+    def test_empty_params_returns_empty(self):
+        cleaned, stripped = strip_unknown_params({}, {"brief"})
+        assert cleaned == {}
+        assert stripped == []
+
+    def test_preserves_none_values_for_known_fields(self):
+        cleaned, stripped = strip_unknown_params(
+            {"brief": None, "unknown": "x"},
+            {"brief"},
+        )
+        assert cleaned == {"brief": None}
+        assert stripped == ["unknown"]
