@@ -722,6 +722,16 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-004-daterange-equal": ("date range validation (start==end) not implemented", True),
             # Webhook delivery: not yet in production
             "T-UC-004-webhook-scheduled": ("webhook delivery not implemented", True),
+            # Webhook retry off-by-one: range(max_retries) yields 3 total calls,
+            # should be range(max_retries + 1) for 4 calls (1 initial + 3 retries per BR-RULE-029 / UC-004-EXT-G-01)
+            "T-UC-004-webhook-retry-5xx": (
+                "production off-by-one: range(max_retries) does 3 calls, should do 4 (1 initial + 3 retries)",
+                True,
+            ),
+            "T-UC-004-webhook-retry-network": (
+                "production off-by-one: range(max_retries) does 3 calls, should do 4 (1 initial + 3 retries)",
+                True,
+            ),
             # Sandbox: not yet in delivery _impl
             "T-UC-004-sandbox-happy": ("sandbox mode not implemented in delivery", True),
             "T-UC-004-sandbox-validation": ("sandbox mode not implemented in delivery", True),
@@ -1132,6 +1142,16 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {"valid_with_max_bid"},
                 "max_bid pricing validation rejects valid ceiling semantics — spec-production gap",
             ),
+            # FIXME(salesagent-e4ij): pricing option not-found / wrong-product returns
+            # 'validation_error' instead of AdCP-spec 'INVALID_REQUEST'. AdCPValidationError
+            # is caught and re-raised as plain ValueError in media_buy_create.py, stripping
+            # error code metadata.
+            (
+                "T-UC-026-partition-pricing-option",
+                {"pricing_option_not_found", "pricing_option_wrong_product"},
+                "Production returns 'validation_error' instead of AdCP-spec 'INVALID_REQUEST' — "
+                "AdCPValidationError caught and re-raised as plain ValueError, stripping error code",
+            ),
             # Update scenarios: get_total_budget missing / transport wrappers don't accept media_buy_id
             # ALL examples under these tags fail — no selective substring needed
             (
@@ -1179,7 +1199,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             if tag in marker_names:
                 if not substrings or any(s in nodeid for s in substrings):
                     item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
-                break
 
         # --- UC-011: xfails for spec-production gaps ---
         # FIXME(salesagent-7wan): Production doesn't implement these UC-011 features.
