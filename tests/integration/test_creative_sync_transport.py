@@ -47,17 +47,13 @@ class TestSyncCreativeCreateTransport:
         with CreativeSyncEnv() as env:
             env.setup_default_data()
 
-            result = env.call_via(
-                transport,
-                creatives=[
-                    {
-                        "creative_id": "c_transport_test",
-                        "name": "Transport Test Creative",
-                        "format_id": {"id": "display_300x250", "agent_url": "https://example.com/agent"},
-                        "media_url": "https://example.com/image.png",
-                    }
-                ],
+            from tests.factories.creative_asset import CreativeAssetFactory
+
+            creative = CreativeAssetFactory(
+                creative_id="c_transport_test",
+                name="Transport Test Creative",
             )
+            result = env.call_via(transport, creatives=[creative])
 
         assert result.is_success, f"Expected success but got error: {result.error}"
         assert_envelope(result, transport)
@@ -93,18 +89,13 @@ class TestSyncCreativeCreateTransport:
         with CreativeSyncEnv() as env:
             env.setup_default_data()
 
-            result = env.call_via(
-                transport,
-                creatives=[
-                    {
-                        "creative_id": "c_dry_run",
-                        "name": "Dry Run Creative",
-                        "format_id": {"id": "display_300x250", "agent_url": "https://example.com/agent"},
-                        "media_url": "https://example.com/image.png",
-                    }
-                ],
-                dry_run=True,
+            from tests.factories.creative_asset import CreativeAssetFactory
+
+            creative = CreativeAssetFactory(
+                creative_id="c_dry_run",
+                name="Dry Run Creative",
             )
+            result = env.call_via(transport, creatives=[creative], dry_run=True)
 
         assert result.is_success
         assert_envelope(result, transport)
@@ -502,17 +493,16 @@ class TestGenerativeBuildPromptInputs:
             env.setup_default_data()
             fmt = env.setup_generative_build()
 
-            result = env.call_via(
-                transport,
-                creatives=[
-                    {
-                        "creative_id": "c_gen_05",
-                        "name": "Inputs Test",
-                        "format_id": fmt,
-                        "inputs": [{"name": "q4_brief", "context_description": "Design for Q4 campaign"}],
-                    }
-                ],
+            from tests.factories.creative_asset import CreativeAssetFactory
+
+            creative = CreativeAssetFactory(
+                creative_id="c_gen_05",
+                name="Inputs Test",
+                format_id=fmt,
+                assets={},
+                inputs=[{"name": "q4_brief", "context_description": "Design for Q4 campaign"}],
             )
+            result = env.call_via(transport, creatives=[creative])
 
             assert result.is_success
             assert_envelope(result, transport)
@@ -536,16 +526,15 @@ class TestGenerativeBuildNameFallback:
             env.setup_default_data()
             fmt = env.setup_generative_build()
 
-            result = env.call_via(
-                transport,
-                creatives=[
-                    {
-                        "creative_id": "c_gen_06",
-                        "name": "Holiday Sale Banner",
-                        "format_id": fmt,
-                    }
-                ],
+            from tests.factories.creative_asset import CreativeAssetFactory
+
+            creative = CreativeAssetFactory(
+                creative_id="c_gen_06",
+                name="Holiday Sale Banner",
+                format_id=fmt,
+                assets={},
             )
+            result = env.call_via(transport, creatives=[creative])
 
             assert result.is_success
             assert_envelope(result, transport)
@@ -589,16 +578,15 @@ class TestGenerativeBuildUpdatePreserve:
             build_calls_after_create = registry.build_creative.call_count
 
             # Second sync: UPDATE with no prompt assets
-            result2 = env.call_via(
-                transport,
-                creatives=[
-                    {
-                        "creative_id": "c_gen_07",
-                        "name": "Preserve Test Updated Name",
-                        "format_id": fmt,
-                    }
-                ],
+            from tests.factories.creative_asset import CreativeAssetFactory
+
+            creative2 = CreativeAssetFactory(
+                creative_id="c_gen_07",
+                name="Preserve Test Updated Name",
+                format_id=fmt,
+                assets={},
             )
+            result2 = env.call_via(transport, creatives=[creative2])
 
             assert result2.is_success
             assert_envelope(result2, transport)
@@ -1053,18 +1041,16 @@ class TestStaticPreviewFailed:
             registry = env.mock["registry"].return_value
             registry.preview_creative = AsyncMock(return_value={})
 
-            # Creative with no url — only assets without a url field
-            result = env.call_via(
-                transport,
-                creatives=[
-                    {
-                        "creative_id": "c_no_preview",
-                        "name": "No Preview Creative",
-                        "format_id": DEFAULT_FORMAT_ID,
-                    }
-                ],
-                validation_mode="lenient",
+            # Creative with no url — empty assets (no url field)
+            from tests.factories.creative_asset import CreativeAssetFactory
+
+            creative = CreativeAssetFactory(
+                creative_id="c_no_preview",
+                name="No Preview Creative",
+                format_id=DEFAULT_FORMAT_ID,
+                assets={},
             )
+            result = env.call_via(transport, creatives=[creative], validation_mode="lenient")
 
         assert result.is_success
         assert_envelope(result, transport)

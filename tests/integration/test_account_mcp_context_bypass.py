@@ -26,7 +26,6 @@ from fastmcp.server.context import Context
 from src.core.schemas.account import (
     ListAccountsRequest,
     ListAccountsResponse,
-    SyncAccountsRequest,
     SyncAccountsResponse,
 )
 from tests.harness.account_list import AccountListEnv
@@ -171,10 +170,13 @@ class TestMCPContextDirectCalls:
             mock_ctx = MagicMock(spec=Context)
             mock_ctx.get_state = AsyncMock(return_value=mcp_identity)
 
-            req = SyncAccountsRequest(
-                accounts=[{"brand": {"domain": "ctx-sync.com"}, "operator": "ctx-sync.com", "billing": "operator"}],
+            tool_result = asyncio.run(
+                sync_accounts(
+                    accounts=[{"brand": {"domain": "ctx-sync.com"}, "operator": "ctx-sync.com", "billing": "operator"}],
+                    ctx=mock_ctx,
+                    context=context_obj,
+                )
             )
-            tool_result = asyncio.run(sync_accounts(req=req, ctx=mock_ctx, context=context_obj))
             response = SyncAccountsResponse(**tool_result.structured_content)
 
         assert response.context is not None
