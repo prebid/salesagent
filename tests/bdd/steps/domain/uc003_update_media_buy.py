@@ -21,8 +21,8 @@ from tests.bdd.steps.generic._dispatch import dispatch_request
 # ═══════════════════════════════════════════════════════════════════════
 
 
-@given(parsers.parse('the Buyer owns an existing media buy with media_buy_id "{media_buy_id}"'))
-def given_buyer_owns_media_buy(ctx: dict, media_buy_id: str) -> None:
+@given("the Buyer owns an existing media buy")
+def given_buyer_owns_media_buy(ctx: dict) -> None:
     """Verify the existing media buy is in ctx AND persisted in DB.
 
     Step text says 'Buyer owns an existing media buy' — verify both ctx state
@@ -33,16 +33,15 @@ def given_buyer_owns_media_buy(ctx: dict, media_buy_id: str) -> None:
 
     mb = ctx.get("existing_media_buy")
     assert mb is not None, "No existing_media_buy in ctx — conftest setup_update_data() failed"
-    assert mb.media_buy_id == media_buy_id, f"Expected media_buy_id '{media_buy_id}', got '{mb.media_buy_id}'"
     # Verify DB persistence — step claims media buy "exists", not just "is in ctx"
     env = ctx["env"]
     env._commit_factory_data()
     tenant = ctx.get("tenant")
     assert tenant is not None, "No tenant in ctx — cannot verify media buy ownership"
     repo = MediaBuyRepository(env._session, tenant.tenant_id)
-    db_mb = repo.get_by_id(media_buy_id)
+    db_mb = repo.get_by_id(mb.media_buy_id)
     assert db_mb is not None, (
-        f"Media buy '{media_buy_id}' not found in DB for tenant '{tenant.tenant_id}' — "
+        f"Media buy '{mb.media_buy_id}' not found in DB for tenant '{tenant.tenant_id}' — "
         "step claims 'Buyer owns an existing media buy' but it is not persisted"
     )
 
@@ -105,6 +104,12 @@ def given_existing_mb_start_time(ctx: dict, start_time: str) -> None:
     mb.start_time = parsed_start
     env = ctx["env"]
     env._commit_factory_data()
+
+
+@given("a valid update_media_buy request")
+def given_update_request_no_table(ctx: dict) -> None:
+    """Initialize update request kwargs with defaults (media_buy_id from ctx)."""
+    _ensure_update_defaults(ctx)
 
 
 @given(parsers.parse("a valid update_media_buy request with:"))
@@ -191,7 +196,7 @@ def given_request_no_updatable_fields(ctx: dict) -> None:
     """
     kwargs = _ensure_update_defaults(ctx)
     # Keep only media_buy_id, remove everything else
-    media_buy_id = kwargs.get("media_buy_id", "mb_existing")
+    media_buy_id = kwargs["media_buy_id"]
     kwargs.clear()
     kwargs["media_buy_id"] = media_buy_id
 
@@ -718,15 +723,6 @@ def then_start_end_time_unchanged(ctx: dict) -> None:
     assert actual_end == original_end, f"end_time changed: expected {original_end}, got {actual_end}"
 
 
-@then(parsers.parse('the response should contain media_buy_id "{media_buy_id}"'))
-def then_response_media_buy_id(ctx: dict, media_buy_id: str) -> None:
-    """Assert response contains the expected media_buy_id."""
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
-    actual = getattr(resp, "media_buy_id", None)
-    assert actual == media_buy_id, f"Expected media_buy_id '{media_buy_id}', got '{actual}'"
-
-
 @then("the response should contain media_buy_id")
 def then_response_has_media_buy_id(ctx: dict) -> None:
     """Assert response contains media_buy_id matching the existing media buy."""
@@ -1054,9 +1050,9 @@ def given_update_request_with_identification(ctx: dict, id_config: str) -> None:
     """Build update request with specific identification fields.
 
     id_config formats:
-    - 'media_buy_id=mb_existing' — set media_buy_id only
+    - 'media_buy_id=<existing>' — use the existing media buy's ID
     - 'buyer_ref=my_ref_01' — set buyer_ref only (ensure mb has this ref)
-    - 'media_buy_id=X,buyer_ref=Y' — set both (ambiguous — expect error)
+    - 'media_buy_id=<existing>,buyer_ref=Y' — set both (ambiguous — expect error)
     - '<none>' — set neither (expect error)
     """
     kwargs: dict[str, Any] = {}
@@ -1072,7 +1068,12 @@ def given_update_request_with_identification(ctx: dict, id_config: str) -> None:
             key = key.strip()
             val = val.strip()
             if key == "media_buy_id":
-                kwargs["media_buy_id"] = val
+                if val == "<existing>":
+                    mb = ctx.get("existing_media_buy")
+                    assert mb is not None, "media_buy_id=<existing> but no existing_media_buy in ctx"
+                    kwargs["media_buy_id"] = mb.media_buy_id
+                else:
+                    kwargs["media_buy_id"] = val
             elif key == "buyer_ref":
                 kwargs["buyer_ref"] = val
                 # Ensure the existing media buy has this buyer_ref
@@ -1641,7 +1642,7 @@ def given_request_includes_fields(ctx: dict, update_fields: str) -> None:
 
     if "no updatable fields" in stripped:
         # Keep only media_buy_id
-        mid = kwargs.get("media_buy_id", "mb_existing")
+        mid = kwargs["media_buy_id"]
         kwargs.clear()
         kwargs["media_buy_id"] = mid
     elif "budget update only" in stripped:
@@ -1670,15 +1671,11 @@ def given_request_includes_fields(ctx: dict, update_fields: str) -> None:
         raise ValueError(f"Unknown update_fields pattern: {stripped}")
 
 
-@given(parsers.parse('the media buy "{media_buy_id}" exists with status "{status}"'))
-def given_media_buy_exists_with_status(ctx: dict, media_buy_id: str, status: str) -> None:
-    """Ensure the specified media buy exists in DB with the given status.
-
-    Uses the existing media buy from ctx or verifies it matches.
-    """
+@given(parsers.parse('the media buy exists with status "{status}"'))
+def given_media_buy_exists_with_status(ctx: dict, status: str) -> None:
+    """Ensure the existing media buy is in DB with the given status."""
     mb = ctx.get("existing_media_buy")
-    assert mb is not None, f"No existing_media_buy in ctx — cannot verify media buy '{media_buy_id}'"
-    assert mb.media_buy_id == media_buy_id, f"Expected media_buy_id '{media_buy_id}', got '{mb.media_buy_id}'"
+    assert mb is not None, "No existing_media_buy in ctx"
     if mb.status != status:
         mb.status = status
         env = ctx["env"]
@@ -1800,9 +1797,9 @@ def given_adapter_result(ctx: dict, adapter_result: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-@given(parsers.parse('the media buy "{media_buy_id}" exists with owner {owner}'))
-def given_media_buy_with_owner(ctx: dict, media_buy_id: str, owner: str) -> None:
-    """Ensure the media buy exists and is owned by the specified principal.
+@given(parsers.parse("the media buy exists with owner {owner}"))
+def given_media_buy_with_owner(ctx: dict, owner: str) -> None:
+    """Ensure the existing media buy is owned by the specified principal.
 
     Creates the owner principal if needed and sets the media buy's principal_id.
     Step text claims the owner "exists" — we must guarantee the principal record
@@ -1811,8 +1808,7 @@ def given_media_buy_with_owner(ctx: dict, media_buy_id: str, owner: str) -> None
     from tests.factories import PrincipalFactory
 
     mb = ctx.get("existing_media_buy")
-    assert mb is not None, f"No existing_media_buy in ctx — cannot set owner for '{media_buy_id}'"
-    assert mb.media_buy_id == media_buy_id, f"Expected media_buy_id '{media_buy_id}', got '{mb.media_buy_id}'"
+    assert mb is not None, "No existing_media_buy in ctx"
     assert "tenant" in ctx, "No tenant in ctx — owner principal requires a tenant"
     env = ctx["env"]
     # Ensure the owner principal exists in the DB.
@@ -1825,6 +1821,28 @@ def given_media_buy_with_owner(ctx: dict, media_buy_id: str, owner: str) -> None
         PrincipalFactory(
             principal_id=owner_id,
             tenant=ctx["tenant"],
+        )
+    mb.principal_id = owner_id
+    env._commit_factory_data()
+
+
+@given(parsers.parse('the media buy is owned by principal "{owner_id}"'))
+def given_media_buy_owned_by_principal(ctx: dict, owner_id: str) -> None:
+    """Set the existing media buy's owner to a different principal.
+
+    Creates the owning principal if needed, then updates the media buy.
+    """
+    from tests.factories import PrincipalFactory
+
+    env = ctx["env"]
+    tenant = ctx["tenant"]
+    mb = ctx.get("existing_media_buy")
+    assert mb is not None, "No existing_media_buy in ctx"
+    existing_principal = ctx.get("principal")
+    if existing_principal is None or existing_principal.principal_id != owner_id:
+        PrincipalFactory(
+            principal_id=owner_id,
+            tenant=tenant,
         )
     mb.principal_id = owner_id
     env._commit_factory_data()
@@ -1893,7 +1911,11 @@ def _ensure_update_defaults(ctx: dict) -> dict[str, Any]:
     """Ensure ctx['update_kwargs'] has valid defaults for an update request."""
     if "update_kwargs" not in ctx:
         mb = ctx.get("existing_media_buy")
+        assert mb is not None, (
+            "No existing_media_buy in ctx — _ensure_update_defaults requires "
+            "the Background step to have created a media buy"
+        )
         ctx["update_kwargs"] = {
-            "media_buy_id": mb.media_buy_id if mb else "mb_existing",
+            "media_buy_id": mb.media_buy_id,
         }
     return ctx["update_kwargs"]
