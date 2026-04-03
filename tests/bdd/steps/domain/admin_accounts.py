@@ -59,8 +59,9 @@ def given_admin_authenticated(ctx: dict, tenant_id: str) -> None:
 
 @given(parsers.parse('the tenant "{tenant_id}" exists in the database'))
 def given_tenant_exists(ctx: dict, tenant_id: str) -> None:
-    """Ensure tenant exists. The harness creates it automatically."""
-    # AdminAccountEnv._ensure_tenant() handles this in __enter__
+    """Ensure the specified tenant exists in the database."""
+    env = _env(ctx)
+    env._ensure_tenant_for_id(tenant_id)
 
 
 @given("the tenant has the following accounts:")
