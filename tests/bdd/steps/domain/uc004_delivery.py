@@ -149,75 +149,95 @@ def _parse_json_list(text: str) -> list[str]:
 @given(parsers.parse('a media buy "{mb_id}" owned by "{owner}" with status "{status}"'))
 def given_media_buy_with_status(ctx: dict, mb_id: str, owner: str, status: str) -> None:
     """Create a media buy with the given status in the test database."""
+    real_id = _generate_unique_id(mb_id)
+    _register_media_buy_label(ctx, mb_id, real_id)
     ctx.setdefault("media_buys", {})[mb_id] = {
-        "media_buy_id": mb_id,
+        "media_buy_id": real_id,
         "owner": owner,
         "status": status,
     }
-    _ensure_media_buy_in_db(ctx, mb_id, owner, status)
+    _ensure_media_buy_in_db(ctx, real_id, owner, status)
 
 
 @given(parsers.parse('a media buy "{mb_id}" owned by "{owner}" with buyer_ref "{buyer_ref}"'))
 def given_media_buy_with_buyer_ref(ctx: dict, mb_id: str, owner: str, buyer_ref: str) -> None:
     """Create a media buy with a buyer reference."""
+    real_id = _generate_unique_id(mb_id)
+    _register_media_buy_label(ctx, mb_id, real_id)
     ctx.setdefault("media_buys", {})[mb_id] = {
-        "media_buy_id": mb_id,
+        "media_buy_id": real_id,
         "owner": owner,
         "buyer_ref": buyer_ref,
     }
-    _ensure_media_buy_in_db(ctx, mb_id, owner, buyer_ref=buyer_ref)
+    _ensure_media_buy_in_db(ctx, real_id, owner, buyer_ref=buyer_ref)
 
 
 @given(parsers.parse('a media buy "{mb_id}" owned by "{owner}"'))
 def given_media_buy(ctx: dict, mb_id: str, owner: str) -> None:
     """Create a media buy owned by the given principal."""
+    real_id = _generate_unique_id(mb_id)
+    _register_media_buy_label(ctx, mb_id, real_id)
     ctx.setdefault("media_buys", {})[mb_id] = {
-        "media_buy_id": mb_id,
+        "media_buy_id": real_id,
         "owner": owner,
     }
-    _ensure_media_buy_in_db(ctx, mb_id, owner)
+    _ensure_media_buy_in_db(ctx, real_id, owner)
 
 
 @given(parsers.parse('a media buy "{mb_id}" owned by "{owner}" created on "{created_date}"'))
 def given_media_buy_created_on(ctx: dict, mb_id: str, owner: str, created_date: str) -> None:
     """Create a media buy with a specific creation date."""
+    real_id = _generate_unique_id(mb_id)
+    _register_media_buy_label(ctx, mb_id, real_id)
     ctx.setdefault("media_buys", {})[mb_id] = {
-        "media_buy_id": mb_id,
+        "media_buy_id": real_id,
         "owner": owner,
         "created_date": created_date,
     }
-    _ensure_media_buy_in_db(ctx, mb_id, owner, created_date=created_date)
+    _ensure_media_buy_in_db(ctx, real_id, owner, created_date=created_date)
 
 
 @given(parsers.parse('a media buy "{mb_id}" with a known owner'))
 def given_media_buy_known_owner(ctx: dict, mb_id: str) -> None:
     """Create a media buy with a known owner (default principal)."""
     owner = ctx.get("principal_id", "buyer-001")
+    real_id = _generate_unique_id(mb_id)
+    _register_media_buy_label(ctx, mb_id, real_id)
     ctx.setdefault("media_buys", {})[mb_id] = {
-        "media_buy_id": mb_id,
+        "media_buy_id": real_id,
         "owner": owner,
     }
-    _ensure_media_buy_in_db(ctx, mb_id, owner)
+    _ensure_media_buy_in_db(ctx, real_id, owner)
 
 
 @given(parsers.parse('no media buy exists with id "{mb_id}"'))
 def given_no_media_buy(ctx: dict, mb_id: str) -> None:
-    """Ensure no media buy with this ID exists."""
-    ctx.setdefault("nonexistent_media_buys", []).append(mb_id)
+    """Ensure no media buy with this ID exists.
+
+    Uses a unique ID so When steps that reference this label send a
+    guaranteed-nonexistent ID to the production code.
+    """
+    real_id = _generate_unique_id(mb_id)
+    _register_media_buy_label(ctx, mb_id, real_id)
+    ctx.setdefault("nonexistent_media_buys", []).append(real_id)
 
 
 @given(parsers.parse('no media buy exists with id "{mb_id1}" or "{mb_id2}"'))
 def given_no_media_buys(ctx: dict, mb_id1: str, mb_id2: str) -> None:
     """Ensure neither media buy exists in context or database."""
-    ctx.setdefault("nonexistent_media_buys", []).extend([mb_id1, mb_id2])
+    real_id1 = _generate_unique_id(mb_id1)
+    real_id2 = _generate_unique_id(mb_id2)
+    _register_media_buy_label(ctx, mb_id1, real_id1)
+    _register_media_buy_label(ctx, mb_id2, real_id2)
+    ctx.setdefault("nonexistent_media_buys", []).extend([real_id1, real_id2])
     # Enforce absence: remove from ctx media_buys if present
     media_buys = ctx.get("media_buys", {})
     media_buys.pop(mb_id1, None)
     media_buys.pop(mb_id2, None)
     # Remove from adapter responses so queries for these IDs raise errors
     env = ctx["env"]
-    env._adapter_responses.pop(mb_id1, None)
-    env._adapter_responses.pop(mb_id2, None)
+    env._adapter_responses.pop(real_id1, None)
+    env._adapter_responses.pop(real_id2, None)
 
 
 @given(parsers.parse('the principal "{principal_id}" has no media buys'))
@@ -255,27 +275,29 @@ def given_no_principal(ctx: dict, principal_id: str) -> None:
 def given_multiple_buys_various_statuses(ctx: dict, owner: str) -> None:
     """Create media buys in various statuses for partition testing."""
     for status in ("active", "completed", "paused"):
-        mb_id = f"mb-{status}"
-        ctx.setdefault("media_buys", {})[mb_id] = {
-            "media_buy_id": mb_id,
+        label = f"mb-{status}"
+        real_id = _generate_unique_id(label)
+        _register_media_buy_label(ctx, label, real_id)
+        ctx.setdefault("media_buys", {})[label] = {
+            "media_buy_id": real_id,
             "owner": owner,
             "status": status,
         }
-        _ensure_media_buy_in_db(ctx, mb_id, owner, status)
+        _ensure_media_buy_in_db(ctx, real_id, owner, status)
 
 
 @given(parsers.parse('media buys owned by "{owner}"'))
 def given_media_buys_owned_by(ctx: dict, owner: str) -> None:
     """Create a default set of media buys owned by the given principal."""
-    import uuid
-
     for i in range(1, 3):
-        mb_id = f"mb-{uuid.uuid4().hex[:8]}-{i}"
-        ctx.setdefault("media_buys", {})[mb_id] = {
-            "media_buy_id": mb_id,
+        label = f"mb-owned-{i}"
+        real_id = _generate_unique_id(label)
+        _register_media_buy_label(ctx, label, real_id)
+        ctx.setdefault("media_buys", {})[label] = {
+            "media_buy_id": real_id,
             "owner": owner,
         }
-        _ensure_media_buy_in_db(ctx, mb_id, owner)
+        _ensure_media_buy_in_db(ctx, real_id, owner)
 
 
 # ── Adapter response configuration ────────────────────────────────────
@@ -285,7 +307,8 @@ def given_media_buys_owned_by(ctx: dict, owner: str) -> None:
 def given_adapter_has_data(ctx: dict, mb_id: str) -> None:
     """Configure adapter mock to return delivery data for the media buy."""
     env = ctx["env"]
-    env.set_adapter_response(media_buy_id=mb_id)
+    real_id = _resolve_media_buy_id(ctx, mb_id)
+    env.set_adapter_response(media_buy_id=real_id)
 
 
 @given("the ad server adapter has delivery data for both media buys")
@@ -293,16 +316,18 @@ def given_adapter_has_data_both(ctx: dict) -> None:
     """Configure adapter mock to return data for both media buys."""
     env = ctx["env"]
     media_buys = ctx.get("media_buys", {})
-    for mb_id in list(media_buys.keys())[:2]:
-        env.set_adapter_response(media_buy_id=mb_id)
+    for label in list(media_buys.keys())[:2]:
+        real_id = _resolve_media_buy_id(ctx, label)
+        env.set_adapter_response(media_buy_id=real_id)
 
 
 @given("the ad server adapter has delivery data for all media buys")
 def given_adapter_has_data_all(ctx: dict) -> None:
     """Configure adapter mock to return data for all media buys."""
     env = ctx["env"]
-    for mb_id in ctx.get("media_buys", {}):
-        env.set_adapter_response(media_buy_id=mb_id)
+    for label in ctx.get("media_buys", {}):
+        real_id = _resolve_media_buy_id(ctx, label)
+        env.set_adapter_response(media_buy_id=real_id)
 
 
 @given("the ad server adapter is unavailable")
@@ -316,7 +341,8 @@ def given_adapter_unavailable(ctx: dict) -> None:
 def given_adapter_partial_data(ctx: dict, mb_id1: str, mb_id2: str) -> None:
     """Configure adapter for partial success: data for one, error for another."""
     env = ctx["env"]
-    env.set_adapter_response(media_buy_id=mb_id1)
+    real_id1 = _resolve_media_buy_id(ctx, mb_id1)
+    env.set_adapter_response(media_buy_id=real_id1)
     # mb_id2 has no response registered — will raise KeyError from the mixin
 
 
@@ -324,7 +350,8 @@ def given_adapter_partial_data(ctx: dict, mb_id1: str, mb_id2: str) -> None:
 def given_adapter_no_data_period(ctx: dict, mb_id: str) -> None:
     """Configure adapter to return zero data for the media buy."""
     env = ctx["env"]
-    env.set_adapter_response(media_buy_id=mb_id, impressions=0, spend=0.0)
+    real_id = _resolve_media_buy_id(ctx, mb_id)
+    env.set_adapter_response(media_buy_id=real_id, impressions=0, spend=0.0)
 
 
 # ── Webhook configuration steps ─────────────────────────────────────
@@ -394,15 +421,16 @@ def given_bearer_token_valid(ctx: dict) -> None:
 @given(parsers.parse("a media buy webhook configuration with credentials of {n:d} characters"))
 def given_webhook_creds_length(ctx: dict, n: int) -> None:
     """Configure a full webhook configuration with credentials of specific length."""
-    import uuid
-
     ctx["webhook_secret"] = "x" * n
     # The step claims "a media buy webhook configuration" — create the full config
-    mb_id = next(iter(ctx.get("media_buys", {})), None)
-    if mb_id is None:
-        mb_id = f"mb-creds-{uuid.uuid4().hex[:8]}"
-        ctx.setdefault("media_buys", {})[mb_id] = {"media_buy_id": mb_id, "owner": "buyer-001"}
-    wh = ctx.setdefault("webhook_config", {}).setdefault(mb_id, {})
+    # Use the first existing label, or create a placeholder with a unique ID
+    label = next(iter(ctx.get("media_buys", {})), None)
+    if label is None:
+        label = "mb-creds"
+        real_id = _generate_unique_id(label)
+        _register_media_buy_label(ctx, label, real_id)
+        ctx.setdefault("media_buys", {})[label] = {"media_buy_id": real_id, "owner": "buyer-001"}
+    wh = ctx.setdefault("webhook_config", {}).setdefault(label, {})
     wh["url"] = "https://buyer.example.com/webhook"
     wh["active"] = True
     wh["auth_scheme"] = "hmac-sha256"
@@ -577,8 +605,9 @@ def given_device_type_under_limit(ctx: dict) -> None:
 @when(parsers.re(r"the Buyer Agent requests delivery metrics for media_buy_ids (?P<ids_json>\[.+?\])"))
 def when_request_by_ids(ctx: dict, ids_json: str) -> None:
     """Request delivery metrics by media_buy_ids."""
-    media_buy_ids = _parse_json_list(ids_json)
-    dispatch_request(ctx, media_buy_ids=media_buy_ids)
+    labels = _parse_json_list(ids_json)
+    real_ids = _resolve_media_buy_ids(ctx, labels)
+    dispatch_request(ctx, media_buy_ids=real_ids)
 
 
 @when("the Buyer Agent requests delivery metrics without media_buy_ids or buyer_refs")
@@ -591,6 +620,9 @@ def when_request_no_identifiers(ctx: dict) -> None:
 def when_request_with_params(ctx: dict, request_params: str) -> None:
     """Request with arbitrary params (Scenario Outline)."""
     kwargs = _parse_request_params(request_params)
+    # Resolve label→real ID for media_buy_ids if present
+    if "media_buy_ids" in kwargs:
+        kwargs["media_buy_ids"] = _resolve_media_buy_ids(ctx, kwargs["media_buy_ids"])
     dispatch_request(ctx, **kwargs)
 
 
@@ -600,8 +632,9 @@ def when_request_with_media_buy_ids(ctx: dict, ids_json: str) -> None:
     if ids_json == "[]":
         dispatch_request(ctx, media_buy_ids=[])
     else:
-        media_buy_ids = _parse_json_list(ids_json)
-        dispatch_request(ctx, media_buy_ids=media_buy_ids)
+        labels = _parse_json_list(ids_json)
+        real_ids = _resolve_media_buy_ids(ctx, labels)
+        dispatch_request(ctx, media_buy_ids=real_ids)
 
 
 @when(parsers.parse("the Buyer Agent requests delivery metrics with buyer_refs {refs_json}"))
@@ -631,8 +664,9 @@ def when_request_with_status_filter_list(ctx: dict, filter_json: str) -> None:
 def when_request_no_status_filter(ctx: dict) -> None:
     """Request without status_filter (all statuses)."""
     media_buys = ctx.get("media_buys", {})
-    mb_ids = list(media_buys.keys())
-    dispatch_request(ctx, media_buy_ids=mb_ids if mb_ids else None)
+    labels = list(media_buys.keys())
+    real_ids = _resolve_media_buy_ids(ctx, labels) if labels else []
+    dispatch_request(ctx, media_buy_ids=real_ids if real_ids else None)
 
 
 @when(parsers.parse('the Buyer Agent requests delivery metrics with start_date "{start}" and end_date "{end}"'))
@@ -660,10 +694,10 @@ def when_request_delivery_default(ctx: dict) -> None:
     Respects ctx["principal_id"] override for scenarios like 'principal not found'.
     """
     media_buys = ctx.get("media_buys", {})
-    mb_ids = list(media_buys.keys()) or None
+    labels = list(media_buys.keys()) or None
     kwargs: dict = {}
-    if mb_ids:
-        kwargs["media_buy_ids"] = mb_ids
+    if labels:
+        kwargs["media_buy_ids"] = _resolve_media_buy_ids(ctx, labels)
     # Override identity if ctx has a custom principal_id (e.g. "unknown-buyer")
     if "principal_id" in ctx:
         from src.core.resolved_identity import ResolvedIdentity
@@ -704,7 +738,7 @@ def when_request_no_auth(ctx: dict) -> None:
 def when_webhook_fires(ctx: dict, mb_id: str) -> None:
     """Webhook scheduler fires for a media buy via WebhookDeliveryService."""
     try:
-        result = _call_webhook_service(ctx, mb_id=mb_id)
+        result = _call_webhook_service(ctx, mb_id=mb_id)  # resolves label internally
         ctx["webhook_result"] = result
     except Exception as exc:
         ctx["error"] = exc
@@ -852,11 +886,12 @@ def when_validate_webhook_config(ctx: dict) -> None:
 @when(parsers.parse('the webhook scheduler evaluates "{mb_id}"'))
 def when_webhook_evaluates(ctx: dict, mb_id: str) -> None:
     """Webhook scheduler evaluates a media buy for delivery."""
+    # webhook_config is keyed by Gherkin label
     wh = ctx.get("webhook_config", {}).get(mb_id, {})
     if not wh.get("active"):
         ctx["webhook_skipped"] = True
     else:
-        ctx["webhook_evaluated"] = mb_id
+        ctx["webhook_evaluated"] = _resolve_media_buy_id(ctx, mb_id)
 
 
 # ── Reporting dimensions When steps ─────────────────────────────────
@@ -871,12 +906,14 @@ def when_webhook_evaluates(ctx: dict, mb_id: str) -> None:
 def when_request_with_dimensions(ctx: dict, mb_id: str, dims_json: str) -> None:
     """Request delivery metrics with reporting dimensions."""
     dims = json.loads(dims_json)
-    dispatch_request(ctx, media_buy_ids=[mb_id], reporting_dimensions=dims)
+    real_id = _resolve_media_buy_id(ctx, mb_id)
+    dispatch_request(ctx, media_buy_ids=[real_id], reporting_dimensions=dims)
 
 
 def _request_single_mb(ctx: dict, mb_id: str) -> None:
-    """Shared: request delivery for a single media buy."""
-    dispatch_request(ctx, media_buy_ids=[mb_id])
+    """Shared: request delivery for a single media buy (resolves label to real ID)."""
+    real_id = _resolve_media_buy_id(ctx, mb_id)
+    dispatch_request(ctx, media_buy_ids=[real_id])
 
 
 @when(parsers.parse('the Buyer Agent requests delivery metrics for "{mb_id}"'))
@@ -901,7 +938,8 @@ def when_request_no_attribution(ctx: dict, mb_id: str) -> None:
 def when_request_with_attribution(ctx: dict, mb_id: str, aw_json: str) -> None:
     """Request with attribution window."""
     aw = json.loads(aw_json)
-    dispatch_request(ctx, media_buy_ids=[mb_id], attribution_window=aw)
+    real_id = _resolve_media_buy_id(ctx, mb_id)
+    dispatch_request(ctx, media_buy_ids=[real_id], attribution_window=aw)
 
 
 # ── Partition/boundary When steps ─────────────────────────────────
@@ -1069,58 +1107,64 @@ def when_request_without_field(ctx: dict, mb_id: str, field: str) -> None:
 @then(parsers.re(r'the response should include delivery data for "(?P<mb_id>[^"]+)"$'))
 def then_includes_delivery_data(ctx: dict, mb_id: str) -> None:
     """Assert response includes delivery data for the given media buy."""
+    real_id = _resolve_media_buy_id(ctx, mb_id)
     resp = ctx.get("response")
     assert resp is not None, "Expected a response but none found"
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
-    mb_ids = [d.media_buy_id for d in deliveries]
-    assert mb_id in mb_ids, f"Expected delivery data for '{mb_id}', got: {mb_ids}"
+    returned_ids = [d.media_buy_id for d in deliveries]
+    assert real_id in returned_ids, f"Expected delivery data for '{mb_id}' (real_id={real_id}), got: {returned_ids}"
 
 
 @then(parsers.re(r'the response should include delivery data for "(?P<mb_id1>[^"]+)" and "(?P<mb_id2>[^"]+)"'))
 def then_includes_delivery_data_both(ctx: dict, mb_id1: str, mb_id2: str) -> None:
     """Assert response includes delivery data for both media buys."""
+    real_id1 = _resolve_media_buy_id(ctx, mb_id1)
+    real_id2 = _resolve_media_buy_id(ctx, mb_id2)
     resp = ctx.get("response")
     assert resp is not None, "Expected a response but none found"
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
-    mb_ids = [d.media_buy_id for d in deliveries]
-    assert mb_id1 in mb_ids, f"Expected delivery data for '{mb_id1}', got: {mb_ids}"
-    assert mb_id2 in mb_ids, f"Expected delivery data for '{mb_id2}', got: {mb_ids}"
+    returned_ids = [d.media_buy_id for d in deliveries]
+    assert real_id1 in returned_ids, f"Expected delivery data for '{mb_id1}' (real_id={real_id1}), got: {returned_ids}"
+    assert real_id2 in returned_ids, f"Expected delivery data for '{mb_id2}' (real_id={real_id2}), got: {returned_ids}"
 
 
 @then(parsers.parse('the response should include delivery data for "{mb_id}" only'))
 def then_includes_delivery_data_only(ctx: dict, mb_id: str) -> None:
     """Assert response includes delivery data for ONLY the given media buy."""
+    real_id = _resolve_media_buy_id(ctx, mb_id)
     resp = ctx.get("response")
     assert resp is not None, "Expected a response but none found"
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
-    mb_ids = [d.media_buy_id for d in deliveries]
-    assert mb_ids == [mb_id], f"Expected only '{mb_id}', got: {mb_ids}"
+    returned_ids = [d.media_buy_id for d in deliveries]
+    assert returned_ids == [real_id], f"Expected only '{mb_id}' (real_id={real_id}), got: {returned_ids}"
 
 
 @then(parsers.parse('the response should NOT include delivery data for "{mb_id}"'))
 def then_excludes_delivery_data(ctx: dict, mb_id: str) -> None:
     """Assert response does NOT include delivery data for the media buy."""
+    real_id = _resolve_media_buy_id(ctx, mb_id)
     resp = ctx.get("response")
     assert resp is not None, (
         "Expected a successful response to verify exclusion of delivery data, "
         f"but got no response (error: {ctx.get('error')})"
     )
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
-    mb_ids = [d.media_buy_id for d in deliveries]
-    assert mb_id not in mb_ids, f"Expected no delivery data for '{mb_id}', but found it"
+    returned_ids = [d.media_buy_id for d in deliveries]
+    assert real_id not in returned_ids, f"Expected no delivery data for '{mb_id}' (real_id={real_id}), but found it"
 
 
 @then(parsers.parse('the response should not include delivery data for "{mb_id}"'))
 def then_no_delivery_data(ctx: dict, mb_id: str) -> None:
     """Assert response does not include delivery data for the media buy."""
+    real_id = _resolve_media_buy_id(ctx, mb_id)
     resp = ctx.get("response")
     assert resp is not None, (
         "Expected a successful response to verify absence of delivery data, "
         f"but got no response (error: {ctx.get('error')})"
     )
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
-    mb_ids = [d.media_buy_id for d in deliveries]
-    assert mb_id not in mb_ids, f"Expected no delivery data for '{mb_id}'"
+    returned_ids = [d.media_buy_id for d in deliveries]
+    assert real_id not in returned_ids, f"Expected no delivery data for '{mb_id}' (real_id={real_id})"
 
 
 @then("the response should have an empty media_buy_deliveries array")
@@ -1263,17 +1307,18 @@ def _assert_no_error_for_mb(ctx: dict, mb_id: str) -> None:
     """Shared: assert no error was returned for a specific media buy ID.
 
     Checks three layers:
-    1. Top-level ctx["error"] exception must not mention the mb_id
-    2. Response-level errors list must not reference the mb_id
-    3. Per-delivery error field for this mb_id must be None
+    1. Top-level ctx["error"] exception must not mention the real_id
+    2. Response-level errors list must not reference the real_id
+    3. Per-delivery error field for this real_id must be None
     """
+    real_id = _resolve_media_buy_id(ctx, mb_id)
     resp = ctx.get("response")
     error = ctx.get("error")
     assert resp is not None or error is not None, "Neither error nor response in ctx — test setup failed"
     # If a general error occurred, check it's not about this specific mb_id
     if error is not None:
         error_msg = str(error).lower()
-        assert mb_id.lower() not in error_msg, f"Error mentions '{mb_id}': {error}"
+        assert real_id.lower() not in error_msg, f"Error mentions '{mb_id}' (real_id={real_id}): {error}"
     # If response exists, check response-level errors list and per-delivery errors
     if resp is not None:
         # Check response-level errors array (e.g. resp.errors)
@@ -1281,14 +1326,16 @@ def _assert_no_error_for_mb(ctx: dict, mb_id: str) -> None:
         if resp_errors:
             for err in resp_errors:
                 err_str = str(err).lower()
-                assert mb_id.lower() not in err_str, f"Response-level errors list mentions '{mb_id}': {err}"
+                assert real_id.lower() not in err_str, (
+                    f"Response-level errors list mentions '{mb_id}' (real_id={real_id}): {err}"
+                )
         # Check per-delivery error field
         deliveries = getattr(resp, "media_buy_deliveries", None) or []
         for d in deliveries:
             d_id = getattr(d, "media_buy_id", None)
-            if d_id == mb_id:
+            if d_id == real_id:
                 d_error = getattr(d, "error", None)
-                assert d_error is None, f"Delivery for '{mb_id}' has error: {d_error}"
+                assert d_error is None, f"Delivery for '{mb_id}' (real_id={real_id}) has error: {d_error}"
 
 
 @then(parsers.parse('the response should not include an error for "{mb_id}"'))
@@ -1309,9 +1356,9 @@ def then_only_status(ctx: dict, status: str) -> None:
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
-    # Check if any Given-step media buy has this status — if so, those IDs must appear
+    # Check if any Given-step media buy has this status — resolve labels to real IDs
     setup_buys = ctx.get("media_buys", {})
-    expected_ids = {mb_id for mb_id, mb in setup_buys.items() if mb.get("status") == status}
+    expected_ids = {_resolve_media_buy_id(ctx, label) for label, mb in setup_buys.items() if mb.get("status") == status}
     returned_ids = {getattr(d, "media_buy_id", None) for d in deliveries}
     if expected_ids:
         missing = expected_ids - returned_ids
@@ -1683,24 +1730,26 @@ def then_skip_no_webhook(ctx: dict, mb_id: str) -> None:
     check #2 re-validated the Given precondition (webhook_config inactive),
     which is a tautology — removed per inspector finding.
     """
+    real_id = _resolve_media_buy_id(ctx, mb_id)
     env = ctx["env"]
     post_mock = env.mock["post"]
-    # Check that no POST call was made containing this mb_id in its payload
+    # Check that no POST call was made containing this real_id in its payload
     for call_idx, call in enumerate(post_mock.call_args_list):
         call_payload = call.kwargs.get("json") or (call[1].get("json", {}) if len(call) > 1 else {})
         # Check top-level media_buy_id
-        if call_payload.get("media_buy_id") == mb_id:
+        if call_payload.get("media_buy_id") == real_id:
             raise AssertionError(
-                f"Expected no webhook POST for '{mb_id}', but call [{call_idx}] has media_buy_id='{mb_id}'"
+                f"Expected no webhook POST for '{mb_id}' (real_id={real_id}), "
+                f"but call [{call_idx}] has media_buy_id='{real_id}'"
             )
         # Check nested media_buy_deliveries (webhook payloads nest deliveries)
         deliveries = call_payload.get("media_buy_deliveries", [])
         for d in deliveries:
             d_mb_id = d.get("media_buy_id") if isinstance(d, dict) else getattr(d, "media_buy_id", None)
-            if d_mb_id == mb_id:
+            if d_mb_id == real_id:
                 raise AssertionError(
-                    f"Expected no webhook POST for '{mb_id}', "
-                    f"but call [{call_idx}] payload media_buy_deliveries contains '{mb_id}'"
+                    f"Expected no webhook POST for '{mb_id}' (real_id={real_id}), "
+                    f"but call [{call_idx}] payload media_buy_deliveries contains '{real_id}'"
                 )
 
 
@@ -1943,28 +1992,32 @@ def then_partial_data(ctx: dict, mb_id: str) -> None:
 
     The response itself must signal the partial failure to the buyer — either
     via a delivery entry with delayed status, a response-level partial_data flag,
-    or a response-level errors/partial_failures field naming the affected mb_id.
+    or a response-level errors/partial_failures field naming the affected real_id.
     Never falls back to test harness ctx state.
     """
+    real_id = _resolve_media_buy_id(ctx, mb_id)
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     resp_dict = resp.model_dump() if hasattr(resp, "model_dump") else resp
     deliveries = resp_dict.get("media_buy_deliveries", [])
-    # Check if mb_id is in deliveries with a partial/delayed signal
+    # Check if real_id is in deliveries with a partial/delayed signal
     for d in deliveries:
-        if d.get("media_buy_id") == mb_id:
+        if d.get("media_buy_id") == real_id:
             has_partial = (
                 resp_dict.get("partial_data") is True
                 or d.get("status") == "reporting_delayed"
                 or d.get("expected_availability") is not None
             )
-            assert has_partial, f"Expected partial_data or delayed status for '{mb_id}', got status='{d.get('status')}'"
+            assert has_partial, (
+                f"Expected partial_data or delayed status for '{mb_id}' (real_id={real_id}), "
+                f"got status='{d.get('status')}'"
+            )
             return
-    # mb_id not in deliveries — response must communicate the failure itself
+    # real_id not in deliveries — response must communicate the failure itself
     errors = resp_dict.get("errors") or resp_dict.get("partial_failures") or []
-    has_error_signal = resp_dict.get("partial_data") is True or any(mb_id in str(e) for e in errors)
+    has_error_signal = resp_dict.get("partial_data") is True or any(real_id in str(e) for e in errors)
     assert has_error_signal, (
-        f"'{mb_id}' absent from deliveries and response has no partial_data flag, "
+        f"'{mb_id}' (real_id={real_id}) absent from deliveries and response has no partial_data flag, "
         f"errors, or partial_failures field naming it — buyer cannot see the failure"
     )
 
@@ -1976,14 +2029,16 @@ def then_zero_metrics(ctx: dict, mb_id: str) -> None:
     The scenario requires the system to report a known-zero result (not omit data).
     totals must not be None — the buyer must see explicit zeros.
     """
+    real_id = _resolve_media_buy_id(ctx, mb_id)
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
     for d in deliveries:
-        if d.media_buy_id == mb_id:
+        if d.media_buy_id == real_id:
             totals = getattr(d, "totals", None)
             assert totals is not None, (
-                f"Delivery for '{mb_id}' has totals=None — scenario requires explicit zero metrics, not omitted data"
+                f"Delivery for '{mb_id}' (real_id={real_id}) has totals=None — "
+                f"scenario requires explicit zero metrics, not omitted data"
             )
             assert getattr(totals, "impressions", None) == 0.0, (
                 f"Expected impressions=0.0 for '{mb_id}', got {getattr(totals, 'impressions', None)}"
@@ -1992,7 +2047,7 @@ def then_zero_metrics(ctx: dict, mb_id: str) -> None:
                 f"Expected spend=0.0 for '{mb_id}', got {getattr(totals, 'spend', None)}"
             )
             return
-    raise AssertionError(f"No delivery found for '{mb_id}'")
+    raise AssertionError(f"No delivery found for '{mb_id}' (real_id={real_id})")
 
 
 @then("no real billing records should have been created")
@@ -2056,7 +2111,7 @@ def then_no_billing(ctx: dict) -> None:
 
 def _ensure_media_buy_in_db(
     ctx: dict,
-    mb_id: str,
+    real_id: str,
     owner: str,
     status: str = "active",
     buyer_ref: str | None = None,
@@ -2064,6 +2119,7 @@ def _ensure_media_buy_in_db(
 ) -> None:
     """Create a media buy in the test database using factories.
 
+    ``real_id`` is the unique generated ID (not the Gherkin label).
     Uses the env's integration DB session. If the env doesn't support
     DB operations (unit harness), this is a no-op — ctx state is enough.
 
@@ -2106,7 +2162,7 @@ def _ensure_media_buy_in_db(
     mb_kwargs: dict[str, Any] = {
         "tenant": ctx["db_tenant"],
         "principal": ctx[principal_key],
-        "media_buy_id": mb_id,
+        "media_buy_id": real_id,
         "status": status,
     }
     if buyer_ref:
@@ -2146,14 +2202,14 @@ def _dispatch_webhook_credentials(ctx: dict, value: str) -> None:
         secret = value_stripped
 
     ctx["webhook_secret"] = secret
-    # Configure full webhook config
-    import uuid
-
-    mb_id = next(iter(ctx.get("media_buys", {})), None)
-    if mb_id is None:
-        mb_id = f"mb-creds-{uuid.uuid4().hex[:8]}"
-        ctx.setdefault("media_buys", {})[mb_id] = {"media_buy_id": mb_id, "owner": "buyer-001"}
-    wh = ctx.setdefault("webhook_config", {}).setdefault(mb_id, {})
+    # Configure full webhook config using existing label or creating a placeholder
+    label = next(iter(ctx.get("media_buys", {})), None)
+    if label is None:
+        label = "mb-creds"
+        real_id = _generate_unique_id(label)
+        _register_media_buy_label(ctx, label, real_id)
+        ctx.setdefault("media_buys", {})[label] = {"media_buy_id": real_id, "owner": "buyer-001"}
+    wh = ctx.setdefault("webhook_config", {}).setdefault(label, {})
     wh["url"] = "https://buyer.example.com/webhook"
     wh["active"] = True
     wh["auth_scheme"] = "hmac-sha256"
@@ -2218,7 +2274,8 @@ def _dispatch_resolution(ctx: dict, partition: str) -> None:
     were resolved, not just that the request was accepted.
     """
     media_buys = ctx.get("media_buys", {})
-    mb_ids = list(media_buys.keys())
+    labels = list(media_buys.keys())
+    real_ids = _resolve_media_buy_ids(ctx, labels)
     partition_clean = partition.strip()
     request_params = ctx.setdefault("request_params", {})
 
@@ -2228,25 +2285,25 @@ def _dispatch_resolution(ctx: dict, partition: str) -> None:
 
     if "media_buy_ids" in partition_norm and "only" in partition_norm:
         # Resolve by media_buy_ids only
-        request_params["media_buy_ids"] = mb_ids
-        dispatch_request(ctx, media_buy_ids=mb_ids)
+        request_params["media_buy_ids"] = real_ids
+        dispatch_request(ctx, media_buy_ids=real_ids)
     elif "buyer_refs" in partition_norm and "only" in partition_norm:
-        # Resolve by buyer_refs only — use mb_ids as refs (Given step may not set refs)
-        refs = [media_buys[k].get("buyer_ref", k) for k in mb_ids]
+        # Resolve by buyer_refs only — use real IDs as refs (Given step may not set refs)
+        refs = [media_buys[k].get("buyer_ref", _resolve_media_buy_id(ctx, k)) for k in labels]
         request_params["buyer_refs"] = refs
         dispatch_request(ctx, buyer_refs=refs)
     elif "both_provided" in partition_norm or "both" in partition_norm and "provided" in partition_norm:
         # Both media_buy_ids and buyer_refs provided
-        refs = [media_buys[k].get("buyer_ref", k) for k in mb_ids]
-        request_params["media_buy_ids"] = mb_ids
+        refs = [media_buys[k].get("buyer_ref", _resolve_media_buy_id(ctx, k)) for k in labels]
+        request_params["media_buy_ids"] = real_ids
         request_params["buyer_refs"] = refs
-        dispatch_request(ctx, media_buy_ids=mb_ids, buyer_refs=refs)
+        dispatch_request(ctx, media_buy_ids=real_ids, buyer_refs=refs)
     elif "neither_provided" in partition_norm or "neither" in partition_norm:
         # Neither IDs nor refs — should return all owned media buys
         dispatch_request(ctx)
     elif "partial" in partition_norm:
         # Partial resolution — request includes a nonexistent ID alongside a real one
-        partial_ids = mb_ids[:1] + ["mb-nonexistent"]
+        partial_ids = real_ids[:1] + ["mb-nonexistent"]
         request_params["media_buy_ids"] = partial_ids
         dispatch_request(ctx, media_buy_ids=partial_ids)
     elif "zero" in partition_norm:
