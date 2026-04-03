@@ -13,7 +13,6 @@ from adcp.types import FormatCategory
 from pydantic import ValidationError
 
 from src.adapters.broadstreet.config_schema import BROADSTREET_TEMPLATES
-from src.core.exceptions import AdCPValidationError
 from src.core.schemas import FormatId, ListCreativeFormatsRequest, ListCreativeFormatsResponse
 from tests.factories import TenantFactory
 from tests.harness import CreativeFormatsEnv
@@ -301,16 +300,19 @@ class TestMalformedFormatIdObjects:
             ListCreativeFormatsRequest(format_ids=[{"agent_url": "not_a_url", "id": "test_format"}])
 
     def test_malformed_format_ids_via_mcp_raises_adcp_error(self, integration_db):
-        """UC-005-EXT-B-02: MCP wrapper converts malformed FormatId to AdCPValidationError.
+        """UC-005-EXT-B-02: MCP rejects malformed FormatId (missing agent_url).
 
-        When malformed format_ids are passed through the MCP wrapper,
-        the ValidationError is caught and re-raised as AdCPValidationError.
+        The request is rejected regardless of which layer catches it:
+        TypeAdapter (dev) or our validation code (production after fallback).
         """
+        from tests.harness.assertions import assert_rejected
+        from tests.harness.transport import Transport
+
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
 
-            with pytest.raises((AdCPValidationError, ValidationError)):
-                env.call_mcp(format_ids=[{"id": "no_agent_url"}])
+            result = env.call_via(Transport.MCP, format_ids=[{"id": "no_agent_url"}])
+            assert_rejected(result, field="agent_url")
 
     def test_valid_format_ids_accepted(self, integration_db):
         """UC-005-EXT-B-02 (positive counterpart): well-formed FormatId objects are accepted.

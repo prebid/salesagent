@@ -989,7 +989,14 @@ class TestMissingFormatFails:
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
     def test_no_format_action_failed(self, integration_db, transport):
-        """Creative without format_id → action=failed."""
+        """Creative without format_id is rejected.
+
+        On impl/a2a: reaches _impl which returns action=failed (missing format).
+        On MCP: TypeAdapter rejects because CreativeAsset requires format_id.
+        Both paths correctly reject the creative.
+        """
+        from tests.harness.assertions import assert_rejected
+
         with CreativeSyncEnv() as env:
             env.setup_default_data()
 
@@ -1005,11 +1012,15 @@ class TestMissingFormatFails:
                 validation_mode="lenient",
             )
 
-        assert result.is_success
-        assert_envelope(result, transport)
-        creative_result = result.payload.creatives[0]
-        assert creative_result.action == CreativeAction.failed
-        assert creative_result.errors
+        if result.is_error:
+            # MCP: TypeAdapter rejected missing format_id — correct behavior
+            assert_rejected(result, field="format_id")
+        else:
+            # impl/a2a/rest: _impl handled it, returned action=failed
+            assert_envelope(result, transport)
+            creative_result = result.payload.creatives[0]
+            assert creative_result.action == CreativeAction.failed
+            assert creative_result.errors
 
 
 @pytest.mark.requires_db
@@ -1041,22 +1052,35 @@ class TestStaticPreviewFailed:
             registry = env.mock["registry"].return_value
             registry.preview_creative = AsyncMock(return_value={})
 
-            # Creative with no url — empty assets (no url field)
-            from tests.factories.creative_asset import CreativeAssetFactory
-
-            creative = CreativeAssetFactory(
-                creative_id="c_no_preview",
-                name="No Preview Creative",
-                format_id=DEFAULT_FORMAT_ID,
-                assets={},
+            # Creative with format_id but no assets — tests the "no previews" path.
+            # Uses dict because the test exercises the dict→CreativeAsset coercion
+            # in _impl (which defaults assets={}). On MCP, TypeAdapter rejects the
+            # missing assets field — that's also correct (schema-level rejection).
+            result = env.call_via(
+                transport,
+                creatives=[
+                    {
+                        "creative_id": "c_no_preview",
+                        "name": "No Preview Creative",
+                        "format_id": DEFAULT_FORMAT_ID,
+                    }
+                ],
+                validation_mode="lenient",
             )
-            result = env.call_via(transport, creatives=[creative], validation_mode="lenient")
 
-        assert result.is_success
-        assert_envelope(result, transport)
-        creative_result = result.payload.creatives[0]
-        assert creative_result.action == CreativeAction.failed
-        assert any("no previews" in e.lower() or "no media_url" in e.lower() for e in (creative_result.errors or []))
+        if result.is_error:
+            # MCP: TypeAdapter rejects missing assets field — correct schema rejection
+            from tests.harness.assertions import assert_rejected
+
+            assert_rejected(result, field="assets")
+        else:
+            # impl/a2a/rest: _impl handles it, returns action=failed
+            assert_envelope(result, transport)
+            creative_result = result.payload.creatives[0]
+            assert creative_result.action == CreativeAction.failed
+            assert any(
+                "no previews" in e.lower() or "no media_url" in e.lower() for e in (creative_result.errors or [])
+            )
 
 
 @pytest.mark.requires_db
