@@ -8,7 +8,7 @@ import functools
 import inspect
 import logging
 from collections.abc import Callable
-from typing import Any
+from typing import Any, NoReturn
 
 from fastmcp.exceptions import ToolError
 from fastmcp.server import Context as FastMCPContext
@@ -145,7 +145,7 @@ def _log_tool_error(tool_name: str, error: Exception, tenant_id: str | None, pri
         logger.debug(f"Failed to log error to audit log: {e}")
 
 
-def _translate_to_tool_error(error: Exception) -> None:
+def _translate_to_tool_error(error: Exception) -> NoReturn:
     """Translate typed exceptions to ToolError at the MCP boundary.
 
     AdCPError, ValueError, and PermissionError are translated to ToolError

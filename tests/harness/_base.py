@@ -86,7 +86,7 @@ def _adcp_error_from_code(
     reconstructed = exc_cls(
         message=message,
         details=details,
-        recovery=recovery or "contact_support",
+        recovery=recovery or "terminal",
     )
     if exc_cls is AdCPError:
         reconstructed.error_code = error_code
@@ -540,12 +540,18 @@ class BaseTestEnv:
             }
 
             async def _call():
-                with (
-                    patch("src.core.transport_helpers.get_http_headers", return_value=headers),
-                    patch("src.core.mcp_auth_middleware.get_http_headers", return_value=headers),
-                ):
+                mock_th = patch("src.core.transport_helpers.get_http_headers", return_value=headers)
+                mock_mw = patch("src.core.mcp_auth_middleware.get_http_headers", return_value=headers)
+                with mock_th as patched_th, mock_mw as patched_mw:
                     async with Client(mcp) as client:
                         result = await client.call_tool(tool_name, arguments)
+                        # Guard: verify the header patches were called.
+                        # If a third module imports get_http_headers without being
+                        # patched, this won't catch it — but at least we verify
+                        # the known auth paths were exercised.
+                        assert patched_th.called or patched_mw.called, (
+                            f"Auth chain not exercised for {tool_name} — get_http_headers patches were not called"
+                        )
                         return response_cls(**result.structured_content)
         else:
             # Unit mode: inject identity directly.
@@ -703,8 +709,19 @@ class BaseTestEnv:
     def parse_rest_error(self, status_code: int, data: dict[str, Any]) -> Exception:
         """Reconstruct an AdCPError from REST error response.
 
-        Default implementation maps status_code to exception class.
+        Prefers the structured error_code in the response body (same precision
+        as MCP and A2A unwrappers). Falls back to HTTP status mapping.
         """
+        message = data.get("message", data.get("error", str(data)))
+
+        # Try structured error_code first (same as MCP/A2A unwrappers)
+        error_code = data.get("error_code")
+        if error_code:
+            recovery = data.get("recovery")
+            details = data.get("details")
+            return _adcp_error_from_code(error_code, message, recovery, details)
+
+        # Fallback: map HTTP status to exception class
         from src.core.exceptions import (
             AdCPAdapterError,
             AdCPAuthenticationError,
@@ -723,7 +740,6 @@ class BaseTestEnv:
             502: AdCPAdapterError,
         }
         error_cls = STATUS_TO_ERROR.get(status_code, Exception)
-        message = data.get("message", data.get("error", str(data)))
         return error_cls(message)
 
     def get_rest_client(self) -> Any:

@@ -1383,6 +1383,14 @@ class AdCPRequestHandler(RequestHandler):
             # Translate AdCPError to protocol-specific A2A error
             logger.error(f"AdCPError in skill handler {skill_name}: {e.error_code} - {e.message}")
             raise ServerError(_adcp_to_a2a_error(e))
+        except ValueError as e:
+            # Same translation as MCP: ValueError → VALIDATION_ERROR
+            logger.error(f"ValueError in skill handler {skill_name}: {e}")
+            raise ServerError(InvalidParamsError(message=str(e)))
+        except PermissionError as e:
+            # Same translation as MCP: PermissionError → AUTHORIZATION_ERROR
+            logger.error(f"PermissionError in skill handler {skill_name}: {e}")
+            raise ServerError(InvalidRequestError(message=str(e)))
         except Exception as e:
             logger.error(f"Error in skill handler {skill_name}: {e}")
             raise ServerError(InternalError(message=f"Skill {skill_name} failed: {str(e)}"))
