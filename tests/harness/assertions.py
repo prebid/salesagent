@@ -59,25 +59,22 @@ def assert_rejected(
     *,
     code: str | None = None,
     field: str | None = None,
+    reason: str | None = None,
     message_contains: str | None = None,
 ) -> None:
-    """Assert the request was rejected, regardless of which transport layer caught it.
+    """Assert the request was rejected, checking WHAT field and WHY.
 
-    Works across all transports and environments:
-    - impl/a2a/rest: result.error is AdCPError with error_code and details
-    - MCP dev mode: result.error may be ToolError (TypeAdapter) or AdCPError (unwrapped)
-    - MCP prod mode: result.error is AdCPError (after TypeAdapter fallback)
-
-    All mean "the request was rejected." This helper normalizes the assertion
-    so BDD Then steps don't need to know which layer rejected.
+    Checks observable behavior — what the buyer sees — not which internal
+    layer caught the error. Works across all transports and environments.
 
     Args:
         result: TransportResult from env.call_via()
-        code: Expected error code (e.g., "VALIDATION_ERROR"). Checked on the
-            error object or in the error message string.
-        field: Expected field name in the error (e.g., "max_width").
-            Checked in error message, details, or ToolError text.
-        message_contains: Substring that must appear in the error message.
+        code: Expected error code (e.g., "VALIDATION_ERROR").
+        field: Expected field name (e.g., "max_width", "agent_url").
+        reason: Expected error reason (e.g., "Field required",
+            "Input should be a valid integer"). This distinguishes
+            "field missing" from "field has wrong type" on the same field.
+        message_contains: Additional substring that must appear in the error.
     """
     assert result.is_error, f"Expected rejection but got success: {result.payload}"
 
@@ -91,12 +88,14 @@ def assert_rejected(
         )
 
     if field is not None:
-        # Check in message, details, or raw error string
         details = getattr(error, "details", None) or {}
         details_str = str(details)
         assert field in error_str or field in details_str, (
             f"Expected field '{field}' in error. Error: {error_str[:200]}"
         )
+
+    if reason is not None:
+        assert reason in error_str, f"Expected reason '{reason}' in error. Got: {error_str[:200]}"
 
     if message_contains is not None:
         message = getattr(error, "message", error_str)

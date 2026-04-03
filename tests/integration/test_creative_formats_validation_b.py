@@ -83,7 +83,7 @@ class TestNonIntegerDimensionValues:
             TenantFactory(tenant_id="test_tenant")
             env.set_registry_formats([])
             result = env.call_via(Transport.MCP, max_width="not_a_number")
-            assert_rejected(result, field="max_width")
+            assert_rejected(result, field="max_width", reason="valid integer")
 
     def test_formatted_error_identifies_dimension_field(self, integration_db):
         """Covers: UC-005-EXT-B-03 — error message identifies the dimension field.
@@ -232,5 +232,5 @@ class TestMultiFieldValidationErrors:
                 max_width="not_a_number",
                 min_height="also_invalid",
             )
-            assert_rejected(result, field="max_width")
-            assert_rejected(result, field="min_height")
+            assert_rejected(result, field="max_width", reason="valid integer")
+            assert_rejected(result, field="min_height", reason="valid integer")
