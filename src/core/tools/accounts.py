@@ -390,7 +390,12 @@ def _check_billing_policy(
     """
     from adcp.types.generated_poc.core.error import Error
 
-    supported = getattr(identity, "supported_billing", None)
+    # Read billing policy from tenant configuration (not identity).
+    # The tenant dict carries supported_billing from DB or test overrides.
+    tenant = identity.tenant if identity else None
+    supported = (
+        tenant.get("supported_billing") if isinstance(tenant, dict) else getattr(tenant, "supported_billing", None)
+    )
     if supported is None:
         return None  # No policy configured → accept all
 
@@ -573,8 +578,13 @@ async def _sync_accounts_impl(
                     )
                     continue
 
-                # BR-RULE-060: determine approval status
-                approval_mode = getattr(identity, "account_approval_mode", None)
+                # BR-RULE-060: determine approval status from tenant config
+                tenant = identity.tenant if identity else None
+                approval_mode = (
+                    tenant.get("account_approval_mode") or tenant.get("approval_mode")
+                    if isinstance(tenant, dict)
+                    else getattr(tenant, "account_approval_mode", None) or getattr(tenant, "approval_mode", None)
+                )
                 setup = _build_setup_for_approval(approval_mode or "auto", tenant_id)
                 initial_status = "pending_approval" if setup else "active"
 
