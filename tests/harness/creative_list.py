@@ -62,18 +62,12 @@ class CreativeListEnv(IntegrationEnv):
         return _list_creatives_impl(**kwargs)
 
     def call_a2a(self, **kwargs: Any) -> ListCreativesResponse:
-        """Call list_creatives_raw (A2A wrapper) with real DB."""
-        from src.core.tools.creatives.listing import list_creatives_raw
-
-        self._commit_factory_data()
-        kwargs.setdefault("identity", self.identity)
-        return list_creatives_raw(**kwargs)
+        """Call list_creatives via real AdCPRequestHandler — full A2A pipeline."""
+        return self._run_a2a_handler("list_creatives", ListCreativesResponse, **kwargs)
 
     def call_mcp(self, **kwargs: Any) -> ListCreativesResponse:
-        """Call list_creatives MCP wrapper with mock Context."""
-        from src.core.tools.creatives.listing import list_creatives
-
-        return self._run_mcp_wrapper(list_creatives, ListCreativesResponse, **kwargs)
+        """Call list_creatives via Client(mcp) — full pipeline dispatch."""
+        return self._run_mcp_client("list_creatives", ListCreativesResponse, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert kwargs to ListCreativesBody shape for REST POST."""

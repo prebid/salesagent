@@ -9,8 +9,8 @@
             <h1>Custom Policy Rules - {{ tenant_name }}</h1>
             <nav aria-label="breadcrumb">
                 <ol class="breadcrumb">
-                    <li class="breadcrumb-item"><a href="/tenant/{{ tenant_id }}">Dashboard</a></li>
-                    <li class="breadcrumb-item"><a href="/tenant/{{ tenant_id }}/policy">Policy Settings</a></li>
+                    <li class="breadcrumb-item"><a href="{{ request.script_root }}/tenant/{{ tenant_id }}">Dashboard</a></li>
+                    <li class="breadcrumb-item"><a href="{{ request.script_root }}/tenant/{{ tenant_id }}/policy">Policy Settings</a></li>
                     <li class="breadcrumb-item active">Custom Rules</li>
                 </ol>
             </nav>
@@ -19,7 +19,7 @@
 
     <div class="row mt-4">
         <div class="col-md-12">
-            <form action="/tenant/{{ tenant_id }}/policy/rules" method="POST">
+            <form action="{{ request.script_root }}/tenant/{{ tenant_id }}/policy/rules" method="POST">
                 <div class="row">
                     <!-- Prohibited Advertisers -->
                     <div class="col-md-4">
@@ -91,7 +91,7 @@ deceptive advertising">{{ '\n'.join(custom_rules.prohibited_tactics) }}</textare
                 <div class="row mt-3">
                     <div class="col-md-12">
                         <button type="submit" class="btn btn-primary">Save Rules</button>
-                        <a href="/tenant/{{ tenant_id }}/policy" class="btn btn-secondary">Back to Policy Settings</a>
+                        <a href="{{ request.script_root }}/tenant/{{ tenant_id }}/policy" class="btn btn-secondary">Back to Policy Settings</a>
                     </div>
                 </div>
             </form>

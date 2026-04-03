@@ -1400,6 +1400,8 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
         return "UC-011"
     if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
         return "ADMIN"
+    if any(t.startswith("T-COMPAT") for t in marker_names):
+        return "COMPAT"
     return None
 
 
@@ -1595,6 +1597,14 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             ctx["env"] = env
             yield
 
+    elif uc == "COMPAT":
+        request.getfixturevalue("integration_db")
+        from tests.harness.product import ProductEnv
+
+        with ProductEnv() as env:
+            ctx["env"] = env
+            yield
+
     elif uc == "UC-004":
         harness_type = _detect_delivery_harness(request)
 
@@ -1619,12 +1629,12 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 ctx["env"] = env
                 yield
         elif harness_type == "circuit-breaker":
-            from tests.harness.delivery_circuit_breaker_unit import CircuitBreakerEnv
+            from tests.harness.delivery_circuit_breaker import CircuitBreakerEnv
 
             with CircuitBreakerEnv() as env:
                 ctx["env"] = env
                 yield
         else:
-            yield
+            pytest.xfail(f"UC-004 harness not yet wired for type: {harness_type}")
     else:
-        yield
+        pytest.xfail(f"No harness wired for {uc}")

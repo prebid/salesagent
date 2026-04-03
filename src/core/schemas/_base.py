@@ -12,6 +12,11 @@ if TYPE_CHECKING:
 from adcp import Error
 from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import CreateMediaBuyRequest as LibraryCreateMediaBuyRequest
+from adcp.types import (
+    DeliveryStatus,  # noqa: F401 — used by Snapshot below
+    PriceGuidance,  # Replaces local PriceGuidance class
+    PricingModel,  # Replaces local PricingModel enum (lowercase members: .cpm, .cpc, etc.)
+)
 
 # Import main request/response types from stable API
 from adcp.types import Format as LibraryFormat
@@ -26,10 +31,6 @@ from adcp.types import PackageRequest as LibraryPackageRequest
 # Import types from stable API (per adcp 2.9.0+ - all types now in stable)
 # Note: AffectedPackage was removed in 2.9.0, use Package instead
 from adcp.types import PackageUpdate as LibraryPackageUpdate
-from adcp.types import (
-    PriceGuidance,  # Replaces local PriceGuidance class
-    PricingModel,  # Replaces local PricingModel enum (lowercase members: .cpm, .cpc, etc.)
-)
 from adcp.types import UpdateMediaBuyRequest as LibraryUpdateMediaBuyRequest
 from adcp.types.aliases import (
     CreateMediaBuyErrorResponse as AdCPCreateMediaBuyError,
@@ -734,11 +735,12 @@ def get_format_by_id(format_id: str, tenant_id: str | None = None) -> Format | N
     Returns:
         Format object or None if not found
     """
+    from src.core.exceptions import AdCPNotFoundError
     from src.core.format_resolver import get_format
 
     try:
         return get_format(format_id, tenant_id=tenant_id)
-    except ValueError:
+    except (ValueError, AdCPNotFoundError):
         return None
 
 
@@ -1615,6 +1617,13 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
     - packages: use our AdCPPackageUpdate (adds creative_ids)
     - budget: campaign-level budget (not in library — convenience field)
     - today: internal testing field
+
+    Spec fields missing from library codegen (accepted here for forward compatibility):
+    - revision: optimistic concurrency control
+    - canceled: irreversible cancellation flag
+    - cancellation_reason: reason for cancellation
+    - new_packages: mid-flight package additions
+    - invoice_recipient: override billing entity for this buy
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
@@ -1627,6 +1636,17 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
     # Bare float is accepted so transport wrappers can preserve existing DB currency
     # when the caller updates only the amount.
     budget: Budget | float | None = None
+    # Spec fields missing from library codegen — accept for forward compatibility
+    revision: int | None = Field(None, description="Expected current revision for optimistic concurrency")
+    canceled: bool | None = Field(None, description="Cancel the media buy (irreversible)")
+    cancellation_reason: str | None = Field(None, description="Reason for cancellation", max_length=500)
+    new_packages: list[PackageRequest] | None = Field(None, description="New packages to add mid-flight")
+    invoice_recipient: dict[str, Any] | None = Field(
+        None,
+        description="Override who receives the invoice for this buy (business-entity.json). "
+        "When provided, the seller invoices this entity instead of the account's default billing_entity.",
+    )
+    # idempotency_key: now provided by adcp library base class (since 3.10)
     # Internal testing field
     today: date | None = Field(None, exclude=True, description="For testing/simulation only - not part of AdCP spec")
 
@@ -2256,8 +2276,7 @@ class ListAuthorizedPropertiesResponse(NestedModelSerializerMixin, SalesAgentBas
 
 
 # --- Get Media Buys Types ---
-# These types match the adcp 3.6.0 spec for get_media_buys.
-# When the project migrates to adcp >=3.6.0, these can be replaced with library imports.
+# DeliveryStatus: imported from adcp library at top of file (all 6 values).
 
 
 class SnapshotUnavailableReason(str, Enum):
@@ -2290,8 +2309,8 @@ class Snapshot(SalesAgentBaseModel):
     pacing_index: float | None = Field(
         default=None, ge=0.0, description="Current delivery pace relative to expected (1.0 = on track)"
     )
-    delivery_status: Any = Field(
-        default=None, description="Operational delivery state of this package (DeliveryStatus enum)"
+    delivery_status: DeliveryStatus | None = Field(
+        default=None, description="Operational delivery state of this package"
     )
     currency: str | None = Field(default=None, description="ISO 4217 currency code for spend in this snapshot")
 

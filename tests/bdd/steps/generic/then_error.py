@@ -392,11 +392,28 @@ def then_error_has_fix_suggestion(ctx: dict) -> None:
     assert "suggestion" in d, f"Expected 'suggestion' in error: {d}"
     suggestion = d["suggestion"]
     assert suggestion, "Expected non-empty suggestion"
-    # A fix suggestion must contain actionable guidance
+    # A fix suggestion must contain actionable guidance — a verb telling the
+    # caller what to DO, not just describing the problem.
     suggestion_lower = suggestion.lower()
-    action_words = ("use", "try", "check", "provide", "include", "ensure", "remove", "specify", "set", "omit")
-    assert any(word in suggestion_lower for word in action_words), (
-        f"Expected actionable fix suggestion (use/try/check/provide/...), got: {suggestion}"
+    # Split into words to avoid substring matches (e.g., "reset" matching "set")
+    words = set(suggestion_lower.split())
+    action_verbs = {
+        "use",
+        "try",
+        "check",
+        "provide",
+        "include",
+        "ensure",
+        "remove",
+        "specify",
+        "set",
+        "omit",
+        "add",
+        "verify",
+    }
+    found = words & action_verbs
+    assert found, (
+        f"Expected actionable fix suggestion with a verb ({', '.join(sorted(action_verbs))}), got: {suggestion}"
     )
 
 

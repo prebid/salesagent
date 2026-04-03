@@ -99,7 +99,10 @@ def _resolve_by_id(
 
     principal_id = identity.principal_id
     if principal_id and not repo.has_access(principal_id, account_id):
-        raise AdCPAuthorizationError(f"Agent '{principal_id}' does not have access to account '{account_id}'.")
+        raise AdCPAuthorizationError(
+            f"Agent '{principal_id}' does not have access to account '{account_id}'.",
+            details={"suggestion": "Use list_accounts to find accounts accessible to this agent."},
+        )
 
     _check_account_status(account_id, account.status)
 
@@ -111,35 +114,39 @@ def _resolve_by_natural_key(
     identity: ResolvedIdentity,
     repo: AccountRepository,
 ) -> str:
-    """Resolve by natural key (brand + operator + sandbox) — lookup + ambiguity check + status check."""
+    """Resolve by natural key (brand + operator + sandbox) — lookup + ambiguity check + access check + status check."""
     brand_domain = ref.brand.domain
     brand_id = None
     if ref.brand.brand_id is not None:
         brand_id = str(ref.brand.brand_id.root) if hasattr(ref.brand.brand_id, "root") else str(ref.brand.brand_id)
 
-    # Check for ambiguity first
-    match_count = repo.count_by_natural_key(
+    # Single query: fetch up to 2 matches for ambiguity detection
+    matches = repo.list_by_natural_key(
         operator=ref.operator,
         brand_domain=brand_domain,
         brand_id=brand_id,
         sandbox=ref.sandbox,
+        limit=2,
     )
-    if match_count > 1:
+    if len(matches) > 1:
         raise AdCPAccountAmbiguousError(
-            f"Natural key matches {match_count} accounts for brand '{brand_domain}', operator '{ref.operator}'.",
+            f"Natural key matches multiple accounts for brand '{brand_domain}', operator '{ref.operator}'.",
             details={"suggestion": "Use explicit account_id instead of brand+operator to avoid ambiguity."},
         )
 
-    account = repo.get_by_natural_key(
-        operator=ref.operator,
-        brand_domain=brand_domain,
-        brand_id=brand_id,
-        sandbox=ref.sandbox,
-    )
+    account = matches[0] if matches else None
     if account is None:
         raise AdCPAccountNotFoundError(
             f"Account not found for brand '{brand_domain}', operator '{ref.operator}'.",
             details={"suggestion": "Use list_accounts to find valid accounts."},
+        )
+
+    # Access check — parity with _resolve_by_id (lines 100-102)
+    principal_id = identity.principal_id
+    if principal_id and not repo.has_access(principal_id, account.account_id):
+        raise AdCPAuthorizationError(
+            f"Agent '{principal_id}' does not have access to account '{account.account_id}'.",
+            details={"suggestion": "Use list_accounts to find accounts accessible to this agent."},
         )
 
     _check_account_status(account.account_id, account.status)

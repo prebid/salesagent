@@ -144,7 +144,7 @@ def test_settings_page():
     # Test authentication
     print("\n1. Testing authentication...")
     auth_data = {"email": TEST_EMAIL, "password": TEST_PASSWORD}
-    response = session.post(f"{BASE_URL}/test/auth", data=auth_data, allow_redirects=False)
+    response = session.post(f"{BASE_URL}/admin/test/auth", data=auth_data, allow_redirects=False)
     print(f"   Auth response: {response.status_code}")
 
     if response.status_code == 302:
@@ -155,7 +155,7 @@ def test_settings_page():
 
     # Test settings page
     print("\n2. Testing settings page...")
-    response = session.get(f"{BASE_URL}/tenant/default/settings")
+    response = session.get(f"{BASE_URL}/admin/tenant/default/settings")
     print(f"   Settings page response: {response.status_code}")
 
     if response.status_code == 200:
@@ -196,7 +196,7 @@ def test_settings_page():
 
     # Test dashboard page
     print("\n3. Testing dashboard page...")
-    response = session.get(f"{BASE_URL}/tenant/default")
+    response = session.get(f"{BASE_URL}/admin/tenant/default")
     print(f"   Dashboard response: {response.status_code}")
 
     if response.status_code == 200:

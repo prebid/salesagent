@@ -38,8 +38,8 @@ Feature: BR-UC-002 Create Media Buy
     | buyer_ref      | campaign-2026-q1             |
     | account        | account_id "acc-001"         |
     | brand          | domain "acme.com"            |
-    | start_time     | 2027-01-01T00:00:00Z         |
-    | end_time       | 2027-01-31T23:59:59Z         |
+    | start_time     | 2026-04-01T00:00:00Z         |
+    | end_time       | 2026-04-30T23:59:59Z         |
     And the request includes 2 packages with valid product_ids
     And each package has a positive budget meeting minimum spend
     And all packages use the same currency "USD"
@@ -122,8 +122,8 @@ Feature: BR-UC-002 Create Media Buy
     | buyer_ref      | campaign-2026-q1             |
     | account        | account_id "acc-001"         |
     | brand          | domain "acme.com"            |
-    | start_time     | 2027-01-01T00:00:00Z         |
-    | end_time       | 2027-01-31T23:59:59Z         |
+    | start_time     | 2026-04-01T00:00:00Z         |
+    | end_time       | 2026-04-30T23:59:59Z         |
     And the account "acc-001" exists and is active
     And proposal "prop-2026-001" exists and has not expired
     And the proposal has 3 product allocations
@@ -508,6 +508,37 @@ Feature: BR-UC-002 Create Media Buy
     # POST-F1: System state is unchanged on failure
     # POST-F2: Buyer knows what failed
     # POST-F3: Buyer knows how to fix the issue
+    # ── Hand-authored: authorization boundary (PR #1170 review) ──
+
+  @T-UC-002-account-access-denied-id @extension @account @auth @security @hand-authored
+  Scenario: Account resolution by ID denied when agent lacks access
+    Given a valid create_media_buy request with account_id "acc_other_agent"
+    And the account exists but is accessible only to a different agent
+    When the Buyer Agent sends the create_media_buy request
+    Then the operation should fail
+    And the error code should be "AUTHORIZATION_ERROR"
+    And the error message should contain "access"
+    # Security: ID resolution enforces has_access() — agent cannot use another agent's account
+
+  @T-UC-002-account-access-denied-natural-key @extension @account @auth @security @hand-authored
+  Scenario: Account resolution by natural key denied when agent lacks access
+    Given a valid create_media_buy request with account natural key brand "other-agent.com" operator "other-agent.com"
+    And the natural key resolves to an account accessible only to a different agent
+    When the Buyer Agent sends the create_media_buy request
+    Then the operation should fail
+    And the error code should be "AUTHORIZATION_ERROR"
+    And the error message should contain "access"
+    # Security: natural key resolution must have same auth behavior as ID resolution
+
+  @T-UC-002-sandbox-access-denied @extension @account @sandbox @security @hand-authored
+  Scenario: Sandbox account resolution denied when agent lacks access
+    Given a valid create_media_buy request with account_id "acc_sandbox_other"
+    And the sandbox account exists but is accessible only to a different agent
+    When the Buyer Agent sends the create_media_buy request
+    Then the operation should fail
+    And the error code should be "AUTHORIZATION_ERROR"
+    # Edge case: sandbox flag doesn't bypass access checks
+
     # --- ext-u: Optimization Goal Validation Failure ---
 
   @T-UC-002-ext-u @extension @ext-u @error @post-f1 @post-f2 @post-f3

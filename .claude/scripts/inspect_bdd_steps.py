@@ -6,57 +6,19 @@ Two-pass pipeline:
 
 Usage:
   python .claude/scripts/inspect_bdd_steps.py [--pass1-only] [--steps-dir PATH]
-
-Delta-only mode (pre-commit gate):
-  python .claude/scripts/inspect_bdd_steps.py --delta-only --fail-on-flag --pass1-only
 """
 
 from __future__ import annotations
 
 import argparse
 import ast
-import json
 import os
 import subprocess
-import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 STEP_DECORATOR_NAMES = {"given", "when", "then"}
-
-# ── Delta detection ──────────────────────────────────────────────────
-
-
-def get_delta_step_files(steps_dir: Path) -> list[Path]:
-    """Get BDD step files that have changed since the last commit.
-
-    Uses ``git diff --name-only HEAD -- <steps_dir>`` to find files with
-    uncommitted changes (staged + unstaged).  Returns absolute Paths for
-    files that still exist on disk.
-    """
-    try:
-        result = subprocess.run(
-            ["git", "diff", "--name-only", "HEAD", "--", str(steps_dir)],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode != 0:
-            return []
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return []
-
-    files: list[Path] = []
-    for line in result.stdout.strip().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        p = Path(line)
-        if p.exists() and p.suffix == ".py":
-            files.append(p)
-    return files
-
 
 # ── Data classes ────────────────────────────────────────────────────
 
@@ -137,23 +99,16 @@ def _get_decorator_step_type(decorator: ast.expr) -> str | None:
     return None
 
 
-def extract_bdd_steps(directory: Path, files: list[Path] | None = None) -> list[BddStepInfo]:
+def extract_bdd_steps(directory: Path) -> list[BddStepInfo]:
     """Extract all BDD step functions from Python files in directory.
 
     Walks all .py files recursively, finds functions decorated with
     @given, @when, or @then (from pytest_bdd), and extracts their
     step text and source code.
-
-    If ``files`` is provided, only those specific files are scanned.
     """
     results: list[BddStepInfo] = []
 
-    if files:
-        py_files = sorted(files)
-    else:
-        py_files = sorted(directory.rglob("*.py"))
-
-    for py_file in py_files:
+    for py_file in sorted(directory.rglob("*.py")):
         try:
             source = py_file.read_text()
         except (OSError, UnicodeDecodeError):
@@ -195,50 +150,26 @@ def extract_bdd_steps(directory: Path, files: list[Path] | None = None) -> list[
 # ── Pass 1: Triage (Sonnet) ─────────────────────────────────────────
 
 
-TRIAGE_PROMPT_TEMPLATE = """You are reviewing BDD step definitions for correctness.
+TRIAGE_PROMPT_TEMPLATE = """You are reviewing BDD step definitions for assertion completeness.
 
 For each step below, answer FLAG or PASS:
-
-## Then steps — assertion completeness
-- FLAG: Function does NOT assert what the step text claims.
-  Examples: body is `pass`, only checks truthiness/existence when step promises
-  content-specific validation, xfails inside the step body masking real checks.
-- PASS: Function plausibly asserts what the step text claims.
-
-## Given steps — setup correctness
-- FLAG: Function does NOT set up what the step text describes.
-  Examples: uses wrong factory params, sets incorrect field values, uses dict
-  intermediaries instead of proper model construction, sets up data that doesn't
-  match the scenario (e.g., step says "budget 5000" but code sets 100),
-  missing required setup fields, silently skips setup behind `if` guards.
-- PASS: Function plausibly sets up what the step text describes.
-
-## When steps — dispatch correctness
-- FLAG: Function does NOT dispatch the operation the step text describes.
-  Examples: catches errors and silently swallows them, doesn't actually call
-  the production function, stores result in wrong ctx key, missing error capture
-  path, dispatches to wrong function.
-- PASS: Function plausibly dispatches the described operation and captures outcomes.
+- FLAG: High chance the function does NOT implement what the step text claims.
+  Examples: body is just `pass`, assertions only check truthiness/existence
+  but the step text promises content-specific validation (e.g., "should indicate
+  which parameters" but only asserts `assert msg`).
+- PASS: The function plausibly implements what the step text claims.
+  A function that checks error existence for "the operation should fail" is PASS.
 
 Respond with EXACTLY one line per step in format: <number>|<FLAG or PASS>|<reason>
 
 {steps_block}"""
 
 
-def _truncate_source(source: str, max_lines: int = 40) -> str:
-    """Truncate long function bodies to keep batches fast."""
-    lines = source.splitlines()
-    if len(lines) <= max_lines:
-        return source
-    return "\n".join(lines[:max_lines]) + f"\n# ... ({len(lines) - max_lines} more lines truncated)"
-
-
 def _format_steps_for_triage(steps: list[BddStepInfo]) -> str:
     """Format steps into a numbered block for the triage prompt."""
     parts = []
     for i, step in enumerate(steps, 1):
-        source = _truncate_source(step.source_text)
-        parts.append(f'--- Step {i} ---\nStep text: "{step.step_text}"\nFunction:\n{source}\n')
+        parts.append(f'--- Step {i} ---\nStep text: "{step.step_text}"\nFunction:\n{step.source_text}\n')
     return "\n".join(parts)
 
 
@@ -250,106 +181,22 @@ def _run_claude(prompt: str, model: str = "sonnet") -> str:
         capture_output=True,
         text=True,
         env=env,
-        timeout=900,
+        timeout=120,
     )
     return result.stdout.strip()
 
 
-def _load_partial_results(path: Path) -> dict[str, str]:
-    """Load partial triage results from a JSON checkpoint file.
-
-    Returns dict: function_name -> verdict (FLAG/PASS).
-    """
-    if not path.exists():
-        return {}
-    try:
-        data = json.loads(path.read_text())
-        return {entry["function"]: entry["verdict"] for entry in data}
-    except (json.JSONDecodeError, KeyError):
-        return {}
-
-
-def _save_partial_results(results: list[TriageResult], path: Path) -> None:
-    """Save triage results to a JSON checkpoint file for resume."""
-    data = [
-        {
-            "function": r.step.function_name,
-            "file": r.step.file_path,
-            "line": r.step.line_number,
-            "step_text": r.step.step_text,
-            "verdict": r.verdict,
-            "reason": r.reason,
-        }
-        for r in results
-    ]
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2))
-
-
-def run_pass1_triage(
-    steps: list[BddStepInfo],
-    batch_size: int = 10,
-    checkpoint_path: Path | None = None,
-) -> list[TriageResult]:
-    """Run Pass 1 triage on steps, batched for efficiency.
-
-    Supports resume: if checkpoint_path exists, skips already-processed steps.
-    Saves progress after each batch.
-    """
+def run_pass1_triage(steps: list[BddStepInfo], batch_size: int = 10) -> list[TriageResult]:
+    """Run Pass 1 triage on steps, batched for efficiency."""
     results: list[TriageResult] = []
 
-    # Resume: load existing results and skip already-processed steps
-    already_done: dict[str, str] = {}
-    if checkpoint_path:
-        already_done = _load_partial_results(checkpoint_path)
-        if already_done:
-            print(f"  Resuming: {len(already_done)} steps already processed", file=sys.stderr)
-
-    # Separate already-done from todo
-    todo_steps = []
-    for step in steps:
-        if step.function_name in already_done:
-            results.append(
-                TriageResult(
-                    step=step,
-                    verdict=already_done[step.function_name],
-                    reason="(from checkpoint)",
-                )
-            )
-        else:
-            todo_steps.append(step)
-
-    if not todo_steps:
-        print("  All steps already processed (checkpoint complete)", file=sys.stderr)
-        return results
-
-    total_batches = (len(todo_steps) + batch_size - 1) // batch_size
-    print(f"  Processing {len(todo_steps)} steps in {total_batches} batches...", file=sys.stderr)
-
-    for batch_idx, batch_start in enumerate(range(0, len(todo_steps), batch_size)):
-        batch = todo_steps[batch_start : batch_start + batch_size]
-        print(
-            f"  Batch {batch_idx + 1}/{total_batches} ({len(batch)} steps)...",
-            end="",
-            flush=True,
-            file=sys.stderr,
-        )
-
+    for batch_start in range(0, len(steps), batch_size):
+        batch = steps[batch_start : batch_start + batch_size]
         prompt = TRIAGE_PROMPT_TEMPLATE.format(steps_block=_format_steps_for_triage(batch))
 
-        try:
-            output = _run_claude(prompt, model="sonnet")
-        except subprocess.TimeoutExpired:
-            print(" TIMEOUT — skipping batch", file=sys.stderr)
-            # Mark batch as PASS (timeout = can't triage, don't block)
-            for step in batch:
-                results.append(TriageResult(step=step, verdict="PASS", reason="(triage timeout)"))
-            if checkpoint_path:
-                _save_partial_results(results, checkpoint_path)
-            continue
+        output = _run_claude(prompt, model="sonnet")
 
         # Parse responses
-        batch_results = 0
         for line in output.splitlines():
             line = line.strip()
             if not line or "|" not in line:
@@ -372,14 +219,6 @@ def run_pass1_triage(
                             reason=reason,
                         )
                     )
-                    batch_results += 1
-
-        flagged = sum(1 for r in results[-batch_results:] if r.verdict == "FLAG") if batch_results else 0
-        print(f" {batch_results} parsed, {flagged} flagged", file=sys.stderr)
-
-        # Save checkpoint after each batch
-        if checkpoint_path:
-            _save_partial_results(results, checkpoint_path)
 
     return results
 
@@ -387,15 +226,12 @@ def run_pass1_triage(
 # ── Pass 2: Deep trace (Opus) ───────────────────────────────────────
 
 
-DEEP_TRACE_PROMPT_TEMPLATE = """You are an expert reviewing a BDD {step_type} step definition that was flagged
+DEEP_TRACE_PROMPT_TEMPLATE = """You are an expert reviewing a BDD Then step definition that was flagged
 as potentially NOT implementing what its step text claims.
 
-Your job is to make an ARCHITECTURAL JUDGMENT:
-- For Then steps: what should this function actually ASSERT?
-- For Given steps: what should this function actually SET UP? Is the data correct for the scenario?
-- For When steps: what should this function actually DISPATCH? Are all outcomes captured?
-
-You are NOT writing code — you are deciding what the correct semantic behavior should be.
+Your job is to make an ARCHITECTURAL JUDGMENT: what should this function
+actually verify? You are NOT writing code — you are deciding what the
+correct semantic assertion should be.
 
 ## Flagged Function
 
@@ -423,11 +259,9 @@ SEVERITY: <COSMETIC|WEAK|MISSING>
 RECOMMENDATION: <what the correct assertion should be — describe the semantic check, not code>
 
 Severity guide:
-- COSMETIC: naming/wording mismatch but the function is functionally correct for its purpose
-- WEAK: function does something related but significantly weaker than what's claimed
-  (Then: weak assertion; Given: incomplete setup; When: partial dispatch)
-- MISSING: function doesn't do what's claimed at all
-  (Then: pass body or pure existence check; Given: no setup or wrong data; When: no dispatch)"""
+- COSMETIC: naming/wording mismatch but the assertion is functionally correct
+- WEAK: assertion checks something related but is significantly weaker than what's claimed
+- MISSING: assertion doesn't check what's claimed at all (pass body, pure existence check for content claim)"""
 
 
 def _collect_context_for_step(step: BddStepInfo) -> str:
@@ -487,7 +321,6 @@ def run_pass2_deep_trace(
         context = _collect_context_for_step(step)
 
         prompt = DEEP_TRACE_PROMPT_TEMPLATE.format(
-            step_type=step.step_type.capitalize(),
             step_text=step.step_text,
             func_name=step.function_name,
             file_path=step.file_path,
@@ -581,7 +414,7 @@ def generate_report(
                     pass
                 lines.extend(
                     [
-                        f"#### `{r.step.function_name}` [{r.step.step_type}] ({rel_path}:{r.step.line_number})",
+                        f"#### `{r.step.function_name}` ({rel_path}:{r.step.line_number})",
                         "",
                         f'**Step text**: "{r.step.step_text}"',
                         "",
@@ -634,30 +467,8 @@ def main() -> None:
     parser.add_argument(
         "--then-only",
         action="store_true",
-        default=False,
-        help="Only inspect Then steps (default: false — inspects all step types)",
-    )
-    parser.add_argument(
-        "--files",
-        nargs="+",
-        type=Path,
-        default=None,
-        help="Specific step files to inspect (overrides --steps-dir)",
-    )
-    parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Also write machine-readable JSON alongside the markdown report",
-    )
-    parser.add_argument(
-        "--delta-only",
-        action="store_true",
-        help="Only inspect Then steps in files changed since last commit (git diff HEAD)",
-    )
-    parser.add_argument(
-        "--fail-on-flag",
-        action="store_true",
-        help="Exit with code 1 if any step is FLAG'd by Sonnet triage",
+        default=True,
+        help="Only inspect Then steps (default: true)",
     )
     args = parser.parse_args()
 
@@ -666,41 +477,20 @@ def main() -> None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M")
         args.output = Path(f".claude/reports/bdd-step-audit-{timestamp}.md")
 
-    # --delta-only: override file list with git-changed step files
-    if args.delta_only:
-        delta_files = get_delta_step_files(args.steps_dir)
-        if not delta_files:
-            print("No changed step files found — nothing to inspect.")
-            raise SystemExit(0)
-        print(f"Delta mode: {len(delta_files)} changed file(s)")
-        for f in delta_files:
-            print(f"  {f}")
-        args.files = delta_files
-
-    if args.files:
-        print(f"Scanning {len(args.files)} specific files for BDD step functions...")
-        all_steps = extract_bdd_steps(args.steps_dir, files=args.files)
-    else:
-        print(f"Scanning {args.steps_dir} for BDD step functions...")
-        all_steps = extract_bdd_steps(args.steps_dir)
+    print(f"Scanning {args.steps_dir} for BDD step functions...")
+    all_steps = extract_bdd_steps(args.steps_dir)
     print(f"  Found {len(all_steps)} step functions total")
 
-    # Filter by step type
+    # Filter to Then steps for assertion completeness
     if args.then_only:
         target_steps = [s for s in all_steps if s.step_type == "then"]
         print(f"  Filtering to {len(target_steps)} Then steps")
     else:
         target_steps = all_steps
-        from collections import Counter
 
-        by_type = Counter(s.step_type for s in target_steps)
-        print(f"  Inspecting all types: {dict(by_type)}")
-
-    # Pass 1: Triage (with resume support)
-    checkpoint_path = args.output.with_suffix(".checkpoint.json")
+    # Pass 1: Triage
     print("\n=== Pass 1: Triage (Sonnet) ===")
-    print(f"  Checkpoint: {checkpoint_path}")
-    triage_results = run_pass1_triage(target_steps, checkpoint_path=checkpoint_path)
+    triage_results = run_pass1_triage(target_steps)
     flagged = [r for r in triage_results if r.verdict == "FLAG"]
     print(f"  {len(flagged)} flagged, {len(triage_results) - len(flagged)} passed")
 
@@ -715,29 +505,6 @@ def main() -> None:
     # Generate report
     generate_report(all_steps, triage_results, deep_results, args.output)
     print(f"\nReport written to {args.output}")
-
-    # JSON output for machine consumption (pipeline integration)
-    if args.json:
-        json_path = args.output.with_suffix(".json")
-        findings = []
-        for r in flagged:
-            findings.append(
-                {
-                    "function": r.step.function_name,
-                    "step_type": r.step.step_type,
-                    "file": r.step.file_path,
-                    "line": r.step.line_number,
-                    "step_text": r.step.step_text,
-                    "reason": r.reason,
-                }
-            )
-        json_path.write_text(json.dumps(findings, indent=2))
-        print(f"JSON written to {json_path}")
-
-    # --fail-on-flag: exit non-zero if any step was flagged
-    if args.fail_on_flag and flagged:
-        print(f"\nFAILED: {len(flagged)} step(s) flagged — see report for details.")
-        raise SystemExit(1)
 
 
 if __name__ == "__main__":

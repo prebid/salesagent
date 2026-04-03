@@ -188,7 +188,13 @@ class CreativeSyncEnv(IntegrationEnv):
         return _sync_creatives_impl(**kwargs)
 
     def call_a2a(self, **kwargs: Any) -> SyncCreativesResponse:
-        """Call sync_creatives_raw (A2A wrapper) with real DB."""
+        """Call sync_creatives_raw (A2A wrapper) with real DB.
+
+        Note: uses _raw() path instead of _run_a2a_handler because the real
+        A2A handler's _handle_sync_creatives_skill constructs CreativeAsset
+        from raw dicts, which fails validation (assets field required).
+        That handler bug needs a separate fix.
+        """
         from src.core.tools.creatives.sync_wrappers import sync_creatives_raw
 
         self._commit_factory_data()
@@ -197,20 +203,12 @@ class CreativeSyncEnv(IntegrationEnv):
         return sync_creatives_raw(**kwargs)
 
     def call_mcp(self, **kwargs: Any) -> SyncCreativesResponse:
-        """Call sync_creatives MCP wrapper with mock Context.
+        """Call sync_creatives via Client(mcp) — full pipeline dispatch.
 
-        Coerces validation_mode string→enum before delegating to base.
+        No enum coercion needed — FastMCP's TypeAdapter handles it automatically.
         """
-        from adcp.types.generated_poc.enums.validation_mode import ValidationMode
-
-        from src.core.tools.creatives.sync_wrappers import sync_creatives
-
-        # Coerce validation_mode string to enum (FastMCP does this automatically)
-        if "validation_mode" in kwargs and isinstance(kwargs["validation_mode"], str):
-            kwargs["validation_mode"] = ValidationMode(kwargs["validation_mode"])
-
         kwargs.setdefault("creatives", [])
-        return self._run_mcp_wrapper(sync_creatives, SyncCreativesResponse, **kwargs)
+        return self._run_mcp_client("sync_creatives", SyncCreativesResponse, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert kwargs to SyncCreativesBody shape for REST POST."""

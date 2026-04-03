@@ -75,7 +75,7 @@ class RestDispatcher:
 
 
 class McpDispatcher:
-    """Dispatch via mock Context → async MCP wrapper → _impl().
+    """Dispatch via Client(mcp) — full FastMCP pipeline.
 
     Identity flows through kwargs to env.call_mcp() → _run_mcp_wrapper(),
     which pops it and configures the mock Context.

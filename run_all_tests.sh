@@ -4,9 +4,10 @@
 # Prerequisites: tox + tox-uv (install: uv tool install tox --with tox-uv)
 #
 # Usage:
-#   ./run_all_tests.sh           # Docker + all 6 suites via tox (default)
-#   ./run_all_tests.sh quick     # No Docker: unit + integration + integration_v2
+#   ./run_all_tests.sh           # Docker + all 5 suites via tox (default)
+#   ./run_all_tests.sh quick     # No Docker: unit + integration
 #   ./run_all_tests.sh ci tests/integration/test_file.py -k test_name
+#   ./run_all_tests.sh ci tests/integration/ -m creative     # scoped by entity
 
 set -eo pipefail
 
@@ -50,11 +51,11 @@ collect_reports() {
 # --- Quick mode (no Docker) ---
 if [ "$MODE" = "quick" ]; then
     validate_imports
-    echo -e "${BLUE}Running unit + integration + integration_v2 via tox...${NC}"
+    echo -e "${BLUE}Running unit + integration via tox...${NC}"
     set +e
     # Redirect to file + stdout via process substitution to avoid tox-uv fd leak
     # that causes pipes (| tee) to hang after tox exits.
-    tox -e unit,integration,integration_v2 -p > >(tee "$RESULTS_DIR/tox.log") 2>&1
+    tox -e unit,integration -p > >(tee "$RESULTS_DIR/tox.log") 2>&1
     TOX_RC=$?
     set -e
     collect_reports
@@ -100,9 +101,19 @@ elif [ "$MODE" = "ci" ]; then
     fi
 else
     echo "Usage: ./run_all_tests.sh [quick|ci]"
-    echo "  ci (default) — Docker + all 6 suites via tox"
-    echo "  quick        — no Docker: unit + integration + integration_v2"
+    echo "  ci (default) — Docker + all 5 suites via tox"
+    echo "  quick        — no Docker: unit + integration"
     exit 1
+fi
+
+# --- Security audit ---
+echo -e "${BLUE}Running security audit (uv-secure)...${NC}"
+IGNORED_VULNS="GHSA-7gcm-g887-7qv7,GHSA-5239-wwwm-4pmq"
+if uvx uv-secure --ignore-vulns "$IGNORED_VULNS" 2>/dev/null; then
+    echo -e "${GREEN}Security audit passed${NC}"
+else
+    echo -e "${RED}Security audit FAILED — run: uvx uv-secure --ignore-vulns $IGNORED_VULNS${NC}"
+    FAILURES="${FAILURES:+$FAILURES }security"
 fi
 
 # --- Summary ---

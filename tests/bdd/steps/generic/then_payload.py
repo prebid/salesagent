@@ -44,6 +44,7 @@ def _fmt_name(f: Any) -> str | None:
 
 @then("the response should include all registered formats")
 def then_all_formats(ctx: dict) -> None:
+    """Assert response includes ALL registered formats — identity check, not just count."""
     formats = _get_formats(ctx)
     registered = ctx.get("registry_formats", [])
     assert len(formats) == len(registered), f"Expected {len(registered)} formats, got {len(formats)}"

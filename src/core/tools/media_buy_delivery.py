@@ -394,14 +394,14 @@ def _get_media_buy_delivery_impl(
 
                         # Build placement breakdown if reporting_dimensions includes "placement"
                         placement_breakdown = None
-                        placement_dim = (
-                            getattr(req.reporting_dimensions, "placement", None) if req.reporting_dimensions else None
-                        )
+                        placement_dim = req.reporting_dimensions.placement if req.reporting_dimensions else None
                         if placement_dim is not None and raw_placements:
                             placement_breakdown = [PlacementBreakdown(**p) for p in raw_placements]
                             # Apply sort_by: use requested metric if available, fall back to "spend"
                             sort_metric = (
-                                placement_dim.get("sort_by", "spend") if isinstance(placement_dim, dict) else "spend"
+                                str(placement_dim.sort_by)
+                                if hasattr(placement_dim, "sort_by") and placement_dim.sort_by
+                                else "spend"
                             )
                             # Check if all placements have the sort metric
                             has_metric = all(getattr(p, sort_metric, None) is not None for p in placement_breakdown)

@@ -277,8 +277,10 @@ app.include_router(health_debug_router)
 # ---------------------------------------------------------------------------
 
 from src.core.auth_middleware import UnifiedAuthMiddleware  # noqa: E402
+from src.routes.rest_compat_middleware import RestCompatMiddleware  # noqa: E402
 
 app.add_middleware(UnifiedAuthMiddleware)
+app.add_middleware(RestCompatMiddleware)
 
 _cors_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:8000").split(",")
 
@@ -322,7 +324,7 @@ async def _handle_landing_page(request: Request):
     )
 
     if result.type == "admin":
-        return RedirectResponse(url="/login", status_code=302)
+        return RedirectResponse(url="/admin/login", status_code=302)
 
     if result.type in ("custom_domain", "subdomain") and result.tenant:
         try:

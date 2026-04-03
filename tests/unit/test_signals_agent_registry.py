@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from src.core.exceptions import AdCPAdapterError
 from src.core.signals_agent_registry import SignalsAgent, SignalsAgentRegistry
 
 
@@ -172,8 +173,8 @@ class TestSignalsAgentRegistry:
         )
         mock_client.agent = Mock(return_value=mock_agent_client)
 
-        # Call method - should raise RuntimeError (for backward compatibility)
-        with pytest.raises(RuntimeError, match="Authentication failed"):
+        # Call method - should raise AdCPAdapterError
+        with pytest.raises(AdCPAdapterError, match="Authentication failed"):
             await registry._get_signals_from_agent(
                 mock_client,
                 test_agent,
@@ -245,7 +246,7 @@ class TestSignalsAgentRegistry:
             patch.object(registry, "_get_signals_from_agent") as mock_get_signals,
         ):
             mock_build.return_value = Mock()
-            mock_get_signals.side_effect = RuntimeError("Authentication failed: Invalid token")
+            mock_get_signals.side_effect = AdCPAdapterError("Authentication failed: Invalid token")
 
             result = await registry.test_connection(agent_url, auth=auth, auth_header=auth_header)
 

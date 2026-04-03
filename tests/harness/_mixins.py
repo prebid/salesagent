@@ -86,7 +86,6 @@ class DeliveryPollMixin:
                     package_id=p["package_id"],
                     impressions=p.get("impressions", 0),
                     spend=p.get("spend", 0.0),
-                    by_placement=p.get("by_placement"),
                 )
                 for p in packages
             ]

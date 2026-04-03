@@ -31,9 +31,12 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from adcp import ADCPMultiAgentClient, GetSignalsRequest, PlatformDestination
+from adcp import ADCPMultiAgentClient, PlatformDestination
 from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPError, ADCPTimeoutError
 from adcp.types import DeliverTo
+
+from src.core.exceptions import AdCPAdapterError
+from src.core.schemas import GetSignalsRequest
 
 logger = logging.getLogger(__name__)
 
@@ -186,8 +189,7 @@ class SignalsAgentRegistry:
             if result.status == "completed":
                 # Synchronous completion
                 if result.data is None:
-                    logger.warning("Completed status but no data in response")
-                    return []
+                    raise AdCPAdapterError("Completed status but no data in signals response")
                 signals = result.data.signals
                 total_duration = time.time() - start_time
                 logger.info(f"[TIMING] Got {len(signals)} signals synchronously in {total_duration:.2f}s total")
@@ -208,8 +210,7 @@ class SignalsAgentRegistry:
                 # Asynchronous completion - webhook registered
                 total_duration = time.time() - start_time
                 if result.submitted is None:
-                    logger.warning("Submitted status but no submitted info in response")
-                    return []
+                    raise AdCPAdapterError("Submitted status but no submitted info in signals response")
                 logger.info(
                     f"[TIMING] Async operation submitted in {total_duration:.2f}s, "
                     f"webhook: {result.submitted.webhook_url}"
@@ -218,24 +219,23 @@ class SignalsAgentRegistry:
                 return []
 
             else:
-                logger.warning(f"_get_signals_from_agent: Unexpected status: {result.status}")
-                return []
+                raise AdCPAdapterError(f"Unexpected result status from {agent.name}: {result.status}")
 
         except ADCPAuthenticationError as e:
             logger.error(f"Authentication failed for {agent.name}: {e.message}")
-            raise RuntimeError(f"Authentication failed: {e.message}") from e
+            raise AdCPAdapterError(f"Authentication failed: {e.message}") from e
 
         except ADCPTimeoutError as e:
             logger.error(f"Request timed out for {agent.name}: {e.message}")
-            raise RuntimeError(f"Request timed out: {e.message}") from e
+            raise AdCPAdapterError(f"Request timed out: {e.message}") from e
 
         except ADCPConnectionError as e:
             logger.error(f"Connection failed for {agent.name}: {e.message}")
-            raise RuntimeError(f"Connection failed: {e.message}") from e
+            raise AdCPAdapterError(f"Connection failed: {e.message}") from e
 
         except ADCPError as e:
             logger.error(f"AdCP error for {agent.name}: {e.message}")
-            raise RuntimeError(f"AdCP error: {e.message}") from e
+            raise AdCPAdapterError(f"AdCP error: {e.message}") from e
 
     async def get_signals(
         self,

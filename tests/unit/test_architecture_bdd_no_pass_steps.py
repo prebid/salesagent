@@ -68,7 +68,7 @@ def _scan_bdd_steps() -> list[str]:
 
 
 class TestBddNoPassSteps:
-    """Structural guard: Then steps must assert something."""
+    """Structural guard: BDD steps must have meaningful bodies."""
 
     def test_no_empty_then_steps(self):
         """Every @then step must contain an assert, function call, or raise."""

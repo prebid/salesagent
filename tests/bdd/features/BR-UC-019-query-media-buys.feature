@@ -532,7 +532,7 @@ Feature: BR-UC-019 Query Media Buys
 
   @T-UC-019-sandbox-validation @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account with invalid request returns real validation error
-    Given the request targets a sandbox account
+    And the request targets a sandbox account
     When the Buyer Agent sends a get_media_buys request with invalid status filter
     Then the response should indicate a validation error
     And the error should be a real validation error, not simulated
