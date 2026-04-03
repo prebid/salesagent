@@ -73,7 +73,7 @@ export GEMINI_API_KEY="${GEMINI_API_KEY}"
 export ENCRYPTION_KEY="${ENCRYPTION_KEY}"
 export BDD_E2E_ENABLED=true
 export E2E_BASE_URL="http://localhost:${MCP_PORT}"
-export E2E_POSTGRES_URL="$DATABASE_URL"
+export E2E_POSTGRES_URL="postgresql://adcp_user:secure_password_change_me@localhost:${POSTGRES_PORT}/adcp"
 EOF
 
     echo -e "${GREEN}Stack ready (pg:$POSTGRES_PORT srv:$MCP_PORT)${NC}"

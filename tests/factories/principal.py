@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import uuid
+
 import factory
-from factory import LazyAttribute, Sequence, SubFactory
+from factory import LazyAttribute, LazyFunction, Sequence, SubFactory
 
 from src.core.database.models import Principal
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.testing_hooks import AdCPTestContext
-from tests.factories.core import TenantFactory
+from tests.factories.core import TenantFactory, _now
 
 _UNSET = object()
 
@@ -23,8 +25,11 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
     tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
     principal_id = Sequence(lambda n: f"principal_{n:04d}")
     name = LazyAttribute(lambda o: f"Test Advertiser {o.principal_id}")
-    access_token = Sequence(lambda n: f"token_{n:08d}")
+    # UUID-based tokens avoid collisions across processes sharing a DB (E2E mode)
+    access_token = LazyFunction(lambda: f"token_{uuid.uuid4().hex[:16]}")
     platform_mappings = factory.LazyFunction(lambda: {"mock": {"advertiser_id": "test_adv"}})
+    created_at = LazyFunction(_now)
+    updated_at = LazyFunction(_now)
 
     @classmethod
     def make_identity(

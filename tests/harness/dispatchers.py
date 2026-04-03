@@ -12,7 +12,6 @@ Usage (internal — called by BaseTestEnv.call_via)::
 
 from __future__ import annotations
 
-import os
 from typing import TYPE_CHECKING, Any
 
 from tests.harness.transport import Transport, TransportResult
@@ -96,22 +95,25 @@ class RestE2EDispatcher:
     stack: nginx -> UnifiedAuthMiddleware -> resolve_identity() ->
     get_principal_from_token() DB lookup -> route handler -> _impl().
 
-    Environment variables:
-        E2E_BASE_URL: Docker stack URL (default http://localhost:8092)
-        E2E_AUTH_TOKEN: auth token (default ci-test-token)
-        E2E_TENANT: tenant subdomain (default ci-test)
+    All config comes from the env object — no environment variables:
+    - ``env.e2e_config["base_url"]`` — Docker stack URL
+    - ``kwargs["identity"]`` — auth_token and tenant (injected by call_via)
     """
 
     def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
         import httpx
 
-        base_url = os.environ.get("E2E_BASE_URL", "http://localhost:8092")
-        auth_token = os.environ.get("E2E_AUTH_TOKEN", "ci-test-token")
-        tenant = os.environ.get("E2E_TENANT", "ci-test")
+        if not env.e2e_config:
+            return TransportResult(error=RuntimeError("E2E dispatch requires env.e2e_config (pass e2e_config= to env)"))
 
+        identity = kwargs.pop("identity", None)
+        if not identity:
+            return TransportResult(error=RuntimeError("E2E dispatch requires identity (injected by call_via)"))
+
+        base_url = env.e2e_config.base_url
         headers = {
-            "x-adcp-auth": auth_token,
-            "x-adcp-tenant": tenant,
+            "x-adcp-auth": identity.auth_token,
+            "x-adcp-tenant": identity.tenant["subdomain"],
             "Content-Type": "application/json",
         }
 

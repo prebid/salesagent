@@ -198,6 +198,8 @@ class MediaBuyUpdateIntegrationEnv(IntegrationEnv):
         "context_mgr": f"{_UPDATE_MODULE}.get_context_manager",
     }
 
+    _seeded_media_buy_id: str = "NOT_SEEDED"  # Set by setup_update_data()
+
     def setup_update_data(self) -> tuple:
         """Create the full dependency chain needed for update_media_buy.
 
@@ -205,10 +207,13 @@ class MediaBuyUpdateIntegrationEnv(IntegrationEnv):
         Product with PricingOption (with placements), a pre-existing media buy
         with one package.
 
-        Returns (tenant, principal, media_buy, package, product).
-        """
-        from tests.factories import MediaBuyFactory, MediaPackageFactory
+        Media buy is created through seed_media_buy() which uses the real
+        API in E2E mode (server-generated ID) or factories in in-process
+        mode (per-test DB, no collision).
 
+        Returns (tenant, principal, media_buy, product) where media_buy
+        is a MediaBuy ORM object (attribute access: .media_buy_id, .status).
+        """
         tenant, principal = self.setup_default_data()
         product, _pricing = self.setup_product_chain(
             tenant,
@@ -217,25 +222,16 @@ class MediaBuyUpdateIntegrationEnv(IntegrationEnv):
                 {"placement_id": "plc_b", "name": "Placement B"},
             ],
         )
-        media_buy = MediaBuyFactory(
+        media_buy = self.seed_media_buy(
             tenant=tenant,
             principal=principal,
-            media_buy_id="mb_existing",
-            buyer_ref="test-buyer-ref",
-            currency="USD",
+            product=product,
             status="active",
+            buyer_ref="test-buyer-ref",
+            packages=[{"product_id": product.product_id, "budget": 5000.0}],
         )
-        package = MediaPackageFactory(
-            media_buy=media_buy,
-            package_id="pkg_001",
-            package_config={
-                "package_id": "pkg_001",
-                "product_id": "guaranteed_display",
-                "budget": 5000.0,
-            },
-        )
-        self._commit_factory_data()
-        return tenant, principal, media_buy, package, product
+        self._seeded_media_buy_id = media_buy.media_buy_id
+        return tenant, principal, media_buy, product
 
     def _configure_mocks(self) -> None:
         """Set up happy-path defaults for external mocks."""
@@ -276,8 +272,12 @@ class MediaBuyUpdateIntegrationEnv(IntegrationEnv):
         # Uses shared helper from IntegrationEnv.
         self.mock["context_mgr"].return_value = self._build_mock_context_manager(tool_name="update_media_buy")
 
-    REST_ENDPOINT = "/api/v1/media-buys/mb_existing"
     REST_METHOD = "put"
+
+    @property
+    def REST_ENDPOINT(self) -> str:  # noqa: N802
+        """Dynamic endpoint — uses the seeded media_buy_id."""
+        return f"/api/v1/media-buys/{self._seeded_media_buy_id}"
 
     def call_impl(self, **kwargs: Any) -> Any:
         """Call _update_media_buy_impl with real DB."""

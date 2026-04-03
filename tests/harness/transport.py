@@ -44,6 +44,19 @@ TRANSPORT_PROTOCOL: dict[Transport, str] = {
 
 
 @dataclass(frozen=True)
+class E2EConfig:
+    """Configuration for E2E transport dispatch.
+
+    Attributes:
+        base_url: Docker stack URL (e.g., ``http://localhost:8092``).
+        postgres_url: Docker PostgreSQL URL for factory data writes.
+    """
+
+    base_url: str
+    postgres_url: str
+
+
+@dataclass(frozen=True)
 class TransportResult:
     """Normalized result from any transport dispatch.
 

@@ -5,13 +5,16 @@ Factories: TenantFactory, CurrencyLimitFactory, PropertyTagFactory, PublisherPar
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
 import factory
-from factory import LazyAttribute, RelatedFactory, Sequence, SubFactory
+from factory import LazyAttribute, LazyFunction, RelatedFactory, Sequence, SubFactory
 
 from src.core.database.models import AdapterConfig, CurrencyLimit, PropertyTag, PublisherPartner, Tenant
+
+_now = lambda: datetime.now(UTC)  # noqa: E731
 
 
 class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
@@ -28,6 +31,9 @@ class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
     ad_server = "mock"
     authorized_emails = factory.LazyFunction(lambda: ["test@example.com"])
     authorized_domains = factory.LazyFunction(lambda: ["example.com"])
+    # Explicit timestamps — Docker DB may lack server_default from migrations
+    created_at = LazyFunction(_now)
+    updated_at = LazyFunction(_now)
 
     @classmethod
     def make_tenant(cls, tenant_id: str = "test_tenant", **overrides: Any) -> dict[str, Any]:
@@ -63,6 +69,8 @@ class CurrencyLimitFactory(factory.alchemy.SQLAlchemyModelFactory):
     tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
     currency_code = "USD"
     min_package_budget = Decimal("100.00")
+    created_at = LazyFunction(_now)
+    updated_at = LazyFunction(_now)
 
 
 class PublisherPartnerFactory(factory.alchemy.SQLAlchemyModelFactory):
@@ -77,6 +85,8 @@ class PublisherPartnerFactory(factory.alchemy.SQLAlchemyModelFactory):
     display_name = LazyAttribute(lambda o: f"Publisher {o.publisher_domain}")
     is_verified = True
     sync_status = "success"
+    created_at = LazyFunction(_now)
+    updated_at = LazyFunction(_now)
 
 
 class AdapterConfigFactory(factory.alchemy.SQLAlchemyModelFactory):
@@ -101,3 +111,5 @@ class PropertyTagFactory(factory.alchemy.SQLAlchemyModelFactory):
     tag_id = Sequence(lambda n: f"tag_{n:04d}")
     name = LazyAttribute(lambda o: f"Tag {o.tag_id}")
     description = LazyAttribute(lambda o: f"Description for {o.name}")
+    created_at = LazyFunction(_now)
+    updated_at = LazyFunction(_now)

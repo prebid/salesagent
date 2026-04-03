@@ -6,10 +6,10 @@ from datetime import date
 from decimal import Decimal
 
 import factory
-from factory import LazyAttribute, Sequence, SubFactory
+from factory import LazyAttribute, LazyFunction, Sequence, SubFactory
 
 from src.core.database.models import MediaBuy, MediaPackage
-from tests.factories.core import TenantFactory
+from tests.factories.core import TenantFactory, _now
 from tests.factories.principal import PrincipalFactory
 
 
@@ -33,6 +33,8 @@ class MediaBuyFactory(factory.alchemy.SQLAlchemyModelFactory):
     start_date = date(2025, 1, 1)
     end_date = date(2027, 12, 31)
     status = "pending_approval"
+    created_at = LazyFunction(_now)
+    updated_at = LazyFunction(_now)
     raw_request = LazyAttribute(
         lambda o: {
             "buyer_ref": o.buyer_ref,
