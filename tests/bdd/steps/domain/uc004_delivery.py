@@ -63,12 +63,15 @@ def _wire_webhook_db(ctx: dict) -> None:
 
 def _call_webhook_service(
     ctx: dict,
-    mb_id: str = "mb-001",
+    mb_id: str | None = None,
     is_final: bool = False,
     is_adjusted: bool = False,
     next_expected_interval_seconds: float | None = 3600.0,
 ) -> bool:
     """Dispatch webhook delivery through the CircuitBreakerEnv.call_send."""
+    if mb_id is None:
+        mb_id = next(iter(ctx.get("media_buys", {})), None) or next(iter(ctx.get("webhook_config", {})), None)
+        assert mb_id, "No media buy in ctx or webhook_config — a Given step must create one first"
     _wire_webhook_db(ctx)
     env = ctx["env"]
     kwargs: dict[str, Any] = {
@@ -229,7 +232,10 @@ def given_multiple_buys_various_statuses(ctx: dict, owner: str) -> None:
 @given(parsers.parse('media buys owned by "{owner}"'))
 def given_media_buys_owned_by(ctx: dict, owner: str) -> None:
     """Create a default set of media buys owned by the given principal."""
-    for mb_id in ("mb-001", "mb-002"):
+    import uuid
+
+    for i in range(1, 3):
+        mb_id = f"mb-{uuid.uuid4().hex[:8]}-{i}"
         ctx.setdefault("media_buys", {})[mb_id] = {
             "media_buy_id": mb_id,
             "owner": owner,
@@ -353,9 +359,14 @@ def given_bearer_token_valid(ctx: dict) -> None:
 @given(parsers.parse("a media buy webhook configuration with credentials of {n:d} characters"))
 def given_webhook_creds_length(ctx: dict, n: int) -> None:
     """Configure a full webhook configuration with credentials of specific length."""
+    import uuid
+
     ctx["webhook_secret"] = "x" * n
     # The step claims "a media buy webhook configuration" — create the full config
-    mb_id = next(iter(ctx.get("media_buys", {})), "mb-001")
+    mb_id = next(iter(ctx.get("media_buys", {})), None)
+    if mb_id is None:
+        mb_id = f"mb-creds-{uuid.uuid4().hex[:8]}"
+        ctx.setdefault("media_buys", {})[mb_id] = {"media_buy_id": mb_id, "owner": "buyer-001"}
     wh = ctx.setdefault("webhook_config", {}).setdefault(mb_id, {})
     wh["url"] = "https://buyer.example.com/webhook"
     wh["active"] = True
@@ -913,14 +924,14 @@ def when_boundary_account(ctx: dict, value: str) -> None:
 def when_partition_status_filter(ctx: dict, partition_value: str) -> None:
     """Partition test: status_filter value."""
     ctx.setdefault("request_params", {})["status_filter"] = [partition_value]
-    _call_delivery(ctx, status_filter=[partition_value])
+    dispatch_request(ctx, status_filter=[partition_value])
 
 
 @when(parsers.re(r'the Buyer Agent requests delivery metrics at status_filter boundary "(?P<boundary_value>[^"]+)"'))
 def when_boundary_status_filter(ctx: dict, boundary_value: str) -> None:
     """Boundary test: status_filter value."""
     ctx.setdefault("request_params", {})["status_filter"] = [boundary_value]
-    _call_delivery(ctx, status_filter=[boundary_value])
+    dispatch_request(ctx, status_filter=[boundary_value])
 
 
 @when(parsers.re(r'the Buyer Agent requests delivery metrics with date range "(?P<partition>[^"]+)"'))
@@ -1027,8 +1038,7 @@ def then_includes_delivery_data(ctx: dict, mb_id: str) -> None:
     assert resp is not None, "Expected a response but none found"
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
     mb_ids = [d.media_buy_id for d in deliveries]
-    assert mb_id1 in mb_ids, f"Expected delivery data for '{mb_id1}', got: {mb_ids}"
-    assert mb_id2 in mb_ids, f"Expected delivery data for '{mb_id2}', got: {mb_ids}"
+    assert mb_id in mb_ids, f"Expected delivery data for '{mb_id}', got: {mb_ids}"
 
 
 @then(parsers.re(r'the response should include delivery data for "(?P<mb_id1>[^"]+)" and "(?P<mb_id2>[^"]+)"'))
@@ -1038,7 +1048,8 @@ def then_includes_delivery_data_both(ctx: dict, mb_id1: str, mb_id2: str) -> Non
     assert resp is not None, "Expected a response but none found"
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
     mb_ids = [d.media_buy_id for d in deliveries]
-    assert mb_id in mb_ids, f"Expected delivery data for '{mb_id}', got: {mb_ids}"
+    assert mb_id1 in mb_ids, f"Expected delivery data for '{mb_id1}', got: {mb_ids}"
+    assert mb_id2 in mb_ids, f"Expected delivery data for '{mb_id2}', got: {mb_ids}"
 
 
 @then(parsers.parse('the response should include delivery data for "{mb_id}" only'))
@@ -2101,7 +2112,12 @@ def _dispatch_webhook_credentials(ctx: dict, value: str) -> None:
 
     ctx["webhook_secret"] = secret
     # Configure full webhook config
-    mb_id = next(iter(ctx.get("media_buys", {})), "mb-001")
+    import uuid
+
+    mb_id = next(iter(ctx.get("media_buys", {})), None)
+    if mb_id is None:
+        mb_id = f"mb-creds-{uuid.uuid4().hex[:8]}"
+        ctx.setdefault("media_buys", {})[mb_id] = {"media_buy_id": mb_id, "owner": "buyer-001"}
     wh = ctx.setdefault("webhook_config", {}).setdefault(mb_id, {})
     wh["url"] = "https://buyer.example.com/webhook"
     wh["active"] = True
@@ -2144,19 +2160,19 @@ def _dispatch_partition(ctx: dict, field: str, value: str) -> None:
 
     # Handle special partition values
     if value_stripped in ("(field absent)", "(omitted)", "(not provided)"):
-        _call_delivery(ctx)
+        dispatch_request(ctx)
         return
 
     # Try to parse as JSON
     try:
         parsed = json.loads(value_stripped)
-        _call_delivery(ctx, **{field: parsed})
+        dispatch_request(ctx, **{field: parsed})
         return
     except (json.JSONDecodeError, TypeError):
         pass
 
     # Pass as string
-    _call_delivery(ctx, **{field: value_stripped})
+    dispatch_request(ctx, **{field: value_stripped})
 
 
 def _dispatch_resolution(ctx: dict, partition: str) -> None:
@@ -2178,36 +2194,36 @@ def _dispatch_resolution(ctx: dict, partition: str) -> None:
     if "media_buy_ids" in partition_norm and "only" in partition_norm:
         # Resolve by media_buy_ids only
         request_params["media_buy_ids"] = mb_ids
-        _call_delivery(ctx, media_buy_ids=mb_ids)
+        dispatch_request(ctx, media_buy_ids=mb_ids)
     elif "buyer_refs" in partition_norm and "only" in partition_norm:
         # Resolve by buyer_refs only — use mb_ids as refs (Given step may not set refs)
         refs = [media_buys[k].get("buyer_ref", k) for k in mb_ids]
         request_params["buyer_refs"] = refs
-        _call_delivery(ctx, buyer_refs=refs)
+        dispatch_request(ctx, buyer_refs=refs)
     elif "both_provided" in partition_norm or "both" in partition_norm and "provided" in partition_norm:
         # Both media_buy_ids and buyer_refs provided
         refs = [media_buys[k].get("buyer_ref", k) for k in mb_ids]
         request_params["media_buy_ids"] = mb_ids
         request_params["buyer_refs"] = refs
-        _call_delivery(ctx, media_buy_ids=mb_ids, buyer_refs=refs)
+        dispatch_request(ctx, media_buy_ids=mb_ids, buyer_refs=refs)
     elif "neither_provided" in partition_norm or "neither" in partition_norm:
         # Neither IDs nor refs — should return all owned media buys
-        _call_delivery(ctx)
+        dispatch_request(ctx)
     elif "partial" in partition_norm:
         # Partial resolution — request includes a nonexistent ID alongside a real one
         partial_ids = mb_ids[:1] + ["mb-nonexistent"]
         request_params["media_buy_ids"] = partial_ids
-        _call_delivery(ctx, media_buy_ids=partial_ids)
+        dispatch_request(ctx, media_buy_ids=partial_ids)
     elif "zero" in partition_norm:
         # Zero resolution — request IDs that don't exist
         request_params["media_buy_ids"] = ["mb-nonexistent-1", "mb-nonexistent-2"]
-        _call_delivery(ctx, media_buy_ids=["mb-nonexistent-1", "mb-nonexistent-2"])
+        dispatch_request(ctx, media_buy_ids=["mb-nonexistent-1", "mb-nonexistent-2"])
     elif "empty_array" in partition_norm or "empty" in partition_norm and "array" in partition_norm:
         # Empty array — schema rejection expected
-        _call_delivery(ctx, media_buy_ids=[])
+        dispatch_request(ctx, media_buy_ids=[])
     elif "all_buys" in partition_norm or "all" in partition_norm:
         # All media buys — same as neither_provided
-        _call_delivery(ctx)
+        dispatch_request(ctx)
     else:
         # Fallback: pass through to generic dispatch
         _dispatch_partition(ctx, "resolution", partition)
@@ -2352,96 +2368,3 @@ def then_filter_result(ctx: dict, expected: str) -> None:
 def then_resolution_result(ctx: dict, expected: str) -> None:
     """Partition test: resolution outcome."""
     _assert_partition_or_boundary(ctx, expected, "resolution")
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# Helpers — internal
-# ═══════════════════════════════════════════════════════════════════════
-
-
-def _ensure_media_buy_in_db(
-    ctx: dict,
-    mb_id: str,
-    owner: str,
-    status: str = "active",
-    buyer_ref: str | None = None,
-) -> None:
-    """Create a media buy in the test database using factories.
-
-    Uses the env's integration DB session. If the env doesn't support
-    DB operations (unit harness), this is a no-op — ctx state is enough.
-    """
-    env = ctx["env"]
-    if env is None or not hasattr(env, "_session"):
-        return
-
-    from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
-
-    # Ensure tenant exists
-    if "db_tenant" not in ctx:
-        ctx["db_tenant"] = TenantFactory(tenant_id=ctx.get("tenant_id", "test_tenant"))
-
-    # Ensure principal exists
-    principal_key = f"db_principal_{owner}"
-    if principal_key not in ctx:
-        ctx[principal_key] = PrincipalFactory(
-            tenant=ctx["db_tenant"],
-            principal_id=owner,
-        )
-
-    # Create media buy
-    mb_kwargs: dict[str, Any] = {
-        "tenant": ctx["db_tenant"],
-        "principal": ctx[principal_key],
-        "media_buy_id": mb_id,
-        "status": status,
-    }
-    if buyer_ref:
-        mb_kwargs["buyer_ref"] = buyer_ref
-
-    MediaBuyFactory(**mb_kwargs)
-
-
-def _parse_request_params(params_str: str) -> dict[str, Any]:
-    """Parse request parameters from Gherkin table/string format.
-
-    Handles formats like:
-    - media_buy_ids=["mb-001"]
-    - buyer_refs=["ref-001"]
-    - media_buy_ids=["mb-001"] buyer_refs=["ref-001"]
-    """
-    kwargs: dict[str, Any] = {}
-    for match in re.finditer(r'(\w+)=(\[.+?\]|"[^"]*"|[^\s]+)', params_str):
-        key, value = match.group(1), match.group(2)
-        if value.startswith("["):
-            kwargs[key] = json.loads(value)
-        elif value.startswith('"'):
-            kwargs[key] = value.strip('"')
-        else:
-            kwargs[key] = value
-    return kwargs
-
-
-def _dispatch_partition(ctx: dict, field: str, value: str) -> None:
-    """Dispatch a partition/boundary test request.
-
-    Parses the partition value and makes the appropriate call.
-    For omitted/absent values, calls with no additional params.
-    """
-    value_stripped = value.strip()
-
-    # Handle special partition values
-    if value_stripped in ("(field absent)", "(omitted)", "(not provided)"):
-        dispatch_request(ctx)
-        return
-
-    # Try to parse as JSON
-    try:
-        parsed = json.loads(value_stripped)
-        dispatch_request(ctx, **{field: parsed})
-        return
-    except (json.JSONDecodeError, TypeError):
-        pass
-
-    # Pass as string
-    dispatch_request(ctx, **{field: value_stripped})
