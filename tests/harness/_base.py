@@ -526,10 +526,18 @@ class BaseTestEnv:
         else:
             arguments = dict(kwargs)
 
-        # Choose auth strategy based on whether we have a real DB token.
+        # Choose auth strategy based on whether we have a real DB token
+        # AND whether the identity has custom fields the DB can't reproduce.
+        # Fields like supported_billing, account_approval_mode are set by
+        # harness Given steps but not stored in the DB — the real auth chain
+        # would lose them. Fall back to identity patching in that case.
         auth_token = mcp_identity.auth_token if mcp_identity else None
+        has_custom_identity = mcp_identity and (
+            getattr(mcp_identity, "supported_billing", None) is not None
+            or getattr(mcp_identity, "account_approval_mode", None) is not None
+        )
 
-        if auth_token:
+        if auth_token and not has_custom_identity:
             # Real auth chain: header → token → DB lookup → identity.
             # Patch get_http_headers in BOTH modules that import it:
             # transport_helpers (called by resolve_identity_from_context) and
