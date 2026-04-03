@@ -27,6 +27,40 @@ from tests.factories import (
 # ═══════════════════════════════════════════════════════════════════════
 
 
+def _generate_unique_id(label: str) -> str:
+    """Generate a unique media_buy_id from a Gherkin label.
+
+    Appends a uuid4 suffix so IDs never collide across parallel test runs
+    or E2E scenarios sharing a database, while keeping the label prefix
+    for human readability in logs.
+    """
+    import uuid
+
+    return f"{label}-{uuid.uuid4().hex[:8]}"
+
+
+def _register_media_buy(ctx: dict, label: str, media_buy: Any) -> None:
+    """Register a media buy under a Gherkin label for later lookup.
+
+    Stores both the label→real_id mapping and the label→ORM object mapping.
+    """
+    ctx.setdefault("media_buy_labels", {})[label] = media_buy.media_buy_id
+    ctx.setdefault("seeded_media_buys", {})[label] = media_buy
+
+
+def _resolve_media_buy_id(ctx: dict, label: str) -> str:
+    """Resolve a Gherkin label to the real database media_buy_id."""
+    labels = ctx.get("media_buy_labels", {})
+    if label in labels:
+        return labels[label]
+    return label  # fallback: label IS the real ID (legacy)
+
+
+def _resolve_media_buy_ids(ctx: dict, labels: list[str]) -> list[str]:
+    """Resolve a list of Gherkin labels to real database media_buy_ids."""
+    return [_resolve_media_buy_id(ctx, label) for label in labels]
+
+
 def _make_test_snapshot() -> Any:
     """Create a realistic Snapshot instance for adapter reporting tests."""
     from datetime import UTC, datetime
@@ -90,17 +124,18 @@ def given_principal_owns_media_buy_with_dates(ctx: dict, principal_id: str, mb_i
         f"Step claims principal '{principal_id}' but ctx has '{ctx['principal'].principal_id}'"
     )
     env = ctx["env"]
+    real_id = _generate_unique_id(mb_id)
     mb = MediaBuyFactory(
         tenant=ctx["tenant"],
         principal=ctx["principal"],
-        media_buy_id=mb_id,
-        buyer_ref=f"ref_{mb_id}",
+        media_buy_id=real_id,
+        buyer_ref=f"ref_{real_id}",
         status="active",
         start_date=date.fromisoformat(start),
         end_date=date.fromisoformat(end),
     )
     env._commit_factory_data()
-    ctx.setdefault("seeded_media_buys", {})[mb_id] = mb
+    _register_media_buy(ctx, mb_id, mb)
 
 
 @given(parsers.parse('today is "{today_str}"'))
@@ -134,15 +169,16 @@ def given_principal_owns_multiple(ctx: dict, principal_id: str, mb1: str, mb2: s
         f"Step claims principal '{principal_id}' but ctx has '{ctx['principal'].principal_id}'"
     )
     env = ctx["env"]
-    for mb_id in [mb1, mb2, mb3]:
+    for label in [mb1, mb2, mb3]:
+        real_id = _generate_unique_id(label)
         mb = MediaBuyFactory(
             tenant=ctx["tenant"],
             principal=ctx["principal"],
-            media_buy_id=mb_id,
-            buyer_ref=f"ref_{mb_id}",
+            media_buy_id=real_id,
+            buyer_ref=f"ref_{real_id}",
             status="active",
         )
-        ctx.setdefault("seeded_media_buys", {})[mb_id] = mb
+        _register_media_buy(ctx, label, mb)
     env._commit_factory_data()
 
 
@@ -154,15 +190,16 @@ def given_principal_owns_with_ref(ctx: dict, principal_id: str, mb_id: str, ref:
         f"Step claims principal '{principal_id}' but ctx has '{ctx['principal'].principal_id}'"
     )
     env = ctx["env"]
+    real_id = _generate_unique_id(mb_id)
     mb = MediaBuyFactory(
         tenant=ctx["tenant"],
         principal=ctx["principal"],
-        media_buy_id=mb_id,
+        media_buy_id=real_id,
         buyer_ref=ref,
         status="active",
     )
     env._commit_factory_data()
-    ctx.setdefault("seeded_media_buys", {})[mb_id] = mb
+    _register_media_buy(ctx, mb_id, mb)
 
 
 @given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with an active package "{pkg_id}"'))
@@ -173,11 +210,12 @@ def given_principal_owns_with_package(ctx: dict, principal_id: str, mb_id: str, 
         f"Step claims principal '{principal_id}' but ctx has '{ctx['principal'].principal_id}'"
     )
     env = ctx["env"]
+    real_id = _generate_unique_id(mb_id)
     mb = MediaBuyFactory(
         tenant=ctx["tenant"],
         principal=ctx["principal"],
-        media_buy_id=mb_id,
-        buyer_ref=f"ref_{mb_id}",
+        media_buy_id=real_id,
+        buyer_ref=f"ref_{real_id}",
         status="active",
     )
     MediaPackageFactory(
@@ -191,7 +229,7 @@ def given_principal_owns_with_package(ctx: dict, principal_id: str, mb_id: str, 
         },
     )
     env._commit_factory_data()
-    ctx.setdefault("seeded_media_buys", {})[mb_id] = mb
+    _register_media_buy(ctx, mb_id, mb)
     ctx.setdefault("seeded_packages", {})[pkg_id] = mb
 
 
@@ -227,19 +265,20 @@ def given_principal_owns_mb_with_start_time(
 
     assert ctx["principal"].principal_id == principal_id
     env = ctx["env"]
+    real_id = _generate_unique_id(mb_id)
     start_dt = dt.fromisoformat(start_time)
     mb = MediaBuyFactory(
         tenant=ctx["tenant"],
         principal=ctx["principal"],
-        media_buy_id=mb_id,
-        buyer_ref=f"ref_{mb_id}",
+        media_buy_id=real_id,
+        buyer_ref=f"ref_{real_id}",
         status="active",
         start_date=date.fromisoformat(start),
         end_date=date.fromisoformat(end),
         start_time=start_dt,
     )
     env._commit_factory_data()
-    ctx.setdefault("seeded_media_buys", {})[mb_id] = mb
+    _register_media_buy(ctx, mb_id, mb)
 
 
 @given(
@@ -256,26 +295,25 @@ def given_principal_owns_mb_with_end_time(
 
     assert ctx["principal"].principal_id == principal_id
     env = ctx["env"]
+    real_id = _generate_unique_id(mb_id)
     end_dt = dt.fromisoformat(end_time)
     mb = MediaBuyFactory(
         tenant=ctx["tenant"],
         principal=ctx["principal"],
-        media_buy_id=mb_id,
-        buyer_ref=f"ref_{mb_id}",
+        media_buy_id=real_id,
+        buyer_ref=f"ref_{real_id}",
         status="active",
         start_date=date.fromisoformat(start),
         end_date=date.fromisoformat(end),
         end_time=end_dt,
     )
     env._commit_factory_data()
-    ctx.setdefault("seeded_media_buys", {})[mb_id] = mb
+    _register_media_buy(ctx, mb_id, mb)
 
 
 @given(parsers.parse('the principal "{principal_id}" owns media buys in various statuses'))
 def given_principal_owns_various_statuses(ctx: dict, principal_id: str) -> None:
     """Create media buys in multiple statuses for status filter testing."""
-    import uuid
-
     assert ctx["principal"].principal_id == principal_id
     env = ctx["env"]
     # Create one in each status by using dates relative to 'today'
@@ -283,25 +321,24 @@ def given_principal_owns_various_statuses(ctx: dict, principal_id: str) -> None:
     today = date.fromisoformat(ctx.get("mock_today", "2026-03-15"))
     from datetime import timedelta
 
-    suffix = uuid.uuid4().hex[:8]
-    statuses = {
-        f"mb-pending-{suffix}": (today + timedelta(days=10), today + timedelta(days=30)),
-        f"mb-active-{suffix}": (today - timedelta(days=10), today + timedelta(days=10)),
-        f"mb-completed-{suffix}": (today - timedelta(days=30), today - timedelta(days=10)),
+    status_dates = {
+        "mb-pending": (today + timedelta(days=10), today + timedelta(days=30)),
+        "mb-active": (today - timedelta(days=10), today + timedelta(days=10)),
+        "mb-completed": (today - timedelta(days=30), today - timedelta(days=10)),
     }
-    for mb_id, (start, end) in statuses.items():
+    for label, (start, end) in status_dates.items():
+        real_id = _generate_unique_id(label)
         mb = MediaBuyFactory(
             tenant=ctx["tenant"],
             principal=ctx["principal"],
-            media_buy_id=mb_id,
-            buyer_ref=f"ref_{mb_id}",
+            media_buy_id=real_id,
+            buyer_ref=f"ref_{real_id}",
             status="active",
             start_date=start,
             end_date=end,
         )
-        ctx.setdefault("seeded_media_buys", {})[mb_id] = mb
+        _register_media_buy(ctx, label, mb)
     env._commit_factory_data()
-    ctx["various_status_buys"] = statuses
 
 
 @given(parsers.parse('the principal "{principal_id}" owns active media buy "{mb1}" and completed media buy "{mb2}"'))
@@ -313,28 +350,30 @@ def given_principal_owns_active_and_completed(ctx: dict, principal_id: str, mb1:
     from datetime import timedelta
 
     # Active: today is within flight dates
+    real_id1 = _generate_unique_id(mb1)
     mb_active = MediaBuyFactory(
         tenant=ctx["tenant"],
         principal=ctx["principal"],
-        media_buy_id=mb1,
-        buyer_ref=f"ref_{mb1}",
+        media_buy_id=real_id1,
+        buyer_ref=f"ref_{real_id1}",
         status="active",
         start_date=today - timedelta(days=5),
         end_date=today + timedelta(days=5),
     )
     # Completed: today is after flight dates
+    real_id2 = _generate_unique_id(mb2)
     mb_completed = MediaBuyFactory(
         tenant=ctx["tenant"],
         principal=ctx["principal"],
-        media_buy_id=mb2,
-        buyer_ref=f"ref_{mb2}",
+        media_buy_id=real_id2,
+        buyer_ref=f"ref_{real_id2}",
         status="active",
         start_date=today - timedelta(days=30),
         end_date=today - timedelta(days=10),
     )
     env._commit_factory_data()
-    ctx.setdefault("seeded_media_buys", {})[mb1] = mb_active
-    ctx.setdefault("seeded_media_buys", {})[mb2] = mb_completed
+    _register_media_buy(ctx, mb1, mb_active)
+    _register_media_buy(ctx, mb2, mb_completed)
 
 
 @given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with package "{pkg_id}"'))
@@ -342,11 +381,12 @@ def given_principal_owns_mb_with_named_package(ctx: dict, principal_id: str, mb_
     """Create a media buy with a named package (for creative approval scenarios)."""
     assert ctx["principal"].principal_id == principal_id
     env = ctx["env"]
+    real_id = _generate_unique_id(mb_id)
     mb = MediaBuyFactory(
         tenant=ctx["tenant"],
         principal=ctx["principal"],
-        media_buy_id=mb_id,
-        buyer_ref=f"ref_{mb_id}",
+        media_buy_id=real_id,
+        buyer_ref=f"ref_{real_id}",
         status="active",
     )
     MediaPackageFactory(
@@ -360,7 +400,7 @@ def given_principal_owns_mb_with_named_package(ctx: dict, principal_id: str, mb_
         },
     )
     env._commit_factory_data()
-    ctx.setdefault("seeded_media_buys", {})[mb_id] = mb
+    _register_media_buy(ctx, mb_id, mb)
     ctx.setdefault("seeded_packages", {})[pkg_id] = mb
 
 
@@ -369,11 +409,12 @@ def given_principal_owns_mb_with_two_packages(ctx: dict, principal_id: str, mb_i
     """Create a media buy with two packages (INV-153-3)."""
     assert ctx["principal"].principal_id == principal_id
     env = ctx["env"]
+    real_id = _generate_unique_id(mb_id)
     mb = MediaBuyFactory(
         tenant=ctx["tenant"],
         principal=ctx["principal"],
-        media_buy_id=mb_id,
-        buyer_ref=f"ref_{mb_id}",
+        media_buy_id=real_id,
+        buyer_ref=f"ref_{real_id}",
         status="active",
     )
     for pkg_id in [pkg1, pkg2]:
@@ -389,7 +430,7 @@ def given_principal_owns_mb_with_two_packages(ctx: dict, principal_id: str, mb_i
         )
         ctx.setdefault("seeded_packages", {})[pkg_id] = mb
     env._commit_factory_data()
-    ctx.setdefault("seeded_media_buys", {})[mb_id] = mb
+    _register_media_buy(ctx, mb_id, mb)
 
 
 @given(parsers.parse('package "{pkg_id}" has a creative with internal status "{status}"'))
@@ -590,15 +631,16 @@ def given_adapter_reporting_with_data(ctx: dict) -> None:
     snapshot_data: dict[str, dict] = {}
     seeded = ctx.get("seeded_media_buys", {})
     env = ctx["env"]
-    for mb_id in seeded:
+    for _label, mb_obj in seeded.items():
+        real_id = mb_obj.media_buy_id
         if env._session is not None:
             from sqlalchemy import select
 
             from src.core.database.models import MediaPackage as DBMediaPackage
 
-            pkgs = env._session.scalars(select(DBMediaPackage).filter_by(media_buy_id=mb_id)).all()
+            pkgs = env._session.scalars(select(DBMediaPackage).filter_by(media_buy_id=real_id)).all()
             for pkg in pkgs:
-                snapshot_data.setdefault(mb_id, {})[pkg.package_id] = _make_test_snapshot()
+                snapshot_data.setdefault(real_id, {})[pkg.package_id] = _make_test_snapshot()
 
     _patch_adapter_with_snapshot(ctx, snapshot_data)
 
@@ -629,7 +671,8 @@ def given_adapter_reporting_no_data(ctx: dict, pkg_id: str) -> None:
             snapshot_data[pkg_row.media_buy_id] = {}
     elif seeded:
         # Fallback: use first seeded media buy with empty snapshot
-        snapshot_data[next(iter(seeded))] = {}
+        first_mb = next(iter(seeded.values()))
+        snapshot_data[first_mb.media_buy_id] = {}
 
     _patch_adapter_with_snapshot(ctx, snapshot_data)
 
@@ -647,15 +690,16 @@ def given_adapter_reporting_all_data(ctx: dict) -> None:
     seeded = ctx.get("seeded_media_buys", {})
     env = ctx["env"]
 
-    for mb_id in seeded:
+    for _label, mb_obj in seeded.items():
+        real_id = mb_obj.media_buy_id
         if env._session is not None:
             from sqlalchemy import select
 
             from src.core.database.models import MediaPackage as DBMediaPackage
 
-            pkgs = env._session.scalars(select(DBMediaPackage).filter_by(media_buy_id=mb_id)).all()
+            pkgs = env._session.scalars(select(DBMediaPackage).filter_by(media_buy_id=real_id)).all()
             for pkg in pkgs:
-                snapshot_data.setdefault(mb_id, {})[pkg.package_id] = _make_test_snapshot()
+                snapshot_data.setdefault(real_id, {})[pkg.package_id] = _make_test_snapshot()
 
     _patch_adapter_with_snapshot(ctx, snapshot_data)
 
@@ -689,8 +733,8 @@ def given_adapter_reporting_mixed(ctx: dict, pkg1: str, pkg2: str) -> None:
                     # pkg2's media buy key exists but no entry for pkg2
                     snapshot_data.setdefault(mb_id, {})
     elif seeded:
-        mb_id = next(iter(seeded))
-        snapshot_data[mb_id] = {pkg1: _make_test_snapshot()}
+        first_mb = next(iter(seeded.values()))
+        snapshot_data[first_mb.media_buy_id] = {pkg1: _make_test_snapshot()}
 
     _patch_adapter_with_snapshot(ctx, snapshot_data)
 
@@ -702,21 +746,19 @@ def given_principal_with_n_buys(ctx: dict, principal_id: str, count: int) -> Non
     Uses MediaBuyFactory(...) which invokes factory_boy's create() strategy.
     env._commit_factory_data() flushes all pending factory objects to the DB session.
     """
-    import uuid
-
     assert ctx["principal"].principal_id == principal_id
     env = ctx["env"]
-    suffix = uuid.uuid4().hex[:8]
     for i in range(count):
-        mb_id = f"mb-{principal_id}-{i + 1}-{suffix}"
+        label = f"mb-{principal_id}-{i + 1}"
+        real_id = _generate_unique_id(label)
         mb = MediaBuyFactory(
             tenant=ctx["tenant"],
             principal=ctx["principal"],
-            media_buy_id=mb_id,
-            buyer_ref=f"ref_{mb_id}",
+            media_buy_id=real_id,
+            buyer_ref=f"ref_{real_id}",
             status="active",
         )
-        ctx.setdefault("seeded_media_buys", {})[mb_id] = mb
+        _register_media_buy(ctx, label, mb)
     env._commit_factory_data()
     assert len(ctx["seeded_media_buys"]) >= count, (
         f"Expected at least {count} seeded media buys, got {len(ctx['seeded_media_buys'])}"
@@ -757,15 +799,16 @@ def given_principal_owns_single_mb(ctx: dict, principal_id: str, mb_id: str) -> 
             tenant=ctx["tenant"],
             principal_id=principal_id,
         )
+    real_id = _generate_unique_id(mb_id)
     mb = MediaBuyFactory(
         tenant=ctx["tenant"],
         principal=principal,
-        media_buy_id=mb_id,
-        buyer_ref=f"ref_{mb_id}",
+        media_buy_id=real_id,
+        buyer_ref=f"ref_{real_id}",
         status="active",
     )
     env._commit_factory_data()
-    ctx.setdefault("seeded_media_buys", {})[mb_id] = mb
+    _register_media_buy(ctx, mb_id, mb)
     ctx.setdefault("principals", {})[principal_id] = principal
 
 
@@ -774,15 +817,16 @@ def given_principal_owns_mb_simple(ctx: dict, principal_id: str, mb_id: str) -> 
     """Create a media buy (simple, no date attributes)."""
     assert ctx["principal"].principal_id == principal_id
     env = ctx["env"]
+    real_id = _generate_unique_id(mb_id)
     mb = MediaBuyFactory(
         tenant=ctx["tenant"],
         principal=ctx["principal"],
-        media_buy_id=mb_id,
-        buyer_ref=f"ref_{mb_id}",
+        media_buy_id=real_id,
+        buyer_ref=f"ref_{real_id}",
         status="active",
     )
     env._commit_factory_data()
-    ctx.setdefault("seeded_media_buys", {})[mb_id] = mb
+    _register_media_buy(ctx, mb_id, mb)
 
 
 @given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with no start_time and no start_date'))
@@ -795,17 +839,18 @@ def given_principal_owns_mb_no_start(ctx: dict, principal_id: str, mb_id: str) -
     """
     assert ctx["principal"].principal_id == principal_id
     env = ctx["env"]
+    real_id = _generate_unique_id(mb_id)
     mb = MediaBuyFactory(
         tenant=ctx["tenant"],
         principal=ctx["principal"],
-        media_buy_id=mb_id,
-        buyer_ref=f"ref_{mb_id}",
+        media_buy_id=real_id,
+        buyer_ref=f"ref_{real_id}",
         status="active",
         start_date=None,
         start_time=None,
     )
     env._commit_factory_data()
-    ctx.setdefault("seeded_media_buys", {})[mb_id] = mb
+    _register_media_buy(ctx, mb_id, mb)
 
 
 @given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with no end_time and no end_date'))
@@ -818,17 +863,18 @@ def given_principal_owns_mb_no_end(ctx: dict, principal_id: str, mb_id: str) -> 
     """
     assert ctx["principal"].principal_id == principal_id
     env = ctx["env"]
+    real_id = _generate_unique_id(mb_id)
     mb = MediaBuyFactory(
         tenant=ctx["tenant"],
         principal=ctx["principal"],
-        media_buy_id=mb_id,
-        buyer_ref=f"ref_{mb_id}",
+        media_buy_id=real_id,
+        buyer_ref=f"ref_{real_id}",
         status="active",
         end_date=None,
         end_time=None,
     )
     env._commit_factory_data()
-    ctx.setdefault("seeded_media_buys", {})[mb_id] = mb
+    _register_media_buy(ctx, mb_id, mb)
 
 
 @given(parsers.parse("the request targets a sandbox account"))
@@ -867,7 +913,8 @@ def given_snapshot_available(ctx: dict, pkg_id: str) -> None:
         if pkg_row:
             target_mb_id = pkg_row.media_buy_id
     if target_mb_id is None and seeded:
-        target_mb_id = next(iter(seeded))
+        first_mb = next(iter(seeded.values()))
+        target_mb_id = first_mb.media_buy_id
 
     # Build or update snapshot_data mapping
     snapshot_data = ctx.get("adapter_snapshot_data", {})
@@ -962,8 +1009,9 @@ def when_query_for_ids(ctx: dict, ids: str) -> None:
     """Send get_media_buys filtered by media_buy_ids."""
     import json
 
-    parsed_ids = json.loads(ids)
-    _dispatch_query(ctx, media_buy_ids=parsed_ids)
+    parsed_labels = json.loads(ids)
+    real_ids = _resolve_media_buy_ids(ctx, parsed_labels)
+    _dispatch_query(ctx, media_buy_ids=real_ids)
 
 
 @when(parsers.parse("the Buyer Agent sends a get_media_buys request with include_snapshot false"))
@@ -1078,10 +1126,12 @@ def _get_media_buys(ctx: dict) -> list:
 @then(parsers.parse('the response should include media buy "{mb_id}" with status "{status}"'))
 def then_response_includes_mb_with_status(ctx: dict, mb_id: str, status: str) -> None:
     """Assert response includes the media buy with expected status."""
+    real_id = _resolve_media_buy_id(ctx, mb_id)
     buys = _get_media_buys(ctx)
-    matching = [b for b in buys if getattr(b, "media_buy_id", None) == mb_id]
+    matching = [b for b in buys if getattr(b, "media_buy_id", None) == real_id]
     assert len(matching) == 1, (
-        f"Expected media buy '{mb_id}' in response, got IDs: {[getattr(b, 'media_buy_id', None) for b in buys]}"
+        f"Expected media buy '{mb_id}' (real_id={real_id}) in response, "
+        f"got IDs: {[getattr(b, 'media_buy_id', None) for b in buys]}"
     )
     actual_status = getattr(matching[0], "status", None)
     # Status may be an enum — convert to string
@@ -1212,26 +1262,30 @@ def then_buyer_refs_for_correlation(ctx: dict) -> None:
 @then(parsers.parse('the response should include media buys "{mb1}" and "{mb2}"'))
 def then_response_includes_two(ctx: dict, mb1: str, mb2: str) -> None:
     """Assert response includes both specified media buys."""
+    real_id1 = _resolve_media_buy_id(ctx, mb1)
+    real_id2 = _resolve_media_buy_id(ctx, mb2)
     buys = _get_media_buys(ctx)
     ids = {getattr(b, "media_buy_id", None) for b in buys}
-    assert mb1 in ids, f"Expected '{mb1}' in response, got {ids}"
-    assert mb2 in ids, f"Expected '{mb2}' in response, got {ids}"
+    assert real_id1 in ids, f"Expected '{mb1}' (real_id={real_id1}) in response, got {ids}"
+    assert real_id2 in ids, f"Expected '{mb2}' (real_id={real_id2}) in response, got {ids}"
 
 
 @then(parsers.parse('the response should not include media buy "{mb_id}"'))
 def then_response_excludes(ctx: dict, mb_id: str) -> None:
     """Assert response does not include the specified media buy."""
+    real_id = _resolve_media_buy_id(ctx, mb_id)
     buys = _get_media_buys(ctx)
     ids = {getattr(b, "media_buy_id", None) for b in buys}
-    assert mb_id not in ids, f"Expected '{mb_id}' NOT in response, but it was present"
+    assert real_id not in ids, f"Expected '{mb_id}' (real_id={real_id}) NOT in response, but it was present"
 
 
 @then(parsers.parse('the response should include media buy "{mb_id}"'))
 def then_response_includes_one(ctx: dict, mb_id: str) -> None:
     """Assert response includes the specified media buy."""
+    real_id = _resolve_media_buy_id(ctx, mb_id)
     buys = _get_media_buys(ctx)
     ids = {getattr(b, "media_buy_id", None) for b in buys}
-    assert mb_id in ids, f"Expected '{mb_id}' in response, got {ids}"
+    assert real_id in ids, f"Expected '{mb_id}' (real_id={real_id}) in response, got {ids}"
 
 
 @then(parsers.parse('the response package "{pkg_id}" should include a snapshot'))
@@ -1356,10 +1410,12 @@ def then_suggestion_contains_any_of_three(ctx: dict, text1: str, text2: str, tex
 @then(parsers.parse('the media buy "{mb_id}" should have status "{expected_status}"'))
 def then_media_buy_has_status(ctx: dict, mb_id: str, expected_status: str) -> None:
     """Assert a specific media buy has the expected status in the response."""
+    real_id = _resolve_media_buy_id(ctx, mb_id)
     buys = _get_media_buys(ctx)
-    matching = [b for b in buys if getattr(b, "media_buy_id", None) == mb_id]
+    matching = [b for b in buys if getattr(b, "media_buy_id", None) == real_id]
     assert len(matching) == 1, (
-        f"Expected media buy '{mb_id}' in response, got IDs: {[getattr(b, 'media_buy_id', None) for b in buys]}"
+        f"Expected media buy '{mb_id}' (real_id={real_id}) in response, "
+        f"got IDs: {[getattr(b, 'media_buy_id', None) for b in buys]}"
     )
     actual = getattr(matching[0], "status", None)
     actual_str = actual.value if hasattr(actual, "value") else str(actual)
@@ -1800,23 +1856,25 @@ def then_response_count_scoped(ctx: dict, count: int, principal_id: str) -> None
     assert len(buys) == count, f"Expected {count} media buys for '{principal_id}', got {len(buys)}"
     # Verify scoping: all returned buys should belong to the claimed principal
     seeded = ctx.get("seeded_media_buys", {})
+    # Build reverse map: real_id → ORM object
+    real_id_to_mb = {mb_obj.media_buy_id: mb_obj for mb_obj in seeded.values()}
     returned_ids = {getattr(b, "media_buy_id", None) for b in buys}
     scoping_checked = 0
-    for mb_id in returned_ids:
-        if mb_id in seeded:
-            mb = seeded[mb_id]
+    for real_id in returned_ids:
+        if real_id in real_id_to_mb:
+            mb = real_id_to_mb[real_id]
             actual_principal = getattr(mb, "principal_id", None)
             if actual_principal is not None:
                 scoping_checked += 1
                 assert actual_principal == principal_id, (
-                    f"Media buy '{mb_id}' belongs to principal '{actual_principal}', "
+                    f"Media buy '{real_id}' belongs to principal '{actual_principal}', "
                     f"not '{principal_id}' — scoping violation"
                 )
     # Step claims scoping — we must have verified at least one buy's ownership
     if count > 0:
         assert scoping_checked > 0, (
             f"Step claims scoping to '{principal_id}' but verified 0 of {count} returned buys. "
-            f"Returned IDs: {returned_ids}, seeded IDs: {set(seeded.keys())}"
+            f"Returned IDs: {returned_ids}, seeded real IDs: {set(real_id_to_mb.keys())}"
         )
 
 
@@ -2010,9 +2068,11 @@ def then_any_status_returned(ctx: dict) -> None:
         "were seeded — cannot verify completeness without seeded data"
     )
     returned_ids = {getattr(b, "media_buy_id", None) for b in buys}
-    for mb_id in seeded:
-        assert mb_id in returned_ids, (
-            f"All-status filter should return all media buys, but '{mb_id}' is missing. Returned: {returned_ids}"
+    for label, mb_obj in seeded.items():
+        real_id = mb_obj.media_buy_id
+        assert real_id in returned_ids, (
+            f"All-status filter should return all media buys, but '{label}' (real_id={real_id}) is missing. "
+            f"Returned: {returned_ids}"
         )
 
 
