@@ -274,6 +274,8 @@ def given_principal_owns_mb_with_end_time(
 @given(parsers.parse('the principal "{principal_id}" owns media buys in various statuses'))
 def given_principal_owns_various_statuses(ctx: dict, principal_id: str) -> None:
     """Create media buys in multiple statuses for status filter testing."""
+    import uuid
+
     assert ctx["principal"].principal_id == principal_id
     env = ctx["env"]
     # Create one in each status by using dates relative to 'today'
@@ -281,10 +283,11 @@ def given_principal_owns_various_statuses(ctx: dict, principal_id: str) -> None:
     today = date.fromisoformat(ctx.get("mock_today", "2026-03-15"))
     from datetime import timedelta
 
+    suffix = uuid.uuid4().hex[:8]
     statuses = {
-        "mb-pending": (today + timedelta(days=10), today + timedelta(days=30)),
-        "mb-active": (today - timedelta(days=10), today + timedelta(days=10)),
-        "mb-completed": (today - timedelta(days=30), today - timedelta(days=10)),
+        f"mb-pending-{suffix}": (today + timedelta(days=10), today + timedelta(days=30)),
+        f"mb-active-{suffix}": (today - timedelta(days=10), today + timedelta(days=10)),
+        f"mb-completed-{suffix}": (today - timedelta(days=30), today - timedelta(days=10)),
     }
     for mb_id, (start, end) in statuses.items():
         mb = MediaBuyFactory(
@@ -699,10 +702,13 @@ def given_principal_with_n_buys(ctx: dict, principal_id: str, count: int) -> Non
     Uses MediaBuyFactory(...) which invokes factory_boy's create() strategy.
     env._commit_factory_data() flushes all pending factory objects to the DB session.
     """
+    import uuid
+
     assert ctx["principal"].principal_id == principal_id
     env = ctx["env"]
+    suffix = uuid.uuid4().hex[:8]
     for i in range(count):
-        mb_id = f"mb-{principal_id}-{i + 1}"
+        mb_id = f"mb-{principal_id}-{i + 1}-{suffix}"
         mb = MediaBuyFactory(
             tenant=ctx["tenant"],
             principal=ctx["principal"],
