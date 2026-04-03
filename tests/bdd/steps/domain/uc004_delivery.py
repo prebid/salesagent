@@ -20,6 +20,37 @@ from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps.generic._dispatch import dispatch_request
 
+# ── Label-mapping helpers ────────────────────────────────────────────
+# Gherkin uses human-readable labels ("mb-001", "mb-002"). Step definitions
+# create real unique IDs via factories and store a label→ID mapping so tests
+# never collide in a shared E2E database.
+
+
+def _generate_unique_id(label: str) -> str:
+    """Generate a unique media_buy_id from a Gherkin label."""
+    import uuid
+
+    return f"{label}-{uuid.uuid4().hex[:8]}"
+
+
+def _register_media_buy_label(ctx: dict, label: str, real_id: str) -> None:
+    """Register a Gherkin label → real database ID mapping."""
+    ctx.setdefault("media_buy_labels", {})[label] = real_id
+
+
+def _resolve_media_buy_id(ctx: dict, label: str) -> str:
+    """Resolve a Gherkin label to the real database media_buy_id."""
+    labels = ctx.get("media_buy_labels", {})
+    if label in labels:
+        return labels[label]
+    return label  # fallback: label IS the real ID (legacy/nonexistent-ID scenarios)
+
+
+def _resolve_media_buy_ids(ctx: dict, labels: list[str]) -> list[str]:
+    """Resolve a list of Gherkin labels to real database media_buy_ids."""
+    return [_resolve_media_buy_id(ctx, label) for label in labels]
+
+
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
@@ -70,8 +101,12 @@ def _call_webhook_service(
 ) -> bool:
     """Dispatch webhook delivery through the CircuitBreakerEnv.call_send."""
     if mb_id is None:
-        mb_id = next(iter(ctx.get("media_buys", {})), None) or next(iter(ctx.get("webhook_config", {})), None)
-        assert mb_id, "No media buy in ctx or webhook_config — a Given step must create one first"
+        # Pick the first label from ctx, then resolve to real ID
+        label = next(iter(ctx.get("media_buys", {})), None) or next(iter(ctx.get("webhook_config", {})), None)
+        assert label, "No media buy in ctx or webhook_config — a Given step must create one first"
+        mb_id = _resolve_media_buy_id(ctx, label)
+    else:
+        mb_id = _resolve_media_buy_id(ctx, mb_id)
     _wire_webhook_db(ctx)
     env = ctx["env"]
     kwargs: dict[str, Any] = {
