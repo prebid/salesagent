@@ -76,6 +76,12 @@ class AccountListEnv(IntegrationEnv):
         """Call list_accounts MCP wrapper with mock Context."""
         from src.core.tools.accounts import list_accounts
 
+        # MCP wrapper takes flat kwargs, not req=. Unpack request if provided.
+        req = kwargs.pop("req", None)
+        if req is not None:
+            flat = req.model_dump(mode="json", exclude_none=True)
+            flat.update(kwargs)
+            kwargs = flat
         return self._run_mcp_wrapper(list_accounts, ListAccountsResponse, **kwargs)
 
     REST_ENDPOINT = "/api/v1/accounts"
