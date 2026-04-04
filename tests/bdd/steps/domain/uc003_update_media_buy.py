@@ -14,7 +14,38 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
+from tests.bdd.steps._harness_db import db_session
 from tests.bdd.steps.generic._dispatch import dispatch_request
+
+# ═══════════════════════════════════════════════════════════════════════
+# Label mapping — Gherkin package labels → real package_ids
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Gherkin scenarios refer to packages with stable labels like "pkg_001",
+# but MediaPackageFactory uses a Sequence (pkg_0000, pkg_0001, ...). Step
+# definitions must resolve the label to the real database package_id
+# before comparing or operating on packages. See UC-019 principal_id
+# pattern (salesagent-vmqv) for the same approach.
+
+
+def _register_package(ctx: dict, label: str, package: Any) -> None:
+    """Register a package under a Gherkin label.
+
+    Called by conftest after setup_update_data() and by given_package_exists()
+    when a new package is created. Subsequent step resolvers translate the
+    label to the real factory-generated package_id.
+    """
+    ctx.setdefault("package_labels", {})[label] = package.package_id
+
+
+def _resolve_package_id(ctx: dict, label: str) -> str:
+    """Resolve a Gherkin package label to the real package_id.
+
+    Falls back to returning the label itself so legacy scenarios (where the
+    label and the real ID happen to coincide) continue to work.
+    """
+    return ctx.get("package_labels", {}).get(label, label)
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — Background + request construction
@@ -232,10 +263,16 @@ def given_package_update_with_table(ctx: dict, datatable: list[list[str]]) -> No
 
 @given(parsers.parse('the package "{package_id}" exists in the media buy'))
 def given_package_exists(ctx: dict, package_id: str) -> None:
-    """Verify or create the package in the existing media buy."""
+    """Verify or create the package in the existing media buy.
+
+    `package_id` is a Gherkin label — resolve it against ctx['package_labels']
+    (populated by conftest from the factory-seeded existing_package) before
+    deciding whether a new package needs to be created.
+    """
     pkg = ctx.get("existing_package")
-    if pkg is not None and pkg.package_id == package_id:
-        return  # Package already matches
+    resolved = _resolve_package_id(ctx, package_id)
+    if pkg is not None and pkg.package_id == resolved:
+        return  # Label already maps to the existing package
     # Create the package if it doesn't exist or doesn't match
     from tests.factories import MediaPackageFactory
 
@@ -243,15 +280,14 @@ def given_package_exists(ctx: dict, package_id: str) -> None:
     env = ctx["env"]
     new_pkg = MediaPackageFactory(
         media_buy=ctx["existing_media_buy"],
-        package_id=package_id,
         package_config={
-            "package_id": package_id,
             "product_id": "guaranteed_display",
             "budget": 5000.0,
         },
     )
     env._commit_factory_data()
     ctx["existing_package"] = new_pkg
+    _register_package(ctx, package_id, new_pkg)
 
 
 @given("the updated daily spend does not exceed max_daily_package_spend")
@@ -400,7 +436,6 @@ def given_creatives_in_valid_state(ctx: dict) -> None:
     # Verify the status is not error/rejected via DB query.
     from sqlalchemy import select
 
-    from src.core.database.database_session import get_db_session
     from src.core.database.models import Creative as CreativeModel
 
     tenant = ctx.get("tenant")
@@ -409,7 +444,7 @@ def given_creatives_in_valid_state(ctx: dict) -> None:
         "but cannot verify without tenant context"
     )
     invalid_statuses = ("error", "rejected")
-    with get_db_session() as session:
+    with db_session(ctx) as session:
         for cid in ids:
             cr = session.scalars(select(CreativeModel).filter_by(creative_id=cid, tenant_id=tenant.tenant_id)).first()
             assert cr is not None, (
@@ -654,6 +689,14 @@ def when_send_update_request(ctx: dict) -> None:
     from src.core.schemas import UpdateMediaBuyRequest
 
     update_kwargs = ctx.get("update_kwargs", {})
+    # Resolve Gherkin package_id labels ("pkg_001") to real factory-generated
+    # package_ids before sending the request to production code. See
+    # _resolve_package_id / _register_package above.
+    packages = update_kwargs.get("packages")
+    if packages:
+        for pkg in packages:
+            if isinstance(pkg, dict) and "package_id" in pkg:
+                pkg["package_id"] = _resolve_package_id(ctx, pkg["package_id"])
     try:
         req = UpdateMediaBuyRequest(**update_kwargs)
     except ValidationError as e:
@@ -699,7 +742,6 @@ def then_start_end_time_unchanged(ctx: dict) -> None:
 
     from sqlalchemy import select
 
-    from src.core.database.database_session import get_db_session
     from src.core.database.models import MediaBuy
 
     original_start = ctx.get("original_start_time")
@@ -709,7 +751,7 @@ def then_start_end_time_unchanged(ctx: dict) -> None:
         "missing prior Given step 'the existing media buy has start_time ... and end_time ...'"
     )
     mb = ctx["existing_media_buy"]
-    with get_db_session() as session:
+    with db_session(ctx) as session:
         refreshed = session.scalars(select(MediaBuy).filter_by(media_buy_id=mb.media_buy_id)).first()
         assert refreshed is not None, f"Media buy {mb.media_buy_id} not found in DB after update"
         actual_start = refreshed.start_time
@@ -805,14 +847,19 @@ def then_implementation_date_not_null(ctx: dict) -> None:
 
 @then(parsers.parse('the response should contain affected_packages including "{package_id}"'))
 def then_affected_packages_include(ctx: dict, package_id: str) -> None:
-    """Assert affected_packages contains the specified package."""
+    """Assert affected_packages contains the specified package.
+
+    `package_id` is a Gherkin label — resolve it to the real package_id
+    produced by the factory before comparing against the production response.
+    """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     affected = getattr(resp, "affected_packages", None) or []
     pkg_ids = [
         getattr(p, "package_id", None) or (p.get("package_id") if isinstance(p, dict) else None) for p in affected
     ]
-    assert package_id in pkg_ids, f"Expected '{package_id}' in affected_packages, got {pkg_ids}"
+    resolved = _resolve_package_id(ctx, package_id)
+    assert resolved in pkg_ids, f"Expected '{resolved}' (label '{package_id}') in affected_packages, got {pkg_ids}"
 
 
 @then("the response should contain affected_packages")
@@ -982,14 +1029,13 @@ def given_tenant_max_daily_spend(ctx: dict, cap_config: str) -> None:
     """
     from sqlalchemy import select
 
-    from src.core.database.database_session import get_db_session
     from src.core.database.models import CurrencyLimit
 
     tenant = ctx.get("tenant")
     assert tenant is not None, "No tenant in ctx — cannot configure max_daily_package_spend"
 
     stripped = cap_config.strip()
-    with get_db_session() as session:
+    with db_session(ctx) as session:
         cl = session.scalars(select(CurrencyLimit).filter_by(tenant_id=tenant.tenant_id)).first()
         if stripped.lower() == "not set":
             if cl is not None:
@@ -1025,10 +1071,9 @@ def given_media_buy_flight_duration(ctx: dict, flight_days: str) -> None:
     # Verify persistence: re-read from DB to confirm flight duration was committed
     from sqlalchemy import select
 
-    from src.core.database.database_session import get_db_session
     from src.core.database.models import MediaBuy as MediaBuyModel
 
-    with get_db_session() as session:
+    with db_session(ctx) as session:
         persisted = session.scalars(
             select(MediaBuyModel).filter_by(media_buy_id=mb.media_buy_id, tenant_id=mb.tenant_id)
         ).first()
@@ -1305,10 +1350,9 @@ def given_package_existing_creatives(ctx: dict, package_id: str, assignments: st
         f"No 'existing_package' in ctx — step claims package '{package_id}' has creative assignments "
         "but no package was set up by a prior Given step"
     )
-    assert pkg.package_id == package_id, (
-        f"existing_package has package_id '{pkg.package_id}', but step text references '{package_id}'. "
-        "Package ID mismatch — check scenario setup."
-    )
+    # package_id is a Gherkin label; register it against the existing package
+    # so later resolver calls can translate label → real package_id.
+    _register_package(ctx, package_id, pkg)
     config = pkg.package_config or {}
     config["creative_assignments"] = [{"creative_id": cid, "weight": 1.0} for cid in creative_ids]
     pkg.package_config = config
@@ -1401,7 +1445,6 @@ def given_all_creatives_valid(ctx: dict) -> None:
     """
     from sqlalchemy import select
 
-    from src.core.database.database_session import get_db_session
     from src.core.database.models import Creative as CreativeModel
     from tests.factories.creative import CreativeFactory
 
@@ -1412,7 +1455,7 @@ def given_all_creatives_valid(ctx: dict) -> None:
     env._commit_factory_data()
 
     tenant = ctx["tenant"]
-    with get_db_session() as session:
+    with db_session(ctx) as session:
         # Find which creatives already exist
         db_creatives = session.scalars(
             select(CreativeModel).filter(
@@ -1435,7 +1478,7 @@ def given_all_creatives_valid(ctx: dict) -> None:
             )
 
     # Re-query to verify all exist and none are in invalid state
-    with get_db_session() as session:
+    with db_session(ctx) as session:
         db_creatives = session.scalars(
             select(CreativeModel).filter(
                 CreativeModel.tenant_id == tenant.tenant_id,
@@ -1501,11 +1544,10 @@ def given_creative_assignments_with_state(ctx: dict, creative_state: str) -> Non
         # Set status to error after creation
         from sqlalchemy import select
 
-        from src.core.database.database_session import get_db_session
         from src.core.database.models import Creative as CreativeModel
 
         env._commit_factory_data()
-        with get_db_session() as session:
+        with db_session(ctx) as session:
             cr = session.scalars(
                 select(CreativeModel).filter_by(creative_id=cid, tenant_id=ctx["tenant"].tenant_id)
             ).first()
@@ -1599,10 +1641,9 @@ def given_creative_assignments_with_placements(ctx: dict, placement_config: str)
                 if product_id:
                     from sqlalchemy import select
 
-                    from src.core.database.database_session import get_db_session
                     from src.core.database.models import Product as ProductModel
 
-                    with get_db_session() as session:
+                    with db_session(ctx) as session:
                         product = session.scalars(
                             select(ProductModel).filter_by(product_id=product_id, tenant_id=ctx["tenant"].tenant_id)
                         ).first()

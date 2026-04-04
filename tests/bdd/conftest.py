@@ -1501,6 +1501,13 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             ctx["tenant"] = tenant
             ctx["principal"] = principal
             ctx["existing_media_buy"] = media_buy
+            existing_package = media_buy.packages[0] if media_buy.packages else None
+            ctx["existing_package"] = existing_package
+            # Register the Gherkin label "pkg_001" → real factory-generated package_id
+            # so step definitions can resolve label references. See
+            # tests/bdd/steps/domain/uc003_update_media_buy.py::_resolve_package_id.
+            if existing_package is not None:
+                ctx.setdefault("package_labels", {})["pkg_001"] = existing_package.package_id
             ctx["default_product"] = product
             yield
 
@@ -1521,18 +1528,10 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         from tests.harness.media_buy_create import MediaBuyCreateEnv
 
         with MediaBuyCreateEnv(**extra) as env:
-            from tests.factories import (
-                PricingOptionFactory,
-                ProductFactory,
-                PropertyTagFactory,
-                PublisherPartnerFactory,
-            )
+            from tests.factories import PricingOptionFactory, ProductFactory
 
             tenant, principal = env.setup_default_data()
-            if "_" in (tenant.subdomain or ""):
-                tenant.subdomain = tenant.subdomain.replace("_", "-")
-            PropertyTagFactory(tenant=tenant, tag_id="all_inventory", name="All Inventory")
-            PublisherPartnerFactory(tenant=tenant, publisher_domain="testpublisher.example.com")
+            env.setup_tenant_inventory(tenant)
             product = ProductFactory(
                 tenant=tenant,
                 product_id="prod-1",
