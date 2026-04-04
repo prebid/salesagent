@@ -112,6 +112,12 @@ class AccountSyncEnv(IntegrationEnv):
         """Call sync_accounts MCP wrapper with mock Context."""
         from src.core.tools.accounts import sync_accounts
 
+        # MCP wrapper takes flat kwargs, not req=. Unpack request if provided.
+        req = kwargs.pop("req", None)
+        if req is not None:
+            flat = req.model_dump(mode="json", exclude_none=True)
+            flat.update(kwargs)
+            kwargs = flat
         return self._run_mcp_wrapper(sync_accounts, SyncAccountsResponse, **kwargs)
 
     REST_ENDPOINT = "/api/v1/accounts/sync"
