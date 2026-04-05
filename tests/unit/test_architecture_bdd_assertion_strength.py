@@ -60,7 +60,7 @@ _GETATTR_EXISTENCE_ALLOWLIST: set[str] = {
 
 _COUNT_ONLY_ALLOWLIST: set[str] = {
     # FIXME(salesagent-beq4): replace count-only check with element-level assertion
-    "bdd/steps/domain/uc002_create_media_buy.py:2134 then_creatives_assigned_to_packages",
+    "bdd/steps/domain/uc002_create_media_buy.py:2137 then_creatives_assigned_to_packages",
     "bdd/steps/domain/uc002_nfr.py:210 then_protocol_audit_logged",
     "bdd/steps/domain/uc003_update_media_buy.py:866 then_affected_packages_present",
     "bdd/steps/domain/uc003_update_media_buy.py:900 then_affected_package_budget",

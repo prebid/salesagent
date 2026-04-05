@@ -609,15 +609,18 @@ def _dispatch_create_media_buy(ctx: dict) -> None:
 
     # Account resolution — mirrors transport boundary behavior.
     # Production wrappers call enrich_identity_with_account(identity, req.account)
-    # before _impl. The harness's call_a2a/call_mcp don't propagate account through
-    # flat kwargs, so we resolve here (pre-dispatch) for all transports.
+    # before _impl. We resolve here using the harness session (env._session) so
+    # E2E and in-process transports both query the correct database.
     if req.account is not None:
-        from src.core.transport_helpers import enrich_identity_with_account
+        from src.core.database.repositories.account import AccountRepository
+        from src.core.helpers.account_helpers import resolve_account
 
         env = ctx["env"]
         env._commit_factory_data()
         try:
-            enriched = enrich_identity_with_account(env.identity, req.account)
+            repo = AccountRepository(env._session, env.identity.tenant_id)
+            account_id = resolve_account(req.account, env.identity, repo)
+            enriched = env.identity.model_copy(update={"account_id": account_id})
         except Exception as exc:
             ctx["error"] = exc
             return
