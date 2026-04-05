@@ -84,6 +84,7 @@ class CreateMediaBuyBody(BaseModel):
 
 
 class UpdateMediaBuyBody(BaseModel):
+    buyer_ref: str | None = None  # oneOf identifier with media_buy_id (URL)
     paused: bool | None = None
     flight_start_date: str | None = None
     flight_end_date: str | None = None
@@ -91,6 +92,11 @@ class UpdateMediaBuyBody(BaseModel):
     currency: str | None = None
     start_time: str | None = None
     end_time: str | None = None
+    packages: list[dict[str, Any]] | None = None
+    push_notification_config: dict[str, Any] | None = None
+    reporting_webhook: dict[str, Any] | None = None
+    context: dict[str, Any] | None = None
+    ext: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
 
 
@@ -247,10 +253,19 @@ async def create_media_buy(body: CreateMediaBuyBody, identity: ResolvedIdentity 
 
 @router.put("/media-buys/{media_buy_id}")
 async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity: ResolvedIdentity = require_auth):
-    """Update an existing media buy (auth required)."""
+    """Update an existing media buy (auth required).
+
+    AdCP oneOf: exactly one of media_buy_id or buyer_ref must identify the buy.
+    When the body supplies buyer_ref, it wins and the URL's media_buy_id is
+    treated as a routing hint only (not forwarded to _impl).
+    """
     try:
+        # Resolve identifier per AdCP oneOf constraint: buyer_ref in body wins,
+        # otherwise fall back to media_buy_id from the URL.
+        resolved_media_buy_id = None if body.buyer_ref is not None else media_buy_id
         response = media_buy_update_module.update_media_buy_raw(
-            media_buy_id=media_buy_id,
+            media_buy_id=resolved_media_buy_id,
+            buyer_ref=body.buyer_ref,
             paused=body.paused,
             flight_start_date=body.flight_start_date,
             flight_end_date=body.flight_end_date,
@@ -258,6 +273,11 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
             currency=body.currency,
             start_time=body.start_time,
             end_time=body.end_time,
+            packages=body.packages,
+            push_notification_config=body.push_notification_config,
+            reporting_webhook=body.reporting_webhook,
+            context=body.context,
+            ext=body.ext,
             identity=identity,
         )
     except ToolError as e:

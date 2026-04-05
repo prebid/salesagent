@@ -454,36 +454,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
-        # FIXME(salesagent-9vgz.11): UC-003 package-level update scenarios — REST endpoint
-        # doesn't forward packages/creative_assignments/creatives/targeting_overlay to
-        # update_media_buy_raw
-        if is_rest and (
-            "T-UC-003-alt-creative-assignments" in marker_names
-            or "T-UC-003-alt-creatives-inline" in marker_names
-            or "T-UC-003-alt-targeting" in marker_names
-            or "T-UC-003-alt-keyword-ops" in marker_names
-            or "T-UC-003-alt-keyword-remove" in marker_names
-            or "T-UC-003-alt-negative-keywords" in marker_names
-            or "T-UC-003-partial-update" in marker_names
-            or "T-UC-003-idempotency-valid" in marker_names
-            or "T-UC-003-idempotency-absent" in marker_names
-            or "T-UC-003-adapter-success" in marker_names
-            or "T-UC-003-adapter-failure" in marker_names
-            or "T-UC-003-main-buyer-ref" in marker_names
-            or "T-UC-003-atomic-success" in marker_names
-            or "T-UC-003-approval-auto" in marker_names
-            or "T-UC-003-approval-tenant" in marker_names
-            or "T-UC-003-approval-adapter" in marker_names
-            or "T-UC-003-creative-replace" in marker_names
-            or "T-UC-003-alt-manual" in marker_names
-        ):
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="REST endpoint doesn't forward packages param (spec-production gap)",
-                    strict=True,
-                )
-            )
-
         # FIXME(salesagent-9vgz.21): UC-003 idempotency-valid — MCP/A2A wrappers don't
         # accept idempotency_key param. Schema has the field but transport boundary
         # doesn't forward it.
@@ -507,9 +477,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             )
 
         # FIXME(salesagent-9vgz.14): UC-003 keyword_targets_add — production applies the
-        # keyword additions but returns empty affected_packages. impl/a2a/mcp pass the When
+        # keyword additions but returns empty affected_packages. All transports pass the When
         # step (no error) but the Then step "affected_packages including pkg_001" fails.
-        if "T-UC-003-alt-keyword-ops" in marker_names and not is_rest:
+        if "T-UC-003-alt-keyword-ops" in marker_names:
             item.add_marker(
                 pytest.mark.xfail(
                     reason="keyword_targets_add: affected_packages empty after keyword add (spec-production gap)",
@@ -521,7 +491,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # FK violation: creative_assignments references creative before commit.
         # _sync_creatives_impl uses its own UoW scope; assignment FK check fails
         # because the creative hasn't been committed in the outer transaction yet.
-        if "T-UC-003-alt-creatives-inline" in marker_names and not is_rest:
+        if "T-UC-003-alt-creatives-inline" in marker_names:
             item.add_marker(
                 pytest.mark.xfail(
                     reason="inline creatives: FK violation in _sync_creatives_impl assignment path (spec-production gap)",
@@ -575,16 +545,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     )
                 )
                 break  # One xfail per scenario is sufficient
-
-        # FIXME(salesagent-05b): UC-003 ext-r cross-ok scenarios — REST endpoint
-        # doesn't forward keyword_targets_add/negative_keywords_add params
-        if is_rest and ("T-UC-003-ext-r-cross-ok" in marker_names or "T-UC-003-ext-r-cross-ok-2" in marker_names):
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="REST endpoint doesn't forward keyword params (spec-production gap)",
-                    strict=True,
-                )
-            )
 
         # FIXME(salesagent-9vgz.1): UC-002 alt-manual: workflow_step_id is exclude=True
         # in CreateMediaBuySuccess schema, so MCP/REST serialization drops it.
