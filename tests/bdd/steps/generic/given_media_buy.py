@@ -9,6 +9,7 @@ and ctx["default_pricing_option"] created by conftest's _harness_env.
 
 from __future__ import annotations
 
+import re as _re
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -20,6 +21,31 @@ from tests.factories import (
     PricingOptionFactory,
     ProductFactory,
 )
+
+# Gherkin date token resolver — single source for all BDD step files.
+# Matches {now}, {N days from now}, {N days ago}.
+_DATE_TOKEN_RE = _re.compile(r"\{(?:now|(?P<future>\d+)\s+days?\s+from\s+now|(?P<past>\d+)\s+days?\s+ago)\}")
+
+
+def _resolve_date_token(value: str, clock: Any) -> str:
+    """Resolve Gherkin date tokens to ISO-Z strings using a TestClock.
+
+    Supported tokens:
+        {now}
+        {N days from now} / {N day from now}
+        {N days ago}       / {N day ago}
+
+    Non-token values are returned unchanged, so plain ISO strings still work.
+    """
+    m = _DATE_TOKEN_RE.search(value)
+    if not m:
+        return value
+    if m.group("future") is not None:
+        return clock.future_iso(int(m.group("future")))
+    if m.group("past") is not None:
+        return clock.past_iso(int(m.group("past")))
+    # Bare {now}
+    return clock.now_iso()
 
 
 def _pricing_option_id(po: Any) -> str:
@@ -258,8 +284,13 @@ def given_valid_create_request_with_table(ctx: dict, datatable: list[list[str]])
     """Set up a create_media_buy request from a Gherkin data table.
 
     Table format: | field | value |
+
+    ``start_time``/``end_time`` values may be relative date tokens
+    (``{30 days from now}``, ``{now}``, ``{1 day ago}``) resolved via the
+    shared TestClock on ``ctx['env'].clock`` — plain ISO strings still work.
     """
     kwargs = _ensure_request_defaults(ctx)
+    clock = ctx["env"].clock
     for row in datatable:
         field, value = row[0].strip(), row[1].strip()
         if field == "buyer_ref":
@@ -272,9 +303,9 @@ def given_valid_create_request_with_table(ctx: dict, datatable: list[list[str]])
             else:
                 kwargs["brand"] = {"domain": value}
         elif field == "start_time":
-            kwargs["start_time"] = value
+            kwargs["start_time"] = _resolve_date_token(value, clock)
         elif field == "end_time":
-            kwargs["end_time"] = value
+            kwargs["end_time"] = _resolve_date_token(value, clock)
         elif field == "account":
             # Parse: account_id "acc-001"
             if "account_id" in value:

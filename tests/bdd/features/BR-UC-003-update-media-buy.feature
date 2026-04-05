@@ -110,7 +110,7 @@ Feature: BR-UC-003 Update Media Buy
     Given the tenant is configured for auto-approval
     And a valid update_media_buy request with:
     | field        | value                    |
-    | end_time     | 2026-06-30T23:59:59.000Z |
+    | end_time     | {90 days from now}       |
     And the new end_time is after the existing start_time
     When the Buyer Agent sends the update_media_buy request
     Then the response status should be "completed"

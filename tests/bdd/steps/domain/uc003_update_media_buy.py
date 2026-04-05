@@ -16,6 +16,7 @@ from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.bdd.steps.generic.given_media_buy import _resolve_date_token
 
 # ═══════════════════════════════════════════════════════════════════════
 # Label mapping — Gherkin package labels → real package_ids
@@ -160,6 +161,7 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
         "idempotency_key",
     }
     kwargs = _ensure_update_defaults(ctx)
+    clock = ctx["env"].clock
     # Skip header row (pytest-bdd datatables include the header as first row)
     rows = datatable[1:] if datatable and datatable[0][0].strip() == "field" else datatable
     # Track which fields the table explicitly sets
@@ -178,9 +180,9 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
         elif field == "paused":
             kwargs["paused"] = value.lower() == "true"
         elif field == "start_time":
-            kwargs["start_time"] = value
+            kwargs["start_time"] = _resolve_date_token(value, clock)
         elif field == "end_time":
-            kwargs["end_time"] = value
+            kwargs["end_time"] = _resolve_date_token(value, clock)
         elif field == "budget":
             kwargs["budget"] = float(value)
         elif field == "packages":

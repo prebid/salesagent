@@ -34,9 +34,9 @@ from tests.unit._bdd_guard_helpers import iter_then_functions
 
 _HASATTR_ALLOWLIST: set[str] = {
     # FIXME(salesagent-beq4): replace hasattr with value assertion
-    "bdd/steps/domain/uc003_update_media_buy.py:801 then_implementation_date_null",
-    "bdd/steps/domain/uc003_update_media_buy.py:811 then_implementation_date_not_null",
-    "bdd/steps/domain/uc003_update_media_buy.py:935 then_response_has_sandbox",
+    "bdd/steps/domain/uc003_update_media_buy.py:803 then_implementation_date_null",
+    "bdd/steps/domain/uc003_update_media_buy.py:813 then_implementation_date_not_null",
+    "bdd/steps/domain/uc003_update_media_buy.py:937 then_response_has_sandbox",
     "bdd/steps/domain/uc004_delivery.py:1685 then_has_deliveries_field",
     "bdd/steps/domain/uc011_accounts.py:1308 then_has_accounts_array",
     "bdd/steps/domain/uc011_accounts.py:1327 then_response_is_success_variant",
@@ -53,7 +53,7 @@ _HASATTR_ALLOWLIST: set[str] = {
 
 _GETATTR_EXISTENCE_ALLOWLIST: set[str] = {
     # FIXME(salesagent-beq4): replace getattr existence check with value comparison
-    "bdd/steps/domain/uc003_update_media_buy.py:784 then_response_has_buyer_ref",
+    "bdd/steps/domain/uc003_update_media_buy.py:786 then_response_has_buyer_ref",
     "bdd/steps/domain/uc019_query_media_buys.py:1142 then_package_details",
 }
 
@@ -61,8 +61,8 @@ _COUNT_ONLY_ALLOWLIST: set[str] = {
     # FIXME(salesagent-beq4): replace count-only check with element-level assertion
     "bdd/steps/domain/uc002_create_media_buy.py:2137 then_creatives_assigned_to_packages",
     "bdd/steps/domain/uc002_nfr.py:210 then_protocol_audit_logged",
-    "bdd/steps/domain/uc003_update_media_buy.py:866 then_affected_packages_present",
-    "bdd/steps/domain/uc003_update_media_buy.py:900 then_affected_package_budget",
+    "bdd/steps/domain/uc003_update_media_buy.py:868 then_affected_packages_present",
+    "bdd/steps/domain/uc003_update_media_buy.py:902 then_affected_package_budget",
     "bdd/steps/domain/uc004_delivery.py:1180 then_has_metrics",
     "bdd/steps/domain/uc004_delivery.py:1199 then_has_packages",
     "bdd/steps/domain/uc004_delivery.py:1244 then_has_mb_status",

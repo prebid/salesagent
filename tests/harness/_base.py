@@ -22,6 +22,7 @@ Multi-transport support (subclasses may also override):
 
 from __future__ import annotations
 
+import datetime as _dt
 from typing import TYPE_CHECKING, Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -31,6 +32,38 @@ if TYPE_CHECKING:
 
     from src.core.resolved_identity import ResolvedIdentity
     from tests.harness.transport import E2EConfig, Transport, TransportResult
+
+
+class TestClock:
+    """Single source of test time.
+
+    Produces 'now' and relative future/past instants as ISO 8601 Z-suffixed
+    strings for Gherkin step consumption. Feature files express time relatively
+    (e.g. ``{30 days from now}``) and steps resolve the tokens via this clock
+    at execution time, so no hardcoded date ever becomes stale.
+    """
+
+    def now(self) -> _dt.datetime:
+        return _dt.datetime.now(_dt.UTC)
+
+    def future(self, days: int) -> _dt.datetime:
+        return self.now() + _dt.timedelta(days=days)
+
+    def past(self, days: int) -> _dt.datetime:
+        return self.now() - _dt.timedelta(days=days)
+
+    @staticmethod
+    def _iso(dt: _dt.datetime) -> str:
+        return dt.isoformat().replace("+00:00", "Z")
+
+    def now_iso(self) -> str:
+        return self._iso(self.now())
+
+    def future_iso(self, days: int) -> str:
+        return self._iso(self.future(days))
+
+    def past_iso(self, days: int) -> str:
+        return self._iso(self.past(days))
 
 
 def _adcp_error_from_code(
@@ -251,6 +284,7 @@ class BaseTestEnv:
         self._e2e_engine: Any = None  # Engine created from explicit database_url
         self._identity_cache: dict[str, ResolvedIdentity] = {}
         self._rest_client: Any = None  # Lazy-created TestClient
+        self.clock: TestClock = TestClock()
 
     # -- Identity (one function, all transports) ----------------------------
 
