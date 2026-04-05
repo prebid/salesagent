@@ -104,6 +104,67 @@ class TestMiddlewarePassthrough:
             call_next.assert_called_once_with(ctx)
 
 
+class TestShouldRetry:
+    """_should_retry only catches TypeAdapter structural errors, not business logic."""
+
+    def test_typeadapter_validation_error_retries_in_production(self, middleware):
+        """TypeAdapter errors (title starts with 'call[') should trigger retry."""
+        from pydantic import ValidationError
+
+        # Simulate TypeAdapter error: "validation error for call[create_media_buy]"
+        exc = ValidationError.from_exception_data(
+            title="call[create_media_buy]",
+            line_errors=[],
+        )
+        with patch("src.core.config.is_production", return_value=True):
+            assert middleware._should_retry(exc) is True
+
+    def test_business_logic_validation_error_does_not_retry(self, middleware):
+        """Model validation errors (e.g. CreateMediaBuyRequest) must NOT retry."""
+        from pydantic import ValidationError
+
+        # Simulate business logic error: "validation error for CreateMediaBuyRequest"
+        exc = ValidationError.from_exception_data(
+            title="CreateMediaBuyRequest",
+            line_errors=[],
+        )
+        with patch("src.core.config.is_production", return_value=True):
+            assert middleware._should_retry(exc) is False
+
+    def test_non_production_never_retries(self, middleware):
+        """No retry in dev mode, even for TypeAdapter errors."""
+        from pydantic import ValidationError
+
+        exc = ValidationError.from_exception_data(
+            title="call[get_products]",
+            line_errors=[],
+        )
+        with patch("src.core.config.is_production", return_value=False):
+            assert middleware._should_retry(exc) is False
+
+    def test_tool_error_with_typeadapter_signature_retries(self, middleware):
+        """ToolError wrapping a TypeAdapter message should retry in production."""
+        from fastmcp.exceptions import ToolError
+
+        exc = ToolError("1 validation error for call[get_products]\ncount\n  Field required [type=missing]")
+        with patch("src.core.config.is_production", return_value=True):
+            assert middleware._should_retry(exc) is True
+
+    def test_tool_error_without_typeadapter_signature_does_not_retry(self, middleware):
+        """ToolError with a generic message should not retry."""
+        from fastmcp.exceptions import ToolError
+
+        exc = ToolError("Something went wrong")
+        with patch("src.core.config.is_production", return_value=True):
+            assert middleware._should_retry(exc) is False
+
+    def test_unrelated_exception_does_not_retry(self, middleware):
+        """Non-ValidationError, non-ToolError exceptions never retry."""
+        exc = RuntimeError("unexpected")
+        with patch("src.core.config.is_production", return_value=True):
+            assert middleware._should_retry(exc) is False
+
+
 class TestMiddlewareEdgeCases:
     """Edge cases: None arguments, empty arguments."""
 

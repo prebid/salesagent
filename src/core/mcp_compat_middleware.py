@@ -120,7 +120,11 @@ class RequestCompatMiddleware(Middleware):
         from pydantic import ValidationError
 
         if isinstance(exc, ValidationError):
-            return True
+            # Only retry TypeAdapter structural errors (function signature validation),
+            # not business logic ValidationErrors from model construction inside _impl.
+            # TypeAdapter errors have title "call[tool_name]"; model errors have the
+            # model class name (e.g. "CreateMediaBuyRequest").
+            return exc.title.startswith("call[")
 
         # FastMCP may wrap in its own ToolError
         from fastmcp.exceptions import ToolError
