@@ -1364,10 +1364,12 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
 
 def _detect_uc011_harness(marker_names: set[str]) -> str:
     """Detect which UC-011 harness a scenario needs based on tags."""
-    if "list" in marker_names:
-        return "list"
+    # Check sync first — AccountSyncEnv handles both sync and list.
+    # AccountListEnv only handles list, so sync-tagged scenarios require sync env.
     if "sync" in marker_names:
         return "sync"
+    if "list" in marker_names:
+        return "list"
     # Context-echo and sandbox scenarios are cross-cutting: they test both
     # list_accounts and sync_accounts. Use sync harness as default since
     # it's the superset (context-echo When step creates its own env if needed).
