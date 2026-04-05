@@ -129,8 +129,17 @@ def _resolve_by_natural_key(
         limit=2,
     )
     if len(matches) > 1:
+        # Ambiguity detected — query the full count for the error message.
+        # Spec (BR-UC-002-ext-t) requires the error message to include the
+        # actual number of matches so buyers know the scale of the conflict.
+        actual_count = repo.count_by_natural_key(
+            operator=ref.operator,
+            brand_domain=brand_domain,
+            brand_id=brand_id,
+            sandbox=ref.sandbox,
+        )
         raise AdCPAccountAmbiguousError(
-            f"Natural key matches multiple accounts for brand '{brand_domain}', operator '{ref.operator}'.",
+            f"Natural key matches {actual_count} accounts for brand '{brand_domain}', operator '{ref.operator}'.",
             details={"suggestion": "Use explicit account_id instead of brand+operator to avoid ambiguity."},
         )
 
