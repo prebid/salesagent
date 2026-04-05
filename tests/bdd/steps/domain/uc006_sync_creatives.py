@@ -41,7 +41,13 @@ def given_creative_with_format(ctx: dict) -> None:
         "creative_id": creative_id,
         "name": "Test Creative with Known Format",
         "format_id": {"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
-        "media_url": "https://example.com/banner.png",
+        "assets": {
+            "image": {
+                "url": "https://example.com/banner.png",
+                "width": 300,
+                "height": 250,
+            },
+        },
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
