@@ -14,8 +14,8 @@ Architecture:
 - Generative creative: Use agent's create_generative_creative tool
 
 Testing:
-- When ADCP_TESTING=true, returns mock formats instead of calling external services
-- This avoids timeouts in CI when external creative agents are unreachable
+- CREATIVE_AGENT_URL env var points the registry at a containerized agent
+- No ADCP_TESTING short-circuits — the real fetch path runs in all modes
 """
 
 import os
@@ -490,10 +490,6 @@ class CreativeAgentRegistry:
         Returns:
             List of Format objects
         """
-        # In testing mode (ADCP_TESTING=true), return mock formats to avoid external HTTP calls
-        if os.environ.get("ADCP_TESTING", "").lower() == "true":
-            return _get_mock_formats()
-
         # Check cache - only use cache if no filtering parameters provided
         has_filters = any(
             [
@@ -597,11 +593,6 @@ class CreativeAgentRegistry:
         import logging
 
         logger = logging.getLogger(__name__)
-
-        # In testing mode (ADCP_TESTING=true), return mock formats to avoid external HTTP calls
-        if os.environ.get("ADCP_TESTING", "").lower() == "true":
-            logger.info("list_all_formats: Using mock formats (ADCP_TESTING=true)")
-            return FormatFetchResult(formats=_get_mock_formats(), errors=[])
 
         agents = self._get_tenant_agents(tenant_id)
         all_formats: list[Format] = []
