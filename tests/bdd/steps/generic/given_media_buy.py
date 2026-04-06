@@ -260,14 +260,14 @@ def given_tenant_max_daily_spend(ctx: dict, amount: int) -> None:
 
     from sqlalchemy import select
 
-    from src.core.database.database_session import get_db_session
     from src.core.database.models import CurrencyLimit
+    from tests.bdd.steps._harness_db import db_session
 
     tenant = ctx.get("tenant")
     assert tenant is not None, "No tenant in ctx — Given step ordering error"
     env = ctx["env"]
     env._commit_factory_data()
-    with get_db_session() as session:
+    with db_session(ctx) as session:
         cl = session.scalars(select(CurrencyLimit).filter_by(tenant_id=tenant.tenant_id, currency_code="USD")).first()
         assert cl is not None, f"No CurrencyLimit(USD) for tenant {tenant.tenant_id}"
         cl.max_daily_package_spend = Decimal(str(amount))
@@ -471,8 +471,8 @@ def given_packages_valid_pricing(ctx: dict) -> None:
     """
     from sqlalchemy import select
 
-    from src.core.database.database_session import get_db_session
     from src.core.database.models import PricingOption
+    from tests.bdd.steps._harness_db import db_session
 
     kwargs = ctx.get("request_kwargs")
     assert kwargs is not None, "No request_kwargs in ctx — step claims packages have valid pricing"
@@ -490,7 +490,7 @@ def given_packages_valid_pricing(ctx: dict) -> None:
         )
         # Verify the pricing_option_id references an actual PricingOption in the DB
         product_id = pkg.get("product_id")
-        with get_db_session() as session:
+        with db_session(ctx) as session:
             po = session.scalars(
                 select(PricingOption).filter_by(
                     tenant_id=tenant_id,
@@ -975,23 +975,18 @@ def _setup_both_pricing(ctx: dict, rate: float = 5.00, floor: float = 2.0) -> No
 
 
 def _setup_neither_pricing(ctx: dict) -> None:
-    """Configure a malformed PO with neither fixed_price nor floor_price.
+    """Configure request with a pricing_option_id that has neither fixed nor auction pricing.
 
-    Production catches this as "has is_fixed=true but no rate specified" → PRICING_ERROR.
+    DB constraints (check_fixed_has_rate + check_auction_has_price_guidance) make
+    it impossible to INSERT a PricingOption row without valid pricing data.
+    Instead, we reference a synthetic pricing_option_id that doesn't match any
+    existing option — this exercises the app-level "no matching option" path in
+    _validate_pricing_model_selection → PRICING_ERROR.
     """
-    env = ctx["env"]
-    malformed_po = PricingOptionFactory(
-        product=ctx["default_product"],
-        pricing_model="cpm",
-        currency="USD",
-        is_fixed=True,
-        rate=None,
-        price_guidance=None,
-    )
-    env._commit_factory_data()
     kwargs = _ensure_request_defaults(ctx)
     assert kwargs.get("packages"), "No packages in request — cannot assign neither-set pricing option"
-    kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(malformed_po)
+    # Use a pricing_option_id that matches no existing option (neither fixed nor auction)
+    kwargs["packages"][0]["pricing_option_id"] = "cpm_usd_neither"
 
 
 @given(parsers.parse("the pricing option configuration is {config}"))
