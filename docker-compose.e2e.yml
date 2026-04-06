@@ -29,6 +29,19 @@ services:
       timeout: 5s
       retries: 5
 
+  mock-creative-agent:
+    image: python:3.12-slim
+    command: ["sh", "-c", "pip install -q -r /app/requirements.txt && python /app/server.py"]
+    volumes:
+      - ./tests/fixtures/mock_creative_agent:/app:ro
+    ports:
+      - "${MOCK_AGENT_PORT:-8090}:8090"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8090/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   adcp-server:
     build: .
     environment:
@@ -46,8 +59,11 @@ services:
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       SALES_AGENT_DOMAIN: "sales-agent.example.com"
       ADCP_MULTI_TENANT: "true"
+      MOCK_CREATIVE_AGENT_URL: "http://mock-creative-agent:8090"
     depends_on:
       postgres:
+        condition: service_healthy
+      mock-creative-agent:
         condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"

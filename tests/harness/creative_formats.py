@@ -33,7 +33,18 @@ class CreativeFormatsEnv(IntegrationEnv):
 
     Mocks creative agent registry (external service) and audit logger.
     The format processing logic runs for real.
+
+    In E2E mode, ``_mock_agent_url`` points to the mock creative agent
+    sidecar (read from ``MOCK_CREATIVE_AGENT_URL`` env var). Given steps
+    POST formats to the sidecar instead of patching in-process mocks.
     """
+
+    @property
+    def _mock_agent_url(self) -> str | None:
+        """URL of the mock creative agent sidecar (E2E only)."""
+        import os
+
+        return os.environ.get("MOCK_CREATIVE_AGENT_URL")
 
     EXTERNAL_PATCHES = {
         "registry": "src.core.creative_agent_registry.get_creative_agent_registry",
@@ -47,8 +58,10 @@ class CreativeFormatsEnv(IntegrationEnv):
         Seeds a single default-display format via FormatFactory so scenarios
         that don't explicitly call set_registry_formats() get a valid baseline.
         Scenarios needing specific formats override via set_registry_formats().
+
+        In E2E mode, resets the mock creative agent sidecar to its default
+        (single display format) so each scenario starts clean.
         """
-        from src.core.creative_agent_registry import FormatFetchResult
         from tests.factories.format import CATEGORY_MAP, FormatFactory, make_asset, make_fixed_renders
 
         default_formats = [
@@ -60,20 +73,40 @@ class CreativeFormatsEnv(IntegrationEnv):
             ),
         ]
 
-        # Registry: return a mock with async list_all_formats + list_all_formats_with_errors
-        mock_registry = MagicMock()
-        mock_registry.list_all_formats = AsyncMock(return_value=default_formats)
-        mock_registry.list_all_formats_with_errors = AsyncMock(
-            return_value=FormatFetchResult(formats=default_formats, errors=[])
-        )
-        self.mock["registry"].return_value = mock_registry
+        if self.e2e_config and self._mock_agent_url:
+            # E2E: seed the mock sidecar with the default format
+            self.set_registry_formats(default_formats)
+        else:
+            from src.core.creative_agent_registry import FormatFetchResult
+
+            # In-process: patch the mock registry
+            mock_registry = MagicMock()
+            mock_registry.list_all_formats = AsyncMock(return_value=default_formats)
+            mock_registry.list_all_formats_with_errors = AsyncMock(
+                return_value=FormatFetchResult(formats=default_formats, errors=[])
+            )
+            self.mock["registry"].return_value = mock_registry
 
         # Audit logger: no-op
         mock_logger = MagicMock()
         self.mock["audit_logger"].return_value = mock_logger
 
     def set_registry_formats(self, formats: list[Any]) -> None:
-        """Configure mock registry to return these formats from list_all_formats."""
+        """Configure registry to return these formats from list_all_formats.
+
+        In E2E mode (e2e_config is set), POSTs the formats to the mock
+        creative agent sidecar so Docker's registry fetches them.
+        In in-process mode, patches the mock registry directly.
+        """
+        if self.e2e_config and self._mock_agent_url:
+            import httpx
+
+            httpx.post(
+                f"{self._mock_agent_url}/test/set-formats",
+                json=[f.model_dump(mode="json") if hasattr(f, "model_dump") else f for f in formats],
+            )
+            return
+
         from src.core.creative_agent_registry import FormatFetchResult
 
         self.mock["registry"].return_value.list_all_formats = AsyncMock(return_value=formats)
