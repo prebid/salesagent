@@ -1,7 +1,7 @@
 """CreativeFormatsEnv — integration test environment for _list_creative_formats_impl.
 
-Patches: creative agent registry, audit logger.
-Real: format processing logic (no direct DB access in this _impl).
+Patches: audit logger only.
+Real: creative agent registry (uses ADCP_TESTING=true mock formats), format processing logic.
 
 Requires: integration_db fixture (creates test PostgreSQL DB).
 
@@ -15,14 +15,13 @@ Usage::
             assert len(response.formats) == 2
 
 Available mocks via env.mock:
-    "registry"     -- get_creative_agent_registry (lazy import in creative_formats.py)
     "audit_logger" -- get_audit_logger (module-level import in creative_formats.py)
 """
 
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock, patch
 
 from src.core.schemas import ListCreativeFormatsResponse
 from tests.harness._base import IntegrationEnv
@@ -31,8 +30,10 @@ from tests.harness._base import IntegrationEnv
 class CreativeFormatsEnv(IntegrationEnv):
     """Integration test environment for _list_creative_formats_impl.
 
-    Mocks creative agent registry (external service) and audit logger.
-    The format processing logic runs for real.
+    The creative agent registry runs for real — in-process mode relies on
+    ADCP_TESTING=true which makes the registry return _get_mock_formats().
+    Scenarios that need specific formats call set_registry_formats() which
+    patches _get_mock_formats at the module level.
 
     In E2E mode, ``_mock_agent_url`` points to the mock creative agent
     sidecar (read from ``MOCK_CREATIVE_AGENT_URL`` env var). Given steps
@@ -47,47 +48,30 @@ class CreativeFormatsEnv(IntegrationEnv):
         return os.environ.get("MOCK_CREATIVE_AGENT_URL")
 
     EXTERNAL_PATCHES = {
-        "registry": "src.core.creative_agent_registry.get_creative_agent_registry",
         "audit_logger": "src.core.tools.creative_formats.get_audit_logger",
     }
     REST_ENDPOINT = "/api/v1/creative-formats"
 
-    def _configure_mocks(self) -> None:
-        """Set up happy-path defaults for external mocks.
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._format_patcher: Any | None = None
 
-        Seeds a single default-display format via FormatFactory so scenarios
-        that don't explicitly call set_registry_formats() get a valid baseline.
-        Scenarios needing specific formats override via set_registry_formats().
+    def _configure_mocks(self) -> None:
+        """Set up happy-path defaults.
 
         In E2E mode, resets the mock creative agent sidecar to empty so each
         scenario starts with a clean slate. Each scenario MUST seed its own
         formats via set_registry_formats() in the Given step — no shared state.
+
+        In in-process mode, the real registry runs with ADCP_TESTING=true
+        which returns _get_mock_formats(). Scenarios that need specific
+        formats override via set_registry_formats().
         """
         if self.e2e_config and self._mock_agent_url:
             # E2E: reset the sidecar to empty — each scenario seeds its own formats
             import httpx
 
             httpx.post(f"{self._mock_agent_url}/test/reset")
-        else:
-            from src.core.creative_agent_registry import FormatFetchResult
-            from tests.factories.format import CATEGORY_MAP, FormatFactory, make_asset, make_fixed_renders
-
-            default_formats = [
-                FormatFactory.build(
-                    name="default-display",
-                    type=CATEGORY_MAP["display"],
-                    assets=[make_asset("image")],
-                    renders=[make_fixed_renders(width=300, height=250)],
-                ),
-            ]
-
-            # In-process: patch the mock registry
-            mock_registry = MagicMock()
-            mock_registry.list_all_formats = AsyncMock(return_value=default_formats)
-            mock_registry.list_all_formats_with_errors = AsyncMock(
-                return_value=FormatFetchResult(formats=default_formats, errors=[])
-            )
-            self.mock["registry"].return_value = mock_registry
 
         # Audit logger: no-op
         mock_logger = MagicMock()
@@ -98,7 +82,8 @@ class CreativeFormatsEnv(IntegrationEnv):
 
         In E2E mode (e2e_config is set), POSTs the formats to the mock
         creative agent sidecar so Docker's registry fetches them.
-        In in-process mode, patches the mock registry directly.
+        In in-process mode, patches _get_mock_formats to return the
+        given formats (ADCP_TESTING=true ensures this path is taken).
         """
         if self.e2e_config and self._mock_agent_url:
             import httpx
@@ -109,12 +94,25 @@ class CreativeFormatsEnv(IntegrationEnv):
             )
             return
 
-        from src.core.creative_agent_registry import FormatFetchResult
+        # In-process: patch _get_mock_formats so the real registry returns our formats.
+        # Also invalidate the global registry cache so stale cached formats don't leak.
+        from src.core.creative_agent_registry import get_creative_agent_registry
 
-        self.mock["registry"].return_value.list_all_formats = AsyncMock(return_value=formats)
-        self.mock["registry"].return_value.list_all_formats_with_errors = AsyncMock(
-            return_value=FormatFetchResult(formats=list(formats), errors=[])
+        registry = get_creative_agent_registry()
+        registry._format_cache.clear()
+
+        # Stop previous patcher if any (idempotent replacement)
+        if self._format_patcher is not None:
+            self._format_patcher.stop()
+            if self._format_patcher in self._patchers:
+                self._patchers.remove(self._format_patcher)
+
+        self._format_patcher = patch(
+            "src.core.creative_agent_registry._get_mock_formats",
+            return_value=list(formats),
         )
+        self._format_patcher.start()
+        self._patchers.append(self._format_patcher)
 
     def call_impl(self, **kwargs: Any) -> ListCreativeFormatsResponse:
         """Call _list_creative_formats_impl.
