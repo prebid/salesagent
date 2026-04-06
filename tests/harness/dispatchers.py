@@ -107,15 +107,19 @@ class RestE2EDispatcher:
             return TransportResult(error=RuntimeError("E2E dispatch requires env.e2e_config (pass e2e_config= to env)"))
 
         identity = kwargs.pop("identity", None)
-        if not identity:
-            return TransportResult(error=RuntimeError("E2E dispatch requires identity (injected by call_via)"))
 
         base_url = env.e2e_config.base_url
-        headers = {
-            "x-adcp-auth": identity.auth_token,
-            "x-adcp-tenant": identity.tenant["subdomain"],
-            "Content-Type": "application/json",
-        }
+
+        # identity=None means "send without auth headers" (no-auth test).
+        # Let Docker's auth middleware return 401/structured error.
+        if identity is not None:
+            headers = {
+                "x-adcp-auth": identity.auth_token,
+                "x-adcp-tenant": identity.tenant["subdomain"],
+                "Content-Type": "application/json",
+            }
+        else:
+            headers = {"Content-Type": "application/json"}
 
         body = env.build_rest_body(**kwargs)
         endpoint = env.REST_ENDPOINT  # type: ignore[attr-defined]
