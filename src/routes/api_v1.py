@@ -24,6 +24,7 @@ from src.core.tools import capabilities as capabilities_module
 from src.core.tools import creative_formats as creative_formats_module
 from src.core.tools import media_buy_create as media_buy_create_module
 from src.core.tools import media_buy_delivery as media_buy_delivery_module
+from src.core.tools import media_buy_list as media_buy_list_module
 from src.core.tools import media_buy_update as media_buy_update_module
 from src.core.tools import performance as performance_module
 from src.core.tools import products as products_module
@@ -120,6 +121,7 @@ class SyncCreativesBody(BaseModel):
     delete_missing: bool = False
     dry_run: bool = False
     validation_mode: str = "strict"
+    account: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
 
 
@@ -159,6 +161,16 @@ class SyncAccountsBody(BaseModel):
     delete_missing: bool = False
     dry_run: bool = False
     push_notification_config: dict[str, Any] | None = None
+    context: dict[str, Any] | None = None
+    adcp_version: str = "1.0.0"
+
+
+class GetMediaBuysBody(BaseModel):
+    media_buy_ids: list[str] | None = None
+    buyer_refs: list[str] | None = None
+    status_filter: Any = None
+    include_snapshot: bool = False
+    account_id: str | None = None
     context: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
 
@@ -318,10 +330,44 @@ async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, identity: Resolv
     return response.model_dump(mode="json")
 
 
+@router.post("/media-buys/query")
+async def get_media_buys(body: GetMediaBuysBody, identity: ResolvedIdentity = require_auth):
+    """Query media buys with status and optional delivery snapshots (auth required)."""
+    from typing import cast
+
+    from adcp.types.generated_poc.core.context import ContextObject
+
+    try:
+        response = media_buy_list_module.get_media_buys_raw(
+            media_buy_ids=body.media_buy_ids,
+            buyer_refs=body.buyer_refs,
+            status_filter=body.status_filter,
+            include_snapshot=body.include_snapshot,
+            account_id=body.account_id,
+            context=cast(ContextObject | None, body.context),
+            identity=identity,
+        )
+    except ToolError as e:
+        return _handle_tool_error(e)
+
+    return response.model_dump(mode="json")
+
+
 @router.post("/creatives/sync")
 async def sync_creatives(body: SyncCreativesBody, identity: ResolvedIdentity = require_auth):
     """Sync creatives (auth required)."""
     try:
+        # Handle account resolution at boundary (same as MCP/A2A wrappers)
+        if body.account is not None:
+            from adcp.types import AccountReference as LibraryAccountReference
+
+            from src.core.transport_helpers import enrich_identity_with_account
+
+            account_ref = LibraryAccountReference(**body.account)
+            enriched = enrich_identity_with_account(identity, account_ref)
+            assert enriched is not None  # identity is non-None (from require_auth)
+            identity = enriched
+
         response = creatives_sync_module.sync_creatives_raw(
             creatives=body.creatives,  # type: ignore[arg-type]  # REST accepts dicts, _impl handles both
             assignments=body.assignments,
