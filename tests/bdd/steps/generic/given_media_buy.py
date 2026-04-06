@@ -84,6 +84,46 @@ def _ensure_request_defaults(ctx: dict) -> dict[str, Any]:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Adapter DB config sync (E2E support)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _sync_adapter_approval_to_db(ctx: dict, *, manual_approval_required: bool) -> None:
+    """Write adapter approval config to DB so Docker-hosted adapter picks it up.
+
+    In-process transports use the mock attribute directly. E2E transports need
+    the config written to the shared database. This is a no-op when no tenant
+    exists yet (the harness will set up defaults).
+    """
+    tenant = ctx.get("tenant")
+    if tenant is None:
+        return
+    env = ctx["env"]
+    from tests.factories.core import set_adapter_test_behavior
+
+    set_adapter_test_behavior(env, tenant.tenant_id, manual_approval_required=manual_approval_required)
+
+
+def _sync_adapter_error_to_db(
+    ctx: dict, *, fail_on_create: bool = False, fail_on_update: bool = False, error_message: str | None = None
+) -> None:
+    """Write adapter error injection config to DB so Docker adapter raises errors."""
+    tenant = ctx.get("tenant")
+    if tenant is None:
+        return
+    env = ctx["env"]
+    from tests.factories.core import set_adapter_test_behavior
+
+    set_adapter_test_behavior(
+        env,
+        tenant.tenant_id,
+        fail_on_create=fail_on_create,
+        fail_on_update=fail_on_update,
+        error_message=error_message,
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Tenant configuration
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -139,6 +179,8 @@ def given_adapter_no_manual_approval(ctx: dict) -> None:
     adapter_mock = env.mock["adapter"].return_value
     adapter_mock.manual_approval_required = False
     adapter_mock.manual_approval_operations = []
+    # Also write to DB so Docker-hosted adapter reads the correct config
+    _sync_adapter_approval_to_db(ctx, manual_approval_required=False)
 
 
 @given("adapter manual_approval_required is true")
@@ -152,6 +194,8 @@ def given_adapter_manual_approval(ctx: dict) -> None:
     adapter_mock = env.mock["adapter"].return_value
     adapter_mock.manual_approval_required = True
     adapter_mock.manual_approval_operations = {"create_media_buy", "update_media_buy"}
+    # Also write to DB so Docker-hosted adapter reads the correct config
+    _sync_adapter_approval_to_db(ctx, manual_approval_required=True)
 
 
 @given(parsers.parse("the approval scenario is {partition}"))
@@ -2518,6 +2562,8 @@ def given_adapter_error(ctx: dict) -> None:
     )
     mock_adapter.create_media_buy.side_effect = error
     mock_adapter.update_media_buy.side_effect = error
+    # Also write to DB so Docker adapter raises the same error
+    _sync_adapter_error_to_db(ctx, fail_on_create=True, fail_on_update=True, error_message="Ad server unavailable")
 
 
 @given("the ad server adapter returns success")
@@ -2537,6 +2583,8 @@ def given_adapter_success(ctx: dict) -> None:
         # Fallback: just clear error injection; return_value may already be set
         mock_adapter.create_media_buy.side_effect = None
     mock_adapter.update_media_buy.side_effect = None
+    # Also reset DB test_behavior so Docker adapter stops raising errors
+    _sync_adapter_error_to_db(ctx, fail_on_create=False, fail_on_update=False)
 
 
 @given("a create_media_buy request")

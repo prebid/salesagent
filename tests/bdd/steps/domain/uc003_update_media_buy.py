@@ -1785,6 +1785,8 @@ def given_tenant_approval_mode(ctx: dict, approval_mode: str) -> None:
     'auto-approval' — tenant human_review_required=False, adapter manual_approval_required=False
     'manual' — tenant human_review_required=True
     """
+    from tests.factories.core import set_adapter_test_behavior
+
     stripped = approval_mode.strip()
     tenant = ctx.get("tenant")
     assert tenant is not None, "No tenant in ctx — cannot configure approval mode"
@@ -1794,6 +1796,8 @@ def given_tenant_approval_mode(ctx: dict, approval_mode: str) -> None:
         tenant.human_review_required = False
         if "adapter" in env.mock:
             env.mock["adapter"].return_value.manual_approval_required = False
+        # Also write to DB so Docker adapter reads the correct config
+        set_adapter_test_behavior(env, tenant.tenant_id, manual_approval_required=False)
     elif stripped == "manual":
         tenant.human_review_required = True
     else:
@@ -1812,6 +1816,8 @@ def given_adapter_result(ctx: dict, adapter_result: str) -> None:
     Uses regex to avoid matching 'the adapter manual_approval_required is ...'
     which is a separate step for approval workflow partition/boundary scenarios.
     """
+    from tests.factories.core import set_adapter_test_behavior
+
     stripped = adapter_result.strip()
     env = ctx["env"]
 
@@ -1822,12 +1828,22 @@ def given_adapter_result(ctx: dict, adapter_result: str) -> None:
             "Ensure the test environment sets up the adapter mock before this step."
         )
         env.mock["adapter"].return_value.update_order.side_effect = None
+        # Also reset DB test_behavior
+        tenant = ctx.get("tenant")
+        if tenant is not None:
+            set_adapter_test_behavior(env, tenant.tenant_id, fail_on_update=False)
     elif stripped == "returns error":
         assert "adapter" in env.mock, (
             "Step claims 'the adapter returns error' but no adapter mock is registered in env.mock. "
             "Ensure the test environment sets up the adapter mock before this step."
         )
         env.mock["adapter"].return_value.update_order.side_effect = Exception("Adapter error: update failed")
+        # Also write to DB so Docker adapter raises the same error
+        tenant = ctx.get("tenant")
+        if tenant is not None:
+            set_adapter_test_behavior(
+                env, tenant.tenant_id, fail_on_update=True, error_message="Adapter error: update failed"
+            )
     elif stripped == "not yet called":
         # Manual approval — adapter won't be called
         pass

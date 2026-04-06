@@ -253,6 +253,32 @@ class MockAdServer(AdServerAdapter):
             if self.hitl_mode == "mixed":
                 self.log(f"   Operation overrides: {self.operation_modes}")
 
+    def _read_test_behavior(self) -> dict:
+        """Read test_behavior from AdapterConfig for this tenant.
+
+        BDD Given steps write test_behavior via AdapterConfigFactory so the
+        Docker-hosted mock adapter can pick up error/failure injection that
+        was previously only possible via in-process mock patching.
+
+        Returns the test_behavior dict, or {} if not configured.
+        """
+        if not self.tenant_id:
+            return {}
+        try:
+            from src.core.database.database_session import get_db_session
+            from src.core.database.repositories.adapter_config import AdapterConfigRepository
+
+            with get_db_session() as session:
+                repo = AdapterConfigRepository(session, self.tenant_id)
+                row = repo.find_by_tenant()
+                if row and isinstance(row.config_json, dict):
+                    result = row.config_json.get("test_behavior", {})
+                    if isinstance(result, dict):
+                        return result
+        except Exception:
+            pass
+        return {}
+
     def _validate_targeting(self, targeting_overlay):
         """Mock adapter accepts all targeting."""
         return []  # No unsupported features
@@ -438,6 +464,17 @@ class MockAdServer(AdServerAdapter):
             CreateMediaBuyResponse with simulated media buy
         """
         from src.adapters.test_scenario_parser import has_test_keywords, parse_test_scenario
+
+        # Check DB-driven test_behavior (injected by BDD Given steps for E2E)
+        test_behavior = self._read_test_behavior()
+        if test_behavior.get("fail_on_create"):
+            from src.core.exceptions import AdCPAdapterError
+
+            raise AdCPAdapterError(
+                test_behavior.get("error_message", "Test adapter failure"),
+                recovery="transient",
+                details={"suggestion": "Retry the operation or contact ad server support"},
+            )
 
         # Log pricing model info if provided (AdCP PR #88)
         if package_pricing_info:
@@ -1317,6 +1354,17 @@ class MockAdServer(AdServerAdapter):
         logger = logging.getLogger(__name__)
 
         assert self.tenant_id is not None, "tenant_id required for DB operations"
+
+        # Check DB-driven test_behavior (injected by BDD Given steps for E2E)
+        test_behavior = self._read_test_behavior()
+        if test_behavior.get("fail_on_update"):
+            from src.core.exceptions import AdCPAdapterError
+
+            raise AdCPAdapterError(
+                test_behavior.get("error_message", "Test adapter failure"),
+                recovery="transient",
+                details={"suggestion": "Retry the operation or contact ad server support"},
+            )
 
         with get_db_session() as session:
             if action == "update_package_budget" and package_id and budget is not None:

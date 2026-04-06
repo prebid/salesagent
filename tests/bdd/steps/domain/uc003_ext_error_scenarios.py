@@ -12,6 +12,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then
 
+from tests.bdd.steps._harness_db import db_session
 from tests.bdd.steps.domain.uc003_update_media_buy import _ensure_update_defaults
 
 
@@ -70,12 +71,11 @@ def given_principal_not_in_db(ctx: dict, principal_id: str) -> None:
     """
     from sqlalchemy import delete, select
 
-    from src.core.database.database_session import get_db_session
     from src.core.database.models import Principal
 
     tenant = ctx.get("tenant")
     assert tenant is not None, "No tenant in ctx"
-    with get_db_session() as session:
+    with db_session(ctx) as session:
         existing = session.scalars(
             select(Principal).filter_by(principal_id=principal_id, tenant_id=tenant.tenant_id)
         ).first()
@@ -102,12 +102,11 @@ def given_no_media_buy_by_id(ctx: dict, media_buy_id: str) -> None:
     """
     from sqlalchemy import delete, select
 
-    from src.core.database.database_session import get_db_session
     from src.core.database.models import MediaBuy
 
     tenant = ctx.get("tenant")
     assert tenant is not None, "No tenant in ctx"
-    with get_db_session() as session:
+    with db_session(ctx) as session:
         existing = session.scalars(
             select(MediaBuy).filter_by(media_buy_id=media_buy_id, tenant_id=tenant.tenant_id)
         ).first()
@@ -126,12 +125,11 @@ def given_no_media_buy_by_buyer_ref(ctx: dict, buyer_ref: str) -> None:
     """Ensure no media buy with the given buyer_ref exists in the database."""
     from sqlalchemy import delete, select
 
-    from src.core.database.database_session import get_db_session
     from src.core.database.models import MediaBuy
 
     tenant = ctx.get("tenant")
     assert tenant is not None, "No tenant in ctx"
-    with get_db_session() as session:
+    with db_session(ctx) as session:
         existing = session.scalars(select(MediaBuy).filter_by(buyer_ref=buyer_ref, tenant_id=tenant.tenant_id)).first()
         if existing:
             session.execute(
@@ -188,12 +186,11 @@ def given_tenant_no_currency_limit(ctx: dict, currency: str) -> None:
     """
     from sqlalchemy import delete, select
 
-    from src.core.database.database_session import get_db_session
     from src.core.database.models import CurrencyLimit
 
     tenant = ctx.get("tenant")
     assert tenant is not None, "No tenant in ctx"
-    with get_db_session() as session:
+    with db_session(ctx) as session:
         existing = session.scalars(
             select(CurrencyLimit).filter_by(currency=currency, tenant_id=tenant.tenant_id)
         ).first()
@@ -214,14 +211,13 @@ def given_tenant_max_daily_spend(ctx: dict, amount: int) -> None:
 
     from sqlalchemy import select
 
-    from src.core.database.database_session import get_db_session
     from src.core.database.models import CurrencyLimit
 
     tenant = ctx.get("tenant")
     assert tenant is not None, "No tenant in ctx"
     mb = ctx.get("existing_media_buy")
     currency = mb.currency if mb else "USD"
-    with get_db_session() as session:
+    with db_session(ctx) as session:
         cl = session.scalars(select(CurrencyLimit).filter_by(currency=currency, tenant_id=tenant.tenant_id)).first()
         assert cl is not None, (
             f"No CurrencyLimit for {currency} in tenant {tenant.tenant_id} — cannot set max_daily_package_spend"
@@ -271,10 +267,9 @@ def given_package_not_in_media_buy(ctx: dict, package_id: str) -> None:
     # Verify via DB
     from sqlalchemy import select
 
-    from src.core.database.database_session import get_db_session
     from src.core.database.models import MediaPackage
 
-    with get_db_session() as session:
+    with db_session(ctx) as session:
         db_pkg = session.scalars(
             select(MediaPackage).filter_by(
                 package_id=package_id,
@@ -313,12 +308,11 @@ def given_creative_not_in_library(ctx: dict, creative_id: str) -> None:
     """
     from sqlalchemy import select
 
-    from src.core.database.database_session import get_db_session
     from src.core.database.models import Creative as CreativeModel
 
     tenant = ctx.get("tenant")
     assert tenant is not None, "No tenant in ctx"
-    with get_db_session() as session:
+    with db_session(ctx) as session:
         cr = session.scalars(
             select(CreativeModel).filter_by(creative_id=creative_id, tenant_id=tenant.tenant_id)
         ).first()
@@ -436,13 +430,12 @@ def _get_product(ctx: dict) -> Any:
     # Look it up from the existing package's product_id.
     from sqlalchemy import select
 
-    from src.core.database.database_session import get_db_session
     from src.core.database.models import Product
 
     tenant = ctx.get("tenant")
     if tenant is None:
         return None
-    with get_db_session() as session:
+    with db_session(ctx) as session:
         product = session.scalars(select(Product).filter_by(tenant_id=tenant.tenant_id)).first()
     return product
 
@@ -570,6 +563,14 @@ def given_adapter_error_during_update(ctx: dict) -> None:
     mock_adapter.update_media_buy.side_effect = error
     # Store original for potential recovery
     mock_adapter._original_validate_side_effect = None
+    # Also write to DB so Docker adapter raises the same error
+    tenant = ctx.get("tenant")
+    if tenant is not None:
+        from tests.factories.core import set_adapter_test_behavior
+
+        set_adapter_test_behavior(
+            env, tenant.tenant_id, fail_on_update=True, error_message="Ad server returned error during update"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -667,14 +668,13 @@ def then_no_db_records_modified(ctx: dict) -> None:
     """
     from sqlalchemy import select
 
-    from src.core.database.database_session import get_db_session
     from src.core.database.models import MediaBuy, MediaPackage
 
     mb = ctx.get("existing_media_buy")
     assert mb is not None, "No existing_media_buy in ctx — cannot verify DB state"
     existing_pkg = ctx.get("existing_package")
 
-    with get_db_session() as session:
+    with db_session(ctx) as session:
         # --- MediaBuy: verify all mutable fields unchanged ---
         db_mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=mb.media_buy_id)).first()
         assert db_mb is not None, f"Media buy {mb.media_buy_id} not found in DB"
