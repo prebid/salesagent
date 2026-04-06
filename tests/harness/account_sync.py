@@ -122,6 +122,46 @@ class AccountSyncEnv(IntegrationEnv):
 
     REST_ENDPOINT = "/api/v1/accounts/sync"
 
+    def get_rest_client(self) -> Any:
+        """Return FastAPI TestClient with identity enrichment for billing/approval.
+
+        The real auth chain (resolve_identity -> get_principal_from_token) does not
+        populate supported_billing or account_approval_mode on ResolvedIdentity.
+        These are harness-only fields set by BDD Given steps.  We override the
+        _require_auth_dep dependency to run the real auth chain and then enrich
+        the resolved identity — mirroring what identity_for() does for
+        IMPL/A2A/MCP transports.
+        """
+        if self._rest_client is None:
+            from starlette.testclient import TestClient
+
+            from src.app import app
+            from src.core.auth_context import (
+                AuthContext,
+                _require_auth_dep,
+                get_auth_context,
+            )
+
+            env = self  # capture for closure
+
+            def _enriched_auth_dep(
+                auth_ctx: AuthContext = get_auth_context,
+            ) -> Any:
+                identity = _require_auth_dep(auth_ctx)
+                updates: dict[str, Any] = {}
+                if env._supported_billing is not None:
+                    updates["supported_billing"] = env._supported_billing
+                if env._account_approval_mode is not None:
+                    updates["account_approval_mode"] = env._account_approval_mode
+                if updates:
+                    return identity.model_copy(update=updates)
+                return identity
+
+            app.dependency_overrides[_require_auth_dep] = _enriched_auth_dep
+            self._rest_client = TestClient(app)
+
+        return self._rest_client
+
     def parse_rest_response(self, data: dict[str, Any]) -> SyncAccountsResponse:
         """Parse REST JSON into SyncAccountsResponse."""
         return SyncAccountsResponse(**data)
