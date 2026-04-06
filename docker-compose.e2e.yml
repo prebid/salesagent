@@ -59,7 +59,7 @@ services:
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       SALES_AGENT_DOMAIN: "sales-agent.example.com"
       ADCP_MULTI_TENANT: "true"
-      MOCK_CREATIVE_AGENT_URL: "http://mock-creative-agent:8090"
+      CREATIVE_AGENT_URL: "http://mock-creative-agent:8090"
     depends_on:
       postgres:
         condition: service_healthy

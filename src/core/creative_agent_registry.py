@@ -86,41 +86,13 @@ def _create_mock_format(format_id_str: str, name: str, format_type: FormatType, 
     )
 
 
-def _fetch_from_mock_agent(mock_url: str) -> list[Format] | None:
-    """Fetch formats from mock creative agent sidecar (E2E testing).
-
-    Returns None if the sidecar is unreachable or returns no formats,
-    falling back to hardcoded formats.
-    """
-    import logging
-
-    import httpx
-
-    logger = logging.getLogger(__name__)
-    try:
-        resp = httpx.get(f"{mock_url.rstrip('/')}/formats", timeout=5)
-        resp.raise_for_status()
-        data = resp.json()
-        if not isinstance(data, list):
-            return None
-        return [Format.model_validate(f) for f in data] if data else []
-    except Exception as e:
-        logger.debug(f"Mock creative agent unreachable at {mock_url}: {e}")
-        return None
-
-
 def _get_mock_formats() -> list[Format]:
     """Return mock formats for testing mode (ADCP_TESTING=true).
 
-    When MOCK_CREATIVE_AGENT_URL is set (E2E sidecar), fetches formats
-    from the mock agent. Otherwise returns hardcoded formats.
+    Returns hardcoded formats for deterministic test behavior.
+    E2E tests that need specific formats should seed them via the
+    test harness (CreativeFormatsEnv.set_registry_formats).
     """
-    mock_url = os.environ.get("MOCK_CREATIVE_AGENT_URL")
-    if mock_url:
-        result = _fetch_from_mock_agent(mock_url)
-        if result is not None:
-            return result
-
     # Create mock formats using our Format class (which includes is_standard field)
     return [
         _create_mock_format("display_300x250_image", "Medium Rectangle", FormatType.display, "image"),

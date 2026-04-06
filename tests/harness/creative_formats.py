@@ -59,25 +59,27 @@ class CreativeFormatsEnv(IntegrationEnv):
         that don't explicitly call set_registry_formats() get a valid baseline.
         Scenarios needing specific formats override via set_registry_formats().
 
-        In E2E mode, resets the mock creative agent sidecar to its default
-        (single display format) so each scenario starts clean.
+        In E2E mode, resets the mock creative agent sidecar to empty so each
+        scenario starts with a clean slate. Each scenario MUST seed its own
+        formats via set_registry_formats() in the Given step — no shared state.
         """
-        from tests.factories.format import CATEGORY_MAP, FormatFactory, make_asset, make_fixed_renders
-
-        default_formats = [
-            FormatFactory.build(
-                name="default-display",
-                type=CATEGORY_MAP["display"],
-                assets=[make_asset("image")],
-                renders=[make_fixed_renders(width=300, height=250)],
-            ),
-        ]
-
         if self.e2e_config and self._mock_agent_url:
-            # E2E: seed the mock sidecar with the default format
-            self.set_registry_formats(default_formats)
+            # E2E: reset the sidecar to empty — each scenario seeds its own formats
+            import httpx
+
+            httpx.post(f"{self._mock_agent_url}/test/reset")
         else:
             from src.core.creative_agent_registry import FormatFetchResult
+            from tests.factories.format import CATEGORY_MAP, FormatFactory, make_asset, make_fixed_renders
+
+            default_formats = [
+                FormatFactory.build(
+                    name="default-display",
+                    type=CATEGORY_MAP["display"],
+                    assets=[make_asset("image")],
+                    renders=[make_fixed_renders(width=300, height=250)],
+                ),
+            ]
 
             # In-process: patch the mock registry
             mock_registry = MagicMock()
