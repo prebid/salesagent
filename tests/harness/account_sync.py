@@ -53,30 +53,10 @@ class AccountSyncEnv(IntegrationEnv):
         "audit_logger": "src.core.tools.accounts.get_audit_logger",
     }
 
-    def __init__(
-        self,
-        supported_billing: list[str] | None = None,
-        account_approval_mode: str | None = None,
-        **kwargs: Any,
-    ) -> None:
-        super().__init__(**kwargs)
-        self._supported_billing = supported_billing
-        self._account_approval_mode = account_approval_mode
-
     def _configure_mocks(self) -> None:
         """Set up happy-path defaults for audit logger."""
         mock_logger = MagicMock()
         self.mock["audit_logger"].return_value = mock_logger
-
-    def identity_for(self, transport: Any) -> Any:
-        """Build identity with optional billing policy and approval mode."""
-        ident = super().identity_for(transport)
-        updates: dict[str, Any] = {}
-        if self._supported_billing is not None:
-            updates["supported_billing"] = self._supported_billing
-        if self._account_approval_mode is not None:
-            updates["account_approval_mode"] = self._account_approval_mode
-        return ident.model_copy(update=updates) if updates else ident
 
     async def call_impl_async(self, **kwargs: Any) -> SyncAccountsResponse:
         """Call _sync_accounts_impl with real DB (async version).
@@ -121,46 +101,6 @@ class AccountSyncEnv(IntegrationEnv):
         return self._run_mcp_wrapper(sync_accounts, SyncAccountsResponse, **kwargs)
 
     REST_ENDPOINT = "/api/v1/accounts/sync"
-
-    def get_rest_client(self) -> Any:
-        """Return FastAPI TestClient with identity enrichment for billing/approval.
-
-        The real auth chain (resolve_identity -> get_principal_from_token) does not
-        populate supported_billing or account_approval_mode on ResolvedIdentity.
-        These are harness-only fields set by BDD Given steps.  We override the
-        _require_auth_dep dependency to run the real auth chain and then enrich
-        the resolved identity — mirroring what identity_for() does for
-        IMPL/A2A/MCP transports.
-        """
-        if self._rest_client is None:
-            from starlette.testclient import TestClient
-
-            from src.app import app
-            from src.core.auth_context import (
-                AuthContext,
-                _require_auth_dep,
-                get_auth_context,
-            )
-
-            env = self  # capture for closure
-
-            def _enriched_auth_dep(
-                auth_ctx: AuthContext = get_auth_context,
-            ) -> Any:
-                identity = _require_auth_dep(auth_ctx)
-                updates: dict[str, Any] = {}
-                if env._supported_billing is not None:
-                    updates["supported_billing"] = env._supported_billing
-                if env._account_approval_mode is not None:
-                    updates["account_approval_mode"] = env._account_approval_mode
-                if updates:
-                    return identity.model_copy(update=updates)
-                return identity
-
-            app.dependency_overrides[_require_auth_dep] = _enriched_auth_dep
-            self._rest_client = TestClient(app)
-
-        return self._rest_client
 
     def parse_rest_response(self, data: dict[str, Any]) -> SyncAccountsResponse:
         """Parse REST JSON into SyncAccountsResponse."""
