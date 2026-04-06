@@ -16,8 +16,10 @@ import json
 
 from pytest_bdd import given, parsers, then, when
 
+from tests.bdd.steps._harness_db import db_session
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
+from tests.factories.principal import PrincipalFactory
 
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — request setup and account state
@@ -104,6 +106,9 @@ def given_account_is(ctx: dict, account_setup: str) -> None:
 
 def _setup_account_by_id(account_id: str, tenant: object, principal: object) -> None:
     """Create DB state for account_id-based scenarios."""
+    # Accounts that exist but belong to a different principal (AUTHORIZATION_ERROR)
+    access_denied_ids = {"acc_other_agent"}
+
     status_map = {
         "acc_acme_001": "active",
         "acc_new_unconfigured": "pending_approval",
@@ -111,6 +116,21 @@ def _setup_account_by_id(account_id: str, tenant: object, principal: object) -> 
         "acc_suspended": "suspended",
     }
     status = status_map.get(account_id)
+
+    if account_id in access_denied_ids:
+        # Account exists but the test principal has no access — triggers AUTHORIZATION_ERROR
+        domain = account_id.replace("_", "-") + ".com"
+        other_principal = PrincipalFactory(tenant=tenant)
+        account = AccountFactory(
+            tenant=tenant,
+            account_id=account_id,
+            status="active",
+            brand={"domain": domain},
+            operator=domain,
+        )
+        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=other_principal, account=account)
+        return
+
     if status is None:
         # Unknown account_id — don't create (tests not-found path)
         return
@@ -130,6 +150,9 @@ def _setup_account_by_id(account_id: str, tenant: object, principal: object) -> 
 
 def _setup_account_by_natural_key(brand_domain: str, operator: str, tenant: object, principal: object) -> None:
     """Create DB state for natural-key-based scenarios."""
+    # Domains where the account exists but belongs to a different principal (AUTHORIZATION_ERROR)
+    access_denied_domains = {"other-agent.com"}
+
     if brand_domain == "multi.com":
         # Ambiguous: create 3 accounts with same natural key
         for i in range(3):
@@ -143,6 +166,17 @@ def _setup_account_by_natural_key(brand_domain: str, operator: str, tenant: obje
     elif brand_domain in ("unknown.com",):
         # Not found — don't create anything
         pass
+    elif brand_domain in access_denied_domains:
+        # Account exists but the test principal has no access — triggers AUTHORIZATION_ERROR
+        other_principal = PrincipalFactory(tenant=tenant)
+        account = AccountFactory(
+            tenant=tenant,
+            account_id=f"acc-{brand_domain.replace('.', '-')}",
+            status="active",
+            brand={"domain": brand_domain},
+            operator=operator,
+        )
+        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=other_principal, account=account)
     else:
         # Single match — create one active account
         account = AccountFactory(
@@ -222,11 +256,10 @@ def then_proceed_with_resolved_account(ctx: dict) -> None:
     #    resolve_account() found a valid, active account during dispatch
     from sqlalchemy import select
 
-    from src.core.database.database_session import get_db_session
     from src.core.database.models import Account
 
     tenant_id = ctx["tenant"].tenant_id
-    with get_db_session() as session:
+    with db_session(ctx) as session:
         if has_account_id:
             account = session.scalars(
                 select(Account).filter_by(tenant_id=tenant_id, account_id=ctx["request_account_id"])

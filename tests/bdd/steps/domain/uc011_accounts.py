@@ -109,10 +109,10 @@ def _snapshot_account_count(ctx: dict) -> None:
     tenant = ctx.get("tenant")
     principal = ctx.get("principal")
     if tenant is not None and principal is not None:
-        from src.core.database.database_session import get_db_session
         from src.core.database.repositories.account import AccountRepository
+        from tests.bdd.steps._harness_db import db_session
 
-        with get_db_session() as session:
+        with db_session(ctx) as session:
             repo = AccountRepository(session, tenant.tenant_id)
             existing = repo.list_by_principal(principal.principal_id)
             ctx["_pre_error_account_count"] = len(existing)
@@ -571,11 +571,11 @@ def then_other_statuses_excluded(ctx: dict) -> None:
     filtered_status = returned_statuses.pop()
 
     # Query all accessible accounts (via AgentAccountAccess join) to find excluded IDs
-    from src.core.database.database_session import get_db_session
     from src.core.database.repositories.account import AccountRepository
+    from tests.bdd.steps._harness_db import db_session
 
     tenant, principal = ctx["tenant"], ctx["principal"]
-    with get_db_session() as session:
+    with db_session(ctx) as session:
         repo = AccountRepository(session, tenant.tenant_id)
         all_accounts = repo.list_for_agent(principal.principal_id)
         excluded_ids = {a.account_id for a in all_accounts if _status_str(a.status) != filtered_status}
@@ -677,11 +677,11 @@ def then_accounts_from_first_page(ctx: dict) -> None:
     assert account_ids == sorted(account_ids), f"Accounts not sorted by account_id: {account_ids}"
 
     # Verify the returned accounts match the accounts created in the Given step
-    from src.core.database.database_session import get_db_session
     from src.core.database.repositories.account import AccountRepository
+    from tests.bdd.steps._harness_db import db_session
 
     tenant, principal = ctx["tenant"], ctx["principal"]
-    with get_db_session() as session:
+    with db_session(ctx) as session:
         repo = AccountRepository(session, tenant.tenant_id)
         all_db_accounts = repo.list_for_agent(principal.principal_id)
         db_ids = {a.account_id for a in all_db_accounts}
@@ -1147,10 +1147,10 @@ def then_error_exists(ctx: dict) -> None:
     tenant = ctx.get("tenant")
     principal = ctx.get("principal")
     if tenant is not None and principal is not None:
-        from src.core.database.database_session import get_db_session
         from src.core.database.repositories.account import AccountRepository
+        from tests.bdd.steps._harness_db import db_session
 
-        with get_db_session() as session:
+        with db_session(ctx) as session:
             repo = AccountRepository(session, tenant.tenant_id)
             db_accounts = repo.list_by_principal(principal.principal_id)
             # Only accounts created BEFORE the error should exist (from Given steps).
@@ -1610,13 +1610,13 @@ def then_webhook_registered(ctx: dict) -> None:
     # Verify the webhook URL is persisted in the DB
     from sqlalchemy import select
 
-    from src.core.database.database_session import get_db_session
     from src.core.database.models import PushNotificationConfig
+    from tests.bdd.steps._harness_db import db_session
 
     tenant = ctx.get("tenant")
     principal = ctx.get("principal")
     assert tenant is not None, "No tenant in ctx — cannot verify webhook persistence"
-    with get_db_session() as session:
+    with db_session(ctx) as session:
         configs = list(
             session.scalars(
                 select(PushNotificationConfig).where(
@@ -1660,14 +1660,14 @@ def then_account_transitions(ctx: dict, from_status: str, to_status: str) -> Non
     )
 
     # Verify the DB reflects the to_status (the transition actually happened)
-    from src.core.database.database_session import get_db_session
     from src.core.database.repositories.account import AccountRepository
+    from tests.bdd.steps._harness_db import db_session
 
     tenant = ctx.get("tenant")
     if tenant is not None:
         acct_id = getattr(acct, "account_id", None) or getattr(acct, "name", None)
         if acct_id is not None:
-            with get_db_session() as session:
+            with db_session(ctx) as session:
                 repo = AccountRepository(session, tenant.tenant_id)
                 db_acct = repo.get_by_id(str(acct_id))
                 if db_acct is not None:
@@ -1710,12 +1710,12 @@ def then_push_sent(ctx: dict, url: str) -> None:
     # Verify push delivery evidence: webhook delivery record or push_notification_config in DB
     from sqlalchemy import select
 
-    from src.core.database.database_session import get_db_session
     from src.core.database.models import PushNotificationConfig
+    from tests.bdd.steps._harness_db import db_session
 
     tenant = ctx.get("tenant")
     if tenant is not None:
-        with get_db_session() as session:
+        with db_session(ctx) as session:
             configs = list(
                 session.scalars(
                     select(PushNotificationConfig).where(
@@ -1926,11 +1926,11 @@ def then_account_shows_action(ctx: dict, domain: str, action: str) -> None:
 @then("no accounts were actually created or modified on the seller")
 def then_no_db_writes(ctx: dict) -> None:
     """Assert dry_run didn't write to DB — query repo and verify no accounts exist."""
-    from src.core.database.database_session import get_db_session
     from src.core.database.repositories.account import AccountRepository
+    from tests.bdd.steps._harness_db import db_session
 
     tenant, principal = ctx["tenant"], ctx["principal"]
-    with get_db_session() as session:
+    with db_session(ctx) as session:
         repo = AccountRepository(session, tenant.tenant_id)
         accounts = repo.list_by_principal(principal.principal_id)
         assert len(accounts) == 0, (
@@ -1945,8 +1945,8 @@ def then_account_in_db(ctx: dict) -> None:
     Derives expected domains from the sync response (not hardcoded) to ensure
     the DB contains the accounts that were reported as created/updated.
     """
-    from src.core.database.database_session import get_db_session
     from src.core.database.repositories.account import AccountRepository
+    from tests.bdd.steps._harness_db import db_session
 
     resp = ctx.get("response")
     assert resp is not None, "Expected a sync response"
@@ -1955,7 +1955,7 @@ def then_account_in_db(ctx: dict) -> None:
     assert len(expected_domains) > 0, "Sync response has no accounts with brand domains"
 
     tenant, principal = ctx["tenant"], ctx["principal"]
-    with get_db_session() as session:
+    with db_session(ctx) as session:
         repo = AccountRepository(session, tenant.tenant_id)
         accounts = repo.list_by_principal(principal.principal_id)
         assert len(accounts) > 0, "Expected at least 1 account in DB after sync"
@@ -2004,12 +2004,12 @@ def then_account_unchanged_or_updated(ctx: dict, domain: str) -> None:
 @then(parsers.parse('agent B\'s account for brand domain "{domain}" is not affected'))
 def then_agent_b_not_affected(ctx: dict, domain: str) -> None:
     """Assert agent B's account is still active (not deactivated by agent A)."""
-    from src.core.database.database_session import get_db_session
     from src.core.database.repositories.account import AccountRepository
+    from tests.bdd.steps._harness_db import db_session
 
     tenant = ctx["tenant"]
     agent_b = ctx["agents"]["B"]
-    with get_db_session() as session:
+    with db_session(ctx) as session:
         repo = AccountRepository(session, tenant.tenant_id)
         accounts = repo.list_by_principal(agent_b.principal_id)
         matching = [a for a in accounts if a.brand and a.brand.domain == domain]
@@ -2028,8 +2028,8 @@ def then_only_agent_a_deactivated(ctx: dict) -> None:
     2. Agent A's present accounts are NOT deactivated
     3. Agent B's accounts remain untouched in the DB
     """
-    from src.core.database.database_session import get_db_session
     from src.core.database.repositories.account import AccountRepository
+    from tests.bdd.steps._harness_db import db_session
 
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
@@ -2059,7 +2059,7 @@ def then_only_agent_a_deactivated(ctx: dict) -> None:
     # Verify agent B's accounts are untouched in the DB
     tenant = ctx["tenant"]
     agent_b = ctx["agents"]["B"]
-    with get_db_session() as session:
+    with db_session(ctx) as session:
         repo = AccountRepository(session, tenant.tenant_id)
         b_accounts = repo.list_by_principal(agent_b.principal_id)
         for acct in b_accounts:
@@ -2072,12 +2072,12 @@ def then_only_agent_a_deactivated(ctx: dict) -> None:
 @then(parsers.parse('brand domain "{domain}" remains in its current state'))
 def then_brand_unchanged(ctx: dict, domain: str) -> None:
     """Assert the account for the given domain was NOT deactivated."""
-    from src.core.database.database_session import get_db_session
     from src.core.database.repositories.account import AccountRepository
+    from tests.bdd.steps._harness_db import db_session
 
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    with get_db_session() as session:
+    with db_session(ctx) as session:
         repo = AccountRepository(session, tenant.tenant_id)
         accounts = repo.list_by_principal(principal.principal_id)
         matching = [a for a in accounts if a.brand and a.brand.domain == domain]
@@ -2108,12 +2108,12 @@ def then_only_included_processed(ctx: dict) -> None:
 @then("no accounts are deactivated")
 def then_no_deactivations(ctx: dict) -> None:
     """Assert no accounts were deactivated (all still active/non-closed)."""
-    from src.core.database.database_session import get_db_session
     from src.core.database.repositories.account import AccountRepository
+    from tests.bdd.steps._harness_db import db_session
 
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    with get_db_session() as session:
+    with db_session(ctx) as session:
         repo = AccountRepository(session, tenant.tenant_id)
         all_accounts = repo.list_by_principal(principal.principal_id)
         closed = [a for a in all_accounts if a.status == "closed"]
@@ -2563,11 +2563,11 @@ def then_no_production_accounts(ctx: dict) -> None:
         assert acct.sandbox is True, f"Production account found: {acct.name} (sandbox={acct.sandbox!r})"
     # Verify the Given step created production accounts that were excluded
     # (without this, the assertion is vacuous — it could pass with no production accounts created)
-    from src.core.database.database_session import get_db_session
     from src.core.database.repositories.account import AccountRepository
+    from tests.bdd.steps._harness_db import db_session
 
     tenant, principal = ctx["tenant"], ctx["principal"]
-    with get_db_session() as session:
+    with db_session(ctx) as session:
         repo = AccountRepository(session, tenant.tenant_id)
         all_accounts = repo.list_for_agent(principal.principal_id)
         production_in_db = [a for a in all_accounts if not getattr(a, "sandbox", False)]
@@ -2668,12 +2668,12 @@ def then_error_has_fix_suggestion(ctx: dict) -> None:
 @then(parsers.parse('the governance_agents are stored for brand domain "{domain}"'))
 def then_governance_agents_stored(ctx: dict, domain: str) -> None:
     """Assert governance_agents were persisted in the DB with valid structure."""
-    from src.core.database.database_session import get_db_session
     from src.core.database.repositories.account import AccountRepository
+    from tests.bdd.steps._harness_db import db_session
 
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    with get_db_session() as session:
+    with db_session(ctx) as session:
         repo = AccountRepository(session, tenant.tenant_id)
         accounts = repo.list_by_principal(principal.principal_id)
         matching = [a for a in accounts if a.brand and a.brand.domain == domain]
@@ -2697,12 +2697,12 @@ def then_no_modifications_for_domain(ctx: dict, domain: str) -> None:
     Verifies that the pre-existing account retains its original billing value
     despite the dry-run response reporting action='updated'.
     """
-    from src.core.database.database_session import get_db_session
     from src.core.database.repositories.account import AccountRepository
+    from tests.bdd.steps._harness_db import db_session
 
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    with get_db_session() as session:
+    with db_session(ctx) as session:
         repo = AccountRepository(session, tenant.tenant_id)
         accounts = repo.list_by_principal(principal.principal_id)
         matching = [a for a in accounts if a.brand and a.brand.domain == domain]
