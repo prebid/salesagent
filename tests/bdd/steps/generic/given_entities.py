@@ -73,11 +73,14 @@ def given_authenticated_request(ctx: dict, principal_id: str) -> None:
 
 @given("at least one creative agent is registered with format definitions")
 def given_creative_agent_registered(ctx: dict) -> None:
-    """Background precondition: creative agents exist.
+    """Background precondition: creative agent is running with real catalog.
 
-    Harness _configure_mocks() provides a default-display format.
-    Scenarios override via their own Given steps.
+    Validates the real creative agent container returns a complete catalog
+    and stores it in ctx for Then steps to reference.
     """
+    from tests.bdd.steps.generic._registry import validate_catalog
+
+    validate_catalog(ctx)
     ctx["creative_agents_registered"] = True
 
 
