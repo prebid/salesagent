@@ -36,11 +36,11 @@ dc() { docker-compose -f docker-compose.e2e.yml -p "${COMPOSE_PROJECT_NAME:-adcp
 cmd_up() {
     echo -e "${BLUE}Starting Docker test stack...${NC}"
 
-    read POSTGRES_PORT MCP_PORT MOCK_AGENT_PORT <<< $(find_ports)
+    read POSTGRES_PORT MCP_PORT CREATIVE_AGENT_PORT <<< $(find_ports)
     export COMPOSE_PROJECT_NAME="adcp-test-$$"
     dc down -v 2>/dev/null || true
 
-    export POSTGRES_PORT ADCP_SALES_PORT=$MCP_PORT MOCK_AGENT_PORT ADCP_TESTING=true CREATE_SAMPLE_DATA=true
+    export POSTGRES_PORT ADCP_SALES_PORT=$MCP_PORT CREATIVE_AGENT_PORT ADCP_TESTING=true CREATE_SAMPLE_DATA=true
     export DATABASE_URL="postgresql://adcp_user:secure_password_change_me@localhost:${POSTGRES_PORT}/adcp_test"
     export DELIVERY_WEBHOOK_INTERVAL=5
     export GEMINI_API_KEY="${GEMINI_API_KEY:-test_key}"
@@ -55,7 +55,7 @@ cmd_up() {
     while [ $(date +%s) -lt $deadline ]; do
         [ "$pg" = false ] && dc exec -T postgres pg_isready -U adcp_user >/dev/null 2>&1 && pg=true && echo -e "${GREEN}PostgreSQL ready${NC}"
         [ "$srv" = false ] && curl -sf "http://localhost:${MCP_PORT}/health" >/dev/null 2>&1 && srv=true && echo -e "${GREEN}Server ready${NC}"
-        [ "$mock" = false ] && curl -sf "http://localhost:${MOCK_AGENT_PORT}/health" >/dev/null 2>&1 && mock=true && echo -e "${GREEN}Mock creative agent ready${NC}"
+        [ "$mock" = false ] && curl -sf "http://localhost:${CREATIVE_AGENT_PORT}/api/creative-agent/health" >/dev/null 2>&1 && mock=true && echo -e "${GREEN}Creative agent ready${NC}"
         [ "$pg" = true ] && [ "$srv" = true ] && [ "$mock" = true ] && break
         sleep 2
     done
@@ -68,7 +68,7 @@ cmd_up() {
 export COMPOSE_PROJECT_NAME="$COMPOSE_PROJECT_NAME"
 export POSTGRES_PORT=$POSTGRES_PORT
 export ADCP_SALES_PORT=$MCP_PORT
-export MOCK_AGENT_PORT=$MOCK_AGENT_PORT
+export CREATIVE_AGENT_PORT=$CREATIVE_AGENT_PORT
 export DATABASE_URL="$DATABASE_URL"
 export ADCP_TESTING=true
 export CREATE_SAMPLE_DATA=true
@@ -78,10 +78,10 @@ export ENCRYPTION_KEY="${ENCRYPTION_KEY}"
 export BDD_E2E_ENABLED=true
 export E2E_BASE_URL="http://localhost:${MCP_PORT}"
 export E2E_POSTGRES_URL="postgresql://adcp_user:secure_password_change_me@localhost:${POSTGRES_PORT}/adcp"
-export MOCK_CREATIVE_AGENT_URL="http://localhost:${MOCK_AGENT_PORT}"
+export CREATIVE_AGENT_URL="http://localhost:${CREATIVE_AGENT_PORT}/api/creative-agent"
 EOF
 
-    echo -e "${GREEN}Stack ready (pg:$POSTGRES_PORT srv:$MCP_PORT mock:$MOCK_AGENT_PORT)${NC}"
+    echo -e "${GREEN}Stack ready (pg:$POSTGRES_PORT srv:$MCP_PORT creative:$CREATIVE_AGENT_PORT)${NC}"
     echo -e "${BLUE}Env written to $ENV_FILE — source it before running tox${NC}"
     echo ""
     echo "Run tests with:"
@@ -107,7 +107,7 @@ cmd_status() {
         echo "Stack env: $ENV_FILE"
         echo "  POSTGRES_PORT=$POSTGRES_PORT"
         echo "  ADCP_SALES_PORT=$ADCP_SALES_PORT"
-        echo "  MOCK_AGENT_PORT=${MOCK_AGENT_PORT:-not set}"
+        echo "  CREATIVE_AGENT_PORT=${CREATIVE_AGENT_PORT:-not set}"
         echo "  COMPOSE_PROJECT_NAME=$COMPOSE_PROJECT_NAME"
         dc ps 2>/dev/null || echo "Stack not running"
     else

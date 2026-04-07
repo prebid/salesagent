@@ -29,18 +29,42 @@ services:
       timeout: 5s
       retries: 5
 
-  mock-creative-agent:
-    image: python:3.12-slim
-    command: ["sh", "-c", "pip install -q -r /app/requirements.txt && python /app/server.py"]
-    volumes:
-      - ./tests/fixtures/mock_creative_agent:/app:ro
-    ports:
-      - "${MOCK_AGENT_PORT:-8090}:8090"
+  creative-agent-db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: adcp_registry
+      POSTGRES_USER: adcp
+      POSTGRES_PASSWORD: localdev
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8090/health')"]
+      test: ["CMD-SHELL", "pg_isready -U adcp"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  creative-agent:
+    build:
+      context: ../adcp
+    ports:
+      - "${CREATIVE_AGENT_PORT:-9999}:8080"
+    environment:
+      - NODE_ENV=production
+      - PORT=8080
+      - DATABASE_URL=postgresql://adcp:localdev@creative-agent-db:5432/adcp_registry
+      - RUN_MIGRATIONS=true
+      - ALLOW_INSECURE_COOKIES=true
+      - DEV_USER_EMAIL=ci@test.com
+      - DEV_USER_ID=ci-user
+      - AGENT_TOKEN_ENCRYPTION_SECRET=local-dev-encryption-key-32chars!
+      - WORKOS_API_KEY=sk_test_dummy
+      - WORKOS_CLIENT_ID=client_dummy
+    depends_on:
+      creative-agent-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/creative-agent/health"]
       interval: 5s
       timeout: 3s
-      retries: 10
+      retries: 15
 
   adcp-server:
     build: .
@@ -59,11 +83,11 @@ services:
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       SALES_AGENT_DOMAIN: "sales-agent.example.com"
       ADCP_MULTI_TENANT: "true"
-      CREATIVE_AGENT_URL: "http://mock-creative-agent:8090"
+      CREATIVE_AGENT_URL: "http://creative-agent:8080/api/creative-agent"
     depends_on:
       postgres:
         condition: service_healthy
-      mock-creative-agent:
+      creative-agent:
         condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
