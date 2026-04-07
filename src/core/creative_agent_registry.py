@@ -154,15 +154,18 @@ class CreativeAgentRegistry:
         )
     """
 
-    # Default creative agent (always available)
-    # Note: agent_url is the base URL for the creative agent (e.g., https://creative.adcontextprotocol.org)
-    # The MCP server endpoint (/mcp) is appended by the MCP client when connecting
-    # Reads CREATIVE_AGENT_URL env var so CI can point at a containerized agent.
-    DEFAULT_AGENT = CreativeAgent(
-        agent_url=os.environ.get("CREATIVE_AGENT_URL", "https://creative.adcontextprotocol.org"),
-        name="AdCP Standard Creative Agent",
-        enabled=True,
-        priority=1,
+    # Default creative agent (always available in production).
+    # CREATIVE_AGENT_URL env var overrides for CI/Docker (containerized agent).
+    # When ADCP_TESTING=true without CREATIVE_AGENT_URL: no default agent — use mock formats.
+    DEFAULT_AGENT: CreativeAgent | None = (
+        CreativeAgent(
+            agent_url=os.environ.get("CREATIVE_AGENT_URL", "https://creative.adcontextprotocol.org"),
+            name="AdCP Standard Creative Agent",
+            enabled=True,
+            priority=1,
+        )
+        if os.environ.get("CREATIVE_AGENT_URL") or os.environ.get("ADCP_TESTING") != "true"
+        else None
     )
 
     def __init__(self):
@@ -188,9 +191,10 @@ class CreativeAgentRegistry:
         """Get list of creative agents for a tenant.
 
         Returns:
-            List of CreativeAgent instances (default + tenant-specific)
+            List of CreativeAgent instances (default + tenant-specific).
+            Empty list when ADCP_TESTING=true and no CREATIVE_AGENT_URL.
         """
-        agents = [self.DEFAULT_AGENT]
+        agents: list[CreativeAgent] = [self.DEFAULT_AGENT] if self.DEFAULT_AGENT else []
 
         if not tenant_id:
             return agents
@@ -597,6 +601,9 @@ class CreativeAgentRegistry:
         agents = self._get_tenant_agents(tenant_id)
         all_formats: list[Format] = []
         errors: list[AdCPResponseError] = []
+
+        if not agents:
+            return FormatFetchResult(formats=[], errors=[])
 
         logger.info(f"list_all_formats: Found {len(agents)} agents for tenant {tenant_id}")
 
