@@ -714,10 +714,12 @@ def when_boundary_input_ids(ctx: dict, boundary_point: str) -> None:
 
 
 def _sync_creative_agent_formats(ctx: dict) -> None:
-    """Push ctx['creative_agent_formats'] into the harness registry."""
-    formats = ctx.get("creative_agent_formats", [])
-    if formats:
-        ctx["env"].set_registry_formats(formats)
+    """No-op: creative agent formats come from the real catalog.
+
+    Formerly pushed ctx['creative_agent_formats'] into the harness via
+    set_registry_formats(). That method has been removed — the real
+    catalog is always available.
+    """
 
 
 _AGENT_TYPE_PARTITION_MAP = {

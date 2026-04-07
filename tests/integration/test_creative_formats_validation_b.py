@@ -81,7 +81,6 @@ class TestNonIntegerDimensionValues:
 
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
-            env.set_registry_formats([])
             result = env.call_via(Transport.MCP, max_width="not_a_number")
             assert_rejected(result, field="max_width", reason="valid integer")
 
@@ -226,7 +225,6 @@ class TestMultiFieldValidationErrors:
 
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
-            env.set_registry_formats([])
             result = env.call_via(
                 Transport.MCP,
                 max_width="not_a_number",

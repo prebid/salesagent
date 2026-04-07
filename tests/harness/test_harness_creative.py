@@ -150,25 +150,6 @@ class TestCreativeFormatsEnvContract:
 
         assert CreativeFormatsEnv is not None
 
-    def test_set_registry_formats_injects_into_cache(self):
-        """set_registry_formats() pre-warms the registry cache.
-
-        No mocks — writes to the registry's _format_cache directly.
-        The call_impl path reads from cache and returns the injected formats.
-        """
-        from tests.factories.format import FormatFactory as FF
-        from tests.harness.creative_formats import CreativeFormatsEnv
-
-        class _UnitMode(CreativeFormatsEnv):
-            use_real_db = False
-
-        with _UnitMode() as env:
-            custom = [FF.build(name="custom-video")]
-            env.set_registry_formats(custom)
-            response = env.call_impl()
-            assert len(response.formats) == 1
-            assert response.formats[0].name == "custom-video"
-
     def test_has_correct_external_patches(self):
         """CreativeFormatsEnv patches audit_logger only (registry is real)."""
         from tests.harness.creative_formats import CreativeFormatsEnv

@@ -54,26 +54,9 @@ class TestAdapterFormatsViaA2A:
                 session.add(config)
                 session.commit()
 
-            from src.core.schemas import Format
-
-            standard_format = Format(
-                format_id=FormatId(
-                    agent_url="https://creative.adcontextprotocol.org",
-                    id="display_300x250",
-                ),
-                name="Display 300x250",
-                type=FormatCategory.display,
-                is_standard=True,
-            )
-            env.set_registry_formats([standard_format])
-
             response = env.call_a2a()
 
         assert isinstance(response, ListCreativeFormatsResponse)
-
-        # Standard format should be present
-        format_ids = {f.format_id.id for f in response.formats}
-        assert "display_300x250" in format_ids, "Standard format should be in response"
 
         # All 8 real Broadstreet formats should be present with assets
         broadstreet_formats = [f for f in response.formats if "broadstreet" in str(f.format_id.agent_url)]
@@ -111,13 +94,12 @@ class TestAdapterFormatsViaA2A:
                 session.add(config)
                 session.commit()
 
-            env.set_registry_formats([])
-
             response = env.call_a2a()
 
-        assert len(response.formats) == len(BROADSTREET_TEMPLATES)
+        broadstreet_formats = [f for f in response.formats if "broadstreet" in str(f.format_id.agent_url)]
+        assert len(broadstreet_formats) == len(BROADSTREET_TEMPLATES)
 
-        for fmt in response.formats:
+        for fmt in broadstreet_formats:
             # FormatId structure
             assert fmt.format_id is not None
             assert fmt.format_id.id.startswith("broadstreet_")
@@ -152,24 +134,11 @@ class TestAdapterFormatsViaA2A:
                 session.add(config)
                 session.commit()
 
-            from src.core.schemas import Format
-
-            standard_format = Format(
-                format_id=FormatId(
-                    agent_url="https://creative.adcontextprotocol.org",
-                    id="display_300x250",
-                ),
-                name="Display 300x250",
-                type=FormatCategory.display,
-                is_standard=True,
-            )
-            env.set_registry_formats([standard_format])
-
             response = env.call_a2a()
 
-        # Only the standard format should be present
-        assert len(response.formats) == 1
-        assert response.formats[0].format_id.id == "display_300x250"
+        # No adapter-specific formats should be present for mock adapter
+        broadstreet_formats = [f for f in response.formats if "broadstreet" in str(f.format_id.agent_url)]
+        assert len(broadstreet_formats) == 0, "Mock adapter should not add Broadstreet formats"
 
 
 class TestInvalidFormatCategoryEnum:
@@ -230,9 +199,10 @@ class TestInvalidFormatCategoryEnum:
             # Pass a real enum — the wrapper's type.value should work
             response = env.call_mcp(type=FormatCategory.audio)
 
-        # Audio filter on a catalog with no audio formats → empty result
+        # Audio filter returns real catalog audio formats (3 in real catalog)
         assert isinstance(response, ListCreativeFormatsResponse)
-        assert len(response.formats) == 0
+        assert len(response.formats) > 0
+        assert all(f.type == FormatCategory.audio for f in response.formats)
 
     def test_each_valid_category_accepted(self, integration_db):
         """UC-005-EXT-B-01 (positive counterpart): all valid FormatCategory values are accepted.
