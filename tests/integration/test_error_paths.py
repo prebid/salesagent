@@ -240,7 +240,7 @@ class TestCreateMediaBuyErrorPaths:
         # Verify error details
         error = response.errors[0]
         assert isinstance(error, Error)
-        assert error.code == "validation_error"
+        assert error.code == "INVALID_REQUEST"
         # Context echoed back (adcp 2.12.0+: context is ContextObject, not dict)
         assert response.context.trace_id == "past-start"
         assert "past" in error.message.lower() or "start" in error.message.lower()
@@ -284,7 +284,7 @@ class TestCreateMediaBuyErrorPaths:
 
         error = response.errors[0]
         assert isinstance(error, Error)
-        assert error.code == "validation_error"
+        assert error.code == "INVALID_REQUEST"
         assert "end" in error.message.lower() or "after" in error.message.lower()
 
     async def test_negative_budget_raises_tool_error(self, test_tenant_with_principal):
@@ -359,8 +359,8 @@ class TestCreateMediaBuyErrorPaths:
 
         error = response.errors[0]
         assert isinstance(error, Error)
-        # Should be validation error or similar
-        assert error.code in ["validation_error", "invalid_request"]
+        # Empty packages means total budget is 0, which triggers BUDGET_TOO_LOW
+        assert error.code == "BUDGET_TOO_LOW"
 
 
 @pytest.mark.integration

@@ -53,30 +53,10 @@ class AccountSyncEnv(IntegrationEnv):
         "audit_logger": "src.core.tools.accounts.get_audit_logger",
     }
 
-    def __init__(
-        self,
-        supported_billing: list[str] | None = None,
-        account_approval_mode: str | None = None,
-        **kwargs: Any,
-    ) -> None:
-        super().__init__(**kwargs)
-        self._supported_billing = supported_billing
-        self._account_approval_mode = account_approval_mode
-
     def _configure_mocks(self) -> None:
         """Set up happy-path defaults for audit logger."""
         mock_logger = MagicMock()
         self.mock["audit_logger"].return_value = mock_logger
-
-    def identity_for(self, transport: Any) -> Any:
-        """Build identity with optional billing policy and approval mode."""
-        ident = super().identity_for(transport)
-        updates: dict[str, Any] = {}
-        if self._supported_billing is not None:
-            updates["supported_billing"] = self._supported_billing
-        if self._account_approval_mode is not None:
-            updates["account_approval_mode"] = self._account_approval_mode
-        return ident.model_copy(update=updates) if updates else ident
 
     async def call_impl_async(self, **kwargs: Any) -> SyncAccountsResponse:
         """Call _sync_accounts_impl with real DB (async version).
@@ -112,6 +92,12 @@ class AccountSyncEnv(IntegrationEnv):
         """Call sync_accounts MCP wrapper with mock Context."""
         from src.core.tools.accounts import sync_accounts
 
+        # MCP wrapper takes flat kwargs, not req=. Unpack request if provided.
+        req = kwargs.pop("req", None)
+        if req is not None:
+            flat = req.model_dump(mode="json", exclude_none=True)
+            flat.update(kwargs)
+            kwargs = flat
         return self._run_mcp_wrapper(sync_accounts, SyncAccountsResponse, **kwargs)
 
     REST_ENDPOINT = "/api/v1/accounts/sync"
@@ -119,3 +105,19 @@ class AccountSyncEnv(IntegrationEnv):
     def parse_rest_response(self, data: dict[str, Any]) -> SyncAccountsResponse:
         """Parse REST JSON into SyncAccountsResponse."""
         return SyncAccountsResponse(**data)
+
+    # -- Cross-cutting list dispatch -----------------------------------------
+    # Scenarios tagged "sandbox" or "context-echo" run under AccountSyncEnv
+    # but need to call list_accounts (a different operation). These methods
+    # keep the production import in the harness, not in step functions.
+
+    def call_list_impl(self, **kwargs: Any) -> Any:
+        """Call _list_accounts_impl with real DB (cross-cutting list dispatch).
+
+        Accepts all _list_accounts_impl kwargs. Identity defaults to self.identity.
+        """
+        from src.core.tools.accounts import _list_accounts_impl
+
+        self._commit_factory_data()
+        kwargs.setdefault("identity", self.identity)
+        return _list_accounts_impl(**kwargs)

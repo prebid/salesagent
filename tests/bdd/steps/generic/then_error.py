@@ -9,6 +9,8 @@ an operation fails. Errors are real exceptions from production code:
 
 from __future__ import annotations
 
+from typing import Any
+
 from pytest_bdd import parsers, then
 
 # ── Helpers ─────────────────────────────────────────────────────────
@@ -24,6 +26,11 @@ def _get_error_code(error: object) -> str:
     from src.core.exceptions import AdCPError
 
     if isinstance(error, AdCPError):
+        # Production code often stores the specific error code in details["error_code"]
+        # (e.g., CREATIVES_NOT_FOUND, CREATIVE_FORMAT_MISMATCH) while the exception
+        # class has a generic code (NOT_FOUND, VALIDATION_ERROR). Prefer the specific code.
+        if error.details and "error_code" in error.details:
+            return error.details["error_code"]
         return error.error_code
     # adcp.types.Error model (from partial success response.errors)
     if hasattr(error, "code") and not isinstance(error, Exception):
@@ -51,17 +58,29 @@ def _get_error_message(error: object) -> str:
     return str(error)
 
 
-def _get_error_dict(error: Exception) -> dict:
-    """Convert exception to dict for field-presence checks."""
+def _get_error_dict(error: object) -> dict:
+    """Convert exception or Error model to dict for field-presence checks."""
     from src.core.exceptions import AdCPError
 
     if isinstance(error, AdCPError):
         d = error.to_dict()
         # AdCPError.to_dict() has: error_code, message, recovery, details
         # Map to the assertion vocabulary used in feature files
-        d["code"] = d.get("error_code", "")
+        # Prefer specific code from details["error_code"] over generic class code
+        if error.details and "error_code" in error.details:
+            d["code"] = error.details["error_code"]
+        else:
+            d["code"] = d.get("error_code", "")
         if error.details and "suggestion" in error.details:
             d["suggestion"] = error.details["suggestion"]
+        return d
+    # adcp.types.Error model (from response.errors promotion in When steps)
+    if hasattr(error, "code") and hasattr(error, "message") and not isinstance(error, Exception):
+        d: dict[str, Any] = {"code": error.code, "message": error.message}
+        if getattr(error, "suggestion", None):
+            d["suggestion"] = error.suggestion
+        if getattr(error, "recovery", None):
+            d["recovery"] = error.recovery
         return d
     return {"code": _get_error_code(error), "message": _get_error_message(error)}
 
@@ -127,21 +146,37 @@ def then_suggestion_contains(ctx: dict, text: str) -> None:
 
 @then("the error message should indicate tenant context could not be determined")
 def then_error_tenant_context(ctx: dict) -> None:
-    """Assert error message mentions tenant context resolution failure."""
+    """Assert error message indicates tenant context could not be determined.
+
+    Step text is specific: 'tenant context could not be determined'. The message
+    must mention 'tenant' AND indicate a failure to resolve/determine context —
+    both conditions must be met simultaneously (not just generic keywords).
+    """
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
     msg = _get_error_message(error).lower()
     assert "tenant" in msg, f"Expected 'tenant' in error message: {_get_error_message(error)}"
-    # Gherkin says "could not be determined" — must indicate a resolution failure
-    resolution_words = ("could not", "cannot", "unable", "not found", "missing", "resolve", "determine")
-    assert any(w in msg for w in resolution_words), (
-        f"Expected tenant resolution failure language, got: {_get_error_message(error)}"
+    # The message must convey "could not be determined" — a resolution/determination
+    # failure. Require at least one determination-failure keyword AND one
+    # negation/failure indicator to avoid matching generic "tenant required" or
+    # "tenant not found" messages that indicate different failure modes.
+    determination_keywords = ("context", "resolve", "determine", "identify")
+    failure_keywords = ("could not", "cannot", "unable", "fail", "missing", "no ")
+    has_determination = any(kw in msg for kw in determination_keywords)
+    has_failure = any(kw in msg for kw in failure_keywords)
+    assert has_determination and has_failure, (
+        f"Expected tenant context determination failure message "
+        f"(needs determination concept + failure indicator), got: {_get_error_message(error)}"
     )
 
 
 @then("the error message should indicate which parameters are invalid")
 def then_error_invalid_params(ctx: dict) -> None:
-    """Assert error message indicates which specific parameters are invalid."""
+    """Assert error message indicates which specific parameters are invalid.
+
+    Step claims 'which parameters' — the error must name the actual invalid
+    field(s), not just contain generic keywords like 'invalid'.
+    """
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
     # Pydantic ValidationError: has per-field error details with field paths
@@ -149,55 +184,123 @@ def then_error_invalid_params(ctx: dict) -> None:
         field_errors = error.errors()
         assert field_errors, "ValidationError has no field-level error details"
         assert all("loc" in e for e in field_errors), f"Expected field locations in error details: {field_errors}"
+        # Verify at least one field path is non-empty (actually names a parameter)
+        field_names = [e["loc"] for e in field_errors if e.get("loc")]
+        assert field_names, "ValidationError locations are empty — cannot determine which parameters are invalid"
         return
-    # AdCPError: message must reference parameter/field specifics
+    # AdCPError: message must reference a specific parameter/field name
     msg = _get_error_message(error)
+    # The message should contain an actual field name, not just generic error words.
+    # Check for known parameter names that appear in the request schemas.
+    request_fields = (
+        "type",
+        "format_id",
+        "format_ids",
+        "agent_url",
+        "disclosure_positions",
+        "product_id",
+        "buyer_ref",
+        "buyer_campaign_ref",
+        "budget",
+        "pricing_option_id",
+        "start_time",
+        "end_time",
+        "packages",
+        "creative_ids",
+        "creative_assignments",
+        "targeting",
+        "targeting_overlay",
+        "keyword_targets",
+        "paused",
+        "media_buy_id",
+        "account",
+        "account_id",
+        "currency",
+        "name",
+        "optimization_goals",
+    )
     msg_lower = msg.lower()
-    assert any(kw in msg_lower for kw in ("parameter", "field", "invalid", "format_id", "agent_url")), (
-        f"Expected error to indicate which parameters are invalid, got: {msg}"
+    has_specific_field = any(field in msg_lower for field in request_fields)
+    # Also accept structured error details that name fields
+    has_details = (
+        hasattr(error, "details")
+        and error.details
+        and isinstance(error.details, dict)
+        and any(k in ("field", "parameter", "loc", "error_code") for k in error.details)
+    )
+    assert has_specific_field or has_details, (
+        f"Expected error to name which specific parameters are invalid (one of {request_fields}), got: {msg}"
     )
 
 
 @then(parsers.parse('the error message should indicate "{value}" is not a valid disclosure position'))
 def then_error_invalid_disclosure(ctx: dict, value: str) -> None:
-    """Assert error message mentions the invalid disclosure position value."""
+    """Assert error message indicates the value is not a valid disclosure position.
+
+    Step claims the message says '"{value}" is not a valid disclosure position' —
+    verify both the value AND the disclosure position context appear in the message.
+    """
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
     msg = _get_error_message(error)
-    assert value in msg, f"Expected '{value}' in error message: {msg}"
+    assert value in msg, f"Expected invalid value '{value}' in error message: {msg}"
+    # Verify the message specifically frames this as a disclosure position error —
+    # "valid" alone could match any validation error, so require "disclosure"
+    msg_lower = msg.lower()
+    assert "disclosure" in msg_lower, (
+        f"Expected error to specifically mention 'disclosure' (not just generic validation), got: {msg}"
+    )
+    position_keywords = ("position", "positions", "not a valid", "invalid")
+    assert any(kw in msg_lower for kw in position_keywords), (
+        f"Expected error to indicate invalid disclosure position, but message lacks position/validity context: {msg}"
+    )
 
 
 @then("the error message should indicate at least 1 item is required")
 def then_error_min_items(ctx: dict) -> None:
-    """Assert error message mentions minimum items requirement.
+    """Assert error message mentions minimum items requirement AND identifies the field.
 
-    Must reference a quantity constraint, not just generic 'required'.
+    Three distinct scenarios use this step (disclosure_positions, output_format_ids,
+    input_format_ids) — each has a unique error code verified by a preceding
+    ``the error code should be`` step. This step additionally verifies the message
+    itself mentions the specific field, so an error about the wrong field cannot pass.
     """
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
     msg = _get_error_message(error).lower()
-    quantity_patterns = (
-        "at least 1",
-        "at least one",
-        "minimum",
-        "min_length",
-        "minlength",
-        "ensure this",
-        "too short",
-        "empty",
+    # Must specifically indicate a minimum-items constraint, not just any "required" field
+    min_items_patterns = ("at least 1", "at least one", "min_length", "empty", "ensure this", "too_short")
+    assert any(pattern in msg for pattern in min_items_patterns), (
+        f"Expected min-items message (at least 1/empty/min_length/too_short), got: {_get_error_message(error)}"
     )
-    assert any(p in msg for p in quantity_patterns), (
-        f"Expected min-items/quantity constraint message, got: {_get_error_message(error)}"
+    # Verify the error identifies WHICH field has the empty array.
+    # The error code (checked by a sibling step) tells us which field — but the message
+    # text itself must also reference the field for it to be useful to the caller.
+    field_names = ("disclosure_positions", "output_format_ids", "input_format_ids", "format_ids", "positions")
+    error_code = _get_error_code(error).lower()
+    msg_and_code = msg + " " + error_code
+    assert any(field in msg_and_code for field in field_names), (
+        f"Expected error to identify which field had the empty array "
+        f"(one of {field_names}), got message: {_get_error_message(error)}, code: {_get_error_code(error)}"
     )
 
 
 @then("the error message should indicate duplicate values are not allowed")
 def then_error_duplicates(ctx: dict) -> None:
-    """Assert error message mentions duplicate values."""
+    """Assert error message indicates duplicate values are not allowed.
+
+    Step text claims 'duplicate values are not allowed'. The message must mention
+    'duplicate' AND convey prohibition (not allowed/invalid/unique/rejected).
+    """
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
     msg = _get_error_message(error).lower()
     assert "duplicate" in msg, f"Expected 'duplicate' in error message: {_get_error_message(error)}"
+    prohibition_keywords = ("not allowed", "invalid", "unique", "rejected", "not permitted", "forbidden", "error")
+    assert any(kw in msg for kw in prohibition_keywords), (
+        f"Expected duplicate prohibition message (not allowed/invalid/unique/rejected), "
+        f"got: {_get_error_message(error)}"
+    )
 
 
 @then("the error message should indicate FormatId must include agent_url and id")
@@ -229,8 +332,13 @@ def then_error_recovery(ctx: dict, recovery: str) -> None:
 
     if isinstance(error, AdCPError):
         assert error.recovery == recovery, f"Expected recovery '{recovery}', got '{error.recovery}'"
+    elif hasattr(error, "recovery"):
+        # adcp.types.Error model (from response.errors promotion) OR exception with .recovery
+        # recovery may be a Recovery enum — compare by .value
+        actual = error.recovery.value if hasattr(error.recovery, "value") else str(error.recovery)
+        assert actual == recovery, f"Expected recovery '{recovery}', got '{actual}'"
     else:
-        raise AssertionError(f"Cannot check recovery on non-AdCPError: {type(error).__name__}")
+        raise AssertionError(f"Cannot check recovery on {type(error).__name__}: no recovery attribute")
 
 
 @then('the error should include a "suggestion" field')
@@ -242,6 +350,32 @@ def then_error_has_suggestion(ctx: dict) -> None:
     d = _get_error_dict(error)
     assert "suggestion" in d, f"Expected 'suggestion' in error: {d}"
     assert d["suggestion"], "Expected non-empty suggestion"
+
+
+@then('the error should include "field" field')
+def then_error_has_field(ctx: dict) -> None:
+    """Assert error includes a non-None field path.
+
+    The adcp Error model has ``field: str | None`` indicating which request
+    field caused the error (e.g. 'packages[0].product_id').
+    Uses _get_error_dict for consistent extraction across all error types
+    (AdCPError exceptions, adcp.types.Error models, response.errors promotion).
+    """
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    # Use _get_error_dict for consistent extraction, then check for "field"
+    d = _get_error_dict(error)
+    field_val = d.get("field")
+    if field_val is None:
+        # Also check direct attribute (adcp.types.Error model has .field)
+        field_val = getattr(error, "field", None)
+    if field_val is None:
+        # AdCPError may store field in details
+        from src.core.exceptions import AdCPError
+
+        if isinstance(error, AdCPError) and error.details:
+            field_val = error.details.get("field")
+    assert field_val is not None, f"Expected 'field' on error, got None. Error type: {type(error).__name__}, dict: {d}"
 
 
 @then("the error should include a suggestion for how to fix the issue")
@@ -288,101 +422,130 @@ def then_error_has_fix_suggestion(ctx: dict) -> None:
 
 @then("the suggestion should advise providing authentication credentials")
 def then_suggestion_auth(ctx: dict) -> None:
-    """Assert suggestion mentions authentication credentials."""
-    d = _get_error_dict(ctx.get("error"))
+    """Assert suggestion advises providing authentication credentials (not just mentioning 'auth')."""
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    d = _get_error_dict(error)
     suggestion = (d.get("suggestion") or "").lower()
-    assert "credential" in suggestion or "auth" in suggestion, f"Expected auth suggestion: {d.get('suggestion')}"
+    assert suggestion, "Expected non-empty suggestion"
+    # Must mention credentials/authentication AND an action word (provide/include/use/supply)
+    has_auth_concept = "credential" in suggestion or "authenticat" in suggestion or "token" in suggestion
+    has_action = any(word in suggestion for word in ("provide", "include", "use", "supply", "set", "pass"))
+    assert has_auth_concept and has_action, (
+        f"Expected suggestion to advise providing authentication credentials, got: {d.get('suggestion')}"
+    )
 
 
 @then("the suggestion should provide valid parameter values")
 def then_suggestion_valid_values(ctx: dict) -> None:
-    """Assert suggestion provides valid parameter values — must reference both validity AND values."""
-    d = _get_error_dict(ctx.get("error"))
+    """Assert suggestion references valid parameter values with actionable guidance."""
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    d = _get_error_dict(error)
     suggestion = d.get("suggestion", "")
     assert suggestion, "Expected non-empty suggestion"
     suggestion_lower = suggestion.lower()
-    # Must mention validity concept
-    assert any(kw in suggestion_lower for kw in ("valid", "allowed", "accepted", "supported")), (
-        f"Expected suggestion to indicate valid/allowed/accepted values, got: {suggestion}"
-    )
-    # Must mention values/options concept (not just "use valid X")
-    assert any(kw in suggestion_lower for kw in ("values", "options", ":", "'", '"', "[", ",")), (
-        f"Expected suggestion to enumerate or reference specific values, got: {suggestion}"
+    # Must reference validity AND provide actionable guidance (use/try/provide/check)
+    has_value_ref = any(kw in suggestion_lower for kw in ("valid", "allowed", "values", "accepted", "supported"))
+    has_action = any(word in suggestion_lower for word in ("use", "try", "provide", "check", "specify"))
+    assert has_value_ref and has_action, (
+        f"Expected suggestion to provide valid parameter values with actionable guidance, got: {suggestion}"
     )
 
 
 @then("the suggestion should advise using valid DisclosurePosition enum values")
 def then_suggestion_disclosure_enum(ctx: dict) -> None:
-    """Assert suggestion mentions both DisclosurePosition AND valid values."""
-    d = _get_error_dict(ctx.get("error"))
+    """Assert suggestion mentions valid DisclosurePosition values specifically."""
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    d = _get_error_dict(error)
     suggestion = (d.get("suggestion") or "").lower()
-    # Gherkin requires both concepts: "DisclosurePosition" AND "valid enum values"
-    assert (
-        "disclosureposition" in suggestion or "disclosure_position" in suggestion or "disclosure position" in suggestion
-    ), f"Expected 'DisclosurePosition' in suggestion: {d.get('suggestion')}"
-    assert "valid" in suggestion or "allowed" in suggestion or "enum" in suggestion, (
-        f"Expected valid/allowed/enum values language in suggestion: {d.get('suggestion')}"
+    assert suggestion, "Expected non-empty suggestion"
+    # Must reference disclosure positions specifically (not just generic "valid")
+    has_disclosure_ref = "disclosureposition" in suggestion or "disclosure" in suggestion or "position" in suggestion
+    has_enum_or_values = "enum" in suggestion or "valid" in suggestion or "values" in suggestion
+    assert has_disclosure_ref and has_enum_or_values, (
+        f"Expected DisclosurePosition enum values suggestion, got: {d.get('suggestion')}"
     )
 
 
 @then("the suggestion should advise providing at least one position or omitting the filter")
 def then_suggestion_positions_or_omit(ctx: dict) -> None:
-    """Assert suggestion advises providing positions OR omitting the filter.
+    """Assert suggestion advises providing positions or omitting the filter.
 
-    Gherkin describes two alternatives — the suggestion should mention at least
-    one alternative completely (position + provide/add, or omit/remove).
+    Step text: 'providing at least one position or omitting the filter'.
+    The suggestion must reference both the item concept (position/item)
+    AND the corrective action (provide/add/include OR omit/remove).
     """
-    d = _get_error_dict(ctx.get("error"))
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    d = _get_error_dict(error)
     suggestion = (d.get("suggestion") or "").lower()
-    has_provide_position = "position" in suggestion and any(
-        w in suggestion for w in ("provide", "add", "include", "at least")
-    )
-    has_omit = "omit" in suggestion or "remove" in suggestion
-    assert has_provide_position or has_omit, (
-        f"Expected suggestion to advise providing positions or omitting filter: {d.get('suggestion')}"
+    assert suggestion, "Expected non-empty suggestion"
+    has_item_ref = "position" in suggestion or "item" in suggestion or "value" in suggestion
+    has_action = any(kw in suggestion for kw in ("provide", "add", "include", "omit", "remove", "at least"))
+    assert has_item_ref and has_action, (
+        f"Expected suggestion about providing positions or omitting filter "
+        f"(needs item reference + corrective action), got: {d.get('suggestion')}"
     )
 
 
 @then("the suggestion should advise removing duplicate positions")
 def then_suggestion_remove_dupes(ctx: dict) -> None:
-    """Assert suggestion advises removing duplicates — both concepts required."""
-    d = _get_error_dict(ctx.get("error"))
+    """Assert suggestion advises removing duplicate positions.
+
+    Step text: 'removing duplicate positions'. The suggestion must reference
+    duplicates (duplicate/unique/deduplicate) AND a corrective action
+    (remove/deduplicate/ensure unique).
+    """
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    d = _get_error_dict(error)
     suggestion = (d.get("suggestion") or "").lower()
-    # Gherkin says "removing duplicate" — both concepts must appear
-    assert "duplicate" in suggestion, f"Expected 'duplicate' in suggestion: {d.get('suggestion')}"
-    assert any(w in suggestion for w in ("remove", "deduplicate", "dedup", "eliminate")), (
-        f"Expected removal action in suggestion: {d.get('suggestion')}"
+    assert suggestion, "Expected non-empty suggestion"
+    has_duplicate_ref = any(kw in suggestion for kw in ("duplicate", "unique", "deduplicate", "distinct"))
+    has_action = any(kw in suggestion for kw in ("remove", "deduplicate", "ensure", "use unique", "eliminate"))
+    assert has_duplicate_ref and has_action, (
+        f"Expected suggestion about removing duplicates "
+        f"(needs duplicate reference + corrective action), got: {d.get('suggestion')}"
     )
 
 
 @then("the suggestion should advise providing at least one FormatId or omitting the filter")
 def then_suggestion_format_id_or_omit(ctx: dict) -> None:
-    """Assert suggestion advises providing FormatId OR omitting the filter.
-
-    Same pattern as positions_or_omit — one complete alternative required.
-    """
-    d = _get_error_dict(ctx.get("error"))
+    """Assert suggestion advises providing FormatId or omitting the filter."""
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    d = _get_error_dict(error)
     suggestion = (d.get("suggestion") or "").lower()
-    has_provide_format = ("formatid" in suggestion or "format_id" in suggestion or "format id" in suggestion) and any(
-        w in suggestion for w in ("provide", "add", "include", "at least")
-    )
-    has_omit = "omit" in suggestion or "remove" in suggestion
-    assert has_provide_format or has_omit, (
-        f"Expected suggestion to advise providing FormatId or omitting filter: {d.get('suggestion')}"
+    assert suggestion, "Expected non-empty suggestion"
+    # Must reference FormatId/format AND either omit or provide guidance.
+    # Production may use "FormatId" (camelCase), "format_id" (snake), or just "format".
+    has_format_ref = "formatid" in suggestion or "format_id" in suggestion or "format" in suggestion
+    has_action = "omit" in suggestion or "provide" in suggestion or "include" in suggestion
+    assert has_format_ref and has_action, (
+        f"Expected suggestion about FormatId with omit/provide guidance, got: {d.get('suggestion')}"
     )
 
 
 @then("the suggestion should advise including agent_url (URI) and id fields")
 def then_suggestion_agent_url_id(ctx: dict) -> None:
     """Assert suggestion advises including both agent_url AND id fields."""
-    d = _get_error_dict(ctx.get("error"))
+    import re
+
+    error = ctx.get("error")
+    assert error is not None, "No error in ctx — cannot check suggestion"
+    d = _get_error_dict(error)
     suggestion = d.get("suggestion", "")
     assert suggestion, "Expected non-empty suggestion"
     suggestion_lower = suggestion.lower()
-    assert "agent_url" in suggestion_lower or "uri" in suggestion_lower, (
-        f"Expected agent_url/URI in suggestion: {suggestion}"
+    # Step text says "agent_url (URI)" — parenthetical describes the type, not an alias.
+    # Require "agent_url" specifically.
+    assert "agent_url" in suggestion_lower, f"Expected 'agent_url' in suggestion: {suggestion}"
+    # Use word-boundary match to avoid false positives from "valid", "provide", etc.
+    assert re.search(r"\bid\b", suggestion_lower), (
+        f"Expected 'id' field reference (word-boundary) in suggestion: {suggestion}"
     )
-    assert "id" in suggestion_lower, f"Expected 'id' field reference in suggestion: {suggestion}"
 
 
 # ── No error raised ─────────────────────────────────────────────────

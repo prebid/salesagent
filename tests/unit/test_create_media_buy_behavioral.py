@@ -236,11 +236,11 @@ class _PatchContext:
 
 
 class TestProductNotFound:
-    """GAP-001: Product not found returns CreateMediaBuyError with validation_error."""
+    """GAP-001: Product not found returns CreateMediaBuyError with PRODUCT_NOT_FOUND."""
 
     @pytest.mark.asyncio
     async def test_product_not_found_returns_error(self):
-        """When packages reference non-existent product_ids, return validation_error
+        """When packages reference non-existent product_ids, return PRODUCT_NOT_FOUND
         with missing IDs listed.
 
         Anchors: media_buy_create.py:1470-1473
@@ -275,7 +275,7 @@ class TestProductNotFound:
         assert result.status == "failed"
         errors = result.response.errors
         assert len(errors) == 1
-        assert errors[0].code == "validation_error"
+        assert errors[0].code == "PRODUCT_NOT_FOUND"
         assert "prod_missing" in errors[0].message
         assert "not found" in errors[0].message.lower()
 

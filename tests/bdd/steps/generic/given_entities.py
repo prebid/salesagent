@@ -73,9 +73,12 @@ def given_authenticated_request(ctx: dict, principal_id: str) -> None:
 
 @given("at least one creative agent is registered with format definitions")
 def given_creative_agent_registered(ctx: dict) -> None:
-    """At least one creative agent has format definitions (Background)."""
+    """Background precondition: creative agents exist.
+
+    Harness _configure_mocks() provides a default-display format.
+    Scenarios override via their own Given steps.
+    """
     ctx["creative_agents_registered"] = True
-    ctx.setdefault("registry_formats", [])
 
 
 # ── Creative agent registry: multi-category / type-specific ──────────
@@ -85,9 +88,22 @@ def given_creative_agent_registered(ctx: dict) -> None:
 def given_registry_multi_categories(ctx: dict) -> None:
     """Registry has formats spanning multiple categories (display, video, etc.)."""
     ctx["registry_formats"] = [
-        FormatFactory.build(name="banner", type=CATEGORY_MAP["display"]),
-        FormatFactory.build(name="pre-roll", type=CATEGORY_MAP["video"]),
-        FormatFactory.build(name="audio-spot", type=CATEGORY_MAP["audio"]),
+        FormatFactory.build(
+            name="banner",
+            type=CATEGORY_MAP["display"],
+            assets=[make_asset("image")],
+            renders=[make_fixed_renders(width=300, height=250)],
+        ),
+        FormatFactory.build(
+            name="pre-roll",
+            type=CATEGORY_MAP["video"],
+            assets=[make_asset("video")],
+        ),
+        FormatFactory.build(
+            name="audio-spot",
+            type=CATEGORY_MAP["audio"],
+            assets=[make_asset("audio")],
+        ),
     ]
     _sync_registry(ctx)
 
@@ -105,11 +121,14 @@ def given_registry_two_types(ctx: dict, type_a: str, type_b: str) -> None:
 @given("the seller has additional creative agents beyond the default")
 def given_additional_creative_agents(ctx: dict) -> None:
     """Seller has additional creative agent referrals."""
+    from adcp.types import CreativeAgent as LibraryCreativeAgent
+    from adcp.types.generated_poc.enums.creative_agent_capability import CreativeAgentCapability
+
     ctx["creative_agent_referrals"] = [
-        {
-            "agent_url": "https://extra-creatives.example.com",
-            "capabilities": ["display", "video"],
-        },
+        LibraryCreativeAgent(
+            agent_url="https://extra-creatives.example.com",
+            capabilities=[CreativeAgentCapability.assembly, CreativeAgentCapability.delivery],
+        ),
     ]
 
 
@@ -257,10 +276,10 @@ def given_seller_various_input_formats(ctx: dict) -> None:
 def given_seller_creative_agent_various_types(ctx: dict) -> None:
     """Seller has creative agent formats of various types (partition/boundary)."""
     ctx["creative_agent_formats"] = [
-        {"name": "audio-format", "type": "audio"},
-        {"name": "video-format", "type": "video"},
-        {"name": "display-format", "type": "display"},
-        {"name": "dooh-format", "type": "dooh"},
+        FormatFactory.build(name="audio-format", type=CATEGORY_MAP["audio"]),
+        FormatFactory.build(name="video-format", type=CATEGORY_MAP["video"]),
+        FormatFactory.build(name="display-format", type=CATEGORY_MAP["display"]),
+        FormatFactory.build(name="dooh-format", type=CATEGORY_MAP["dooh"]),
     ]
 
 
@@ -268,7 +287,7 @@ def given_seller_creative_agent_various_types(ctx: dict) -> None:
 def given_seller_creative_agent_various_assets(ctx: dict) -> None:
     """Seller has creative agent formats with various asset types (partition/boundary)."""
     ctx["creative_agent_formats"] = [
-        {"name": "image-format", "assets": [{"type": "image"}]},
-        {"name": "video-format", "assets": [{"type": "video"}]},
-        {"name": "text-format", "assets": [{"type": "text"}]},
+        FormatFactory.build(name="image-format", assets=[make_asset("image")]),
+        FormatFactory.build(name="video-format", assets=[make_asset("video")]),
+        FormatFactory.build(name="text-format", assets=[make_asset("text")]),
     ]

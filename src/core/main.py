@@ -135,8 +135,10 @@ mcp = FastMCP(
 # Tools read identity via ctx.get_state('identity') instead of calling
 # resolve_identity_from_context() directly.
 from src.core.mcp_auth_middleware import MCPAuthMiddleware
+from src.core.mcp_compat_middleware import RequestCompatMiddleware
 
 mcp.add_middleware(MCPAuthMiddleware())
+mcp.add_middleware(RequestCompatMiddleware())
 
 # Initialize creative engine with minimal config (will be tenant-specific later)
 creative_engine_config: dict[str, Any] = {}

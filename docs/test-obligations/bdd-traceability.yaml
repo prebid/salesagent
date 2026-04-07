@@ -1860,6 +1860,31 @@ mappings:
       upstream_refs: ["BR-UC-003"]
       business_rules: []
       status: new
+  COMPAT-001:
+    - adcp_scenario_id: "T-COMPAT-001-brand-manifest"
+      adcp_feature: "BR-COMPAT-001-deprecated-field-normalization.feature"
+      obligation_id: null
+      upstream_refs: ["BR-COMPAT-001"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-COMPAT-001-campaign-ref"
+      adcp_feature: "BR-COMPAT-001-deprecated-field-normalization.feature"
+      obligation_id: null
+      upstream_refs: ["BR-COMPAT-001"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-COMPAT-001-account-id"
+      adcp_feature: "BR-COMPAT-001-deprecated-field-normalization.feature"
+      obligation_id: null
+      upstream_refs: ["BR-COMPAT-001"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-COMPAT-001-precedence"
+      adcp_feature: "BR-COMPAT-001-deprecated-field-normalization.feature"
+      obligation_id: null
+      upstream_refs: ["BR-COMPAT-001"]
+      business_rules: []
+      status: new
   UC-004:
     - adcp_scenario_id: "T-UC-004-main"
       adcp_feature: "BR-UC-004-deliver-media-buy-metrics.feature"

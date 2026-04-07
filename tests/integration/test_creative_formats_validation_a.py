@@ -13,7 +13,6 @@ from adcp.types import FormatCategory
 from pydantic import ValidationError
 
 from src.adapters.broadstreet.config_schema import BROADSTREET_TEMPLATES
-from src.core.exceptions import AdCPValidationError
 from src.core.schemas import FormatId, ListCreativeFormatsRequest, ListCreativeFormatsResponse
 from tests.factories import TenantFactory
 from tests.harness import CreativeFormatsEnv
@@ -55,26 +54,9 @@ class TestAdapterFormatsViaA2A:
                 session.add(config)
                 session.commit()
 
-            from src.core.schemas import Format
-
-            standard_format = Format(
-                format_id=FormatId(
-                    agent_url="https://creative.adcontextprotocol.org",
-                    id="display_300x250",
-                ),
-                name="Display 300x250",
-                type=FormatCategory.display,
-                is_standard=True,
-            )
-            env.set_registry_formats([standard_format])
-
             response = env.call_a2a()
 
         assert isinstance(response, ListCreativeFormatsResponse)
-
-        # Standard format should be present
-        format_ids = {f.format_id.id for f in response.formats}
-        assert "display_300x250" in format_ids, "Standard format should be in response"
 
         # All 8 real Broadstreet formats should be present with assets
         broadstreet_formats = [f for f in response.formats if "broadstreet" in str(f.format_id.agent_url)]
@@ -112,13 +94,12 @@ class TestAdapterFormatsViaA2A:
                 session.add(config)
                 session.commit()
 
-            env.set_registry_formats([])
-
             response = env.call_a2a()
 
-        assert len(response.formats) == len(BROADSTREET_TEMPLATES)
+        broadstreet_formats = [f for f in response.formats if "broadstreet" in str(f.format_id.agent_url)]
+        assert len(broadstreet_formats) == len(BROADSTREET_TEMPLATES)
 
-        for fmt in response.formats:
+        for fmt in broadstreet_formats:
             # FormatId structure
             assert fmt.format_id is not None
             assert fmt.format_id.id.startswith("broadstreet_")
@@ -127,7 +108,7 @@ class TestAdapterFormatsViaA2A:
             # Format metadata
             assert fmt.name is not None and len(fmt.name) > 0
             assert fmt.type == FormatCategory.display
-            assert fmt.is_standard is False
+            # is_standard is exclude=True (internal-only) — not visible through A2A serialization
 
             # Assets must be present (regression guard)
             assert fmt.assets is not None, f"Format {fmt.format_id.id} must have assets"
@@ -153,24 +134,11 @@ class TestAdapterFormatsViaA2A:
                 session.add(config)
                 session.commit()
 
-            from src.core.schemas import Format
-
-            standard_format = Format(
-                format_id=FormatId(
-                    agent_url="https://creative.adcontextprotocol.org",
-                    id="display_300x250",
-                ),
-                name="Display 300x250",
-                type=FormatCategory.display,
-                is_standard=True,
-            )
-            env.set_registry_formats([standard_format])
-
             response = env.call_a2a()
 
-        # Only the standard format should be present
-        assert len(response.formats) == 1
-        assert response.formats[0].format_id.id == "display_300x250"
+        # No adapter-specific formats should be present for mock adapter
+        broadstreet_formats = [f for f in response.formats if "broadstreet" in str(f.format_id.agent_url)]
+        assert len(broadstreet_formats) == 0, "Mock adapter should not add Broadstreet formats"
 
 
 class TestInvalidFormatCategoryEnum:
@@ -231,9 +199,10 @@ class TestInvalidFormatCategoryEnum:
             # Pass a real enum — the wrapper's type.value should work
             response = env.call_mcp(type=FormatCategory.audio)
 
-        # Audio filter on a catalog with no audio formats → empty result
+        # Audio filter returns real catalog audio formats (3 in real catalog)
         assert isinstance(response, ListCreativeFormatsResponse)
-        assert len(response.formats) == 0
+        assert len(response.formats) > 0
+        assert all(f.type == FormatCategory.audio for f in response.formats)
 
     def test_each_valid_category_accepted(self, integration_db):
         """UC-005-EXT-B-01 (positive counterpart): all valid FormatCategory values are accepted.
@@ -301,16 +270,19 @@ class TestMalformedFormatIdObjects:
             ListCreativeFormatsRequest(format_ids=[{"agent_url": "not_a_url", "id": "test_format"}])
 
     def test_malformed_format_ids_via_mcp_raises_adcp_error(self, integration_db):
-        """UC-005-EXT-B-02: MCP wrapper converts malformed FormatId to AdCPValidationError.
+        """UC-005-EXT-B-02: MCP rejects malformed FormatId (missing agent_url).
 
-        When malformed format_ids are passed through the MCP wrapper,
-        the ValidationError is caught and re-raised as AdCPValidationError.
+        The request is rejected regardless of which layer catches it:
+        TypeAdapter (dev) or our validation code (production after fallback).
         """
+        from tests.harness.assertions import assert_rejected
+        from tests.harness.transport import Transport
+
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
 
-            with pytest.raises((AdCPValidationError, ValidationError)):
-                env.call_mcp(format_ids=[{"id": "no_agent_url"}])
+            result = env.call_via(Transport.MCP, format_ids=[{"id": "no_agent_url"}])
+            assert_rejected(result, field="agent_url", reason="Field required")
 
     def test_valid_format_ids_accepted(self, integration_db):
         """UC-005-EXT-B-02 (positive counterpart): well-formed FormatId objects are accepted.

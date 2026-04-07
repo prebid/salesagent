@@ -14,8 +14,8 @@ Architecture:
 - Generative creative: Use agent's create_generative_creative tool
 
 Testing:
-- When ADCP_TESTING=true, returns mock formats instead of calling external services
-- This avoids timeouts in CI when external creative agents are unreachable
+- CREATIVE_AGENT_URL env var points the registry at a containerized agent
+- No ADCP_TESTING short-circuits — the real fetch path runs in all modes
 """
 
 import os
@@ -89,8 +89,9 @@ def _create_mock_format(format_id_str: str, name: str, format_type: FormatType, 
 def _get_mock_formats() -> list[Format]:
     """Return mock formats for testing mode (ADCP_TESTING=true).
 
-    These formats match what the real creative agent returns, but without
-    making external HTTP calls. Used in CI to avoid timeouts.
+    Returns hardcoded formats for deterministic test behavior.
+    E2E tests that need specific formats should seed them via the
+    test harness (CreativeFormatsEnv.set_registry_formats).
     """
     # Create mock formats using our Format class (which includes is_standard field)
     return [
@@ -153,15 +154,18 @@ class CreativeAgentRegistry:
         )
     """
 
-    # Default creative agent (always available)
-    # Note: agent_url is the base URL for the creative agent (e.g., https://creative.adcontextprotocol.org)
-    # The MCP server endpoint (/mcp) is appended by the MCP client when connecting
-    # Reads CREATIVE_AGENT_URL env var so CI can point at a containerized agent.
-    DEFAULT_AGENT = CreativeAgent(
-        agent_url=os.environ.get("CREATIVE_AGENT_URL", "https://creative.adcontextprotocol.org"),
-        name="AdCP Standard Creative Agent",
-        enabled=True,
-        priority=1,
+    # Default creative agent (always available in production).
+    # CREATIVE_AGENT_URL env var overrides for CI/Docker (containerized agent).
+    # When ADCP_TESTING=true without CREATIVE_AGENT_URL: no default agent — use mock formats.
+    DEFAULT_AGENT: CreativeAgent | None = (
+        CreativeAgent(
+            agent_url=os.environ.get("CREATIVE_AGENT_URL", "https://creative.adcontextprotocol.org"),
+            name="AdCP Standard Creative Agent",
+            enabled=True,
+            priority=1,
+        )
+        if os.environ.get("CREATIVE_AGENT_URL") or os.environ.get("ADCP_TESTING") != "true"
+        else None
     )
 
     def __init__(self):
@@ -187,9 +191,10 @@ class CreativeAgentRegistry:
         """Get list of creative agents for a tenant.
 
         Returns:
-            List of CreativeAgent instances (default + tenant-specific)
+            List of CreativeAgent instances (default + tenant-specific).
+            Empty list when ADCP_TESTING=true and no CREATIVE_AGENT_URL.
         """
-        agents = [self.DEFAULT_AGENT]
+        agents: list[CreativeAgent] = [self.DEFAULT_AGENT] if self.DEFAULT_AGENT else []
 
         if not tenant_id:
             return agents
@@ -489,10 +494,6 @@ class CreativeAgentRegistry:
         Returns:
             List of Format objects
         """
-        # In testing mode (ADCP_TESTING=true), return mock formats to avoid external HTTP calls
-        if os.environ.get("ADCP_TESTING", "").lower() == "true":
-            return _get_mock_formats()
-
         # Check cache - only use cache if no filtering parameters provided
         has_filters = any(
             [
@@ -597,14 +598,12 @@ class CreativeAgentRegistry:
 
         logger = logging.getLogger(__name__)
 
-        # In testing mode (ADCP_TESTING=true), return mock formats to avoid external HTTP calls
-        if os.environ.get("ADCP_TESTING", "").lower() == "true":
-            logger.info("list_all_formats: Using mock formats (ADCP_TESTING=true)")
-            return FormatFetchResult(formats=_get_mock_formats(), errors=[])
-
         agents = self._get_tenant_agents(tenant_id)
         all_formats: list[Format] = []
         errors: list[AdCPResponseError] = []
+
+        if not agents:
+            return FormatFetchResult(formats=[], errors=[])
 
         logger.info(f"list_all_formats: Found {len(agents)} agents for tenant {tenant_id}")
 

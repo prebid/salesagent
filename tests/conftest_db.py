@@ -320,212 +320,174 @@ def auth_headers(test_principal):
     return {"x-adcp-auth": test_principal.access_token}
 
 
-@pytest.fixture(scope="function")
-def integration_db():
-    """Provide an isolated PostgreSQL database for each integration test.
-
-    REQUIRES: PostgreSQL container running (via run_all_tests.sh ci or GitHub Actions)
-    - Uses DATABASE_URL to get PostgreSQL connection info (host, port, user, password)
-    - Database name in URL is ignored - creates a unique database per test (e.g., test_a3f8d92c)
-    - Matches production environment exactly
-    - Better multi-process support (fixes mcp_server tests)
-    - Consistent JSONB behavior
-    """
-    import uuid
-
-    # Save original DATABASE_URL
-    original_url = os.environ.get("DATABASE_URL")
-    original_db_type = os.environ.get("DB_TYPE")
-
-    # Require PostgreSQL - no SQLite fallback
-    postgres_url = os.environ.get("DATABASE_URL")
-    if not postgres_url or not postgres_url.startswith("postgresql://"):
-        pytest.skip(
-            "Integration tests require PostgreSQL DATABASE_URL (e.g., postgresql://user:pass@localhost:5432/any_db)"
-        )
-
-    # PostgreSQL mode - create unique database per test
-    unique_db_name = f"test_{uuid.uuid4().hex[:8]}"
-
-    # Create the test database
-    # Parse port from postgres_url (set by run_all_tests.sh or environment)
+def _parse_postgres_url(url: str) -> dict:
+    """Parse PostgreSQL URL into connection components."""
     import re
 
+    pattern = r"postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)"
+    match = re.match(pattern, url)
+    if not match:
+        raise ValueError(f"Cannot parse DATABASE_URL: {url}")
+    user, password, host, port_str, dbname = match.groups()
+    return {"user": user, "password": password, "host": host, "port": int(port_str), "dbname": dbname}
+
+
+def _pg_admin_conn(parsed: dict):
+    """Open an AUTOCOMMIT connection to the 'postgres' admin database."""
     import psycopg2
     from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
-    pattern = r"postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)"
-    match = re.match(pattern, postgres_url)
-    if match:
-        user, password, host, port_str, _ = match.groups()
-        postgres_port = int(port_str)
-    else:
-        # Fallback to defaults if URL parsing fails
-        pytest.fail(
-            f"Failed to parse DATABASE_URL: {postgres_url}\nExpected format: postgresql://user:pass@host:port/dbname"
-        )
-        user, password, host, postgres_port = "adcp_user", "test_password", "localhost", 5432
-
-    conn_params = {
-        "host": host,
-        "port": postgres_port,
-        "user": user,
-        "password": password,
-        "database": "postgres",  # Connect to default db first
-    }
-
-    conn = psycopg2.connect(**conn_params)
+    conn = psycopg2.connect(
+        host=parsed["host"], port=parsed["port"], user=parsed["user"], password=parsed["password"], database="postgres"
+    )
     conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-    cur = conn.cursor()
+    return conn
 
+
+def _build_url(parsed: dict, dbname: str) -> str:
+    """Reconstruct a PostgreSQL URL with a different database name."""
+    return f"postgresql://{parsed['user']}:{parsed['password']}@{parsed['host']}:{parsed['port']}/{dbname}"
+
+
+def _drop_database(parsed: dict, dbname: str) -> None:
+    """Terminate connections and drop a PostgreSQL database (best-effort)."""
     try:
-        cur.execute(f'CREATE DATABASE "{unique_db_name}"')
+        conn = _pg_admin_conn(parsed)
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+            f"WHERE datname = '{dbname}' AND pid <> pg_backend_pid()"
+        )
+        cur.execute(f'DROP DATABASE IF EXISTS "{dbname}"')
+        cur.close()
+        conn.close()
+    except Exception:
+        pass
+
+
+@pytest.fixture(scope="session")
+def migration_template():
+    """Create a session-scoped template database with Alembic migrations applied.
+
+    Run once per test session. Per-test databases clone from this template
+    via ``CREATE DATABASE ... TEMPLATE``, which is near-instant (filesystem
+    copy, no SQL replay).
+
+    This ensures integration tests use the **exact same schema** as
+    production (Alembic migrations), eliminating schema drift from
+    ``Base.metadata.create_all()``.
+    """
+    import uuid
+
+    postgres_url = os.environ.get("DATABASE_URL")
+    if not postgres_url or not postgres_url.startswith("postgresql://"):
+        pytest.skip("Integration tests require PostgreSQL DATABASE_URL")
+
+    parsed = _parse_postgres_url(postgres_url)
+    template_name = f"tpl_{uuid.uuid4().hex[:8]}"
+
+    # 1. Create the template database
+    conn = _pg_admin_conn(parsed)
+    cur = conn.cursor()
+    try:
+        cur.execute(f'CREATE DATABASE "{template_name}"')
     finally:
         cur.close()
         conn.close()
 
-    os.environ["DATABASE_URL"] = f"postgresql://{user}:{password}@{host}:{postgres_port}/{unique_db_name}"
-    os.environ["DB_TYPE"] = "postgresql"
-    db_path = unique_db_name  # For cleanup reference
+    # 2. Run Alembic migrations against the template
+    template_url = _build_url(parsed, template_name)
+    original_url = os.environ.get("DATABASE_URL")
+    os.environ["DATABASE_URL"] = template_url
+    try:
+        from alembic.config import Config
 
-    # Create the database without running migrations
-    # (migrations are for production, tests create tables directly)
+        from alembic import command
+
+        alembic_cfg = Config("alembic.ini")
+        alembic_cfg.set_main_option("sqlalchemy.url", template_url)
+        command.upgrade(alembic_cfg, "head")
+    finally:
+        if original_url:
+            os.environ["DATABASE_URL"] = original_url
+
+    yield {"parsed": parsed, "template_name": template_name}
+
+    # 3. Drop the template database at session end
+    _drop_database(parsed, template_name)
+
+
+@pytest.fixture(scope="function")
+def integration_db(migration_template):
+    """Provide an isolated PostgreSQL database for each integration test.
+
+    Clones the session-scoped Alembic template database (near-instant)
+    instead of running ``Base.metadata.create_all()`` or re-running
+    migrations per test. Schema matches production exactly.
+
+    REQUIRES: PostgreSQL container running (via run_all_tests.sh ci or GitHub Actions)
+    """
+    import uuid
+
+    parsed = migration_template["parsed"]
+    template_name = migration_template["template_name"]
+    unique_db_name = f"test_{uuid.uuid4().hex[:8]}"
+
+    # Save original env
+    original_url = os.environ.get("DATABASE_URL")
+    original_db_type = os.environ.get("DB_TYPE")
+
+    # Clone from template (near-instant filesystem copy)
+    conn = _pg_admin_conn(parsed)
+    cur = conn.cursor()
+    try:
+        cur.execute(f'CREATE DATABASE "{unique_db_name}" TEMPLATE "{template_name}"')
+    finally:
+        cur.close()
+        conn.close()
+
+    test_url = _build_url(parsed, unique_db_name)
+    os.environ["DATABASE_URL"] = test_url
+    os.environ["DB_TYPE"] = "postgresql"
+
     from sqlalchemy import create_engine
     from sqlalchemy.orm import scoped_session, sessionmaker
 
-    # Import ALL models first, BEFORE using Base
-    # This ensures all tables are registered in Base.metadata
-    import src.core.database.models as all_models  # noqa: F401
-    from src.core.database.models import Base, Context, ObjectWorkflowMapping, WorkflowStep  # noqa: F401
+    from src.core.database.database_session import _pydantic_json_serializer, reset_engine
 
-    # Explicitly ensure Context and workflow models are registered
-    # (in case the module import doesn't trigger class definition)
-    _ = (Context, WorkflowStep, ObjectWorkflowMapping)
-
-    from src.core.database.database_session import _pydantic_json_serializer
-
-    engine = create_engine(
-        f"postgresql://{user}:{password}@{host}:{postgres_port}/{unique_db_name}",
-        echo=False,
-        json_serializer=_pydantic_json_serializer,
-    )
-
-    # Ensure all model classes are imported and registered with Base.metadata
-    # Import order matters - some models may not be registered if imported too early
-    from src.core.database.models import (
-        AdapterConfig,
-        AuditLog,
-        AuthorizedProperty,
-        Creative,
-        CreativeAssignment,
-        FormatPerformanceMetrics,
-        GAMInventory,
-        GAMLineItem,
-        GAMOrder,
-        MediaBuy,
-        Principal,
-        Product,
-        ProductInventoryMapping,
-        PropertyTag,
-        PushNotificationConfig,
-        Strategy,
-        StrategyState,
-        SyncJob,
-        Tenant,
-        TenantManagementConfig,
-        User,
-    )
-
-    # Ensure workflow models are loaded (force evaluation)
-    _ = (
-        Context,
-        WorkflowStep,
-        ObjectWorkflowMapping,
-        Tenant,
-        Principal,
-        Product,
-        MediaBuy,
-        Creative,
-        AuthorizedProperty,
-        Strategy,
-        AuditLog,
-        CreativeAssignment,
-        TenantManagementConfig,
-        PushNotificationConfig,
-        User,
-        AdapterConfig,
-        GAMInventory,
-        ProductInventoryMapping,
-        FormatPerformanceMetrics,
-        GAMOrder,
-        GAMLineItem,
-        SyncJob,
-        StrategyState,
-        PropertyTag,
-    )
-
-    # Create all tables directly (no migrations)
-    Base.metadata.create_all(bind=engine, checkfirst=True)
-
-    # Reset engine and update globals to point to the test database
-    from src.core.database.database_session import reset_engine
+    engine = create_engine(test_url, echo=False, json_serializer=_pydantic_json_serializer)
 
     reset_engine()
 
-    # Now update the globals to use our test engine
     import src.core.database.database_session as db_session_module
 
     db_session_module._engine = engine
     db_session_module._session_factory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     db_session_module._scoped_session = scoped_session(db_session_module._session_factory)
 
-    # Reset context manager singleton so it uses the new database session
-    # This is critical because ContextManager caches a session reference
     import src.core.context_manager
 
     src.core.context_manager._context_manager_instance = None
 
-    yield db_path
-
-    # Reset engine to clean up test database connections
-    reset_engine()
-
-    # Reset context manager singleton again to avoid stale references
-    src.core.context_manager._context_manager_instance = None
+    yield unique_db_name
 
     # Cleanup
+    reset_engine()
+    src.core.context_manager._context_manager_instance = None
     engine.dispose()
 
     # Restore original environment
     if original_url:
         os.environ["DATABASE_URL"] = original_url
     else:
-        del os.environ["DATABASE_URL"]
-
+        os.environ.pop("DATABASE_URL", None)
     if original_db_type:
         os.environ["DB_TYPE"] = original_db_type
-    elif "DB_TYPE" in os.environ:
-        del os.environ["DB_TYPE"]
+    else:
+        os.environ.pop("DB_TYPE", None)
 
-    # Drop PostgreSQL test database
-    try:
-        conn = psycopg2.connect(**conn_params)
-        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-        cur = conn.cursor()
-        # Terminate connections to the test database
-        cur.execute(
-            f"""
-            SELECT pg_terminate_backend(pg_stat_activity.pid)
-            FROM pg_stat_activity
-            WHERE pg_stat_activity.datname = '{db_path}'
-            AND pid <> pg_backend_pid()
-            """
-        )
-        cur.execute(f'DROP DATABASE IF EXISTS "{db_path}"')
-        cur.close()
-        conn.close()
-    except Exception:
-        pass  # Ignore cleanup errors
+    # Drop the per-test database
+    _drop_database(parsed, unique_db_name)
 
 
 # Import inspect only when needed

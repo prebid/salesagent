@@ -24,16 +24,14 @@ Feature: BR-UC-003 Update Media Buy
     Given a Seller Agent is operational and accepting requests
     And a tenant exists with completed setup checklist
     And the Buyer is authenticated with a valid principal_id
-    And the Buyer owns an existing media buy with media_buy_id "mb_existing"
+    And the Buyer owns an existing media buy
     And the media buy is in "active" status
 
 
   @T-UC-003-main @main-flow @post-s1 @post-s2 @post-s3 @post-s4 @post-s5 @post-s6
   Scenario: Package budget update -- auto-applied via media_buy_id
     Given the tenant is configured for auto-approval
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -42,7 +40,7 @@ Feature: BR-UC-003 Update Media Buy
     And the updated daily spend does not exceed max_daily_package_spend
     When the Buyer Agent sends the update_media_buy request
     Then the response status should be "completed"
-    And the response should contain media_buy_id "mb_existing"
+    And the response should contain media_buy_id
     And the response should contain buyer_ref
     And the response should contain an implementation_date that is not null
     And the response should contain affected_packages including "pkg_001"
@@ -82,11 +80,10 @@ Feature: BR-UC-003 Update Media Buy
     And the media buy is in "active" status
     And a valid update_media_buy request with:
     | field        | value       |
-    | media_buy_id | mb_existing |
     | paused       | true        |
     When the Buyer Agent sends the update_media_buy request
     Then the response status should be "completed"
-    And the response should contain media_buy_id "mb_existing"
+    And the response should contain media_buy_id
     And the response should contain affected_packages
     And the response envelope should include a sandbox flag
     # POST-S1: Buyer knows media buy paused
@@ -100,11 +97,10 @@ Feature: BR-UC-003 Update Media Buy
     And the media buy is in "paused" status
     And a valid update_media_buy request with:
     | field        | value       |
-    | media_buy_id | mb_existing |
     | paused       | false       |
     When the Buyer Agent sends the update_media_buy request
     Then the response status should be "completed"
-    And the response should contain media_buy_id "mb_existing"
+    And the response should contain media_buy_id
     # POST-S1: Buyer knows media buy resumed
     # POST-S4: Unambiguous success
     # POST-S5: Request completed
@@ -114,8 +110,7 @@ Feature: BR-UC-003 Update Media Buy
     Given the tenant is configured for auto-approval
     And a valid update_media_buy request with:
     | field        | value                    |
-    | media_buy_id | mb_existing              |
-    | end_time     | 2026-06-30T23:59:59.000Z |
+    | end_time     | {90 days from now}       |
     And the new end_time is after the existing start_time
     When the Buyer Agent sends the update_media_buy request
     Then the response status should be "completed"
@@ -130,7 +125,6 @@ Feature: BR-UC-003 Update Media Buy
     Given the tenant is configured for auto-approval
     And a valid update_media_buy request with:
     | field        | value       |
-    | media_buy_id | mb_existing |
     | start_time   | asap        |
     And the existing end_time is in the future
     When the Buyer Agent sends the update_media_buy request
@@ -143,12 +137,11 @@ Feature: BR-UC-003 Update Media Buy
     Given the tenant is configured for auto-approval
     And a valid update_media_buy request with:
     | field        | value       |
-    | media_buy_id | mb_existing |
     | budget       | 25000       |
     And the budget 25000 is greater than zero
     When the Buyer Agent sends the update_media_buy request
     Then the response status should be "completed"
-    And the response should contain media_buy_id "mb_existing"
+    And the response should contain media_buy_id
     # POST-S1: Buyer knows budget updated
     # POST-S4: Unambiguous success
     # POST-S5: Request completed
@@ -156,9 +149,7 @@ Feature: BR-UC-003 Update Media Buy
   @T-UC-003-alt-creative-assignments @alt-flow @creatives @post-s1 @post-s2 @post-s4 @post-s5
   Scenario: Update creative assignments -- replacement semantics
     Given the tenant is configured for auto-approval
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -181,9 +172,7 @@ Feature: BR-UC-003 Update Media Buy
   @T-UC-003-alt-creatives-inline @alt-flow @creatives-inline @post-s1 @post-s2 @post-s4
   Scenario: Upload inline creatives and assign to package
     Given the tenant is configured for auto-approval
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -199,9 +188,7 @@ Feature: BR-UC-003 Update Media Buy
   @T-UC-003-alt-targeting @alt-flow @targeting @post-s1 @post-s2 @post-s4 @post-s5
   Scenario: Update targeting overlay -- replacement semantics
     Given the tenant is configured for auto-approval
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     And the request includes 1 package update with:
     | field             | value                                |
     | package_id        | pkg_001                              |
@@ -218,9 +205,7 @@ Feature: BR-UC-003 Update Media Buy
   @T-UC-003-alt-optimization-goals @alt-flow @optimization-goals @post-s1 @post-s2 @post-s4 @post-s5
   Scenario: Update optimization goals -- replacement semantics
     Given the tenant is configured for auto-approval
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -237,9 +222,7 @@ Feature: BR-UC-003 Update Media Buy
   @T-UC-003-alt-keyword-ops @alt-flow @keyword-ops @post-s1 @post-s2 @post-s4 @post-s5
   Scenario: Add keyword targets incrementally
     Given the tenant is configured for auto-approval
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -257,9 +240,7 @@ Feature: BR-UC-003 Update Media Buy
   @T-UC-003-alt-keyword-remove @alt-flow @keyword-ops @post-s1 @post-s2
   Scenario: Remove keyword targets incrementally
     Given the tenant is configured for auto-approval
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -273,9 +254,7 @@ Feature: BR-UC-003 Update Media Buy
   @T-UC-003-alt-negative-keywords @alt-flow @keyword-ops @post-s1
   Scenario: Add and remove negative keywords incrementally
     Given the tenant is configured for auto-approval
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -290,9 +269,7 @@ Feature: BR-UC-003 Update Media Buy
   @T-UC-003-alt-manual @alt-flow @manual-approval @post-s7 @post-s8
   Scenario: Update requires manual approval -- pending state
     Given the tenant is configured for manual approval
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -300,7 +277,7 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
     Then the response status should be "submitted"
-    And the response should contain media_buy_id "mb_existing"
+    And the response should contain media_buy_id
     And the response should contain implementation_date that is null
     # POST-S7: Buyer knows update awaiting seller approval (status "submitted")
     # POST-S8: implementation_date is null (pending approval)
@@ -309,9 +286,7 @@ Feature: BR-UC-003 Update Media Buy
   Scenario: Partial update -- omitted fields remain unchanged
     Given the tenant is configured for auto-approval
     And the existing media buy has start_time "2026-04-01T00:00:00Z" and end_time "2026-06-30T23:59:59Z"
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -326,9 +301,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-empty-update @invariant @BR-RULE-022 @error
   Scenario: Empty update -- no updatable fields specified
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request does not include any updatable fields
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
@@ -345,7 +318,6 @@ Feature: BR-UC-003 Update Media Buy
     Given the tenant is configured for auto-approval
     And a valid update_media_buy request with:
     | field           | value                                |
-    | media_buy_id    | mb_existing                          |
     | idempotency_key | 550e8400-e29b-41d4-a716-446655440000 |
     And the request includes 1 package update with:
     | field      | value   |
@@ -359,9 +331,7 @@ Feature: BR-UC-003 Update Media Buy
   @T-UC-003-idempotency-absent @invariant @BR-RULE-081
   Scenario: Idempotency key -- absent, proceeds without protection
     Given the tenant is configured for auto-approval
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     And the request does NOT include an idempotency_key
     And the request includes 1 package update with:
     | field      | value   |
@@ -375,9 +345,7 @@ Feature: BR-UC-003 Update Media Buy
   @T-UC-003-atomic-success @invariant @BR-RULE-018
   Scenario: Atomic response -- success has no errors field
     Given the tenant is configured for auto-approval
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -392,7 +360,6 @@ Feature: BR-UC-003 Update Media Buy
   Scenario: Atomic response -- error has no success fields
     Given a valid update_media_buy request with:
     | field        | value       |
-    | media_buy_id | mb_existing |
     | budget       | -100        |
     When the Buyer Agent sends the update_media_buy request
     Then the response should contain an "errors" array
@@ -405,9 +372,7 @@ Feature: BR-UC-003 Update Media Buy
   Scenario: Approval workflow -- both flags false, auto-approved
     Given the tenant human_review_required is false
     And the adapter manual_approval_required is false
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -420,9 +385,7 @@ Feature: BR-UC-003 Update Media Buy
   @T-UC-003-approval-tenant @invariant @BR-RULE-017
   Scenario: Approval workflow -- tenant requires manual review
     Given the tenant human_review_required is true
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -437,9 +400,7 @@ Feature: BR-UC-003 Update Media Buy
   Scenario: Approval workflow -- adapter requires manual review
     Given the tenant human_review_required is false
     And the adapter manual_approval_required is true
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -454,9 +415,7 @@ Feature: BR-UC-003 Update Media Buy
   Scenario: Adapter atomicity -- success persists changes
     Given the tenant is configured for auto-approval
     And the ad server adapter returns success
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -471,9 +430,7 @@ Feature: BR-UC-003 Update Media Buy
   Scenario: Adapter atomicity -- failure rolls back all changes
     Given the tenant is configured for auto-approval
     And the ad server adapter returns an error
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -491,9 +448,7 @@ Feature: BR-UC-003 Update Media Buy
   Scenario: Creative replacement -- new set replaces existing
     Given the tenant is configured for auto-approval
     And the package "pkg_001" has existing creative assignments [cr_old_1, cr_old_2]
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -511,9 +466,7 @@ Feature: BR-UC-003 Update Media Buy
   @T-UC-003-ext-a @extension @ext-a @error @post-f1 @post-f2 @post-f3
   Scenario: Authentication error -- no principal in context
     Given the Buyer has no authentication credentials
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
     And the error code should be "authentication_error"
@@ -528,9 +481,7 @@ Feature: BR-UC-003 Update Media Buy
   Scenario: Authentication error -- principal not found in database
     Given the Buyer is authenticated as principal "unknown_principal"
     And the principal "unknown_principal" does not exist in the database
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
     And the error code should be "authentication_error"
@@ -571,10 +522,8 @@ Feature: BR-UC-003 Update Media Buy
   @T-UC-003-ext-c @extension @ext-c @error @post-f1 @post-f2 @post-f3
   Scenario: Ownership mismatch -- principal does not own media buy
     Given the Buyer is authenticated as principal "principal_other"
-    And the media buy "mb_existing" is owned by principal "principal_owner"
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And the media buy is owned by principal "principal_owner"
+    And a valid update_media_buy request
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
     And the error code should be "ACCOUNT_NOT_FOUND"
@@ -587,7 +536,6 @@ Feature: BR-UC-003 Update Media Buy
   Scenario: Budget validation -- campaign budget zero
     Given a valid update_media_buy request with:
     | field        | value       |
-    | media_buy_id | mb_existing |
     | budget       | 0           |
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
@@ -603,7 +551,6 @@ Feature: BR-UC-003 Update Media Buy
   Scenario: Budget validation -- campaign budget negative
     Given a valid update_media_buy request with:
     | field        | value       |
-    | media_buy_id | mb_existing |
     | budget       | -500        |
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
@@ -618,7 +565,6 @@ Feature: BR-UC-003 Update Media Buy
     Given the existing media buy has start_time "2026-04-01T00:00:00Z"
     And a valid update_media_buy request with:
     | field        | value                    |
-    | media_buy_id | mb_existing              |
     | end_time     | 2026-03-15T00:00:00Z     |
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
@@ -634,7 +580,6 @@ Feature: BR-UC-003 Update Media Buy
     Given the existing media buy has start_time "2026-04-01T00:00:00Z"
     And a valid update_media_buy request with:
     | field        | value                    |
-    | media_buy_id | mb_existing              |
     | end_time     | 2026-04-01T00:00:00Z     |
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
@@ -647,9 +592,7 @@ Feature: BR-UC-003 Update Media Buy
   Scenario: Currency not supported -- tenant does not support media buy currency
     Given the existing media buy uses currency "JPY"
     And the tenant does not have "JPY" in CurrencyLimit table
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -667,9 +610,7 @@ Feature: BR-UC-003 Update Media Buy
   Scenario: Daily spend cap exceeded -- updated budget exceeds daily max
     Given the tenant has max_daily_package_spend of 1000
     And the media buy flight is 10 days
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -687,9 +628,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-ext-h @extension @ext-h @error @post-f1 @post-f2 @post-f3
   Scenario: Missing package ID -- package update without identifier
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update without package_id or buyer_ref
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
@@ -702,9 +641,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-ext-i @extension @ext-i @error @post-f1 @post-f2 @post-f3
   Scenario: Creative not found -- referenced creative_id not in library
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -723,9 +660,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-ext-j-error @extension @ext-j @error @post-f1 @post-f2 @post-f3
   Scenario: Creative validation -- creative in error state
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -744,9 +679,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-ext-j-rejected @extension @ext-j @error @post-f1 @post-f2 @post-f3
   Scenario: Creative validation -- creative in rejected state
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -764,9 +697,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-ext-j-format @extension @ext-j @error @post-f1 @post-f2 @post-f3
   Scenario: Creative validation -- format incompatible with product
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -784,9 +715,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-ext-k @extension @ext-k @error @post-f1 @post-f2 @post-f3
   Scenario: Creative sync failure -- inline creative upload fails
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with inline creatives
     And the creative upload/sync process fails
     And the package exists in the media buy
@@ -800,9 +729,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-ext-l @extension @ext-l @error @post-f1 @post-f2 @post-f3
   Scenario: Package not found -- package_id not in media buy
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value          |
     | package_id | pkg_nonexistent |
@@ -819,9 +746,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-ext-m @extension @ext-m @error @post-f1 @post-f2 @post-f3
   Scenario: Invalid placement IDs -- placement not valid for product
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -840,9 +765,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-ext-m-unsupported @extension @ext-m @error @post-f1 @post-f2 @post-f3
   Scenario: Invalid placement IDs -- product does not support placement targeting
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -862,9 +785,7 @@ Feature: BR-UC-003 Update Media Buy
   Scenario: Insufficient privileges -- admin-only action without admin role
     Given the Buyer does not have admin privileges
     And the update operation requires admin privileges
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
     And the error should include "suggestion" field
@@ -877,9 +798,7 @@ Feature: BR-UC-003 Update Media Buy
   Scenario: Adapter failure -- ad server returns error
     Given the tenant is configured for auto-approval
     And the ad server adapter returns an error during update
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -897,7 +816,6 @@ Feature: BR-UC-003 Update Media Buy
   Scenario: Idempotency key too short -- below 8 characters
     Given a valid update_media_buy request with:
     | field           | value       |
-    | media_buy_id    | mb_existing |
     | idempotency_key | abc1234     |
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
@@ -913,7 +831,6 @@ Feature: BR-UC-003 Update Media Buy
   Scenario: Idempotency key too long -- above 255 characters
     Given a valid update_media_buy request with:
     | field           | value                    |
-    | media_buy_id    | mb_existing              |
     | idempotency_key | <256 character string>   |
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
@@ -927,9 +844,7 @@ Feature: BR-UC-003 Update Media Buy
   @T-UC-003-ext-q-rejected @extension @ext-q @error @post-f1 @post-f2 @post-f3
   Scenario: Terminal status rejection -- media buy status is "rejected"
     Given the media buy is in "rejected" status
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -947,9 +862,7 @@ Feature: BR-UC-003 Update Media Buy
   @T-UC-003-ext-q-canceled @extension @ext-q @error @post-f1 @post-f2 @post-f3
   Scenario: Terminal status rejection -- media buy status is "canceled"
     Given the media buy is in "canceled" status
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -966,9 +879,7 @@ Feature: BR-UC-003 Update Media Buy
   @T-UC-003-ext-q-completed @extension @ext-q @error @post-f1 @post-f2 @post-f3
   Scenario: Terminal status rejection -- media buy status is "completed"
     Given the media buy is in "completed" status
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -983,9 +894,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-ext-r-keyword @extension @ext-r @error @post-f1 @post-f2 @post-f3
   Scenario: Keyword operation conflict -- keyword_targets_add with targeting_overlay.keyword_targets
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -1002,9 +911,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-ext-r-negative @extension @ext-r @error @post-f1 @post-f2 @post-f3
   Scenario: Keyword operation conflict -- negative_keywords_add with targeting_overlay.negative_keywords
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -1021,9 +928,7 @@ Feature: BR-UC-003 Update Media Buy
   @T-UC-003-ext-r-cross-ok @invariant @BR-RULE-083
   Scenario: Keyword operations -- cross-dimension mixing is valid
     Given the tenant is configured for auto-approval
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -1036,9 +941,7 @@ Feature: BR-UC-003 Update Media Buy
   @T-UC-003-ext-r-cross-ok-2 @invariant @BR-RULE-083
   Scenario: Keyword operations -- negative_keywords_add with targeting_overlay.keyword_targets is valid
     Given the tenant is configured for auto-approval
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -1050,9 +953,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-partition-idempotency-key @partition @idempotency_key
   Scenario Outline: Idempotency key partition validation - <partition>
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -1079,9 +980,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-boundary-idempotency-key @boundary @idempotency_key
   Scenario Outline: Idempotency key boundary validation - <boundary_point>
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -1106,9 +1005,7 @@ Feature: BR-UC-003 Update Media Buy
   @T-UC-003-partition-media-buy-status @partition @media_buy_status
   Scenario Outline: Media buy status partition validation - <partition>
     Given the media buy is in "<status>" status
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -1133,9 +1030,7 @@ Feature: BR-UC-003 Update Media Buy
   @T-UC-003-boundary-media-buy-status @boundary @media_buy_status
   Scenario Outline: Media buy status boundary validation - <boundary_point>
     Given the media buy is in "<status>" status
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -1156,9 +1051,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-partition-budget-amount @partition @budget_amount
   Scenario Outline: Budget amount partition validation - <partition>
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value    |
     | package_id | pkg_001  |
@@ -1180,9 +1073,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-boundary-budget-amount @boundary @budget_amount
   Scenario Outline: Budget amount boundary validation - <boundary_point>
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value    |
     | package_id | pkg_001  |
@@ -1200,9 +1091,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-partition-daily-spend-cap @partition @daily_spend_cap
   Scenario Outline: Daily spend cap partition validation - <partition>
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value    |
     | package_id | pkg_001  |
@@ -1226,9 +1115,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-boundary-daily-spend-cap @boundary @daily_spend_cap
   Scenario Outline: Daily spend cap boundary validation - <boundary_point>
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value    |
     | package_id | pkg_001  |
@@ -1261,12 +1148,12 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Valid partitions
       | partition          | id_config                        | outcome |
-      | media_buy_id_only  | media_buy_id=mb_existing         | success |
+      | media_buy_id_only  | media_buy_id=<existing>          | success |
       | buyer_ref_only     | buyer_ref=my_ref_01              | success |
 
     Examples: Invalid partitions
       | partition       | id_config                                   | outcome                                      |
-      | both_provided   | media_buy_id=mb_existing,buyer_ref=my_ref_01 | error "INVALID_REQUEST" with suggestion       |
+      | both_provided   | media_buy_id=<existing>,buyer_ref=my_ref_01 | error "INVALID_REQUEST" with suggestion       |
       | neither_provided | <none>                                      | error "INVALID_REQUEST" with suggestion       |
 
   @T-UC-003-boundary-media-buy-identification @boundary @media_buy_identification
@@ -1283,16 +1170,14 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Boundary values
       | boundary_point                       | id_config                                   | outcome                                  |
-      | media_buy_id only (primary path)     | media_buy_id=mb_existing                    | success                                  |
+      | media_buy_id only (primary path)     | media_buy_id=<existing>                     | success                                  |
       | buyer_ref only (fallback path)       | buyer_ref=my_ref_01                         | success                                  |
-      | both identifiers (ambiguous)         | media_buy_id=mb_existing,buyer_ref=my_ref_01 | error "INVALID_REQUEST" with suggestion  |
+      | both identifiers (ambiguous)         | media_buy_id=<existing>,buyer_ref=my_ref_01 | error "INVALID_REQUEST" with suggestion  |
       | neither identifier (missing)         | <none>                                       | error "INVALID_REQUEST" with suggestion  |
 
   @T-UC-003-partition-frequency-cap-suppress @partition @frequency_cap_suppress
   Scenario Outline: Frequency cap suppress partition validation - <partition>
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with:
     | field             | value   |
     | package_id        | pkg_001 |
@@ -1328,9 +1213,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-boundary-frequency-cap-suppress @boundary @frequency_cap_suppress
   Scenario Outline: Frequency cap suppress boundary validation - <boundary_point>
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with:
     | field             | value   |
     | package_id        | pkg_001 |
@@ -1363,9 +1246,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-partition-optimization-goals @partition @optimization_goals
   Scenario Outline: Optimization goals partition validation - <partition>
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -1409,9 +1290,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-boundary-optimization-goals @boundary @optimization_goals
   Scenario Outline: Optimization goals boundary validation - <boundary_point>
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -1447,9 +1326,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-partition-keyword-targets-add @partition @keyword_targets_add
   Scenario Outline: Keyword targets add partition validation - <partition>
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -1484,9 +1361,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-boundary-keyword-targets-add @boundary @keyword_targets_add
   Scenario Outline: Keyword targets add boundary validation - <boundary_point>
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -1515,9 +1390,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-partition-keyword-targets-remove @partition @keyword_targets_remove
   Scenario Outline: Keyword targets remove partition validation - <partition>
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -1548,9 +1421,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-boundary-keyword-targets-remove @boundary @keyword_targets_remove
   Scenario Outline: Keyword targets remove boundary validation - <boundary_point>
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -1577,9 +1448,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-partition-negative-keywords-add @partition @negative_keywords_add
   Scenario Outline: Negative keywords add partition validation - <partition>
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -1610,9 +1479,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-boundary-negative-keywords-add @boundary @negative_keywords_add
   Scenario Outline: Negative keywords add boundary validation - <boundary_point>
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -1639,9 +1506,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-partition-negative-keywords-remove @partition @negative_keywords_remove
   Scenario Outline: Negative keywords remove partition validation - <partition>
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -1672,9 +1537,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-boundary-negative-keywords-remove @boundary @negative_keywords_remove
   Scenario Outline: Negative keywords remove boundary validation - <boundary_point>
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -1701,9 +1564,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-partition-targeting-overlay @partition @targeting_overlay
   Scenario Outline: Targeting overlay partition validation - <partition>
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with:
     | field             | value   |
     | package_id        | pkg_001 |
@@ -1740,9 +1601,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-boundary-targeting-overlay @boundary @targeting_overlay
   Scenario Outline: Targeting overlay boundary validation - <boundary_point>
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with:
     | field             | value   |
     | package_id        | pkg_001 |
@@ -1775,7 +1634,6 @@ Feature: BR-UC-003 Update Media Buy
   Scenario Outline: Start time partition validation - <partition>
     Given a valid update_media_buy request with:
     | field        | value        |
-    | media_buy_id | mb_existing  |
     | start_time   | <start_value> |
     And the existing end_time is in the future
     When the Buyer Agent sends the update_media_buy request
@@ -1796,7 +1654,6 @@ Feature: BR-UC-003 Update Media Buy
   Scenario Outline: Start time boundary validation - <boundary_point>
     Given a valid update_media_buy request with:
     | field        | value        |
-    | media_buy_id | mb_existing  |
     | start_time   | <start_value> |
     And the existing end_time is in the future
     When the Buyer Agent sends the update_media_buy request
@@ -1815,7 +1672,6 @@ Feature: BR-UC-003 Update Media Buy
     Given the existing media buy has start_time "2026-04-01T00:00:00Z"
     And a valid update_media_buy request with:
     | field        | value       |
-    | media_buy_id | mb_existing |
     | end_time     | <end_value>  |
     When the Buyer Agent sends the update_media_buy request
     Then the result should be <outcome>
@@ -1834,7 +1690,6 @@ Feature: BR-UC-003 Update Media Buy
     Given the existing media buy has start_time "2026-04-01T00:00:00Z"
     And a valid update_media_buy request with:
     | field        | value       |
-    | media_buy_id | mb_existing |
     | end_time     | <end_value>  |
     When the Buyer Agent sends the update_media_buy request
     Then the result should be <outcome>
@@ -1850,9 +1705,7 @@ Feature: BR-UC-003 Update Media Buy
   Scenario Outline: Approval workflow partition validation - <partition>
     Given the tenant human_review_required is <tenant_flag>
     And the adapter manual_approval_required is <adapter_flag>
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -1871,9 +1724,7 @@ Feature: BR-UC-003 Update Media Buy
   Scenario Outline: Approval workflow boundary validation - <boundary_point>
     Given the tenant human_review_required is <tenant_flag>
     And the adapter manual_approval_required is <adapter_flag>
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -1892,9 +1743,7 @@ Feature: BR-UC-003 Update Media Buy
   Scenario Outline: Creative replacement partition validation - <partition>
     Given the tenant is configured for auto-approval
     And the package "pkg_001" has existing creative assignments [cr_old_1, cr_old_2]
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -1914,9 +1763,7 @@ Feature: BR-UC-003 Update Media Buy
   Scenario Outline: Creative replacement boundary validation - <boundary_point>
     Given the tenant is configured for auto-approval
     And the package "pkg_001" has existing creative assignments [cr_old_1, cr_old_2]
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    And a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -1934,9 +1781,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-partition-creative-state @partition @creative_state_validation
   Scenario Outline: Creative state validation partition - <partition>
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -1957,9 +1802,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-boundary-creative-state @boundary @creative_state_validation
   Scenario Outline: Creative state validation boundary - <boundary_point>
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -1977,9 +1820,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-partition-placement-id @partition @placement_id_validation
   Scenario Outline: Placement ID validation partition - <partition>
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -2001,9 +1842,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-boundary-placement-id @boundary @placement_id_validation
   Scenario Outline: Placement ID validation boundary - <boundary_point>
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
@@ -2021,11 +1860,9 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-partition-adapter-dispatch @partition @adapter_dispatch
   Scenario Outline: Adapter dispatch partition validation - <partition>
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes <update_fields>
-    And the media buy "mb_existing" exists with status "active"
+    And the media buy exists with status "active"
     And the tenant is configured for auto-approval
     When the Buyer Agent sends the update_media_buy request
     Then the result should be <outcome>
@@ -2041,11 +1878,9 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-boundary-adapter-dispatch @boundary @adapter_dispatch
   Scenario Outline: Adapter dispatch boundary validation - <boundary_point>
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes <update_config>
-    And the media buy "mb_existing" exists with status "active"
+    And the media buy exists with status "active"
     And the tenant is configured for auto-approval
     When the Buyer Agent sends the update_media_buy request
     Then the result should be <outcome>
@@ -2058,11 +1893,9 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-partition-persistence-timing @partition @persistence_timing
   Scenario Outline: Persistence timing partition validation - <partition>
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package with budget update
-    And the media buy "mb_existing" exists with status "active"
+    And the media buy exists with status "active"
     And the tenant approval mode is <approval_mode>
     And the adapter <adapter_result>
     When the Buyer Agent sends the update_media_buy request
@@ -2079,11 +1912,9 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-boundary-persistence-timing @boundary @persistence_timing
   Scenario Outline: Persistence timing boundary validation - <boundary_point>
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package with budget update
-    And the media buy "mb_existing" exists with status "active"
+    And the media buy exists with status "active"
     And the tenant approval mode is <approval_mode>
     And the adapter <adapter_result>
     When the Buyer Agent sends the update_media_buy request
@@ -2097,10 +1928,8 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-partition-principal-ownership @partition @principal_ownership
   Scenario Outline: Principal ownership partition validation - <partition>
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
-    And the media buy "mb_existing" exists with owner <owner>
+    Given a valid update_media_buy request
+    And the media buy exists with owner <owner>
     And the authenticated principal is <principal>
     When the Buyer Agent sends the update_media_buy request
     Then the result should be <outcome>
@@ -2115,10 +1944,8 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-boundary-principal-ownership @boundary @principal_ownership
   Scenario Outline: Principal ownership boundary validation - <boundary_point>
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
-    And the media buy "mb_existing" exists with owner <owner>
+    Given a valid update_media_buy request
+    And the media buy exists with owner <owner>
     And the authenticated principal is <principal>
     When the Buyer Agent sends the update_media_buy request
     Then the result should be <outcome>
@@ -2130,11 +1957,9 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-partition-immutable-fields @partition @immutable_fields
   Scenario Outline: Immutable fields partition validation - <partition>
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with <update_content>
-    And the media buy "mb_existing" exists with status "active"
+    And the media buy exists with status "active"
     When the Buyer Agent sends the update_media_buy request
     Then the result should be <outcome>
 
@@ -2150,11 +1975,9 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-boundary-immutable-fields @boundary @immutable_fields
   Scenario Outline: Immutable fields boundary validation - <boundary_point>
-    Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
+    Given a valid update_media_buy request
     And the request includes 1 package update with <update_content>
-    And the media buy "mb_existing" exists with status "active"
+    And the media buy exists with status "active"
     When the Buyer Agent sends the update_media_buy request
     Then the result should be <outcome>
 

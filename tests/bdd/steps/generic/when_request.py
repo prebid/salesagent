@@ -136,7 +136,7 @@ def when_request_unfiltered(ctx: dict) -> None:
 @when("the Buyer Agent sends a list_creative_formats request with invalid dimension filters")
 def when_send_request_invalid_dimensions(ctx: dict) -> None:
     try:
-        req = ListCreativeFormatsRequest(min_width=-1)
+        req = ListCreativeFormatsRequest(min_width="invalid")  # type: ignore[arg-type]
         _call(ctx, req=req)
     except Exception as exc:
         ctx["error"] = exc
@@ -708,28 +708,61 @@ def when_boundary_input_ids(ctx: dict, boundary_point: str) -> None:
 
 # ── Creative agent format queries (partition / boundary) ─────────────
 # These test a separate API (creative agent format querying), not
-# list_creative_formats. Marked xfail in conftest.py.
+# list_creative_formats. Until the dedicated API exists, we proxy
+# through list_creative_formats with the creative_agent_formats seeded
+# into the registry. Marked xfail in conftest.py.
+
+
+def _sync_creative_agent_formats(ctx: dict) -> None:
+    """No-op: creative agent formats come from the real catalog.
+
+    Formerly pushed ctx['creative_agent_formats'] into the harness via
+    set_registry_formats(). That method has been removed — the real
+    catalog is always available.
+    """
+
+
+_AGENT_TYPE_PARTITION_MAP = {
+    "not_provided": "omitted",
+}
+
+_AGENT_ASSET_PARTITION_MAP = {
+    "not_provided": "omitted",
+}
 
 
 @when(parsers.parse('the Buyer Agent queries creative agent formats with type "{partition}"'))
 def when_query_agent_type(ctx: dict, partition: str) -> None:
-    ctx["partition"] = partition
-    ctx["filter_under_test"] = "creative_agent_format_type"
+    _sync_creative_agent_formats(ctx)
+    _partition_type(ctx, _AGENT_TYPE_PARTITION_MAP.get(partition, partition))
 
 
 @when(parsers.parse('the Buyer Agent queries creative agent formats with asset_types "{partition}"'))
 def when_query_agent_asset_types(ctx: dict, partition: str) -> None:
-    ctx["partition"] = partition
-    ctx["filter_under_test"] = "creative_agent_asset_type"
+    _sync_creative_agent_formats(ctx)
+    _partition_asset_types(ctx, _AGENT_ASSET_PARTITION_MAP.get(partition, partition))
 
 
 @when(parsers.parse('the Buyer Agent queries creative agent formats at type boundary "{boundary_point}"'))
 def when_boundary_agent_type(ctx: dict, boundary_point: str) -> None:
-    ctx["boundary_point"] = boundary_point
-    ctx["filter_under_test"] = "creative_agent_format_type"
+    _sync_creative_agent_formats(ctx)
+    mapping = {
+        "audio (first enum value)": "audio",
+        "dooh (last enum value)": "dooh",
+        "Not provided (no filter)": "omitted",
+        "native (valid in media-buy variant but not in creative agent)": "native",
+    }
+    _partition_type(ctx, mapping.get(boundary_point, boundary_point))
 
 
 @when(parsers.parse('the Buyer Agent queries creative agent formats at asset_types boundary "{boundary_point}"'))
 def when_boundary_agent_asset_types(ctx: dict, boundary_point: str) -> None:
-    ctx["boundary_point"] = boundary_point
-    ctx["filter_under_test"] = "creative_agent_asset_type"
+    _sync_creative_agent_formats(ctx)
+    mapping = {
+        "image (first enum value)": "image",
+        "url (last enum value)": "url",
+        "Not provided (no filter)": "omitted",
+        "vast (valid in media-buy variant but not in creative agent)": "vast",
+        "Empty array": "empty_array",
+    }
+    _partition_asset_types(ctx, mapping.get(boundary_point, boundary_point))

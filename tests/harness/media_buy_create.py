@@ -1,0 +1,242 @@
+"""MediaBuyCreateEnv — integration test environment for _create_media_buy_impl.
+
+Patches: adapter, audit logger, slack notifier, context manager.
+Real: get_db_session, MediaBuyRepository, all validation (all hit real DB).
+
+Requires: integration_db fixture.
+
+beads: salesagent-4n0
+"""
+
+from __future__ import annotations
+
+import asyncio
+import uuid
+from typing import Any
+from unittest.mock import MagicMock
+
+from src.core.schemas import CreateMediaBuyRequest
+from src.core.schemas._base import CreateMediaBuyError, CreateMediaBuyResult, CreateMediaBuySuccess
+from tests.harness._base import IntegrationEnv
+
+
+def _restore_creative_ids(req: CreateMediaBuyRequest, flat: dict[str, Any]) -> None:
+    """Re-inject creative_ids stripped by model_dump(exclude=True).
+
+    PackageRequest.creative_ids is an internal field with exclude=True,
+    so model_dump drops it. Transport wrappers (A2A, MCP, REST) need it
+    in the flat dict so the re-parsed request preserves creative assignments.
+    """
+    if not req.packages:
+        return
+    flat_pkgs = flat.get("packages")
+    if not flat_pkgs:
+        return
+    for i, pkg in enumerate(req.packages):
+        cids = getattr(pkg, "creative_ids", None)
+        if cids and i < len(flat_pkgs):
+            flat_pkgs[i]["creative_ids"] = cids
+
+
+class MediaBuyCreateEnv(IntegrationEnv):
+    """Integration test environment for _create_media_buy_impl.
+
+    Mocks external services (adapter, audit, slack, context manager).
+    Everything else is real: DB, repositories, validation, schema processing.
+    """
+
+    EXTERNAL_PATCHES = {
+        "adapter": "src.core.tools.media_buy_create.get_adapter",
+        "audit": "src.core.tools.media_buy_create.get_audit_logger",
+        "slack": "src.core.tools.media_buy_create.get_slack_notifier",
+        "context_mgr": "src.core.tools.media_buy_create.get_context_manager",
+        "setup_check": "src.core.tools.media_buy_create.validate_setup_complete",
+        "format_spec": "src.core.tools.media_buy_create._get_format_spec_sync",
+    }
+    REST_ENDPOINT = "/api/v1/media-buys"
+
+    def setup_media_buy_data(self) -> tuple:
+        """Create the full dependency chain needed for create_media_buy.
+
+        Creates: tenant (with auto CurrencyLimit USD), principal,
+        PropertyTag ("all_inventory"), Product with PricingOption.
+
+        Returns (tenant, principal, product, pricing_option).
+        """
+        tenant, principal = self.setup_default_data()
+        product, pricing_option = self.setup_product_chain(tenant)
+        return tenant, principal, product, pricing_option
+
+    def _configure_mocks(self) -> None:
+        """Set up happy-path defaults for external mocks."""
+        # Adapter: mock create_media_buy — returns response matching the request packages.
+        # The side_effect dynamically generates package_ids from the request.
+        mock_adapter = MagicMock()
+
+        def _adapter_create_response(*args: Any, **kwargs: Any) -> Any:
+            """Generate adapter response with package_ids matching request packages."""
+            from src.core.schemas._base import CreateMediaBuySuccess
+
+            # Determine package count from request
+            req_obj = kwargs.get("request") or (args[0] if args else None)
+            pkg_count = 0
+            if req_obj and hasattr(req_obj, "packages") and req_obj.packages:
+                pkg_count = len(req_obj.packages)
+            # Also check the 'packages' kwarg (MediaPackage list)
+            pkgs_arg = kwargs.get("packages")
+            if pkgs_arg:
+                pkg_count = max(pkg_count, len(pkgs_arg))
+            if pkg_count == 0:
+                pkg_count = 1
+
+            media_buy_id = f"mb_{uuid.uuid4().hex[:8]}"
+            return CreateMediaBuySuccess(
+                media_buy_id=media_buy_id,
+                buyer_ref=getattr(req_obj, "buyer_ref", "test-buyer"),
+                packages=[
+                    {
+                        "package_id": f"pkg_{uuid.uuid4().hex[:8]}",
+                        "product_id": f"prod_{i}",
+                        "budget": 5000.0,
+                        "status": "active",
+                    }
+                    for i in range(pkg_count)
+                ],
+            )
+
+        mock_adapter.create_media_buy.side_effect = _adapter_create_response
+        # Save original side_effect so Given steps can restore it after error injection
+        mock_adapter._original_create_side_effect = _adapter_create_response
+        mock_adapter.validate_media_buy_request.return_value = None
+        mock_adapter.add_creative_assets.return_value = None
+        mock_adapter.associate_creatives.return_value = None
+        mock_adapter.manual_approval_required = False
+        mock_adapter.manual_approval_operations = []
+        self.mock["adapter"].return_value = mock_adapter
+
+        # Audit logger: no-op
+        mock_audit = MagicMock()
+        mock_audit.log_operation.return_value = None
+        mock_audit.log_security_violation.return_value = None
+        self.mock["audit"].return_value = mock_audit
+
+        # Slack notifier: no-op
+        mock_slack = MagicMock()
+        mock_slack.notify_media_buy_event.return_value = None
+        self.mock["slack"].return_value = mock_slack
+
+        # Context manager: creates real DB records (Context + WorkflowStep)
+        # so FK constraints on ObjectWorkflowMapping don't fail in the manual
+        # approval path. Uses shared helper from IntegrationEnv.
+        self.mock["context_mgr"].return_value = self._build_mock_context_manager(tool_name="create_media_buy")
+
+        # Setup checklist: pass by default
+        self.mock["setup_check"].return_value = None
+
+        # Format spec: mock _get_format_spec_sync to avoid asyncio.run() inside
+        # running event loop. Returns a valid format keyed by format_id. Tests
+        # for format mismatch (ext-p) override via mock["format_spec"].side_effect.
+        from tests.helpers.adcp_factories import create_test_format
+
+        self._format_specs: dict[str, Any] = {
+            "display_300x250": create_test_format(
+                format_id="display_300x250",
+                name="Display 300x250",
+                type="display",
+            ),
+        }
+
+        def _format_spec_side_effect(agent_url: str, format_id: str) -> Any:
+            return self._format_specs.get(format_id)
+
+        self.mock["format_spec"].side_effect = _format_spec_side_effect
+
+    def call_impl(self, **kwargs: Any) -> CreateMediaBuyResult:
+        """Call _create_media_buy_impl with real DB."""
+        from src.core.tools.media_buy_create import _create_media_buy_impl
+
+        self._commit_factory_data()
+        identity = kwargs.pop("identity", None) or self.identity
+
+        # Build request from kwargs if not provided directly
+        req = kwargs.pop("req", None)
+        if req is None:
+            req = CreateMediaBuyRequest(**kwargs)
+
+        return asyncio.run(_create_media_buy_impl(req=req, identity=identity))
+
+    def call_a2a(self, **kwargs: Any) -> Any:
+        """Call create_media_buy_raw (A2A wrapper)."""
+        from src.core.tools.media_buy_create import create_media_buy_raw
+
+        self._commit_factory_data()
+        kwargs.setdefault("identity", self.identity)
+        # A2A wrapper takes flat kwargs, not req=. Unpack request if provided.
+        req = kwargs.pop("req", None)
+        if req is not None:
+            flat = req.model_dump(mode="json", exclude_none=True)
+            # A2A wrapper doesn't accept these fields directly
+            for key in ("account", "proposal_id", "total_budget"):
+                flat.pop(key, None)
+            # Preserve creative_ids — exclude=True strips them from model_dump
+            _restore_creative_ids(req, flat)
+            flat.update(kwargs)
+            kwargs = flat
+        return asyncio.run(create_media_buy_raw(**kwargs))
+
+    def call_mcp(self, **kwargs: Any) -> Any:
+        """Call create_media_buy MCP wrapper."""
+        import asyncio as aio
+        from unittest.mock import AsyncMock
+        from unittest.mock import MagicMock as MM
+
+        from fastmcp.server.context import Context
+
+        from src.core.tools.media_buy_create import create_media_buy
+        from tests.harness.transport import Transport
+
+        self._commit_factory_data()
+
+        # MCP wrapper takes flat kwargs, not req=. Unpack request if provided.
+        req = kwargs.pop("req", None)
+        if req is not None:
+            flat = req.model_dump(mode="json", exclude_none=True)
+            for key in ("account", "proposal_id", "total_budget"):
+                flat.pop(key, None)
+            # Preserve creative_ids — exclude=True strips them from model_dump
+            _restore_creative_ids(req, flat)
+            flat.update(kwargs)
+            kwargs = flat
+
+        identity = kwargs.pop("identity", None) or self.identity_for(Transport.MCP)
+        mock_ctx = MM(spec=Context)
+        mock_ctx.get_state = AsyncMock(return_value=identity)
+
+        tool_result = aio.run(create_media_buy(ctx=mock_ctx, **kwargs))
+        # Parse the flattened structured_content back into CreateMediaBuyResult
+        data = dict(tool_result.structured_content)
+        return self.parse_rest_response(data)
+
+    def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
+        """Build REST request body from kwargs."""
+        kwargs.pop("identity", None)
+        req = kwargs.pop("req", None)
+        if req is not None:
+            body = req.model_dump(mode="json", exclude_none=True)
+            # Preserve creative_ids — exclude=True strips them from model_dump
+            _restore_creative_ids(req, body)
+            return body
+        return kwargs
+
+    def parse_rest_response(self, data: dict[str, Any]) -> CreateMediaBuyResult:
+        """Parse REST response JSON.
+
+        CreateMediaBuyResult serializes with flattened response fields + status.
+        Reconstruct by splitting status from the rest.
+        """
+        status = data.pop("status", "completed")
+        if "errors" in data and data["errors"]:
+            response = CreateMediaBuyError(**data)
+        else:
+            response = CreateMediaBuySuccess(**data)
+        return CreateMediaBuyResult(response=response, status=status)

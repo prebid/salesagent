@@ -149,3 +149,4 @@ test-results/
 
 # One-off presentation drafts
 docs/TRANSFORMATION_PRESENTATION.md
+.claude/worktrees/

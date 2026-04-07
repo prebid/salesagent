@@ -26,6 +26,9 @@ class Transport(str, Enum):
     A2A = "a2a"  # _raw() A2A wrapper
     REST = "rest"  # FastAPI TestClient → route → _raw() → _impl()
     MCP = "mcp"  # Mock Context → MCP wrapper → _impl()
+    E2E_REST = "e2e_rest"  # Real HTTP via httpx → nginx → server
+    E2E_MCP = "e2e_mcp"  # Real MCP via httpx → nginx → server (placeholder)
+    E2E_A2A = "e2e_a2a"  # Real A2A via httpx → nginx → server (placeholder)
 
 
 # Maps Transport → ResolvedIdentity.protocol value
@@ -34,7 +37,23 @@ TRANSPORT_PROTOCOL: dict[Transport, str] = {
     Transport.A2A: "a2a",
     Transport.REST: "rest",
     Transport.MCP: "mcp",
+    Transport.E2E_REST: "rest",
+    Transport.E2E_MCP: "mcp",
+    Transport.E2E_A2A: "a2a",
 }
+
+
+@dataclass(frozen=True)
+class E2EConfig:
+    """Configuration for E2E transport dispatch.
+
+    Attributes:
+        base_url: Docker stack URL (e.g., ``http://localhost:8092``).
+        postgres_url: Docker PostgreSQL URL for factory data writes.
+    """
+
+    base_url: str
+    postgres_url: str
 
 
 @dataclass(frozen=True)

@@ -84,6 +84,9 @@ Dockerfile.*
 # Conductor workspaces
 .conductor/
 
+# Claude Code
+.claude/
+
 # CI/CD
 .github/
 .gitlab-ci.yml

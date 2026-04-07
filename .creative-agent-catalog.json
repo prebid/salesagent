@@ -1,0 +1,375 @@
+[
+  {
+    "format_id": "display_generative",
+    "name": "Display Banner - AI Generated",
+    "type": "display",
+    "is_responsive": null,
+    "asset_keys": []
+  },
+  {
+    "format_id": "display_300x250_generative",
+    "name": "Medium Rectangle - AI Generated",
+    "type": "display",
+    "is_responsive": null,
+    "renders": [],
+    "asset_keys": []
+  },
+  {
+    "format_id": "display_728x90_generative",
+    "name": "Leaderboard - AI Generated",
+    "type": "display",
+    "is_responsive": null,
+    "renders": [],
+    "asset_keys": []
+  },
+  {
+    "format_id": "display_320x50_generative",
+    "name": "Mobile Banner - AI Generated",
+    "type": "display",
+    "is_responsive": null,
+    "renders": [],
+    "asset_keys": []
+  },
+  {
+    "format_id": "display_160x600_generative",
+    "name": "Wide Skyscraper - AI Generated",
+    "type": "display",
+    "is_responsive": null,
+    "renders": [],
+    "asset_keys": []
+  },
+  {
+    "format_id": "display_336x280_generative",
+    "name": "Large Rectangle - AI Generated",
+    "type": "display",
+    "is_responsive": null,
+    "renders": [],
+    "asset_keys": []
+  },
+  {
+    "format_id": "display_300x600_generative",
+    "name": "Half Page - AI Generated",
+    "type": "display",
+    "is_responsive": null,
+    "renders": [],
+    "asset_keys": []
+  },
+  {
+    "format_id": "display_970x250_generative",
+    "name": "Billboard - AI Generated",
+    "type": "display",
+    "is_responsive": null,
+    "renders": [],
+    "asset_keys": []
+  },
+  {
+    "format_id": "video_standard",
+    "name": "Standard Video",
+    "type": "video",
+    "is_responsive": null,
+    "asset_keys": []
+  },
+  {
+    "format_id": "video_dimensions",
+    "name": "Video with Dimensions",
+    "type": "video",
+    "is_responsive": null,
+    "asset_keys": []
+  },
+  {
+    "format_id": "video_vast",
+    "name": "VAST Video",
+    "type": "video",
+    "is_responsive": null,
+    "asset_keys": []
+  },
+  {
+    "format_id": "video_standard_30s",
+    "name": "Standard Video - 30 seconds",
+    "type": "video",
+    "is_responsive": null,
+    "asset_keys": []
+  },
+  {
+    "format_id": "video_standard_15s",
+    "name": "Standard Video - 15 seconds",
+    "type": "video",
+    "is_responsive": null,
+    "asset_keys": []
+  },
+  {
+    "format_id": "video_vast_30s",
+    "name": "VAST Video - 30 seconds",
+    "type": "video",
+    "is_responsive": null,
+    "asset_keys": []
+  },
+  {
+    "format_id": "video_1920x1080",
+    "name": "Full HD Video - 1920x1080",
+    "type": "video",
+    "is_responsive": null,
+    "renders": [],
+    "asset_keys": []
+  },
+  {
+    "format_id": "video_1280x720",
+    "name": "HD Video - 1280x720",
+    "type": "video",
+    "is_responsive": null,
+    "renders": [],
+    "asset_keys": []
+  },
+  {
+    "format_id": "video_1080x1920",
+    "name": "Vertical Video - 1080x1920",
+    "type": "video",
+    "is_responsive": null,
+    "renders": [],
+    "asset_keys": []
+  },
+  {
+    "format_id": "video_1080x1080",
+    "name": "Square Video - 1080x1080",
+    "type": "video",
+    "is_responsive": null,
+    "renders": [],
+    "asset_keys": []
+  },
+  {
+    "format_id": "video_ctv_preroll_30s",
+    "name": "CTV Pre-Roll - 30 seconds",
+    "type": "video",
+    "is_responsive": null,
+    "asset_keys": []
+  },
+  {
+    "format_id": "video_ctv_midroll_30s",
+    "name": "CTV Mid-Roll - 30 seconds",
+    "type": "video",
+    "is_responsive": null,
+    "asset_keys": []
+  },
+  {
+    "format_id": "display_image",
+    "name": "Display Banner - Image",
+    "type": "display",
+    "is_responsive": null,
+    "asset_keys": []
+  },
+  {
+    "format_id": "display_300x250_image",
+    "name": "Medium Rectangle - Image",
+    "type": "display",
+    "is_responsive": null,
+    "renders": [],
+    "asset_keys": []
+  },
+  {
+    "format_id": "display_728x90_image",
+    "name": "Leaderboard - Image",
+    "type": "display",
+    "is_responsive": null,
+    "renders": [],
+    "asset_keys": []
+  },
+  {
+    "format_id": "display_320x50_image",
+    "name": "Mobile Banner - Image",
+    "type": "display",
+    "is_responsive": null,
+    "renders": [],
+    "asset_keys": []
+  },
+  {
+    "format_id": "display_160x600_image",
+    "name": "Wide Skyscraper - Image",
+    "type": "display",
+    "is_responsive": null,
+    "renders": [],
+    "asset_keys": []
+  },
+  {
+    "format_id": "display_336x280_image",
+    "name": "Large Rectangle - Image",
+    "type": "display",
+    "is_responsive": null,
+    "renders": [],
+    "asset_keys": []
+  },
+  {
+    "format_id": "display_300x600_image",
+    "name": "Half Page - Image",
+    "type": "display",
+    "is_responsive": null,
+    "renders": [],
+    "asset_keys": []
+  },
+  {
+    "format_id": "display_970x250_image",
+    "name": "Billboard - Image",
+    "type": "display",
+    "is_responsive": null,
+    "renders": [],
+    "asset_keys": []
+  },
+  {
+    "format_id": "display_html",
+    "name": "Display Banner - HTML5",
+    "type": "display",
+    "is_responsive": null,
+    "asset_keys": []
+  },
+  {
+    "format_id": "display_300x250_html",
+    "name": "Medium Rectangle - HTML5",
+    "type": "display",
+    "is_responsive": null,
+    "renders": [],
+    "asset_keys": []
+  },
+  {
+    "format_id": "display_728x90_html",
+    "name": "Leaderboard - HTML5",
+    "type": "display",
+    "is_responsive": null,
+    "renders": [],
+    "asset_keys": []
+  },
+  {
+    "format_id": "display_160x600_html",
+    "name": "Wide Skyscraper - HTML5",
+    "type": "display",
+    "is_responsive": null,
+    "renders": [],
+    "asset_keys": []
+  },
+  {
+    "format_id": "display_336x280_html",
+    "name": "Large Rectangle - HTML5",
+    "type": "display",
+    "is_responsive": null,
+    "renders": [],
+    "asset_keys": []
+  },
+  {
+    "format_id": "display_300x600_html",
+    "name": "Half Page - HTML5",
+    "type": "display",
+    "is_responsive": null,
+    "renders": [],
+    "asset_keys": []
+  },
+  {
+    "format_id": "display_970x250_html",
+    "name": "Billboard - HTML5",
+    "type": "display",
+    "is_responsive": null,
+    "renders": [],
+    "asset_keys": []
+  },
+  {
+    "format_id": "display_js",
+    "name": "Display Banner - JavaScript",
+    "type": "display",
+    "is_responsive": null,
+    "asset_keys": []
+  },
+  {
+    "format_id": "native_standard",
+    "name": "IAB Native Standard",
+    "type": "native",
+    "is_responsive": null,
+    "asset_keys": []
+  },
+  {
+    "format_id": "native_content",
+    "name": "Native Content Placement",
+    "type": "native",
+    "is_responsive": null,
+    "asset_keys": []
+  },
+  {
+    "format_id": "audio_standard_15s",
+    "name": "Standard Audio - 15 seconds",
+    "type": "audio",
+    "is_responsive": null,
+    "asset_keys": []
+  },
+  {
+    "format_id": "audio_standard_30s",
+    "name": "Standard Audio - 30 seconds",
+    "type": "audio",
+    "is_responsive": null,
+    "asset_keys": []
+  },
+  {
+    "format_id": "audio_standard_60s",
+    "name": "Standard Audio - 60 seconds",
+    "type": "audio",
+    "is_responsive": null,
+    "asset_keys": []
+  },
+  {
+    "format_id": "dooh_billboard_1920x1080",
+    "name": "Digital Billboard - 1920x1080",
+    "type": "dooh",
+    "is_responsive": null,
+    "renders": [],
+    "asset_keys": []
+  },
+  {
+    "format_id": "dooh_billboard_landscape",
+    "name": "Digital Billboard - Landscape",
+    "type": "dooh",
+    "is_responsive": null,
+    "asset_keys": []
+  },
+  {
+    "format_id": "dooh_billboard_portrait",
+    "name": "Digital Billboard - Portrait",
+    "type": "dooh",
+    "is_responsive": null,
+    "asset_keys": []
+  },
+  {
+    "format_id": "dooh_transit_screen",
+    "name": "Transit Screen",
+    "type": "dooh",
+    "is_responsive": null,
+    "renders": [],
+    "asset_keys": []
+  },
+  {
+    "format_id": "product_card_standard",
+    "name": "Product Card - Standard",
+    "type": "display",
+    "is_responsive": null,
+    "renders": [],
+    "asset_keys": []
+  },
+  {
+    "format_id": "product_card_detailed",
+    "name": "Product Card - Detailed",
+    "type": "display",
+    "is_responsive": null,
+    "renders": [],
+    "asset_keys": []
+  },
+  {
+    "format_id": "format_card_standard",
+    "name": "Format Card - Standard",
+    "type": "display",
+    "is_responsive": null,
+    "renders": [],
+    "asset_keys": []
+  },
+  {
+    "format_id": "format_card_detailed",
+    "name": "Format Card - Detailed",
+    "type": "display",
+    "is_responsive": null,
+    "renders": [],
+    "asset_keys": []
+  }
+]

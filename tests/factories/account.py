@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import factory
-from factory import LazyAttribute, Sequence, SubFactory
+from factory import LazyAttribute, LazyFunction, Sequence, SubFactory
 
 from src.core.database.models import Account, AgentAccountAccess
-from tests.factories.core import TenantFactory
+from tests.factories.core import TenantFactory, _now
 
 
 class AccountFactory(factory.alchemy.SQLAlchemyModelFactory):
@@ -20,6 +20,12 @@ class AccountFactory(factory.alchemy.SQLAlchemyModelFactory):
     account_id = Sequence(lambda n: f"acc_{n:04d}")
     name = LazyAttribute(lambda o: f"Test Account {o.account_id}")
     status = "active"
+    advertiser = LazyAttribute(lambda o: f"{o.account_id}-advertiser")
+    billing_proxy = LazyAttribute(lambda o: f"{o.account_id}-billing-proxy")
+    rate_card = "Standard CPM"
+    payment_terms = "net_30"
+    created_at = LazyFunction(_now)
+    updated_at = LazyFunction(_now)
 
     class Params:
         """Exclude tenant from model construction (it's only for deriving tenant_id)."""

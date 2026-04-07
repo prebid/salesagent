@@ -16,8 +16,10 @@ import json
 
 from pytest_bdd import given, parsers, then, when
 
+from tests.bdd.steps._harness_db import db_session
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
+from tests.factories.principal import PrincipalFactory
 
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — request setup and account state
@@ -26,8 +28,31 @@ from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 
 @given("a creative with a known format_id")
 def given_creative_with_format(ctx: dict) -> None:
-    """Set up a creative with a known format — no-op for account resolution tests."""
-    ctx.setdefault("creative_format_id", "display_300x250")
+    """Set up a creative payload with a known format_id for sync_creatives dispatch.
+
+    Ensures tenant/principal exist, then builds a creative payload dict matching
+    the shape that _sync_creatives_impl expects (CreativeAsset-compatible dict).
+    Stores the payload in ctx["creatives"] for the When step to consume.
+    """
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+
+    format_id = "display_300x250"
+    creative_id = "creative-known-fmt-001"
+    creative_payload = {
+        "creative_id": creative_id,
+        "name": "Test Creative with Known Format",
+        "format_id": {"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
+        "assets": {
+            "image": {
+                "url": "https://example.com/banner.png",
+                "width": 300,
+                "height": 250,
+            },
+        },
+    }
+    ctx.setdefault("creatives", []).append(creative_payload)
+    ctx["creative_format_id"] = format_id
 
 
 @given(parsers.parse("account is {account_setup}"))
@@ -81,16 +106,31 @@ def given_account_is(ctx: dict, account_setup: str) -> None:
 
 def _setup_account_by_id(account_id: str, tenant: object, principal: object) -> None:
     """Create DB state for account_id-based scenarios."""
-    from tests.factories.principal import PrincipalFactory
+    # Accounts that exist but belong to a different principal (AUTHORIZATION_ERROR)
+    access_denied_ids = {"acc_other_agent"}
 
     status_map = {
         "acc_acme_001": "active",
         "acc_new_unconfigured": "pending_approval",
         "acc_overdue": "payment_required",
         "acc_suspended": "suspended",
-        "acc_other_agent": "active",  # Exists but accessible to a different agent
     }
     status = status_map.get(account_id)
+
+    if account_id in access_denied_ids:
+        # Account exists but the test principal has no access — triggers AUTHORIZATION_ERROR
+        domain = account_id.replace("_", "-") + ".com"
+        other_principal = PrincipalFactory(tenant=tenant)
+        account = AccountFactory(
+            tenant=tenant,
+            account_id=account_id,
+            status="active",
+            brand={"domain": domain},
+            operator=domain,
+        )
+        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=other_principal, account=account)
+        return
+
     if status is None:
         # Unknown account_id — don't create (tests not-found path)
         return
@@ -105,16 +145,14 @@ def _setup_account_by_id(account_id: str, tenant: object, principal: object) -> 
         brand={"domain": domain},
         operator=domain,
     )
-    if account_id == "acc_other_agent":
-        # Grant access to a DIFFERENT principal — tests authorization boundary
-        other_principal = PrincipalFactory(tenant=tenant)
-        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=other_principal, account=account)
-    else:
-        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
+    AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
 
 
 def _setup_account_by_natural_key(brand_domain: str, operator: str, tenant: object, principal: object) -> None:
     """Create DB state for natural-key-based scenarios."""
+    # Domains where the account exists but belongs to a different principal (AUTHORIZATION_ERROR)
+    access_denied_domains = {"other-agent.com"}
+
     if brand_domain == "multi.com":
         # Ambiguous: create 3 accounts with same natural key
         for i in range(3):
@@ -128,18 +166,16 @@ def _setup_account_by_natural_key(brand_domain: str, operator: str, tenant: obje
     elif brand_domain in ("unknown.com",):
         # Not found — don't create anything
         pass
-    elif brand_domain == "other-agent.com":
-        # Access denied: account exists but belongs to a different agent
-        from tests.factories.principal import PrincipalFactory
-
+    elif brand_domain in access_denied_domains:
+        # Account exists but the test principal has no access — triggers AUTHORIZATION_ERROR
+        other_principal = PrincipalFactory(tenant=tenant)
         account = AccountFactory(
             tenant=tenant,
-            account_id="acc-other-agent",
+            account_id=f"acc-{brand_domain.replace('.', '-')}",
             status="active",
             brand={"domain": brand_domain},
             operator=operator,
         )
-        other_principal = PrincipalFactory(tenant=tenant)
         AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=other_principal, account=account)
     else:
         # Single match — create one active account
@@ -167,16 +203,13 @@ def when_sync_creative(ctx: dict) -> None:
     The wrappers call enrich_identity_with_account() → resolve_account(),
     exercising the full account resolution chain across all transports.
 
-    Pre-resolution validation (missing/invalid account_ref) is handled via
-    the shared validate_account_ref() helper.
+    Always dispatches — even when account_ref is None or invalid — because
+    the step text says "syncs the creative". Error handling is the production
+    code's responsibility, not the step's.
     """
-    from tests.bdd.steps.generic._account_resolution import validate_account_ref
-
-    account_ref = validate_account_ref(ctx)
-    if account_ref is None:
-        return  # ctx["error"] already set
-
-    dispatch_request(ctx, account=account_ref, creatives=[])
+    account_ref = ctx.get("account_ref")
+    creatives = ctx.get("creatives", [])
+    dispatch_request(ctx, account=account_ref, creatives=creatives)
 
 
 def _ensure_tenant_principal(ctx: dict, env: object) -> None:
@@ -193,18 +226,61 @@ def _ensure_tenant_principal(ctx: dict, env: object) -> None:
 
 @then("the request should proceed with resolved account")
 def then_proceed_with_resolved_account(ctx: dict) -> None:
-    """Assert account resolution succeeded — sync_creatives returned a response.
+    """Assert account resolution succeeded and the resolved account matches Given state.
 
-    When dispatched through transport wrappers, successful account resolution
-    means the wrapper called enrich_identity_with_account() without error
-    and the _impl returned a SyncCreativesResponse.
+    Verifies three things:
+    1. The transport dispatch succeeded (no error, correct response type).
+    2. The Given step provided an account reference (request_account_id or
+       request_brand/request_operator exists in ctx).
+    3. The account that was set up in the DB is active — confirming the
+       production resolve_account() path found and validated it during
+       enrich_identity_with_account().
     """
     from src.core.schemas import SyncCreativesResponse
 
+    # 1. Response succeeded with correct type
     assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
     resp = ctx.get("response")
     assert resp is not None, "Expected a response (SyncCreativesResponse)"
     assert isinstance(resp, SyncCreativesResponse), f"Expected SyncCreativesResponse, got {type(resp).__name__}"
+
+    # 2. Verify an account reference was provided by the Given step
+    has_account_id = "request_account_id" in ctx
+    has_natural_key = "request_brand" in ctx and "request_operator" in ctx
+    assert has_account_id or has_natural_key, (
+        "Then step claims 'proceed with resolved account' but no account reference "
+        "was set up by a Given step (missing request_account_id and request_brand/request_operator)"
+    )
+
+    # 3. Verify the account exists and is active in the DB — proving
+    #    resolve_account() found a valid, active account during dispatch
+    from sqlalchemy import select
+
+    from src.core.database.models import Account
+
+    tenant_id = ctx["tenant"].tenant_id
+    with db_session(ctx) as session:
+        if has_account_id:
+            account = session.scalars(
+                select(Account).filter_by(tenant_id=tenant_id, account_id=ctx["request_account_id"])
+            ).first()
+            assert account is not None, (
+                f"Account {ctx['request_account_id']} not found in DB — "
+                "resolve_account() should have matched this account"
+            )
+            assert account.status == "active", (
+                f"Account {ctx['request_account_id']} has status '{account.status}', "
+                "expected 'active' for successful resolution"
+            )
+        else:
+            # Natural key lookup — verify at least one active account with matching brand
+            brand_domain = ctx["request_brand"]
+            accounts = session.scalars(select(Account).filter_by(tenant_id=tenant_id)).all()
+            matching = [a for a in accounts if a.brand and a.brand.domain == brand_domain and a.status == "active"]
+            assert len(matching) == 1, (
+                f"Expected exactly 1 active account with brand domain '{brand_domain}', "
+                f"found {len(matching)} — resolve_account() requires unambiguous match"
+            )
 
 
 @then(parsers.parse("the error should be {error_code} with suggestion"))

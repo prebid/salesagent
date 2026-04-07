@@ -142,7 +142,7 @@ class TestCreativeListEnvContract:
 
 
 class TestCreativeFormatsEnvContract:
-    """CreativeFormatsEnv must mock registry and audit logger."""
+    """CreativeFormatsEnv uses real registry (ADCP_TESTING=true), mocks audit logger only."""
 
     def test_import_succeeds(self):
         """CreativeFormatsEnv is importable from harness."""
@@ -151,10 +151,10 @@ class TestCreativeFormatsEnvContract:
         assert CreativeFormatsEnv is not None
 
     def test_has_correct_external_patches(self):
-        """CreativeFormatsEnv patches registry and audit_logger."""
+        """CreativeFormatsEnv patches audit_logger only (registry is real)."""
         from tests.harness.creative_formats import CreativeFormatsEnv
 
-        expected_keys = {"registry", "audit_logger"}
+        expected_keys = {"audit_logger"}
         assert set(CreativeFormatsEnv.EXTERNAL_PATCHES.keys()) == expected_keys
 
     def test_is_integration_env(self):
@@ -164,13 +164,12 @@ class TestCreativeFormatsEnvContract:
         assert CreativeFormatsEnv.use_real_db is True
 
     def test_mock_dict_populated_in_unit_mode(self):
-        """Verify patches activate correctly."""
+        """Verify patches activate correctly (audit_logger only)."""
         from tests.harness.creative_formats import CreativeFormatsEnv
 
         class _UnitMode(CreativeFormatsEnv):
             use_real_db = False
 
         with _UnitMode() as env:
-            assert "registry" in env.mock
             assert "audit_logger" in env.mock
-            assert len(env.mock) == 2
+            assert len(env.mock) == 1

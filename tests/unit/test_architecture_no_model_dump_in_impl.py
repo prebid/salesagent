@@ -24,10 +24,9 @@ BANNED_METHODS = {"model_dump", "model_dump_internal"}
 
 # Known violations — allowlist shrinks as violations are fixed.
 # Each entry is (relative_path_from_tools_dir, line_number).
-# FIXME(salesagent-hr8n): 24 violations remain (5 fixed by salesagent-lfto).
-# Line numbers reflect FIXME comment restored in media_buy_update.py (PR04 review item 1).
+# FIXME(salesagent-hr8n): 25 violations remain (4 fixed by salesagent-lfto).
 KNOWN_VIOLATIONS = {
-    # _update_media_buy_impl: 22 violations (workflow step response_data)
+    # FIXME: _update_media_buy_impl: 22 violations (workflow step response_data)
     ("media_buy_update.py", 224),
     ("media_buy_update.py", 279),
     ("media_buy_update.py", 280),
@@ -53,7 +52,7 @@ KNOWN_VIOLATIONS = {
     # _get_products_impl: 1 violation (logging)
     ("products.py", 637),
     # _list_creatives_impl: 1 violation (filter dict conversion)
-    ("creatives/listing.py", 153),  # filters.model_dump(exclude_none=True)
+    ("creatives/listing.py", 153),
 }
 
 
