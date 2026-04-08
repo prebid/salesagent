@@ -56,24 +56,30 @@ SCHEMA_TO_MODEL_MAP = {
 # Python library. These are spec-vs-library mismatches, not bugs in our code.
 # See test_schema_account_field_mismatch.py for detailed documentation.
 # FIXME(salesagent-amkf): Remove entries as adcp library adds these fields.
+# Fields present in AdCP spec schemas but not yet in our Pydantic models or the adcp library.
+# adcp_major_version was added to all request schemas in the spec but is not in the library yet.
+_COMMON_SPEC_AHEAD_FIELDS = {"adcp_major_version"}
+
 KNOWN_SCHEMA_LIBRARY_MISMATCHES: dict[str, set[str]] = {
-    "/schemas/latest/media-buy/get-products-request.json": {
+    "/schemas/latest/media-buy/get-products-request.json": _COMMON_SPEC_AHEAD_FIELDS
+    | {
         "fields",  # Schema defines field selection, library doesn't have it yet
         "preferred_delivery_types",  # Schema defines delivery type preferences, library doesn't have it yet
         "refine",  # Schema defines refinement array, library doesn't have it yet
         "required_policies",  # Schema defines policy IDs, library doesn't have it yet
         "time_budget",  # Schema defines time budget, library doesn't have it yet
     },
-    "/schemas/latest/media-buy/update-media-buy-request.json": {
+    "/schemas/latest/media-buy/update-media-buy-request.json": _COMMON_SPEC_AHEAD_FIELDS
+    | {
         "idempotency_key",  # Schema defines request deduplication key, library doesn't have it yet
         "invoice_recipient",  # Schema refs BusinessEntity type, not in library or our models yet
     },
-    "/schemas/latest/media-buy/get-media-buy-delivery-request.json": {
-        "account",  # Schema says 'account' (object), library uses 'account_id' (string)
+    "/schemas/latest/media-buy/get-media-buy-delivery-request.json": _COMMON_SPEC_AHEAD_FIELDS
+    | {
         "reporting_dimensions",  # Schema defines it, library doesn't have it yet
     },
-    "/schemas/latest/media-buy/sync-creatives-request.json": {
-        "account",  # Schema says 'account' (object), library uses 'account_id' (string)
+    "/schemas/latest/media-buy/sync-creatives-request.json": _COMMON_SPEC_AHEAD_FIELDS
+    | {
         "idempotency_key",  # Schema defines request deduplication key, library doesn't have it yet
     },
 }
@@ -151,6 +157,8 @@ def generate_example_value(field_type: str, field_name: str = "", field_spec: di
             return {"url": "https://example.com/notify"}
         elif "validation-mode" in ref.lower():
             return "strict"
+        elif "account-ref" in ref.lower():
+            return {"account_id": "test-account-123"}
         elif "context" in ref.lower():
             return {"session_id": "test-session"}
         elif "ext" in ref.lower():
