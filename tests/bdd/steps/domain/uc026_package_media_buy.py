@@ -301,26 +301,36 @@ def given_product_with_pricing(ctx: dict, product_id: str, options: str) -> None
             },
         }
 
-        # Remove existing pricing options so we start fresh
+        # Match existing pricing options to labels by attributes.
+        # Only create new ones if a label has no match. Never delete.
+        # The DB trigger prevent_empty_pricing_options blocks deletion
+        # of the last option, so the product must never have zero options.
         existing = list(product.pricing_options or [])
-        for po in existing:
-            env._session.delete(po)
-        env._session.flush()
-
         pricing_map: dict[str, str] = {}
         for label in expected_labels:
             spec = _LABEL_SPEC.get(label)
             if spec:
-                PricingOptionFactory(product=product, **spec)
                 fixed_str = "fixed" if spec["is_fixed"] else "auction"
                 canonical_id = f"{spec['pricing_model']}_{spec['currency'].lower()}_{fixed_str}"
+                match = next(
+                    (
+                        po
+                        for po in existing
+                        if po.pricing_model == spec["pricing_model"]
+                        and po.currency == spec["currency"]
+                        and po.is_fixed == spec["is_fixed"]
+                    ),
+                    None,
+                )
+                if not match:
+                    PricingOptionFactory(product=product, **spec)
+                    env._commit_factory_data()
                 pricing_map[label] = canonical_id
             else:
-                # Unknown label — create a generic CPM fixed option keyed by label
                 PricingOptionFactory(product=product)
+                env._commit_factory_data()
                 pricing_map[label] = label
 
-        env._commit_factory_data()
         ctx["pricing_option_map"] = pricing_map
 
     ctx["product_pricing_options"] = options
