@@ -142,24 +142,16 @@ class TestShouldRetry:
         with patch("src.core.config.is_production", return_value=False):
             assert middleware._should_retry(exc) is False
 
-    def test_tool_error_with_typeadapter_signature_retries(self, middleware):
-        """ToolError wrapping a TypeAdapter message should retry in production."""
+    def test_tool_error_does_not_retry(self, middleware):
+        """ToolError is never retried — TypeAdapter raises ValidationError, not ToolError."""
         from fastmcp.exceptions import ToolError
 
         exc = ToolError("1 validation error for call[get_products]\ncount\n  Field required [type=missing]")
         with patch("src.core.config.is_production", return_value=True):
-            assert middleware._should_retry(exc) is True
-
-    def test_tool_error_without_typeadapter_signature_does_not_retry(self, middleware):
-        """ToolError with a generic message should not retry."""
-        from fastmcp.exceptions import ToolError
-
-        exc = ToolError("Something went wrong")
-        with patch("src.core.config.is_production", return_value=True):
             assert middleware._should_retry(exc) is False
 
     def test_unrelated_exception_does_not_retry(self, middleware):
-        """Non-ValidationError, non-ToolError exceptions never retry."""
+        """Non-ValidationError exceptions never retry."""
         exc = RuntimeError("unexpected")
         with patch("src.core.config.is_production", return_value=True):
             assert middleware._should_retry(exc) is False
