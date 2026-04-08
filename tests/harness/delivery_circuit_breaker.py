@@ -78,16 +78,15 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
     ) -> PushNotificationConfig:
         """Create a real PushNotificationConfig via factory.
 
-        Mirrors the unit env's MagicMock-based make_webhook_config but
-        creates a real ORM row in the test database.
+        Uses the env's tenant/principal (from setup_default_data) so the
+        webhook config is discoverable by call_send which queries by
+        self._tenant_id.
         """
-        from tests.factories import PrincipalFactory, PushNotificationConfigFactory, TenantFactory
+        from tests.factories import PushNotificationConfigFactory
 
-        tenant = TenantFactory()
-        principal = PrincipalFactory(tenant=tenant)
         return PushNotificationConfigFactory(
-            tenant=tenant,
-            principal=principal,
+            tenant_id=self._tenant_id,
+            principal_id=self._principal_id,
             url=url,
             authentication_type=auth_type,
             authentication_token=auth_token,

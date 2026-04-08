@@ -61,6 +61,24 @@ def _resolve_media_buy_ids(ctx: dict, labels: list[str]) -> list[str]:
     return [_resolve_media_buy_id(ctx, label) for label in labels]
 
 
+def _register_principal(ctx: dict, label: str) -> None:
+    """Register the ctx principal under a Gherkin label.
+
+    Called once per scenario (conftest creates one principal).
+    Subsequent Given steps resolve "buyer-001" → real principal_id.
+    """
+    principal = ctx["principal"]
+    ctx.setdefault("principal_labels", {})[label] = principal.principal_id
+
+
+def _resolve_principal_id(ctx: dict, label: str) -> str:
+    """Resolve a Gherkin principal label to the real principal_id."""
+    labels = ctx.get("principal_labels", {})
+    if label in labels:
+        return labels[label]
+    return label  # fallback: label IS the real ID
+
+
 def _make_test_snapshot() -> Any:
     """Create a realistic Snapshot instance for adapter reporting tests."""
     from datetime import UTC, datetime
@@ -120,9 +138,7 @@ def _find_media_buy_for_package(ctx: dict, pkg_id: str) -> Any:
 )
 def given_principal_owns_media_buy_with_dates(ctx: dict, principal_id: str, mb_id: str, start: str, end: str) -> None:
     """Create a media buy with specific flight dates, verifying principal_id consistency."""
-    assert ctx["principal"].principal_id == principal_id, (
-        f"Step claims principal '{principal_id}' but ctx has '{ctx['principal'].principal_id}'"
-    )
+    _register_principal(ctx, principal_id)
     env = ctx["env"]
     real_id = _generate_unique_id(mb_id)
     mb = MediaBuyFactory(
@@ -165,9 +181,7 @@ def given_today_is(ctx: dict, today_str: str) -> None:
 @given(parsers.parse('the principal "{principal_id}" owns media buys "{mb1}", "{mb2}", and "{mb3}"'))
 def given_principal_owns_multiple(ctx: dict, principal_id: str, mb1: str, mb2: str, mb3: str) -> None:
     """Create 3 media buys, verifying principal_id consistency."""
-    assert ctx["principal"].principal_id == principal_id, (
-        f"Step claims principal '{principal_id}' but ctx has '{ctx['principal'].principal_id}'"
-    )
+    _register_principal(ctx, principal_id)
     env = ctx["env"]
     for label in [mb1, mb2, mb3]:
         real_id = _generate_unique_id(label)
@@ -186,9 +200,7 @@ def given_principal_owns_multiple(ctx: dict, principal_id: str, mb1: str, mb2: s
 def given_principal_owns_with_ref(ctx: dict, principal_id: str, mb_id: str, ref: str) -> None:
     """Create a media buy with specific buyer_ref, verifying principal_id consistency."""
     # Verify the stated principal_id matches the ctx principal
-    assert ctx["principal"].principal_id == principal_id, (
-        f"Step claims principal '{principal_id}' but ctx has '{ctx['principal'].principal_id}'"
-    )
+    _register_principal(ctx, principal_id)
     env = ctx["env"]
     real_id = _generate_unique_id(mb_id)
     mb = MediaBuyFactory(
@@ -206,9 +218,7 @@ def given_principal_owns_with_ref(ctx: dict, principal_id: str, mb_id: str, ref:
 def given_principal_owns_with_package(ctx: dict, principal_id: str, mb_id: str, pkg_id: str) -> None:
     """Create a media buy with an active package, verifying principal_id consistency."""
     # Verify the stated principal_id matches the ctx principal
-    assert ctx["principal"].principal_id == principal_id, (
-        f"Step claims principal '{principal_id}' but ctx has '{ctx['principal'].principal_id}'"
-    )
+    _register_principal(ctx, principal_id)
     env = ctx["env"]
     real_id = _generate_unique_id(mb_id)
     mb = MediaBuyFactory(
@@ -240,14 +250,7 @@ def given_principal_owns_none(ctx: dict, principal_id: str) -> None:
     Validates that the principal_id matches the ctx principal (like other
     principal-scoped Given steps).
     """
-    principal = ctx.get("principal")
-    assert principal is not None, (
-        f"No principal in ctx — step claims principal '{principal_id}' owns no media buys "
-        "but no principal exists to validate against"
-    )
-    assert principal.principal_id == principal_id, (
-        f"Step references principal '{principal_id}' but ctx principal is '{principal.principal_id}' — mismatch"
-    )
+    _register_principal(ctx, principal_id)
     ctx.setdefault("seeded_media_buys", {})
 
 
@@ -263,7 +266,7 @@ def given_principal_owns_mb_with_start_time(
     """Create a media buy with start_time taking precedence over start_date (INV-150-4)."""
     from datetime import datetime as dt
 
-    assert ctx["principal"].principal_id == principal_id
+    _register_principal(ctx, principal_id)
     env = ctx["env"]
     real_id = _generate_unique_id(mb_id)
     start_dt = dt.fromisoformat(start_time)
@@ -293,7 +296,7 @@ def given_principal_owns_mb_with_end_time(
     """Create a media buy with end_time taking precedence over end_date (INV-150-5)."""
     from datetime import datetime as dt
 
-    assert ctx["principal"].principal_id == principal_id
+    _register_principal(ctx, principal_id)
     env = ctx["env"]
     real_id = _generate_unique_id(mb_id)
     end_dt = dt.fromisoformat(end_time)
@@ -314,7 +317,7 @@ def given_principal_owns_mb_with_end_time(
 @given(parsers.parse('the principal "{principal_id}" owns media buys in various statuses'))
 def given_principal_owns_various_statuses(ctx: dict, principal_id: str) -> None:
     """Create media buys in multiple statuses for status filter testing."""
-    assert ctx["principal"].principal_id == principal_id
+    _register_principal(ctx, principal_id)
     env = ctx["env"]
     # Create one in each status by using dates relative to 'today'
     # Pre-flight → pending_activation, In-flight → active, Post-flight → completed
@@ -344,7 +347,7 @@ def given_principal_owns_various_statuses(ctx: dict, principal_id: str) -> None:
 @given(parsers.parse('the principal "{principal_id}" owns active media buy "{mb1}" and completed media buy "{mb2}"'))
 def given_principal_owns_active_and_completed(ctx: dict, principal_id: str, mb1: str, mb2: str) -> None:
     """Create one active and one completed media buy (INV-151-1)."""
-    assert ctx["principal"].principal_id == principal_id
+    _register_principal(ctx, principal_id)
     env = ctx["env"]
     today = date.fromisoformat(ctx.get("mock_today", "2026-03-15"))
     from datetime import timedelta
@@ -379,7 +382,7 @@ def given_principal_owns_active_and_completed(ctx: dict, principal_id: str, mb1:
 @given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with package "{pkg_id}"'))
 def given_principal_owns_mb_with_named_package(ctx: dict, principal_id: str, mb_id: str, pkg_id: str) -> None:
     """Create a media buy with a named package (for creative approval scenarios)."""
-    assert ctx["principal"].principal_id == principal_id
+    _register_principal(ctx, principal_id)
     env = ctx["env"]
     real_id = _generate_unique_id(mb_id)
     mb = MediaBuyFactory(
@@ -407,7 +410,7 @@ def given_principal_owns_mb_with_named_package(ctx: dict, principal_id: str, mb_
 @given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with packages "{pkg1}" and "{pkg2}"'))
 def given_principal_owns_mb_with_two_packages(ctx: dict, principal_id: str, mb_id: str, pkg1: str, pkg2: str) -> None:
     """Create a media buy with two packages (INV-153-3)."""
-    assert ctx["principal"].principal_id == principal_id
+    _register_principal(ctx, principal_id)
     env = ctx["env"]
     real_id = _generate_unique_id(mb_id)
     mb = MediaBuyFactory(
@@ -746,7 +749,7 @@ def given_principal_with_n_buys(ctx: dict, principal_id: str, count: int) -> Non
     Uses MediaBuyFactory(...) which invokes factory_boy's create() strategy.
     env._commit_factory_data() flushes all pending factory objects to the DB session.
     """
-    assert ctx["principal"].principal_id == principal_id
+    _register_principal(ctx, principal_id)
     env = ctx["env"]
     for i in range(count):
         label = f"mb-{principal_id}-{i + 1}"
@@ -768,14 +771,7 @@ def given_principal_with_n_buys(ctx: dict, principal_id: str, count: int) -> Non
 @given(parsers.parse('an authenticated principal "{principal_id}" who owns no media buys'))
 def given_principal_no_buys(ctx: dict, principal_id: str) -> None:
     """No media buys exist for this principal."""
-    principal = ctx.get("principal")
-    assert principal is not None, (
-        f"No principal in ctx — step claims principal '{principal_id}' owns no media buys "
-        "but no principal exists to validate against"
-    )
-    assert principal.principal_id == principal_id, (
-        f"Step references principal '{principal_id}' but ctx principal is '{principal.principal_id}' — mismatch"
-    )
+    _register_principal(ctx, principal_id)
     ctx.setdefault("seeded_media_buys", {})
 
 
@@ -790,14 +786,14 @@ def given_principal_owns_single_mb(ctx: dict, principal_id: str, mb_id: str) -> 
     from tests.factories import PrincipalFactory
 
     env = ctx["env"]
-    if ctx["principal"].principal_id == principal_id:
+    resolved_id = _resolve_principal_id(ctx, principal_id)
+    if ctx["principal"].principal_id == resolved_id:
         principal = ctx["principal"]
     else:
         # Create a separate principal for isolation testing (INV-154)
-        # PrincipalFactory(...) creates via factory_boy; _commit_factory_data() persists
         principal = PrincipalFactory(
             tenant=ctx["tenant"],
-            principal_id=principal_id,
+            principal_id=resolved_id,
         )
     real_id = _generate_unique_id(mb_id)
     mb = MediaBuyFactory(
@@ -815,7 +811,7 @@ def given_principal_owns_single_mb(ctx: dict, principal_id: str, mb_id: str) -> 
 @given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}"'))
 def given_principal_owns_mb_simple(ctx: dict, principal_id: str, mb_id: str) -> None:
     """Create a media buy (simple, no date attributes)."""
-    assert ctx["principal"].principal_id == principal_id
+    _register_principal(ctx, principal_id)
     env = ctx["env"]
     real_id = _generate_unique_id(mb_id)
     mb = MediaBuyFactory(
@@ -837,7 +833,7 @@ def given_principal_owns_mb_no_start(ctx: dict, principal_id: str, mb_id: str) -
     IntegrityError on commit. The scenario-level xfail (T-UC-019-partition-status-invalid)
     handles the expected failure.
     """
-    assert ctx["principal"].principal_id == principal_id
+    _register_principal(ctx, principal_id)
     env = ctx["env"]
     real_id = _generate_unique_id(mb_id)
     mb = MediaBuyFactory(
@@ -861,7 +857,7 @@ def given_principal_owns_mb_no_end(ctx: dict, principal_id: str, mb_id: str) -> 
     IntegrityError on commit. The scenario-level xfail (T-UC-019-partition-status-invalid)
     handles the expected failure.
     """
-    assert ctx["principal"].principal_id == principal_id
+    _register_principal(ctx, principal_id)
     env = ctx["env"]
     real_id = _generate_unique_id(mb_id)
     mb = MediaBuyFactory(
@@ -1859,6 +1855,7 @@ def then_response_count_scoped(ctx: dict, count: int, principal_id: str) -> None
     # Build reverse map: real_id → ORM object
     real_id_to_mb = {mb_obj.media_buy_id: mb_obj for mb_obj in seeded.values()}
     returned_ids = {getattr(b, "media_buy_id", None) for b in buys}
+    resolved = _resolve_principal_id(ctx, principal_id)
     scoping_checked = 0
     for real_id in returned_ids:
         if real_id in real_id_to_mb:
@@ -1866,9 +1863,9 @@ def then_response_count_scoped(ctx: dict, count: int, principal_id: str) -> None
             actual_principal = getattr(mb, "principal_id", None)
             if actual_principal is not None:
                 scoping_checked += 1
-                assert actual_principal == principal_id, (
+                assert actual_principal == resolved, (
                     f"Media buy '{real_id}' belongs to principal '{actual_principal}', "
-                    f"not '{principal_id}' — scoping violation"
+                    f"not '{resolved}' (label '{principal_id}') — scoping violation"
                 )
     # Step claims scoping — we must have verified at least one buy's ownership
     if count > 0:

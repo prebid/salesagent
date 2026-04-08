@@ -48,13 +48,13 @@ _HASATTR_ALLOWLIST: set[str] = {
     "bdd/steps/domain/uc011_accounts.py:662 then_accounts_from_first_page",
     "bdd/steps/domain/uc011_accounts.py:764 then_response_outcome",
     "bdd/steps/domain/uc011_accounts.py:930 then_success_with_accounts",
-    "bdd/steps/domain/uc019_query_media_buys.py:1145 then_package_details",
+    "bdd/steps/domain/uc019_query_media_buys.py:1141 then_package_details",
 }
 
 _GETATTR_EXISTENCE_ALLOWLIST: set[str] = {
     # FIXME(salesagent-beq4): replace getattr existence check with value comparison
     "bdd/steps/domain/uc003_update_media_buy.py:786 then_response_has_buyer_ref",
-    "bdd/steps/domain/uc019_query_media_buys.py:1145 then_package_details",
+    "bdd/steps/domain/uc019_query_media_buys.py:1141 then_package_details",
 }
 
 _COUNT_ONLY_ALLOWLIST: set[str] = {
@@ -85,11 +85,11 @@ _COUNT_ONLY_ALLOWLIST: set[str] = {
     "bdd/steps/domain/uc011_accounts.py:534 then_only_status",
     "bdd/steps/domain/uc011_accounts.py:552 then_other_statuses_excluded",
     "bdd/steps/domain/uc011_accounts.py:764 then_response_outcome",
-    "bdd/steps/domain/uc019_query_media_buys.py:1195 then_creative_approval_state",
-    "bdd/steps/domain/uc019_query_media_buys.py:1236 then_buyer_refs_for_correlation",
-    "bdd/steps/domain/uc019_query_media_buys.py:2040 then_either_status_returned",
-    "bdd/steps/domain/uc019_query_media_buys.py:2057 then_any_status_returned",
-    "bdd/steps/domain/uc019_query_media_buys.py:1145 then_package_details",
+    "bdd/steps/domain/uc019_query_media_buys.py:1191 then_creative_approval_state",
+    "bdd/steps/domain/uc019_query_media_buys.py:1232 then_buyer_refs_for_correlation",
+    "bdd/steps/domain/uc019_query_media_buys.py:2037 then_either_status_returned",
+    "bdd/steps/domain/uc019_query_media_buys.py:2054 then_any_status_returned",
+    "bdd/steps/domain/uc019_query_media_buys.py:1141 then_package_details",
     "bdd/steps/domain/uc026_package_media_buy.py:1663 then_package_has_id",
     "bdd/steps/domain/uc026_package_media_buy.py:1749 then_package_default_formats",
     "bdd/steps/domain/uc026_package_media_buy.py:1816 then_package_formats_to_provide",
