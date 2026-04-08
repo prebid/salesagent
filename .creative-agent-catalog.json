@@ -1,0 +1,1345 @@
+[
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "display_300x250_image"
+    },
+    "name": "Medium Rectangle (300x250)",
+    "type": "display",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 300,
+          "height": 250
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "image_asset",
+        "required": true,
+        "asset_type": "image"
+      }
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "display_728x90_image"
+    },
+    "name": "Leaderboard (728x90)",
+    "type": "display",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 728,
+          "height": 90
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "image_asset",
+        "required": true,
+        "asset_type": "image"
+      }
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "display_160x600_image"
+    },
+    "name": "Wide Skyscraper (160x600)",
+    "type": "display",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 160,
+          "height": 600
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "image_asset",
+        "required": true,
+        "asset_type": "image"
+      }
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "display_320x50_image"
+    },
+    "name": "Mobile Banner (320x50)",
+    "type": "display",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 320,
+          "height": 50
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "image_asset",
+        "required": true,
+        "asset_type": "image"
+      }
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "display_970x250_image"
+    },
+    "name": "Billboard (970x250)",
+    "type": "display",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 970,
+          "height": 250
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "image_asset",
+        "required": true,
+        "asset_type": "image"
+      }
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "display_300x600_image"
+    },
+    "name": "Half Page (300x600)",
+    "type": "display",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 300,
+          "height": 600
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "image_asset",
+        "required": true,
+        "asset_type": "image"
+      }
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "display_336x280_image"
+    },
+    "name": "Large Rectangle (336x280)",
+    "type": "display",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 336,
+          "height": 280
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "image_asset",
+        "required": true,
+        "asset_type": "image"
+      }
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "display_970x90_image"
+    },
+    "name": "Super Leaderboard (970x90)",
+    "type": "display",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 970,
+          "height": 90
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "image_asset",
+        "required": true,
+        "asset_type": "image"
+      }
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "display_468x60_image"
+    },
+    "name": "Full Banner (468x60)",
+    "type": "display",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 468,
+          "height": 60
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "image_asset",
+        "required": true,
+        "asset_type": "image"
+      }
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "display_120x600_image"
+    },
+    "name": "Skyscraper (120x600)",
+    "type": "display",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 120,
+          "height": 600
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "image_asset",
+        "required": true,
+        "asset_type": "image"
+      }
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "display_320x100_image"
+    },
+    "name": "Large Mobile Banner (320x100)",
+    "type": "display",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 320,
+          "height": 100
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "image_asset",
+        "required": true,
+        "asset_type": "image"
+      }
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "display_250x250_image"
+    },
+    "name": "Square (250x250)",
+    "type": "display",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 250,
+          "height": 250
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "image_asset",
+        "required": true,
+        "asset_type": "image"
+      }
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "display_300x250_html5"
+    },
+    "name": "HTML5 Medium Rectangle",
+    "type": "display",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 300,
+          "height": 250
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "html_asset",
+        "required": true,
+        "asset_type": "html"
+      }
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "display_728x90_html5"
+    },
+    "name": "HTML5 Leaderboard",
+    "type": "display",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 728,
+          "height": 90
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "html_asset",
+        "required": true,
+        "asset_type": "html"
+      }
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "display_320x50_html5"
+    },
+    "name": "HTML5 Mobile Banner",
+    "type": "display",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 320,
+          "height": 50
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "html_asset",
+        "required": true,
+        "asset_type": "html"
+      }
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "display_970x250_html5"
+    },
+    "name": "HTML5 Billboard",
+    "type": "display",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 970,
+          "height": 250
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "html_asset",
+        "required": true,
+        "asset_type": "html"
+      }
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "display_carousel"
+    },
+    "name": "Display Carousel",
+    "type": "display",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 300,
+          "height": 250
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "image_asset",
+        "required": true,
+        "asset_type": "image"
+      },
+      {
+        "item_type": "individual",
+        "asset_id": "text_asset",
+        "required": true,
+        "asset_type": "text"
+      }
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "display_expandable"
+    },
+    "name": "Expandable Banner",
+    "type": "display",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 300,
+          "height": 250
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "image_asset",
+        "required": true,
+        "asset_type": "image"
+      },
+      {
+        "item_type": "individual",
+        "asset_id": "html_asset",
+        "required": true,
+        "asset_type": "html"
+      }
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "display_responsive_flex"
+    },
+    "name": "Responsive Flex Banner",
+    "type": "display",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "min_width": 300,
+          "max_width": 970,
+          "responsive": {
+            "width": true,
+            "height": false
+          }
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "image_asset",
+        "required": true,
+        "asset_type": "image"
+      }
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "display_responsive_smart"
+    },
+    "name": "Responsive Smart Banner",
+    "type": "display",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "min_width": 300,
+          "max_width": 970,
+          "responsive": {
+            "width": true,
+            "height": false
+          }
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "image_asset",
+        "required": true,
+        "asset_type": "image"
+      },
+      {
+        "item_type": "individual",
+        "asset_id": "text_asset",
+        "required": true,
+        "asset_type": "text"
+      }
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "display_generative"
+    },
+    "name": "Generative Display Ad",
+    "type": "display",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 300,
+          "height": 250
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "image_asset",
+        "required": true,
+        "asset_type": "image"
+      },
+      {
+        "item_type": "individual",
+        "asset_id": "text_asset",
+        "required": true,
+        "asset_type": "text"
+      }
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "display_dynamic_creative"
+    },
+    "name": "Dynamic Creative Optimization",
+    "type": "display",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 300,
+          "height": 250
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "image_asset",
+        "required": true,
+        "asset_type": "image"
+      },
+      {
+        "item_type": "individual",
+        "asset_id": "text_asset",
+        "required": true,
+        "asset_type": "text"
+      }
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "display_interstitial_320x480"
+    },
+    "name": "Mobile Interstitial (320x480)",
+    "type": "display",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 320,
+          "height": 480
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "image_asset",
+        "required": true,
+        "asset_type": "image"
+      }
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "display_interstitial_768x1024"
+    },
+    "name": "Tablet Interstitial (768x1024)",
+    "type": "display",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 768,
+          "height": 1024
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "image_asset",
+        "required": true,
+        "asset_type": "image"
+      }
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "display_adhesion_320x50"
+    },
+    "name": "Mobile Adhesion (320x50)",
+    "type": "display",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 320,
+          "height": 50
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "image_asset",
+        "required": true,
+        "asset_type": "image"
+      }
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "display_adhesion_728x90"
+    },
+    "name": "Desktop Adhesion (728x90)",
+    "type": "display",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 728,
+          "height": 90
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "image_asset",
+        "required": true,
+        "asset_type": "image"
+      }
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "display_skin"
+    },
+    "name": "Page Skin",
+    "type": "display",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 1800,
+          "height": 1000
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "image_asset",
+        "required": true,
+        "asset_type": "image"
+      },
+      {
+        "item_type": "individual",
+        "asset_id": "html_asset",
+        "required": true,
+        "asset_type": "html"
+      }
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "display_lightbox"
+    },
+    "name": "Lightbox Overlay",
+    "type": "display",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 600,
+          "height": 400
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "image_asset",
+        "required": true,
+        "asset_type": "image"
+      },
+      {
+        "item_type": "individual",
+        "asset_id": "html_asset",
+        "required": true,
+        "asset_type": "html"
+      }
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "video_standard"
+    },
+    "name": "Standard Video (16:9)",
+    "type": "video",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 1920,
+          "height": 1080
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "video_asset",
+        "required": true,
+        "asset_type": "video"
+      }
+    ],
+    "supported_disclosure_positions": [
+      "prominent",
+      "overlay"
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "video_vertical"
+    },
+    "name": "Vertical Video (9:16)",
+    "type": "video",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 1080,
+          "height": 1920
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "video_asset",
+        "required": true,
+        "asset_type": "video"
+      }
+    ],
+    "supported_disclosure_positions": [
+      "prominent",
+      "overlay"
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "video_square"
+    },
+    "name": "Square Video (1:1)",
+    "type": "video",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 1080,
+          "height": 1080
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "video_asset",
+        "required": true,
+        "asset_type": "video"
+      }
+    ],
+    "supported_disclosure_positions": [
+      "prominent",
+      "overlay"
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "video_preroll_15s"
+    },
+    "name": "Pre-Roll 15s",
+    "type": "video",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 1920,
+          "height": 1080
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "video_asset",
+        "required": true,
+        "asset_type": "video"
+      }
+    ],
+    "supported_disclosure_positions": [
+      "prominent",
+      "overlay"
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "video_preroll_30s"
+    },
+    "name": "Pre-Roll 30s",
+    "type": "video",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 1920,
+          "height": 1080
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "video_asset",
+        "required": true,
+        "asset_type": "video"
+      }
+    ],
+    "supported_disclosure_positions": [
+      "prominent",
+      "overlay"
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "video_midroll"
+    },
+    "name": "Mid-Roll",
+    "type": "video",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 1920,
+          "height": 1080
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "video_asset",
+        "required": true,
+        "asset_type": "video"
+      }
+    ],
+    "supported_disclosure_positions": [
+      "prominent",
+      "overlay"
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "video_outstream"
+    },
+    "name": "Outstream Video",
+    "type": "video",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 640,
+          "height": 360
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "video_asset",
+        "required": true,
+        "asset_type": "video"
+      }
+    ],
+    "supported_disclosure_positions": [
+      "prominent",
+      "overlay"
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "video_bumper_6s"
+    },
+    "name": "Bumper Ad 6s",
+    "type": "video",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 1920,
+          "height": 1080
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "video_asset",
+        "required": true,
+        "asset_type": "video"
+      }
+    ],
+    "supported_disclosure_positions": [
+      "prominent",
+      "overlay"
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "video_rewarded"
+    },
+    "name": "Rewarded Video",
+    "type": "video",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 1920,
+          "height": 1080
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "video_asset",
+        "required": true,
+        "asset_type": "video"
+      }
+    ],
+    "supported_disclosure_positions": [
+      "prominent",
+      "overlay"
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "video_interactive"
+    },
+    "name": "Interactive Video",
+    "type": "video",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 1920,
+          "height": 1080
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "video_asset",
+        "required": true,
+        "asset_type": "video"
+      },
+      {
+        "item_type": "individual",
+        "asset_id": "html_asset",
+        "required": true,
+        "asset_type": "html"
+      }
+    ],
+    "supported_disclosure_positions": [
+      "prominent",
+      "overlay"
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "video_shoppable"
+    },
+    "name": "Shoppable Video",
+    "type": "video",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 1920,
+          "height": 1080
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "video_asset",
+        "required": true,
+        "asset_type": "video"
+      },
+      {
+        "item_type": "individual",
+        "asset_id": "image_asset",
+        "required": true,
+        "asset_type": "image"
+      }
+    ],
+    "supported_disclosure_positions": [
+      "prominent",
+      "overlay"
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "video_ctv_standard"
+    },
+    "name": "Connected TV Standard",
+    "type": "video",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 1920,
+          "height": 1080
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "video_asset",
+        "required": true,
+        "asset_type": "video"
+      }
+    ],
+    "supported_disclosure_positions": [
+      "prominent",
+      "overlay"
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "dooh_billboard_1920x1080"
+    },
+    "name": "Digital Billboard (1920x1080)",
+    "type": "dooh",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 1920,
+          "height": 1080
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "image_asset",
+        "required": true,
+        "asset_type": "image"
+      }
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "dooh_portrait_1080x1920"
+    },
+    "name": "Digital Portrait (1080x1920)",
+    "type": "dooh",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 1080,
+          "height": 1920
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "image_asset",
+        "required": true,
+        "asset_type": "image"
+      }
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "dooh_transit_1280x720"
+    },
+    "name": "Transit Screen (1280x720)",
+    "type": "dooh",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 1280,
+          "height": 720
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "image_asset",
+        "required": true,
+        "asset_type": "image"
+      }
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "dooh_video_billboard"
+    },
+    "name": "Video Billboard",
+    "type": "dooh",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "width": 1920,
+          "height": 1080
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "video_asset",
+        "required": true,
+        "asset_type": "video"
+      }
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "audio_standard_15s"
+    },
+    "name": "Audio Ad 15s",
+    "type": "audio",
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "audio_asset",
+        "required": true,
+        "asset_type": "audio"
+      }
+    ],
+    "supported_disclosure_positions": [
+      "audio"
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "audio_standard_30s"
+    },
+    "name": "Audio Ad 30s",
+    "type": "audio",
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "audio_asset",
+        "required": true,
+        "asset_type": "audio"
+      }
+    ],
+    "supported_disclosure_positions": [
+      "audio"
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "audio_companion"
+    },
+    "name": "Audio with Companion Banner",
+    "type": "audio",
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "audio_asset",
+        "required": true,
+        "asset_type": "audio"
+      },
+      {
+        "item_type": "individual",
+        "asset_id": "image_asset",
+        "required": true,
+        "asset_type": "image"
+      }
+    ],
+    "supported_disclosure_positions": [
+      "audio"
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "native_standard"
+    },
+    "name": "Native Standard",
+    "type": "native",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "min_width": 300,
+          "max_width": 970,
+          "responsive": {
+            "width": true,
+            "height": false
+          }
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "image_asset",
+        "required": true,
+        "asset_type": "image"
+      },
+      {
+        "item_type": "individual",
+        "asset_id": "text_asset",
+        "required": true,
+        "asset_type": "text"
+      }
+    ]
+  },
+  {
+    "format_id": {
+      "agent_url": "https://creative.adcontextprotocol.org/",
+      "id": "native_video"
+    },
+    "name": "Native Video",
+    "type": "native",
+    "renders": [
+      {
+        "role": "primary",
+        "dimensions": {
+          "min_width": 300,
+          "max_width": 970,
+          "responsive": {
+            "width": true,
+            "height": false
+          }
+        }
+      }
+    ],
+    "assets": [
+      {
+        "item_type": "individual",
+        "asset_id": "video_asset",
+        "required": true,
+        "asset_type": "video"
+      },
+      {
+        "item_type": "individual",
+        "asset_id": "text_asset",
+        "required": true,
+        "asset_type": "text"
+      }
+    ]
+  }
+]

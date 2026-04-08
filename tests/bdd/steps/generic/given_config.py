@@ -31,11 +31,14 @@ from tests.factories.format import (
 def _add_format(ctx: dict, fmt: object) -> None:
     """Add a format to the registry.
 
-    Background no longer pre-populates ctx["registry_formats"], so
-    simple append is sufficient. The harness _configure_mocks() owns
-    the default-display format; scenario Given steps build on top.
+    On the first call within a scenario, clears the Background-seeded
+    real catalog so that invariant tests get only the formats they
+    explicitly define. Subsequent calls within the same scenario append.
     """
-    ctx.setdefault("registry_formats", []).append(fmt)
+    if not ctx.get("_config_replaced"):
+        ctx["registry_formats"] = []
+        ctx["_config_replaced"] = True
+    ctx["registry_formats"].append(fmt)
 
 
 def _datatable_to_dicts(datatable: Sequence[Sequence[object]]) -> list[dict[str, str]]:
