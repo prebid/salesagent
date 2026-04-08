@@ -470,6 +470,164 @@ class TestInv1KnownFieldsNeverRemoved:
 
 
 # ===========================================================================
+# INV-3: Data preservation — known field VALUES are bit-identical after strip
+# ===========================================================================
+
+
+class TestInv3DataPreservation:
+    """INV-3: Stripping only removes unknown fields. Known field values must
+    be bit-identical to the input — no truncation, coercion, reordering, or
+    type conversion. The buyer's data is sacred; we strip the envelope, not
+    the contents.
+    """
+
+    def test_string_values_preserved_exactly(self):
+        """String values including special chars, unicode, empty strings."""
+        value = {
+            "name": "Ünïcödé — with dashes & 'quotes'",
+            "age": 0,  # falsy but valid
+            "extra": "gone",
+        }
+        result = deep_strip_to_schema(value, FLAT_OBJECT_STRICT)
+        assert result["name"] == "Ünïcödé — with dashes & 'quotes'"
+        assert result["age"] == 0  # not stripped as falsy
+
+    def test_numeric_values_preserved_exactly(self):
+        """Floats, ints, zero, negative — no coercion."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "int_val": {"type": "integer"},
+                "float_val": {"type": "number"},
+                "zero": {"type": "integer"},
+                "negative": {"type": "number"},
+            },
+            "additionalProperties": False,
+        }
+        value = {"int_val": 42, "float_val": 3.14159, "zero": 0, "negative": -99.5, "extra": "x"}
+        result = deep_strip_to_schema(value, schema)
+        assert result["int_val"] == 42
+        assert result["float_val"] == 3.14159
+        assert result["zero"] == 0
+        assert result["negative"] == -99.5
+        assert type(result["int_val"]) is int
+        assert type(result["float_val"]) is float
+
+    def test_boolean_values_preserved(self):
+        """True and False are not coerced to 1/0 or stripped as falsy."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "enabled": {"type": "boolean"},
+                "disabled": {"type": "boolean"},
+            },
+            "additionalProperties": False,
+        }
+        result = deep_strip_to_schema({"enabled": True, "disabled": False, "extra": 1}, schema)
+        assert result["enabled"] is True
+        assert result["disabled"] is False
+        assert type(result["disabled"]) is bool  # not int 0
+
+    def test_none_values_preserved(self):
+        """None/null values in known fields are preserved, not stripped."""
+        result = deep_strip_to_schema(
+            {"name": None, "age": None, "extra": None},
+            FLAT_OBJECT_STRICT,
+        )
+        assert result == {"name": None, "age": None}
+
+    def test_empty_string_preserved(self):
+        """Empty string is valid data, not stripped."""
+        result = deep_strip_to_schema({"name": "", "extra": "x"}, FLAT_OBJECT_STRICT)
+        assert result["name"] == ""
+
+    def test_nested_values_preserved_through_ref(self):
+        """Values inside $ref-resolved objects are bit-identical."""
+        result = deep_strip_to_schema(
+            {"account": {"account_id": "acc-特殊文字-123"}, "label": "tëst", "extra": "x"},
+            NESTED_SCHEMA,
+        )
+        assert result["account"]["account_id"] == "acc-特殊文字-123"
+        assert result["label"] == "tëst"
+
+    def test_array_item_values_preserved(self):
+        """Every item in an array has its known field values preserved exactly."""
+        items = [{"id": f"id-{i}", "value": i * 100, "extra": f"strip-{i}"} for i in range(5)]
+        result = deep_strip_to_schema({"items": items}, ARRAY_SCHEMA)
+        for i, item in enumerate(result["items"]):
+            assert item["id"] == f"id-{i}", f"Item {i} id changed"
+            assert item["value"] == i * 100, f"Item {i} value changed"
+            assert "extra" not in item
+
+    def test_complex_nested_value_preserved_through_strip(self):
+        """Real-world scenario: buyer sends rich payload, strip removes extras,
+        all known data arrives intact.
+        """
+        schema = {
+            "type": "object",
+            "properties": {
+                "brief": {"type": "string"},
+                "brand": {
+                    "type": "object",
+                    "properties": {"domain": {"type": "string"}},
+                    "additionalProperties": False,
+                },
+                "packages": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "product_id": {"type": "string"},
+                            "budget": {
+                                "type": "object",
+                                "properties": {
+                                    "total": {"type": "number"},
+                                    "currency": {"type": "string"},
+                                },
+                                "additionalProperties": False,
+                            },
+                        },
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "additionalProperties": False,
+        }
+        original = {
+            "brief": "Q4 holiday campaign — budget: $50k USD",
+            "brand": {"domain": "holiday-brand.com", "verification": "premium"},
+            "packages": [
+                {
+                    "product_id": "prod-display-300x250",
+                    "budget": {"total": 25000.50, "currency": "USD", "tax_rate": 0.08},
+                    "targeting": {"geo": "US"},
+                },
+                {
+                    "product_id": "prod-video-preroll",
+                    "budget": {"total": 24999.50, "currency": "USD"},
+                },
+            ],
+            "analytics_config": {"tracking_id": "UA-12345"},
+        }
+        result = deep_strip_to_schema(original, schema)
+
+        # All known data preserved exactly
+        assert result["brief"] == "Q4 holiday campaign — budget: $50k USD"
+        assert result["brand"] == {"domain": "holiday-brand.com"}
+        assert len(result["packages"]) == 2
+        assert result["packages"][0]["product_id"] == "prod-display-300x250"
+        assert result["packages"][0]["budget"] == {"total": 25000.50, "currency": "USD"}
+        assert result["packages"][1]["product_id"] == "prod-video-preroll"
+        assert result["packages"][1]["budget"] == {"total": 24999.50, "currency": "USD"}
+
+        # All unknowns stripped
+        assert "verification" not in result["brand"]
+        assert "targeting" not in result["packages"][0]
+        assert "tax_rate" not in result["packages"][0]["budget"]
+        assert "analytics_config" not in result
+
+
+# ===========================================================================
 # INV-2: Idempotent — strip(strip(x)) == strip(x)
 # ===========================================================================
 

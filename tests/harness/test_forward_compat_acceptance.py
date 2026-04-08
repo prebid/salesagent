@@ -442,6 +442,174 @@ class TestDeepStripRetryE2E:
 
 
 # ---------------------------------------------------------------------------
+# Data preservation: known values survive deep-strip + retry unchanged
+# ---------------------------------------------------------------------------
+
+
+class TestDataPreservationE2E:
+    """Verify that after deep-strip retry, the tool function receives exactly
+    the buyer's data for all known fields — no truncation, coercion, or loss.
+
+    The test intercepts the _impl call to capture what arguments the tool
+    function actually receives after the middleware pipeline.
+    """
+
+    def test_brand_domain_preserved_after_strip(self):
+        """Buyer sends brand with extra field. After strip + retry, _impl
+        receives brand.domain exactly as sent.
+        """
+        from fastmcp import Client
+
+        from src.core.main import mcp
+
+        captured_req = {}
+
+        async def _call():
+            patches = _get_products_patches()
+
+            # Intercept _get_products_impl to capture the request
+            original_impl = None
+
+            async def capturing_impl(req, identity=None):
+                captured_req["brand"] = req.brand
+                captured_req["brief"] = req.brief
+                # Call original to produce a valid response
+                return await original_impl(req, identity)
+
+            with patch.dict(os.environ, {"ENVIRONMENT": "production"}):
+                for p in patches:
+                    p.start()
+                # Capture the impl
+                import src.core.tools.products as products_mod
+
+                original_impl = products_mod._get_products_impl
+                with patch.object(products_mod, "_get_products_impl", side_effect=capturing_impl):
+                    try:
+                        async with Client(mcp) as client:
+                            result = await client.call_tool(
+                                "get_products",
+                                {
+                                    "brief": "holiday campaign — Q4",
+                                    "brand": {
+                                        "domain": "my-brand.com",
+                                        "future_field": "should be stripped",
+                                    },
+                                },
+                                raise_on_error=False,
+                            )
+                            assert not result.is_error, f"Should succeed: {result.content}"
+                    finally:
+                        for p in patches:
+                            p.stop()
+
+            # Verify the _impl received exactly what the buyer sent for known fields
+            assert captured_req["brief"] == "holiday campaign — Q4"
+            assert captured_req["brand"] is not None
+            assert captured_req["brand"].domain == "my-brand.com"
+
+        asyncio.run(_call())
+
+    def test_context_session_id_preserved_after_strip(self):
+        """Buyer sends context with extra field. After strip, session_id preserved."""
+        from fastmcp import Client
+
+        from src.core.main import mcp
+
+        captured_req = {}
+
+        async def _call():
+            patches = _get_products_patches()
+            original_impl = None
+
+            async def capturing_impl(req, identity=None):
+                captured_req["context"] = req.context
+                captured_req["brief"] = req.brief
+                return await original_impl(req, identity)
+
+            with patch.dict(os.environ, {"ENVIRONMENT": "production"}):
+                for p in patches:
+                    p.start()
+                import src.core.tools.products as products_mod
+
+                original_impl = products_mod._get_products_impl
+                with patch.object(products_mod, "_get_products_impl", side_effect=capturing_impl):
+                    try:
+                        async with Client(mcp) as client:
+                            result = await client.call_tool(
+                                "get_products",
+                                {
+                                    "brief": "test preserv",
+                                    "context": {
+                                        "session_id": "sess-保存-789",
+                                        "future_trace": "strip-me",
+                                    },
+                                },
+                                raise_on_error=False,
+                            )
+                            assert not result.is_error, f"Should succeed: {result.content}"
+                    finally:
+                        for p in patches:
+                            p.stop()
+
+            assert captured_req["brief"] == "test preserv"
+            assert captured_req["context"] is not None
+            assert captured_req["context"].session_id == "sess-保存-789"
+
+        asyncio.run(_call())
+
+    def test_multiple_fields_all_preserved(self):
+        """Buyer sends brief + brand + context, all with extras at different levels.
+        After strip + retry, all known data arrives intact.
+        """
+        from fastmcp import Client
+
+        from src.core.main import mcp
+
+        captured_req = {}
+
+        async def _call():
+            patches = _get_products_patches()
+            original_impl = None
+
+            async def capturing_impl(req, identity=None):
+                captured_req["brief"] = req.brief
+                captured_req["brand"] = req.brand
+                captured_req["context"] = req.context
+                return await original_impl(req, identity)
+
+            with patch.dict(os.environ, {"ENVIRONMENT": "production"}):
+                for p in patches:
+                    p.start()
+                import src.core.tools.products as products_mod
+
+                original_impl = products_mod._get_products_impl
+                with patch.object(products_mod, "_get_products_impl", side_effect=capturing_impl):
+                    try:
+                        async with Client(mcp) as client:
+                            result = await client.call_tool(
+                                "get_products",
+                                {
+                                    "brief": "multi-field test — $50k budget",
+                                    "brand": {"domain": "multi.test.com", "tier": "enterprise"},
+                                    "context": {"session_id": "s-multi", "region": "APAC"},
+                                    "future_top_level": "also stripped",
+                                },
+                                raise_on_error=False,
+                            )
+                            assert not result.is_error, f"Should succeed: {result.content}"
+                    finally:
+                        for p in patches:
+                            p.stop()
+
+            # Every known field's VALUE is exactly what the buyer sent
+            assert captured_req["brief"] == "multi-field test — $50k budget"
+            assert captured_req["brand"].domain == "multi.test.com"
+            assert captured_req["context"].session_id == "s-multi"
+
+        asyncio.run(_call())
+
+
+# ---------------------------------------------------------------------------
 # Adversarial: Error propagation (Pydantic/business errors NOT swallowed)
 # ---------------------------------------------------------------------------
 
