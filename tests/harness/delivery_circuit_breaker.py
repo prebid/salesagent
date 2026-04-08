@@ -81,12 +81,24 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
         Uses the env's tenant/principal (from setup_default_data) so the
         webhook config is discoverable by call_send which queries by
         self._tenant_id.
+
+        Passes the actual tenant/principal ORM objects to the factory so
+        that SQLAlchemy relationship resolution doesn't override the IDs
+        with auto-generated SubFactory values.
         """
+        from sqlalchemy import select
+
+        from src.core.database.models import Principal, Tenant
         from tests.factories import PushNotificationConfigFactory
 
+        tenant = self._session.scalars(select(Tenant).filter_by(tenant_id=self._tenant_id)).one()
+        principal = self._session.scalars(
+            select(Principal).filter_by(tenant_id=self._tenant_id, principal_id=self._principal_id)
+        ).one()
+
         return PushNotificationConfigFactory(
-            tenant_id=self._tenant_id,
-            principal_id=self._principal_id,
+            tenant=tenant,
+            principal=principal,
             url=url,
             authentication_type=auth_type,
             authentication_token=auth_token,
