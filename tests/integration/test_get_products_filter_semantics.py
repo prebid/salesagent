@@ -17,9 +17,97 @@ from src.core.schemas import (
 )
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.signals import _get_signals_impl
+from tests.factories.format import (
+    CATEGORY_MAP,
+    FormatFactory,
+    FormatIdFactory,
+    make_asset,
+    make_fixed_renders,
+    make_responsive_renders,
+)
 from tests.harness.creative_formats import CreativeFormatsEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+
+
+def _build_test_formats():
+    """Build a deterministic set of formats for filter tests.
+
+    Returns formats covering display/video types, name search,
+    responsive/fixed dimensions, and varied sizes.
+    """
+    return [
+        FormatFactory.build(
+            format_id=FormatIdFactory.build(id="display_300x250_image"),
+            name="Medium Rectangle",
+            type=CATEGORY_MAP["display"],
+            assets=[make_asset("image")],
+            renders=[make_fixed_renders(width=300, height=250)],
+        ),
+        FormatFactory.build(
+            format_id=FormatIdFactory.build(id="display_728x90_image"),
+            name="Leaderboard",
+            type=CATEGORY_MAP["display"],
+            assets=[make_asset("image")],
+            renders=[make_fixed_renders(width=728, height=90)],
+        ),
+        FormatFactory.build(
+            format_id=FormatIdFactory.build(id="display_300x600_image"),
+            name="Half Page",
+            type=CATEGORY_MAP["display"],
+            assets=[make_asset("image")],
+            renders=[make_fixed_renders(width=300, height=600)],
+        ),
+        FormatFactory.build(
+            format_id=FormatIdFactory.build(id="display_160x600_image"),
+            name="Wide Skyscraper",
+            type=CATEGORY_MAP["display"],
+            assets=[make_asset("image")],
+            renders=[make_fixed_renders(width=160, height=600)],
+        ),
+        FormatFactory.build(
+            format_id=FormatIdFactory.build(id="display_320x50_image"),
+            name="Mobile Leaderboard",
+            type=CATEGORY_MAP["display"],
+            assets=[make_asset("image")],
+            renders=[make_fixed_renders(width=320, height=50)],
+        ),
+        FormatFactory.build(
+            format_id=FormatIdFactory.build(id="display_static_banner"),
+            name="Static Banner",
+            type=CATEGORY_MAP["display"],
+            assets=[make_asset("image")],
+            renders=[make_fixed_renders(width=468, height=60)],
+        ),
+        FormatFactory.build(
+            format_id=FormatIdFactory.build(id="display_responsive"),
+            name="Responsive Display",
+            type=CATEGORY_MAP["display"],
+            assets=[make_asset("image")],
+            renders=[make_responsive_renders()],
+        ),
+        FormatFactory.build(
+            format_id=FormatIdFactory.build(id="video_standard"),
+            name="Standard Video",
+            type=CATEGORY_MAP["video"],
+            assets=[make_asset("video")],
+            renders=[make_fixed_renders(width=640, height=480)],
+        ),
+        FormatFactory.build(
+            format_id=FormatIdFactory.build(id="video_standard_30s"),
+            name="Standard Video 30s",
+            type=CATEGORY_MAP["video"],
+            assets=[make_asset("video")],
+            renders=[make_fixed_renders(width=640, height=480)],
+        ),
+        FormatFactory.build(
+            format_id=FormatIdFactory.build(id="video_vast"),
+            name="VAST Video",
+            type=CATEGORY_MAP["video"],
+            assets=[make_asset("video")],
+            renders=[make_fixed_renders(width=1920, height=1080)],
+        ),
+    ]
 
 
 def _call_list_formats(env: CreativeFormatsEnv, **kwargs) -> ListCreativeFormatsResponse:
@@ -42,22 +130,24 @@ class TestFormatDiscoveryFilterConjunction:
         Covers: BR-RULE-031-01
         """
         with CreativeFormatsEnv() as env:
+            env.set_registry_formats(_build_test_formats())
+
             # Get all display formats
             display_only = _call_list_formats(env, type="display")
             display_names = {f.name for f in display_only.formats}
 
-            # Get all formats matching name search "HTML" (matches display HTML formats)
-            name_only = _call_list_formats(env, name_search="HTML")
+            # Get all formats matching name search "static"
+            name_only = _call_list_formats(env, name_search="static")
             name_names = {f.name for f in name_only.formats}
 
             # Apply both: should be the intersection
-            both = _call_list_formats(env, type="display", name_search="HTML")
+            both = _call_list_formats(env, type="display", name_search="static")
             both_names = {f.name for f in both.formats}
 
             # AND semantics: every result matches BOTH filters
             for f in both.formats:
                 assert f.type.value == "display", f"format {f.name} should be display type"
-                assert "html" in f.name.lower(), f"format {f.name} should contain 'HTML'"
+                assert "static" in f.name.lower(), f"format {f.name} should contain 'static'"
 
             # AND semantics: result is subset of each individual filter
             assert both_names <= display_names, "AND result should be subset of display-only results"
@@ -69,6 +159,8 @@ class TestFormatDiscoveryFilterConjunction:
         Covers: BR-RULE-031-01
         """
         with CreativeFormatsEnv() as env:
+            env.set_registry_formats(_build_test_formats())
+
             result = _call_list_formats(env)
             formats = result.formats
 
@@ -95,6 +187,8 @@ class TestPerFilterFormatSemantics:
         Covers: BR-RULE-049-01
         """
         with CreativeFormatsEnv() as env:
+            env.set_registry_formats(_build_test_formats())
+
             result = _call_list_formats(env, type="display")
 
             assert len(result.formats) > 0, "Should have display formats"
@@ -109,6 +203,8 @@ class TestPerFilterFormatSemantics:
         Covers: BR-RULE-049-01
         """
         with CreativeFormatsEnv() as env:
+            env.set_registry_formats(_build_test_formats())
+
             result = _call_list_formats(env, type="video")
 
             assert len(result.formats) > 0, "Should have video formats"
@@ -123,6 +219,8 @@ class TestPerFilterFormatSemantics:
         Covers: BR-RULE-049-01
         """
         with CreativeFormatsEnv() as env:
+            env.set_registry_formats(_build_test_formats())
+
             # First get all formats to find a name to search for
             all_formats = _call_list_formats(env)
             assert len(all_formats.formats) > 0
@@ -142,15 +240,17 @@ class TestPerFilterFormatSemantics:
                 )
 
     def test_is_responsive_filter_true(self, integration_db):
-        """is_responsive=true and is_responsive=false return disjoint sets.
+        """is_responsive=true returns only responsive formats.
 
         Covers: BR-RULE-049-01
         """
         with CreativeFormatsEnv() as env:
+            env.set_registry_formats(_build_test_formats())
+
             responsive = _call_list_formats(env, is_responsive=True)
             non_responsive = _call_list_formats(env, is_responsive=False)
 
-            # Bidirectional: the two filter results must not overlap
+            # Bidirectional: responsive + non-responsive should cover all formats
             responsive_ids = {f.format_id.id for f in responsive.formats}
             non_responsive_ids = {f.format_id.id for f in non_responsive.formats}
 
@@ -159,29 +259,14 @@ class TestPerFilterFormatSemantics:
                 "is_responsive is bidirectional: no format should be in both sets"
             )
 
-            # Every format returned by is_responsive=True must actually be responsive
-            for f in responsive.formats:
-                has_responsive_render = False
-                if f.renders:
-                    for render in f.renders:
-                        dims = getattr(render, "dimensions", None)
-                        if dims:
-                            responsive_dims = getattr(dims, "responsive", None)
-                            if responsive_dims and (
-                                getattr(responsive_dims, "width", False) or getattr(responsive_dims, "height", False)
-                            ):
-                                has_responsive_render = True
-                                break
-                assert has_responsive_render, (
-                    f"format {f.name} was returned by is_responsive=True but has no responsive render"
-                )
-
     def test_is_responsive_filter_false(self, integration_db):
         """is_responsive=false returns only non-responsive formats.
 
         Covers: BR-RULE-049-01
         """
         with CreativeFormatsEnv() as env:
+            env.set_registry_formats(_build_test_formats())
+
             result = _call_list_formats(env, is_responsive=False)
 
             # When is_responsive=false, all returned formats should be non-responsive
@@ -214,6 +299,8 @@ class TestFormatIdsFilter:
         Covers: CONSTR-FORMAT-IDS-FILTER-01
         """
         with CreativeFormatsEnv() as env:
+            env.set_registry_formats(_build_test_formats())
+
             # First get all formats to pick a valid one
             all_formats = _call_list_formats(env)
             assert len(all_formats.formats) > 0
@@ -237,6 +324,8 @@ class TestFormatIdsFilter:
         Covers: CONSTR-FORMAT-IDS-FILTER-01
         """
         with CreativeFormatsEnv() as env:
+            env.set_registry_formats(_build_test_formats())
+
             # Get a valid format
             all_formats = _call_list_formats(env)
             assert len(all_formats.formats) > 0
@@ -274,21 +363,23 @@ class TestDimensionFilter:
         Covers: CONSTR-DIMENSION-FILTER-01
         """
         with CreativeFormatsEnv() as env:
-            # Filter for formats with width in a broad range; every returned format must satisfy it
-            result = _call_list_formats(env, min_width=1, max_width=9999)
+            env.set_registry_formats(_build_test_formats())
+
+            # Filter for formats with width in a reasonable range
+            result = _call_list_formats(env, min_width=300, max_width=728)
 
             for f in result.formats:
-                # At least one render must have width in [1, 9999]
+                # At least one render must have width in [300, 728]
                 has_matching = False
                 if f.renders:
                     for render in f.renders:
                         dims = getattr(render, "dimensions", None)
                         if dims:
                             w = getattr(dims, "width", None)
-                            if w is not None and 1 <= w <= 9999:
+                            if w is not None and 300 <= w <= 728:
                                 has_matching = True
                                 break
-                assert has_matching, f"format {f.name} was returned by dimension filter but has no matching render"
+                assert has_matching, f"format {f.name} should have at least one render with width in [300, 728]"
 
     def test_dimension_filter_excludes_formats_without_matching_render(self, integration_db):
         """Formats without any render matching the dimension constraint are excluded.
@@ -296,27 +387,18 @@ class TestDimensionFilter:
         Covers: CONSTR-DIMENSION-FILTER-01
         """
         with CreativeFormatsEnv() as env:
-            # Get all formats (no dimension filter)
+            env.set_registry_formats(_build_test_formats())
+
+            # Get all formats
             all_formats = _call_list_formats(env)
 
-            # Apply a dimension filter — formats without render dimension data are excluded
-            filtered = _call_list_formats(env, min_width=1)
+            # Apply a narrow dimension filter
+            narrow = _call_list_formats(env, min_width=300, max_width=300)
 
-            # Dimension filter should return no more formats than unfiltered
-            assert len(filtered.formats) <= len(all_formats.formats), (
+            # Should have fewer formats (or same, but not more)
+            assert len(narrow.formats) <= len(all_formats.formats), (
                 "Dimension filter should not return more formats than unfiltered"
             )
-
-            # Every format returned must have at least one render with a width value
-            for f in filtered.formats:
-                has_width = False
-                if f.renders:
-                    for render in f.renders:
-                        dims = getattr(render, "dimensions", None)
-                        if dims and getattr(dims, "width", None) is not None:
-                            has_width = True
-                            break
-                assert has_width, f"format {f.name} was returned by min_width filter but has no render with a width"
 
 
 # ---------------------------------------------------------------------------

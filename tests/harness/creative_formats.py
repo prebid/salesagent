@@ -3,9 +3,10 @@
 Patches: audit logger only.
 Real: creative agent registry, format fetching, filtering.
 
-Tests work against the real creative agent catalog. When Docker is running,
-the registry fetches live formats from the creative agent container. No cache
-injection, no mock patches, no _get_mock_formats bypasses.
+When Docker is running, the registry fetches from the real creative agent
+container. When tests need controlled formats (specific filtering behavior),
+set_registry_formats() pre-warms the registry cache — the same mechanism
+production uses after fetching. No mock patches, no _get_mock_formats bypasses.
 
 Requires: Docker stack running (creative agent + Postgres) for real-catalog tests.
 
@@ -14,6 +15,7 @@ Usage::
     @pytest.mark.requires_db
     def test_filter_by_type(self, integration_db):
         with CreativeFormatsEnv() as env:
+            env.set_registry_formats([display_format, video_format])
             response = env.call_impl(req=ListCreativeFormatsRequest(type="display"))
             assert all(f.type == "display" for f in response.formats)
 
@@ -34,8 +36,10 @@ class CreativeFormatsEnv(IntegrationEnv):
     """Integration test environment for _list_creative_formats_impl.
 
     The creative agent registry runs for real. Only the audit logger
-    is mocked (internal, no external call). Tests work against the real
-    catalog — no cache injection or format pre-warming.
+    is mocked (internal, no external call).
+
+    set_registry_formats() injects formats into the registry's own cache —
+    same data structure production uses after an HTTP fetch. No patches.
     """
 
     EXTERNAL_PATCHES = {

@@ -4,28 +4,49 @@ Behavioral tests using CreativeFormatsEnv + real PostgreSQL + factory_boy.
 Replaces mock-heavy unit tests from test_creative.py and
 test_creative_formats_behavioral.py with provable assertions.
 
-Tests run against the real creative agent catalog (49 formats served by
-the Docker container). Catalog composition: 28 display, 12 video, 4 dooh,
-3 audio, 2 native = 49 total. Catalog stats: 30 formats have renders,
-49 have assets, 2 are responsive (product_card_detailed, format_card_detailed).
-Asset breakdown: 16 image, 10 video, 7 html.
-
 Covers: salesagent-rrt0
 """
 
 from __future__ import annotations
 
 import pytest
+from adcp.types.generated_poc.core.format import (
+    Assets5,
+    Assets18,
+    Assets19,
+    Assets22,
+    Dimensions,
+    Renders,
+    Responsive,
+)
 from adcp.types.generated_poc.enums.format_category import FormatCategory
 
 from src.core.exceptions import AdCPAuthenticationError
-from src.core.schemas import FormatId, ListCreativeFormatsRequest
+from src.core.schemas import Format, FormatId, ListCreativeFormatsRequest
 from tests.factories import TenantFactory
 from tests.harness import CreativeFormatsEnv, make_identity
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+
+
+def _make_format(
+    format_id: str,
+    name: str,
+    type: FormatCategory = FormatCategory.display,
+    renders: list | None = None,
+    assets: list | None = None,
+) -> Format:
+    """Helper to create a Format object with minimal boilerplate."""
+    return Format(
+        format_id=FormatId(agent_url=DEFAULT_AGENT_URL, id=format_id),
+        name=name,
+        type=type,
+        is_standard=True,
+        renders=renders,
+        assets=assets,
+    )
 
 
 _make_identity = make_identity  # Canonical version from tests.harness
@@ -56,34 +77,59 @@ class TestFormatsFiltering:
     """Filtering by type, format_ids, name_search."""
 
     def test_no_filter_returns_all(self, integration_db):
-        """Covers: UC-005-MAIN-MCP-01 — no filters returns entire catalog (49 formats)."""
+        """Covers: UC-005-MAIN-MCP-01 — no filters returns entire catalog."""
+        formats = [
+            _make_format("d1", "Display Banner"),
+            _make_format("v1", "Video Pre-roll", type=FormatCategory.video),
+            _make_format("n1", "Native Feed", type=FormatCategory.native),
+        ]
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats(formats)
             response = env.call_impl()
-        assert len(response.formats) == 49
+        assert len(response.formats) == 3
 
     def test_type_filter_returns_matching(self, integration_db):
-        """Covers: UC-005-MAIN-MCP-05 — type=video returns only video formats (12 in catalog)."""
+        """Covers: UC-005-MAIN-MCP-05 — type=video returns only video formats."""
+        formats = [
+            _make_format("d1", "Display Banner", type=FormatCategory.display),
+            _make_format("v1", "Video Pre-roll", type=FormatCategory.video),
+            _make_format("n1", "Native Feed", type=FormatCategory.native),
+        ]
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats(formats)
             req = ListCreativeFormatsRequest(type="video")
             response = env.call_impl(req=req)
-        assert len(response.formats) == 12
-        assert all(f.type == FormatCategory.video for f in response.formats)
+        assert len(response.formats) == 1
+        assert response.formats[0].name == "Video Pre-roll"
 
     def test_native_type_filter(self, integration_db):
-        """Covers: UC-005-MAIN-MCP-05 — type=native returns only native formats (2 in catalog)."""
+        """Covers: UC-005-MAIN-MCP-05 — type=native returns only native formats."""
+        formats = [
+            _make_format("d1", "Display Banner", type=FormatCategory.display),
+            _make_format("n1", "Native Feed", type=FormatCategory.native),
+            _make_format("v1", "Video Pre-roll", type=FormatCategory.video),
+            _make_format("n2", "Native Recommendation", type=FormatCategory.native),
+        ]
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats(formats)
             req = ListCreativeFormatsRequest(type="native")
             response = env.call_impl(req=req)
         assert len(response.formats) == 2
-        assert all(f.type == FormatCategory.native for f in response.formats)
+        names = {f.name for f in response.formats}
+        assert names == {"Native Feed", "Native Recommendation"}
 
     def test_format_ids_no_match_returns_empty(self, integration_db):
         """Covers: UC-005-MAIN-MCP-06 — non-existent format_ids returns empty list."""
+        formats = [
+            _make_format("display_300x250", "Display 300x250"),
+            _make_format("display_728x90", "Display 728x90"),
+        ]
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats(formats)
             non_existent = [FormatId(agent_url=DEFAULT_AGENT_URL, id="nonexistent")]
             req = ListCreativeFormatsRequest(format_ids=non_existent)
             response = env.call_impl(req=req)
@@ -100,42 +146,60 @@ class TestFormatsSort:
 
     def test_sort_order_type_then_name(self, integration_db):
         """Covers: T-UC-005-inv10 — display before video, alpha within type."""
+        formats = [
+            _make_format("v_zebra", "Zebra Ad", type=FormatCategory.video),
+            _make_format("d_alpha", "Alpha Banner", type=FormatCategory.display),
+            _make_format("v_alpha", "Alpha Video", type=FormatCategory.video),
+            _make_format("d_zebra", "Zebra Banner", type=FormatCategory.display),
+        ]
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
-            # Request only display and video to reduce result set
-            req = ListCreativeFormatsRequest(type="display")
-            display_response = env.call_impl(req=req)
-        display_names = [f.name for f in display_response.formats]
-        # All results are display type, sorted alphabetically
-        assert display_names == sorted(display_names)
+            env.set_registry_formats(formats)
+            response = env.call_impl()
+        names = [f.name for f in response.formats]
+        assert names == [
+            "Alpha Banner",
+            "Zebra Banner",
+            "Alpha Video",
+            "Zebra Ad",
+        ]
 
     def test_sort_order_across_three_types(self, integration_db):
         """Covers: T-UC-005-inv10 — sort holds across display < native < video."""
+        formats = [
+            _make_format("n1", "Native B", type=FormatCategory.native),
+            _make_format("d1", "Display A", type=FormatCategory.display),
+            _make_format("v1", "Video C", type=FormatCategory.video),
+            _make_format("n2", "Native A", type=FormatCategory.native),
+            _make_format("d2", "Display B", type=FormatCategory.display),
+        ]
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats(formats)
             response = env.call_impl()
-        # Collect type sequence in result order
-        type_values = [f.type.value for f in response.formats]
-        # Type values must appear in sorted order (display < dooh < native < video etc.)
-        # Verify: once a type starts, no earlier type appears after it
-        seen_types: set[str] = set()
-        last_type = None
-        for t in type_values:
-            if last_type is not None and t != last_type:
-                # Type changed — the new type must not have been seen before (no backtracking)
-                assert t not in seen_types, f"Type '{t}' appeared after '{last_type}' but also before — sort broken"
-            seen_types.add(t)
-            last_type = t
+        names = [f.name for f in response.formats]
+        assert names == [
+            "Display A",
+            "Display B",
+            "Native A",
+            "Native B",
+            "Video C",
+        ]
 
     def test_sort_preserves_after_filtering(self, integration_db):
         """Covers: T-UC-005-inv10 — sort maintained after type filter."""
+        formats = [
+            _make_format("v2", "Zebra Video", type=FormatCategory.video),
+            _make_format("v1", "Alpha Video", type=FormatCategory.video),
+            _make_format("d1", "Display Ad", type=FormatCategory.display),
+        ]
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats(formats)
             req = ListCreativeFormatsRequest(type="video")
             response = env.call_impl(req=req)
         names = [f.name for f in response.formats]
-        # Names within a single type must be sorted alphabetically
-        assert names == sorted(names)
+        assert names == ["Alpha Video", "Zebra Video"]
 
 
 # ---------------------------------------------------------------------------
@@ -144,39 +208,96 @@ class TestFormatsSort:
 
 
 class TestFormatsAssetTypes:
-    """asset_types filter checks individual and nested group assets.
+    """asset_types filter checks individual and nested group assets."""
 
-    The real catalog has 49 formats all with assets. Asset breakdown:
-    16 with image asset, 10 with video asset, 7 with html asset.
-    Filters return formats whose assets contain the requested type.
-    """
-
-    def test_asset_types_image_filter_excludes_formats_without_assets(self, integration_db):
-        """Covers: T-UC-005-inv4-group — image filter returns only formats with image assets (16 in catalog)."""
+    def test_group_assets_match(self, integration_db):
+        """Covers: T-UC-005-inv4-group — group assets with image match image filter."""
+        group_asset = Assets18(
+            item_type="repeatable_group",
+            asset_group_id="product_group",
+            required=True,
+            min_count=1,
+            max_count=5,
+            assets=[
+                Assets19(asset_id="product_image", required=True),
+                Assets22(asset_id="product_title", required=True),
+            ],
+        )
+        fmt = Format(
+            format_id=FormatId(agent_url=DEFAULT_AGENT_URL, id="native_carousel"),
+            name="Native Carousel",
+            type=FormatCategory.native,
+            is_standard=True,
+            assets=[group_asset],
+        )
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats([fmt])
             req = ListCreativeFormatsRequest(asset_types=["image"])
             response = env.call_impl(req=req)
-        # Real catalog: 16 formats have image assets
-        assert len(response.formats) > 0
+        assert len(response.formats) == 1
+        assert response.formats[0].name == "Native Carousel"
 
-    def test_asset_types_video_filter_excludes_formats_without_assets(self, integration_db):
-        """Covers: T-UC-005-inv4-group — video filter returns only formats with video assets (10 in catalog)."""
+    def test_group_assets_no_match_excluded(self, integration_db):
+        """Covers: T-UC-005-inv4-group — group with only text excluded by video filter."""
+        group_asset = Assets18(
+            item_type="repeatable_group",
+            asset_group_id="text_group",
+            required=True,
+            min_count=1,
+            max_count=3,
+            assets=[Assets22(asset_id="headline", required=True)],
+        )
+        fmt = Format(
+            format_id=FormatId(agent_url=DEFAULT_AGENT_URL, id="text_only"),
+            name="Text Only Native",
+            type=FormatCategory.native,
+            is_standard=True,
+            assets=[group_asset],
+        )
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats([fmt])
             req = ListCreativeFormatsRequest(asset_types=["video"])
             response = env.call_impl(req=req)
-        # Real catalog: 10 formats have video assets
-        assert len(response.formats) > 0
+        assert response.formats == []
 
-    def test_asset_types_text_filter_excludes_formats_without_assets(self, integration_db):
-        """Covers: T-UC-005-inv4-group — text filter returns only formats with text assets."""
+    def test_mixed_individual_and_group_assets(self, integration_db):
+        """Covers: T-UC-005-inv4-group — mixed format matches both asset types."""
+        individual = Assets5(item_type="individual", asset_id="hero_video", required=True)
+        group = Assets18(
+            item_type="repeatable_group",
+            asset_group_id="product_group",
+            required=False,
+            min_count=0,
+            max_count=5,
+            assets=[Assets19(asset_id="product_image", required=True)],
+        )
+        fmt = Format(
+            format_id=FormatId(agent_url=DEFAULT_AGENT_URL, id="mixed"),
+            name="Mixed Format",
+            type=FormatCategory.display,
+            is_standard=True,
+            assets=[individual, group],
+        )
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
-            req = ListCreativeFormatsRequest(asset_types=["text"])
+            env.set_registry_formats([fmt])
+
+            # image matches via group
+            req = ListCreativeFormatsRequest(asset_types=["image"])
             response = env.call_impl(req=req)
-        # Real catalog: text is a common asset type present in the catalog
-        assert len(response.formats) > 0
+            assert len(response.formats) == 1
+
+            # video matches via individual
+            req = ListCreativeFormatsRequest(asset_types=["video"])
+            response = env.call_impl(req=req)
+            assert len(response.formats) == 1
+
+            # html matches neither
+            req = ListCreativeFormatsRequest(asset_types=["html"])
+            response = env.call_impl(req=req)
+            assert response.formats == []
 
 
 # ---------------------------------------------------------------------------
@@ -185,48 +306,72 @@ class TestFormatsAssetTypes:
 
 
 class TestFormatsDimensions:
-    """Dimension filtering with inclusive boundary checks.
+    """Dimension filtering with inclusive boundary checks."""
 
-    The real catalog has 30 formats with renders/dimensions data populated.
-    Dimension filters return formats whose renders satisfy the constraint.
-    Formats without renders are excluded when any dimension filter is active.
-    """
-
-    def test_max_width_filter_excludes_formats_without_renders(self, integration_db):
-        """Covers: T-UC-005-boundary-dimension — max_width filter returns formats with renders within width limit."""
+    def test_exact_max_width_included(self, integration_db):
+        """Covers: T-UC-005-boundary-dimension — width=300 included by max_width=300."""
+        formats = [
+            _make_format(
+                "rect",
+                "Medium Rectangle",
+                renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
+            ),
+        ]
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
-            req = ListCreativeFormatsRequest(max_width=400)
+            env.set_registry_formats(formats)
+            req = ListCreativeFormatsRequest(max_width=300)
             response = env.call_impl(req=req)
-        # Real catalog: 30 formats have renders; some have width <= 400
-        assert len(response.formats) > 0
+        assert len(response.formats) == 1
+        assert response.formats[0].name == "Medium Rectangle"
 
-    def test_min_width_filter_excludes_formats_without_renders(self, integration_db):
-        """Covers: T-UC-005-boundary-dimension — min_width filter returns formats with renders above width floor."""
+    def test_off_by_one_max_width_excluded(self, integration_db):
+        """Covers: T-UC-005-boundary-dimension — width=301 excluded by max_width=300."""
+        formats = [
+            _make_format(
+                "wide",
+                "Slightly Wide",
+                renders=[Renders(role="primary", dimensions=Dimensions(width=301, height=250))],
+            ),
+        ]
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
-            req = ListCreativeFormatsRequest(min_width=100)
+            env.set_registry_formats(formats)
+            req = ListCreativeFormatsRequest(max_width=300)
             response = env.call_impl(req=req)
-        # Real catalog: 30 formats have renders; some have width >= 100
-        assert len(response.formats) > 0
+        assert response.formats == []
 
-    def test_max_height_filter_excludes_formats_without_renders(self, integration_db):
-        """Covers: T-UC-005-boundary-dimension — max_height filter returns formats with renders within height limit."""
+    def test_exact_min_width_included(self, integration_db):
+        """Covers: T-UC-005-boundary-dimension — width=300 included by min_width=300."""
+        formats = [
+            _make_format(
+                "rect",
+                "Medium Rectangle",
+                renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
+            ),
+        ]
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
-            req = ListCreativeFormatsRequest(max_height=400)
+            env.set_registry_formats(formats)
+            req = ListCreativeFormatsRequest(min_width=300)
             response = env.call_impl(req=req)
-        # Real catalog: 30 formats have renders; some have height <= 400
-        assert len(response.formats) > 0
+        assert len(response.formats) == 1
 
-    def test_min_height_filter_excludes_formats_without_renders(self, integration_db):
-        """Covers: T-UC-005-boundary-dimension — min_height filter returns formats with renders above height floor."""
+    def test_off_by_one_min_width_excluded(self, integration_db):
+        """Covers: T-UC-005-boundary-dimension — width=299 excluded by min_width=300."""
+        formats = [
+            _make_format(
+                "narrow",
+                "Slightly Narrow",
+                renders=[Renders(role="primary", dimensions=Dimensions(width=299, height=250))],
+            ),
+        ]
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
-            req = ListCreativeFormatsRequest(min_height=100)
+            env.set_registry_formats(formats)
+            req = ListCreativeFormatsRequest(min_width=300)
             response = env.call_impl(req=req)
-        # Real catalog: 30 formats have renders; some have height >= 100
-        assert len(response.formats) > 0
+        assert response.formats == []
 
 
 # ---------------------------------------------------------------------------
@@ -235,144 +380,215 @@ class TestFormatsDimensions:
 
 
 class TestFormatsEdgeCases:
-    """Edge cases: no-match filters, empty name search."""
+    """Edge cases: empty registry, no-match filters, empty name search."""
 
-    def test_type_filter_no_match_returns_empty(self, integration_db):
-        """Covers: T-UC-005-edge-02 — type=rich_media with no rich_media formats returns empty."""
+    def test_empty_registry_returns_empty(self, integration_db):
+        """Covers: T-UC-005-edge-01 — empty format catalog returns empty list."""
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
-            req = ListCreativeFormatsRequest(type="rich_media")
+            env.set_registry_formats([])
+            response = env.call_impl()
+        assert response.formats == []
+
+    def test_type_filter_no_match_returns_empty(self, integration_db):
+        """Covers: T-UC-005-edge-02 — type=audio with no audio formats returns empty."""
+        formats = [
+            _make_format("d1", "Display Banner", type=FormatCategory.display),
+            _make_format("d2", "Display Rectangle", type=FormatCategory.display),
+        ]
+        with CreativeFormatsEnv() as env:
+            TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats(formats)
+            req = ListCreativeFormatsRequest(type="audio")
             response = env.call_impl(req=req)
         assert response.formats == []
 
     def test_empty_name_search_returns_all(self, integration_db):
         """Covers: T-UC-005-edge-03 — empty string name_search treated as no filter."""
+        formats = [
+            _make_format("d1", "Alpha Display"),
+            _make_format("v1", "Beta Video", type=FormatCategory.video),
+            _make_format("n1", "Gamma Native", type=FormatCategory.native),
+        ]
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats(formats)
             req = ListCreativeFormatsRequest(name_search="")
             response = env.call_impl(req=req)
-        assert len(response.formats) == 49
-
-    def test_display_type_filter_count(self, integration_db):
-        """Covers: T-UC-005-edge — type=display returns all 28 display formats."""
-        with CreativeFormatsEnv() as env:
-            TenantFactory(tenant_id="test_tenant")
-            req = ListCreativeFormatsRequest(type="display")
-            response = env.call_impl(req=req)
-        assert len(response.formats) == 28
-        assert all(f.type == FormatCategory.display for f in response.formats)
-
-    def test_audio_type_filter_count(self, integration_db):
-        """Covers: T-UC-005-edge — type=audio returns all 3 audio formats."""
-        with CreativeFormatsEnv() as env:
-            TenantFactory(tenant_id="test_tenant")
-            req = ListCreativeFormatsRequest(type="audio")
-            response = env.call_impl(req=req)
         assert len(response.formats) == 3
-        assert all(f.type == FormatCategory.audio for f in response.formats)
-
-    def test_dooh_type_filter_count(self, integration_db):
-        """Covers: T-UC-005-edge — type=dooh returns all 4 dooh formats."""
-        with CreativeFormatsEnv() as env:
-            TenantFactory(tenant_id="test_tenant")
-            req = ListCreativeFormatsRequest(type="dooh")
-            response = env.call_impl(req=req)
-        assert len(response.formats) == 4
-        assert all(f.type == FormatCategory.dooh for f in response.formats)
 
 
 class TestCreativeFormatsResponsiveFilter:
-    """Tests for is_responsive filter — creative_formats.py lines 209-220, 260.
+    """Tests for is_responsive filter — creative_formats.py lines 209-220, 260."""
 
-    The real catalog has 2 responsive formats (product_card_detailed,
-    format_card_detailed). The remaining 47 are non-responsive.
-    """
-
-    def test_responsive_filter_true_returns_empty_from_real_catalog(self, integration_db):
-        """Spec: is_responsive=True returns only responsive formats; real catalog has 2."""
+    def test_responsive_filter_true(self, integration_db):
+        """Spec: is_responsive=True returns only responsive formats."""
+        responsive_format = _make_format(
+            "resp1",
+            "Responsive Banner",
+            renders=[
+                Renders(
+                    role="primary",
+                    dimensions=Dimensions(
+                        width=300,
+                        height=250,
+                        responsive=Responsive(width=True, height=False),
+                    ),
+                )
+            ],
+        )
+        fixed_format = _make_format(
+            "fixed1",
+            "Fixed Banner",
+            renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
+        )
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats([responsive_format, fixed_format])
             req = ListCreativeFormatsRequest(is_responsive=True)
             response = env.call_impl(req=req)
 
-        # Real catalog: 2 formats are responsive (product_card_detailed, format_card_detailed)
-        assert len(response.formats) == 2
+        assert len(response.formats) == 1
+        assert response.formats[0].format_id.id == "resp1"
 
-    def test_responsive_filter_false_returns_all_from_real_catalog(self, integration_db):
-        """Spec: is_responsive=False returns only non-responsive formats; 47 qualify."""
+    def test_responsive_filter_false(self, integration_db):
+        """Spec: is_responsive=False returns only non-responsive formats."""
+        responsive_format = _make_format(
+            "resp1",
+            "Responsive Banner",
+            renders=[
+                Renders(
+                    role="primary",
+                    dimensions=Dimensions(
+                        width=300,
+                        height=250,
+                        responsive=Responsive(width=True, height=False),
+                    ),
+                )
+            ],
+        )
+        fixed_format = _make_format(
+            "fixed1",
+            "Fixed Banner",
+            renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
+        )
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats([responsive_format, fixed_format])
             req = ListCreativeFormatsRequest(is_responsive=False)
             response = env.call_impl(req=req)
 
-        # Real catalog: 49 total - 2 responsive = 47 non-responsive formats
-        assert len(response.formats) == 47
+        assert len(response.formats) == 1
+        assert response.formats[0].format_id.id == "fixed1"
 
 
 class TestCreativeFormatsDimensionFilters:
-    """Tests for dimension filters — creative_formats.py lines 278-285.
+    """Tests for dimension filters — creative_formats.py lines 278-285."""
 
-    The real catalog has 30 formats with renders/dimensions data.
-    Dimension filters return matching formats; formats without renders
-    are excluded when any dimension filter is active.
-    """
-
-    def test_min_height_filter_excludes_all_from_real_catalog(self, integration_db):
-        """Spec: min_height filter returns formats with renders satisfying the height floor."""
+    def test_min_height_filter(self, integration_db):
+        """Spec: min_height filter returns formats with height >= threshold."""
+        tall = _make_format(
+            "tall1",
+            "Tall Banner",
+            renders=[Renders(role="primary", dimensions=Dimensions(width=160, height=600))],
+        )
+        short = _make_format(
+            "short1",
+            "Short Banner",
+            renders=[Renders(role="primary", dimensions=Dimensions(width=728, height=90))],
+        )
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats([tall, short])
             req = ListCreativeFormatsRequest(min_height=200)
             response = env.call_impl(req=req)
 
-        # Real catalog: 30 formats have renders; some have height >= 200
-        assert len(response.formats) > 0
+        assert len(response.formats) == 1
+        assert response.formats[0].format_id.id == "tall1"
 
-    def test_max_height_filter_excludes_all_from_real_catalog(self, integration_db):
-        """Spec: max_height filter returns formats with renders within the height ceiling."""
+    def test_max_height_filter(self, integration_db):
+        """Spec: max_height filter returns formats with height <= threshold."""
+        tall = _make_format(
+            "tall1",
+            "Tall Banner",
+            renders=[Renders(role="primary", dimensions=Dimensions(width=160, height=600))],
+        )
+        short = _make_format(
+            "short1",
+            "Short Banner",
+            renders=[Renders(role="primary", dimensions=Dimensions(width=728, height=90))],
+        )
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats([tall, short])
             req = ListCreativeFormatsRequest(max_height=200)
             response = env.call_impl(req=req)
 
-        # Real catalog: 30 formats have renders; some have height <= 200
-        assert len(response.formats) > 0
+        assert len(response.formats) == 1
+        assert response.formats[0].format_id.id == "short1"
 
     def test_no_renders_excluded_from_dimension_filter(self, integration_db):
         """Spec: formats without renders are excluded when dimension filters applied."""
+        no_renders = _make_format("nr1", "No Renders Format")
+        with_renders = _make_format(
+            "wr1",
+            "With Renders",
+            renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
+        )
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats([no_renders, with_renders])
             req = ListCreativeFormatsRequest(min_width=100)
             response = env.call_impl(req=req)
 
-        # Real catalog: 30 formats have renders; some have width >= 100
-        assert len(response.formats) > 0
+        assert len(response.formats) == 1
+        assert response.formats[0].format_id.id == "wr1"
 
 
 # ---------------------------------------------------------------------------
 # output_format_ids Filter — Covers: UC-005-MAIN-MCP-18, UC-005-MAIN-MCP-19
+# Regression for beads-xlu: filter NOT implemented yet — this test must FAIL
 # ---------------------------------------------------------------------------
 
 
 class TestFormatsOutputFormatIds:
     """output_format_ids OR-filter: return formats whose output_format_ids overlaps."""
 
-    def test_output_format_ids_no_match_returns_empty(self, integration_db):
-        """Covers: UC-005-MAIN-MCP-18 — output_format_ids with non-matching id returns empty."""
-        out_a = FormatId(agent_url=DEFAULT_AGENT_URL, id="out_a")
-        with CreativeFormatsEnv() as env:
-            TenantFactory(tenant_id="test_tenant")
-            req = ListCreativeFormatsRequest(output_format_ids=[out_a])
-            response = env.call_impl(req=req)
-        # Real catalog formats have no output_format_ids → none match → empty
-        assert response.formats == []
-
-    def test_output_format_ids_or_semantics_no_match_returns_empty(self, integration_db):
-        """Covers: UC-005-MAIN-MCP-19 — output_format_ids=[X,Y] with no matches returns empty."""
+    def test_output_format_ids_single_match(self, integration_db):
+        """Covers: UC-005-MAIN-MCP-18 — output_format_ids=[X] returns formats that produce X."""
         out_a = FormatId(agent_url=DEFAULT_AGENT_URL, id="out_a")
         out_b = FormatId(agent_url=DEFAULT_AGENT_URL, id="out_b")
+        formats = [
+            _make_format("fmt_1", "Multi-output A"),
+            _make_format("fmt_2", "Multi-output B"),
+            _make_format("fmt_3", "No output ids"),
+        ]
+        formats[0].output_format_ids = [out_a]
+        formats[1].output_format_ids = [out_b]
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats(formats)
+            req = ListCreativeFormatsRequest(output_format_ids=[out_a])
+            response = env.call_impl(req=req)
+        assert len(response.formats) == 1
+        assert response.formats[0].name == "Multi-output A"
+
+    def test_output_format_ids_or_semantics(self, integration_db):
+        """Covers: UC-005-MAIN-MCP-19 — output_format_ids=[X,Y] returns union (OR semantics)."""
+        out_a = FormatId(agent_url=DEFAULT_AGENT_URL, id="out_a")
+        out_b = FormatId(agent_url=DEFAULT_AGENT_URL, id="out_b")
+        formats = [
+            _make_format("fmt_1", "Produces A"),
+            _make_format("fmt_2", "Produces B"),
+            _make_format("fmt_3", "No output ids"),
+        ]
+        formats[0].output_format_ids = [out_a]
+        formats[1].output_format_ids = [out_b]
+        with CreativeFormatsEnv() as env:
+            TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats(formats)
             req = ListCreativeFormatsRequest(output_format_ids=[out_a, out_b])
             response = env.call_impl(req=req)
-        # Real catalog formats have no output_format_ids → union of [X,Y] still yields no matches
-        assert response.formats == []
+        assert len(response.formats) == 2
+        names = {f.name for f in response.formats}
+        assert names == {"Produces A", "Produces B"}

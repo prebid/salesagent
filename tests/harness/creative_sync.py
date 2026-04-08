@@ -157,10 +157,9 @@ class CreativeSyncEnv(IntegrationEnv):
     def set_run_async_result(self, formats: list[Any]) -> None:
         """Configure run_async_in_sync_context to return *formats*.
 
-        Patches the sync bridge that wraps the async call in _sync.py.
-        CreativeFormatsEnv works against the real creative agent catalog
-        (no cache injection). This method is specific to CreativeSyncEnv,
-        which mocks the async runner to control which formats are returned.
+        Unlike CreativeFormatsEnv.set_registry_formats (which patches
+        registry.list_all_formats directly), this patches the sync bridge
+        that wraps the async call in _sync.py.
         """
         self.mock["run_async"].side_effect = lambda coro: formats
 

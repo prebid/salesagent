@@ -3,9 +3,6 @@
 Tests MCP combined-filter dispatch, MCP ToolResult wrapping,
 A2A full catalog, and A2A tenant context resolution.
 
-All tests run against the real creative agent catalog (49 formats):
-28 display, 12 video, 4 dooh, 3 audio, 2 native.
-
 Obligation IDs:
 - UC-005-MAIN-MCP-16: combined filters narrow results
 - UC-005-MAIN-MCP-17: MCP ToolResult wrapping
@@ -19,24 +16,47 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from adcp.types.generated_poc.core.format import (
+    Assets,
+    Assets5,
+    Dimensions,
+    Renders,
+)
 from adcp.types.generated_poc.enums.asset_content_type import AssetContentType
 from adcp.types.generated_poc.enums.format_category import FormatCategory
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 
 from src.core.schemas import (
+    Format,
+    FormatId,
     ListCreativeFormatsRequest,
     ListCreativeFormatsResponse,
 )
 from tests.factories import PrincipalFactory, TenantFactory
 from tests.harness import CreativeFormatsEnv
 
-# Real catalog totals served by the Docker creative agent container
-REAL_CATALOG_TOTAL = 49
-REAL_CATALOG_DISPLAY = 28
-REAL_CATALOG_VIDEO = 12
+DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+
+
+def _make_format(
+    format_id: str,
+    name: str,
+    type: FormatCategory = FormatCategory.display,
+    renders: list | None = None,
+    assets: list | None = None,
+) -> Format:
+    """Build a Format with minimal boilerplate."""
+    return Format(
+        format_id=FormatId(agent_url=DEFAULT_AGENT_URL, id=format_id),
+        name=name,
+        type=type,
+        is_standard=True,
+        renders=renders,
+        assets=assets,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -50,12 +70,47 @@ class TestCombinedFilters:
     def test_combined_type_asset_dimension_filters(self, integration_db):
         """UC-005-MAIN-MCP-16: type=display + asset_types=[image] + max_width=728.
 
-        Filters are applied conjunctively: every returned format must be
-        display type AND have at least one image asset AND have at least one
-        render with width <= 728. Verified against the real catalog.
+        Given diverse formats, only display formats with image assets and
+        at least one render width <= 728 are returned.
         """
+        # Display with image, width 300 -- SHOULD MATCH
+        display_small_image = _make_format(
+            "d_small",
+            "Small Display Banner",
+            type=FormatCategory.display,
+            renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
+            assets=[Assets(item_type="individual", asset_id="hero_image", required=True)],
+        )
+        # Display with image, width 970 -- should NOT match (too wide)
+        display_wide_image = _make_format(
+            "d_wide",
+            "Wide Display Billboard",
+            type=FormatCategory.display,
+            renders=[Renders(role="primary", dimensions=Dimensions(width=970, height=250))],
+            assets=[Assets(item_type="individual", asset_id="billboard_image", required=True)],
+        )
+        # Display with video asset, width 300 -- should NOT match (wrong asset type)
+        display_video = _make_format(
+            "d_video",
+            "Display Video Unit",
+            type=FormatCategory.display,
+            renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
+            assets=[Assets5(item_type="individual", asset_id="hero_video", required=True)],
+        )
+        # Video with image, width 300 -- should NOT match (wrong type)
+        video_image = _make_format(
+            "v_image",
+            "Video Companion",
+            type=FormatCategory.video,
+            renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
+            assets=[Assets(item_type="individual", asset_id="companion_image", required=True)],
+        )
+
+        all_formats = [display_small_image, display_wide_image, display_video, video_image]
+
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats(all_formats)
 
             req = ListCreativeFormatsRequest(
                 type="display",
@@ -64,14 +119,29 @@ class TestCombinedFilters:
             )
             response = env.call_impl(req=req)
 
-        # All returned formats must satisfy all three constraints simultaneously
-        for fmt in response.formats:
-            assert fmt.type == FormatCategory.display, f"Expected display type, got {fmt.type} for {fmt.format_id.id}"
+        assert len(response.formats) == 1
+        assert response.formats[0].format_id.id == "d_small"
 
     def test_combined_filters_via_mcp(self, integration_db):
         """UC-005-MAIN-MCP-16: same combined filter logic through MCP wrapper."""
+        display_match = _make_format(
+            "d_match",
+            "Matching Display",
+            type=FormatCategory.display,
+            renders=[Renders(role="primary", dimensions=Dimensions(width=728, height=90))],
+            assets=[Assets(item_type="individual", asset_id="banner_image", required=True)],
+        )
+        display_no_match = _make_format(
+            "d_nomatch",
+            "Non-Matching Display",
+            type=FormatCategory.display,
+            renders=[Renders(role="primary", dimensions=Dimensions(width=970, height=250))],
+            assets=[Assets(item_type="individual", asset_id="wide_image", required=True)],
+        )
+
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats([display_match, display_no_match])
 
             response = env.call_mcp(
                 type=FormatCategory.display,
@@ -79,16 +149,27 @@ class TestCombinedFilters:
                 max_width=728,
             )
 
-        # All returned formats must be display type (filter applied conjunctively)
-        for fmt in response.formats:
-            assert fmt.type == FormatCategory.display, (
-                f"MCP: expected display type, got {fmt.type} for {fmt.format_id.id}"
-            )
+        assert len(response.formats) == 1
+        assert response.formats[0].format_id.id == "d_match"
 
     def test_combined_filters_via_a2a(self, integration_db):
         """UC-005-MAIN-MCP-16: same combined filter logic through A2A wrapper."""
+        display_match = _make_format(
+            "d_a2a_match",
+            "A2A Display Match",
+            type=FormatCategory.display,
+            renders=[Renders(role="primary", dimensions=Dimensions(width=320, height=50))],
+            assets=[Assets(item_type="individual", asset_id="mobile_image", required=True)],
+        )
+        audio_format = _make_format(
+            "a_nomatch",
+            "Audio Ad",
+            type=FormatCategory.audio,
+        )
+
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats([display_match, audio_format])
 
             req = ListCreativeFormatsRequest(
                 type="display",
@@ -97,25 +178,28 @@ class TestCombinedFilters:
             )
             response = env.call_a2a(req=req)
 
-        # All returned formats must be display type
-        for fmt in response.formats:
-            assert fmt.type == FormatCategory.display, (
-                f"A2A: expected display type, got {fmt.type} for {fmt.format_id.id}"
-            )
+        assert len(response.formats) == 1
+        assert response.formats[0].format_id.id == "d_a2a_match"
 
     def test_all_filters_conjunctive_empty_result(self, integration_db):
-        """UC-005-MAIN-MCP-16: if no format matches all filters, result is empty.
+        """UC-005-MAIN-MCP-16: if no format matches all filters, result is empty."""
+        # Video format -- fails type=display filter
+        only_video = _make_format(
+            "v1",
+            "Video Only",
+            type=FormatCategory.video,
+            renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
+            assets=[Assets(item_type="individual", asset_id="vid", required=True)],
+        )
 
-        Using max_width=0 ensures no format can satisfy width <= 0, so the
-        conjunctive filter must return an empty list regardless of other matches.
-        """
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats([only_video])
 
             req = ListCreativeFormatsRequest(
                 type="display",
                 asset_types=["image"],
-                max_width=0,
+                max_width=728,
             )
             response = env.call_impl(req=req)
 
@@ -135,12 +219,18 @@ class TestMcpToolResultWrapping:
 
         The MCP wrapper must return a ToolResult object whose
         structured_content is the ListCreativeFormatsResponse data,
-        parseable as JSON. Verified against the real catalog.
+        parseable as JSON.
         """
         from src.core.tools.creative_formats import list_creative_formats
 
+        formats = [
+            _make_format("display_300", "Medium Rectangle"),
+            _make_format("video_15s", "Pre-roll 15s", type=FormatCategory.video),
+        ]
+
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats(formats)
             env._commit_factory_data()
 
             from tests.harness.transport import Transport
@@ -159,14 +249,17 @@ class TestMcpToolResultWrapping:
 
         # Verify it can be parsed as ListCreativeFormatsResponse
         parsed = ListCreativeFormatsResponse(**sc)
-        assert len(parsed.formats) >= 1
+        assert len(parsed.formats) == 2
 
     def test_mcp_tool_result_content_is_text(self, integration_db):
         """UC-005-MAIN-MCP-17: ToolResult.content contains displayable text."""
         from src.core.tools.creative_formats import list_creative_formats
 
+        formats = [_make_format("test_fmt", "Test Format")]
+
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats(formats)
             env._commit_factory_data()
 
             from tests.harness.transport import Transport
@@ -187,8 +280,14 @@ class TestMcpToolResultWrapping:
         """UC-005-MAIN-MCP-17: structured_content contains 'formats' key."""
         from src.core.tools.creative_formats import list_creative_formats
 
+        formats = [
+            _make_format("fmt_a", "Format A"),
+            _make_format("fmt_b", "Format B", type=FormatCategory.video),
+        ]
+
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats(formats)
             env._commit_factory_data()
 
             from tests.harness.transport import Transport
@@ -201,7 +300,7 @@ class TestMcpToolResultWrapping:
         sc = tool_result.structured_content
         assert "formats" in sc
         assert isinstance(sc["formats"], list)
-        assert len(sc["formats"]) >= 1
+        assert len(sc["formats"]) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -216,15 +315,22 @@ class TestFullCatalogViaA2A:
         """UC-005-MAIN-REST-01: list_creative_formats_raw returns full catalog.
 
         The A2A endpoint (list_creative_formats_raw) returns a valid
-        ListCreativeFormatsResponse with all formats from the real catalog.
+        ListCreativeFormatsResponse with all registered formats.
         """
+        formats = [
+            _make_format("display_300x250", "Medium Rectangle"),
+            _make_format("display_728x90", "Leaderboard"),
+            _make_format("video_preroll", "Pre-roll 15s", type=FormatCategory.video),
+        ]
+
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats(formats)
 
             response = env.call_a2a()
 
         assert isinstance(response, ListCreativeFormatsResponse)
-        assert len(response.formats) == REAL_CATALOG_TOTAL
+        assert len(response.formats) == 3
 
     def test_a2a_response_format_structure(self, integration_db):
         """UC-005-MAIN-REST-01: each format in A2A response has required fields.
@@ -232,34 +338,47 @@ class TestFullCatalogViaA2A:
         POST-S1: complete catalog. POST-S2: each format includes
         format_id, name, type.
         """
+        fmt = _make_format(
+            "display_standard",
+            "Standard Display",
+            assets=[Assets(item_type="individual", asset_id="hero", required=True)],
+        )
+
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats([fmt])
 
             response = env.call_a2a()
 
-        assert len(response.formats) >= 1
-        # Verify every format has the required fields populated
-        for fmt in response.formats:
-            assert fmt.format_id is not None, "format_id must be present"
-            assert fmt.format_id.id, "format_id.id must be non-empty"
-            assert fmt.format_id.agent_url is not None, "format_id.agent_url must be present"
-            assert fmt.name, "name must be non-empty"
-            assert fmt.type is not None, "type must be present"
+        assert len(response.formats) == 1
+        result_fmt = response.formats[0]
+        # FormatId is a structured object
+        assert result_fmt.format_id.id == "display_standard"
+        assert str(result_fmt.format_id.agent_url).rstrip("/") == DEFAULT_AGENT_URL
+        assert result_fmt.name == "Standard Display"
+        assert result_fmt.type == FormatCategory.display
 
-    def test_a2a_no_type_filter_returns_all_formats(self, integration_db):
-        """UC-005-MAIN-REST-01: no filters returns the complete catalog."""
+    def test_a2a_empty_catalog_returns_empty_formats(self, integration_db):
+        """UC-005-MAIN-REST-01: empty registry returns empty formats list, not error."""
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats([])
 
             response = env.call_a2a()
 
         assert isinstance(response, ListCreativeFormatsResponse)
-        assert len(response.formats) == REAL_CATALOG_TOTAL
+        assert response.formats == []
 
     def test_a2a_and_impl_return_same_catalog(self, integration_db):
         """UC-005-MAIN-REST-01: A2A and _impl return identical results."""
+        formats = [
+            _make_format("d1", "Display One"),
+            _make_format("v1", "Video One", type=FormatCategory.video),
+        ]
+
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats(formats)
 
             impl_response = env.call_impl()
             a2a_response = env.call_a2a()
@@ -284,8 +403,11 @@ class TestTenantContextFromA2AHeaders:
         When the identity has tenant context, the A2A wrapper uses that
         tenant to return the correct tenant's format catalog.
         """
+        formats = [_make_format("tenant_fmt", "Tenant-Specific Format")]
+
         with CreativeFormatsEnv(tenant_id="my_tenant") as env:
             TenantFactory(tenant_id="my_tenant")
+            env.set_registry_formats(formats)
 
             identity = PrincipalFactory.make_identity(
                 principal_id="buyer_1",
@@ -295,18 +417,26 @@ class TestTenantContextFromA2AHeaders:
             response = env.call_a2a(identity=identity)
 
         assert isinstance(response, ListCreativeFormatsResponse)
-        assert len(response.formats) >= 1
+        assert len(response.formats) == 1
 
-    def test_a2a_different_tenants_get_same_catalog(self, integration_db):
-        """UC-005-MAIN-REST-03: different tenant identities each resolve tenant context.
+    def test_a2a_different_tenants_get_different_catalogs(self, integration_db):
+        """UC-005-MAIN-REST-03: different tenant identities see different catalogs.
 
-        Two separate calls with different tenant identities must each
-        resolve to a valid tenant context and return the real catalog.
-        Both tenants share the same default creative agent catalog.
+        Two separate calls with different tenant identities should each
+        resolve to the correct tenant context. We simulate this by running
+        two env contexts with different tenant IDs and verifying independent
+        format lists.
         """
+        tenant_a_formats = [_make_format("fmtA", "Format for Tenant A")]
+        tenant_b_formats = [
+            _make_format("fmtB1", "Format B1 for Tenant B"),
+            _make_format("fmtB2", "Format B2 for Tenant B"),
+        ]
+
         # Tenant A
         with CreativeFormatsEnv(tenant_id="tenant_a") as env_a:
             TenantFactory(tenant_id="tenant_a")
+            env_a.set_registry_formats(tenant_a_formats)
 
             identity_a = PrincipalFactory.make_identity(
                 principal_id="buyer_a",
@@ -318,6 +448,7 @@ class TestTenantContextFromA2AHeaders:
         # Tenant B (separate env/session)
         with CreativeFormatsEnv(tenant_id="tenant_b") as env_b:
             TenantFactory(tenant_id="tenant_b")
+            env_b.set_registry_formats(tenant_b_formats)
 
             identity_b = PrincipalFactory.make_identity(
                 principal_id="buyer_b",
@@ -326,11 +457,11 @@ class TestTenantContextFromA2AHeaders:
             )
             response_b = env_b.call_a2a(identity=identity_b)
 
-        # Both tenants see the real catalog
-        assert len(response_a.formats) >= 1
-        assert len(response_b.formats) >= 1
-        # Both tenants see the same global default catalog
-        assert len(response_a.formats) == len(response_b.formats)
+        assert len(response_a.formats) == 1
+        assert response_a.formats[0].format_id.id == "fmtA"
+        assert len(response_b.formats) == 2
+        b_ids = {f.format_id.id for f in response_b.formats}
+        assert b_ids == {"fmtB1", "fmtB2"}
 
     def test_a2a_no_tenant_raises_auth_error(self, integration_db):
         """UC-005-MAIN-REST-03: missing tenant context raises AdCPAuthenticationError.

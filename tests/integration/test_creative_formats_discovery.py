@@ -15,12 +15,26 @@ from __future__ import annotations
 
 import pytest
 
-from src.core.schemas import ListCreativeFormatsResponse
+from src.core.schemas import Format, FormatId, ListCreativeFormatsResponse
 from tests.factories import PrincipalFactory, TenantFactory
 from tests.harness import CreativeFormatsEnv
 from tests.harness.transport import Transport
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+
+DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
+
+
+def _make_format(format_id: str, name: str) -> Format:
+    """Build a minimal Format for testing."""
+    from adcp.types.generated_poc.enums.format_category import FormatCategory
+
+    return Format(
+        format_id=FormatId(agent_url=DEFAULT_AGENT_URL, id=format_id),
+        name=name,
+        type=FormatCategory.display,
+        is_standard=True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -36,11 +50,16 @@ class TestAuthOptionalForDiscovery:
 
         Given an identity with tenant context but auth_token=None,
         When calling _list_creative_formats_impl,
-        Then the response is a valid ListCreativeFormatsResponse with formats
-        from the real catalog.
+        Then the response is a valid ListCreativeFormatsResponse with formats.
         """
+        formats = [
+            _make_format("fmt_1", "Display Banner"),
+            _make_format("fmt_2", "Leaderboard"),
+        ]
+
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats(formats)
 
             identity_no_token = PrincipalFactory.make_identity(
                 principal_id="anon_buyer",
@@ -51,7 +70,9 @@ class TestAuthOptionalForDiscovery:
             response = env.call_impl(identity=identity_no_token)
 
         assert isinstance(response, ListCreativeFormatsResponse)
-        assert len(response.formats) > 0
+        assert len(response.formats) == 2
+        ids = {f.format_id.id for f in response.formats}
+        assert ids == {"fmt_1", "fmt_2"}
 
     def test_a2a_returns_formats_with_no_auth_token(self, integration_db):
         """UC-005-MAIN-MCP-02: A2A wrapper succeeds without auth_token.
@@ -60,8 +81,11 @@ class TestAuthOptionalForDiscovery:
         When calling list_creative_formats_raw (A2A),
         Then the response is a valid ListCreativeFormatsResponse.
         """
+        formats = [_make_format("a2a_fmt", "A2A Display")]
+
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats(formats)
 
             identity_no_token = PrincipalFactory.make_identity(
                 principal_id="anon_buyer",
@@ -72,7 +96,8 @@ class TestAuthOptionalForDiscovery:
             response = env.call_a2a(identity=identity_no_token)
 
         assert isinstance(response, ListCreativeFormatsResponse)
-        assert len(response.formats) > 0
+        assert len(response.formats) == 1
+        assert response.formats[0].format_id.id == "a2a_fmt"
 
     def test_impl_with_no_auth_token_via_call_via(self, integration_db):
         """UC-005-MAIN-MCP-02: call_via(IMPL) with explicit no-token identity.
@@ -80,8 +105,11 @@ class TestAuthOptionalForDiscovery:
         Uses the multi-transport dispatch path with an unauthenticated identity
         to verify the TransportResult wrapper also succeeds.
         """
+        formats = [_make_format("dispatch_fmt", "Dispatched Format")]
+
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats(formats)
 
             identity_no_token = PrincipalFactory.make_identity(
                 principal_id="anon_buyer",
@@ -93,15 +121,18 @@ class TestAuthOptionalForDiscovery:
 
         assert result.is_success
         assert isinstance(result.payload, ListCreativeFormatsResponse)
-        assert len(result.payload.formats) > 0
+        assert len(result.payload.formats) == 1
 
     def test_a2a_with_no_auth_token_via_call_via(self, integration_db):
         """UC-005-MAIN-MCP-02: call_via(A2A) with explicit no-token identity.
 
         Verifies A2A transport dispatch succeeds without auth token.
         """
+        formats = [_make_format("a2a_dispatch", "A2A Dispatch Format")]
+
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats(formats)
 
             identity_no_token = PrincipalFactory.make_identity(
                 principal_id="anon_buyer",
@@ -113,7 +144,7 @@ class TestAuthOptionalForDiscovery:
 
         assert result.is_success
         assert isinstance(result.payload, ListCreativeFormatsResponse)
-        assert len(result.payload.formats) > 0
+        assert len(result.payload.formats) == 1
 
     def test_no_tenant_context_raises_auth_error(self, integration_db):
         """UC-005-MAIN-MCP-02: missing tenant context IS an error, even though auth is optional.
@@ -124,8 +155,11 @@ class TestAuthOptionalForDiscovery:
         """
         from src.core.exceptions import AdCPAuthenticationError
 
+        formats = [_make_format("no_tenant_fmt", "Should Not Reach")]
+
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats(formats)
 
             identity_no_tenant = PrincipalFactory.make_identity(
                 principal_id="anon_buyer",
@@ -143,11 +177,16 @@ class TestAuthOptionalForDiscovery:
         """UC-005-MAIN-MCP-02: auth token does not affect the catalog returned.
 
         Both an authenticated and unauthenticated identity with the same
-        tenant context should receive identical format catalogs from the real
-        creative agent.
+        tenant context should receive identical format catalogs.
         """
+        formats = [
+            _make_format("shared_1", "Shared Format 1"),
+            _make_format("shared_2", "Shared Format 2"),
+        ]
+
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats(formats)
 
             authed_identity = PrincipalFactory.make_identity(
                 principal_id="authed_buyer",
@@ -190,6 +229,7 @@ class TestTenantResolutionFailure:
 
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats([_make_format("unreachable", "Should Not Reach")])
 
             identity = PrincipalFactory.make_identity(
                 principal_id="anon_buyer",
@@ -209,6 +249,7 @@ class TestTenantResolutionFailure:
 
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.set_registry_formats([])
 
             identity = PrincipalFactory.make_identity(
                 principal_id="anon_buyer",

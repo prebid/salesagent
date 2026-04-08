@@ -324,19 +324,20 @@ class TestEnvMethodNamingConsistency:
         )
 
     def test_creative_sync_env_has_set_run_async_result(self):
-        """CreativeSyncEnv uses set_run_async_result to control format lists.
+        """CreativeSyncEnv uses set_run_async_result, not set_registry_formats.
 
-        set_run_async_result patches run_async.side_effect in _sync.py.
-        CreativeFormatsEnv works against the real creative agent catalog
-        (no cache injection method). Using the wrong helper is a trap for
-        new Env authors.
+        set_registry_formats patches registry.list_all_formats (CreativeFormatsEnv).
+        CreativeSyncEnv patches run_async.side_effect, which is a different mechanic.
+        Using the same name is a trap for new Env authors.
         """
         from tests.harness.creative_sync import CreativeSyncEnv
 
-        assert hasattr(CreativeSyncEnv, "set_run_async_result"), "CreativeSyncEnv should have set_run_async_result"
+        assert hasattr(CreativeSyncEnv, "set_run_async_result"), (
+            "CreativeSyncEnv should have set_run_async_result (not set_registry_formats)"
+        )
         assert not hasattr(CreativeSyncEnv, "set_registry_formats"), (
             "CreativeSyncEnv should NOT have set_registry_formats — "
-            "use set_run_async_result instead (different mechanic)"
+            "that name belongs to CreativeFormatsEnv (different mechanic)"
         )
 
 
