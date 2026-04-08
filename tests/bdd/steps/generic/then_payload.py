@@ -64,7 +64,14 @@ def then_empty_formats(ctx: dict) -> None:
 
 @then("the response should include only display formats")
 def then_only_display(ctx: dict) -> None:
-    for f in _get_formats(ctx):
+    formats = _get_formats(ctx)
+    # Derive expected display count from the registry (real catalog subset)
+    registered = ctx.get("registry_formats", [])
+    expected_display = [r for r in registered if _fmt_type_str(r) == "display"]
+    assert len(formats) == len(expected_display), (
+        f"Expected {len(expected_display)} display formats, got {len(formats)}"
+    )
+    for f in formats:
         assert _fmt_type_str(f) == "display", f"Expected type 'display', got '{_fmt_type_str(f)}'"
 
 

@@ -15,6 +15,16 @@ from tests.bdd.steps.generic._registry import load_real_catalog
 from tests.bdd.steps.generic._registry import sync_registry as _sync_registry
 from tests.factories.format import FormatFactory, FormatIdFactory
 
+
+def _group_by_type(formats: list[object]) -> dict[str, list[object]]:
+    """Group Format objects by their type value string."""
+    by_type: dict[str, list[object]] = {}
+    for f in formats:
+        t = f.type.value if f.type else "unknown"
+        by_type.setdefault(t, []).append(f)
+    return by_type
+
+
 # ── Background steps (apply to every scenario) ──────────────────────
 
 
@@ -75,6 +85,7 @@ def given_creative_agent_registered(ctx: dict) -> None:
     real_formats = load_real_catalog()
     ctx["env"].set_registry_formats(real_formats)
     ctx["real_catalog"] = real_formats
+    ctx["real_catalog_by_type"] = _group_by_type(real_formats)
     ctx["registry_formats"] = list(real_formats)
     ctx["creative_agents_registered"] = True
 
