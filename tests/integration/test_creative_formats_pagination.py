@@ -53,11 +53,8 @@ class TestCreativeAgentReferrals:
 
     @staticmethod
     def _configure_registry_agents(env):
-        """Patch _get_tenant_agents on the real registry to return a known agent list."""
-        from unittest.mock import patch as _patch
-
+        """Configure mock registry to return agent list for _get_tenant_agents."""
         from src.core.creative_agent_registry import CreativeAgent as RegistryAgent
-        from src.core.creative_agent_registry import get_creative_agent_registry
 
         mock_agents = [
             RegistryAgent(
@@ -73,10 +70,7 @@ class TestCreativeAgentReferrals:
                 priority=2,
             ),
         ]
-        registry = get_creative_agent_registry()
-        patcher = _patch.object(registry, "_get_tenant_agents", return_value=mock_agents)
-        patcher.start()
-        env._patchers.append(patcher)
+        env.mock["registry"].return_value._get_tenant_agents.return_value = mock_agents
 
     def test_response_includes_creative_agents(self, integration_db):
         """UC-005-MAIN-MCP-13: response includes creative_agents with agent info."""

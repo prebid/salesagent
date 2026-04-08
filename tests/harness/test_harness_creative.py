@@ -142,7 +142,7 @@ class TestCreativeListEnvContract:
 
 
 class TestCreativeFormatsEnvContract:
-    """CreativeFormatsEnv uses real registry (ADCP_TESTING=true), mocks audit logger only."""
+    """CreativeFormatsEnv must mock registry and audit logger."""
 
     def test_import_succeeds(self):
         """CreativeFormatsEnv is importable from harness."""
@@ -150,11 +150,13 @@ class TestCreativeFormatsEnvContract:
 
         assert CreativeFormatsEnv is not None
 
-    def test_real_registry_returns_default_formats(self):
-        """Real registry with ADCP_TESTING=true returns _get_mock_formats().
+    def test_configure_mocks_provides_default_format(self):
+        """_configure_mocks() seeds a default-display format via FormatFactory.
 
-        No registry mock — production code runs and uses ADCP_TESTING=true
-        to return deterministic formats without external HTTP calls.
+        Core invariant: harness owns defaults, not BDD Background steps.
+        After refactoring, _configure_mocks() should use FormatFactory.build()
+        (not _get_mock_formats() from production code) to create a single
+        default-display format.
         """
         from tests.harness.creative_formats import CreativeFormatsEnv
 
@@ -162,15 +164,20 @@ class TestCreativeFormatsEnvContract:
             use_real_db = False
 
         with _UnitMode() as env:
-            response = env.call_impl()
-            # Real registry returns _get_mock_formats() which has 11 formats
-            assert len(response.formats) >= 1
-            # Should include display formats
-            has_display = any(str(getattr(fmt, "type", "")).lower().find("display") >= 0 for fmt in response.formats)
+            mock_registry = env.mock["registry"].return_value
+            default_formats = mock_registry.list_all_formats.return_value
+            # Harness must provide at least one default format
+            assert len(default_formats) >= 1
+            # The default should include a display format
+            has_display = any(
+                getattr(fmt, "name", "").lower().find("display") >= 0
+                or str(getattr(fmt, "type", "")).lower().find("display") >= 0
+                for fmt in default_formats
+            )
             assert has_display, "Default formats must include at least one display format"
 
     def test_set_registry_formats_overrides_defaults(self):
-        """set_registry_formats() replaces _get_mock_formats() return value."""
+        """set_registry_formats() fully replaces _configure_mocks() defaults."""
         from tests.factories.format import FormatFactory as FF
         from tests.harness.creative_formats import CreativeFormatsEnv
 
@@ -180,15 +187,34 @@ class TestCreativeFormatsEnvContract:
         with _UnitMode() as env:
             custom = [FF.build(name="custom-video")]
             env.set_registry_formats(custom)
-            response = env.call_impl()
-            assert len(response.formats) == 1
-            assert response.formats[0].name == "custom-video"
+            mock_registry = env.mock["registry"].return_value
+            assert mock_registry.list_all_formats.return_value == custom
 
-    def test_has_correct_external_patches(self):
-        """CreativeFormatsEnv patches audit_logger only (registry is real)."""
+    def test_default_format_built_by_factory_not_production(self):
+        """After refactoring, _configure_mocks() uses FormatFactory, not _get_mock_formats().
+
+        This is the TDD "red" test — it will fail until _configure_mocks()
+        is changed to use FormatFactory.build() instead of _get_mock_formats().
+        """
         from tests.harness.creative_formats import CreativeFormatsEnv
 
-        expected_keys = {"audit_logger"}
+        class _UnitMode(CreativeFormatsEnv):
+            use_real_db = False
+
+        with _UnitMode() as env:
+            mock_registry = env.mock["registry"].return_value
+            default_formats = mock_registry.list_all_formats.return_value
+            # After refactoring: exactly 1 default-display format (not 11 production mocks)
+            assert len(default_formats) == 1, (
+                f"Expected 1 default format from FormatFactory, got {len(default_formats)} "
+                f"(still using _get_mock_formats()?)"
+            )
+
+    def test_has_correct_external_patches(self):
+        """CreativeFormatsEnv patches registry and audit_logger."""
+        from tests.harness.creative_formats import CreativeFormatsEnv
+
+        expected_keys = {"registry", "audit_logger"}
         assert set(CreativeFormatsEnv.EXTERNAL_PATCHES.keys()) == expected_keys
 
     def test_is_integration_env(self):
@@ -198,12 +224,13 @@ class TestCreativeFormatsEnvContract:
         assert CreativeFormatsEnv.use_real_db is True
 
     def test_mock_dict_populated_in_unit_mode(self):
-        """Verify patches activate correctly (audit_logger only)."""
+        """Verify patches activate correctly."""
         from tests.harness.creative_formats import CreativeFormatsEnv
 
         class _UnitMode(CreativeFormatsEnv):
             use_real_db = False
 
         with _UnitMode() as env:
+            assert "registry" in env.mock
             assert "audit_logger" in env.mock
-            assert len(env.mock) == 1
+            assert len(env.mock) == 2
