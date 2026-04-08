@@ -1076,22 +1076,17 @@ class IntegrationEnv(BaseTestEnv):
         principal = PrincipalFactory(tenant=tenant, principal_id=self._principal_id)
         return tenant, principal
 
-    def setup_product_chain(
-        self,
-        tenant: Any,
-        product_id: str = "guaranteed_display",
-        placements: list[dict[str, str]] | None = None,
-    ) -> tuple[Any, Any]:
-        """Create product + pricing option with required supporting data.
+    def setup_tenant_inventory(self, tenant: Any) -> None:
+        """Set up inventory prerequisites needed by the setup checklist.
 
-        Creates: PropertyTag("all_inventory"), PublisherPartner, Product,
-        PricingOption (CPM/USD). Fixes DNS-incompatible subdomains.
+        Creates: PropertyTag("all_inventory"), PublisherPartner,
+        AuthorizedProperty. Fixes DNS-incompatible subdomains.
 
-        Returns (product, pricing_option).
+        Satisfies the "Authorized Properties" critical setup task so
+        _create_media_buy_impl doesn't raise SetupIncompleteError.
         """
         from tests.factories import (
-            PricingOptionFactory,
-            ProductFactory,
+            AuthorizedPropertyFactory,
             PropertyTagFactory,
             PublisherPartnerFactory,
         )
@@ -1100,6 +1095,24 @@ class IntegrationEnv(BaseTestEnv):
             tenant.subdomain = tenant.subdomain.replace("_", "-")
         PropertyTagFactory(tenant=tenant, tag_id="all_inventory", name="All Inventory")
         PublisherPartnerFactory(tenant=tenant, publisher_domain="testpublisher.example.com")
+        AuthorizedPropertyFactory(tenant=tenant, publisher_domain="testpublisher.example.com")
+
+    def setup_product_chain(
+        self,
+        tenant: Any,
+        product_id: str = "guaranteed_display",
+        placements: list[dict[str, str]] | None = None,
+    ) -> tuple[Any, Any]:
+        """Create product + pricing option with required supporting data.
+
+        Creates: tenant inventory prerequisites (via setup_tenant_inventory),
+        Product, PricingOption (CPM/USD).
+
+        Returns (product, pricing_option).
+        """
+        from tests.factories import PricingOptionFactory, ProductFactory
+
+        self.setup_tenant_inventory(tenant)
         product = ProductFactory(
             tenant=tenant,
             product_id=product_id,
@@ -1120,6 +1133,7 @@ class IntegrationEnv(BaseTestEnv):
         tenant: Any,
         principal: Any,
         product: Any,
+        pricing_option: Any = None,
         status: str = "active",
         buyer_ref: str = "test-buyer-ref",
         packages: list[dict] | None = None,
@@ -1143,6 +1157,7 @@ class IntegrationEnv(BaseTestEnv):
                 tenant=tenant,
                 principal=principal,
                 product=product,
+                pricing_option=pricing_option,
                 status=status,
                 buyer_ref=buyer_ref,
                 packages=packages,
@@ -1162,16 +1177,19 @@ class IntegrationEnv(BaseTestEnv):
         tenant: Any,
         principal: Any,
         product: Any,
+        pricing_option: Any,
         status: str,
         buyer_ref: str,
         packages: list[dict],
     ) -> Any:
         """Create media buy via real HTTP to Docker server.
 
-        Posts to the create_media_buy endpoint, then reads the ORM object
-        back from Docker PostgreSQL so callers get the same type as
-        in-process mode.
+        Sends a complete AdCP-compliant CreateMediaBuyRequest to the REST
+        endpoint, then reads the ORM object back from Docker PostgreSQL
+        so callers get the same type as in-process mode.
         """
+        from datetime import UTC, datetime, timedelta
+
         import httpx
 
         from tests.harness.transport import Transport
@@ -1180,14 +1198,26 @@ class IntegrationEnv(BaseTestEnv):
         identity = self.identity_for(Transport.E2E_REST)
         base_url = self.e2e_config.base_url
 
+        # Build pricing_option_id string (same convention as BDD steps)
+        po_id = "cpm_usd_fixed"
+        if pricing_option is not None:
+            fixed_str = "fixed" if pricing_option.is_fixed else "auction"
+            po_id = f"{pricing_option.pricing_model}_{pricing_option.currency.lower()}_{fixed_str}"
+
+        now = datetime.now(UTC)
         body = {
             "buyer_ref": buyer_ref,
+            "brand": {"domain": "test-brand.example.com"},
+            "start_time": (now + timedelta(days=1)).isoformat(),
+            "end_time": (now + timedelta(days=30)).isoformat(),
             "packages": [
                 {
                     "product_id": pkg.get("product_id", product.product_id),
                     "budget": pkg.get("budget", 5000.0),
+                    "buyer_ref": f"pkg-{i + 1}",
+                    "pricing_option_id": po_id,
                 }
-                for pkg in packages
+                for i, pkg in enumerate(packages)
             ],
         }
 
