@@ -61,10 +61,11 @@ services:
       creative-agent-db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/api/creative-agent/health"]
+      test: ["CMD", "node", "-e", "const http=require('http');http.get('http://localhost:8080/api/creative-agent/health',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))"]
       interval: 5s
-      timeout: 3s
-      retries: 15
+      timeout: 5s
+      retries: 30
+      start_period: 30s
 
   adcp-server:
     build: .
