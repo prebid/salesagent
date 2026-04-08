@@ -52,6 +52,36 @@ class CreativeFormatsEnv(IntegrationEnv):
         mock_logger = MagicMock()
         self.mock["audit_logger"].return_value = mock_logger
 
+    def set_registry_formats(self, formats: list[Any]) -> None:
+        """Pre-warm the registry cache with specific formats.
+
+        Writes directly to the registry's _format_cache — the same
+        data structure that production populates after fetching from
+        a creative agent via MCP. No mocks, no patches.
+
+        The cache key is the normalized DEFAULT_AGENT URL. When
+        list_all_formats runs, it finds the cache entry and returns
+        these formats without making an HTTP call.
+        """
+        from datetime import UTC, datetime
+
+        from src.core.creative_agent_registry import (
+            CachedFormats,
+            get_creative_agent_registry,
+        )
+
+        registry = get_creative_agent_registry()
+
+        # Use the default agent's URL as cache key (same key the fetch path uses)
+        cache_key = registry._cache_key(registry.DEFAULT_AGENT.agent_url)
+
+        # Inject into cache with a long TTL so it doesn't expire during the test
+        registry._format_cache[cache_key] = CachedFormats(
+            formats=list(formats),
+            fetched_at=datetime.now(UTC),
+            ttl_seconds=86400,  # 24h — won't expire during a test
+        )
+
     def call_impl(self, **kwargs: Any) -> ListCreativeFormatsResponse:
         """Call _list_creative_formats_impl."""
         from src.core.tools.creative_formats import _list_creative_formats_impl
