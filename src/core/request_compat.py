@@ -114,14 +114,14 @@ def normalize_request_params(
             translations.append("account_id → account")
         del result["account_id"]
 
-    # campaign_ref → buyer_campaign_ref
+    # --- Tool-scoped translations ---
+
+    # campaign_ref → buyer_campaign_ref (create_media_buy only)
     if "campaign_ref" in result:
-        if "buyer_campaign_ref" not in result:
+        if tool_name == "create_media_buy" and "buyer_campaign_ref" not in result:
             result["buyer_campaign_ref"] = result["campaign_ref"]
             translations.append("campaign_ref → buyer_campaign_ref")
         del result["campaign_ref"]
-
-    # --- Tool-scoped translations ---
 
     # brand_manifest → brand (get_products, create_media_buy only)
     if "brand_manifest" in result:

@@ -2367,7 +2367,8 @@ class GetMediaBuysRequest(SalesAgentBaseModel):
     media_buy_ids: list[str] | None = Field(default=None, description="Specific media buy IDs to retrieve")
     buyer_refs: list[str] | None = Field(default=None, description="Buyer references to filter by")
     status_filter: Any | None = Field(default=None, description="Filter by status (MediaBuyStatus or list)")
-    account_id: str | None = Field(default=None, description="Account to filter to")
+    account_id: str | None = Field(default=None, description="Account to filter to (legacy, prefer account)")
+    account: LibraryAccountReference | None = Field(default=None, description="Account reference (AdCP 3.x)")
     context: ContextObject | None = Field(default=None, description="Application-level context")
 
 
