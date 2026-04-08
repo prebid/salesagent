@@ -612,3 +612,177 @@ class TestRealWorldSchemas:
                 },
             ],
         }
+
+
+# ===========================================================================
+# Adversarial: Findings from evil opus reviewer
+# ===========================================================================
+
+
+class TestAdversarialFinding1MixedAdditionalProperties:
+    """Finding 1: anyOf scoring must prefer declared-property matches,
+    not total key count. Prevents open variants from winning over strict
+    ones when the value clearly matches the strict variant's shape.
+    """
+
+    MIXED_AP_SCHEMA = {
+        "type": "object",
+        "properties": {
+            "ref": {
+                "anyOf": [
+                    {"$ref": "#/$defs/Strict"},
+                    {"$ref": "#/$defs/Open"},
+                ],
+            },
+        },
+        "additionalProperties": False,
+        "$defs": {
+            "Strict": {
+                "type": "object",
+                "properties": {"account_id": {"type": "string"}},
+                "additionalProperties": False,
+            },
+            "Open": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}, "domain": {"type": "string"}},
+                "additionalProperties": True,
+            },
+        },
+    }
+
+    def test_strict_variant_wins_when_value_matches_its_shape(self):
+        """Value has account_id (Strict's declared property) + extras.
+        Strict variant should win because account_id matches its declaration,
+        even though Open would preserve more keys.
+        """
+        result = deep_strip_to_schema(
+            {"ref": {"account_id": "acc-1", "extra1": "a", "extra2": "b"}},
+            self.MIXED_AP_SCHEMA,
+        )
+        assert result == {"ref": {"account_id": "acc-1"}}
+
+    def test_open_variant_wins_when_value_matches_its_shape(self):
+        """Value has name + domain (Open's declared properties).
+        Open should win because more declared properties match.
+        """
+        result = deep_strip_to_schema(
+            {"ref": {"name": "acme", "domain": "acme.com", "extra": "kept"}},
+            self.MIXED_AP_SCHEMA,
+        )
+        # Open variant: name + domain match (score 2) > Strict: no match (score 0)
+        # additionalProperties: true → extra preserved
+        assert result == {"ref": {"name": "acme", "domain": "acme.com", "extra": "kept"}}
+
+
+class TestAdversarialFinding2AllOf:
+    """Finding 2: allOf must merge properties from all members and strip
+    against the combined set.
+    """
+
+    def test_allof_strips_unknowns(self):
+        """allOf with two members — combined properties kept, extras stripped."""
+        schema = {
+            "allOf": [
+                {
+                    "type": "object",
+                    "properties": {"a": {"type": "string"}},
+                    "additionalProperties": False,
+                },
+                {
+                    "type": "object",
+                    "properties": {"b": {"type": "string"}},
+                    "additionalProperties": False,
+                },
+            ],
+        }
+        result = deep_strip_to_schema({"a": "1", "b": "2", "extra": "3"}, schema)
+        assert result == {"a": "1", "b": "2"}
+
+    def test_allof_with_ref(self):
+        """allOf member uses $ref — resolved and properties merged."""
+        schema = {
+            "allOf": [
+                {"$ref": "#/$defs/Base"},
+                {
+                    "type": "object",
+                    "properties": {"extension": {"type": "string"}},
+                    "additionalProperties": False,
+                },
+            ],
+            "$defs": {
+                "Base": {
+                    "type": "object",
+                    "properties": {"base_field": {"type": "string"}},
+                    "additionalProperties": False,
+                },
+            },
+        }
+        result = deep_strip_to_schema(
+            {"base_field": "b", "extension": "e", "extra": "gone"},
+            schema,
+        )
+        assert result == {"base_field": "b", "extension": "e"}
+
+    def test_allof_preserves_extras_when_all_members_allow_additional(self):
+        """If all allOf members allow additionalProperties, extras preserved."""
+        schema = {
+            "allOf": [
+                {"type": "object", "properties": {"a": {"type": "string"}}},
+                {"type": "object", "properties": {"b": {"type": "string"}}},
+            ],
+        }
+        result = deep_strip_to_schema({"a": "1", "b": "2", "extra": "kept"}, schema)
+        assert result == {"a": "1", "b": "2", "extra": "kept"}
+
+
+class TestAdversarialFinding5OneOf:
+    """Finding 5: oneOf with discriminator — verify stripping works the same
+    as anyOf but for oneOf schemas (used in real tool schemas for SignalId).
+    """
+
+    ONEOF_SCHEMA = {
+        "type": "object",
+        "properties": {
+            "signal": {
+                "oneOf": [
+                    {"$ref": "#/$defs/CatalogSignal"},
+                    {"$ref": "#/$defs/SegmentSignal"},
+                ],
+            },
+        },
+        "additionalProperties": False,
+        "$defs": {
+            "CatalogSignal": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string", "const": "catalog"},
+                    "provider": {"type": "string"},
+                },
+                "additionalProperties": False,
+            },
+            "SegmentSignal": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string", "const": "segment"},
+                    "segment_id": {"type": "string"},
+                },
+                "additionalProperties": False,
+            },
+        },
+    }
+
+    def test_oneof_strips_catalog_variant(self):
+        """CatalogSignal with extra field — stripped to declared properties."""
+        result = deep_strip_to_schema(
+            {"signal": {"source": "catalog", "provider": "nielsen", "future_field": "strip"}},
+            self.ONEOF_SCHEMA,
+        )
+        assert result == {"signal": {"source": "catalog", "provider": "nielsen"}}
+
+    def test_oneof_strips_segment_variant(self):
+        """SegmentSignal with extra field — correct variant selected, stripped."""
+        result = deep_strip_to_schema(
+            {"signal": {"source": "segment", "segment_id": "seg-1", "future": "gone"}},
+            self.ONEOF_SCHEMA,
+        )
+        assert result == {"signal": {"source": "segment", "segment_id": "seg-1"}}

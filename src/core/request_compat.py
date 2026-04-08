@@ -232,22 +232,45 @@ def _strip_node(value: Any, schema: dict[str, Any], defs: dict[str, Any]) -> Any
             real_variants = [v for v in variants if v.get("type") != "null"]
             if not real_variants:
                 return value
-            # Strip against each variant, pick the one that preserves the most fields.
-            # This handles unions like AccountReference (ById vs ByName) where both
-            # variants would accept the value but with different field sets.
+            # Strip against each variant, pick the one whose declared properties
+            # match the most input keys. This avoids variants with
+            # additionalProperties: true inflating the score via unknown fields.
             best_result = value
             best_score = -1
             for variant in real_variants:
                 try:
+                    resolved = variant
+                    if "$ref" in resolved:
+                        resolved = _resolve_ref(resolved, defs)
                     candidate = _strip_node(value, variant, defs)
-                    # Score: count of preserved keys (dicts) or identity (non-dicts)
-                    score = len(candidate) if isinstance(candidate, dict) else 0
+                    # Score by how many input keys match declared properties
+                    declared = set(resolved.get("properties", {}).keys())
+                    score = len(declared & value.keys()) if isinstance(value, dict) else 0
                     if score > best_score:
                         best_score = score
                         best_result = candidate
                 except Exception:
                     continue
             return best_result
+
+    # allOf: value must satisfy ALL schemas. Merge declared properties from
+    # all members and strip against the union of known fields.
+    if "allOf" in schema:
+        merged_props: dict[str, Any] = {}
+        allows_additional = True
+        for member in schema["allOf"]:
+            resolved = member
+            if "$ref" in resolved:
+                resolved = _resolve_ref(resolved, defs)
+            merged_props.update(resolved.get("properties", {}))
+            if resolved.get("additionalProperties") is False:
+                allows_additional = False
+        merged_schema = {
+            "type": "object",
+            "properties": merged_props,
+            "additionalProperties": allows_additional,
+        }
+        return _strip_node(value, merged_schema, defs)
 
     # Object: strip unknown properties, recurse into known ones
     if isinstance(value, dict):
