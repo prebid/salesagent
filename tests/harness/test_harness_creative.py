@@ -150,12 +150,27 @@ class TestCreativeFormatsEnvContract:
 
         assert CreativeFormatsEnv is not None
 
-    def test_set_registry_formats_injects_into_cache(self):
-        """set_registry_formats() pre-warms the registry cache.
+    def test_real_registry_returns_default_formats(self):
+        """Real registry with ADCP_TESTING=true returns _get_mock_formats().
 
-        No mocks — writes to the registry's _format_cache directly.
-        The call_impl path reads from cache and returns the injected formats.
+        No registry mock — production code runs and uses ADCP_TESTING=true
+        to return deterministic formats without external HTTP calls.
         """
+        from tests.harness.creative_formats import CreativeFormatsEnv
+
+        class _UnitMode(CreativeFormatsEnv):
+            use_real_db = False
+
+        with _UnitMode() as env:
+            response = env.call_impl()
+            # Real registry returns _get_mock_formats() which has 11 formats
+            assert len(response.formats) >= 1
+            # Should include display formats
+            has_display = any(str(getattr(fmt, "type", "")).lower().find("display") >= 0 for fmt in response.formats)
+            assert has_display, "Default formats must include at least one display format"
+
+    def test_set_registry_formats_overrides_defaults(self):
+        """set_registry_formats() replaces _get_mock_formats() return value."""
         from tests.factories.format import FormatFactory as FF
         from tests.harness.creative_formats import CreativeFormatsEnv
 
