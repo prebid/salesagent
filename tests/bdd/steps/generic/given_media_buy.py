@@ -105,7 +105,13 @@ def _sync_adapter_approval_to_db(ctx: dict, *, manual_approval_required: bool) -
 
 
 def _sync_adapter_error_to_db(
-    ctx: dict, *, fail_on_create: bool = False, fail_on_update: bool = False, error_message: str | None = None
+    ctx: dict,
+    *,
+    fail_on_create: bool = False,
+    fail_on_update: bool = False,
+    error_message: str | None = None,
+    error_details: dict | None = None,
+    recovery: str | None = None,
 ) -> None:
     """Write adapter error injection config to DB so Docker adapter raises errors."""
     tenant = ctx.get("tenant")
@@ -114,13 +120,16 @@ def _sync_adapter_error_to_db(
     env = ctx["env"]
     from tests.factories.core import set_adapter_test_behavior
 
-    set_adapter_test_behavior(
-        env,
-        tenant.tenant_id,
-        fail_on_create=fail_on_create,
-        fail_on_update=fail_on_update,
-        error_message=error_message,
-    )
+    kwargs: dict = {
+        "fail_on_create": fail_on_create,
+        "fail_on_update": fail_on_update,
+        "error_message": error_message,
+    }
+    if error_details is not None:
+        kwargs["error_details"] = error_details
+    if recovery is not None:
+        kwargs["recovery"] = recovery
+    set_adapter_test_behavior(env, tenant.tenant_id, **kwargs)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -142,6 +151,8 @@ def given_tenant_auto_approval(ctx: dict) -> None:
     # Also update identity's tenant dict (pre-built, not re-read from DB)
     env._identity_cache.clear()
     env._tenant_overrides["human_review_required"] = False
+    # Also write to DB so Docker-hosted adapter reads the correct config
+    _sync_adapter_approval_to_db(ctx, manual_approval_required=False)
 
 
 @given("the tenant is configured for manual approval")
@@ -166,6 +177,8 @@ def given_tenant_manual_approval(ctx: dict) -> None:
     adapter_mock = env.mock["adapter"].return_value
     adapter_mock.manual_approval_required = True
     adapter_mock.manual_approval_operations = {"create_media_buy", "update_media_buy"}
+    # Also write to DB so Docker-hosted adapter reads the correct config
+    _sync_adapter_approval_to_db(ctx, manual_approval_required=True)
 
 
 @given("adapter manual_approval_required is false")
@@ -2562,8 +2575,30 @@ def given_adapter_error(ctx: dict) -> None:
     )
     mock_adapter.create_media_buy.side_effect = error
     mock_adapter.update_media_buy.side_effect = error
-    # Also write to DB so Docker adapter raises the same error
-    _sync_adapter_error_to_db(ctx, fail_on_create=True, fail_on_update=True, error_message="Ad server unavailable")
+    # Also write to DB so Docker adapter raises the same error.
+    # Must also disable manual approval so the adapter is actually called
+    # (manual approval short-circuits before calling adapter.create_media_buy).
+    _sync_adapter_approval_to_db(ctx, manual_approval_required=False)
+    _sync_adapter_error_to_db(
+        ctx,
+        fail_on_create=True,
+        fail_on_update=True,
+        error_message="Ad server unavailable",
+        error_details={"suggestion": "Retry the operation or contact ad server support"},
+        recovery="retryable",
+    )
+    # Ensure tenant is auto-approval so production code doesn't short-circuit
+    tenant = ctx.get("tenant")
+    if tenant is not None:
+        tenant.human_review_required = False
+        env._commit_factory_data()
+        env._identity_cache.clear()
+        env._tenant_overrides["human_review_required"] = False
+    # Strip creative_ids so E2E doesn't fail on creative format validation
+    # (the Docker creative agent doesn't know test formats like display_300x250).
+    # This scenario tests adapter failure, not creative assignment.
+    for pkg in ctx.get("request_kwargs", {}).get("packages", []):
+        pkg.pop("creative_ids", None)
 
 
 @given("the ad server adapter returns success")

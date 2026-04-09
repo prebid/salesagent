@@ -138,8 +138,8 @@ def given_account_not_exists(ctx: dict) -> None:
     """
     from sqlalchemy import select
 
-    from src.core.database.database_session import get_db_session
     from src.core.database.models import Account
+    from tests.bdd.steps._harness_db import db_session as _db_session
 
     account_id = ctx.get("request_account_id")
     brand = ctx.get("request_brand")
@@ -154,7 +154,7 @@ def given_account_not_exists(ctx: dict) -> None:
         "No tenant in ctx — step claims account does not exist in the seller's "
         "account store but cannot verify without a tenant"
     )
-    with get_db_session() as session:
+    with _db_session(ctx) as session:
         if account_id is not None:
             existing = session.scalars(
                 select(Account).filter_by(account_id=account_id, tenant_id=tenant.tenant_id)
@@ -199,7 +199,7 @@ def given_account_needs_setup(ctx: dict, account_id: str) -> None:
         brand={"domain": "setup-needed.com"},
         operator="setup-needed.com",
     )
-    AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
+    AgentAccountAccessFactory(tenant=tenant, principal=principal, account=account)
     # Postcondition: verify account state matches step text claims
     assert account.status == "pending_approval", f"Account status should be 'pending_approval', got '{account.status}'"
     assert account.billing is None, f"Account billing should be None (not configured), got '{account.billing}'"
@@ -227,7 +227,7 @@ def given_multiple_matches(ctx: dict, count: int) -> None:
             brand={"domain": brand},
             operator=operator,
         )
-        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
+        AgentAccountAccessFactory(tenant=tenant, principal=principal, account=account)
 
 
 @given(parsers.parse('the account "{account_id}" exists and is active'))
@@ -249,7 +249,7 @@ def given_account_exists_active(ctx: dict, account_id: str) -> None:
         brand={"domain": f"{account_id}.com"},
         operator=f"{account_id}.com",
     )
-    AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
+    AgentAccountAccessFactory(tenant=tenant, principal=principal, account=account)
 
 
 @given("the account exists and is active")
@@ -272,7 +272,7 @@ def given_account_active(ctx: dict) -> None:
         brand={"domain": f"{account_id}.com"},
         operator=f"{account_id}.com",
     )
-    AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
+    AgentAccountAccessFactory(tenant=tenant, principal=principal, account=account)
 
 
 @given(parsers.parse("a create_media_buy request with account configuration {partition}"))
@@ -298,7 +298,7 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
             brand={"domain": "explicit.com"},
             operator="explicit.com",
         )
-        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
+        AgentAccountAccessFactory(tenant=tenant, principal=principal, account=account)
         ctx["account_ref"] = AccountReference(root=AccountReference1(account_id="acc-explicit"))
 
     elif partition == "natural_key_unambiguous":
@@ -309,7 +309,7 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
             brand={"domain": "natkey.com"},
             operator="natkey.com",
         )
-        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
+        AgentAccountAccessFactory(tenant=tenant, principal=principal, account=account)
         ctx["account_ref"] = AccountReference(
             root=AccountReference2(brand=BrandReference(domain="natkey.com"), operator="natkey.com"),
         )
@@ -351,7 +351,7 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
             brand={"domain": "setup.com"},
             operator="setup.com",
         )
-        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
+        AgentAccountAccessFactory(tenant=tenant, principal=principal, account=account)
         ctx["account_ref"] = AccountReference(root=AccountReference1(account_id="acc-setup"))
 
     elif partition == "account_payment_required":
@@ -362,7 +362,7 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
             brand={"domain": "payment.com"},
             operator="payment.com",
         )
-        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
+        AgentAccountAccessFactory(tenant=tenant, principal=principal, account=account)
         ctx["account_ref"] = AccountReference(root=AccountReference1(account_id="acc-payment"))
 
     elif partition == "account_suspended":
@@ -373,7 +373,7 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
             brand={"domain": "suspended.com"},
             operator="suspended.com",
         )
-        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
+        AgentAccountAccessFactory(tenant=tenant, principal=principal, account=account)
         ctx["account_ref"] = AccountReference(root=AccountReference1(account_id="acc-suspended"))
 
     else:
@@ -458,7 +458,7 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
             brand={"domain": f"{account_id}.com"},
             operator=f"{account_id}.com",
         )
-        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
+        AgentAccountAccessFactory(tenant=tenant, principal=principal, account=account)
         ctx["account_ref"] = AccountReference(root=AccountReference1(account_id=account_id))
 
     elif config.startswith("acc-") and "not-found" in config:
@@ -473,7 +473,7 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
             brand={"domain": "single.com"},
             operator="single.com",
         )
-        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
+        AgentAccountAccessFactory(tenant=tenant, principal=principal, account=account)
         ctx["account_ref"] = AccountReference(
             root=AccountReference2(brand=BrandReference(domain="single.com"), operator="single.com"),
         )
@@ -504,7 +504,7 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
             brand={"domain": "setup.com"},
             operator="setup.com",
         )
-        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
+        AgentAccountAccessFactory(tenant=tenant, principal=principal, account=account)
         ctx["account_ref"] = AccountReference(root=AccountReference1(account_id="acc-setup"))
 
     elif "payment-due" in config:
@@ -515,7 +515,7 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
             brand={"domain": "payment.com"},
             operator="payment.com",
         )
-        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
+        AgentAccountAccessFactory(tenant=tenant, principal=principal, account=account)
         ctx["account_ref"] = AccountReference(root=AccountReference1(account_id="acc-payment"))
 
     elif "suspended" in config:
@@ -526,7 +526,7 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
             brand={"domain": "suspended.com"},
             operator="suspended.com",
         )
-        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
+        AgentAccountAccessFactory(tenant=tenant, principal=principal, account=account)
         ctx["account_ref"] = AccountReference(root=AccountReference1(account_id="acc-suspended"))
 
     elif "no account" in config:
@@ -596,6 +596,21 @@ def _dispatch_create_media_buy(ctx: dict) -> None:
         _ensure_request_defaults(ctx)
 
     request_kwargs = ctx.get("request_kwargs", {})
+
+    # For production account scenarios in E2E mode, the Docker default tenant
+    # has human_review_required=True which routes to manual approval (status='submitted').
+    # Production account scenarios expect auto-approval, so sync to DB.
+    if ctx.get("sandbox") is False:
+        tenant = ctx.get("tenant")
+        env = ctx.get("env")
+        if tenant is not None and env is not None:
+            from tests.bdd.steps.generic.given_media_buy import _sync_adapter_approval_to_db
+
+            tenant.human_review_required = False
+            _sync_adapter_approval_to_db(ctx, manual_approval_required=False)
+            env._commit_factory_data()
+            env._identity_cache.clear()
+            env._tenant_overrides["human_review_required"] = False
 
     # Build the request object — may raise ValidationError for malformed inputs
     # (e.g., start_time="ASAP" violates Literal["asap"] | AwareDatetime)
@@ -1176,9 +1191,9 @@ def when_seller_rejects_media_buy(ctx: dict, reason: str) -> None:
 
     import pytest
 
-    from src.core.database.database_session import get_db_session
     from src.core.database.repositories.media_buy import MediaBuyRepository
     from src.core.database.repositories.workflow import WorkflowRepository
+    from tests.bdd.steps._harness_db import db_session as _db_session
 
     # SPEC-PRODUCTION GAP: Uses repository methods instead of the full Flask admin
     # rejection path. The repository layer (tenant scoping, status transitions) is
@@ -1198,7 +1213,7 @@ def when_seller_rejects_media_buy(ctx: dict, reason: str) -> None:
     tenant = ctx["tenant"]
 
     workflow_step_id = None
-    with get_db_session() as session:
+    with _db_session(ctx) as session:
         mb_repo = MediaBuyRepository(session, tenant.tenant_id)
         wf_repo = WorkflowRepository(session, tenant.tenant_id)
 
@@ -1234,7 +1249,7 @@ def when_seller_rejects_media_buy(ctx: dict, reason: str) -> None:
         session.commit()
 
     # Verify the rejection actually persisted (tenant-scoped, fresh session)
-    with get_db_session() as session:
+    with _db_session(ctx) as session:
         mb_repo = MediaBuyRepository(session, tenant.tenant_id)
         mb_check = mb_repo.get_by_id(media_buy_id)
         assert mb_check is not None, f"Media buy {media_buy_id} not found after rejection"
@@ -1710,10 +1725,10 @@ def then_creative_assignment_proceeds(ctx: dict) -> None:
 
     from sqlalchemy import func, select
 
-    from src.core.database.database_session import get_db_session
     from src.core.database.models import CreativeAssignment
+    from tests.bdd.steps._harness_db import db_session as _db_session
 
-    with get_db_session() as session:
+    with _db_session(ctx) as session:
         count = session.scalar(
             select(func.count()).select_from(CreativeAssignment).filter_by(media_buy_id=media_buy_id)
         )
@@ -1753,6 +1768,26 @@ def given_transient_error(ctx: dict, error_type: str) -> None:
         details={"retry_after": 30, "error_code": error_type},
         recovery="transient",
     )
+    # Also write to DB so Docker-hosted adapter raises the error in E2E mode.
+    # Must also disable manual approval so the adapter is actually called
+    # (manual approval short-circuits before calling adapter.create_media_buy).
+    from tests.bdd.steps.generic.given_media_buy import _sync_adapter_approval_to_db, _sync_adapter_error_to_db
+
+    _sync_adapter_approval_to_db(ctx, manual_approval_required=False)
+    _sync_adapter_error_to_db(
+        ctx,
+        fail_on_create=True,
+        error_message=f"{error_type}: transient error",
+        error_details={"retry_after": 30, "error_code": error_type},
+        recovery="transient",
+    )
+    # Also set tenant to auto-approval so production code doesn't short-circuit
+    tenant = ctx.get("tenant")
+    if tenant is not None:
+        tenant.human_review_required = False
+        env._commit_factory_data()
+        env._identity_cache.clear()
+        env._tenant_overrides["human_review_required"] = False
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2094,8 +2129,8 @@ def then_creatives_uploaded_to_library(ctx: dict) -> None:
     """
     from sqlalchemy import select
 
-    from src.core.database.database_session import get_db_session
     from src.core.database.models import Creative as CreativeModel
+    from tests.bdd.steps._harness_db import db_session as _db_session
 
     tenant = ctx["tenant"]
     # Verify the create request succeeded before checking creative upload
@@ -2116,7 +2151,7 @@ def then_creatives_uploaded_to_library(ctx: dict) -> None:
                 expected_ids.add(cid)
     assert expected_ids, "No creative IDs found in request — cannot verify upload"
 
-    with get_db_session() as session:
+    with _db_session(ctx) as session:
         db_creatives = session.scalars(select(CreativeModel).filter_by(tenant_id=tenant.tenant_id)).all()
         db_creative_ids = {c.creative_id for c in db_creatives}
         # Hard assert: all expected creatives must exist in DB.
@@ -2143,8 +2178,8 @@ def then_creatives_assigned_to_packages(ctx: dict) -> None:
     """
     from sqlalchemy import select
 
-    from src.core.database.database_session import get_db_session
     from src.core.database.models import CreativeAssignment
+    from tests.bdd.steps._harness_db import db_session as _db_session
 
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
@@ -2176,7 +2211,7 @@ def then_creatives_assigned_to_packages(ctx: dict) -> None:
             if cid and pkg_id:
                 expected_pairs.add((cid, pkg_id))
 
-    with get_db_session() as session:
+    with _db_session(ctx) as session:
         assignments = session.scalars(select(CreativeAssignment).filter_by(media_buy_id=media_buy_id)).all()
         assert len(assignments) > 0, f"Expected creative assignments for media_buy {media_buy_id}, found none"
 
@@ -2211,10 +2246,10 @@ def then_response_has_creative_assignments(ctx: dict) -> None:
     # Step text claims "with creative assignments" — verify they exist in DB
     from sqlalchemy import func, select
 
-    from src.core.database.database_session import get_db_session
     from src.core.database.models import CreativeAssignment
+    from tests.bdd.steps._harness_db import db_session as _db_session
 
-    with get_db_session() as session:
+    with _db_session(ctx) as session:
         assignment_count = session.scalar(
             select(func.count()).select_from(CreativeAssignment).filter_by(media_buy_id=media_buy_id)
         )

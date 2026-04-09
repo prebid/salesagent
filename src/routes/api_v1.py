@@ -260,7 +260,7 @@ async def create_media_buy(body: CreateMediaBuyBody, identity: ResolvedIdentity 
     except ToolError as e:
         return _handle_tool_error(e)
 
-    return response.model_dump(mode="json")
+    return response.model_dump(mode="json", context={"include_internal": True})
 
 
 @router.put("/media-buys/{media_buy_id}")
@@ -295,7 +295,7 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
     except ToolError as e:
         return _handle_tool_error(e)
 
-    return response.model_dump(mode="json")
+    return response.model_dump(mode="json", context={"include_internal": True})
 
 
 @router.post("/media-buys/delivery")

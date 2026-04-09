@@ -1800,6 +1800,14 @@ def given_tenant_approval_mode(ctx: dict, approval_mode: str) -> None:
         set_adapter_test_behavior(env, tenant.tenant_id, manual_approval_required=False)
     elif stripped == "manual":
         tenant.human_review_required = True
+        if "adapter" in env.mock:
+            env.mock["adapter"].return_value.manual_approval_required = True
+            env.mock["adapter"].return_value.manual_approval_operations = {
+                "create_media_buy",
+                "update_media_buy",
+            }
+        # Also write to DB so Docker adapter reads the correct config
+        set_adapter_test_behavior(env, tenant.tenant_id, manual_approval_required=True)
     else:
         raise ValueError(f"Unknown approval mode: {stripped}")
     env._commit_factory_data()

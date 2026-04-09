@@ -27,8 +27,8 @@ def given_tenant_has_min_order(ctx: dict) -> None:
     """
     from sqlalchemy import select
 
-    from src.core.database.database_session import get_db_session
     from src.core.database.models import CurrencyLimit
+    from tests.bdd.steps._harness_db import db_session
 
     env = ctx["env"]
     env._commit_factory_data()
@@ -36,7 +36,7 @@ def given_tenant_has_min_order(ctx: dict) -> None:
     tenant = ctx.get("tenant")
     assert tenant is not None, "No tenant in ctx — 'the account exists and is active' must run first"
 
-    with get_db_session() as session:
+    with db_session(ctx) as session:
         cl = session.scalars(select(CurrencyLimit).filter_by(tenant_id=tenant.tenant_id)).first()
         assert cl is not None, (
             f"No CurrencyLimit found for tenant {tenant.tenant_id} — TenantFactory should auto-create one"

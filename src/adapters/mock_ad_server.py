@@ -472,8 +472,10 @@ class MockAdServer(AdServerAdapter):
 
             raise AdCPAdapterError(
                 test_behavior.get("error_message", "Test adapter failure"),
-                recovery="transient",
-                details={"suggestion": "Retry the operation or contact ad server support"},
+                recovery=test_behavior.get("recovery", "transient"),
+                details=test_behavior.get(
+                    "error_details", {"suggestion": "Retry the operation or contact ad server support"}
+                ),
             )
 
         # Log pricing model info if provided (AdCP PR #88)
@@ -1362,8 +1364,10 @@ class MockAdServer(AdServerAdapter):
 
             raise AdCPAdapterError(
                 test_behavior.get("error_message", "Test adapter failure"),
-                recovery="transient",
-                details={"suggestion": "Retry the operation or contact ad server support"},
+                recovery=test_behavior.get("recovery", "transient"),
+                details=test_behavior.get(
+                    "error_details", {"suggestion": "Retry the operation or contact ad server support"}
+                ),
             )
 
         with get_db_session() as session:
