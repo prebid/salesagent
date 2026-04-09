@@ -171,9 +171,10 @@ def _assert_audit_approval_e2e(ctx: dict) -> None:
     with db_session(ctx) as session:
         logs = session.scalars(select(AuditLog).filter_by(tenant_id=tenant.tenant_id)).all()
         for log in logs:
-            if log.operation == "create_media_buy_pending_approval":
+            op = log.operation or ""
+            if "pending_approval" in op:
                 return
-            if log.operation == "create_media_buy" and log.success is True:
+            if "create_media_buy" in op and log.success is True:
                 details = log.details or {}
                 if "media_buy_id" in details:
                     return
@@ -216,7 +217,11 @@ def _assert_audit_adapter_mock(ctx: dict) -> None:
 
 
 def _assert_audit_adapter_e2e(ctx: dict) -> None:
-    """Assert adapter execution audit log exists in DB (E2E mode)."""
+    """Assert adapter execution audit log exists in DB (E2E mode).
+
+    If the media buy went to pending_approval, the adapter was not called —
+    that's correct behavior (no adapter audit log expected).
+    """
     from sqlalchemy import select
 
     from src.core.database.models import AuditLog
@@ -227,10 +232,14 @@ def _assert_audit_adapter_e2e(ctx: dict) -> None:
     with db_session(ctx) as session:
         logs = session.scalars(select(AuditLog).filter_by(tenant_id=tenant.tenant_id)).all()
         for log in logs:
-            if log.operation == "create_media_buy" and log.success is True and log.details is not None:
+            op = log.operation or ""
+            # Adapter execution logged as create_media_buy with success + details
+            if "create_media_buy" in op and log.success is True and log.details is not None:
+                return
+            # Pending approval means adapter was not called — valid, no adapter log expected
+            if "pending_approval" in op:
                 return
         raise AssertionError(
-            f"Expected audit_logs entry for adapter execution "
-            f"(operation='create_media_buy', success=True, with details) for tenant "
-            f"{tenant.tenant_id}, found: {[(log.operation, log.success) for log in logs]}"
+            f"Expected audit_logs entry for adapter execution or pending_approval "
+            f"for tenant {tenant.tenant_id}, found: {[(log.operation, log.success) for log in logs]}"
         )

@@ -3845,7 +3845,10 @@ async def create_media_buy(
     result = await _create_media_buy_impl(
         req=req, push_notification_config=pnc_dict, identity=identity, context_id=_ctx_id
     )
-    return ToolResult(content=str(result), structured_content=result)
+    return ToolResult(
+        content=str(result),
+        structured_content=result.model_dump(mode="json", context={"include_internal": True}),
+    )
 
 
 async def create_media_buy_raw(
