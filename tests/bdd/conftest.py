@@ -375,6 +375,7 @@ _REST_XFAIL_TAGS: set[str] = {
     "T-UC-005-inv-049-2-holds",  # format_ids filter
     "T-UC-005-inv-049-3-violated",  # asset_types filter
     "T-UC-005-inv-049-4-violated",  # dimension filter
+    "T-UC-005-inv-049-4-edge",  # dimension filter (formats without dimensions)
     "T-UC-005-inv-049-4-nodim",  # dimension filter (no dimensions)
     "T-UC-005-inv-049-5-holds",  # responsive=true filter
     "T-UC-005-inv-049-6-holds",  # responsive=false filter
@@ -382,9 +383,11 @@ _REST_XFAIL_TAGS: set[str] = {
     "T-UC-005-inv-049-7-violated",
     "T-UC-005-inv-049-9-holds",  # output_format_ids filter
     "T-UC-005-inv-049-9-violated",
+    "T-UC-005-inv-049-9-edge",  # output_format_ids (format without field)
     "T-UC-005-inv-049-9-nofield",
     "T-UC-005-inv-049-10-holds",  # input_format_ids filter
     "T-UC-005-inv-049-10-violated",
+    "T-UC-005-inv-049-10-edge",  # input_format_ids (format without field)
     "T-UC-005-inv-049-10-nofield",
     "T-UC-005-inv-031-1-holds",  # multi-filter AND combination
     "T-UC-005-inv-031-1-violated",
@@ -571,16 +574,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
                 break  # One xfail per scenario is sufficient
 
-        # FIXME(salesagent-9vgz.1): UC-002 alt-manual: workflow_step_id is exclude=True
-        # in CreateMediaBuySuccess schema, so MCP/REST serialization drops it.
-        # impl/a2a return raw Pydantic objects where the field is still accessible.
-        if (is_mcp or is_rest) and "T-UC-002-alt-manual" in marker_names:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="workflow_step_id excluded from MCP/REST serialization (exclude=True)",
-                    strict=True,
-                )
-            )
+        # Graduated: salesagent-9vgz.1 workflow_step_id — fixed in f2cd7a1d
+        # (propagated serializer context through CreateMediaBuyResult._serialize)
 
         # --- UC-005: disclosure/asset scenarios with partial impl ---
         # FIXME(beads-dul): disclosure_positions and brief/catalog asset types
