@@ -96,23 +96,13 @@ class AccountSyncEnv(IntegrationEnv):
         """
         return asyncio.run(self.call_impl_async(**kwargs))
 
-    async def call_a2a_async(self, **kwargs: Any) -> SyncAccountsResponse:
-        """Call sync_accounts_raw (A2A wrapper) with real DB (async version)."""
-        from src.core.tools.accounts import sync_accounts_raw
-
-        self._commit_factory_data()
-        kwargs.setdefault("identity", self.identity)
-        return await sync_accounts_raw(**kwargs)
-
     def call_a2a(self, **kwargs: Any) -> SyncAccountsResponse:
-        """Call sync_accounts_raw (A2A wrapper) with real DB (sync wrapper)."""
-        return asyncio.run(self.call_a2a_async(**kwargs))
+        """Call sync_accounts via real AdCPRequestHandler — full A2A pipeline."""
+        return self._run_a2a_handler("sync_accounts", SyncAccountsResponse, **kwargs)
 
     def call_mcp(self, **kwargs: Any) -> SyncAccountsResponse:
-        """Call sync_accounts MCP wrapper with mock Context."""
-        from src.core.tools.accounts import sync_accounts
-
-        return self._run_mcp_wrapper(sync_accounts, SyncAccountsResponse, **kwargs)
+        """Call sync_accounts via Client(mcp) — full pipeline dispatch."""
+        return self._run_mcp_client("sync_accounts", SyncAccountsResponse, **kwargs)
 
     REST_ENDPOINT = "/api/v1/accounts/sync"
 

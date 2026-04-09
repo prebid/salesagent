@@ -74,10 +74,10 @@ class RestDispatcher:
 
 
 class McpDispatcher:
-    """Dispatch via mock Context → async MCP wrapper → _impl().
+    """Dispatch via Client(mcp) — full FastMCP pipeline.
 
-    Identity flows through kwargs to env.call_mcp() → _run_mcp_wrapper(),
-    which pops it and configures the mock Context.
+    Identity flows through kwargs to env.call_mcp() → _run_mcp_client(),
+    which pops it and dispatches via FastMCP in-memory transport.
     """
 
     def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:

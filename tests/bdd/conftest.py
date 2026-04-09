@@ -44,6 +44,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc006_sync_creatives",
     "tests.bdd.steps.domain.uc011_accounts",
     "tests.bdd.steps.domain.admin_accounts",
+    "tests.bdd.steps.domain.compat_normalization",
 ]
 
 # ---------------------------------------------------------------------------
@@ -252,6 +253,25 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     break
 
         # UC-011 REST: per-request auth implemented (salesagent-xms)
+
+        # FIXME(#1184): UC-011 MCP — billing policy and approval mode not populated
+        # from DB. The real MCP auth chain resolves identity from DB which doesn't
+        # carry supported_billing or account_approval_mode. These are tenant-level
+        # configs that need a DB migration to persist.
+        _UC011_MCP_IDENTITY_XFAIL: set[str] = {
+            "T-UC-011-ext-c-rejected",  # billing rejection
+            "T-UC-011-ext-c-mixed",  # per-account billing rejection
+            "T-UC-011-ext-d-pending-url",  # approval mode pending
+            "T-UC-011-ext-d-pending-message",  # approval mode pending
+            "T-UC-011-atomic-all-failed",  # all-failed (uses billing rejection)
+        }
+        if is_mcp and (marker_names & _UC011_MCP_IDENTITY_XFAIL):
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="MCP: billing/approval config not in DB — needs #1184",
+                    strict=True,
+                )
+            )
 
         # FIXME(salesagent-9d5): UC-006 REST — account resolution through CreativeSyncEnv
         # REST route for sync_creatives exists but account kwarg may not be
@@ -584,6 +604,8 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
         return "UC-011"
     if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
         return "ADMIN"
+    if any(t.startswith("T-COMPAT") for t in marker_names):
+        return "COMPAT"
     return None
 
 
@@ -692,6 +714,14 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         # BDD suite always uses integration mode (Flask test_client).
         # E2E mode (requests.Session + Docker) is tested separately.
         with AdminAccountEnv(mode="integration") as env:
+            ctx["env"] = env
+            yield
+
+    elif uc == "COMPAT":
+        request.getfixturevalue("integration_db")
+        from tests.harness.product import ProductEnv
+
+        with ProductEnv() as env:
             ctx["env"] = env
             yield
 

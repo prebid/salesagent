@@ -87,24 +87,12 @@ class CreativeFormatsEnv(IntegrationEnv):
         return _list_creative_formats_impl(**kwargs)
 
     def call_a2a(self, **kwargs: Any) -> ListCreativeFormatsResponse:
-        """Call list_creative_formats_raw (A2A wrapper)."""
-        from src.core.tools.creative_formats import list_creative_formats_raw
-
-        self._commit_factory_data()
-        kwargs.setdefault("identity", self.identity)
-        kwargs.setdefault("req", None)
-        return list_creative_formats_raw(**kwargs)
+        """Call list_creative_formats via real AdCPRequestHandler — full A2A pipeline."""
+        return self._run_a2a_handler("list_creative_formats", ListCreativeFormatsResponse, **kwargs)
 
     def call_mcp(self, **kwargs: Any) -> ListCreativeFormatsResponse:
-        """Call list_creative_formats MCP wrapper with mock Context.
-
-        Pops 'req' kwarg (MCP wrapper takes individual params, not req object).
-        """
-        from src.core.tools.creative_formats import list_creative_formats
-
-        # MCP wrapper takes individual params, not 'req'
-        kwargs.pop("req", None)
-        return self._run_mcp_wrapper(list_creative_formats, ListCreativeFormatsResponse, **kwargs)
+        """Call list_creative_formats via Client(mcp) — full pipeline dispatch."""
+        return self._run_mcp_client("list_creative_formats", ListCreativeFormatsResponse, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert kwargs to ListCreativeFormatsBody shape for REST POST.

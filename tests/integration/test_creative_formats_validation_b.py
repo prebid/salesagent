@@ -15,7 +15,6 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from src.core.exceptions import AdCPValidationError
 from src.core.schemas import ListCreativeFormatsRequest
 from src.core.validation_helpers import format_validation_error
 from tests.factories import TenantFactory
@@ -73,19 +72,18 @@ class TestNonIntegerDimensionValues:
         assert any("min_height" in p for p in field_paths)
 
     def test_dimension_type_mismatch_via_mcp_wrapper(self, integration_db):
-        """Covers: UC-005-EXT-B-03 — MCP wrapper catches dimension type mismatch.
+        """Covers: UC-005-EXT-B-03 — MCP rejects dimension type mismatch.
 
-        When the MCP wrapper constructs ListCreativeFormatsRequest with an
-        invalid max_width, it catches the ValidationError and raises
-        AdCPValidationError with a formatted message identifying the field.
+        Invalid max_width is rejected regardless of which layer catches it.
         """
+        from tests.harness.assertions import assert_rejected
+        from tests.harness.transport import Transport
+
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
             env.set_registry_formats([])
-            with pytest.raises(AdCPValidationError, match="max_width") as exc_info:
-                env.call_mcp(max_width="not_a_number")
-
-            assert "VALIDATION_ERROR" == exc_info.value.error_code
+            result = env.call_via(Transport.MCP, max_width="not_a_number")
+            assert_rejected(result, field="max_width", reason="valid integer")
 
     def test_formatted_error_identifies_dimension_field(self, integration_db):
         """Covers: UC-005-EXT-B-03 — error message identifies the dimension field.
@@ -219,22 +217,20 @@ class TestMultiFieldValidationErrors:
         assert len(errors) >= 2, f"Expected multiple errors, got {len(errors)}"
 
     def test_mcp_wrapper_multi_field_error_contains_field_details(self, integration_db):
-        """Covers: UC-005-EXT-B-05 — MCP wrapper produces AdCPValidationError with details.
+        """Covers: UC-005-EXT-B-05 — MCP rejects multiple invalid fields.
 
-        When multiple params are invalid, the MCP wrapper catches the ValidationError
-        and wraps it in AdCPValidationError with per-field detail in the message.
+        Both invalid field names are present in the rejection error.
         """
+        from tests.harness.assertions import assert_rejected
+        from tests.harness.transport import Transport
+
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
             env.set_registry_formats([])
-            with pytest.raises(AdCPValidationError) as exc_info:
-                env.call_mcp(
-                    max_width="not_a_number",
-                    min_height="also_invalid",
-                )
-
-            error = exc_info.value
-            assert error.error_code == "VALIDATION_ERROR"
-            # Message should contain both invalid field names
-            assert "max_width" in error.message
-            assert "min_height" in error.message
+            result = env.call_via(
+                Transport.MCP,
+                max_width="not_a_number",
+                min_height="also_invalid",
+            )
+            assert_rejected(result, field="max_width", reason="valid integer")
+            assert_rejected(result, field="min_height", reason="valid integer")

@@ -65,9 +65,6 @@ from src.core.tools import (
     get_media_buy_delivery_raw as core_get_media_buy_delivery_tool,
 )
 from src.core.tools import (
-    get_media_buys_raw as core_get_media_buys_tool,
-)
-from src.core.tools import (
     get_products_raw as core_get_products_tool,
 )
 from src.core.tools import (
@@ -105,10 +102,13 @@ logger = logging.getLogger(__name__)
 def _adcp_to_a2a_error(exc: AdCPError) -> InvalidParamsError | InvalidRequestError | InternalError:
     """Translate AdCPError to an A2A SDK error type preserving semantics.
 
-    The recovery classification is forwarded in the ``data`` field so that
-    buyer agents can decide whether to retry, fix, or abandon the request.
+    The recovery classification, error_code, and details are forwarded in the
+    ``data`` field so that buyer agents (and test harness unwrapping) can
+    reconstruct the original AdCPError.
     """
-    data: dict[str, str] = {"recovery": exc.recovery}
+    data: dict[str, Any] = {"recovery": exc.recovery, "error_code": exc.error_code}
+    if exc.details:
+        data["details"] = exc.details
     if isinstance(exc, (AdCPValidationError, AdCPConflictError, AdCPBudgetExhaustedError)):
         return InvalidParamsError(message=exc.message, data=data)
     elif isinstance(exc, (AdCPAuthenticationError, AdCPAuthorizationError)):
@@ -1321,6 +1321,12 @@ class AdCPRequestHandler(RequestHandler):
                 else push_notification_config
             )
             parameters = {**parameters, "push_notification_config": pnc_dict}
+        # Normalize deprecated fields before any handler sees the parameters
+        from src.core.request_compat import normalize_request_params
+
+        compat_result = normalize_request_params(skill_name, parameters)
+        parameters = compat_result.params
+
         logger.info(f"Handling explicit skill: {skill_name} with parameters: {list(parameters.keys())}")
 
         # Validate identity for non-discovery skills
@@ -1374,6 +1380,10 @@ class AdCPRequestHandler(RequestHandler):
             # Translate AdCPError to protocol-specific A2A error
             logger.error(f"AdCPError in skill handler {skill_name}: {e.error_code} - {e.message}")
             raise ServerError(_adcp_to_a2a_error(e))
+        except ValueError as e:
+            # Same translation as MCP: ValueError → VALIDATION_ERROR
+            logger.error(f"ValueError in skill handler {skill_name}: {e}")
+            raise ServerError(InvalidParamsError(message=str(e)))
         except Exception as e:
             logger.error(f"Error in skill handler {skill_name}: {e}")
             raise ServerError(InternalError(message=f"Skill {skill_name} failed: {str(e)}"))
@@ -1505,6 +1515,8 @@ class AdCPRequestHandler(RequestHandler):
 
             return response
 
+        except AdCPError:
+            raise  # Let _handle_explicit_skill translate to proper A2A error
         except Exception as e:
             logger.error(f"Error in create_media_buy skill: {e}")
             raise ServerError(InternalError(message=f"Failed to create media buy: {str(e)}"))
@@ -1553,11 +1565,14 @@ class AdCPRequestHandler(RequestHandler):
                 validation_mode=parameters.get("validation_mode", "strict"),
                 push_notification_config=parameters.get("push_notification_config"),
                 context=context,
+                account=parameters.get("account"),
                 identity=identity,
             )
 
             return response
 
+        except AdCPError:
+            raise  # Let _handle_explicit_skill translate to proper A2A error
         except Exception as e:
             logger.error(f"Error in sync_creatives skill: {e}")
             raise ServerError(InternalError(message=f"Failed to sync creatives: {str(e)}"))
@@ -1588,6 +1603,8 @@ class AdCPRequestHandler(RequestHandler):
 
             return response
 
+        except AdCPError:
+            raise  # Let _handle_explicit_skill translate to proper A2A error
         except Exception as e:
             logger.error(f"Error in list_creatives skill: {e}")
             raise ServerError(InternalError(message=f"Failed to list creatives: {str(e)}"))
@@ -1614,6 +1631,8 @@ class AdCPRequestHandler(RequestHandler):
             # response = core_create_creative_tool(...)
             raise ServerError(UnsupportedOperationError(message="create_creative skill not yet implemented"))
 
+        except AdCPError:
+            raise  # Let _handle_explicit_skill translate to proper A2A error
         except Exception as e:
             logger.error(f"Error in create_creative skill: {e}")
             raise ServerError(InternalError(message=f"Failed to create creative: {str(e)}"))
@@ -1635,6 +1654,8 @@ class AdCPRequestHandler(RequestHandler):
             # )
             raise ServerError(UnsupportedOperationError(message="get_creatives skill not yet implemented"))
 
+        except AdCPError:
+            raise  # Let _handle_explicit_skill translate to proper A2A error
         except Exception as e:
             logger.error(f"Error in get_creatives skill: {e}")
             raise ServerError(InternalError(message=f"Failed to get creatives: {str(e)}"))
@@ -1670,6 +1691,8 @@ class AdCPRequestHandler(RequestHandler):
             # )
             raise ServerError(UnsupportedOperationError(message="assign_creative skill not yet implemented"))
 
+        except AdCPError:
+            raise  # Let _handle_explicit_skill translate to proper A2A error
         except Exception as e:
             logger.error(f"Error in assign_creative skill: {e}")
             raise ServerError(InternalError(message=f"Failed to assign creative: {str(e)}"))
@@ -1714,6 +1737,8 @@ class AdCPRequestHandler(RequestHandler):
 
             return response
 
+        except AdCPError:
+            raise  # Let _handle_explicit_skill translate to proper A2A error
         except Exception as e:
             logger.error(f"Error in get_adcp_capabilities skill: {e}")
             raise ServerError(InternalError(message=f"Unable to retrieve AdCP capabilities: {str(e)}"))
@@ -1733,6 +1758,8 @@ class AdCPRequestHandler(RequestHandler):
             req = ListCreativeFormatsRequest(
                 type=parameters.get("type"),
                 format_ids=parameters.get("format_ids"),
+                output_format_ids=parameters.get("output_format_ids"),
+                input_format_ids=parameters.get("input_format_ids"),
                 is_responsive=parameters.get("is_responsive"),
                 name_search=parameters.get("name_search"),
                 asset_types=parameters.get("asset_types"),
@@ -1748,6 +1775,8 @@ class AdCPRequestHandler(RequestHandler):
 
             return response
 
+        except AdCPError:
+            raise  # Let _handle_explicit_skill translate to proper A2A error
         except Exception as e:
             logger.error(f"Error in list_creative_formats skill: {e}")
             raise ServerError(InternalError(message=f"Unable to retrieve creative formats: {str(e)}"))
@@ -1762,6 +1791,7 @@ class AdCPRequestHandler(RequestHandler):
 
         request = ListAccountsRequest(
             status=parameters.get("status"),
+            pagination=parameters.get("pagination"),
             sandbox=parameters.get("sandbox"),
             context=parameters.get("context"),
         )
@@ -1813,6 +1843,8 @@ class AdCPRequestHandler(RequestHandler):
 
             return response
 
+        except AdCPError:
+            raise  # Let _handle_explicit_skill translate to proper A2A error
         except Exception as e:
             logger.error(f"Error in list_authorized_properties skill: {e}")
             raise ServerError(InternalError(message=f"Unable to retrieve authorized properties: {str(e)}"))
@@ -1872,25 +1904,27 @@ class AdCPRequestHandler(RequestHandler):
 
             return response
 
+        except AdCPError:
+            raise  # Let _handle_explicit_skill translate to proper A2A error
         except Exception as e:
             logger.error(f"Error in update_media_buy skill: {e}")
             raise ServerError(InternalError(message=f"Unable to update media buy: {str(e)}"))
 
-    async def _handle_get_media_buys_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
+    async def _handle_get_media_buys_skill(self, parameters: dict, identity: ResolvedIdentity) -> Any:
         """Handle get_media_buys skill invocation."""
         try:
-            response = core_get_media_buys_tool(
-                media_buy_ids=parameters.get("media_buy_ids"),
-                buyer_refs=parameters.get("buyer_refs"),
-                status_filter=parameters.get("status_filter"),
-                include_snapshot=parameters.get("include_snapshot", False),
-                account_id=parameters.get("account_id"),
-                context=parameters.get("context"),
-                identity=identity,
-            )
+            from src.core.schemas import GetMediaBuysRequest
+            from src.core.tools.media_buy_list import _get_media_buys_impl
+
+            params = {**parameters}
+            include_snapshot = params.pop("include_snapshot", False)
+            req = GetMediaBuysRequest.model_validate(params)
+            response = _get_media_buys_impl(req, identity=identity, include_snapshot=include_snapshot)
 
             return response
 
+        except AdCPError:
+            raise  # Let _handle_explicit_skill translate to proper A2A error
         except Exception as e:
             logger.error(f"Error in get_media_buys skill: {e}")
             raise ServerError(InternalError(message=f"Unable to get media buys: {str(e)}"))
@@ -1936,6 +1970,8 @@ class AdCPRequestHandler(RequestHandler):
 
             return response
 
+        except AdCPError:
+            raise  # Let _handle_explicit_skill translate to proper A2A error
         except Exception as e:
             logger.error(f"Error in get_media_buy_delivery skill: {e}")
             raise ServerError(InternalError(message=f"Unable to get media buy delivery: {str(e)}"))
@@ -1970,6 +2006,8 @@ class AdCPRequestHandler(RequestHandler):
 
             return response
 
+        except AdCPError:
+            raise  # Let _handle_explicit_skill translate to proper A2A error
         except Exception as e:
             logger.error(f"Error in update_performance_index skill: {e}")
             raise ServerError(InternalError(message=f"Unable to update performance index: {str(e)}"))
