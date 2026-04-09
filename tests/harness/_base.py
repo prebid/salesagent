@@ -1061,6 +1061,35 @@ class IntegrationEnv(BaseTestEnv):
 
     use_real_db = True
 
+    # -- Repository-based query helpers (work across all transports) --------
+
+    def get_media_buy(self, media_buy_id: str) -> Any:
+        """Query a media buy by ID through the repository."""
+        from src.core.database.repositories.media_buy import MediaBuyRepository
+
+        repo = MediaBuyRepository(self._session, self._tenant_id)
+        mb = repo.get_by_id(media_buy_id)
+        assert mb is not None, f"Media buy {media_buy_id} not found in DB"
+        return mb
+
+    def get_audit_logs(self, operation_substring: str | None = None) -> list[Any]:
+        """Query audit logs for this env's tenant through the repository."""
+        from src.core.database.repositories.audit_log import AuditLogRepository
+
+        repo = AuditLogRepository(self._session, self._tenant_id)
+        if operation_substring:
+            return repo.find_by_operation(operation_substring)
+        return repo.list_by_tenant()
+
+    def get_workflow_steps(self) -> list[Any]:
+        """Query workflow steps for this env's tenant through the repository."""
+        from src.core.database.repositories.workflow import WorkflowRepository
+
+        repo = WorkflowRepository(self._session, self._tenant_id)
+        return repo.list_by_tenant()
+
+    # -- Setup helpers -------------------------------------------------------
+
     def setup_default_data(self) -> tuple[Any, Any]:
         """Create default tenant + principal via factories.
 
