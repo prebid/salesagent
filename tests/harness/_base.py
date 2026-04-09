@@ -1088,6 +1088,13 @@ class IntegrationEnv(BaseTestEnv):
         repo = WorkflowRepository(self._session, self._tenant_id)
         return repo.list_by_tenant()
 
+    def get_currency_limit(self, currency_code: str = "USD") -> Any:
+        """Query currency limit through the repository."""
+        from src.core.database.repositories.currency_limit import CurrencyLimitRepository
+
+        repo = CurrencyLimitRepository(self._session, self._tenant_id)
+        return repo.get_for_currency(currency_code)
+
     # -- Setup helpers -------------------------------------------------------
 
     def setup_default_data(self) -> tuple[Any, Any]:

@@ -207,30 +207,27 @@ def _dispatch_list_tasks_e2e(ctx: dict, **params: Any) -> dict:
     Unsupported params (sort_field, domain, task_status, task_type) raise
     TypeError to preserve the same xfail behavior as in-process mode.
     """
-    from tests.bdd.steps._harness_db import db_session
-
     # Replicate list_tasks() parameter validation: raise TypeError for
     # unsupported params (same behavior as calling list_tasks() in-process).
     _supported = {"status", "object_type", "object_id", "limit", "offset"}
     unsupported = set(params.keys()) - _supported
     if unsupported:
-        # Produce the same TypeError that Python would raise for unexpected kwargs
         raise TypeError(f"list_tasks() got an unexpected keyword argument '{next(iter(unsupported))}'")
 
     env = ctx["env"]
     env._commit_factory_data()
 
-    with db_session(ctx) as session:
-        from src.core.database.repositories.workflow import WorkflowRepository
+    # Use harness to get workflow steps (correct DB in both modes)
+    from src.core.database.repositories.workflow import WorkflowRepository
 
-        repo = WorkflowRepository(session, env.identity.tenant_id)
-        steps = repo.list_by_tenant(
-            status=params.get("status"),
-            object_type=params.get("object_type"),
-            object_id=params.get("object_id"),
-            offset=params.get("offset", 0),
-            limit=params.get("limit", 20),
-        )
+    repo = WorkflowRepository(env._session, env.identity.tenant_id)
+    steps = repo.list_by_tenant(
+        status=params.get("status"),
+        object_type=params.get("object_type"),
+        object_id=params.get("object_id"),
+        offset=params.get("offset", 0),
+        limit=params.get("limit", 20),
+    )
         # Return a dict matching list_tasks() response shape
         return {
             "tasks": [

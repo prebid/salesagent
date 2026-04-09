@@ -25,26 +25,16 @@ def given_tenant_has_min_order(ctx: dict) -> None:
     TenantFactory auto-creates CurrencyLimit with min_package_budget=100.00,
     so this step verifies the precondition rather than creating new data.
     """
-    from sqlalchemy import select
-
-    from src.core.database.models import CurrencyLimit
-    from tests.bdd.steps._harness_db import db_session
-
     env = ctx["env"]
     env._commit_factory_data()
 
-    tenant = ctx.get("tenant")
-    assert tenant is not None, "No tenant in ctx — 'the account exists and is active' must run first"
-
-    with db_session(ctx) as session:
-        cl = session.scalars(select(CurrencyLimit).filter_by(tenant_id=tenant.tenant_id)).first()
-        assert cl is not None, (
-            f"No CurrencyLimit found for tenant {tenant.tenant_id} — TenantFactory should auto-create one"
-        )
-        assert cl.min_package_budget is not None and cl.min_package_budget > 0, (
-            f"CurrencyLimit.min_package_budget is {cl.min_package_budget} — expected a positive minimum order size"
-        )
-    # Store for Then step to reference
+    cl = env.get_currency_limit("USD")
+    assert cl is not None, (
+        f"No CurrencyLimit(USD) for tenant {env._tenant_id} — TenantFactory should auto-create one"
+    )
+    assert cl.min_package_budget is not None and cl.min_package_budget > 0, (
+        f"CurrencyLimit.min_package_budget is {cl.min_package_budget} — expected a positive minimum order size"
+    )
     ctx["min_package_budget"] = cl.min_package_budget
 
 
