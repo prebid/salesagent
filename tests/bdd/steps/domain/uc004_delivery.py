@@ -939,6 +939,7 @@ def when_request_no_attribution(ctx: dict, mb_id: str) -> None:
 def when_request_with_attribution(ctx: dict, mb_id: str, aw_json: str) -> None:
     """Request with attribution window."""
     aw = json.loads(aw_json)
+    ctx["attribution_window_request"] = aw
     real_id = _resolve_media_buy_id(ctx, mb_id)
     dispatch_request(ctx, media_buy_ids=[real_id], attribution_window=aw)
 
@@ -1766,14 +1767,51 @@ def then_no_delivery_attempt(ctx: dict) -> None:
 
 @then(parsers.parse('the response packages should include "{field}" breakdown arrays'))
 def then_packages_include_breakdown(ctx: dict, field: str) -> None:
-    """Assert package breakdowns include the named field."""
-    _pending(ctx, "then_packages_include_breakdown")
+    """Assert package breakdowns include the named field as a non-empty list."""
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    deliveries = getattr(resp, "media_buy_deliveries", None) or []
+    assert len(deliveries) > 0, "No delivery data"
+    breakdown_key = f"by_{field}" if not field.startswith("by_") else field
+    total_packages = 0
+    for d_idx, delivery in enumerate(deliveries):
+        packages = getattr(delivery, "by_package", None) or []
+        for p_idx, pkg in enumerate(packages):
+            total_packages += 1
+            pkg_dict = pkg.model_dump() if hasattr(pkg, "model_dump") else pkg.__dict__
+            assert breakdown_key in pkg_dict, (
+                f"Delivery[{d_idx}] package[{p_idx}] missing '{breakdown_key}', fields: {list(pkg_dict.keys())}"
+            )
+            breakdown = pkg_dict[breakdown_key]
+            assert isinstance(breakdown, list), (
+                f"Expected '{breakdown_key}' to be a list, got {type(breakdown).__name__}"
+            )
+            assert len(breakdown) > 0, (
+                f"Delivery[{d_idx}] package[{p_idx}]: '{breakdown_key}' is empty — "
+                f"dimension '{field}' was not populated"
+            )
+    assert total_packages > 0, "No packages found across any delivery"
 
 
 @then(parsers.parse('the response packages should NOT include "{field}" breakdown arrays'))
 def then_packages_exclude_breakdown(ctx: dict, field: str) -> None:
-    """Assert package breakdowns do not include the named field."""
-    _pending(ctx, "then_packages_exclude_breakdown")
+    """Assert package breakdowns do not include the named field (or it is empty/None)."""
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    deliveries = getattr(resp, "media_buy_deliveries", None) or []
+    assert len(deliveries) > 0, "No delivery data"
+    breakdown_key = f"by_{field}" if not field.startswith("by_") else field
+    total_packages = 0
+    for d_idx, delivery in enumerate(deliveries):
+        packages = getattr(delivery, "by_package", None) or []
+        for p_idx, pkg in enumerate(packages):
+            total_packages += 1
+            pkg_dict = pkg.model_dump() if hasattr(pkg, "model_dump") else pkg.__dict__
+            breakdown = pkg_dict.get(breakdown_key)
+            assert breakdown is None or breakdown == [], (
+                f"Delivery[{d_idx}] package[{p_idx}] should NOT include '{breakdown_key}' but got: {breakdown!r}"
+            )
+    assert total_packages > 0, "No packages found across any delivery"
 
 
 @then(parsers.parse('the response packages should include "{field}" with at most {n:d} entries'))
@@ -1841,20 +1879,39 @@ def _find_field_in_response(resp: object, field: str) -> tuple[object, str]:
 
 @then(parsers.parse('"{field}" should be true'))
 def then_field_true(ctx: dict, field: str) -> None:
-    """Assert a boolean field is true."""
-    _pending(ctx, "then_field_true")
+    """Assert a boolean field is true at some level of the response."""
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    value, location = _find_field_in_response(resp, field)
+    assert value is True, f"Expected '{field}' to be True at {location}, got {value!r}"
 
 
 @then(parsers.parse('"{field}" should be false'))
 def then_field_false(ctx: dict, field: str) -> None:
-    """Assert a boolean field is false."""
-    _pending(ctx, "then_field_false")
+    """Assert a boolean field is false at some level of the response."""
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    value, location = _find_field_in_response(resp, field)
+    assert value is False, f"Expected '{field}' to be False at {location}, got {value!r}"
 
 
 @then(parsers.parse('the response packages should include "{field}"'))
 def then_packages_include_field(ctx: dict, field: str) -> None:
-    """Assert packages include the named field."""
-    _pending(ctx, "then_packages_include_field")
+    """Assert packages include the named field (non-None)."""
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    deliveries = getattr(resp, "media_buy_deliveries", None) or []
+    assert len(deliveries) > 0, "No delivery data"
+    total_packages = 0
+    for d_idx, delivery in enumerate(deliveries):
+        packages = getattr(delivery, "by_package", None) or []
+        for p_idx, pkg in enumerate(packages):
+            total_packages += 1
+            pkg_dict = pkg.model_dump() if hasattr(pkg, "model_dump") else pkg.__dict__
+            assert field in pkg_dict and pkg_dict[field] is not None, (
+                f"Delivery[{d_idx}] package[{p_idx}] missing or None '{field}', fields: {list(pkg_dict.keys())}"
+            )
+    assert total_packages > 0, "No packages found across any delivery"
 
 
 @then(parsers.parse('the response packages should include "{f1}" and "{f2}" breakdowns'))
@@ -1904,8 +1961,30 @@ def then_packages_exclude_field(ctx: dict, field: str) -> None:
 
 @then(parsers.parse('the response geo breakdown should use classification system "{system}"'))
 def then_geo_system(ctx: dict, system: str) -> None:
-    """Assert geo breakdown uses the named classification system."""
-    _pending(ctx, "then_geo_system")
+    """Assert geo breakdown entries use the named classification system."""
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    deliveries = getattr(resp, "media_buy_deliveries", None) or []
+    assert len(deliveries) > 0, "No delivery data"
+    found_geo = False
+    for delivery in deliveries:
+        packages = getattr(delivery, "by_package", None) or []
+        for pkg in packages:
+            pkg_dict = pkg.model_dump() if hasattr(pkg, "model_dump") else pkg.__dict__
+            by_geo = pkg_dict.get("by_geo")
+            if by_geo and isinstance(by_geo, list) and len(by_geo) > 0:
+                found_geo = True
+                for entry in by_geo:
+                    entry_dict = (
+                        entry
+                        if isinstance(entry, dict)
+                        else (entry.model_dump() if hasattr(entry, "model_dump") else entry.__dict__)
+                    )
+                    actual_system = entry_dict.get("system")
+                    assert actual_system == system, (
+                        f"Expected geo classification system '{system}', got '{actual_system}' in entry: {entry_dict}"
+                    )
+    assert found_geo, "No by_geo breakdown found in any package — geo dimension not populated in response"
 
 
 @then(parsers.parse('the response placement breakdown should be sorted by "{metric}" (fallback)'))
@@ -1925,20 +2004,59 @@ def then_placement_sorted(ctx: dict, metric: str) -> None:
 
 @then(parsers.parse('the response should include attribution_window with model "{model}"'))
 def then_attribution_model(ctx: dict, model: str) -> None:
-    """Assert attribution window model."""
-    _pending(ctx, "then_attribution_model")
+    """Assert response attribution_window has the specified model."""
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    resp_dict = resp.model_dump() if hasattr(resp, "model_dump") else resp
+    aw = resp_dict.get("attribution_window")
+    assert aw is not None, "Response missing attribution_window"
+    actual_model = aw.get("model") if isinstance(aw, dict) else getattr(aw, "model", None)
+    assert actual_model == model, f"Expected attribution_window model '{model}', got '{actual_model}'"
 
 
 @then("the attribution_window should echo the applied post_click window")
 def then_attribution_echo(ctx: dict) -> None:
-    """Assert attribution window echoes the request."""
-    _pending(ctx, "then_attribution_echo")
+    """Assert attribution_window echoes the requested post_click window."""
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    resp_dict = resp.model_dump() if hasattr(resp, "model_dump") else resp
+    aw = resp_dict.get("attribution_window")
+    assert aw is not None, "Response missing attribution_window — cannot verify echo"
+    aw_dict = aw if isinstance(aw, dict) else (aw.model_dump() if hasattr(aw, "model_dump") else aw)
+    post_click = aw_dict.get("post_click")
+    assert post_click is not None, f"attribution_window missing post_click, got keys: {list(aw_dict.keys())}"
+    # Verify the echoed window matches the request
+    requested_aw = ctx.get("attribution_window_request")
+    if requested_aw and "post_click" in requested_aw:
+        req_pc = requested_aw["post_click"]
+        pc_dict = (
+            post_click
+            if isinstance(post_click, dict)
+            else (post_click.model_dump() if hasattr(post_click, "model_dump") else post_click)
+        )
+        assert pc_dict.get("interval") == req_pc.get("interval"), (
+            f"post_click interval mismatch: expected {req_pc.get('interval')}, got {pc_dict.get('interval')}"
+        )
+        assert pc_dict.get("unit") == req_pc.get("unit"), (
+            f"post_click unit mismatch: expected {req_pc.get('unit')}, got {pc_dict.get('unit')}"
+        )
 
 
 @then("the response should include attribution_window with the seller's platform default")
 def then_attribution_default(ctx: dict) -> None:
-    """Assert attribution window uses platform default."""
-    _pending(ctx, "then_attribution_default")
+    """Assert response includes attribution_window with a platform default model."""
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    resp_dict = resp.model_dump() if hasattr(resp, "model_dump") else resp
+    aw = resp_dict.get("attribution_window")
+    assert aw is not None, (
+        "Response missing attribution_window — seller should return platform default "
+        "when buyer's request is not supported"
+    )
+    aw_dict = aw if isinstance(aw, dict) else (aw.model_dump() if hasattr(aw, "model_dump") else aw)
+    assert "model" in aw_dict and aw_dict["model"] is not None, (
+        f"attribution_window missing required 'model' field, got: {aw_dict}"
+    )
 
 
 @then('the response attribution_window should include "model" field (required)')
@@ -1974,14 +2092,46 @@ def then_attribution_has_model(ctx: dict) -> None:
 
 @then("the response should include attribution_window with the seller's platform default model")
 def then_attribution_default_model(ctx: dict) -> None:
-    """Assert attribution window uses platform default model."""
-    _pending(ctx, "then_attribution_default_model")
+    """Assert response includes attribution_window with a default model.
+
+    When the buyer omits attribution_window, the seller should echo its
+    platform default (BR-RULE-092 INV-4).
+    """
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    resp_dict = resp.model_dump() if hasattr(resp, "model_dump") else resp
+    aw = resp_dict.get("attribution_window")
+    assert aw is not None, (
+        "Response missing attribution_window — seller should echo platform default when buyer omits the field"
+    )
+    aw_dict = aw if isinstance(aw, dict) else (aw.model_dump() if hasattr(aw, "model_dump") else aw)
+    model = aw_dict.get("model")
+    assert model is not None, f"attribution_window missing required 'model' field, got: {aw_dict}"
+    assert isinstance(model, str) and len(model) > 0, f"Expected model to be a non-empty string, got: {model!r}"
 
 
 @then("the response should include attribution_window reflecting campaign-length window")
 def then_attribution_campaign_length(ctx: dict) -> None:
-    """Assert attribution window reflects campaign length."""
-    _pending(ctx, "then_attribution_campaign_length")
+    """Assert attribution_window reflects a campaign-length window.
+
+    With unit=campaign and interval=1, the window spans the full campaign flight
+    (BR-RULE-092 INV-5).
+    """
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    resp_dict = resp.model_dump() if hasattr(resp, "model_dump") else resp
+    aw = resp_dict.get("attribution_window")
+    assert aw is not None, "Response missing attribution_window — should echo campaign-length window"
+    aw_dict = aw if isinstance(aw, dict) else (aw.model_dump() if hasattr(aw, "model_dump") else aw)
+    post_click = aw_dict.get("post_click")
+    assert post_click is not None, f"attribution_window missing post_click for campaign window, got: {aw_dict}"
+    pc_dict = (
+        post_click
+        if isinstance(post_click, dict)
+        else (post_click.model_dump() if hasattr(post_click, "model_dump") else post_click)
+    )
+    assert pc_dict.get("unit") == "campaign", f"Expected post_click unit 'campaign', got '{pc_dict.get('unit')}'"
+    assert pc_dict.get("interval") == 1, f"Expected post_click interval 1, got {pc_dict.get('interval')}"
 
 
 # ── Partial/error delivery assertions ─────────────────────────────
