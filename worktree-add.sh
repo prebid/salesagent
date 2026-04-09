@@ -71,7 +71,7 @@ import socket
 for p in range(8001, 8100):
     try:
         s = socket.socket()
-        s.bind(('127.0.0.1', p))
+        s.bind(('', p))
         s.close()
         print(p)
         break
