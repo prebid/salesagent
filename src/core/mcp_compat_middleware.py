@@ -7,14 +7,14 @@ Runs after MCPAuthMiddleware.
 
 from __future__ import annotations
 
-import json
 import logging
+from typing import Any
 
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.tools.tool import ToolResult
 from mcp.types import CallToolRequestParams
 
-from src.core.request_compat import normalize_request_params, strip_unknown_params
+from src.core.request_compat import deep_strip_to_schema, normalize_request_params, strip_unknown_params
 
 logger = logging.getLogger(__name__)
 
@@ -86,22 +86,29 @@ class RequestCompatMiddleware(Middleware):
             if not self._should_retry(exc):
                 raise
 
-            # Erase complex types via JSON round-trip. This converts typed
-            # Pydantic-validated objects back to plain dicts/lists/primitives,
-            # so the TypeAdapter sees dict[str, Any] instead of CreativeAsset.
-            # Our Pydantic models inside the tool function do the real validation.
-            erased = json.loads(json.dumps(normalized))
+            # Deep-strip unknown fields at every nesting level using the tool's
+            # JSON Schema. TypeAdapter rejects unknown fields in objects with
+            # additionalProperties: false. Our Pydantic models (extra='ignore')
+            # would accept them — stripping bridges the gap.
+            tool_schema = await self._get_tool_schema(context, tool_name)
+            if tool_schema is None:
+                raise  # Can't strip without schema — let the error propagate
+
+            stripped = deep_strip_to_schema(normalized, tool_schema)
+            if stripped == normalized:
+                raise  # Stripping didn't change anything — no point retrying
+
             logger.warning(
-                "TypeAdapter rejected %s — retrying with type-erased arguments (production forward-compat): %s",
+                "TypeAdapter rejected %s — retrying with deep-stripped arguments (production forward-compat): %s",
                 tool_name,
                 _summarize_error(exc),
             )
-            erased_message = CallToolRequestParams(
+            stripped_message = CallToolRequestParams(
                 name=tool_name,
-                arguments=erased,
+                arguments=stripped,
             )
-            erased_context = context.copy(message=erased_message)
-            return await call_next(erased_context)
+            stripped_context = context.copy(message=stripped_message)
+            return await call_next(stripped_context)
 
     @staticmethod
     def _should_retry(exc: Exception) -> bool:
@@ -109,30 +116,44 @@ class RequestCompatMiddleware(Middleware):
 
         Only retries in production mode. Only retries Pydantic ValidationErrors
         that come from FastMCP's TypeAdapter (not from our business logic).
+
+        FastMCP's TypeAdapter raises raw pydantic.ValidationError with title
+        "call[tool_name]". Business logic ValidationErrors (from model construction
+        inside _impl) have the model class name (e.g. "CreateMediaBuyRequest").
         """
         from src.core.config import is_production
 
         if not is_production():
             return False
 
-        # FastMCP wraps TypeAdapter ValidationErrors in ToolError or propagates
-        # pydantic.ValidationError directly depending on the path.
         from pydantic import ValidationError
 
-        if isinstance(exc, ValidationError):
-            return True
+        if not isinstance(exc, ValidationError):
+            return False
 
-        # FastMCP may wrap in its own ToolError
-        from fastmcp.exceptions import ToolError
+        return exc.title.startswith("call[")
 
-        if isinstance(exc, ToolError):
-            error_text = str(exc)
-            # TypeAdapter errors contain these Pydantic signatures
-            return "validation error" in error_text.lower() and (
-                "type=" in error_text or "Field required" in error_text
-            )
+    async def _get_tool_schema(
+        self,
+        context: MiddlewareContext,
+        tool_name: str,
+    ) -> dict[str, Any] | None:
+        """Look up tool's full JSON Schema for deep stripping.
 
-        return False
+        Returns None if lookup fails (defensive — skip stripping).
+        """
+        try:
+            fastmcp_ctx = context.fastmcp_context
+            if fastmcp_ctx is None:
+                return None
+            server = fastmcp_ctx.fastmcp
+            tool = await server.get_tool(tool_name)
+            if tool is None:
+                return None
+            return tool.parameters
+        except Exception:
+            logger.debug("Could not look up schema for %s, skipping deep strip", tool_name)
+            return None
 
     async def _get_known_params(
         self,

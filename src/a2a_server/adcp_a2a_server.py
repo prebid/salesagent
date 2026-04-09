@@ -65,9 +65,6 @@ from src.core.tools import (
     get_media_buy_delivery_raw as core_get_media_buy_delivery_tool,
 )
 from src.core.tools import (
-    get_media_buys_raw as core_get_media_buys_tool,
-)
-from src.core.tools import (
     get_products_raw as core_get_products_tool,
 )
 from src.core.tools import (
@@ -1917,18 +1914,16 @@ class AdCPRequestHandler(RequestHandler):
             logger.error(f"Error in update_media_buy skill: {e}")
             raise ServerError(InternalError(message=f"Unable to update media buy: {str(e)}"))
 
-    async def _handle_get_media_buys_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
+    async def _handle_get_media_buys_skill(self, parameters: dict, identity: ResolvedIdentity) -> Any:
         """Handle get_media_buys skill invocation."""
         try:
-            response = core_get_media_buys_tool(
-                media_buy_ids=parameters.get("media_buy_ids"),
-                buyer_refs=parameters.get("buyer_refs"),
-                status_filter=parameters.get("status_filter"),
-                include_snapshot=parameters.get("include_snapshot", False),
-                account_id=parameters.get("account_id"),
-                context=parameters.get("context"),
-                identity=identity,
-            )
+            from src.core.schemas import GetMediaBuysRequest
+            from src.core.tools.media_buy_list import _get_media_buys_impl
+
+            params = {**parameters}
+            include_snapshot = params.pop("include_snapshot", False)
+            req = GetMediaBuysRequest.model_validate(params)
+            response = _get_media_buys_impl(req, identity=identity, include_snapshot=include_snapshot)
 
             return response
 

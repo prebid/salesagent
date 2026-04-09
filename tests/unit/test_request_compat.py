@@ -62,7 +62,7 @@ class TestBrandManifestTranslation:
 
 
 class TestCampaignRefTranslation:
-    """campaign_ref → buyer_campaign_ref (rename only, all tools)."""
+    """campaign_ref → buyer_campaign_ref (create_media_buy only)."""
 
     def test_campaign_ref_renamed(self):
         result = normalize_request_params(
@@ -71,6 +71,15 @@ class TestCampaignRefTranslation:
         )
         assert result.params["buyer_campaign_ref"] == "camp-123"
         assert "campaign_ref" not in result.params
+
+    def test_campaign_ref_not_renamed_for_other_tools(self):
+        """campaign_ref is deleted but not translated for non-create_media_buy tools."""
+        result = normalize_request_params(
+            "get_media_buys",
+            {"campaign_ref": "camp-123"},
+        )
+        assert "campaign_ref" not in result.params
+        assert "buyer_campaign_ref" not in result.params
 
 
 # ---------------------------------------------------------------------------
