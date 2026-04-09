@@ -210,110 +210,36 @@ def then_protocol_audit_logged(ctx: dict) -> None:
     """Assert the protocol-level audit entry was logged.
 
     Production calls log_tool_activity(identity, 'create_media_buy', ...)
-    at line 3603 of media_buy_create.py. In the harness, the audit mock
-    captures log_operation calls. The first call on the success path is
-    the protocol-level entry.
+    at line 3603 of media_buy_create.py. Transport-aware: in-process checks
+    mock, E2E checks audit_logs table.
     """
-    env = ctx["env"]
-    mock_audit = env.mock["audit"].return_value
+    from tests.bdd.steps._outcome_helpers import assert_audit_logged
 
-    # log_operation is called for: (1) protocol/activity, (2) success/pending/failure
-    assert mock_audit.log_operation.called, (
-        "Expected audit_logger.log_operation to be called for protocol audit entry, but it was never called"
-    )
-    # Verify at least one call has the create_media_buy operation
-    operations = [
-        call.kwargs.get("operation") or (call.args[0] if call.args else None)
-        for call in mock_audit.log_operation.call_args_list
-    ]
-    create_ops = [op for op in operations if op and "create_media_buy" in op]
-    assert len(create_ops) >= 1, (
-        f"Expected at least one log_operation call with 'create_media_buy' operation, got operations: {operations}"
-    )
+    assert_audit_logged(ctx, operation_substring="create_media_buy")
 
 
 @then("the approval decision should be logged")
 def then_approval_logged(ctx: dict) -> None:
     """Assert the approval decision was logged with approval-specific content.
 
-    Production logs approval decisions at two points:
-    - Auto-approved (success path): log_operation(operation='create_media_buy',
-      success=True, details={media_buy_id, total_budget, ...}) at line 3706.
-    - Pending approval: log_operation(operation='create_media_buy_pending_approval',
-      success=True, details={media_buy_id, workflow_step_id, ...}) at line 2212.
-
-    This step verifies approval-SPECIFIC content that distinguishes it from the
-    protocol audit entry (which checks only for operation name presence). The
-    approval log must contain either:
-    - 'create_media_buy_pending_approval' operation (explicitly approval), OR
-    - 'create_media_buy' with success=True AND details containing 'media_buy_id'
-      (the post-approval business activity entry, distinct from protocol activity).
+    Transport-aware: in-process checks mock for approval-specific content,
+    E2E checks audit_logs table.
     """
-    env = ctx["env"]
-    mock_audit = env.mock["audit"].return_value
+    from tests.bdd.steps._outcome_helpers import assert_audit_approval_logged
 
-    assert mock_audit.log_operation.called, (
-        "Expected audit_logger.log_operation to be called for approval decision logging"
-    )
-
-    # Find a call with approval-specific content (not just operation name)
-    approval_call = None
-    for call in mock_audit.log_operation.call_args_list:
-        op = call.kwargs.get("operation") or (call.args[0] if call.args else None)
-
-        # Pending approval path: operation name is explicitly approval-related
-        if op == "create_media_buy_pending_approval":
-            approval_call = call
-            break
-
-        # Auto-approved path: success=True with details containing media_buy_id
-        # This is the post-adapter audit entry at line 3706, NOT the protocol entry.
-        if op == "create_media_buy":
-            success = call.kwargs.get("success")
-            details = call.kwargs.get("details") or {}
-            if success is True and "media_buy_id" in details:
-                approval_call = call
-                break
-
-    assert approval_call is not None, (
-        f"Expected audit log entry with approval-specific content: either "
-        f"operation='create_media_buy_pending_approval', or "
-        f"operation='create_media_buy' with success=True and details.media_buy_id. "
-        f"Got calls: {[c.kwargs for c in mock_audit.log_operation.call_args_list]}"
-    )
+    assert_audit_approval_logged(ctx)
 
 
 @then("the adapter execution should be logged")
 def then_adapter_execution_logged(ctx: dict) -> None:
     """Assert the adapter execution was logged via audit_logger.
 
-    Production logs adapter execution at line 3706 with success=True and
-    details including media_buy_id. This is the business activity feed entry
-    that records the adapter created the order.
+    Transport-aware: in-process checks mock for success=True with details,
+    E2E checks audit_logs table.
     """
-    env = ctx["env"]
-    mock_audit = env.mock["audit"].return_value
+    from tests.bdd.steps._outcome_helpers import assert_audit_adapter_logged
 
-    assert mock_audit.log_operation.called, (
-        "Expected audit_logger.log_operation to be called for adapter execution logging"
-    )
-
-    # Find the log_operation call that records adapter execution (success=True with details)
-    adapter_logged = False
-    for call in mock_audit.log_operation.call_args_list:
-        op = call.kwargs.get("operation") or (call.args[0] if call.args else None)
-        success = call.kwargs.get("success")
-        details = call.kwargs.get("details")
-        if op == "create_media_buy" and success is True and details is not None:
-            # This is the post-adapter success log entry
-            adapter_logged = True
-            break
-
-    assert adapter_logged, (
-        f"Expected audit log entry for adapter execution "
-        f"(operation='create_media_buy', success=True, with details), "
-        f"got: {[c.kwargs for c in mock_audit.log_operation.call_args_list]}"
-    )
+    assert_audit_adapter_logged(ctx)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -379,9 +305,15 @@ def then_budget_validated_against_min_order(ctx: dict) -> None:
     2. Makes a SECOND call with budget below min_package_budget.
     3. Asserts the rejection contains "minimum spend" — proving the
        enforcement mechanism actually fires.
+
+    Transport-aware: dispatches the low-budget request through the harness
+    (call_via for E2E, call_impl for in-process).
     """
+    import uuid
     from copy import deepcopy
     from decimal import Decimal
+
+    from tests.bdd.steps._outcome_helpers import is_e2e
 
     min_budget = ctx.get("min_package_budget")
     assert min_budget is not None, (
@@ -396,8 +328,6 @@ def then_budget_validated_against_min_order(ctx: dict) -> None:
     )
 
     # Step 2: Make a second call with budget below minimum to test enforcement
-    import uuid
-
     from src.core.schemas import CreateMediaBuyRequest
 
     env = ctx["env"]
@@ -414,14 +344,30 @@ def then_budget_validated_against_min_order(ctx: dict) -> None:
 
     low_budget_req = CreateMediaBuyRequest(**request_kwargs)
 
+    # Dispatch transport-aware: E2E goes through HTTP, in-process uses call_impl
     low_budget_error = None
-    try:
-        result = env.call_impl(req=low_budget_req)
-        # Check if the result wraps an error response
-        if hasattr(result, "response") and hasattr(result.response, "errors") and result.response.errors:
-            low_budget_error = result.response.errors[0]
-    except Exception as exc:
-        low_budget_error = exc
+    if is_e2e(ctx):
+        # Use a temporary ctx to capture the second request's outcome
+        tmp_ctx = {"env": env, "transport": ctx["transport"]}
+        if "e2e_config" in ctx:
+            tmp_ctx["e2e_config"] = ctx["e2e_config"]
+        from tests.bdd.steps.generic._dispatch import dispatch_request
+
+        dispatch_request(tmp_ctx, req=low_budget_req)
+        low_budget_error = tmp_ctx.get("error")
+        # Also check if the response wraps an error
+        tmp_resp = tmp_ctx.get("response")
+        if tmp_resp is not None and hasattr(tmp_resp, "response") and hasattr(tmp_resp.response, "errors"):
+            if tmp_resp.response.errors:
+                low_budget_error = tmp_resp.response.errors[0]
+    else:
+        try:
+            result = env.call_impl(req=low_budget_req)
+            # Check if the result wraps an error response
+            if hasattr(result, "response") and hasattr(result.response, "errors") and result.response.errors:
+                low_budget_error = result.response.errors[0]
+        except Exception as exc:
+            low_budget_error = exc
 
     # Step 3: Assert the specific minimum spend rejection
     assert low_budget_error is not None, (

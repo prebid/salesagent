@@ -197,6 +197,56 @@ def _dispatch_list_tasks(env: Any, **params: Any) -> Any:
     return asyncio.run(list_tasks(identity=env.identity, **params))
 
 
+def _dispatch_list_tasks_e2e(ctx: dict, **params: Any) -> dict:
+    """Query workflow_steps directly through the harness DB session for E2E mode.
+
+    In E2E mode, list_tasks() would call get_db_session() which connects to
+    the empty test DB, not Docker's DB. Instead, we query workflow_steps
+    through the harness session (bound to Docker's DB).
+
+    Unsupported params (sort_field, domain, task_status, task_type) raise
+    TypeError to preserve the same xfail behavior as in-process mode.
+    """
+    from tests.bdd.steps._harness_db import db_session
+
+    # Replicate list_tasks() parameter validation: raise TypeError for
+    # unsupported params (same behavior as calling list_tasks() in-process).
+    _supported = {"status", "object_type", "object_id", "limit", "offset"}
+    unsupported = set(params.keys()) - _supported
+    if unsupported:
+        # Produce the same TypeError that Python would raise for unexpected kwargs
+        raise TypeError(f"list_tasks() got an unexpected keyword argument '{next(iter(unsupported))}'")
+
+    env = ctx["env"]
+    env._commit_factory_data()
+
+    with db_session(ctx) as session:
+        from src.core.database.repositories.workflow import WorkflowRepository
+
+        repo = WorkflowRepository(session, env.identity.tenant_id)
+        steps = repo.list_by_tenant(
+            status=params.get("status"),
+            object_type=params.get("object_type"),
+            object_id=params.get("object_id"),
+            offset=params.get("offset", 0),
+            limit=params.get("limit", 20),
+        )
+        # Return a dict matching list_tasks() response shape
+        return {
+            "tasks": [
+                {
+                    "step_id": s.step_id,
+                    "status": s.status,
+                    "operation": s.operation,
+                    "created_at": str(s.created_at) if s.created_at else None,
+                    "updated_at": str(s.updated_at) if s.updated_at else None,
+                }
+                for s in steps
+            ],
+            "total": len(steps),
+        }
+
+
 @when("the Buyer Agent queries the task list")
 def when_query_task_list(ctx: dict) -> None:
     """Call list_tasks with ALL configured params.
@@ -205,12 +255,20 @@ def when_query_task_list(ctx: dict) -> None:
     If production doesn't accept a param (e.g. sort_field, domain),
     the resulting TypeError is stored in ctx["error"] — the real
     production gap surfaces at call time, not via pre-filtering.
+
+    Transport-aware: in E2E mode, queries workflow_steps directly through
+    the harness DB session to avoid hitting the wrong database.
     """
+    from tests.bdd.steps._outcome_helpers import is_e2e
+
     env = ctx["env"]
     params = ctx.get("task_query_params", {})
 
     try:
-        result = _dispatch_list_tasks(env, **params)
+        if is_e2e(ctx):
+            result = _dispatch_list_tasks_e2e(ctx, **params)
+        else:
+            result = _dispatch_list_tasks(env, **params)
         ctx["response"] = result
         ctx["task_list_result"] = result
     except (AdCPError, TypeError, Exception) as exc:

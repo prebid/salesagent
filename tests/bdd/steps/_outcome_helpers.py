@@ -72,3 +72,165 @@ def assert_adapter_executed(ctx: dict) -> object:
         f"Media buy status '{mb.status}' does not confirm adapter execution. Expected one of {executed_statuses}."
     )
     return mb
+
+
+def assert_audit_logged(ctx: dict, *, operation_substring: str = "create_media_buy") -> None:
+    """Verify audit logging occurred -- transport-aware.
+
+    In-process: asserts on mock audit logger calls (fast, precise).
+    E2E: queries audit_logs table through harness DB session.
+    """
+    if is_e2e(ctx):
+        _assert_audit_logged_e2e(ctx, operation_substring)
+    else:
+        _assert_audit_logged_mock(ctx, operation_substring)
+
+
+def _assert_audit_logged_mock(ctx: dict, operation_substring: str) -> list:
+    """Assert audit logger mock was called with the operation (in-process mode)."""
+    env = ctx["env"]
+    mock_audit = env.mock["audit"].return_value
+    assert mock_audit.log_operation.called, (
+        f"Expected audit_logger.log_operation to be called with '{operation_substring}', but it was never called"
+    )
+    operations = [
+        call.kwargs.get("operation") or (call.args[0] if call.args else None)
+        for call in mock_audit.log_operation.call_args_list
+    ]
+    matching = [op for op in operations if op and operation_substring in op]
+    assert matching, (
+        f"Expected at least one log_operation call containing '{operation_substring}', got operations: {operations}"
+    )
+    return mock_audit.log_operation.call_args_list
+
+
+def _assert_audit_logged_e2e(ctx: dict, operation_substring: str) -> None:
+    """Assert audit_logs table has entries with the operation (E2E mode)."""
+    from sqlalchemy import select
+
+    from src.core.database.models import AuditLog
+
+    tenant = ctx.get("tenant")
+    assert tenant is not None, "No tenant in ctx for E2E audit assertion"
+
+    with db_session(ctx) as session:
+        logs = session.scalars(select(AuditLog).filter_by(tenant_id=tenant.tenant_id)).all()
+        matching = [log for log in logs if operation_substring in (log.operation or "")]
+        assert matching, (
+            f"Expected audit_logs entry containing '{operation_substring}' for tenant "
+            f"{tenant.tenant_id}, found {len(logs)} total audit entries with operations: "
+            f"{[log.operation for log in logs]}"
+        )
+
+
+def assert_audit_approval_logged(ctx: dict) -> None:
+    """Verify approval decision was logged -- transport-aware.
+
+    In-process: checks mock for approval-specific content.
+    E2E: checks audit_logs for approval-specific entries.
+    """
+    if is_e2e(ctx):
+        _assert_audit_approval_e2e(ctx)
+    else:
+        _assert_audit_approval_mock(ctx)
+
+
+def _assert_audit_approval_mock(ctx: dict) -> None:
+    """Assert approval-specific audit log call exists (in-process mode)."""
+    env = ctx["env"]
+    mock_audit = env.mock["audit"].return_value
+    assert mock_audit.log_operation.called, (
+        "Expected audit_logger.log_operation to be called for approval decision logging"
+    )
+    for call in mock_audit.log_operation.call_args_list:
+        op = call.kwargs.get("operation") or (call.args[0] if call.args else None)
+        if op == "create_media_buy_pending_approval":
+            return
+        if op == "create_media_buy":
+            success = call.kwargs.get("success")
+            details = call.kwargs.get("details") or {}
+            if success is True and "media_buy_id" in details:
+                return
+    raise AssertionError(
+        f"Expected audit log entry with approval-specific content: either "
+        f"operation='create_media_buy_pending_approval', or "
+        f"operation='create_media_buy' with success=True and details.media_buy_id. "
+        f"Got calls: {[c.kwargs for c in mock_audit.log_operation.call_args_list]}"
+    )
+
+
+def _assert_audit_approval_e2e(ctx: dict) -> None:
+    """Assert approval-specific audit log exists in DB (E2E mode)."""
+    from sqlalchemy import select
+
+    from src.core.database.models import AuditLog
+
+    tenant = ctx.get("tenant")
+    assert tenant is not None, "No tenant in ctx for E2E audit assertion"
+
+    with db_session(ctx) as session:
+        logs = session.scalars(select(AuditLog).filter_by(tenant_id=tenant.tenant_id)).all()
+        for log in logs:
+            if log.operation == "create_media_buy_pending_approval":
+                return
+            if log.operation == "create_media_buy" and log.success is True:
+                details = log.details or {}
+                if "media_buy_id" in details:
+                    return
+        raise AssertionError(
+            f"Expected audit_logs entry with approval-specific content for tenant "
+            f"{tenant.tenant_id}, found operations: {[(log.operation, log.success) for log in logs]}"
+        )
+
+
+def assert_audit_adapter_logged(ctx: dict) -> None:
+    """Verify adapter execution was logged -- transport-aware.
+
+    In-process: checks mock for success=True with details.
+    E2E: checks audit_logs for success entries with details.
+    """
+    if is_e2e(ctx):
+        _assert_audit_adapter_e2e(ctx)
+    else:
+        _assert_audit_adapter_mock(ctx)
+
+
+def _assert_audit_adapter_mock(ctx: dict) -> None:
+    """Assert adapter execution audit log call exists (in-process mode)."""
+    env = ctx["env"]
+    mock_audit = env.mock["audit"].return_value
+    assert mock_audit.log_operation.called, (
+        "Expected audit_logger.log_operation to be called for adapter execution logging"
+    )
+    for call in mock_audit.log_operation.call_args_list:
+        op = call.kwargs.get("operation") or (call.args[0] if call.args else None)
+        success = call.kwargs.get("success")
+        details = call.kwargs.get("details")
+        if op == "create_media_buy" and success is True and details is not None:
+            return
+    raise AssertionError(
+        f"Expected audit log entry for adapter execution "
+        f"(operation='create_media_buy', success=True, with details), "
+        f"got: {[c.kwargs for c in mock_audit.log_operation.call_args_list]}"
+    )
+
+
+def _assert_audit_adapter_e2e(ctx: dict) -> None:
+    """Assert adapter execution audit log exists in DB (E2E mode)."""
+    from sqlalchemy import select
+
+    from src.core.database.models import AuditLog
+
+    tenant = ctx.get("tenant")
+    assert tenant is not None, "No tenant in ctx for E2E audit assertion"
+
+    with db_session(ctx) as session:
+        logs = session.scalars(select(AuditLog).filter_by(tenant_id=tenant.tenant_id)).all()
+        for log in logs:
+            if log.operation == "create_media_buy" and log.success is True and log.details is not None:
+                return
+        raise AssertionError(
+            f"Expected audit_logs entry for adapter execution "
+            f"(operation='create_media_buy', success=True, with details) for tenant "
+            f"{tenant.tenant_id}, found: {[(log.operation, log.success) for log in logs]}"
+        )
