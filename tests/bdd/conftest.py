@@ -401,6 +401,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         is_mcp = "[mcp]" in nodeid or "[mcp-" in nodeid
         is_a2a = "[a2a]" in nodeid or "[a2a-" in nodeid
         is_rest = "[rest]" in nodeid or "[rest-" in nodeid
+        is_e2e_rest = "[e2e_rest]" in nodeid or "[e2e_rest-" in nodeid
 
         # Transport-specific xfails: MCP wrappers don't accept certain filter params
         if is_mcp:
@@ -450,12 +451,23 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         if is_rest and any(t.startswith("T-UC-006") for t in marker_names) and "account" in marker_names:
             item.add_marker(pytest.mark.xfail(reason="REST route doesn't forward account param", strict=False))
 
-        # Transport-specific xfails: REST drops all filter params
-        if is_rest:
+        # Transport-specific xfails: REST drops all filter params.
+        # E2E_REST has the same gap — Docker's REST endpoint also drops filters.
+        # FIXME: filed as production bug — REST endpoint needs filter param support.
+        if is_rest or is_e2e_rest:
             for tag in _REST_XFAIL_TAGS:
                 if tag in marker_names:
                     item.add_marker(pytest.mark.xfail(reason="REST endpoint drops filter params", strict=True))
                     break
+
+        # E2E_REST: Docker always has the creative agent — can't test empty catalog
+        if is_e2e_rest and "T-UC-005-empty-catalog" in marker_names:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="E2E Docker always has creative agents — cannot test empty catalog",
+                    strict=True,
+                )
+            )
 
         # FIXME(salesagent-vov): UC-019 REST — REST endpoint returns Method Not Allowed
         # for get_media_buys, so all REST parametrizations fail.
