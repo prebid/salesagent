@@ -574,8 +574,17 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
                 break  # One xfail per scenario is sufficient
 
-        # Graduated: salesagent-9vgz.1 workflow_step_id — fixed in f2cd7a1d
-        # (propagated serializer context through CreateMediaBuyResult._serialize)
+        # workflow_step_id is an internal field (exclude=True in schema).
+        # It should NOT be exposed through any transport — the Gherkin step
+        # "the response should include a workflow_step_id" tests a non-AdCP field.
+        # xfail until the feature file is corrected to not assert on internal fields.
+        if "T-UC-002-alt-manual" in marker_names:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="workflow_step_id is internal (exclude=True), not an AdCP response field",
+                    strict=True,
+                )
+            )
 
         # --- UC-005: disclosure/asset scenarios with partial impl ---
         # FIXME(beads-dul): disclosure_positions and brief/catalog asset types
