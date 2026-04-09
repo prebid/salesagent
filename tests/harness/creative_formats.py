@@ -140,10 +140,12 @@ class CreativeFormatsEnv(IntegrationEnv):
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert kwargs to ListCreativeFormatsBody shape for REST POST.
 
-        Returns empty dict intentionally: ListCreativeFormatsBody
-        (src/routes/api_v1.py) only defines ``adcp_version: str = "1.0.0"``
-        with no user-facing parameters. All kwargs are dropped.
+        Serializes filter parameters from the request object (if present)
+        or from kwargs into the JSON body for the REST endpoint.
         """
+        req = kwargs.get("req")
+        if req is not None and hasattr(req, "model_dump"):
+            return req.model_dump(mode="json", exclude_none=True)
         return {}
 
     def parse_rest_response(self, data: dict[str, Any]) -> ListCreativeFormatsResponse:
