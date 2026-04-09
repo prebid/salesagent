@@ -228,20 +228,20 @@ def _dispatch_list_tasks_e2e(ctx: dict, **params: Any) -> dict:
         offset=params.get("offset", 0),
         limit=params.get("limit", 20),
     )
-        # Return a dict matching list_tasks() response shape
-        return {
-            "tasks": [
-                {
-                    "step_id": s.step_id,
-                    "status": s.status,
-                    "operation": s.operation,
-                    "created_at": str(s.created_at) if s.created_at else None,
-                    "updated_at": str(s.updated_at) if s.updated_at else None,
-                }
-                for s in steps
-            ],
-            "total": len(steps),
-        }
+    # Return a dict matching list_tasks() response shape
+    return {
+        "tasks": [
+            {
+                "step_id": s.step_id,
+                "status": s.status,
+                "operation": s.operation,
+                "created_at": str(s.created_at) if s.created_at else None,
+                "updated_at": str(s.updated_at) if s.updated_at else None,
+            }
+            for s in steps
+        ],
+        "total": len(steps),
+    }
 
 
 @when("the Buyer Agent queries the task list")

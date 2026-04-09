@@ -29,9 +29,7 @@ def given_tenant_has_min_order(ctx: dict) -> None:
     env._commit_factory_data()
 
     cl = env.get_currency_limit("USD")
-    assert cl is not None, (
-        f"No CurrencyLimit(USD) for tenant {env._tenant_id} — TenantFactory should auto-create one"
-    )
+    assert cl is not None, f"No CurrencyLimit(USD) for tenant {env._tenant_id} — TenantFactory should auto-create one"
     assert cl.min_package_budget is not None and cl.min_package_budget > 0, (
         f"CurrencyLimit.min_package_budget is {cl.min_package_budget} — expected a positive minimum order size"
     )

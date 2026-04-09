@@ -69,10 +69,7 @@ def assert_audit_logged(ctx: dict, *, operation_substring: str = "create_media_b
     if is_e2e(ctx):
         env = ctx["env"]
         logs = env.get_audit_logs(operation_substring)
-        assert logs, (
-            f"Expected audit_logs entry containing '{operation_substring}' "
-            f"for tenant {env._tenant_id}"
-        )
+        assert logs, f"Expected audit_logs entry containing '{operation_substring}' for tenant {env._tenant_id}"
     else:
         _assert_audit_logged_mock(ctx, operation_substring)
 
@@ -100,12 +97,10 @@ def assert_audit_approval_logged(ctx: dict) -> None:
         env = ctx["env"]
         logs = env.get_audit_logs()
         found = any("pending_approval" in (log.operation or "") for log in logs) or any(
-            "create_media_buy" in (log.operation or "") and log.success is True
-            for log in logs
+            "create_media_buy" in (log.operation or "") and log.success is True for log in logs
         )
         assert found, (
-            f"Expected audit entry for approval decision, "
-            f"found: {[(log.operation, log.success) for log in logs]}"
+            f"Expected audit entry for approval decision, found: {[(log.operation, log.success) for log in logs]}"
         )
     else:
         _assert_audit_approval_mock(ctx)

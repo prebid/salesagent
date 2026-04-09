@@ -17,15 +17,8 @@ class AuditLogRepository:
 
     def list_by_tenant(self) -> list[AuditLog]:
         """Return all audit logs for the tenant."""
-        return list(
-            self.session.scalars(
-                select(AuditLog).filter_by(tenant_id=self.tenant_id)
-            ).all()
-        )
+        return list(self.session.scalars(select(AuditLog).filter_by(tenant_id=self.tenant_id)).all())
 
     def find_by_operation(self, operation_substring: str) -> list[AuditLog]:
         """Return audit logs whose operation contains the substring."""
-        return [
-            log for log in self.list_by_tenant()
-            if operation_substring in (log.operation or "")
-        ]
+        return [log for log in self.list_by_tenant() if operation_substring in (log.operation or "")]
