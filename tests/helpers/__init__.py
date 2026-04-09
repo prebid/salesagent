@@ -16,13 +16,14 @@ def assert_effective_properties_normalized(
     3. Length matches (no entries dropped or added)
     """
     assert len(effective) == len(raw), f"Length mismatch: {len(effective)} != {len(raw)}"
-    for i, (eff, orig) in enumerate(zip(effective, raw)):
+    for i, (eff, orig) in enumerate(zip(effective, raw, strict=True)):
         for key, value in orig.items():
             assert key in eff, f"[{i}] Missing key {key!r} from original"
             assert eff[key] == value, f"[{i}] {key!r}: {eff[key]!r} != {value!r}"
         assert eff.get("selection_type") == expected_selection_type, (
             f"[{i}] selection_type: {eff.get('selection_type')!r} != {expected_selection_type!r}"
         )
+
 
 from tests.helpers.adcp_factories import (
     create_minimal_product,

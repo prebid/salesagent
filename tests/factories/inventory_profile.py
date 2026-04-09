@@ -27,5 +27,7 @@ class InventoryProfileFactory(factory.alchemy.SQLAlchemyModelFactory):
         lambda: [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}]
     )
     publisher_properties = factory.LazyFunction(
-        lambda: [{"publisher_domain": "test.example.com", "property_tags": ["all_inventory"], "selection_type": "by_tag"}]
+        lambda: [
+            {"publisher_domain": "test.example.com", "property_tags": ["all_inventory"], "selection_type": "by_tag"}
+        ]
     )

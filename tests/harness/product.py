@@ -81,20 +81,22 @@ class ProductEnv(ProductMixin, IntegrationEnv):
     def _configure_mocks(self) -> None:
         self._configure_product_mocks()
 
-    async def call_impl_async(self, **kwargs: Any) -> GetProductsResponse:
-        """Call _get_products_impl with real DB (async version).
+    def call_impl(self, **kwargs: Any) -> Any:  # type: ignore[override]
+        """Call _get_products_impl — async-aware sync bridge.
 
-        For use in @pytest.mark.asyncio tests with ``await``.
+        ProductMixin.call_impl is async. This bridge detects the calling context:
+        - Async (``await env.call_impl(...)``): returns the coroutine for awaiting
+        - Sync (BDD steps, ImplDispatcher): uses ``asyncio.run()``
         """
-        return await super().call_impl(**kwargs)
-
-    def call_impl(self, **kwargs: Any) -> GetProductsResponse:  # type: ignore[override]
-        """Call _get_products_impl with real DB (sync wrapper).
-
-        Bridges async _impl for sync callers (BDD steps, ImplDispatcher).
-        ProductMixin.call_impl is async; this wraps it for sync contexts.
-        """
-        return asyncio.run(self.call_impl_async(**kwargs))
+        coro = super().call_impl(**kwargs)
+        try:
+            asyncio.get_running_loop()
+            # Already in async context (e.g., @pytest.mark.asyncio test)
+            # Return the coroutine so ``await`` works
+            return coro
+        except RuntimeError:
+            # No running loop — safe to block with asyncio.run
+            return asyncio.run(coro)
 
     def call_a2a(self, **kwargs: Any) -> GetProductsResponse:
         """Call get_products via real AdCPRequestHandler — full A2A pipeline."""

@@ -22,7 +22,6 @@ from tests.factories import (
     TenantFactory,
 )
 
-
 # ── Helpers ─────────────────────────────────────────────────────────
 
 
@@ -102,9 +101,7 @@ def given_profile_domain_only(ctx: dict, domain: str) -> None:
 
 
 @given(
-    parsers.parse(
-        'an inventory profile with property_tags "{tags}" for domain "{domain}" and selection_type "{st}"'
-    )
+    parsers.parse('an inventory profile with property_tags "{tags}" for domain "{domain}" and selection_type "{st}"')
 )
 def given_profile_with_selection_type(ctx: dict, tags: str, domain: str, st: str) -> None:
     """Create profile with selection_type already present (passthrough test)."""
@@ -169,7 +166,9 @@ def then_has_products(ctx: dict) -> None:
 def then_selection_type(ctx: dict, expected: str) -> None:
     """Assert publisher_properties[0] has the expected selection_type."""
     inner = _get_first_prop(ctx)
-    actual = getattr(inner, "selection_type", None) or (inner.get("selection_type") if isinstance(inner, dict) else None)
+    actual = getattr(inner, "selection_type", None) or (
+        inner.get("selection_type") if isinstance(inner, dict) else None
+    )
     assert actual == expected, f"Expected selection_type={expected!r}, got {actual!r}"
 
 
