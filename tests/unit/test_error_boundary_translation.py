@@ -354,7 +354,7 @@ class TestA2ABoundaryAdCPErrorTranslation:
             error = exc_info.value.error
             assert error.code == -32602
             assert "invalid param" in error.message
-            assert error.data == {"recovery": "correctable"}
+            assert error.data == {"recovery": "correctable", "error_code": "VALIDATION_ERROR"}
 
     @pytest.mark.asyncio
     async def test_adcp_auth_becomes_invalid_request(self):
@@ -375,7 +375,7 @@ class TestA2ABoundaryAdCPErrorTranslation:
             error = exc_info.value.error
             assert error.code == -32600
             assert "bad token" in error.message
-            assert error.data == {"recovery": "terminal"}
+            assert error.data == {"recovery": "terminal", "error_code": "AUTH_TOKEN_INVALID"}
 
     @pytest.mark.asyncio
     async def test_adcp_adapter_becomes_internal_error(self):
@@ -396,7 +396,7 @@ class TestA2ABoundaryAdCPErrorTranslation:
             error = exc_info.value.error
             assert error.code == -32603
             assert "GAM down" in error.message
-            assert error.data == {"recovery": "transient"}
+            assert error.data == {"recovery": "transient", "error_code": "ADAPTER_ERROR"}
 
     @pytest.mark.asyncio
     async def test_server_error_still_passes_through(self):
@@ -666,7 +666,7 @@ class TestCustomRecoveryOverrideA2ABoundary:
                 await handler._handle_explicit_skill("get_products", {}, "token")
 
             error = exc_info.value.error
-            assert error.data == {"recovery": "transient"}  # Custom, not "terminal"
+            assert error.data == {"recovery": "transient", "error_code": "NOT_FOUND"}  # Custom, not "terminal"
 
 
 class TestCustomRecoveryOverrideRESTBoundary:
@@ -809,8 +809,11 @@ class TestRecoveryRoundtrip:
                 assert error.code == expected_jsonrpc_code, (
                     f"{exc_class.__name__}: JSON-RPC code {error.code}, expected {expected_jsonrpc_code}"
                 )
-                assert error.data == {"recovery": expected_recovery}, (
-                    f"{exc_class.__name__}: data={error.data}, expected recovery={expected_recovery!r}"
+                assert error.data["recovery"] == expected_recovery, (
+                    f"{exc_class.__name__}: recovery={error.data.get('recovery')!r}, expected {expected_recovery!r}"
+                )
+                assert error.data["error_code"] == exc_class.error_code, (
+                    f"{exc_class.__name__}: error_code={error.data.get('error_code')!r}, expected {exc_class.error_code!r}"
                 )
 
     def test_rest_roundtrip_all_subclasses(self):

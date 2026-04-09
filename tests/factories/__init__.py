@@ -21,6 +21,7 @@ from tests.factories.core import (
     TenantFactory,
 )
 from tests.factories.creative import CreativeAssignmentFactory, CreativeFactory
+from tests.factories.creative_asset import CreativeAssetFactory
 from tests.factories.format import FormatFactory, FormatIdFactory
 from tests.factories.inventory_profile import InventoryProfileFactory
 from tests.factories.media_buy import MediaBuyFactory, MediaPackageFactory
@@ -54,6 +55,7 @@ __all__ = [
     "AccountFactory",
     "AdapterConfigFactory",
     "AgentAccountAccessFactory",
+    "CreativeAssetFactory",
     "CreativeAssignmentFactory",
     "CreativeFactory",
     "FormatFactory",

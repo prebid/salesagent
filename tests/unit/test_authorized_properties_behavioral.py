@@ -474,7 +474,7 @@ class TestMCPWrapperIdentityResolution:
 
         with patch("src.core.tools.properties._list_authorized_properties_impl") as mock_impl:
             mock_impl.return_value = self._stub_response
-            await list_authorized_properties(req=None, ctx=mock_ctx)
+            await list_authorized_properties(ctx=mock_ctx)
 
             # Verify get_state was called to retrieve identity
             mock_ctx.get_state.assert_called_once_with("identity")
@@ -489,7 +489,7 @@ class TestMCPWrapperIdentityResolution:
 
         with patch("src.core.tools.properties._list_authorized_properties_impl") as mock_impl:
             mock_impl.return_value = self._stub_response
-            await list_authorized_properties(req=None, ctx=None)
+            await list_authorized_properties(ctx=None)
 
             mock_impl.assert_called_once()
             passed_identity = mock_impl.call_args[0][1]
@@ -503,7 +503,7 @@ class TestMCPWrapperIdentityResolution:
 
         with patch("src.core.tools.properties._list_authorized_properties_impl") as mock_impl:
             mock_impl.return_value = self._stub_response
-            result = await list_authorized_properties(req=None, ctx=None)
+            result = await list_authorized_properties(ctx=None)
 
             assert isinstance(result, ToolResult)
             # structured_content may be the response object or its dict representation
@@ -555,7 +555,7 @@ class TestMCPWrapperContextEcho:
             patches["audit"],
             patches["log_activity"],
         ):
-            result = await list_authorized_properties(req=None, context=test_context, ctx=mock_ctx)
+            result = await list_authorized_properties(context=test_context, ctx=mock_ctx)
 
             # The structured_content in the ToolResult should contain the echoed context
             sc = result.structured_content
@@ -590,7 +590,7 @@ class TestMCPWrapperContextEcho:
             patches["audit"],
             patches["log_activity"],
         ):
-            result = await list_authorized_properties(req=req, context=test_context, ctx=mock_ctx)
+            result = await list_authorized_properties(context=test_context, ctx=mock_ctx)
 
             sc = result.structured_content
             if isinstance(sc, dict):

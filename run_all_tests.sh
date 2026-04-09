@@ -106,6 +106,16 @@ else
     exit 1
 fi
 
+# --- Security audit ---
+echo -e "${BLUE}Running security audit (uv-secure)...${NC}"
+IGNORED_VULNS="GHSA-7gcm-g887-7qv7,GHSA-5239-wwwm-4pmq"
+if uvx uv-secure --no-check-uv-tool --ignore-vulns "$IGNORED_VULNS" 2>/dev/null; then
+    echo -e "${GREEN}Security audit passed${NC}"
+else
+    echo -e "${RED}Security audit FAILED — run: uvx uv-secure --ignore-vulns $IGNORED_VULNS${NC}"
+    FAILURES="${FAILURES:+$FAILURES }security"
+fi
+
 # --- Summary ---
 FAILURES="${FAILURES:-}"
 echo "================================================================"

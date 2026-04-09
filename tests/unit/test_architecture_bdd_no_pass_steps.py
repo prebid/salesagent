@@ -1,11 +1,12 @@
-"""Guard: BDD Then step functions must not have empty bodies.
+"""Guard: BDD step functions must not have empty bodies.
 
-A Then step with ``pass`` or no statements (only docstring) claims to verify
-behavior but asserts nothing. This is the #1 BDD step quality failure mode.
+Then steps with ``pass`` or no statements (only docstring) claim to verify
+behavior but assert nothing. Given/When steps with empty bodies promise data
+setup or actions but deliver nothing.
 
-Scanning approach: AST — find functions decorated with ``@then(...)`` in
-``tests/bdd/steps/`` and check that the body contains at least one ``assert``
-statement or a function call (delegation to a helper that asserts).
+Scanning approach: AST — find functions decorated with ``@given/@when/@then``
+in ``tests/bdd/steps/`` and check that the body contains at least one statement
+beyond the docstring.
 
 beads: beads-5rt
 """
@@ -14,18 +15,28 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from typing import Literal
 
 _BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 
+# Pre-existing empty Given/When steps from #1170. These are legitimate no-ops:
+# - given_tenant_exists: harness creates tenant in __enter__
+# - given_account_not_exists: default state is "no account", nothing to set up
+# FIXME(salesagent-3ydk): shrink as these get real implementations
+_EMPTY_GIVEN_WHEN_ALLOWLIST: set[tuple[str, str]] = {
+    ("bdd/steps/domain/admin_accounts.py", "given_tenant_exists"),
+    ("bdd/steps/domain/uc002_create_media_buy.py", "given_account_not_exists"),
+}
 
-def _is_then_decorated(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    """Check if function is decorated with @then(...)."""
+
+def _is_decorated_with(func: ast.FunctionDef | ast.AsyncFunctionDef, decorator_name: str) -> bool:
+    """Check if function is decorated with @<decorator_name>(...)."""
     for dec in func.decorator_list:
         if isinstance(dec, ast.Call):
             func_node = dec.func
-            if isinstance(func_node, ast.Name) and func_node.id == "then":
+            if isinstance(func_node, ast.Name) and func_node.id == decorator_name:
                 return True
-        if isinstance(dec, ast.Name) and dec.id == "then":
+        if isinstance(dec, ast.Name) and dec.id == decorator_name:
             return True
     return False
 
@@ -33,7 +44,6 @@ def _is_then_decorated(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
 def _body_is_empty(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     """Check if function body is effectively empty (pass, ellipsis, or docstring-only)."""
     stmts = func.body
-    # Filter out docstring (first Expr with Constant str)
     effective = []
     for i, stmt in enumerate(stmts):
         if (
@@ -47,7 +57,6 @@ def _body_is_empty(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
 
     if not effective:
         return True
-    # Only pass or Ellipsis
     if len(effective) == 1:
         s = effective[0]
         if isinstance(s, ast.Pass):
@@ -60,44 +69,80 @@ def _body_is_empty(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
 def _body_has_assert_or_call(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     """Check if function body contains an assert statement or a function call."""
     for node in ast.walk(func):
-        if isinstance(node, ast.Assert):
-            return True
-        if isinstance(node, ast.Call):
-            return True
-        if isinstance(node, ast.Raise):
+        if isinstance(node, (ast.Assert, ast.Call, ast.Raise)):
             return True
     return False
 
 
-def _scan_bdd_steps() -> list[str]:
-    """Find Then steps with empty or assertion-free bodies."""
-    violations = []
+StepKind = Literal["given", "when", "then"]
+
+
+def _iter_step_functions(
+    decorator_names: set[StepKind],
+) -> list[tuple[str, str, int, StepKind, ast.FunctionDef | ast.AsyncFunctionDef]]:
+    """Yield (relative_path, func_name, lineno, decorator, func_node) for matching steps."""
+    results = []
     for py_file in sorted(_BDD_STEPS_DIR.rglob("*.py")):
         if py_file.name.startswith("_"):
             continue
         source = py_file.read_text()
         tree = ast.parse(source, filename=str(py_file))
-        relative = py_file.relative_to(_BDD_STEPS_DIR.parent.parent)
+        relative = str(py_file.relative_to(_BDD_STEPS_DIR.parent.parent))
 
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
-            if not _is_then_decorated(node):
-                continue
-            if _body_is_empty(node):
-                violations.append(f"{relative}:{node.lineno} {node.name} — empty body (pass/docstring-only)")
-            elif not _body_has_assert_or_call(node):
-                violations.append(f"{relative}:{node.lineno} {node.name} — no assert or function call")
-
-    return violations
+            for dec_name in decorator_names:
+                if _is_decorated_with(node, dec_name):
+                    results.append((relative, node.name, node.lineno, dec_name, node))
+    return results
 
 
 class TestBddNoPassSteps:
-    """Structural guard: Then steps must assert something."""
+    """Structural guard: BDD steps must have meaningful bodies."""
 
     def test_no_empty_then_steps(self):
         """Every @then step must contain an assert, function call, or raise."""
-        violations = _scan_bdd_steps()
+        violations = []
+        for rel, name, lineno, _, func in _iter_step_functions({"then"}):
+            if _body_is_empty(func):
+                violations.append(f"{rel}:{lineno} {name} — empty body (pass/docstring-only)")
+            elif not _body_has_assert_or_call(func):
+                violations.append(f"{rel}:{lineno} {name} — no assert or function call")
+
         assert not violations, f"Found {len(violations)} Then step(s) with empty/assertion-free bodies:\n" + "\n".join(
             f"  {v}" for v in violations
+        )
+
+    def test_no_empty_given_when_steps(self):
+        """Every @given/@when step must have a non-empty body.
+
+        A Given step that says 'a tenant with products configured' must actually
+        create a tenant with products. An empty body means the step text is lying.
+        """
+        violations = []
+        for rel, name, lineno, dec_name, func in _iter_step_functions({"given", "when"}):
+            if _body_is_empty(func) and (rel, name) not in _EMPTY_GIVEN_WHEN_ALLOWLIST:
+                violations.append(f"{rel}:{lineno} @{dec_name} {name} — empty body")
+
+        assert not violations, (
+            f"Found {len(violations)} Given/When step(s) with empty bodies:\n"
+            + "\n".join(f"  {v}" for v in violations)
+            + "\n\nFix: implement the step, or add to _EMPTY_GIVEN_WHEN_ALLOWLIST with FIXME."
+        )
+
+    def test_empty_given_when_allowlist_not_stale(self):
+        """Allowlisted empty Given/When steps must still be empty.
+
+        When someone fixes an allowlisted step, this test reminds them to remove
+        it from the allowlist.
+        """
+        stale = []
+        for rel, name, lineno, _, func in _iter_step_functions({"given", "when"}):
+            if (rel, name) in _EMPTY_GIVEN_WHEN_ALLOWLIST and not _body_is_empty(func):
+                stale.append(f"{rel}:{lineno} {name}")
+
+        assert not stale, (
+            f"Found {len(stale)} allowlisted step(s) that are no longer empty — remove from allowlist:\n"
+            + "\n".join(f"  {v}" for v in stale)
         )

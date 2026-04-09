@@ -91,42 +91,28 @@ class ProductEnv(ProductMixin, IntegrationEnv):
     def call_impl(self, **kwargs: Any) -> GetProductsResponse:  # type: ignore[override]
         """Call _get_products_impl with real DB (sync wrapper).
 
-        Bridges async _impl for sync callers (BDD steps, dispatchers).
+        Bridges async _impl for sync callers (BDD steps, ImplDispatcher).
+        ProductMixin.call_impl is async; this wraps it for sync contexts.
         """
         return asyncio.run(self.call_impl_async(**kwargs))
 
-    async def call_a2a_async(self, **kwargs: Any) -> GetProductsResponse:
-        """Call get_products_raw (A2A wrapper) with real DB (async version)."""
-        from src.core.tools.products import get_products_raw
-
-        self._commit_factory_data()
-        identity = kwargs.pop("identity", None) or self.identity
-        return await get_products_raw(identity=identity, **kwargs)
-
     def call_a2a(self, **kwargs: Any) -> GetProductsResponse:
-        """Call get_products_raw (A2A wrapper) with real DB (sync wrapper)."""
-        return asyncio.run(self.call_a2a_async(**kwargs))
+        """Call get_products via real AdCPRequestHandler — full A2A pipeline."""
+        return self._run_a2a_handler("get_products", GetProductsResponse, **kwargs)
 
     def call_mcp(self, **kwargs: Any) -> GetProductsResponse:
-        """Call get_products MCP wrapper with mock Context."""
-        from src.core.tools.products import get_products
-
-        # MCP wrapper takes individual params, not 'req'
-        kwargs.pop("req", None)
-        kwargs.pop("identity", None)  # MCP gets identity from ctx.get_state()
-        return self._run_mcp_wrapper(get_products, GetProductsResponse, **kwargs)
+        """Call get_products via Client(mcp) — full pipeline dispatch."""
+        return self._run_mcp_client("get_products", GetProductsResponse, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
-        """Convert kwargs to GetProductsBody shape for REST POST."""
-        body: dict[str, Any] = {}
-        if "brief" in kwargs:
-            body["brief"] = kwargs["brief"]
-        if "brand" in kwargs:
-            body["brand"] = kwargs["brand"]
-        if "filters" in kwargs:
-            body["filters"] = kwargs["filters"]
-        return body
+        """Convert kwargs to GetProductsBody shape for REST POST.
+
+        GetProductsBody (src/routes/api_v1.py) accepts:
+            brief, brand, filters, adcp_version
+        """
+        _BODY_FIELDS = ("brief", "brand", "filters", "adcp_version")
+        return {k: kwargs[k] for k in _BODY_FIELDS if k in kwargs and kwargs[k] is not None}
 
     def parse_rest_response(self, data: dict[str, Any]) -> GetProductsResponse:
-        """Parse REST JSON into GetProductsResponse."""
+        """Parse REST JSON response into GetProductsResponse."""
         return GetProductsResponse(**data)
