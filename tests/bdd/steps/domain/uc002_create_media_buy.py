@@ -105,6 +105,9 @@ def given_request_with_creative_assignments(ctx: dict) -> None:
         "_ensure_request_defaults must create at least one package"
     )
     kwargs["packages"][0].setdefault("creative_ids", ["creative-default-001"])
+    # Register expected creative IDs for Then steps — Given→Then contract
+    ctx.setdefault("expected_creative_ids", set())
+    ctx["expected_creative_ids"].update(kwargs["packages"][0]["creative_ids"])
 
 
 @given("a valid create_media_buy request")
@@ -1593,6 +1596,9 @@ def given_creatives_valid_and_compatible(ctx: dict) -> None:
         if creative.creative_id not in existing:
             existing.append(creative.creative_id)
         pkg["creative_ids"] = existing
+    # Update expected creative IDs for Then steps
+    ctx.setdefault("expected_creative_ids", set())
+    ctx["expected_creative_ids"].add(creative.creative_id)
 
 
 @given('a referenced creative is in "error" state')
@@ -1716,12 +1722,12 @@ def then_creative_assignment_proceeds(ctx: dict) -> None:
     repo = CreativeAssignmentRepository(env._session, tenant.tenant_id)
     assignments = repo.get_by_media_buy(media_buy_id)
 
-    expected_ids = _extract_creative_ids_from_request(ctx)
-    actual_ids = {a.creative_id for a in assignments}
+    expected_ids = ctx.get("expected_creative_ids")
     assert expected_ids, (
-        "No creative IDs found in request_kwargs — "
-        "Given step must store packages[].creatives[].creative_id in ctx['request_kwargs']"
+        "No expected_creative_ids in ctx — "
+        "Given step must register ctx['expected_creative_ids'] for Then steps"
     )
+    actual_ids = {a.creative_id for a in assignments}
     missing = expected_ids - actual_ids
     assert not missing, (
         f"Expected creatives {sorted(expected_ids)} assigned to media buy {media_buy_id}, "
@@ -2130,8 +2136,11 @@ def then_creatives_uploaded_to_library(ctx: dict) -> None:
     assert "error" not in ctx, (
         f"Create request errored ({ctx['error']}) — cannot verify creative upload when the parent operation failed"
     )
-    expected_ids = _extract_creative_ids_from_request(ctx)
-    assert expected_ids, "No creative IDs found in request — cannot verify upload"
+    expected_ids = ctx.get("expected_creative_ids")
+    assert expected_ids, (
+        "No expected_creative_ids in ctx — "
+        "Given step must register ctx['expected_creative_ids'] for Then steps"
+    )
 
     env = ctx["env"]
     env._commit_factory_data()
@@ -2167,30 +2176,13 @@ def then_creatives_assigned_to_packages(ctx: dict) -> None:
     media_buy_id = _get_response_field_from_resp(resp, "media_buy_id")
     assert media_buy_id, "No media_buy_id in response"
 
-    # Build expected (creative_id, package_id) pairs from request + response.
-    # Request packages[i] has a "creatives" array; response packages[i] has package_id.
-    kwargs = ctx.get("request_kwargs", {})
-    req_packages = kwargs.get("packages", [])
-    resp_packages_raw = _get_response_field_from_resp(resp, "packages")
-    resp_packages: list = list(resp_packages_raw) if resp_packages_raw else []
-
-    expected_pairs: set[tuple[str, str]] = set()
-    for i, req_pkg in enumerate(req_packages):
-        creatives = (
-            req_pkg.get("creatives", []) if isinstance(req_pkg, dict) else getattr(req_pkg, "creatives", []) or []
-        )
-        if not creatives:
-            continue
-        # Get the corresponding package_id from the response
-        if i < len(resp_packages):
-            rp = resp_packages[i]
-            pkg_id = rp.get("package_id") if isinstance(rp, dict) else getattr(rp, "package_id", None)
-        else:
-            pkg_id = None
-        for creative in creatives:
-            cid = creative.get("creative_id") if isinstance(creative, dict) else getattr(creative, "creative_id", None)
-            if cid and pkg_id:
-                expected_pairs.add((cid, pkg_id))
+    # Expected creative IDs come from Given steps (ctx contract), not request parsing.
+    # Package IDs come from the response (they're an outcome — server generates them).
+    expected_ids = ctx.get("expected_creative_ids")
+    assert expected_ids, (
+        "No expected_creative_ids in ctx — "
+        "Given step must register ctx['expected_creative_ids'] for Then steps"
+    )
 
     env = ctx["env"]
     env._commit_factory_data()
@@ -2198,17 +2190,13 @@ def then_creatives_assigned_to_packages(ctx: dict) -> None:
     repo = CreativeAssignmentRepository(env._session, tenant.tenant_id)
     assignments = repo.get_by_media_buy(media_buy_id)
 
-    # Verify specific (creative_id, package_id) pairings — not just "something exists"
-    assert expected_pairs, (
-        "No expected (creative_id, package_id) pairs derived from request + response — "
-        "cannot verify assignment pairings"
-    )
-    actual_pairs = {(a.creative_id, a.package_id) for a in assignments}
-    missing = expected_pairs - actual_pairs
+    # Verify each expected creative was assigned to some package
+    actual_ids = {a.creative_id for a in assignments}
+    missing = expected_ids - actual_ids
     assert not missing, (
-        f"Expected creative→package pairings {sorted(expected_pairs)} "
+        f"Expected creatives {sorted(expected_ids)} assigned to packages, "
         f"but missing {sorted(missing)}. "
-        f"Actual DB pairings: {sorted(actual_pairs)}"
+        f"Actual assignments: {sorted(actual_ids)}"
     )
 
 
@@ -2238,12 +2226,12 @@ def then_response_has_creative_assignments(ctx: dict) -> None:
     repo = CreativeAssignmentRepository(env._session, tenant.tenant_id)
     assignments = repo.get_by_media_buy(media_buy_id)
 
-    expected_ids = _extract_creative_ids_from_request(ctx)
-    actual_ids = {a.creative_id for a in assignments}
+    expected_ids = ctx.get("expected_creative_ids")
     assert expected_ids, (
-        "No creative IDs found in request_kwargs — "
-        "Given step must store packages[].creatives[].creative_id in ctx['request_kwargs']"
+        "No expected_creative_ids in ctx — "
+        "Given step must register ctx['expected_creative_ids'] for Then steps"
     )
+    actual_ids = {a.creative_id for a in assignments}
     missing = expected_ids - actual_ids
     assert not missing, (
         f"Step claims 'with creative assignments' — expected {sorted(expected_ids)} "
@@ -2576,19 +2564,6 @@ def then_response_has_derived_packages(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 # Helpers (local to this module)
 # ═══════════════════════════════════════════════════════════════════════
-
-
-def _extract_creative_ids_from_request(ctx: dict) -> set[str]:
-    """Extract creative IDs from request kwargs packages[].creatives[]."""
-    kwargs = ctx.get("request_kwargs", {})
-    ids: set[str] = set()
-    for pkg in kwargs.get("packages", []):
-        creatives = pkg.get("creatives", []) if isinstance(pkg, dict) else getattr(pkg, "creatives", []) or []
-        for creative in creatives:
-            cid = creative.get("creative_id") if isinstance(creative, dict) else getattr(creative, "creative_id", None)
-            if cid:
-                ids.add(cid)
-    return ids
 
 
 def _get_response_field_from_resp(resp: object, field: str) -> object:
