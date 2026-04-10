@@ -357,15 +357,11 @@ def then_webhook_notification(ctx: dict) -> None:
     assert tenant is not None, "No tenant in ctx — cannot verify notification scoping"
     tenant_id = getattr(tenant, "tenant_id", None) or (tenant.get("tenant_id") if isinstance(tenant, dict) else None)
 
-    # --- Check push_notification_config was provided on request ---
+    # --- Check push_notification_config was registered by Given step ---
     push_config = ctx.get("push_notification_config")
-    if push_config is None:
-        request_kwargs = ctx.get("request_kwargs", {})
-        push_config = request_kwargs.get("push_notification_config")
     assert push_config is not None, (
-        "push_notification_config not provided on request — scenario should include "
-        "a Given step that sets push_notification_config. Without it, production has "
-        "no webhook URL to store and the buyer cannot be notified."
+        "No push_notification_config in ctx — scenario must include a Given step "
+        "that sets ctx['push_notification_config'] with the expected webhook URL."
     )
 
     # --- Precondition 1: PushNotificationConfig persisted with correct URL ---
@@ -582,27 +578,23 @@ def then_creative_assignment_records_persisted(ctx: dict) -> None:
     media_buy_id = _get_response_field(resp, "media_buy_id")
     assert media_buy_id, "No media_buy_id in response"
 
-    # Count expected creative assignments from the request
-    request_kwargs = ctx.get("request_kwargs", {})
-    expected_count = sum(len(pkg.get("creative_ids", []) or []) for pkg in request_kwargs.get("packages", []))
-    assert expected_count > 0, (
-        "Step claims 'creative assignment records should be persisted' but request "
-        "contains no creative_ids — either the scenario setup is wrong or this step "
-        "should not be used here"
+    expected_ids = ctx.get("expected_creative_ids")
+    assert expected_ids, (
+        "No expected_creative_ids in ctx — Given step must register "
+        "ctx['expected_creative_ids'] for Then steps to verify assignment"
     )
 
-    from sqlalchemy import func, select
-
-    from src.core.database.models import CreativeAssignment
+    from src.core.database.repositories.creative import CreativeAssignmentRepository
 
     with _db_session(ctx) as session:
-        actual_count = session.scalar(
-            select(func.count()).select_from(CreativeAssignment).filter_by(media_buy_id=media_buy_id)
-        )
-        assert actual_count and actual_count > 0, f"No creative assignment records found for media buy {media_buy_id}"
-        assert actual_count == expected_count, (
-            f"Expected {expected_count} creative assignment record(s) for media buy {media_buy_id} "
-            f"(matching creative_ids in request), found {actual_count}"
+        repo = CreativeAssignmentRepository(session, ctx["tenant"].tenant_id)
+        assignments = repo.get_by_media_buy(str(media_buy_id))
+        actual_ids = {a.creative_id for a in assignments}
+        missing = expected_ids - actual_ids
+        assert not missing, (
+            f"Expected creatives {sorted(expected_ids)} persisted as assignments "
+            f"for media buy {media_buy_id}, but missing {sorted(missing)}. "
+            f"Actual: {sorted(actual_ids)}"
         )
 
 

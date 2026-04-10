@@ -82,14 +82,7 @@ _DISPATCH_IN_THEN_ALLOWLIST: set[str] = {
     "bdd/steps/domain/uc011_accounts.py:735 then_result_set_identical",
 }
 
-_ASSERT_ON_REQUEST_ALLOWLIST: set[str] = {
-    # FIXME(GH-TBD): Move precondition check to Given step
-    "bdd/steps/domain/uc026_package_media_buy.py:1949 then_package_all_fields",
-    # FIXME(GH-TBD): Remove fallback — Given must always set ctx["push_notification_config"]
-    "bdd/steps/generic/then_media_buy.py:319 then_webhook_notification",
-    # FIXME(GH-TBD): Move precondition check to Given step, use ctx["expected_creative_ids"]
-    "bdd/steps/generic/then_media_buy.py:573 then_creative_assignment_records_persisted",
-}
+_ASSERT_ON_REQUEST_ALLOWLIST: set[str] = set()
 
 
 def _find_request_kwargs_vars(func: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
