@@ -38,6 +38,29 @@ def given_buyer_no_auth(ctx: dict) -> None:
     ctx["identity"] = None
 
 
+@given("the request has no valid authentication")
+@given("But the request has no valid authentication")
+def given_request_no_valid_auth(ctx: dict) -> None:
+    """Request has credentials but they are invalid (no principal_id).
+
+    Unlike 'no authentication credentials' (no identity at all), this
+    simulates an expired/revoked token where the identity resolves but
+    the principal_id is missing. Auth middleware should reject before
+    any business logic (adapter calls, DB writes) executes.
+    """
+    from tests.factories.principal import PrincipalFactory
+
+    env = ctx["env"]
+    ctx["has_auth"] = False
+    ctx["identity"] = PrincipalFactory.make_identity(
+        principal_id=None,
+        tenant_id=env._tenant_id,
+    )
+    # Reset adapter mock so Then can verify no side effects
+    if "adapter" in env.mock:
+        env.mock["adapter"].return_value.create_media_buy.reset_mock()
+
+
 @given("no hostname-based tenant resolution is possible")
 def given_no_hostname_tenant(ctx: dict) -> None:
     """No tenant can be resolved from hostname."""

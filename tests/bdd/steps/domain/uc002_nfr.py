@@ -11,7 +11,7 @@ beads: salesagent-9vgz.92
 
 from __future__ import annotations
 
-from pytest_bdd import given, then
+from pytest_bdd import given, parsers, then
 
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — NFR preconditions
@@ -36,8 +36,90 @@ def given_tenant_has_min_order(ctx: dict) -> None:
     ctx["min_package_budget"] = cl.min_package_budget
 
 
+@given("the package budget is below the minimum")
+@given("But the package budget is below the minimum")
+def given_budget_below_minimum(ctx: dict) -> None:
+    """Set each package budget to 1 cent below min_package_budget.
+
+    Requires 'the tenant has minimum order size requirements' to run first
+    (sets ctx["min_package_budget"]).
+    """
+    from decimal import Decimal
+
+    min_budget = ctx.get("min_package_budget")
+    assert min_budget is not None, (
+        "min_package_budget not in ctx — "
+        "'the tenant has minimum order size requirements' Given step must run first"
+    )
+    below_min = float(Decimal(str(min_budget)) - Decimal("0.01"))
+    kwargs = ctx.get("request_kwargs", {})
+    for pkg in kwargs.get("packages", []):
+        pkg["budget"] = below_min
+
+
 # ═══════════════════════════════════════════════════════════════════════
-# THEN steps — NFR-001: Security hardening
+# THEN steps — NFR enforcement (restructured scenarios)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@then("the operation should fail with authentication error")
+def then_fail_with_auth_error(ctx: dict) -> None:
+    """Assert the operation failed with an authentication error.
+
+    Accepts AdCPAuthenticationError (in-process auth rejection) or
+    TypeError (E2E: null auth token can't be serialized to HTTP header).
+    Both prove the request never reached business logic.
+    """
+    from src.core.exceptions import AdCPAuthenticationError
+
+    error = ctx.get("error")
+    assert error is not None, (
+        "Expected an authentication error but no error was recorded — "
+        "the request succeeded despite invalid credentials"
+    )
+    is_auth_error = isinstance(error, AdCPAuthenticationError)
+    is_null_token_error = isinstance(error, TypeError) and "Header value" in str(error)
+    assert is_auth_error or is_null_token_error, (
+        f"Expected AdCPAuthenticationError (or null-token TypeError in E2E), "
+        f"got {type(error).__name__}: {error}"
+    )
+
+
+@then("no adapter calls should have been made")
+def then_no_adapter_calls(ctx: dict) -> None:
+    """Assert the adapter was never called — proving auth blocked before business logic."""
+    env = ctx["env"]
+    mock_adapter = env.mock["adapter"].return_value
+    assert not mock_adapter.create_media_buy.called, (
+        "Adapter.create_media_buy was called despite auth failure — "
+        "business logic ran before authentication"
+    )
+
+
+@then("the error should indicate minimum spend requirement")
+def then_error_minimum_spend(ctx: dict) -> None:
+    """Assert the error message mentions minimum spend enforcement."""
+    error = ctx.get("error")
+    resp = ctx.get("response")
+
+    error_str = ""
+    if error is not None:
+        error_str = str(error).lower()
+    elif resp is not None:
+        # Some transports wrap errors in the response
+        from tests.bdd.steps.generic.then_media_buy import _get_response_field
+
+        msg = _get_response_field(resp, "message") or _get_response_field(resp, "error") or ""
+        error_str = str(msg).lower()
+
+    assert "minimum" in error_str or "min" in error_str or "spend" in error_str, (
+        f"Expected error to indicate minimum spend requirement, "
+        f"got: {error or resp}"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# THEN steps — NFR-001: Security hardening (legacy — dispatch-in-Then)
 # ═══════════════════════════════════════════════════════════════════════
 
 

@@ -1229,6 +1229,18 @@ mappings:
       upstream_refs: ["SR-NFR-006"]
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-002-nfr-001-enforcement"
+      adcp_feature: "BR-UC-002-nfr-enforcement.feature"
+      obligation_id: null
+      upstream_refs: ["SR-NFR-001"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-002-nfr-006-enforcement"
+      adcp_feature: "BR-UC-002-nfr-enforcement.feature"
+      obligation_id: null
+      upstream_refs: ["SR-NFR-006"]
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-002-sandbox-happy"
       adcp_feature: "BR-UC-002-create-media-buy.feature"
       obligation_id: null

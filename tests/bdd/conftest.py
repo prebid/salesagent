@@ -270,6 +270,9 @@ _XFAIL_TAGS: dict[str, str] = {
     # Rate limiting middleware does not exist (AdCPRateLimitError never raised).
     # No ASGI middleware checks content-length for oversized bodies.
     "T-UC-002-nfr-001": "rate limiting + payload size validation not implemented — spec-production gap",
+    # Restructured into BR-UC-002-nfr-enforcement.feature (proper Given/When/Then).
+    # Original scenario uses dispatch-in-Then to test budget below minimum.
+    "T-UC-002-nfr-006": "restructured — see test_uc002_nfr_enforcement.py",
 }
 
 # FIXME(beads-dul): Selective xfail for parametrized scenarios where only

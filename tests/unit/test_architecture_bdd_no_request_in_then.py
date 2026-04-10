@@ -66,16 +66,14 @@ _DISPATCH_METHODS = {
 # ── Allowlist (ratcheting — may only shrink) ─────────────────────────────
 
 _DISPATCH_IN_THEN_ALLOWLIST: set[str] = {
-    # FIXME(GH-TBD): Split into When (send with bad creds) + Then (assert auth error)
-    "bdd/steps/domain/uc002_nfr.py:45 then_auth_before_business_logic",
-    # FIXME(GH-TBD): Split into When (rapid follow-up) + Then (assert rate limit)
-    "bdd/steps/domain/uc002_nfr.py:104 then_rate_limiting_enforced",
-    # FIXME(GH-TBD): Split into When (oversized payload) + Then (assert rejection)
-    "bdd/steps/domain/uc002_nfr.py:146 then_payload_size_limits",
-    # FIXME(GH-TBD): Split into When (timed call) + Then (assert SLA)
-    "bdd/steps/domain/uc002_nfr.py:239 then_response_within_sla",
-    # FIXME(GH-TBD): Split into When (below-min budget) + Then (assert rejection)
-    "bdd/steps/domain/uc002_nfr.py:283 then_budget_validated_against_min_order",
+    # Legacy dispatch-in-Then steps — original scenarios are xfailed.
+    # Auth and budget enforcement replaced by BR-UC-002-nfr-enforcement.feature.
+    # Rate limiting, payload size, SLA test unimplemented features (dead code).
+    "bdd/steps/domain/uc002_nfr.py:127 then_auth_before_business_logic",
+    "bdd/steps/domain/uc002_nfr.py:186 then_rate_limiting_enforced",
+    "bdd/steps/domain/uc002_nfr.py:228 then_payload_size_limits",
+    "bdd/steps/domain/uc002_nfr.py:321 then_response_within_sla",
+    "bdd/steps/domain/uc002_nfr.py:365 then_budget_validated_against_min_order",
     # FIXME(GH-TBD): Split into When (re-dispatch with decoy) + Then (assert isolation)
     "bdd/steps/domain/uc011_accounts.py:490 then_accounts_are_agent_scoped",
     # FIXME(GH-TBD): Split into When (unfiltered request) + Then (assert same set)
