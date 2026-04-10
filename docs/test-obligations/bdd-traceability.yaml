@@ -1229,6 +1229,12 @@ mappings:
       upstream_refs: ["SR-NFR-006"]
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-002-alt-manual-reject-override"
+      adcp_feature: "BR-UC-002-manual-overrides.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-002-alt-manual-reject"]
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-002-nfr-001-enforcement"
       adcp_feature: "BR-UC-002-nfr-enforcement.feature"
       obligation_id: null

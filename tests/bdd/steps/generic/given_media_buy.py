@@ -2660,6 +2660,9 @@ def given_request_passes_validation(ctx: dict) -> None:
     env._commit_factory_data()
     if kwargs.get("packages"):
         kwargs["packages"][0]["creative_ids"] = [creative.creative_id]
+    # Register expected creative IDs for Then steps (Given→Then contract)
+    ctx.setdefault("expected_creative_ids", set())
+    ctx["expected_creative_ids"].add(creative.creative_id)
 
 
 @given("a create_media_buy request that fails validation")
@@ -2932,3 +2935,23 @@ def given_format_id_boundary(ctx: dict, config: str) -> None:
 
     else:
         raise ValueError(f"Unknown format ID boundary config: {config}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Webhook configuration
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given("the buyer has configured a webhook for notifications")
+def given_webhook_configured(ctx: dict) -> None:
+    """Register push_notification_config so Then steps can verify webhook delivery.
+
+    Stores both the config in ctx (Given→Then contract) and wires it into
+    request_kwargs so production receives it when the media buy is created.
+    """
+    webhook_url = "https://buyer.example.com/webhooks/adcp-notifications"
+    push_config = {"url": webhook_url, "events": ["status_change"]}
+    ctx["push_notification_config"] = push_config
+    # Also wire into request_kwargs if they exist (for create requests)
+    if "request_kwargs" in ctx:
+        ctx["request_kwargs"]["push_notification_config"] = push_config

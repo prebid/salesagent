@@ -270,9 +270,6 @@ _XFAIL_TAGS: dict[str, str] = {
     # Rate limiting middleware does not exist (AdCPRateLimitError never raised).
     # No ASGI middleware checks content-length for oversized bodies.
     "T-UC-002-nfr-001": "rate limiting + payload size validation not implemented — spec-production gap",
-    # Restructured into BR-UC-002-nfr-enforcement.feature (proper Given/When/Then).
-    # Original scenario uses dispatch-in-Then to test budget below minimum.
-    "T-UC-002-nfr-006": "restructured — see test_uc002_nfr_enforcement.py",
 }
 
 # FIXME(beads-dul): Selective xfail for parametrized scenarios where only
@@ -611,6 +608,37 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     if any(s in item.nodeid for s in substrings):
                         item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
                     break  # tag matched — skip remaining selective entries
+
+        # Webhook override: E2E seed_media_buy doesn't forward push_notification_config
+        # to Docker, so the webhook URL is never persisted. In-process transports pass.
+        if is_e2e_rest and "T-UC-002-alt-manual-reject-override" in marker_names:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="E2E: seed_media_buy doesn't forward push_notification_config to Docker",
+                    strict=True,
+                )
+            )
+
+        # Original rejection scenario missing webhook Given step.
+        # Replaced by BR-UC-002-manual-overrides.feature with webhook config.
+        if "T-UC-002-alt-manual-reject" in marker_names and "T-UC-002-alt-manual-reject-override" not in marker_names:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="missing webhook Given step — see test_uc002_manual_overrides.py",
+                    strict=False,
+                )
+            )
+
+        # NFR-006: original dispatch-in-Then scenario replaced by
+        # BR-UC-002-nfr-enforcement.feature. Original still passes (dispatch works)
+        # so strict=False to allow XPASS without failing.
+        if "T-UC-002-nfr-006" in marker_names:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="restructured — see test_uc002_nfr_enforcement.py",
+                    strict=False,
+                )
+            )
 
         # Tag-based xfail for all other scenarios
         for tag, reason in _XFAIL_TAGS.items():
