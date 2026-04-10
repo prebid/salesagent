@@ -136,10 +136,7 @@ def given_account_not_exists(ctx: dict) -> None:
     2. Natural key (brand + operator): ctx["request_brand"] + ctx["request_operator"]
     Verifies no matching Account record exists in the database.
     """
-    from sqlalchemy import select
-
-    from src.core.database.models import Account
-    from tests.bdd.steps._harness_db import db_session as _db_session
+    from src.core.database.repositories.account import AccountRepository
 
     account_id = ctx.get("request_account_id")
     brand = ctx.get("request_brand")
@@ -154,26 +151,21 @@ def given_account_not_exists(ctx: dict) -> None:
         "No tenant in ctx — step claims account does not exist in the seller's "
         "account store but cannot verify without a tenant"
     )
-    with _db_session(ctx) as session:
-        if account_id is not None:
-            existing = session.scalars(
-                select(Account).filter_by(account_id=account_id, tenant_id=tenant.tenant_id)
-            ).first()
-            assert existing is None, (
-                f"Account '{account_id}' exists in DB for tenant '{tenant.tenant_id}' — "
-                "step claims account does not exist but a prior step created it."
-            )
-        else:
-            existing = session.scalars(select(Account).filter_by(tenant_id=tenant.tenant_id)).all()
-            matching = [
-                a
-                for a in existing
-                if getattr(a, "brand", {}).get("domain") == brand and getattr(a, "operator", None) == operator
-            ]
-            assert not matching, (
-                f"Account with brand '{brand}' + operator '{operator}' exists in DB for tenant '{tenant.tenant_id}' — "
-                "step claims no account matches but a prior step created one."
-            )
+    env = ctx["env"]
+    env._commit_factory_data()
+    repo = AccountRepository(env._session, tenant.tenant_id)
+    if account_id is not None:
+        existing = repo.get_by_id(account_id)
+        assert existing is None, (
+            f"Account '{account_id}' exists in DB for tenant '{tenant.tenant_id}' — "
+            "step claims account does not exist but a prior step created it."
+        )
+    else:
+        matching = repo.list_by_natural_key(operator=operator, brand_domain=brand)
+        assert not matching, (
+            f"Account with brand '{brand}' + operator '{operator}' exists in DB for tenant '{tenant.tenant_id}' — "
+            "step claims no account matches but a prior step created one."
+        )
 
 
 @given(parsers.parse('the account "{account_id}" exists but requires setup (billing not configured)'))
@@ -1193,7 +1185,6 @@ def when_seller_rejects_media_buy(ctx: dict, reason: str) -> None:
 
     from src.core.database.repositories.media_buy import MediaBuyRepository
     from src.core.database.repositories.workflow import WorkflowRepository
-    from tests.bdd.steps._harness_db import db_session as _db_session
 
     # SPEC-PRODUCTION GAP: Uses repository methods instead of the full Flask admin
     # rejection path. The repository layer (tenant scoping, status transitions) is
@@ -1212,59 +1203,53 @@ def when_seller_rejects_media_buy(ctx: dict, reason: str) -> None:
     media_buy_id = media_buy.media_buy_id
     tenant = ctx["tenant"]
 
+    session = env._session
+    mb_repo = MediaBuyRepository(session, tenant.tenant_id)
+    wf_repo = WorkflowRepository(session, tenant.tenant_id)
+
+    # Verify media buy exists and is in a rejectable state (via repository)
+    mb = mb_repo.get_by_id(media_buy_id)
+    assert mb is not None, f"Media buy {media_buy_id} not found in DB for tenant {tenant.tenant_id}"
+    rejectable_statuses = {"pending_approval", "submitted", "requires_approval"}
+    assert mb.status in rejectable_statuses, (
+        f"Media buy {media_buy_id} has status '{mb.status}' — "
+        f"expected one of {rejectable_statuses} for rejection. "
+        "Step claims 'Seller rejects' but media buy is not in a rejectable state."
+    )
+
+    # Update status via repository (exercises tenant-scoped update_status)
+    updated_mb = mb_repo.update_status(media_buy_id, "rejected")
+    assert updated_mb is not None, (
+        f"MediaBuyRepository.update_status returned None for {media_buy_id} — "
+        "repository could not find the media buy within tenant scope"
+    )
+
+    # Find and update workflow step via repository
     workflow_step_id = None
-    with _db_session(ctx) as session:
-        mb_repo = MediaBuyRepository(session, tenant.tenant_id)
-        wf_repo = WorkflowRepository(session, tenant.tenant_id)
-
-        # Verify media buy exists and is in a rejectable state (via repository)
-        mb = mb_repo.get_by_id(media_buy_id)
-        assert mb is not None, f"Media buy {media_buy_id} not found in DB for tenant {tenant.tenant_id}"
-        rejectable_statuses = {"pending_approval", "submitted", "requires_approval"}
-        assert mb.status in rejectable_statuses, (
-            f"Media buy {media_buy_id} has status '{mb.status}' — "
-            f"expected one of {rejectable_statuses} for rejection. "
-            "Step claims 'Seller rejects' but media buy is not in a rejectable state."
+    mapping = wf_repo.get_latest_mapping_for_object("media_buy", media_buy_id)
+    if mapping:
+        step = wf_repo.update_status(
+            mapping.step_id,
+            status="rejected",
+            error_message=reason,
         )
+        if step:
+            workflow_step_id = step.step_id
 
-        # Update status via repository (exercises tenant-scoped update_status)
-        updated_mb = mb_repo.update_status(media_buy_id, "rejected")
-        assert updated_mb is not None, (
-            f"MediaBuyRepository.update_status returned None for {media_buy_id} — "
-            "repository could not find the media buy within tenant scope"
+    session.commit()
+
+    # Verify the rejection actually persisted (tenant-scoped read after commit)
+    session.expire_all()
+    mb_check = mb_repo.get_by_id(media_buy_id)
+    assert mb_check is not None, f"Media buy {media_buy_id} not found after rejection"
+    assert mb_check.status == "rejected", f"Expected 'rejected' status after seller rejection, got '{mb_check.status}'"
+    if workflow_step_id:
+        ws = wf_repo.get_by_step_id(workflow_step_id)
+        assert ws is not None, f"Workflow step {workflow_step_id} not found after rejection commit"
+        assert ws.status == "rejected", f"Expected workflow step status 'rejected', got '{ws.status}'"
+        assert ws.error_message == reason, (
+            f"Expected rejection reason '{reason}' on workflow step, got '{ws.error_message}'"
         )
-
-        # Find and update workflow step via repository
-        mapping = wf_repo.get_latest_mapping_for_object("media_buy", media_buy_id)
-        no_workflow_mapping = mapping is None
-        if mapping:
-            step = wf_repo.update_status(
-                mapping.step_id,
-                status="rejected",
-                error_message=reason,
-            )
-            if step:
-                workflow_step_id = step.step_id
-
-        session.commit()
-
-    # Verify the rejection actually persisted (tenant-scoped, fresh session)
-    with _db_session(ctx) as session:
-        mb_repo = MediaBuyRepository(session, tenant.tenant_id)
-        mb_check = mb_repo.get_by_id(media_buy_id)
-        assert mb_check is not None, f"Media buy {media_buy_id} not found after rejection"
-        assert mb_check.status == "rejected", (
-            f"Expected 'rejected' status after seller rejection, got '{mb_check.status}'"
-        )
-        # Also verify the workflow step was updated with the rejection reason
-        if workflow_step_id:
-            wf_repo = WorkflowRepository(session, tenant.tenant_id)
-            ws = wf_repo.get_by_step_id(workflow_step_id)
-            assert ws is not None, f"Workflow step {workflow_step_id} not found after rejection commit"
-            assert ws.status == "rejected", f"Expected workflow step status 'rejected', got '{ws.status}'"
-            assert ws.error_message == reason, (
-                f"Expected rejection reason '{reason}' on workflow step, got '{ws.error_message}'"
-            )
 
     # Store rejection_reason on existing_media_buy so Then steps can find it.
     # MediaBuy model lacks a rejection_reason column — we set it dynamically.
@@ -1723,18 +1708,22 @@ def then_creative_assignment_proceeds(ctx: dict) -> None:
         media_buy_id = resp.response.media_buy_id
     assert media_buy_id, "No media_buy_id in response — creative assignment did not produce a media buy"
 
-    from sqlalchemy import func, select
+    from src.core.database.repositories.creative import CreativeAssignmentRepository
 
-    from src.core.database.models import CreativeAssignment
-    from tests.bdd.steps._harness_db import db_session as _db_session
+    env = ctx["env"]
+    env._commit_factory_data()
+    tenant = ctx["tenant"]
+    repo = CreativeAssignmentRepository(env._session, tenant.tenant_id)
+    assignments = repo.get_by_media_buy(media_buy_id)
 
-    with _db_session(ctx) as session:
-        count = session.scalar(
-            select(func.count()).select_from(CreativeAssignment).filter_by(media_buy_id=media_buy_id)
-        )
-        assert count and count > 0, (
-            f"No creative assignment records found for media buy {media_buy_id} — expected creatives to be assigned"
-        )
+    expected_ids = _extract_creative_ids_from_request(ctx)
+    actual_ids = {a.creative_id for a in assignments}
+    assert expected_ids, "No creative IDs found in request — cannot verify assignment"
+    missing = expected_ids - actual_ids
+    assert not missing, (
+        f"Expected creatives {sorted(expected_ids)} assigned to media buy {media_buy_id}, "
+        f"but missing {sorted(missing)}. Actual: {sorted(actual_ids)}"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2127,10 +2116,7 @@ def then_creatives_uploaded_to_library(ctx: dict) -> None:
     which persists creatives to the database. Verify the specific creatives from
     the current request were uploaded (not just any pre-existing creatives).
     """
-    from sqlalchemy import select
-
-    from src.core.database.models import Creative as CreativeModel
-    from tests.bdd.steps._harness_db import db_session as _db_session
+    from src.core.database.repositories.creative import CreativeRepository
 
     tenant = ctx["tenant"]
     # Verify the create request succeeded before checking creative upload
@@ -2141,31 +2127,26 @@ def then_creatives_uploaded_to_library(ctx: dict) -> None:
     assert "error" not in ctx, (
         f"Create request errored ({ctx['error']}) — cannot verify creative upload when the parent operation failed"
     )
-    # Extract expected creative IDs from the request
-    kwargs = ctx.get("request_kwargs", {})
-    expected_ids = set()
-    for pkg in kwargs.get("packages", []):
-        for creative in pkg.get("creatives", []):
-            cid = creative.get("creative_id")
-            if cid:
-                expected_ids.add(cid)
+    expected_ids = _extract_creative_ids_from_request(ctx)
     assert expected_ids, "No creative IDs found in request — cannot verify upload"
 
-    with _db_session(ctx) as session:
-        db_creatives = session.scalars(select(CreativeModel).filter_by(tenant_id=tenant.tenant_id)).all()
-        db_creative_ids = {c.creative_id for c in db_creatives}
-        # Hard assert: all expected creatives must exist in DB.
-        # If production doesn't persist inline creatives yet, the scenario-level
-        # xfail (T-UC-002-alt-creatives tag in conftest.py) handles the gap.
-        # NEVER xfail inside the step body — it silently swallows the check.
-        missing = expected_ids - db_creative_ids
-        assert not missing, (
-            f"Expected all creatives {sorted(expected_ids)} uploaded to DB, "
-            f"but missing {sorted(missing)}. "
-            f"DB has {sorted(db_creative_ids)}. "
-            f"SPEC-PRODUCTION GAP: production may not persist inline creatives "
-            f"via this code path yet. FIXME(salesagent-9vgz.1)"
-        )
+    env = ctx["env"]
+    env._commit_factory_data()
+    repo = CreativeRepository(env._session, tenant.tenant_id)
+    db_creatives = repo.admin_list_all()
+    db_creative_ids = {c.creative_id for c in db_creatives}
+    # Hard assert: all expected creatives must exist in DB.
+    # If production doesn't persist inline creatives yet, the scenario-level
+    # xfail (T-UC-002-alt-creatives tag in conftest.py) handles the gap.
+    # NEVER xfail inside the step body — it silently swallows the check.
+    missing = expected_ids - db_creative_ids
+    assert not missing, (
+        f"Expected all creatives {sorted(expected_ids)} uploaded to DB, "
+        f"but missing {sorted(missing)}. "
+        f"DB has {sorted(db_creative_ids)}. "
+        f"SPEC-PRODUCTION GAP: production may not persist inline creatives "
+        f"via this code path yet. FIXME(salesagent-9vgz.1)"
+    )
 
 
 @then("the system should assign the uploaded creatives to packages")
@@ -2176,10 +2157,7 @@ def then_creatives_assigned_to_packages(ctx: dict) -> None:
     Verifies that the specific (creative_id, package_id) pairs from the request's
     inline creatives array are present in the DB — not just that any assignment exists.
     """
-    from sqlalchemy import select
-
-    from src.core.database.models import CreativeAssignment
-    from tests.bdd.steps._harness_db import db_session as _db_session
+    from src.core.database.repositories.creative import CreativeAssignmentRepository
 
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
@@ -2211,19 +2189,24 @@ def then_creatives_assigned_to_packages(ctx: dict) -> None:
             if cid and pkg_id:
                 expected_pairs.add((cid, pkg_id))
 
-    with _db_session(ctx) as session:
-        assignments = session.scalars(select(CreativeAssignment).filter_by(media_buy_id=media_buy_id)).all()
-        assert len(assignments) > 0, f"Expected creative assignments for media_buy {media_buy_id}, found none"
+    env = ctx["env"]
+    env._commit_factory_data()
+    tenant = ctx["tenant"]
+    repo = CreativeAssignmentRepository(env._session, tenant.tenant_id)
+    assignments = repo.get_by_media_buy(media_buy_id)
 
-        # Verify specific pairings if we could derive them from request + response
-        if expected_pairs:
-            actual_pairs = {(a.creative_id, a.package_id) for a in assignments}
-            missing = expected_pairs - actual_pairs
-            assert not missing, (
-                f"Expected creative→package pairings {sorted(expected_pairs)} "
-                f"but missing {sorted(missing)}. "
-                f"Actual DB pairings: {sorted(actual_pairs)}"
-            )
+    # Verify specific (creative_id, package_id) pairings — not just "something exists"
+    assert expected_pairs, (
+        "No expected (creative_id, package_id) pairs derived from request + response — "
+        "cannot verify assignment pairings"
+    )
+    actual_pairs = {(a.creative_id, a.package_id) for a in assignments}
+    missing = expected_pairs - actual_pairs
+    assert not missing, (
+        f"Expected creative→package pairings {sorted(expected_pairs)} "
+        f"but missing {sorted(missing)}. "
+        f"Actual DB pairings: {sorted(actual_pairs)}"
+    )
 
 
 @then("the response should include the created media buy with creative assignments")
@@ -2243,20 +2226,23 @@ def then_response_has_creative_assignments(ctx: dict) -> None:
     assert status in ("pending_activation", "completed", "activating"), (
         f"Expected activation-related status, got '{status}'"
     )
-    # Step text claims "with creative assignments" — verify they exist in DB
-    from sqlalchemy import func, select
+    # Step text claims "with creative assignments" — verify the specific creatives
+    from src.core.database.repositories.creative import CreativeAssignmentRepository
 
-    from src.core.database.models import CreativeAssignment
-    from tests.bdd.steps._harness_db import db_session as _db_session
+    env = ctx["env"]
+    env._commit_factory_data()
+    tenant = ctx["tenant"]
+    repo = CreativeAssignmentRepository(env._session, tenant.tenant_id)
+    assignments = repo.get_by_media_buy(media_buy_id)
 
-    with _db_session(ctx) as session:
-        assignment_count = session.scalar(
-            select(func.count()).select_from(CreativeAssignment).filter_by(media_buy_id=media_buy_id)
-        )
-        assert assignment_count and assignment_count > 0, (
-            f"Step claims 'with creative assignments' but no CreativeAssignment records "
-            f"found for media_buy {media_buy_id}"
-        )
+    expected_ids = _extract_creative_ids_from_request(ctx)
+    actual_ids = {a.creative_id for a in assignments}
+    assert expected_ids, "No creative IDs found in request — cannot verify assignment"
+    missing = expected_ids - actual_ids
+    assert not missing, (
+        f"Step claims 'with creative assignments' — expected {sorted(expected_ids)} "
+        f"but missing {sorted(missing)}. Actual: {sorted(actual_ids)}"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2584,6 +2570,19 @@ def then_response_has_derived_packages(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 # Helpers (local to this module)
 # ═══════════════════════════════════════════════════════════════════════
+
+
+def _extract_creative_ids_from_request(ctx: dict) -> set[str]:
+    """Extract creative IDs from request kwargs packages[].creatives[]."""
+    kwargs = ctx.get("request_kwargs", {})
+    ids: set[str] = set()
+    for pkg in kwargs.get("packages", []):
+        creatives = pkg.get("creatives", []) if isinstance(pkg, dict) else getattr(pkg, "creatives", []) or []
+        for creative in creatives:
+            cid = creative.get("creative_id") if isinstance(creative, dict) else getattr(creative, "creative_id", None)
+            if cid:
+                ids.add(cid)
+    return ids
 
 
 def _get_response_field_from_resp(resp: object, field: str) -> object:
