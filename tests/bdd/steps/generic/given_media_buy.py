@@ -2685,16 +2685,27 @@ def given_request_correctable_error(ctx: dict) -> None:
 
 @given(parsers.parse('a media buy exists in "{state}" state'))
 def given_existing_media_buy(ctx: dict, state: str) -> None:
-    """Create a media buy in the specified state in the database."""
-    from tests.factories import MediaBuyFactory
+    """Create a media buy in the specified state in the database.
+
+    Uses env.seed_media_buy() which handles both modes:
+    - In-process: factory with deterministic IDs (per-test DB, no collision)
+    - E2E: HTTP POST to Docker → server-generated UUID (shared DB, no collision)
+    """
+    import uuid
 
     env = ctx["env"]
-    media_buy = MediaBuyFactory(
+    product = ctx.get("default_product")
+    assert product is not None, (
+        "No default_product in ctx — Background must set up ctx['default_product'] "
+        "before 'a media buy exists in ... state'"
+    )
+    media_buy = env.seed_media_buy(
         tenant=ctx["tenant"],
         principal=ctx["principal"],
+        product=product,
         status=state,
+        buyer_ref=f"ref-{uuid.uuid4().hex[:8]}",
     )
-    env._commit_factory_data()
     ctx["existing_media_buy"] = media_buy
     ctx["existing_media_buy_id"] = media_buy.media_buy_id
 

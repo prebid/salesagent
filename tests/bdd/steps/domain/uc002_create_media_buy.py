@@ -1261,7 +1261,7 @@ def when_seller_rejects_media_buy(ctx: dict, reason: str) -> None:
     # SPEC-PRODUCTION GAP: xfail AFTER commit+verification — rejection status IS
     # persisted, but the reason could not be stored on a workflow step because no
     # workflow mapping exists. This surfaces the gap without masking the rejection.
-    if no_workflow_mapping:
+    if mapping is None:
         pytest.xfail(
             f"SPEC-PRODUCTION GAP: No workflow mapping for media buy {media_buy_id} — "
             "rejection reason cannot be stored on a workflow step. "
