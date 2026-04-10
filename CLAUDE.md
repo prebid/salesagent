@@ -107,6 +107,7 @@ AST-scanning tests enforce architecture invariants on every `make quality` run. 
 | No split mock assertions | Tests use `assert_called_once_with()`, not `assert_called_once()` + `call_args` | `test_architecture_weak_mock_assertions.py` |
 | Single migration head | Alembic migration graph has exactly one head | `test_architecture_single_migration_head.py` |
 | BDD assertion strength | Then steps use strong assertions, not hasattr/getattr-existence/count-only/ctx-error-fallback | `test_architecture_bdd_assertion_strength.py` |
+| BDD no request in Then | Then steps must not read request_kwargs — use Given→Then ctx contract | `test_architecture_bdd_no_request_in_then.py` |
 
 **Rules for guards:**
 - Allowlists can only shrink — never add new violations, fix them instead
