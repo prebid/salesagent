@@ -1252,9 +1252,25 @@ def _build_keyword_entry(
 
 
 def _setup_keyword_partition(ctx: dict, field_name: str, partition: str) -> None:
-    """Build update request for keyword add/remove partition scenarios."""
+    """Build update request for keyword add/remove partition scenarios.
+
+    Handles greedy ``{partition}`` captures from pytest-bdd that include a
+    ``shared `` or ``boundary `` prefix when the more specific step pattern
+    is not selected.
+    """
     update_kwargs, pkg_update = _setup_update_partition(ctx)
     partition = partition.strip()
+
+    # pytest-bdd may match "per {partition}" greedily, capturing the
+    # "shared " or "boundary " prefix that belongs to a more-specific step.
+    if partition.startswith("shared "):
+        partition = partition.removeprefix("shared ").strip()
+    elif partition.startswith("boundary "):
+        bp = partition.removeprefix("boundary ").strip()
+        _apply_keyword_boundary(pkg_update, field_name, bp)
+        update_kwargs["packages"] = [pkg_update]
+        ctx["update_kwargs"] = update_kwargs
+        return
 
     if partition in ("new_keyword", "typical_add"):
         pkg_update[field_name] = [_build_keyword_entry()]
