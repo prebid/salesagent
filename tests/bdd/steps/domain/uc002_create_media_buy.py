@@ -1724,8 +1724,7 @@ def then_creative_assignment_proceeds(ctx: dict) -> None:
 
     expected_ids = ctx.get("expected_creative_ids")
     assert expected_ids, (
-        "No expected_creative_ids in ctx — "
-        "Given step must register ctx['expected_creative_ids'] for Then steps"
+        "No expected_creative_ids in ctx — Given step must register ctx['expected_creative_ids'] for Then steps"
     )
     actual_ids = {a.creative_id for a in assignments}
     missing = expected_ids - actual_ids
@@ -2138,8 +2137,7 @@ def then_creatives_uploaded_to_library(ctx: dict) -> None:
     )
     expected_ids = ctx.get("expected_creative_ids")
     assert expected_ids, (
-        "No expected_creative_ids in ctx — "
-        "Given step must register ctx['expected_creative_ids'] for Then steps"
+        "No expected_creative_ids in ctx — Given step must register ctx['expected_creative_ids'] for Then steps"
     )
 
     env = ctx["env"]
@@ -2180,8 +2178,7 @@ def then_creatives_assigned_to_packages(ctx: dict) -> None:
     # Package IDs come from the response (they're an outcome — server generates them).
     expected_ids = ctx.get("expected_creative_ids")
     assert expected_ids, (
-        "No expected_creative_ids in ctx — "
-        "Given step must register ctx['expected_creative_ids'] for Then steps"
+        "No expected_creative_ids in ctx — Given step must register ctx['expected_creative_ids'] for Then steps"
     )
 
     env = ctx["env"]
@@ -2228,8 +2225,7 @@ def then_response_has_creative_assignments(ctx: dict) -> None:
 
     expected_ids = ctx.get("expected_creative_ids")
     assert expected_ids, (
-        "No expected_creative_ids in ctx — "
-        "Given step must register ctx['expected_creative_ids'] for Then steps"
+        "No expected_creative_ids in ctx — Given step must register ctx['expected_creative_ids'] for Then steps"
     )
     actual_ids = {a.creative_id for a in assignments}
     missing = expected_ids - actual_ids

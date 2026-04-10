@@ -11,7 +11,7 @@ beads: salesagent-9vgz.92
 
 from __future__ import annotations
 
-from pytest_bdd import given, parsers, then
+from pytest_bdd import given, then
 
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — NFR preconditions
@@ -48,8 +48,7 @@ def given_budget_below_minimum(ctx: dict) -> None:
 
     min_budget = ctx.get("min_package_budget")
     assert min_budget is not None, (
-        "min_package_budget not in ctx — "
-        "'the tenant has minimum order size requirements' Given step must run first"
+        "min_package_budget not in ctx — 'the tenant has minimum order size requirements' Given step must run first"
     )
     below_min = float(Decimal(str(min_budget)) - Decimal("0.01"))
     kwargs = ctx.get("request_kwargs", {})
@@ -74,14 +73,12 @@ def then_fail_with_auth_error(ctx: dict) -> None:
 
     error = ctx.get("error")
     assert error is not None, (
-        "Expected an authentication error but no error was recorded — "
-        "the request succeeded despite invalid credentials"
+        "Expected an authentication error but no error was recorded — the request succeeded despite invalid credentials"
     )
     is_auth_error = isinstance(error, AdCPAuthenticationError)
     is_null_token_error = isinstance(error, TypeError) and "Header value" in str(error)
     assert is_auth_error or is_null_token_error, (
-        f"Expected AdCPAuthenticationError (or null-token TypeError in E2E), "
-        f"got {type(error).__name__}: {error}"
+        f"Expected AdCPAuthenticationError (or null-token TypeError in E2E), got {type(error).__name__}: {error}"
     )
 
 
@@ -91,8 +88,7 @@ def then_no_adapter_calls(ctx: dict) -> None:
     env = ctx["env"]
     mock_adapter = env.mock["adapter"].return_value
     assert not mock_adapter.create_media_buy.called, (
-        "Adapter.create_media_buy was called despite auth failure — "
-        "business logic ran before authentication"
+        "Adapter.create_media_buy was called despite auth failure — business logic ran before authentication"
     )
 
 
@@ -113,8 +109,7 @@ def then_error_minimum_spend(ctx: dict) -> None:
         error_str = str(msg).lower()
 
     assert "minimum" in error_str or "min" in error_str or "spend" in error_str, (
-        f"Expected error to indicate minimum spend requirement, "
-        f"got: {error or resp}"
+        f"Expected error to indicate minimum spend requirement, got: {error or resp}"
     )
 
 

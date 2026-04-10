@@ -69,11 +69,11 @@ _DISPATCH_IN_THEN_ALLOWLIST: set[str] = {
     # Legacy dispatch-in-Then steps — original scenarios are xfailed.
     # Auth and budget enforcement replaced by BR-UC-002-nfr-enforcement.feature.
     # Rate limiting, payload size, SLA test unimplemented features (dead code).
-    "bdd/steps/domain/uc002_nfr.py:127 then_auth_before_business_logic",
-    "bdd/steps/domain/uc002_nfr.py:186 then_rate_limiting_enforced",
-    "bdd/steps/domain/uc002_nfr.py:228 then_payload_size_limits",
-    "bdd/steps/domain/uc002_nfr.py:321 then_response_within_sla",
-    "bdd/steps/domain/uc002_nfr.py:365 then_budget_validated_against_min_order",
+    "bdd/steps/domain/uc002_nfr.py:122 then_auth_before_business_logic",
+    "bdd/steps/domain/uc002_nfr.py:181 then_rate_limiting_enforced",
+    "bdd/steps/domain/uc002_nfr.py:223 then_payload_size_limits",
+    "bdd/steps/domain/uc002_nfr.py:316 then_response_within_sla",
+    "bdd/steps/domain/uc002_nfr.py:360 then_budget_validated_against_min_order",
     # FIXME(GH-TBD): Split into When (re-dispatch with decoy) + Then (assert isolation)
     "bdd/steps/domain/uc011_accounts.py:490 then_accounts_are_agent_scoped",
     # FIXME(GH-TBD): Split into When (unfiltered request) + Then (assert same set)
@@ -200,8 +200,7 @@ class TestBddNoDispatchInThen:
         if stale:
             errors.append(
                 "Stale allowlist entries (violations fixed — remove from "
-                "_DISPATCH_IN_THEN_ALLOWLIST):\n"
-                + "\n".join(f"  {s}" for s in stale)
+                "_DISPATCH_IN_THEN_ALLOWLIST):\n" + "\n".join(f"  {s}" for s in stale)
             )
 
         assert not errors, "\n\n".join(errors)
@@ -236,8 +235,7 @@ class TestBddNoDispatchInThen:
         if stale:
             errors.append(
                 "Stale allowlist entries (violations fixed — remove from "
-                "_ASSERT_ON_REQUEST_ALLOWLIST):\n"
-                + "\n".join(f"  {s}" for s in stale)
+                "_ASSERT_ON_REQUEST_ALLOWLIST):\n" + "\n".join(f"  {s}" for s in stale)
             )
 
         assert not errors, "\n\n".join(errors)

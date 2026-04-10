@@ -2493,7 +2493,7 @@ def _assert_valid_content(ctx: dict, field: str) -> None:
     """Per-field content assertion for 'valid' partition/boundary outcomes."""
     resp = ctx["response"]
 
-    if field in ("status_filter", "filter"):
+    if field in ("status_filter", "filter", "status"):
         # Verify returned deliveries actually match the requested status filter
         deliveries = getattr(resp, "media_buy_deliveries", None) or []
         request_params = ctx.get("request_params", {})
@@ -2558,13 +2558,17 @@ def _assert_valid_content(ctx: dict, field: str) -> None:
         deliveries = getattr(resp, "media_buy_deliveries", None) or []
         assert len(deliveries) > 0, f"Valid {field}: expected non-empty deliveries"
 
-    elif field in ("date_range", "date range"):
+    elif field in ("date_range", "date range", "date"):
         period = getattr(resp, "reporting_period", None)
         if period is not None:
             start = getattr(period, "start", None)
             end = getattr(period, "end", None)
             assert start is not None, f"Valid {field}: reporting_period.start is None"
             assert end is not None, f"Valid {field}: reporting_period.end is None"
+
+    elif field in ("sampling_method", "sampling"):
+        deliveries = getattr(resp, "media_buy_deliveries", None) or []
+        assert len(deliveries) > 0, f"Valid {field}: expected non-empty deliveries"
 
     elif field == "ownership":
         deliveries = getattr(resp, "media_buy_deliveries", None) or []
@@ -2610,6 +2614,12 @@ def _assert_partition_or_boundary(ctx: dict, expected: str, field: str = "unknow
 @then(parsers.re(r"the (?P<field>.+) check should result in (?P<expected>.+)"))
 @then(parsers.re(r"the (?P<field>.+) check should be (?P<expected>.+)"))
 @then(parsers.re(r"the (?P<field>ownership|resolution) should be (?P<expected>.+)"))
+@then(
+    parsers.re(
+        r"the (?P<field>reporting_dimensions|attribution_window|daily breakdown"
+        r"|account|status|date|sampling) handling should be (?P<expected>.+)"
+    )
+)
 def then_partition_or_boundary_outcome(ctx: dict, field: str, expected: str) -> None:
     """Partition/boundary test: assert outcome matches expected for the given field."""
     _assert_partition_or_boundary(ctx, expected, field)
