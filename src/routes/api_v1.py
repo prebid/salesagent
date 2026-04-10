@@ -81,6 +81,7 @@ class CreateMediaBuyBody(BaseModel):
     po_number: str | None = None
     product_ids: list[str] | None = None
     total_budget: float | None = None
+    push_notification_config: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
 
 
@@ -280,6 +281,7 @@ async def create_media_buy(body: CreateMediaBuyBody, identity: ResolvedIdentity 
             po_number=body.po_number,
             product_ids=body.product_ids,
             total_budget=body.total_budget,
+            push_notification_config=body.push_notification_config,
             identity=identity,
         )
     except ToolError as e:

@@ -22,8 +22,8 @@ Feature: BR-UC-002 Manual Overrides
   # requires a webhook URL to verify against.
   @T-UC-002-alt-manual-reject-override @alternative @alt-manual @post-s12
   Scenario: Seller rejects a pending media buy (with webhook)
-    Given a media buy exists in "pending_approval" state
-    And the buyer has configured a webhook for notifications
+    Given the buyer has configured a webhook for notifications
+    And a media buy exists in "pending_approval" state
     When the Seller rejects the media buy with reason "Budget too low for Q1 campaign"
     Then the media buy status should be "rejected"
     And the response should include "rejection_reason" containing "Budget too low"

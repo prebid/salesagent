@@ -2708,6 +2708,7 @@ def given_existing_media_buy(ctx: dict, state: str) -> None:
         product=product,
         status=state,
         buyer_ref=f"ref-{uuid.uuid4().hex[:8]}",
+        push_notification_config=ctx.get("push_notification_config"),
     )
     ctx["existing_media_buy"] = media_buy
     ctx["existing_media_buy_id"] = media_buy.media_buy_id

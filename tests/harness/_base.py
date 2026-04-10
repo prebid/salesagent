@@ -1173,6 +1173,7 @@ class IntegrationEnv(BaseTestEnv):
         status: str = "active",
         buyer_ref: str = "test-buyer-ref",
         packages: list[dict] | None = None,
+        push_notification_config: dict | None = None,
     ) -> Any:
         """Create a media buy through the real production path.
 
@@ -1197,6 +1198,7 @@ class IntegrationEnv(BaseTestEnv):
                 status=status,
                 buyer_ref=buyer_ref,
                 packages=packages,
+                push_notification_config=push_notification_config,
             )
         return self._seed_media_buy_impl(
             tenant=tenant,
@@ -1217,6 +1219,7 @@ class IntegrationEnv(BaseTestEnv):
         status: str,
         buyer_ref: str,
         packages: list[dict],
+        push_notification_config: dict | None = None,
     ) -> Any:
         """Create media buy via real HTTP to Docker server.
 
@@ -1241,7 +1244,7 @@ class IntegrationEnv(BaseTestEnv):
             po_id = f"{pricing_option.pricing_model}_{pricing_option.currency.lower()}_{fixed_str}"
 
         now = datetime.now(UTC)
-        body = {
+        body: dict[str, Any] = {
             "buyer_ref": buyer_ref,
             "brand": {"domain": "test-brand.example.com"},
             "start_time": (now + timedelta(days=1)).isoformat(),
@@ -1256,6 +1259,8 @@ class IntegrationEnv(BaseTestEnv):
                 for i, pkg in enumerate(packages)
             ],
         }
+        if push_notification_config is not None:
+            body["push_notification_config"] = push_notification_config
 
         with httpx.Client(base_url=base_url, timeout=30) as client:
             resp = client.post(

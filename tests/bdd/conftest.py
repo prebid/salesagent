@@ -609,16 +609,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                         item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
                     break  # tag matched — skip remaining selective entries
 
-        # Webhook override: E2E seed_media_buy doesn't forward push_notification_config
-        # to Docker, so the webhook URL is never persisted. In-process transports pass.
-        if is_e2e_rest and "T-UC-002-alt-manual-reject-override" in marker_names:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="E2E: seed_media_buy doesn't forward push_notification_config to Docker",
-                    strict=True,
-                )
-            )
-
         # Original rejection scenario missing webhook Given step.
         # Replaced by BR-UC-002-manual-overrides.feature with webhook config.
         if "T-UC-002-alt-manual-reject" in marker_names and "T-UC-002-alt-manual-reject-override" not in marker_names:
@@ -630,13 +620,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             )
 
         # NFR-006: original dispatch-in-Then scenario replaced by
-        # BR-UC-002-nfr-enforcement.feature. Original still passes (dispatch works)
-        # so strict=False to allow XPASS without failing.
+        # BR-UC-002-nfr-enforcement.feature with proper Given/When/Then structure.
         if "T-UC-002-nfr-006" in marker_names:
             item.add_marker(
-                pytest.mark.xfail(
-                    reason="restructured — see test_uc002_nfr_enforcement.py",
-                    strict=False,
+                pytest.mark.skip(
+                    reason="replaced by test_uc002_nfr_enforcement.py::test_budget_below_minimum_order_size_is_rejected",
                 )
             )
 
