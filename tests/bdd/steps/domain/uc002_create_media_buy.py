@@ -1718,7 +1718,10 @@ def then_creative_assignment_proceeds(ctx: dict) -> None:
 
     expected_ids = _extract_creative_ids_from_request(ctx)
     actual_ids = {a.creative_id for a in assignments}
-    assert expected_ids, "No creative IDs found in request — cannot verify assignment"
+    assert expected_ids, (
+        "No creative IDs found in request_kwargs — "
+        "Given step must store packages[].creatives[].creative_id in ctx['request_kwargs']"
+    )
     missing = expected_ids - actual_ids
     assert not missing, (
         f"Expected creatives {sorted(expected_ids)} assigned to media buy {media_buy_id}, "
@@ -2237,7 +2240,10 @@ def then_response_has_creative_assignments(ctx: dict) -> None:
 
     expected_ids = _extract_creative_ids_from_request(ctx)
     actual_ids = {a.creative_id for a in assignments}
-    assert expected_ids, "No creative IDs found in request — cannot verify assignment"
+    assert expected_ids, (
+        "No creative IDs found in request_kwargs — "
+        "Given step must store packages[].creatives[].creative_id in ctx['request_kwargs']"
+    )
     missing = expected_ids - actual_ids
     assert not missing, (
         f"Step claims 'with creative assignments' — expected {sorted(expected_ids)} "

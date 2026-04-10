@@ -59,6 +59,7 @@ _GETATTR_EXISTENCE_ALLOWLIST: set[str] = {
 
 _COUNT_ONLY_ALLOWLIST: set[str] = {
     # FIXME(salesagent-beq4): replace count-only check with element-level assertion
+    "bdd/steps/generic/then_error.py:174 then_error_invalid_params",
     "bdd/steps/domain/uc003_update_media_buy.py:868 then_affected_packages_present",
     "bdd/steps/domain/uc003_update_media_buy.py:902 then_affected_package_budget",
     "bdd/steps/domain/uc004_delivery.py:1182 then_has_metrics",
@@ -195,14 +196,42 @@ def _is_len_gt_zero(test: ast.Compare) -> bool:
     return False
 
 
+def _find_collection_vars(func: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+    """Find variable names assigned from set/list comprehensions or len() comparisons.
+
+    These are collection variables whose bare truthiness check (``assert x``)
+    is semantically equivalent to ``assert len(x) > 0`` — a count-only assertion.
+    """
+    names: set[str] = set()
+    for node in ast.walk(func):
+        if not isinstance(node, ast.Assign):
+            continue
+        # x = {... for ... in ...}  or  x = [... for ... in ...]
+        if isinstance(node.value, (ast.SetComp, ast.ListComp)):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    names.add(target.id)
+    return names
+
+
 def _find_count_only_assertion(
     func: ast.FunctionDef | ast.AsyncFunctionDef,
 ) -> bool:
-    """Detect ``assert len(items) > 0`` as the sole collection check."""
+    """Detect count-only assertions: ``assert len(items) > 0`` or ``assert collection_var``.
+
+    The second form (bare truthiness) is semantically identical to len > 0
+    when the variable holds a set or list. We detect it by tracking variables
+    assigned from set/list comprehensions in the same function.
+    """
+    collection_vars = _find_collection_vars(func)
     for node in ast.walk(func):
         if not isinstance(node, ast.Assert):
             continue
+        # Pattern 1: assert len(x) > 0  (and variants)
         if isinstance(node.test, ast.Compare) and _is_len_gt_zero(node.test):
+            return True
+        # Pattern 2: assert collection_var  (bare truthiness on known collection)
+        if isinstance(node.test, ast.Name) and node.test.id in collection_vars:
             return True
     return False
 
