@@ -438,8 +438,8 @@ async def google_callback(request: Request) -> RedirectResponse:
         flash(request, f"Welcome {user_info.get('name', email)}!", "success")
         return RedirectResponse(request.url_for("public_signup_onboarding"), status_code=303)
 
-    # Populate available tenants (sync DB work)
-    available_tenants = await run_in_threadpool(_enumerate_tenants_for_user, email)
+    # Populate available tenants
+    available_tenants = await _enumerate_tenants_for_user(email)
     request.session["available_tenants"] = available_tenants
 
     if is_single_tenant_mode() and len(available_tenants) == 1:
@@ -466,17 +466,22 @@ def _fallback_login_redirect(request: Request, tenant_context: str | None) -> Re
     return RedirectResponse(url, status_code=303)
 
 
-def _enumerate_tenants_for_user(email: str) -> list[dict]:
-    """Port of the tenant enumeration block at blueprints/auth.py:572-634."""
+async def _enumerate_tenants_for_user(email: str) -> list[dict]:
+    """Port of the tenant enumeration block at blueprints/auth.py:572-634.
+
+    `async def` with `async with get_db_session()` per the full-async pivot
+    (2026-04-11). Previously wrapped in `run_in_threadpool` — that is now
+    forbidden for DB work; `AsyncSession` is async-native.
+    """
     from src.core.database.models import User  # local to mirror Flask import style
 
     tenant_access = get_user_tenant_access(email)
     out: dict[str, dict] = {}
-    with get_db_session() as db:
+    async with get_db_session() as db:
         for tenant in tenant_access.get("user_tenants", []):
-            existing = db.scalars(
+            existing = (await db.execute(
                 select(User).filter_by(email=email, tenant_id=tenant.tenant_id)
-            ).first()
+            )).scalars().first()
             is_admin = bool(existing and existing.role == "admin")
             out[tenant.tenant_id] = {
                 "tenant_id": tenant.tenant_id,
@@ -493,9 +498,9 @@ def _enumerate_tenants_for_user(email: str) -> list[dict]:
         for tenant in tenant_access.get("email_tenants", []):
             if tenant.tenant_id in out:
                 continue
-            existing = db.scalars(
+            existing = (await db.execute(
                 select(User).filter_by(email=email, tenant_id=tenant.tenant_id)
-            ).first()
+            )).scalars().first()
             out[tenant.tenant_id] = {
                 "tenant_id": tenant.tenant_id,
                 "name": tenant.name,
@@ -512,7 +517,7 @@ def _enumerate_tenants_for_user(email: str) -> list[dict]:
 @router.get("/logout", name="auth_logout")
 async def logout(request: Request) -> RedirectResponse:
     tenant_id = request.session.get("tenant_id")
-    idp_logout_url = await run_in_threadpool(_lookup_idp_logout_url, tenant_id) if tenant_id else None
+    idp_logout_url = await _lookup_idp_logout_url(tenant_id) if tenant_id else None
     request.session.clear()
     if idp_logout_url:
         return RedirectResponse(idp_logout_url, status_code=303)
@@ -523,9 +528,11 @@ async def logout(request: Request) -> RedirectResponse:
     )
 
 
-def _lookup_idp_logout_url(tenant_id: str) -> str | None:
-    with get_db_session() as db:
-        config = db.scalars(select(TenantAuthConfig).filter_by(tenant_id=tenant_id)).first()
+async def _lookup_idp_logout_url(tenant_id: str) -> str | None:
+    async with get_db_session() as db:
+        config = (await db.execute(
+            select(TenantAuthConfig).filter_by(tenant_id=tenant_id)
+        )).scalars().first()
         return config.oidc_logout_url if config and getattr(config, "oidc_logout_url", None) else None
 ```
 
@@ -536,7 +543,7 @@ def _lookup_idp_logout_url(tenant_id: str) -> str | None:
 | `@auth_bp.route("/login")` + `def login()` | `@router.get("/login", name="auth_login")` async def | Verb-explicit decorator; flat route name. |
 | `request.args.get("next")` | `next: Annotated[str | None, Query()] = None` | Declarative, typed, self-documenting OpenAPI. |
 | `session["login_next_url"] = next_url` | `request.session["login_next_url"] = ...` | Starlette `SessionMiddleware` exposes `request.session` (signed-cookie backend). |
-| `get_db_session()` called inline | `await run_in_threadpool(_detect_tenant_from_host, request)` | Sync SQLAlchemy must not block the event loop. |
+| `get_db_session()` called inline | `await _detect_tenant_from_host(request)` | `AsyncSession` is async-native; helper is `async def` with `async with get_db_session()`. |
 | `current_app.oauth.google.authorize_redirect(uri)` | `oauth.google.authorize_redirect(request, uri)` (from `authlib.integrations.starlette_client`) | The starlette variant is `async` and uses `request.session` directly — no Flask `current_app` thread-local. |
 | Manual `current_app.session_interface.save_session(...)` at `auth.py:437` | _deleted_ | Starlette always writes the cookie on `http.response.start`; the Flask-specific bug doesn't exist. |
 | `session.modified = True` | _deleted_ | `request.session` is a `dict` subclass that marks itself dirty on every mutation. |
@@ -904,7 +911,7 @@ router = APIRouter(prefix="/auth/oidc", tags=["admin-oidc"])
 @router.get("/login/{tenant_id}", name="oidc_login")
 async def oidc_login(tenant_id: str, request: Request) -> RedirectResponse:
     """Initiate tenant-specific OIDC flow."""
-    gate = await run_in_threadpool(_check_tenant_oidc_available, tenant_id)
+    gate = await _check_tenant_oidc_available(tenant_id)
     if gate is not None:
         flash(request, gate, "error")
         return RedirectResponse(request.url_for("auth_login"), status_code=303)
@@ -922,17 +929,24 @@ async def oidc_login(tenant_id: str, request: Request) -> RedirectResponse:
 
     request.session["oidc_login_tenant_id"] = tenant_id
 
-    redirect_uri = await run_in_threadpool(_load_tenant_redirect_uri, tenant_id)
+    redirect_uri = await _load_tenant_redirect_uri(tenant_id)
     return await client.authorize_redirect(request, redirect_uri)
 
 
-def _check_tenant_oidc_available(tenant_id: str) -> str | None:
-    """Return error message if OIDC is not available, None if it is."""
-    with get_db_session() as db:
-        tenant = db.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+async def _check_tenant_oidc_available(tenant_id: str) -> str | None:
+    """Return error message if OIDC is not available, None if it is.
+
+    `async def` per the full-async pivot (2026-04-11).
+    """
+    async with get_db_session() as db:
+        tenant = (await db.execute(
+            select(Tenant).filter_by(tenant_id=tenant_id)
+        )).scalars().first()
         if not tenant:
             return "Tenant not found"
-        config = db.scalars(select(TenantAuthConfig).filter_by(tenant_id=tenant_id)).first()
+        config = (await db.execute(
+            select(TenantAuthConfig).filter_by(tenant_id=tenant_id)
+        )).scalars().first()
         if not config or not config.oidc_client_id:
             return "SSO is not available for this tenant"
         is_setup_mode = getattr(tenant, "auth_setup_mode", False)
@@ -941,9 +955,11 @@ def _check_tenant_oidc_available(tenant_id: str) -> str | None:
     return None
 
 
-def _load_tenant_redirect_uri(tenant_id: str) -> str:
-    with get_db_session() as db:
-        tenant = db.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+async def _load_tenant_redirect_uri(tenant_id: str) -> str:
+    async with get_db_session() as db:
+        tenant = (await db.execute(
+            select(Tenant).filter_by(tenant_id=tenant_id)
+        )).scalars().first()
         return get_tenant_redirect_uri(tenant)
 
 
@@ -990,7 +1006,7 @@ async def oidc_callback(request: Request) -> RedirectResponse | HTMLResponse:
 
     if is_test:
         # Mark config verified + enable SSO (port of oidc.py:282-307)
-        tenant = await run_in_threadpool(_verify_and_enable_oidc, tenant_id)
+        tenant = await _verify_and_enable_oidc(tenant_id)
         return render(request, "oidc_test_success.html", {
             "tenant": tenant, "tenant_id": tenant_id,
             "email": email, "name": user_info.get("name", email),
@@ -998,8 +1014,8 @@ async def oidc_callback(request: Request) -> RedirectResponse | HTMLResponse:
 
     # Production flow
     request.session.pop("oidc_login_tenant_id", None)
-    result = await run_in_threadpool(
-        _resolve_or_create_user, tenant_id, email.lower(), user_info.get("name", "")
+    result = await _resolve_or_create_user(
+        tenant_id, email.lower(), user_info.get("name", "")
     )
     if result == "denied":
         flash(request, "Access denied. You don't have permission to access this tenant.", "error")
@@ -1025,29 +1041,40 @@ async def oidc_callback(request: Request) -> RedirectResponse | HTMLResponse:
     )
 
 
-def _verify_and_enable_oidc(tenant_id: str) -> Tenant | None:
-    with get_db_session() as db:
-        config = db.scalars(select(TenantAuthConfig).filter_by(tenant_id=tenant_id)).first()
+async def _verify_and_enable_oidc(tenant_id: str) -> Tenant | None:
+    async with get_db_session() as db:
+        config = (await db.execute(
+            select(TenantAuthConfig).filter_by(tenant_id=tenant_id)
+        )).scalars().first()
         if config:
-            tenant = db.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+            tenant = (await db.execute(
+                select(Tenant).filter_by(tenant_id=tenant_id)
+            )).scalars().first()
             config.oidc_verified_at = datetime.now(UTC)
             config.oidc_verified_redirect_uri = get_tenant_redirect_uri(tenant)
             config.oidc_enabled = True
             config.updated_at = datetime.now(UTC)
-            db.commit()
-            db.refresh(tenant)
+            await db.commit()
+            await db.refresh(tenant)
             return tenant
     return None
 
 
-def _resolve_or_create_user(tenant_id: str, email: str, sso_name: str) -> dict | str:
+async def _resolve_or_create_user(tenant_id: str, email: str, sso_name: str) -> dict | str:
     """Port of blueprints/oidc.py:309-370.
-    Returns a dict {email, name} on success or a string sentinel on failure."""
+
+    Returns a dict {email, name} on success or a string sentinel on failure.
+    `async def` per the full-async pivot (2026-04-11).
+    """
     from uuid import uuid4
-    with get_db_session() as db:
-        user = db.scalars(select(User).filter_by(email=email, tenant_id=tenant_id)).first()
+    async with get_db_session() as db:
+        user = (await db.execute(
+            select(User).filter_by(email=email, tenant_id=tenant_id)
+        )).scalars().first()
         if not user:
-            tenant = db.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+            tenant = (await db.execute(
+                select(Tenant).filter_by(tenant_id=tenant_id)
+            )).scalars().first()
             email_domain = email.split("@", 1)[1] if "@" in email else None
             authorized_domains = (tenant.authorized_domains or []) if tenant else []
             if email_domain and email_domain in authorized_domains:
@@ -1061,8 +1088,8 @@ def _resolve_or_create_user(tenant_id: str, email: str, sso_name: str) -> dict |
                     created_at=datetime.now(UTC),
                 )
                 db.add(user)
-                db.commit()
-                db.refresh(user)
+                await db.commit()
+                await db.refresh(user)
             else:
                 return "denied"
         if not user.is_active:
@@ -1070,7 +1097,7 @@ def _resolve_or_create_user(tenant_id: str, email: str, sso_name: str) -> dict |
         if sso_name and sso_name != user.name:
             user.name = sso_name
         user.last_login = datetime.now(UTC)
-        db.commit()
+        await db.commit()
         return {"email": user.email, "name": user.name}
 ```
 
@@ -1788,7 +1815,7 @@ async def activity_events(
     async def event_generator() -> AsyncGenerator[dict, None]:
         try:
             # 1. Send the initial burst (historical)
-            recent = await run_in_threadpool(get_recent_activities, tenant_id, None, 50)
+            recent = await get_recent_activities(tenant_id, None, 50)
             for activity in reversed(recent):
                 yield {"event": "activity", "data": json.dumps(activity)}
 
@@ -1801,8 +1828,7 @@ async def activity_events(
                     break
 
                 try:
-                    new_activities = await run_in_threadpool(
-                        get_recent_activities,
+                    new_activities = await get_recent_activities(
                         tenant_id,
                         last_check - timedelta(seconds=1),
                         10,
@@ -1855,7 +1881,7 @@ async def activity_events(
 | `def generate():` (sync generator, `yield "data: ...\n\n"`) | `async def event_generator():` yielding `{"event": "activity", "data": json.dumps(...)}` | Async-native; `EventSourceResponse` does string framing from the dict. |
 | `GeneratorExit` (only disconnect signal, fragile) | `if await request.is_disconnected(): break` | Explicit disconnect check on every loop iteration; works with `sse-starlette`. |
 | `time.sleep(2)` (blocks worker thread) | `await asyncio.sleep(2)` | Yields the event loop; one uvicorn worker can hold thousands of SSE connections. |
-| `get_recent_activities(...)` called inline (sync SQL) | `await run_in_threadpool(get_recent_activities, ...)` | Keeps DB off the event loop. |
+| `get_recent_activities(...)` called inline (sync SQL) | `await get_recent_activities(...)` | `AsyncSession` is async-native; helper is `async def` with per-tick `async with get_db_session()`. |
 | Manual `": heartbeat\n\n"` yield | `ping=15` param | Library handles keep-alive; comment-line pings are automatic. |
 | `defaultdict(list)` for timestamps + no lock | `asyncio.Lock` around shared state | Async-safe; prevents TOCTOU when many connections race on cache-miss. |
 | `@require_tenant_access(api_mode=True)` | `CurrentTenantDep` + cookie-auth (middleware reads `request.session`) | Unified deps. **Cookie, not header** — EventSource can't set `Authorization`. |
@@ -2144,7 +2170,7 @@ async def add_product_form(
     request: Request,
     tenant: CurrentTenantDep,
 ) -> HTMLResponse:
-    adapter_type, currencies = await run_in_threadpool(_load_adapter_context, tenant_id)
+    adapter_type, currencies = await _load_adapter_context(tenant_id)
     return render(request, "add_product.html", {
         "tenant_id": tenant_id,
         "tenant": tenant,
@@ -2294,7 +2320,7 @@ async def add_product(
 
     # 4. Run the service
     try:
-        product_name = await run_in_threadpool(create_product_for_tenant, cmd)
+        product_name = await create_product_for_tenant(cmd)
     except ProductCreateValidationError as err:
         return await _rerender_with_error(request, tenant_id, tenant, raw_form, str(err))
     except Exception:
@@ -2313,15 +2339,18 @@ async def add_product(
 
 # ─── Helpers ────────────────────────────────────────────────────────────────
 
-def _load_adapter_context(tenant_id: str) -> tuple[str, list[str]]:
-    with get_db_session() as db:
-        tenant = db.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+async def _load_adapter_context(tenant_id: str) -> tuple[str, list[str]]:
+    """`async def` per the full-async pivot (2026-04-11)."""
+    async with get_db_session() as db:
+        tenant = (await db.execute(
+            select(Tenant).filter_by(tenant_id=tenant_id)
+        )).scalars().first()
         adapter_type = (tenant.ad_server if tenant else None) or "mock"
         currencies = [
             row.currency_code
-            for row in db.scalars(
+            for row in (await db.execute(
                 select(CurrencyLimit).filter_by(tenant_id=tenant_id)
-            ).all()
+            )).scalars().all()
         ] or ["USD"]
     return adapter_type, currencies
 
@@ -2356,7 +2385,7 @@ async def _rerender_with_error(
     message: str,
 ) -> HTMLResponse:
     flash(request, message, "error")
-    adapter_type, currencies = await run_in_threadpool(_load_adapter_context, tenant_id)
+    adapter_type, currencies = await _load_adapter_context(tenant_id)
     return render(request, "add_product.html", {
         "tenant_id": tenant_id,
         "tenant": tenant,
@@ -2423,10 +2452,14 @@ class CreateProductCommand:
     cross_tenant_principal_ids: list[str] = field(default_factory=list)
 
 
-def create_product_for_tenant(cmd: CreateProductCommand) -> str:
-    """Pure synchronous service function. Raises ProductCreateValidationError
-    with a user-facing message on any failure. Returns the product name on
-    success."""
+async def create_product_for_tenant(cmd: CreateProductCommand) -> str:
+    """Async service function. Raises ProductCreateValidationError with a
+    user-facing message on any failure. Returns the product name on success.
+
+    `async def` per the full-async pivot (2026-04-11). The `_validate_formats`,
+    `_resolve_properties`, and `_build_impl_config` helpers are all `async def`
+    too — see the ported blocks below.
+    """
     if not cmd.name:
         raise ProductCreateValidationError("Product name is required")
 
@@ -2438,15 +2471,15 @@ def create_product_for_tenant(cmd: CreateProductCommand) -> str:
 
     delivery_type = "guaranteed" if parsed_pricing[0].get("is_fixed") else "non_guaranteed"
 
-    with get_db_session() as db:
+    async with get_db_session() as db:
         # Format validation (use creative agent registry)
-        formats_validated = _validate_formats(db, cmd.tenant_id, cmd.formats)
+        formats_validated = await _validate_formats(db, cmd.tenant_id, cmd.formats)
 
         # Property-mode branching
-        properties_kwargs = _resolve_properties(db, cmd)
+        properties_kwargs = await _resolve_properties(db, cmd)
 
         # Build implementation config
-        impl_config = _build_impl_config(
+        impl_config = await _build_impl_config(
             db, cmd, delivery_type, formats_validated,
         )
 
@@ -2470,9 +2503,9 @@ def create_product_for_tenant(cmd: CreateProductCommand) -> str:
                 list(cmd.allowed_principal_ids) + list(cmd.cross_tenant_principal_ids)
             )
         if cmd.inventory_profile_id is not None:
-            profile = db.scalars(
+            profile = (await db.execute(
                 select(InventoryProfile).filter_by(id=cmd.inventory_profile_id)
-            ).first()
+            )).scalars().first()
             if not profile or profile.tenant_id != cmd.tenant_id:
                 raise ProductCreateValidationError(
                     "Invalid inventory profile - profile not found or does not belong to this tenant"
@@ -2484,7 +2517,7 @@ def create_product_for_tenant(cmd: CreateProductCommand) -> str:
 
         product = Product(**product_kwargs)
         db.add(product)
-        db.flush()
+        await db.flush()
 
         for option in parsed_pricing:
             db.add(PricingOption(
@@ -2520,7 +2553,7 @@ def create_product_for_tenant(cmd: CreateProductCommand) -> str:
                 is_primary=(idx == 0),
             ))
 
-        db.commit()
+        await db.commit()
         return product.name
 
 
@@ -2576,7 +2609,7 @@ def _validate_pricing_options(
 | Business logic mixed with form handling | `create_product_for_tenant(cmd)` pure function | Unit-testable without starting the admin app. |
 | No super-admin gating | `SuperAdminDep`-style gating via `user.role == "super_admin"` check on `override_pricing_floor` and `cross_tenant_principal_ids` | New feature; demonstrates the pattern. |
 | Validation errors via `flash()` side-effect | `ProductCreateValidationError` typed exception | Service returns value or raises; handler translates to HTTP. |
-| `asyncio.run(registry.list_all_formats_with_errors(...))` inside sync handler | Service stays sync; handler uses `run_in_threadpool`. Registry's async call happens inside the thread via `asyncio.run` (unchanged) OR we refactor to async registry in Wave 2 | Minimizes blast radius; async registry migration is a separate concern. |
+| `asyncio.run(registry.list_all_formats_with_errors(...))` inside sync handler | `await registry.list_all_formats_with_errors(...)` directly — service is `async def` under the full-async pivot | No more `asyncio.run` inside handler; no more threadpool hop for DB or registry calls. |
 | `request.form.getlist("selected_property_tags")` inside `property_mode` branch | All multi-selects declared at handler top; branching happens in service | Single source of truth for form fields. |
 | `datetime.now(UTC)` inline | Service layer handles timestamps; handler doesn't care | |
 | `flash(f"Product '{product.name}' created...", "success")` + redirect to list | Same, via `request.url_for("products_list_products", tenant_id=...)` | Flat name. |
