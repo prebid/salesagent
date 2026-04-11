@@ -1,25 +1,25 @@
 # Flask → FastAPI v2.0.0 Migration — Implementation Checklist
 
-**Status:** SOURCE OF TRUTH for "am I ready to ship Wave N?" ⚠️ **PARTIALLY STALE — see pivot notice below**
+**Status:** SOURCE OF TRUTH for "am I ready to ship Wave N?"
 **Target release:** salesagent v2.0.0
 **Feature branch:** `feat/v2.0.0-flask-to-fastapi`
-**Last updated:** 2026-04-11 (pivoted to full async — checkpoint pending propagation)
+**Last updated:** 2026-04-11 (pivoted to full async; propagation wave applied)
 
-> ⚠️ **BLOCKER 4 HAS PIVOTED TO FULL ASYNC (2026-04-11)**
+> **BLOCKER 4 PIVOTED TO FULL ASYNC (2026-04-11)**
 >
-> User directive: go fully async in v2.0 (deep-audit Option A), absorbing the previously-deferred async SQLAlchemy migration. **Every sync-def item in §2 Blocker 4 below is superseded**, as is the "v2.1 async SQLAlchemy" deferred-scope section.
+> User directive: go fully async in v2.0 (deep-audit Option A), absorbing the
+> previously-deferred async SQLAlchemy migration. The "sync def admin handlers"
+> resolution is superseded; §2 Blocker 4 describes the pivoted target state.
 >
-> **Read [`async-pivot-checkpoint.md`](async-pivot-checkpoint.md) first** for the full new plan. The rest of this file has NOT yet been rewritten to reflect the pivot — the fresh post-compaction session's opus agents will propagate the pivot across all plan files.
+> **Canonical references for the pivoted plan:**
+> - [`async-pivot-checkpoint.md`](async-pivot-checkpoint.md) — full new plan
+> - [`async-audit/`](async-audit/) — six derivative audit reports on the
+>   absorbed-async v2.0 scope (Agent A-F)
+> - `CLAUDE.md` §"Critical Invariants" — 6 invariants and 9 open decisions
 >
-> **Until the propagation happens:**
-> - §1.2 "Admin handler default: sync def" → IGNORE, reversed to async def
-> - §2 Blocker 4 sub-items → IGNORE, reversed to full async SQLAlchemy
-> - §4 Wave 0 structural guard `test_architecture_admin_sync_db_no_async.py` → DO NOT IMPLEMENT (wrong direction; correct is `test_architecture_admin_routes_async.py`)
-> - §4 Wave 0 file `src/admin/templating.py` description referencing sync def → reverse to async
-> - §4 Wave 2 "datetime serialization audit" stays valid
-> - §8 v2.1 scope "Async SQLAlchemy" line → MOVED TO v2.0 Waves 4-5
-> - §4 Wave 3 "Proxy-header smoke tests" → stays valid (unrelated to async)
-> - Every guard-test, acceptance criterion, and worked example in the plan that says "sync def" → reverse
+> §1.2 ("Architectural decisions"), §2 ("Blocker 4"), and §4 ("Wave 0 deliverables")
+> in this file have been rewritten to reflect the pivot. §4 Wave 4 and Wave 5
+> sections enumerate the async conversion scope.
 
 ## How to use this file
 
@@ -214,7 +214,7 @@ Full detail in `flask-to-fastapi-execution-details.md` Part 1.
 - [ ] `src/admin/csrf.py` (~100 LOC) — pure-ASGI `CSRFMiddleware`, header-only read (never `await receive()`), `_EXEMPT_PATH_PREFIXES` includes `/mcp`, `/a2a`, `/api/v1/`, `/_internal/`, `/admin/auth/callback`, `/admin/auth/oidc/`, plus `csrf_token(request)` Jinja helper
 - [ ] `src/admin/app_factory.py` (~80 LOC) — `build_admin_router()` returns `APIRouter(prefix="/admin", tags=["admin"], include_in_schema=False, redirect_slashes=True)`, empty in Wave 0
 - [ ] `src/admin/deps/__init__.py` (2 LOC)
-- [ ] `src/admin/deps/auth.py` (~220 LOC) — `CurrentUserDep`, `RequireAdminDep`, `RequireSuperAdminDep` as `Annotated[...]` aliases; SYNC `def` handler defaults
+- [ ] `src/admin/deps/auth.py` (~260 LOC) — `CurrentUserDep`, `RequireAdminDep`, `RequireSuperAdminDep` as `Annotated[...]` aliases; dep functions are `async def` with `async with get_db_session()` / `await db.execute(...)` per the full-async pivot (2026-04-11)
 - [ ] `src/admin/deps/tenant.py` (~90 LOC) — `CurrentTenantDep` filters `tenant.is_active=True` (fixes pre-existing latent bug)
 - [ ] `src/admin/deps/audit.py` (~110 LOC) — FastAPI `Depends()`-based audit port (rewritten, not ported one-for-one); cached `AuditLogger` via `request.state`, not `flask.g`
 - [ ] `src/admin/middleware/__init__.py` (2 LOC)
@@ -873,10 +873,10 @@ All six companion files live under `.claude/notes/flask-to-fastapi/`:
    - §11 — Foundation module descriptions
    - §12 — Template codemod details
    - §13 — Three worked route examples (simple cases)
-   - §14 — 4-wave strategy (cross-reference to Section 4 of this file)
+   - §14 — 5-6 wave strategy (pivoted 2026-04-11; cross-reference to Section 4 of this file)
    - §15 — Dependency changes
    - §16 — 28 assumptions
-   - §18 — v2.1 async SQLAlchemy scope
+   - §18 — v2.0 Waves 4-5 async SQLAlchemy absorption (pivoted 2026-04-11; was v2.1 follow-on pre-pivot)
    - §19 — Natural flow changes
    - §21 — Verification strategy
 2. **`flask-to-fastapi-execution-details.md`** (1,142 lines) — per-wave detail
