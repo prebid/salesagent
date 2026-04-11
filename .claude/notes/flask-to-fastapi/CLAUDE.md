@@ -66,6 +66,47 @@ These were surfaced by the 2nd/3rd-order audit. Every one of them has shipped-br
 
 ---
 
+## Derivative audit reports (2026-04-11)
+
+After the async pivot, five parallel opus agents produced deep-audit reports on different facets of the absorbed-async v2.0 scope. All reports live in `async-audit/` and are committed at `3e0afa02` / `d8957931` on `feat/v2.0.0-flask-to-fastapi`. A fresh session should consult these before making scope or idiom decisions.
+
+| Report | Lines | When to read |
+|---|---|---|
+| `async-audit/agent-a-scope-audit.md` | 765 | **Before estimating Wave 4-5 LOC or spike scope.** File-by-file async conversion inventory, lazy-load audit (~50 sites all mechanically fixable), refined scope estimate (~16-18k total LOC, **under** checkpoint's 30-35k upper bound), and **9 open decisions** (listed below) that need user input before Wave 4 can start. |
+| `async-audit/agent-b-risk-matrix.md` | 2,392 | Before attempting any risk mitigation. 33 risks (15 checkpoint + 18 new), severity table, per-risk 4-part deep dive (root cause / detection / mitigation / fallback), **9-pattern lazy-load cookbook**, 7-spike pre-Wave-0 gate, driver fallback to `psycopg[binary,pool]>=3.2.0`. |
+| `async-audit/agent-c-plan-edits.md` | 2,074 | Source record only — its 45 edits were applied in commit `d8957931`. Consult for traceability. |
+| `async-audit/agent-d-adcp-verification.md` | 1,433 | **Before touching any AdCP surface.** 21 surfaces PASS with zero current Risk #5 hits. 9 mitigations M1-M9, including **10 missing `await` sites** identified at exact line numbers: `src/routes/api_v1.py` lines 200, 214, 252, 284, 305, 324, 342, 360 + `src/core/tools/capabilities.py` lines 265, 310 + parallel `src/a2a_server/adcp_a2a_server.py` lines 1558, 1587, 1774, 1798, 1842, 1892, 1961, 2000. These must land in the same PR that converts the corresponding `_raw`/`_impl` to async. |
+| `async-audit/agent-e-ideal-state-gaps.md` | 2,849 | Before writing foundation code. Current plan graded B+; 14 idiom upgrades (SessionDep DI pattern, DTO boundary, lifespan-scoped engine, structlog, no-UoW repository pattern). Minimum apply set: E1/E2/E3/E5/E6/E8. |
+| `async-audit/agent-f-nonsurface-inventory.md` | 1,782 | Before Dockerfile, CI, pre-commit, or deployment script changes. 105 non-code action items across 27 categories. **Hard blocker:** 3 sync-psycopg2 deployment paths in `scripts/deploy/entrypoint_admin.sh:9`, `scripts/deploy/run_all_services.py::check_database_health/check_schema_issues`, and `src/core/database/db_config.py::DatabaseConnection`. Also PG version skew (CI=15, local=17), missing `[tool.pytest.ini_options]` section, `DATABASE_URL` sslmode→ssl rewriter. |
+
+### Open decisions blocking Wave 4 (from Agent A §7)
+
+The following 9 questions need user input BEFORE Wave 4 implementation can start. Agent A's report has the context for each; the summary is here so they are not lost:
+
+1. **Adapter base class async conversion strategy** — full async (cleaner, cascades to every adapter) or sync with `run_in_threadpool` wrap (partial, leaks blocking work)? Agent A recommends full async.
+2. **Delete `DatabaseConnection` + `get_db_connection()` in `src/core/database/db_config.py`?** Dead production code per grep. Agent A recommends DELETE.
+3. **Factory-boy async strategy** — custom `AsyncSQLAlchemyModelFactory` shim (preserves existing factories) or switch to `polyfactory` (native async, larger migration)? Agent A recommends custom shim for v2.0.
+4. **`src/core/database/queries.py`** — 282 LOC of sync helpers taking `session` as parameter; straightforward async conversion but confirm no blocker.
+5. **`src/core/database/database_schema.py` + `product_pricing.py`** — brief checks only; likely low risk but audit before Wave 4.
+6. **Flask-caching in pyproject.toml** — dropped in Wave 3, non-issue for async. Confirm no lingering async-incompatible usage.
+7. **`src/core/context_manager.py`** — thread-safe vs task-safe? Used by `_impl` + schedulers + admin. Needs audit for ContextVar propagation under asyncio.
+8. **SSE session lifetime** — `src/admin/blueprints/activity_stream.py` holds sessions across long-lived streams. Open/close per event vs per stream (per Agent B Interaction F)?
+9. **`src/services/background_sync_service.py`** — 9 `get_db_session()` uses, runs long GAM sync jobs. Checkpoint doesn't mention it; may need special handling for hours-long jobs.
+
+### Mandatory pre-Wave-0 spike sequence
+
+Per Agent B §4 and Agent A §6, the 5-7 day spike sequence gates Wave 4-5 entry:
+
+1. **Spike 1 — Lazy-load audit** (HARD GATE): set `lazy="raise"` on all 58 relationships, run `tox -e integration`. Pass: <40 failures fixable in <2 days. **Fail = abandon absorbed-async, revert to sync-def Option C + defer async to v2.1.**
+2. **Spike 2 — Driver compat**: run tests under `asyncpg`. Fail = switch to `psycopg[binary,pool]>=3.2.0`.
+3. **Spike 3 — Performance baseline**: capture sync latency on 20 admin routes + 5 MCP tool calls as `baseline-sync.json` for Wave 4 comparison.
+4. **Spike 4 — Test harness**: convert `tests/harness/_base.py` + 5 representative tests; verify xdist + factory-boy work.
+5. **Spike 5 — Scheduler alive-tick**: convert 2 scheduler tick bodies; observe container logs.
+6. **Spike 6 — Alembic async**: rewrite `alembic/env.py`; run upgrade/downgrade roundtrip. Fallback: keep env.py sync.
+7. **Spike 7 — `server_default` audit**: grep + categorize columns; confirm <30 to rewrite.
+
+---
+
 ## Apps loaded at runtime (4 before → 3 after)
 
 The migration removes **one** of the four framework-level apps currently loaded by `src/app.py`. The MCP and A2A apps are AdCP-protocol surfaces and stay untouched.
