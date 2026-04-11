@@ -408,8 +408,8 @@ Still applies (deep audit §3.1). Async doesn't fix this. Still v2.0 single-work
 **Original v2.0:** ~18,000 LOC (Flask removal + admin FastAPI rewrite + cleanup)
 **Plus async absorption:** +10,000-15,000 LOC (database layer + repositories + UoW + `_impl` conversion + alembic + test harness + factory_boy + driver change)
 
-**Total v2.0:** ~30,000-35,000 LOC
-**Waves:** 0-5 (was 0-3; adding Wave 4 = async SQLAlchemy, Wave 5 = async cleanup + release)
+~~**Total v2.0:** ~30,000-35,000 LOC~~ **Refined by Agent A scope audit (`async-audit/agent-a-scope-audit.md:347`) to ~16,600-18,000 LOC total** — file-by-file inventory landed the upper bound *below* the checkpoint's first-pass estimate, primarily because the lazy-load audit surfaced ~50 mechanically fixable sites rather than a long tail of rewrites.
+**Waves:** 6 (numbered 0-5; was 4 waves numbered 0-3 pre-pivot). May collapse to 5 if Wave 5 merges back into Wave 4 as scope allows.
 **Branch lifetime:** 4-6 weeks with a mandatory pre-Wave-0 spike for Risk #1 (lazy loading audit)
 
 ## 6. Recommended next-session workflow

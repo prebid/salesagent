@@ -214,7 +214,7 @@ SessionLocal = scoped_session(sessionmaker(bind=_engine))
 3. **Eliminates the v2.1 async follow-on from the roadmap.** One migration, one branch, one release.
 4. **AdCP schema impact: zero.** Verified — wire format, MCP tool signatures, A2A protocol, REST endpoint bodies, OpenAPI surface, auth context, `AdCPError` hierarchy, webhook payloads — all unchanged. The pivot is purely an internal implementation-language change. Full verification in `async-pivot-checkpoint.md` §9.
 
-**Scope implication:** v2.0 grows from ~18,000 LOC (original estimate) to ~30,000-35,000 LOC; wave count grows from 4 to 5-6 (adding Wave 4 = async DB layer, Wave 5 = async cleanup + release).
+**Scope implication:** v2.0 grows from the original ~18,000 LOC estimate to ~16,600-18,000 LOC (per Agent A scope audit `async-audit/agent-a-scope-audit.md:347` — file-by-file inventory refined below the checkpoint's first-pass 30-35k upper bound); wave count grows from 4 to 5-6 (adding Wave 4 = async DB layer, Wave 5 = async cleanup + release).
 
 **Pre-Wave-0 lazy-loading audit spike (MANDATORY before committing to Option A scope):** `relationship()` access sites in SQLAlchemy lazily load under AsyncSession only within an active async session scope — out-of-scope access raises `sqlalchemy.exc.MissingGreenlet` (a HARD FAILURE). The audit enumerates every `relationship()` definition in `src/core/database/models/` and classifies every access site as safe (in-scope), fixable (eager-load via `selectinload`/`joinedload`), or requiring rewrite. If the audit reveals the scope is untenable, fall back to Option C and defer async to v2.1. Estimated effort: 1-3 days. See `async-pivot-checkpoint.md` §4 Risk #1 for the full audit procedure.
 

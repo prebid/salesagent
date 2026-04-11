@@ -1866,7 +1866,7 @@ Registered via `app.add_exception_handler(HTTPException, legacy_error_shape_hand
 
 ## 14. Migration Strategy — 5-6 Waves (pivoted 2026-04-11 from 4)
 
-The "written today" framing pushes toward fewer, bigger, atomic PRs. Eight waves presume backward-compat matters — it doesn't here. But one giant PR (~30,000-35,000 LOC post-pivot) is unreviewable. Five-to-six waves keep each PR at ~one week of work.
+The "written today" framing pushes toward fewer, bigger, atomic PRs. Eight waves presume backward-compat matters — it doesn't here. But one giant PR (~16,600-18,000 LOC per Agent A scope audit) is unreviewable. Five-to-six waves keep each PR at ~one week of work.
 
 **Wave 0-3** ship the Flask removal + admin FastAPI rewrite (originally the whole scope).
 **Wave 4-5** absorb the async SQLAlchemy migration that the original plan deferred to v2.1 (see §18 and `async-pivot-checkpoint.md`).
@@ -1956,7 +1956,7 @@ Eight waves imply safety via backward-compat seams — exactly what the user rej
 
 ### Why not one big PR?
 
-~18,000 LOC is unreviewable. Wave 0 alone (templates + foundations) is ~2,500 LOC, already at the top of reviewable.
+~16,600-18,000 LOC split across 5-6 waves is reviewable; one PR at that size is not. Wave 0 alone (templates + foundations) is ~2,500 LOC, already at the top of reviewable.
 
 ---
 
@@ -2050,7 +2050,7 @@ Eight waves imply safety via backward-compat seams — exactly what the user rej
 ## 17. All 15 Debatable Surfaces (resolved + counterarguments)
 
 1. **Module layout: `src/admin/` (chosen) vs `src/web/admin/` vs `src/routes/admin/`** — `src/web/admin/` signals presentation layer; `src/routes/admin/` mirrors REST. Counter: both cause import churn for marginal gain. **Chosen: keep `src/admin/`, rewrite contents.**
-2. **Sync vs async SQLAlchemy** — async unlocks `async with` UoW natively. Counter: touches 100+ files, triples scope. **Pivoted 2026-04-11: full async absorbed into v2.0.** Rationale: a greenfield FastAPI 2026 team writes fully async code end-to-end; the sync+`run_in_threadpool` compromise was a scope-reduction hack; going fully async eliminates the v2.1 async follow-on entirely and fixes the pre-existing `src/routes/api_v1.py` scoped_session latent bug as a side effect. See `async-pivot-checkpoint.md` §§1-5 for the full rationale, 2nd/3rd order risks, and revised scope (~30,000-35,000 LOC, 5-6 waves, pre-Wave-0 lazy-loading audit required).
+2. **Sync vs async SQLAlchemy** — async unlocks `async with` UoW natively. Counter: touches 100+ files, triples scope. **Pivoted 2026-04-11: full async absorbed into v2.0.** Rationale: a greenfield FastAPI 2026 team writes fully async code end-to-end; the sync+`run_in_threadpool` compromise was a scope-reduction hack; going fully async eliminates the v2.1 async follow-on entirely and fixes the pre-existing `src/routes/api_v1.py` scoped_session latent bug as a side effect. See `async-pivot-checkpoint.md` §§1-5 for the full rationale, 2nd/3rd order risks, and revised scope (~16,600-18,000 LOC per Agent A scope audit, 5-6 waves, pre-Wave-0 lazy-loading audit required).
 3. ~~**CSRF library**~~ **RESOLVED → roll-your-own Double Submit Cookie (~100 LOC).** Zero external dep.
 4. **`SessionMiddleware` cookie vs Redis server-side** — Redis if payloads grow. Counter: payloads stay under 4KB. **Chosen: signed cookies.**
 5. **`BaseHTTPMiddleware` vs pure ASGI** — `BaseHTTPMiddleware` easier but Starlette #1729. **Chosen: pure ASGI.**
