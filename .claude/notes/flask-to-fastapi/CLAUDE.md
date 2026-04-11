@@ -1,8 +1,14 @@
 # Flask → FastAPI v2.0.0 Migration — Mission Briefing
 
-**Mission:** Migrate `src/admin/` (Flask blueprints + Jinja templates + session auth) to FastAPI without breaking the AdCP MCP/REST surface, OAuth callbacks, or the ~147 template refs that depend on `request.script_root`.
+> ⚠️ **BLOCKER 4 HAS PIVOTED (2026-04-11) — READ `async-pivot-checkpoint.md` FIRST**
+>
+> User directive: go fully async in v2.0 (Option A from deep audit §1.4), absorbing the previously-deferred async SQLAlchemy migration. The "sync def admin handlers" resolution is **superseded**. Every reference in the plan files to "sync def", "admin handlers default to def", "defer async to v2.1", or `run_in_threadpool` for DB work is now STALE.
+>
+> Fresh sessions: read `async-pivot-checkpoint.md` in this folder before touching any other plan content or implementing any part of Blocker #4.
 
-**Branch:** `feat/v2.0.0-flask-to-fastapi` — four waves, one PR per wave, merged to main.
+**Mission:** Migrate `src/admin/` (Flask blueprints + Jinja templates + session auth) to FastAPI with **fully async SQLAlchemy end-to-end**, without breaking the AdCP MCP/REST surface, OAuth callbacks, or the ~147 template refs that depend on `request.script_root`.
+
+**Branch:** `feat/v2.0.0-flask-to-fastapi` — expanded to 5-6 waves (Flask removal + admin rewrite + full async SQLAlchemy), one PR per wave, merged to main. Pre-Wave-0 lazy-loading spike required.
 
 ---
 
@@ -24,7 +30,7 @@ These were surfaced by the 2nd/3rd-order audit. Every one of them has shipped-br
 
 3. **`@app.exception_handler(AdCPError)` HTML regression.** Admin user clicks a button, the handler returns a JSON blob to the browser, user sees raw JSON. **Fix:** Accept-aware handler — render `templates/error.html` when `Accept: text/html` and path starts with `/admin/`; JSON otherwise. This is intentionally different from the JSON-only handler currently at `src/app.py:82-88`. See `flask-to-fastapi-deep-audit.md` §1 (blocker 3).
 
-4. **Async event-loop session interleaving.** `scoped_session` scopes on `threading.get_ident()`. If admin handlers are `async def`, concurrent requests share the event-loop thread → same session identity → transaction interleaving and cross-request data corruption. **Fix:** admin handlers default to **sync `def`**. Async is reserved for OAuth callbacks, SSE generators, and outbound `httpx` clients. See `flask-to-fastapi-deep-audit.md` §1 (blocker 4).
+4. **⚠️ PIVOTED to Option A (full async SQLAlchemy in v2.0).** The original Blocker #4 resolution was sync `def` admin handlers (Option C) because the event-loop `scoped_session` bug would otherwise cause transaction interleaving. That resolution is **superseded**. User chose to absorb async SQLAlchemy into v2.0: `create_async_engine`, `async_sessionmaker`, `AsyncSession`, async repositories, async UoW, driver change `psycopg2-binary` → `asyncpg`. Admin handlers become `async def` end-to-end matching the rest of the codebase. The scoped_session bug is eliminated entirely (no more thread-identity scoping). **See `async-pivot-checkpoint.md` in this folder for the new plan. The `flask-to-fastapi-deep-audit.md` §1.4 Option C text is stale.**
 
 5. **Middleware ordering: Approximated BEFORE CSRF.** Counterintuitive but correct. If CSRF fires first, an external-domain POST user fails CSRF validation (403) before the Approximated redirect can fire (should be 307). Also switch the redirect from 302 → 307 to preserve the POST body. See `flask-to-fastapi-deep-audit.md` §1 (blocker 5).
 
@@ -91,11 +97,11 @@ Plus orphan: `src/admin/server.py` (~103 LOC, standalone Flask runner via Waitre
 
 These are the places where "copy what the rest of the repo does" is **wrong**. Admin is different.
 
-- **Admin handlers default to sync `def`.** The rest of the codebase (e.g. `src/routes/api_v1.py`) uses `async def` freely. Admin does not, because of blocker 4 (scoped_session + event loop). Async is allowed only for OAuth callbacks, SSE handlers, and outbound `httpx`.
+- **⚠️ PIVOTED: Admin handlers are `async def` end-to-end with full async SQLAlchemy.** Consistent with the rest of the codebase. The scoped_session bug is eliminated by `AsyncSession` + `async_sessionmaker` (there is no more `threading.get_ident()` scoping to race on). `run_in_threadpool` is still used for genuinely blocking work (file I/O, CPU-bound calls, sync third-party libraries) but NOT for DB work — all DB access goes through `async with` UoW. See `async-pivot-checkpoint.md` for full detail.
 - **Middleware order: Approximated BEFORE CSRF.** Counterintuitive relative to standard stacks where CSRF sits near the outside. Here, Approximated's external-domain redirect must fire before CSRF sees the form body. See blocker 5.
 - **Templates use `{{ url_for('name', **params) }}` exclusively** — for admin routes AND static assets. No prefix variables, no Jinja globals holding URL strings, no `script_root`, no `admin_prefix`, no `static_prefix`. Every admin route has `name="admin_<blueprint>_<endpoint>"`; the static mount is `name="static"`. This is the FastAPI canonical pattern from the official docs, verified in `Jinja2Templates._setup_env_defaults` at `starlette/templating.py:118-129` (auto-registers `url_for` as a Jinja global that calls `request.url_for(...)` via `@pass_context`). `NoMatchFound` at render time on a missing name is caught pre-merge by `test_templates_url_for_resolves.py`.
 - **`AdCPError` handler branches on `Accept`.** For admin HTML browser users, render `templates/error.html`. For JSON API callers, return JSON. Different from the plain JSON-only handler at `src/app.py:82-88` — do not copy that one.
-- **Sync admin handlers wrap DB access directly in `with get_db_session():`**, not via `run_in_threadpool`. FastAPI's threadpool handles the offload automatically when the handler is not `async def`. Adding `run_in_threadpool` on top double-offloads and breaks session scoping.
+- **⚠️ PIVOTED: Async admin handlers wrap DB access in `async with get_db_session() as session:` or `async with UoW() as uow:`**, NOT in `run_in_threadpool`. Under full async SQLAlchemy, `get_db_session()` is an async context manager yielding an `AsyncSession`; repositories return via `await session.execute(...)`. `run_in_threadpool` remains valid for non-DB blocking operations only.
 - **`FLASK_SECRET_KEY` is dual-read alongside `SESSION_SECRET`** during v2.0 for dev ergonomics. It is hard-removed in v2.1. Do not rip it out in v2.0 — you will break every dev's local `.env`.
 
 ---
@@ -126,7 +132,7 @@ Catalogued in `flask-to-fastapi-adcp-safety.md`; listed here so they are not los
 
 These are intentionally out of scope for v2.0.0. If you find yourself wanting to do them during the migration, stop and file an issue instead.
 
-- Async SQLAlchemy (requires blocker 4's sync default to be lifted first)
+- ~~Async SQLAlchemy~~ **MOVED TO v2.0** per async-pivot-checkpoint.md — absorbed into v2.0 scope as Waves 4-5
 - Drop nginx (cannot happen until admin is fully on FastAPI and external-domain handling is battle-tested)
 - REST routes ratchet to `Annotated[...]` form
 - `Apx-Incoming-Host` IP allowlist (currently trusted on header alone)

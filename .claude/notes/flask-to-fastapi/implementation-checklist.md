@@ -1,9 +1,25 @@
 # Flask → FastAPI v2.0.0 Migration — Implementation Checklist
 
-**Status:** SOURCE OF TRUTH for "am I ready to ship Wave N?"
+**Status:** SOURCE OF TRUTH for "am I ready to ship Wave N?" ⚠️ **PARTIALLY STALE — see pivot notice below**
 **Target release:** salesagent v2.0.0
 **Feature branch:** `feat/v2.0.0-flask-to-fastapi`
-**Last updated:** 2026-04-11
+**Last updated:** 2026-04-11 (pivoted to full async — checkpoint pending propagation)
+
+> ⚠️ **BLOCKER 4 HAS PIVOTED TO FULL ASYNC (2026-04-11)**
+>
+> User directive: go fully async in v2.0 (deep-audit Option A), absorbing the previously-deferred async SQLAlchemy migration. **Every sync-def item in §2 Blocker 4 below is superseded**, as is the "v2.1 async SQLAlchemy" deferred-scope section.
+>
+> **Read [`async-pivot-checkpoint.md`](async-pivot-checkpoint.md) first** for the full new plan. The rest of this file has NOT yet been rewritten to reflect the pivot — the fresh post-compaction session's opus agents will propagate the pivot across all plan files.
+>
+> **Until the propagation happens:**
+> - §1.2 "Admin handler default: sync def" → IGNORE, reversed to async def
+> - §2 Blocker 4 sub-items → IGNORE, reversed to full async SQLAlchemy
+> - §4 Wave 0 structural guard `test_architecture_admin_sync_db_no_async.py` → DO NOT IMPLEMENT (wrong direction; correct is `test_architecture_admin_routes_async.py`)
+> - §4 Wave 0 file `src/admin/templating.py` description referencing sync def → reverse to async
+> - §4 Wave 2 "datetime serialization audit" stays valid
+> - §8 v2.1 scope "Async SQLAlchemy" line → MOVED TO v2.0 Waves 4-5
+> - §4 Wave 3 "Proxy-header smoke tests" → stays valid (unrelated to async)
+> - Every guard-test, acceptance criterion, and worked example in the plan that says "sync def" → reverse
 
 ## How to use this file
 
