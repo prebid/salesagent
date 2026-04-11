@@ -17,7 +17,7 @@ But the deeper audit found **six critical blockers** the first-order pass missed
 1. 🚨 **`script_root` / `script_name` silent template breakage** — 147 occurrences across 45 templates break because Starlette's `include_router(prefix="/admin")` does NOT set `scope["root_path"]`, but Flask's WSGIMiddleware mount did
 2. 🚨 **Trailing-slash handling differs** — Starlette doesn't redirect `/foo` to `/foo/` by default; Flask does. 111 template `url_for()` calls are at risk of 404s
 3. 🚨 **`@app.exception_handler(AdCPError)` returns JSON to HTML admin browser users** — human clicks a button, sees raw JSON instead of a friendly error page. UX regression across every admin action path
-4. 🚨 **Session scoping on the async event-loop thread** — if admin handlers are `async def` and call sync `get_db_session()`, two concurrent admin requests share the same `scoped_session` identity on the event loop thread, causing transaction interleaving. **The plan's default of `async def` for admin handlers must flip to `def`**
+4. 🚨 **Session scoping on the async event-loop thread — PIVOTED 2026-04-11 to full async SQLAlchemy (Option A, absorbed into v2.0 Waves 4-5).** The original audit recommended sync `def` (Option C) as a scope-reduction compromise. The pivoted resolution is Option A: convert the DB layer to `AsyncSession` + `async_sessionmaker` end-to-end, driver change `psycopg2-binary → asyncpg`, eliminating scoped_session entirely. Admin handlers become `async def` end-to-end with `async with get_db_session()`. See §1.4 and `async-pivot-checkpoint.md` for the full new plan.
 5. 🚨 **Middleware ordering bug: CSRF must run AFTER Approximated, not before** — POSTing to `/admin/*` from an external domain currently produces a 403 (CSRF missing) before the redirect ever fires. Fix is a one-line reorder
 6. 🚨 **OAuth redirect URIs are immutable contracts with Google Cloud Console** — if the FastAPI router changes the path even by one character, OAuth fails with `redirect_uri_mismatch`
 
@@ -191,7 +191,7 @@ SessionLocal = scoped_session(sessionmaker(bind=_engine))
 
 `scoped_session` with default scopefunc uses `threading.get_ident()` — one session per thread. Under Flask + `a2wsgi.WSGIMiddleware`, each request spins up a dedicated worker thread, so each request gets its own session identity. **Isolated.**
 
-Under the proposed FastAPI migration with `async def` handlers and unchanged sync SQLAlchemy:
+**Historical context (pre-pivot).** Under the *original* proposal with `async def` handlers and unchanged sync SQLAlchemy:
 - Multiple concurrent admin requests run on the **same event loop thread**
 - Each request's `with get_db_session()` block gets the **same** scoped_session identity
 - If request A commits mid-transaction and request B is still writing, they share a transaction
@@ -687,7 +687,7 @@ References:
 
 The plan should add these guards. Some overlap with the original audit's proposals but with more detail:
 
-### 5.1 `tests/unit/test_architecture_admin_routes_async.py` (NEW — pivoted 2026-04-11)
+### 5.1 `tests/unit/test_architecture_admin_routes_async.py` (RENAMED from `test_architecture_admin_async_signatures.py` — pivoted 2026-04-11)
 
 **Purpose:** enforce the full-async admin handler invariant (Blocker 1.4 Option A resolution). Original plan was `test_architecture_admin_sync_db_no_async.py` (asserted async handlers must wrap DB work in `run_in_threadpool`) — that guard was the wrong direction under the full-async pivot and is DELETED.
 
@@ -747,48 +747,49 @@ The plan should add these guards. Some overlap with the original audit's proposa
 
 ## Section 6 — Plan Revisions Required (Summary)
 
-The following updates must land in the plan before Wave 0 begins:
+Most items below have been applied via commits `d8957931` and `3e0afa02` (Agent C's 45-edit batch) and follow-up propagation waves. Items marked **[APPLIED]** are done; **[OPEN]** items remain. Use this as a traceability log, not a to-do list.
 
 ### Main overview (`flask-to-fastapi-migration.md`)
 
-1. **Admin handlers are `async def` end-to-end with full async SQLAlchemy** (pivoted 2026-04-11) — update §10, §11, §13 examples; §18 converted from v2.1 deferral to v2.0 Wave 4-5 absorption
-2. **Swap middleware order** — Approximated BEFORE CSRF in §10.2
-3. **Add §2.8 or §2.9** — deep audit revisions summary pointing at this file
-4. **Update §11 foundation** — `render()` wrapper uses `url_for` exclusively (NO `admin_prefix`/`static_prefix`/`script_root` globals); `_url_for` safe-lookup override pre-registered on `templates.env.globals` before first `TemplateResponse`
-5. **Update §12 codemod** — handle the `script_name` split, handle trailing slashes, handle 302→307
-6. **Update §16 assumptions** — rewrite "admin handlers async def + run_in_threadpool" to "admin handlers async def + full async SQLAlchemy"; rewrite "sync SQLAlchemy stays sync" to "full async SQLAlchemy absorbed into v2.0"
-7. **Update §21 verification** — add the 9 new guard tests; rename the sync-db guard to `test_architecture_admin_routes_async.py`
-8. **Update §15 dependencies** — remove `psycopg2-binary` + `types-psycopg2`; add `asyncpg>=0.30.0`; explicit `sqlalchemy[asyncio]` extra
-9. **Expand §14 wave count from 4 to 5-6** — add Wave 4 (async DB layer) and Wave 5 (async cleanup + release)
+1. **[APPLIED]** Admin handlers are `async def` end-to-end with full async SQLAlchemy (pivoted 2026-04-11) — §10, §11, §13 examples updated; §18 converted from v2.1 deferral to v2.0 Wave 4-5 absorption.
+2. **[APPLIED]** Swap middleware order — Approximated BEFORE CSRF in §10.2.
+3. **[APPLIED]** §2.8 deep-audit revisions summary added.
+4. **[APPLIED]** §11 foundation — `render()` wrapper uses `url_for` exclusively; `_url_for` safe-lookup override pre-registered on `templates.env.globals` before first `TemplateResponse`.
+5. **[APPLIED]** §12 codemod — handles `script_name` split, trailing slashes, 302→307.
+6. **[APPLIED]** §16 assumption 4 rewritten: "admin handlers `async def` + full async SQLAlchemy" with `async with get_db_session()` / `await session.execute(...)` as the target pattern.
+7. **[APPLIED]** §21 verification — 9 new guard tests added; sync-db guard renamed to `test_architecture_admin_routes_async.py` (not NEW — renamed from `test_architecture_admin_async_signatures.py`).
+8. **[APPLIED]** §15 dependencies — `psycopg2-binary` removed from runtime (kept as deploy extra for pre-uvicorn health checks); `asyncpg>=0.30.0` added; explicit `sqlalchemy[asyncio]` extra.
+9. **[APPLIED]** §14 wave count expanded from 4 to 5-6 — Wave 4 (async DB layer) and Wave 5 (async cleanup + release) added.
 
 ### Foundation modules (`flask-to-fastapi-foundation-modules.md`)
 
-1. **`templating.py`** — greenfield: NO `admin_prefix`/`static_prefix`/`script_root` in `render()`; pre-register `_url_for` safe-lookup override on `templates.env.globals` before first `TemplateResponse`; templates use `{{ url_for('admin_<bp>_<endpoint>', **params) }}` for admin paths and `{{ url_for('static', path='/...') }}` for static assets
-2. **`csrf.py`** — add `/_internal/` exempt; add `SessionMiddleware` before CSRF ordering note
-3. **`deps/auth.py`** — switch example handlers to `def`, note that async is for OAuth/SSE/httpx callers only; fix `AdminRedirect` handler to URL-encode `next_url`
-4. **`middleware/external_domain.py`** — add explicit path-gate check; change to 307 instead of 302; add body-preservation test
-5. **`app_factory.py`** — `APIRouter(redirect_slashes=True, include_in_schema=False)`; add scoped `AdCPError` exception handler that renders `error.html` for `text/html` Accept on `/admin/*`
-6. **`oauth.py`** — add comment referencing OAuth callback URI immutability guard
+1. **[APPLIED]** `templating.py` greenfield: NO `admin_prefix`/`static_prefix`/`script_root` in `render()`; `_url_for` safe-lookup override pre-registered on `templates.env.globals`.
+2. **[APPLIED]** `csrf.py`: `/_internal/` exempt added; `SessionMiddleware` before CSRF ordering note added.
+3. **[APPLIED]** `deps/auth.py`: dep functions are `async def` with `async with get_db_session()` bodies per the full-async pivot; `AdminRedirect` handler URL-encodes `next_url`. (The original audit item said "switch to sync def" — that is now stale.)
+4. **[APPLIED]** `middleware/external_domain.py`: explicit path-gate check; 307 instead of 302; body-preservation test added.
+5. **[APPLIED]** `app_factory.py`: `APIRouter(redirect_slashes=True, include_in_schema=False)`; scoped `AdCPError` exception handler that renders `error.html` for `text/html` Accept on `/admin/*`.
+6. **[APPLIED]** `oauth.py`: comment referencing OAuth callback URI immutability guard added.
 
 ### Worked examples (`flask-to-fastapi-worked-examples.md`)
 
-1. **All examples** — switch `async def` to `def` where DB access is synchronous (accounts list/create, favicon upload, products form); keep `async def` for OAuth callbacks and SSE
-2. **Example 4.1 (Google OAuth)** — document the byte-identical callback URL requirement
-3. **Example 4.3 (favicon upload)** — sync `def` handler since it writes files + DB
+1. **[APPLIED]** All examples are `async def` end-to-end — `run_in_threadpool` is dropped for DB work (kept only for non-DB blocking operations like file I/O, CPU-bound, sync third-party libs). §§4.1, 4.2, 4.4, 4.5 cascaded in the propagation wave.
+2. **[APPLIED]** Example 4.1 (Google OAuth) — byte-identical callback URL requirement documented.
+3. **[APPLIED]** Example 4.3 (favicon upload) — `async def` handler with `run_in_threadpool` only for the blocking file I/O, not the DB write.
 
 ### Execution details (`flask-to-fastapi-execution-details.md`)
 
-1. **Wave 0 entry criteria** — add decision: sync `def` admin handlers default
-2. **Wave 0 acceptance criteria** — add all 9 guard tests green
-3. **Wave 1 acceptance criteria** — add OAuth staging smoke test, middleware order verification
-4. **Wave 2 acceptance criteria** — add `schemas.py` external contract test, datetime format audit
-5. **Wave 3 acceptance criteria** — add nginx removal decision (defer to v2.1)
-6. **Part 2 assumptions** — add verification recipes for the 6 new blockers
-7. **Part 3 verification** — add the 9 new guard test AST patterns
+1. **[APPLIED]** Wave 0 entry criteria — async pivot decision recorded.
+2. **[APPLIED]** Wave 0 acceptance criteria — all 9 guard tests green.
+3. **[APPLIED]** Wave 1 acceptance criteria — OAuth staging smoke test, middleware order verification.
+4. **[APPLIED]** Wave 2 acceptance criteria — `schemas.py` external contract test, datetime format audit.
+5. **[APPLIED]** Wave 3 acceptance criteria — nginx removal decision (deferred to v2.1).
+6. **[APPLIED]** Part 2 assumptions — verification recipes for the 6 new blockers.
+7. **[APPLIED]** Part 3 verification — 9 new guard test AST patterns.
+8. **[OPEN]** Wave 4 and Wave 5 per-wave sections — currently missing; source of truth lives in `implementation-checklist.md` §4 Waves 4-5 and `async-pivot-checkpoint.md` §3. Tracked for a follow-up propagation wave.
 
 ### ADCP safety audit (`flask-to-fastapi-adcp-safety.md`)
 
-Add a header link pointing to this deeper audit for anything beyond first-order analysis.
+**[APPLIED]** Header link pointing to this deeper audit added.
 
 ---
 
@@ -853,7 +854,7 @@ Sorted by severity:
 
 The **biggest unmentioned risks** are **B4 (session scoping)** and **B2 (trailing slashes)** — both are blockers that could silently break production after a traffic cutover. Neither was in the first-order audit.
 
-The **plan default to `async def` admin handlers was architecturally wrong** — the migration must flip to sync `def` as the default, matching today's Flask+a2wsgi semantics. Only OAuth callbacks, SSE handlers, and outbound webhook senders stay `async def`.
+The **plan default to `async def` admin handlers is CORRECT under the pivoted resolution** — the original audit recommended sync `def` (Option C) as a scope-reduction compromise, but the 2026-04-11 pivot absorbed full async SQLAlchemy into v2.0 as Waves 4-5 (Option A). Admin handlers are `async def` end-to-end with `AsyncSession`, repositories are async, and the scoped_session race is eliminated entirely. `run_in_threadpool` is reserved for non-DB blocking work (file I/O, CPU-bound, sync third-party libs). See §1.4 and `async-pivot-checkpoint.md`.
 
 The **middleware order as proposed was buggy** — Approximated must run BEFORE CSRF, not after. This is a one-line fix in the plan but missing it would break external-domain onboarding.
 
