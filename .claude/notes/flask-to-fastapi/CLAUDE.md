@@ -55,20 +55,21 @@ These were surfaced by the 2nd/3rd-order audit. Every one of them has shipped-br
 
 | File | When to read | Detail level |
 |---|---|---|
-| `CLAUDE.md` (this file) | First, always | Entry point / map |
-| `flask-to-fastapi-migration.md` | Context pass + before any wave | Overview, 1878 lines |
-| `flask-to-fastapi-deep-audit.md` | **Before writing any admin code** | 6 blockers + 20 risks, 787 lines |
-| `flask-to-fastapi-adcp-safety.md` | Before touching MCP/REST surface | 1st-order audit, 412 lines |
-| `flask-to-fastapi-foundation-modules.md` | When implementing a foundation module | Full code + tests, 2507 lines |
-| `flask-to-fastapi-worked-examples.md` | When translating a specific blueprint | 5 worked examples, 2790 lines |
-| `flask-to-fastapi-execution-details.md` | When starting / shipping a wave | Per-wave acceptance + rollback, 1142 lines |
-| `implementation-checklist.md` | **Before opening a PR** (source of truth) | Consolidated ready-to-ship checklist |
+| `CLAUDE.md` (this file) | First, always | Entry point / map, 182 lines |
+| `flask-to-fastapi-migration.md` | Context pass + before any wave | Overview, 2302 lines |
+| `flask-to-fastapi-deep-audit.md` | **Before writing any admin code** | 6 blockers + 20 risks, 885 lines |
+| `flask-to-fastapi-adcp-safety.md` | Before touching MCP/REST surface | 1st-order audit, 480 lines |
+| `flask-to-fastapi-foundation-modules.md` | When implementing a foundation module | Full code + tests, 3337 lines |
+| `flask-to-fastapi-worked-examples.md` | When translating a specific blueprint | 5 worked examples, 2843 lines |
+| `flask-to-fastapi-execution-details.md` | When starting / shipping a wave | Per-wave acceptance + rollback, 1150 lines |
+| `async-pivot-checkpoint.md` | **Before touching Blocker #4** (canonical pivot doc) | Absorbed-async v2.0 target state, 507 lines |
+| `implementation-checklist.md` | **Before opening a PR** (source of truth) | Consolidated ready-to-ship checklist, 891 lines |
 
 ---
 
 ## Derivative audit reports (2026-04-11)
 
-After the async pivot, five parallel opus agents produced deep-audit reports on different facets of the absorbed-async v2.0 scope. All reports live in `async-audit/` and are committed at `3e0afa02` / `d8957931` on `feat/v2.0.0-flask-to-fastapi`. A fresh session should consult these before making scope or idiom decisions.
+After the async pivot, six parallel opus agents (agents A-F) produced deep-audit reports on different facets of the absorbed-async v2.0 scope. All reports live in `async-audit/` and are committed at `3e0afa02` / `d8957931` on `feat/v2.0.0-flask-to-fastapi`. A fresh session should consult these before making scope or idiom decisions.
 
 | Report | Lines | When to read |
 |---|---|---|
@@ -164,7 +165,7 @@ Catalogued in `flask-to-fastapi-adcp-safety.md`; listed here so they are not los
 ## Branch and folder cleanup intent
 
 - **Branch:** `feat/v2.0.0-flask-to-fastapi`. All migration work lives here.
-- **Merge cadence:** one PR per wave, four waves total, merged to `main` as each wave stabilizes.
+- **Merge cadence:** one PR per wave, 5-6 waves total (Wave 0-3 Flask removal + admin FastAPI rewrite, Wave 4-5 async SQLAlchemy absorption per `async-pivot-checkpoint.md`), merged to `main` as each wave stabilizes.
 - **Post-migration cleanup:** `.claude/notes/flask-to-fastapi/` is a planning-phase artifact. After v2.0.0 ships and stabilizes (~2 releases later), archive or delete this folder. Anything worth keeping long-term gets promoted to `docs/` or `CLAUDE.md` at the repo root.
 
 ---
