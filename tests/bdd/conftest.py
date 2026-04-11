@@ -575,13 +575,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 break  # One xfail per scenario is sufficient
 
         # workflow_step_id is an internal field (exclude=True in schema).
-        # It should NOT be exposed through any transport — the Gherkin step
-        # "the response should include a workflow_step_id" tests a non-AdCP field.
-        # xfail until the feature file is corrected to not assert on internal fields.
-        if "T-UC-002-alt-manual" in marker_names:
+        # impl/a2a return raw Python objects where the attribute is accessible
+        # via hasattr/getattr even with exclude=True. mcp/rest serialize via
+        # model_dump() which drops exclude=True fields — xfail only those.
+        if "T-UC-002-alt-manual" in marker_names and (is_mcp or is_rest):
             item.add_marker(
                 pytest.mark.xfail(
-                    reason="workflow_step_id is internal (exclude=True), not an AdCP response field",
+                    reason="workflow_step_id is internal (exclude=True), dropped during serialization",
                     strict=True,
                 )
             )
