@@ -1441,7 +1441,7 @@ Rationale for keeping the `admin_` prefix (rather than dropping it since `includ
 Each admin route decorator:
 ```python
 @router.get("/tenant/{tenant_id}/accounts", name="admin_accounts_list_accounts")
-def list_accounts(...):
+async def list_accounts(...):
     ...
 ```
 
@@ -2013,7 +2013,7 @@ Eight waves imply safety via backward-compat seams — exactly what the user rej
 1. **FastAPI 0.128 / Starlette 0.50 ABI-stable** for migration duration. Pin exact versions during Wave 2.
 2. **`Annotated[T, Depends()]` is canonical 2026 FastAPI idiom.**
 3. **Full async SQLAlchemy in v2.0** (pivoted 2026-04-11). `create_async_engine` + `async_sessionmaker` + `AsyncSession`. Pre-Wave-0 lazy-loading audit spike (see `async-pivot-checkpoint.md` Risk #1) gates the absorption. Benchmark async vs. the pre-migration sync baseline to quantify the latency profile change; acceptable range is net-neutral to ~5% improvement under moderate concurrency.
-4. **Admin handlers `async def` + async SQLAlchemy end-to-end.** Structural guard `test_architecture_admin_routes_async.py` asserts every handler is `async def`; sibling guard asserts DB access uses `async with get_db_session()` / `await session.execute(...)`. `run_in_threadpool` remains valid for non-DB blocking operations only and is never used for DB access.
+4. **Admin handlers `async def` end-to-end with `SessionDep` + repository DI as the primary pattern.** Handlers declare `session: SessionDep` (or a repository-factory dep like `AccountRepoDep` that chains through `SessionDep`) and let the DI layer own session lifetime; `async with get_db_session() as db:` remains valid as a transitional fallback for non-request contexts (schedulers, CLI, background jobs). Structural guard `test_architecture_admin_routes_async.py` asserts every handler is `async def`; sibling guard asserts DB access uses `async with get_db_session()` / `await session.execute(...)` where it occurs. `run_in_threadpool` remains valid for non-DB blocking operations only and is never used for DB access.
 5. **Starlette `SessionMiddleware` sufficient** (payloads <3.5KB).
 6. **`SESSION_SECRET` set in every deploy.** Hard `KeyError` at startup.
 7. **Admins tolerate one forced re-login** at cutover.
@@ -2054,7 +2054,7 @@ Eight waves imply safety via backward-compat seams — exactly what the user rej
 3. ~~**CSRF library**~~ **RESOLVED → roll-your-own Double Submit Cookie (~100 LOC).** Zero external dep.
 4. **`SessionMiddleware` cookie vs Redis server-side** — Redis if payloads grow. Counter: payloads stay under 4KB. **Chosen: signed cookies.**
 5. **`BaseHTTPMiddleware` vs pure ASGI** — `BaseHTTPMiddleware` easier but Starlette #1729. **Chosen: pure ASGI.**
-6. **Wave count: 4 (chosen) vs 2 vs 8** — 2 unreviewable, 8 too much coordination.
+6. **Wave count: 5-6 (chosen post-pivot) vs 4 (pre-pivot) vs 2 vs 8** — 2 unreviewable, 8 too much coordination. Pre-pivot was 4; the 2026-04-11 pivot added Wave 4 (async DB layer) and Wave 5 (async cleanup + release).
 7. **Port SSE vs drop activity stream** — dropping saves ~400 LOC. Counter: user-visible. **Chosen: port.**
 8. **Per-tenant OIDC complexity** — simplification drops ~150 LOC. Counter: multi-tenant is a product requirement. **Chosen: keep.**
 9. **Dual-mode `require_tenant_access` split into two deps** — doubles dep count. **Chosen: split** (single-responsibility composes better).
@@ -2297,6 +2297,6 @@ Research and design was gathered during a single Claude Code session on 2026-04-
 
 **User decisions gathered via 2 rounds of AskUserQuestion:**
 - Template strategy (Option B), CSRF (roll-your-own), URL prefix (`/admin/`), secret handling (hard-required)
-- Async DB (separate v2.1 PR), error-shape split (category 1 native / category 2 compat)
+- ~~Async DB (separate v2.1 PR)~~ **PIVOTED 2026-04-11: async DB absorbed into v2.0 Waves 4-5 per `async-pivot-checkpoint.md`.** Error-shape split (category 1 native / category 2 compat) — unchanged.
 
 **This document is canonical for v2.0.0 Flask → FastAPI migration planning.** When a future session needs to revisit this work, start here, then consult the plan file at `/Users/quantum/.claude/plans/squishy-meandering-marshmallow.md` for the latest snapshot.
