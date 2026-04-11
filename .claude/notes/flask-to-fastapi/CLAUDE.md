@@ -60,6 +60,33 @@ These were surfaced by the 2nd/3rd-order audit. Every one of them has shipped-br
 
 ---
 
+## Apps loaded at runtime (4 before → 3 after)
+
+The migration removes **one** of the four framework-level apps currently loaded by `src/app.py`. The MCP and A2A apps are AdCP-protocol surfaces and stay untouched.
+
+| # | App | Where | Attached at | Disposition |
+|---|---|---|---|---|
+| 1 | **Root FastAPI `app`** | `src/app.py:64` | (is the root ASGI object) | **STAYS** — gains middleware + admin routers, loses the Flask mount |
+| 2 | **`mcp_app` (Starlette from `mcp.http_app(path="/")`)** | `src/app.py:59` + `src/core/main.py:127` | `app.mount("/mcp", mcp_app)` at `src/app.py:72`; lifespan merged via `combine_lifespans` at `src/app.py:68` | **STAYS** — AdCP MCP protocol surface |
+| 3 | **`a2a_app` (A2AStarletteApplication)** | `src/app.py:110` | **NOT mounted** — routes grafted onto root via `a2a_app.add_routes_to_app(app, ...)` at `src/app.py:118-123` | **STAYS** — AdCP A2A protocol surface |
+| 4 | **`flask_admin_app` (Flask)** | `src/admin/app.py:107` via `create_app()` at `src/app.py:303` | `a2wsgi.WSGIMiddleware` wrapper, mounted at **both** `/admin` and `/` (root catch-all) via `_install_admin_mounts()` | **REMOVED Wave 3** — the whole point of the migration |
+
+Plus orphan: `src/admin/server.py` (~103 LOC, standalone Flask runner via Waitress/Werkzeug/`asgiref.wsgi.WsgiToAsgi`) and `scripts/run_admin_ui.py` (38-line launcher) — not loaded by `src/app.py`, **removed in Wave 3 cleanup**.
+
+**Subtleties a fresh reader MUST understand:**
+
+- **A2A is grafted, not mounted.** `add_routes_to_app` at line 118 injects the SDK's Starlette `Route` objects directly into `app.router.routes`. So A2A handlers sit at the top level of the router tree, NOT inside a mounted sub-app. This is load-bearing for FastAPI middleware propagation (`UnifiedAuthMiddleware`, `CORSMiddleware`, `RestCompatMiddleware` all reach A2A handlers because they share the root scope). `_replace_routes()` at `src/app.py:192-215` also depends on this flat structure — it walks `app.routes` to swap the SDK's static agent-card routes for dynamic header-reading versions. **Any future refactor that mounts A2A as a sub-app would break middleware propagation AND `_replace_routes()`.**
+
+- **MCP schedulers are lifespan-coupled.** `src/core/main.py:82-103` starts `delivery_webhook_scheduler` and `media_buy_status_scheduler` inside `lifespan_context`. That lifespan reaches uvicorn's event loop **only because of `combine_lifespans(app_lifespan, mcp_app.lifespan)` at `src/app.py:68`**. A future refactor that drops the MCP mount, rewires lifespans, or moves schedulers outside the MCP lifespan context will **silently stop the schedulers**. Not touched by v2.0 but document as a hard constraint and consider adding a startup-log assertion.
+
+- **The `/a2a/` trailing-slash redirect shim at `src/app.py:127-135` exists ONLY because the Flask root catch-all (`app.mount("/", admin_wsgi)`) would otherwise eat the request.** When Flask is removed in Wave 3, this shim gets deleted — the causal chain is "no more Flask catch-all → no more route collision → no more shim needed."
+
+- **`_install_admin_mounts()` is a lifespan hook at `src/app.py:25-45`** that re-filters and re-installs the `/admin` and `/` Flask mounts at the **tail** of `app.router.routes` on every startup. This ordering is load-bearing: landing routes (inserted at positions 0 and 1 via the `routes.insert(0, ...)` hack at lines 351-352) must win, A2A grafted routes must win, FastAPI-native REST routes must win, and the Flask catch-all must be last. The whole dance goes away in Wave 3 once Flask is gone.
+
+- **Flask has its own internal WSGI middleware stack** at `src/admin/app.py:187-194` (`CustomProxyFix`, `FlyHeadersMiddleware`, werkzeug `ProxyFix`). These rewrite `Fly-Forwarded-Proto` → `X-Forwarded-Proto` and handle `X-Script-Name` for reverse-proxy deployments. **Wave 3 deletes Flask but the proxy-header handling must be reimplemented** via `uvicorn --proxy-headers --forwarded-allow-ips='*'` (already in the plan per deep-audit §R4). If this is missed, `request.url.scheme` returns `http` in production and OAuth redirect URIs fail with `redirect_uri_mismatch` on Fly.io.
+
+---
+
 ## Migration conventions that differ from the rest of the codebase
 
 These are the places where "copy what the rest of the repo does" is **wrong**. Admin is different.

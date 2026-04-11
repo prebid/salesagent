@@ -401,6 +401,49 @@ For transparency:
 
 ---
 
+## 10. Architectural Constraints Preserved (do NOT change these in a future refactor)
+
+The v2.0 migration preserves two non-obvious architectural facts that are load-bearing for AdCP protocol correctness. They are documented here so a hypothetical future Wave-N refactor doesn't accidentally "improve" them and silently break AdCP handlers.
+
+### 10.1 A2A routes are grafted onto the root app, NOT mounted as a sub-app
+
+**File:** `src/app.py:118-123` calls `a2a_app.add_routes_to_app(app, ...)`. This injects the SDK's Starlette `Route` objects directly into `app.router.routes` at the top level. It is **not** `app.mount("/a2a", a2a_starlette_app)`.
+
+**Why this is load-bearing for AdCP protocol correctness:**
+- A2A handlers sit inside the same ASGI scope as FastAPI routes, so `UnifiedAuthMiddleware` (`src/core/auth_middleware.py:23`) populates `scope["state"]["auth_context"]` for them. A sub-app mount would have an isolated middleware stack and lose this propagation.
+- `RestCompatMiddleware` (`src/routes/rest_compat_middleware.py:29`) only fires for `/api/v1/*` and does not touch A2A — but if A2A were mounted, any future cross-transport body rewrite in `RestCompatMiddleware` would silently skip the A2A path.
+- `_replace_routes()` at `src/app.py:192-215` walks `app.routes` to find the SDK's static agent-card paths and swaps them for dynamic header-reading versions. **It depends on the A2A routes being visible at the top level of `app.routes`.** A sub-app mount would hide the SDK's routes inside a `Mount.app` attribute and break the swap — agent cards would silently return hard-coded default URLs instead of tenant-aware URLs.
+- The `AdCPCallContextBuilder` at `src/a2a_server/context_builder.py` reads `request.state.auth_context` set by `UnifiedAuthMiddleware`. A sub-app mount would break this read.
+
+**What a future refactor must NOT do:**
+- Change `a2a_app.add_routes_to_app(app, ...)` to `app.mount("/a2a", a2a_app.build_starlette_app())` or `app.include_router(...)` without simultaneously reimplementing middleware propagation, `_replace_routes()`, and the context-builder handshake.
+
+**Guard (proposed for Wave 0 as part of deep-audit §3.8 action items):** `tests/unit/test_architecture_a2a_routes_grafted.py` — asserts that `/a2a`, `/.well-known/agent-card.json`, `/agent.json` all appear as top-level `Route` objects in `app.routes` (NOT nested inside a `Mount`). Walks `app.routes`, filters `Mount` objects, looks up the three paths by exact match.
+
+### 10.2 MCP scheduler lifespan is chained via `combine_lifespans`
+
+**File:** `src/app.py:68` — `lifespan=combine_lifespans(app_lifespan, mcp_app.lifespan)`. The FastMCP lifespan (`lifespan_context` at `src/core/main.py:82-103`) starts `delivery_webhook_scheduler` and `media_buy_status_scheduler`. These only run because `combine_lifespans` yields through both.
+
+**Why this is load-bearing for AdCP protocol correctness:**
+- `delivery_webhook_scheduler` is what fires outbound AdCP webhooks to subscribers (creative approvals, media buy state changes, etc.) via `create_a2a_webhook_payload` / `create_mcp_webhook_payload`. If it stops, every human-in-the-loop approval silently stops notifying AdCP callers.
+- `media_buy_status_scheduler` polls adapter status and updates the database. If it stops, `get_media_buy_delivery` MCP/REST tool calls return stale `pending` status forever.
+
+**What a future refactor must NOT do:**
+- Drop the `/mcp` mount → schedulers stop.
+- Replace `combine_lifespans(app_lifespan, mcp_app.lifespan)` with `lifespan=app_lifespan` alone → schedulers stop.
+- Move schedulers out of `lifespan_context` into `app_lifespan` without also verifying they're reached by uvicorn's lifespan protocol → may stop.
+- Set `workers > 1` in uvicorn → schedulers start N× per tick (loud failure, separately tracked in deep-audit §3.1).
+
+**Guards (proposed for Wave 0):**
+1. `tests/unit/test_architecture_scheduler_lifespan_composition.py` — parses `src/app.py`, asserts the `FastAPI(...)` constructor's `lifespan=` kwarg literally contains `combine_lifespans(app_lifespan, mcp_app.lifespan)`.
+2. Startup log assertion: at first scheduler tick, emit `"delivery_webhook_scheduler alive"` / `"media_buy_status_scheduler alive"` so missing log lines in production dashboards surface the failure within 60 seconds.
+
+### Summary: these are Wave-0 structural guards, NOT Wave-3 cleanup
+
+Both guards land in Wave 0 alongside the other migration guards. They cost ~40 lines of Python each and prevent a whole class of silent-failure refactors in v2.1+ work. Added to the plan via `flask-to-fastapi-migration.md` §4.8 "Apps loaded at runtime inventory" and `flask-to-fastapi-deep-audit.md` §3.7 + §3.8.
+
+---
+
 ## Appendix A: Verification methodology
 
 Produced by three parallel Opus Explore subagents on 2026-04-11:

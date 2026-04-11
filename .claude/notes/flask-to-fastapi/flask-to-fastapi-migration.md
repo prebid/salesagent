@@ -162,6 +162,8 @@ The first-order audit (§2.7) verified AdCP protocol safety. A subsequent **deep
 
 Plus two derivative guards:
 13. `test_architecture_single_worker_invariant.py` — prevent multi-worker regression (scheduler singleton)
+14. `test_architecture_scheduler_lifespan_composition.py` — NEW from §4.8 apps inventory. AST-parses `src/app.py`, finds the `FastAPI(...)` constructor, asserts the `lifespan=` kwarg literally contains `combine_lifespans(app_lifespan, mcp_app.lifespan)`. Prevents a silent-failure refactor that drops the MCP lifespan composition and stops the delivery-webhook / media-buy-status schedulers.
+15. `test_architecture_a2a_routes_grafted.py` — NEW from §4.8 apps inventory. Asserts `/a2a`, `/.well-known/agent-card.json`, `/agent.json` appear as top-level `Route` objects in `app.routes` (NOT nested inside a `Mount`). Prevents a future refactor that "improves" A2A integration by mounting it as a sub-app and breaks middleware propagation + `_replace_routes()`.
 11. `test_architecture_harness_overrides_isolated.py` — prevent `app.dependency_overrides` leakage across test envs
 
 ### Derivative opportunities enabled by the migration (deferred to v2.1)
@@ -433,6 +435,105 @@ Registered via `add_middleware` (LIFO — last registered = outermost):
 | `flask-caching` | >=2.3.0 | — |
 | `flask-socketio` | >=5.5.1 | — |
 | `python-multipart` | >=0.0.22 | — (pinned, unused) |
+
+### 4.8 Apps loaded at runtime inventory (4 before → 3 after)
+
+The migration removes **one** of the four framework-level app objects currently loaded by `src/app.py` at startup. The MCP and A2A apps are AdCP-protocol surfaces and stay untouched. This section enumerates exactly what's loaded and why, including the non-obvious runtime subtleties that will bite any future refactor that doesn't understand them.
+
+| # | App | File:Line | Framework | Attached how | Purpose | Disposition |
+|---|---|---|---|---|---|---|
+| 1 | Root `app` | `src/app.py:64` | FastAPI | (root ASGI object served by uvicorn) | Unified HTTP host; owns middleware, lifespan, all routes | **STAYS** |
+| 2 | `mcp_app` | `src/app.py:59` (wrapping `mcp` at `src/core/main.py:127`) | Starlette (via `mcp.http_app(path="/")`) | `app.mount("/mcp", mcp_app)` at `src/app.py:72`; lifespan merged via `combine_lifespans` at `src/app.py:68` | MCP streamable HTTP + SSE protocol; owns tool registry + scheduler lifespans | **STAYS** — AdCP MCP surface |
+| 3 | `a2a_app` | `src/app.py:110` | `A2AStarletteApplication` (a2a-sdk) | **NOT mounted** — routes grafted onto root via `a2a_app.add_routes_to_app(app, ...)` at `src/app.py:118-123` | `/a2a` JSON-RPC + `/.well-known/agent-card.json` + `/agent.json` | **STAYS** — AdCP A2A surface |
+| 4 | `flask_admin_app` | `src/admin/app.py:107` (factory at `src/app.py:303`) | Flask | `a2wsgi.WSGIMiddleware` wrapper, mounted at **both** `/admin` and `/` (root catch-all) via `_install_admin_mounts()` at `src/app.py:25-45` | Admin UI + 3 external JSON APIs (tenant mgmt, sync, GAM reporting) | **REMOVED Wave 3** |
+
+Plus orphan: `src/admin/server.py` (103 LOC, standalone Flask runner) + `scripts/run_admin_ui.py` (38-line launcher) — not loaded at runtime by `src/app.py`, **removed in Wave 3 cleanup**.
+
+**Runtime topology after Wave 3 cuts Flask:**
+
+```
+uvicorn → src.app:app (FastAPI)
+├── Mount "/mcp"                    → mcp_app (Starlette from FastMCP)
+├── Route "/.well-known/agent-card.json"  ┐
+├── Route "/.well-known/agent.json"       ├─ A2A grafted routes (not a sub-app)
+├── Route "/agent.json"                   │  _replace_routes() swaps these for
+├── Route "/a2a"                          │  dynamic header-reading variants
+│                                         ┘
+├── Router src/routes/api_v1.py     → 12 AdCP REST routes
+├── Router src/routes/health.py     → /health, /_internal/*, /debug/*
+├── Router src/admin/app_factory.py → build_admin_router() included at prefix="/admin"
+├── Mount "/static"                 → StaticFiles(name="static")
+├── Route "/"                       → landing page (FastAPI-native @app.get)
+└── Route "/landing"                → landing page
+```
+
+#### 4.8.1 Subtleties that are load-bearing (non-obvious from reading the code)
+
+**A2A is grafted, not mounted.** `a2a_app.add_routes_to_app(app, ...)` at `src/app.py:118` does NOT call `app.mount(...)`. It injects the SDK's Starlette `Route` objects directly into `app.router.routes` at the top level. Consequences:
+- FastAPI middleware (`UnifiedAuthMiddleware`, `RestCompatMiddleware`, `CORSMiddleware`, the future `SessionMiddleware`/`CSRFMiddleware` from Wave 1) all reach A2A handlers because they share the root scope. `scope["state"]["auth_context"]` propagates cleanly.
+- `_replace_routes()` at `src/app.py:192-215` walks `app.routes` to find the SDK's three static agent-card paths (`/.well-known/agent-card.json`, `/.well-known/agent.json`, `/agent.json`) and swaps them for dynamic `Route(path, dynamic_agent_card, methods=[...])` objects that read `Apx-Incoming-Host`/`Host` headers and emit tenant-aware agent cards.
+- **Any future refactor that mounts A2A as a sub-app would break both middleware propagation AND `_replace_routes()`** — the sub-app's internal routes would not be visible to `app.routes` iteration, and the dynamic agent-card swap would silently skip the SDK routes.
+- This migration does not touch this pattern. It's documented here so a future Wave N doesn't accidentally "improve" it.
+
+**MCP schedulers are coupled to the MCP lifespan, which is coupled to `combine_lifespans`.** `src/core/main.py:82-103` starts:
+- `start_delivery_webhook_scheduler()` — delivers pending webhooks to AdCP callers
+- `start_media_buy_status_scheduler()` — polls adapter media buy status
+
+Both start inside `lifespan_context` (the FastMCP lifespan). They reach uvicorn's event loop **only because** `src/app.py:68` composes lifespans via `combine_lifespans(app_lifespan, mcp_app.lifespan)`. The FastMCP lifespan's yields are what actually run the scheduler tasks.
+
+**Silent-failure modes a future refactor might hit:**
+- Dropping the MCP mount → schedulers stop (no yield in lifespan)
+- Rewiring lifespans to run `app_lifespan` without composing `mcp_app.lifespan` → schedulers stop
+- Moving schedulers out of `lifespan_context` into something not reached by the uvicorn ASGI lifespan protocol → schedulers stop
+- Setting `workers > 1` on uvicorn → schedulers start 4× per tick (not a silent failure, but a loud one — documented under deep audit §3.1)
+
+**Not touched by v2.0 but document as a hard constraint.** Recommended: add a startup-log assertion at the first scheduler tick that the scheduler is running, and a `tests/unit/test_architecture_scheduler_lifespan_composition.py` structural guard that parses `src/app.py` and asserts `combine_lifespans(app_lifespan, mcp_app.lifespan)` literally appears in the FastAPI constructor call.
+
+**The `/a2a/` trailing-slash redirect shim exists solely because of the Flask root catch-all.** `src/app.py:127-135` defines:
+```python
+@app.api_route("/a2a/", methods=["GET", "POST", "OPTIONS"])
+async def a2a_trailing_slash_redirect():
+    return RedirectResponse(url="/a2a", status_code=307)
+```
+This exists because `app.mount("/", admin_wsgi)` (the Flask root catch-all) would otherwise match `/a2a/` (trailing slash) and hand it to Flask, which returns 404. When Wave 3 removes the Flask catch-all, this shim is no longer needed and gets deleted — the A2A SDK handles trailing slashes correctly on its own. The plan already includes this deletion; the causal chain is worth understanding because a developer seeing the shim out of context might leave it in "for safety."
+
+**`_install_admin_mounts()` is a lifespan hook that re-positions mounts on every startup.** `src/app.py:25-45` filters existing Flask `Mount(WSGIMiddleware, path="/admin")` and `Mount(WSGIMiddleware, path="")` entries out of `app.router.routes`, then re-appends them at the tail. This runs inside `app_lifespan` at `src/app.py:48-54` so it re-fires on every app startup (including test-client startup). The ordering is load-bearing:
+- Landing routes inserted at positions 0 and 1 via `routes.insert(0, Route("/", ...))` / `insert(1, Route("/landing", ...))` at `src/app.py:351-352` must win
+- A2A grafted routes must win
+- FastAPI-native REST routers (`api_v1_router`, `health_router`, `health_debug_router`) must win
+- The Flask catch-all must be last
+
+The whole dance goes away in Wave 3 when Flask is removed: landing routes become plain `@app.get("/")` / `@app.get("/landing")` decorators, the mount filtering code is deleted, and `app_lifespan` shrinks to just whatever shutdown/startup hooks the admin routers need.
+
+**Flask has its own internal WSGI middleware stack** at `src/admin/app.py:187-194`:
+```python
+app.wsgi_app = WerkzeugProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=0)
+app.wsgi_app = FlyHeadersMiddleware(app.wsgi_app)
+app.wsgi_app = CustomProxyFix(app.wsgi_app)
+```
+These are WSGI-layer middlewares INSIDE the Flask app, not ASGI middlewares on the FastAPI root. They handle:
+- `X-Forwarded-*` headers → correct `request.url.scheme` under reverse proxy
+- `Fly-Forwarded-Proto` → `X-Forwarded-Proto` (Fly.io-specific historic header name)
+- `X-Script-Name` / `X-Forwarded-Prefix` → `SCRIPT_NAME` injection for path prefix
+
+Wave 3 deletes Flask AND these middlewares, so the proxy-header handling **must be reimplemented** via uvicorn `--proxy-headers --forwarded-allow-ips='*'` (covered by deep audit §R4 / §2.5). **Missing this breaks OAuth in production** — `request.url.scheme` returns `http` instead of `https`, the OAuth redirect_uri constructed from `request.url` contains `http://`, and Google Cloud Console rejects it with `redirect_uri_mismatch`. Wave 3 staging smoke test: verify an OAuth initiation response's `redirect_uri` query param starts with `https%3A%2F%2F`.
+
+**Summary: what changes structurally in `src/app.py`**
+
+Pre-migration:
+- 4 app objects loaded
+- 2 mounts + 1 graft + 1 WSGI wrapper
+- Lifespan hook (`_install_admin_mounts`) re-sorts routes on every startup
+- Landing routes inserted via `routes.insert(0, ...)` hack
+- `/a2a/` trailing-slash redirect shim exists as a Flask workaround
+
+Post-Wave-3:
+- 3 app objects loaded (Flask gone)
+- 1 mount (MCP) + 1 mount (StaticFiles) + 1 graft (A2A) + 1 `include_router(prefix="/admin")` (admin)
+- Lifespan hook simplified to just `init_oauth()` + admin startup/shutdown hooks
+- Landing routes via plain `@app.get("/")` / `@app.get("/landing")` decorators
+- No `/a2a/` shim — A2A SDK handles trailing slashes on its own
+- uvicorn launched with `--proxy-headers --forwarded-allow-ips='*'` to replace the three WSGI proxy-fix middlewares
 
 ---
 

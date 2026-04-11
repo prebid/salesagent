@@ -522,6 +522,45 @@ Atomic cleanup in v2.1: remove the fallback, remove `FLASK_SECRET_KEY` from `set
 
 **Action:** scope CORS away from `/admin/*`, OR ensure `ALLOWED_ORIGINS` only contains trusted-admin origins. Document the constraint in `pyproject.toml` or a runtime assertion.
 
+### 3.7 MCP scheduler lifespan-composition dependency (silent-failure footgun)
+
+**Source of truth:** `src/core/main.py:82-103` starts `delivery_webhook_scheduler` and `media_buy_status_scheduler` inside `lifespan_context` (the FastMCP lifespan). Those schedulers reach uvicorn's event loop **only because** `src/app.py:68` composes lifespans via `combine_lifespans(app_lifespan, mcp_app.lifespan)`.
+
+**Silent-failure modes a future refactor could trigger:**
+- Dropping the MCP mount → schedulers stop (no yield in lifespan chain)
+- Rewiring lifespans to run `app_lifespan` alone without composing `mcp_app.lifespan` → schedulers stop
+- Moving schedulers out of `lifespan_context` into something not reached by the uvicorn ASGI lifespan protocol → schedulers stop
+- Setting uvicorn `workers > 1` → schedulers start 4× per tick (not silent — loud and correlated with traffic spikes, already documented in §3.1)
+
+**Severity:** ⚠️ RISK (future-refactor footgun; v2.0 does not touch this). Deletion of the MCP mount during a hypothetical "drop MCP and integrate tools directly into FastAPI" refactor would silently stop webhook delivery and media-buy status polling, with no error and no log line — the only visible symptom is that webhooks stop firing and status fields go stale.
+
+**Required action (document as hard constraint, add guard):**
+1. Add a Wave-0 structural guard `tests/unit/test_architecture_scheduler_lifespan_composition.py` that parses `src/app.py`, finds the `FastAPI(...)` constructor call, and asserts the `lifespan=` kwarg literally contains `combine_lifespans(app_lifespan, mcp_app.lifespan)`. Refactors that change the composition without updating this test fail at CI time.
+2. Add a startup log line at the first scheduler tick: `"delivery_webhook_scheduler alive"` / `"media_buy_status_scheduler alive"`. Missing log lines in production surface the failure within 60 seconds instead of hours.
+3. Document the lifespan-composition invariant in `src/app.py` as a load-bearing comment next to the `combine_lifespans` call.
+
+### 3.8 A2A is grafted onto the root app, not mounted as a sub-app
+
+**Source of truth:** `src/app.py:118-123` calls `a2a_app.add_routes_to_app(app, ...)` which injects the SDK's Starlette `Route` objects directly into `app.router.routes` at the top level. This is NOT `app.mount("/a2a", a2a_app)` — it's a different mechanism with different consequences.
+
+**Why this matters:**
+- A2A handlers sit at the top level of the FastAPI router tree, inside the same ASGI scope as everything else
+- FastAPI middleware (`UnifiedAuthMiddleware`, `RestCompatMiddleware`, `CORSMiddleware`, plus the future `SessionMiddleware`/`CSRFMiddleware`/`ApproximatedExternalDomainMiddleware` from Wave 1) all reach A2A handlers because they share the root scope
+- `scope["state"]["auth_context"]` propagates cleanly into A2A handlers
+- `_replace_routes()` at `src/app.py:192-215` walks `app.routes` to find the SDK's three static agent-card paths (`/.well-known/agent-card.json`, `/.well-known/agent.json`, `/agent.json`) and swaps them for dynamic `Route(path, dynamic_agent_card, methods=[...])` objects that read `Apx-Incoming-Host`/`Host` headers and emit tenant-aware agent cards. This swap depends on the A2A routes being visible at the top level of `app.routes`.
+
+**Silent-failure modes a future refactor could trigger:**
+- Switching to `app.mount("/a2a", a2a_starlette_app)` "to be consistent with MCP" → breaks middleware propagation (sub-apps have isolated middleware stacks). `scope["state"]["auth_context"]` would not reach A2A handlers. Auth might still work by coincidence if A2A sets its own via a context builder, but CSRF/CORS/RestCompat silently drop out.
+- Mounting as a sub-app also breaks `_replace_routes()` — the sub-app's internal routes would not be visible to `app.routes` iteration, and the dynamic agent-card swap would silently skip the SDK routes. Agent cards would then return the SDK's hard-coded default URLs instead of tenant-aware URLs read from `Apx-Incoming-Host`.
+- A future `include_router(a2a_router)` refactor would have the same problem if `a2a_router` is an `APIRouter` — unless it's explicitly included with `prefix=""`, route-name conflicts could arise.
+
+**Severity:** 🟡 YELLOW (future-refactor footgun; v2.0 does not touch this). The v2.0 migration preserves the grafted-routes pattern; this section documents the constraint so Wave-N refactors don't accidentally "improve" A2A integration by mounting it as a sub-app.
+
+**Required action (document as architectural constraint):**
+1. Add a code comment in `src/app.py` at line 118 explaining that `add_routes_to_app` (not `mount`) is deliberate and why.
+2. Add a Wave-0 structural guard `tests/unit/test_architecture_a2a_routes_grafted.py` that asserts the A2A routes (`/a2a`, `/.well-known/agent-card.json`, `/agent.json`) appear directly in `app.routes` (not inside a `Mount` subtree). Walks `app.routes` and checks for `Route` objects at those paths without a containing `Mount`.
+3. Document the grafted-vs-mounted distinction in `flask-to-fastapi-migration.md` §4.8 (the apps inventory section).
+
 ---
 
 ## Section 4 — Derivative Opportunities Enabled by the Migration

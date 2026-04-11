@@ -212,9 +212,11 @@ Full detail in `flask-to-fastapi-execution-details.md` Part 1.
 - [ ] `tests/unit/test_architecture_admin_routes_excluded_from_openapi.py` — first-order audit action #8c
 - [ ] `tests/unit/test_architecture_single_worker_invariant.py` — derivative guard (scheduler singleton protection)
 - [ ] `tests/unit/test_architecture_harness_overrides_isolated.py` — derivative guard (`app.dependency_overrides` leakage protection)
+- [ ] `tests/unit/test_architecture_scheduler_lifespan_composition.py` — NEW from apps inventory. AST-parses `src/app.py`, asserts `FastAPI(...)` has `lifespan=combine_lifespans(app_lifespan, mcp_app.lifespan)`. Prevents silent scheduler stop if MCP mount is dropped.
+- [ ] `tests/unit/test_architecture_a2a_routes_grafted.py` — NEW from apps inventory. Walks `app.routes` and asserts `/a2a`, `/.well-known/agent-card.json`, `/agent.json` are top-level `Route` objects (NOT inside a `Mount`). Prevents future refactor from mounting A2A as a sub-app and breaking middleware propagation + `_replace_routes()`.
 - [ ] `tests/unit/test_foundation_modules_import.py` — smoke test that every foundation module imports cleanly
 - [ ] `tests/integration/test_schemas_discovery_external_contract.py` — contract test for `/schemas/adcp/v2.4/*` (first-order audit action #4)
-- [ ] **(total Wave 0 structural guards = 14)**
+- [ ] **(total Wave 0 structural guards = 16)**
 
 **Harness extension:**
 
@@ -538,6 +540,17 @@ Full detail in `flask-to-fastapi-execution-details.md` Part 1.
 - [ ] Playwright full regression suite green against staging v2.0.0 build
 - [ ] Production deploy plan approved
 - [ ] Production smoke test plan drafted: deploy → login → create tenant → create product → submit creative → SSE activity stream visible → logout
+
+**Proxy-header smoke tests (Wave 3 pre-deploy — CRITICAL):**
+
+The Flask removal also removes Flask's internal WSGI proxy-header stack (`CustomProxyFix`, `FlyHeadersMiddleware`, werkzeug `ProxyFix` at `src/admin/app.py:187-194`). These rewrote `Fly-Forwarded-Proto` → `X-Forwarded-Proto` and handled `X-Script-Name` for reverse-proxy deployments. Their replacement is `uvicorn --proxy-headers --forwarded-allow-ips='*'` (deep audit §R4 / §2.5). If this replacement fails, `request.url.scheme` returns `http` instead of `https` in production, which breaks OAuth by producing `redirect_uri=http%3A%2F%2F...` that Google Cloud Console rejects with `redirect_uri_mismatch` → **login is dead in production.**
+
+- [ ] `scripts/run_server.py` launches uvicorn with `--proxy-headers --forwarded-allow-ips='*'` (verified in the file)
+- [ ] Staging deploy of Wave 3 build
+- [ ] `curl -sI https://staging-tenant.scope3.com/admin/login` — verify `Location:` header (if redirect) contains `https://`, not `http://`
+- [ ] `curl -sI 'https://staging-tenant.scope3.com/admin/auth/google/initiate'` — verify the OAuth-initiation response's `Location:` header contains `redirect_uri=https%3A%2F%2F...` (URL-encoded `https://`). If it contains `redirect_uri=http%3A%2F%2F...`, `--proxy-headers` is not reading `X-Forwarded-Proto` correctly and OAuth will fail with `redirect_uri_mismatch`. **STOP deployment and fix before proceeding.**
+- [ ] Manual browser test: click "Log in" on staging, verify the browser arrives at a real Google OAuth consent page (not an error page). Complete the OAuth flow; verify the callback lands on `https://staging-tenant.scope3.com/admin/...` and the admin UI loads.
+- [ ] If `FlyHeadersMiddleware` was kept (assumption #21 deferred): verify Fly-specific header rewriting still works by checking `scope["headers"]` logs in staging for requests carrying `Apx-Incoming-Host`.
 
 **Exit criteria:**
 
