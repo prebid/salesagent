@@ -1158,7 +1158,7 @@ def _extract_email(raw: Any) -> str:
     return ""
 
 
-def is_super_admin(email: str) -> bool:
+async def is_super_admin(email: str) -> bool:
     """Check super-admin status.
 
     Order (mirrors current src/admin/utils/helpers.py:132):
@@ -1166,6 +1166,13 @@ def is_super_admin(email: str) -> bool:
     2. SUPER_ADMIN_DOMAINS env var (comma list of domains)
     3. TenantManagementConfig row `super_admin_emails` (db fallback)
     4. TenantManagementConfig row `super_admin_domains`
+
+    `async def` under the full-async pivot (2026-04-11). The DB fallback
+    opens its own short-lived `async with get_db_session()` — this is the
+    ONE helper where nested session opening is tolerated because the
+    caller chain (identity resolution in middleware) may precede request
+    scope and therefore has no `SessionDep` to thread through. All OTHER
+    helpers MUST accept `SessionDep` rather than opening their own session.
 
     NO session-level caching here (the Flask version cached in session,
     causing staleness after env var changes). Result is cheap: env checks
@@ -1193,9 +1200,9 @@ def is_super_admin(email: str) -> bool:
     if domain and domain in env_domains:
         return True
 
-    # Async DB check — `is_super_admin` becomes async def under the full-async
-    # pivot (2026-04-11). Callers cascade: `_get_admin_user_or_none` → `is_super_admin`
-    # → `get_admin_user` → every admin handler. All become async.
+    # Async DB check. Caller chain cascades through the full async path:
+    # `_get_admin_user_or_none` → `is_super_admin` → `get_admin_user` →
+    # every admin handler. All are `async def`.
     try:
         async with get_db_session() as db:
             emails_cfg = (await db.execute(
@@ -1317,8 +1324,11 @@ async def _load_tenant(tenant_id: str) -> dict[str, Any]:
         }
 
 
-def _get_admin_user_or_none(request: Request) -> AdminUser | None:
+async def _get_admin_user_or_none(request: Request) -> AdminUser | None:
     """Read the session and produce an AdminUser, or None if not authenticated.
+
+    `async def` under the full-async pivot (2026-04-11) because it `await`s
+    `is_super_admin`, which opens an async DB session for the env/DB fallback.
 
     Test-mode bypass: when ADCP_AUTH_TEST_MODE=true AND session contains a
     `test_user` key, construct an AdminUser with `is_test_user=True` and
@@ -1352,7 +1362,7 @@ def _get_admin_user_or_none(request: Request) -> AdminUser | None:
     email = _extract_email(raw)
     if not email:
         return None
-    role: Role = "super_admin" if is_super_admin(email) else "tenant_user"
+    role: Role = "super_admin" if await is_super_admin(email) else "tenant_user"
     return AdminUser(email=email, role=role, is_test_user=False)
 
 
@@ -1360,20 +1370,20 @@ def _get_admin_user_or_none(request: Request) -> AdminUser | None:
 # Public deps
 # ---------------------------------------------------------------------------
 
-def get_admin_user_optional(request: Request) -> AdminUser | None:
-    return _get_admin_user_or_none(request)
+async def get_admin_user_optional(request: Request) -> AdminUser | None:
+    return await _get_admin_user_or_none(request)
 
 
-def get_admin_user(request: Request) -> AdminUser:
-    user = _get_admin_user_or_none(request)
+async def get_admin_user(request: Request) -> AdminUser:
+    user = await _get_admin_user_or_none(request)
     if user is None:
         raise AdminRedirect(to="/admin/login", next_url=str(request.url))
     return user
 
 
-def get_admin_user_json(request: Request) -> AdminUser:
+async def get_admin_user_json(request: Request) -> AdminUser:
     """Same as get_admin_user but raises HTTPException(401) for JSON endpoints."""
-    user = _get_admin_user_or_none(request)
+    user = await _get_admin_user_or_none(request)
     if user is None:
         raise HTTPException(status_code=401, detail="Authentication required")
     return user
@@ -1384,13 +1394,13 @@ AdminUserJsonDep = Annotated[AdminUser, Depends(get_admin_user_json)]
 AdminUserOptional = Annotated[AdminUser | None, Depends(get_admin_user_optional)]
 
 
-def require_super_admin(user: AdminUserDep) -> AdminUser:
+async def require_super_admin(user: AdminUserDep) -> AdminUser:
     if user.role != "super_admin":
         raise HTTPException(status_code=403, detail="Super admin required")
     return user
 
 
-def require_super_admin_json(user: AdminUserJsonDep) -> AdminUser:
+async def require_super_admin_json(user: AdminUserJsonDep) -> AdminUser:
     if user.role != "super_admin":
         raise HTTPException(status_code=403, detail="Super admin required")
     return user
@@ -1422,58 +1432,66 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant, User
 
 
-def _user_has_tenant_access(email: str, tenant_id: str) -> bool:
-    with get_db_session() as db:
-        found = db.scalars(
+async def _user_has_tenant_access(email: str, tenant_id: str) -> bool:
+    async with get_db_session() as db:
+        found = (await db.execute(
             select(User).filter_by(email=email.lower(), tenant_id=tenant_id, is_active=True)
-        ).first()
+        )).scalars().first()
         return found is not None
 
 
-def _tenant_has_auth_setup_mode(tenant_id: str) -> bool:
-    with get_db_session() as db:
-        tenant = db.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+async def _tenant_has_auth_setup_mode(tenant_id: str) -> bool:
+    async with get_db_session() as db:
+        tenant = (await db.execute(
+            select(Tenant).filter_by(tenant_id=tenant_id)
+        )).scalars().first()
         return bool(tenant and getattr(tenant, "auth_setup_mode", False))
 
 
-def get_current_tenant(
+async def get_current_tenant(
     request: Request,
     user: AdminUserDep,
     tenant_id: str,
 ) -> dict[str, Any]:
     """Resolve the current tenant, enforcing access.
 
+    `async def` under the full-async pivot (2026-04-11): every helper below
+    is async. Note this is the transitional-wrapper shape that opens its own
+    session; the idiomatic Wave 4 replacement threads `TenantRepoDep` +
+    `UserRepoDep` through the signature so the DI layer owns session lifetime.
+    See §11.0.4 (repository base) and §11.0.5 (session_scope).
+
     Super admins bypass access checks. Test users with matching test_tenant_id
     OR super_admin role bypass. Test users from OTHER tenants are rejected.
     Regular users must have an active User row in the target tenant.
     """
     if user.role == "super_admin":
-        return _load_tenant(tenant_id)
+        return await _load_tenant(tenant_id)
 
     if user.is_test_user:
         session = request.session
         if session.get("test_tenant_id") == tenant_id:
-            return _load_tenant(tenant_id)
+            return await _load_tenant(tenant_id)
         if session.get("test_user_role") == "super_admin":
-            return _load_tenant(tenant_id)
+            return await _load_tenant(tenant_id)
         # Fall through to the auth_setup_mode check — a fresh tenant with
         # auth_setup_mode=True is intentionally permissive for bootstrap.
-        if _tenant_has_auth_setup_mode(tenant_id):
-            return _load_tenant(tenant_id)
+        if await _tenant_has_auth_setup_mode(tenant_id):
+            return await _load_tenant(tenant_id)
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
-    if not _user_has_tenant_access(user.email, tenant_id):
+    if not await _user_has_tenant_access(user.email, tenant_id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
-    return _load_tenant(tenant_id)
+    return await _load_tenant(tenant_id)
 
 
-def get_current_tenant_json(
+async def get_current_tenant_json(
     request: Request,
     user: AdminUserJsonDep,
     tenant_id: str,
 ) -> dict[str, Any]:
     # Same logic; different 401 semantics come from the AdminUserJsonDep chain.
-    return get_current_tenant(request, user, tenant_id)
+    return await get_current_tenant(request, user, tenant_id)
 
 
 CurrentTenantDep = Annotated[dict, Depends(get_current_tenant)]
@@ -1624,7 +1642,7 @@ class TestCurrentTenantDep:
 - Public API: `AdminUser`, `AdminRedirect`, `AdminAccessDenied`, `is_super_admin`, `AdminUserDep`, `AdminUserJsonDep`, `SuperAdminDep`, `AdminUserOptional`, `CurrentTenantDep`, `CurrentTenantJsonDep`.
 - Does NOT use `ResolvedIdentity` — admin UI auth is a distinct concept. See docstring.
 - Does NOT read `request.state.auth_context` — that's token-based auth for API routes. Admin UI auth is session-cookie-based. The two stacks share `UnifiedAuthMiddleware` only incidentally (it runs on every request regardless).
-- DB access via `get_db_session()` context manager (sync SQLAlchemy 2.0). No repository layer — a TenantRepository/UserRepository is tracked in v2.1 but 2.0.0 ships with direct ORM.
+- DB access via `async with get_db_session()` (async SQLAlchemy 2.0 via `AsyncSession`, pivoted 2026-04-11). Repository layer ships in v2.0 Wave 4 per the Agent E idiom upgrade — see `async-pivot-checkpoint.md` §3 and the recipe at §11.0.4/§11.0.5.
 - `AdminRedirect` exception handler registered in `app_factory`:
 
 ```python
