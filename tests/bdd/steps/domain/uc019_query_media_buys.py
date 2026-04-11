@@ -742,6 +742,32 @@ def given_adapter_reporting_mixed(ctx: dict, pkg1: str, pkg2: str) -> None:
     _patch_adapter_with_snapshot(ctx, snapshot_data)
 
 
+@given(parsers.parse("the adapter does not support realtime reporting"))
+def given_adapter_no_realtime(ctx: dict) -> None:
+    """Configure adapter to NOT support realtime reporting (short form).
+
+    Patches get_adapter in the media_buy_list module so the returned adapter
+    has supports_realtime_reporting=False. Unlike the "ad platform adapter does
+    not support realtime reporting" step (which uses env.mock["adapter"]), this
+    step patches the module-level get_adapter — suitable for MediaBuyListEnv
+    which has no EXTERNAL_PATCHES.
+    """
+    from unittest.mock import MagicMock, patch
+
+    ctx["adapter_supports_reporting"] = False
+
+    adapter_mock = MagicMock()
+    adapter_mock.capabilities.supports_realtime_reporting = False
+    adapter_mock.get_packages_snapshot.return_value = {}
+
+    patcher = patch(
+        "src.core.tools.media_buy_list.get_adapter",
+        return_value=adapter_mock,
+    )
+    patcher.start()
+    ctx.setdefault("_patchers", []).append(patcher)
+
+
 @given(parsers.parse('an authenticated principal "{principal_id}" who owns {count:d} media buys'))
 def given_principal_with_n_buys(ctx: dict, principal_id: str, count: int) -> None:
     """Create N media buys for a principal.
@@ -883,6 +909,123 @@ def given_sandbox_account(ctx: dict) -> None:
 def given_production_account(ctx: dict) -> None:
     """Mark request as targeting a production (non-sandbox) account."""
     ctx["sandbox"] = False
+
+
+@given("an authenticated identity with no principal_id")
+def given_identity_no_principal(ctx: dict) -> None:
+    """Simulate an identity resolved but with no principal_id.
+
+    The buyer has valid tenant context (e.g., token resolved) but lacks a
+    principal_id — simulating an expired/revoked token or incomplete auth.
+    Sets has_auth=True so the When step sends a real identity, but with
+    principal_id=None so _impl can detect the missing principal and return
+    an appropriate error response.
+    """
+    from tests.factories.principal import PrincipalFactory
+
+    env = ctx["env"]
+    identity = PrincipalFactory.make_identity(
+        principal_id=None,
+        tenant_id=env._tenant_id,
+    )
+    ctx.setdefault("query_kwargs", {})["identity"] = identity
+
+
+@given(parsers.parse("an authenticated identity with principal_id null"))
+@given(parsers.parse('an authenticated identity with principal_id ""'))
+def given_identity_principal_id_null_or_empty(ctx: dict) -> None:
+    """Simulate an identity with principal_id as null or empty string.
+
+    Both null and empty string are treated as "missing principal_id" by
+    production code. We set principal_id=None for both — the distinction
+    is in the Gherkin readability, not the implementation.
+    """
+    from tests.factories.principal import PrincipalFactory
+
+    env = ctx["env"]
+    identity = PrincipalFactory.make_identity(
+        principal_id=None,
+        tenant_id=env._tenant_id,
+    )
+    ctx.setdefault("query_kwargs", {})["identity"] = identity
+
+
+@given(parsers.parse('the principal "{principal_id}" does not exist in the tenant database'))
+def given_principal_not_in_tenant_db(ctx: dict, principal_id: str) -> None:
+    """Ensure the specified principal does not exist in the tenant database.
+
+    For integration env: delete the principal if it exists. The env already
+    created a default principal, but the scenario has set up a different
+    principal_id (e.g., "buyer-unknown") that should NOT be in the database.
+    """
+    from sqlalchemy import delete, select
+
+    from src.core.database.models import Principal
+
+    env = ctx["env"]
+    tenant = ctx.get("tenant")
+    assert tenant is not None, "No tenant in ctx"
+    if env._session is not None:
+        existing = env._session.scalars(
+            select(Principal).filter_by(principal_id=principal_id, tenant_id=tenant.tenant_id)
+        ).first()
+        if existing:
+            env._session.execute(
+                delete(Principal).where(
+                    Principal.principal_id == principal_id,
+                    Principal.tenant_id == tenant.tenant_id,
+                )
+            )
+            env._session.commit()
+
+
+@given(parsers.parse('an authenticated principal "{principal_id}" not in registry'))
+def given_principal_not_in_registry(ctx: dict, principal_id: str) -> None:
+    """Simulate an authenticated principal whose ID is not in the tenant database.
+
+    Sets up an identity with the given principal_id, but ensures no matching
+    Principal row exists in the DB. The _impl function should detect this
+    and return a "principal_not_found" error.
+    """
+    from sqlalchemy import delete, select
+
+    from src.core.database.models import Principal
+    from tests.factories.principal import PrincipalFactory
+
+    env = ctx["env"]
+    tenant = ctx.get("tenant")
+    assert tenant is not None, "No tenant in ctx"
+
+    # Build identity with the unregistered principal_id
+    identity = PrincipalFactory.make_identity(
+        principal_id=principal_id,
+        tenant_id=env._tenant_id,
+    )
+    ctx.setdefault("query_kwargs", {})["identity"] = identity
+
+    # Ensure the principal does NOT exist in DB
+    if env._session is not None:
+        existing = env._session.scalars(
+            select(Principal).filter_by(principal_id=principal_id, tenant_id=tenant.tenant_id)
+        ).first()
+        if existing:
+            env._session.execute(
+                delete(Principal).where(
+                    Principal.principal_id == principal_id,
+                    Principal.tenant_id == tenant.tenant_id,
+                )
+            )
+            env._session.commit()
+
+
+@given("no authentication context")
+def given_no_auth_context(ctx: dict) -> None:
+    """Simulate a request with no authentication at all.
+
+    Sets has_auth=False so the When step sends identity=None, triggering
+    an AUTH_REQUIRED error from _impl.
+    """
+    ctx["has_auth"] = False
 
 
 @given(parsers.parse('snapshot data is available for package "{pkg_id}"'))
