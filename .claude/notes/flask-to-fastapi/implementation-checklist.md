@@ -68,13 +68,25 @@ Every item references the companion doc where full detail lives. Tick every box 
 
 Full detail in `flask-to-fastapi-deep-audit.md` §1.
 
-- [ ] **Blocker 1: `script_root` / `script_name` template breakage**
-  - [ ] `src/admin/templating.py::render()` wrapper injects `admin_prefix="/admin"` and `static_prefix="/static"` as Jinja context globals (NOT `script_root`)
-  - [ ] `scripts/codemod_templates.py` extended to rewrite `{{ script_name }}/static` → `{{ static_prefix }}`
-  - [ ] `scripts/codemod_templates.py` extended to rewrite `{{ script_name }}` → `{{ admin_prefix }}`
-  - [ ] Codemod runs successfully across all 45 templates containing the 147 refs
-  - [ ] `tests/admin/test_templates_no_script_root.py` exists and is green — greps templates for `script_name|script_root|request\.script_root|request\.script_name` and asserts zero matches
-  - [ ] Manual audit of `add_product_gam.html` for JS-literal edge cases
+- [ ] **Blocker 1: `script_root` / `script_name` template breakage — GREENFIELD: full `url_for` adoption**
+  - [ ] `src/admin/templating.py::render()` wrapper has NO `admin_prefix`/`static_prefix`/`script_root`/`script_name` in its context dict
+  - [ ] `src/admin/templating.py` pre-registers `_url_for` safe-lookup override on `templates.env.globals` BEFORE any `TemplateResponse` call (catches `NoMatchFound`, logs template filename + route name + params, re-raises)
+  - [ ] `app.mount("/static", StaticFiles(directory="src/admin/static"), name="static")` on the outer FastAPI app — `name="static"` is load-bearing for `url_for('static', path=...)` resolution via `Mount.url_path_for` at `starlette/routing.py:434-459`
+  - [ ] Every admin route has `name="admin_<blueprint>_<endpoint>"` on its decorator (e.g., `@router.get("/tenant/{tenant_id}/accounts", name="admin_accounts_list_accounts")`)
+  - [ ] `scripts/codemod_templates_greenfield.py` exists and implements a two-pass regex rewrite:
+    - [ ] Pass 1a: `{{ script_name }}/static/foo.css` → `{{ url_for('static', path='/foo.css') }}`
+    - [ ] Pass 1b: `{{ script_name }}/tenant/{{ tenant_id }}/settings` → `{{ url_for('admin_tenants_settings', tenant_id=tenant_id) }}` via `HARDCODED_PATH_TO_ROUTE` map
+    - [ ] Pass 2: `{{ url_for('bp.endpoint', ...) }}` Flask-dotted → `{{ url_for('admin_bp_endpoint', ...) }}` via `FLASK_TO_FASTAPI_NAME` map
+  - [ ] `scripts/generate_route_name_map.py` exists and produces `FLASK_TO_FASTAPI_NAME` and `HARDCODED_PATH_TO_ROUTE` from `src/admin/app.py::create_app().url_map.iter_rules()` introspection
+  - [ ] Codemod runs successfully against all 72 templates; stdout reports `"N templates processed, M rewrites applied"`
+  - [ ] Codemod is idempotent — re-running on post-codemod templates yields zero diff (`tests/unit/admin/test_codemod_idempotent.py` green)
+  - [ ] Manual audit of `add_product_gam.html` for JS-literal edge cases (15 `url_for` calls in JS template literals) — verify the `JS_TEMPLATE_LITERAL_RE` pre-pass flags them for manual review
+  - [ ] Manual audit of `base.html` (7 `{{ script_name }}` references — highest-fanout template)
+  - [ ] Manual audit of `tenant_dashboard.html` (21 `script_name` references — highest-complexity template)
+  - [ ] `tests/unit/admin/test_templates_no_hardcoded_admin_paths.py` green — asserts zero matches for `script_name|script_root|admin_prefix|static_prefix` AND zero bare `"/admin/"` / `"/static/"` string literals
+  - [ ] `tests/unit/admin/test_templates_url_for_resolves.py` green — AST-extracts every `url_for('name', ...)` and asserts `name` is in `{r.name for r in app.routes}` (catches `NoMatchFound` footgun at CI time)
+  - [ ] `tests/unit/admin/test_architecture_admin_routes_named.py` green — AST-scans `src/admin/routers/*.py` and asserts every `@router.<method>(...)` has `name=` kwarg
+  - [ ] For JS URL construction with runtime path params: handlers pre-resolve base URLs via `js_*_base` context vars (e.g., `js_workflows_base=str(request.url_for("admin_workflows_list_workflows", tenant_id=tenant_id))`); templates use `const base = "{{ js_workflows_base }}";`
 - [ ] **Blocker 2: Trailing-slash 404 divergence (111 `url_for` calls at risk)**
   - [ ] Every admin router constructed with `APIRouter(redirect_slashes=True, include_in_schema=False)`
   - [ ] OR: the aggregated admin router in `build_admin_router()` sets `redirect_slashes=True` and nested sub-routers inherit cleanly (verified)
@@ -148,7 +160,7 @@ Full detail in `flask-to-fastapi-execution-details.md` Part 1.
 
 **Files created — all 11 foundation modules plus supporting infra:**
 
-- [ ] `src/admin/templating.py` (~120 LOC) — `Jinja2Templates` singleton, `render()` wrapper injecting `admin_prefix` / `static_prefix` / `csrf_token` / `flash` / `_load_current_tenant` (via repository, no raw select)
+- [ ] `src/admin/templating.py` (~150 LOC) — `Jinja2Templates` singleton, `_url_for` safe-lookup override pre-registered on `templates.env.globals`, `render()` wrapper with greenfield context (NO `admin_prefix`/`static_prefix`/`script_root`; only `request`, `support_email`, `sales_agent_domain`, `csrf_token`, plus handler-provided context keys)
 - [ ] `src/admin/flash.py` (~70 LOC) — `flash(request, msg)` / `get_flashed_messages(request, with_categories=False)`
 - [ ] `src/admin/sessions.py` (~40 LOC) — `build_session_middleware_kwargs()` returning `secret_key` from `SESSION_SECRET` (with dual-read of `FLASK_SECRET_KEY` for v2.0), `session_cookie='adcp_session'`, `same_site='lax'`, `https_only=True` in production
 - [ ] `src/admin/oauth.py` (~60 LOC) — Authlib `starlette_client.OAuth` instance, Google client registered, `GOOGLE_CLIENT_NAME = "google"` constant, comment referencing OAuth URI immutability
@@ -165,14 +177,19 @@ Full detail in `flask-to-fastapi-execution-details.md` Part 1.
 
 **Template codemod:**
 
-- [ ] `scripts/codemod_templates.py` (~80 LOC) exists
-- [ ] Codemod handles all six required transformations:
-  - [ ] `{{ url_for('bp.endpoint') }}` → `{{ url_for('bp_endpoint') }}` (flat naming)
-  - [ ] `request.script_root` → `admin_prefix`
-  - [ ] `request.script_name` → `admin_prefix`
-  - [ ] `csrf_token()` → `csrf_token` (Jinja helper)
-  - [ ] `{{ script_name }}/static` → `{{ static_prefix }}` (NEW from Blocker 1)
-  - [ ] `{{ script_name }}` → `{{ admin_prefix }}` (NEW from Blocker 1)
+- [ ] `scripts/codemod_templates_greenfield.py` (~200 LOC) exists — two-pass regex rewrite
+- [ ] `scripts/generate_route_name_map.py` (~50 LOC) exists — imports `src.admin.app.create_app()` and produces `FLASK_TO_FASTAPI_NAME` + `HARDCODED_PATH_TO_ROUTE` maps from `url_map.iter_rules()` introspection
+- [ ] Codemod handles all greenfield transformations:
+  - [ ] `{{ url_for('bp.endpoint', **kw) }}` → `{{ url_for('admin_bp_endpoint', **kw) }}` (Flask-dotted → flat admin-prefixed) — Pass 2
+  - [ ] `{{ script_name }}/static/foo.css` → `{{ url_for('static', path='/foo.css') }}` — Pass 1a
+  - [ ] `{{ script_name }}/tenant/{{ tenant_id }}/settings` → `{{ url_for('admin_tenants_settings', tenant_id=tenant_id) }}` via `HARDCODED_PATH_TO_ROUTE` — Pass 1b
+  - [ ] `{{ script_name }}/logout` → `{{ url_for('admin_auth_logout') }}` — Pass 1b
+  - [ ] `request.script_root` / `request.script_name` / `script_root` / `script_name` → **DELETED** (never appears in greenfield templates)
+  - [ ] `csrf_token()` → `csrf_token` (Jinja variable, codemod Pass 0)
+  - [ ] `get_flashed_messages(...)` → `get_flashed_messages(request, ...)` (add `request` first arg, codemod Pass 0)
+  - [ ] `g.test_mode` → `test_mode` (drop `g.` prefix, codemod Pass 0)
+  - [ ] JS template literals with `{{ script_name }}` inside backticks → flagged for manual review via `JS_TEMPLATE_LITERAL_RE` pre-pass
+  - [ ] Bare `"/admin/..."` / `"/static/..."` string literals in quotes → flagged for manual review via `BARE_ADMIN_RE` post-pass
 - [ ] Codemod runs to exit code 0 against all 72 templates in `/templates/`
 - [ ] Codemod stdout reports `"72 templates processed, N transformations applied"`
 - [ ] Codemod is idempotent: re-running on post-codemod templates yields zero diff
@@ -182,12 +199,14 @@ Full detail in `flask-to-fastapi-execution-details.md` Part 1.
 
 **Tests created (Wave 0 additions):**
 
-- [ ] `tests/admin/test_templates_url_for_resolves.py` — naming-convention mode only (Wave 0); `--strict` resolution mode activated in Wave 1
-- [ ] `tests/admin/test_templates_no_script_root.py` — Blocker 1 guard
-- [ ] `tests/admin/test_trailing_slash_tolerance.py` — Blocker 2 guard
+- [ ] `tests/unit/admin/test_templates_url_for_resolves.py` — AST-extracts every `url_for('name', ...)` from templates; asserts `name` in `{r.name for r in app.routes}`. Blocker 1 runtime safety net.
+- [ ] `tests/unit/admin/test_templates_no_hardcoded_admin_paths.py` — Blocker 1 GREENFIELD guard. Forbids `script_name`/`script_root`/`admin_prefix`/`static_prefix` Jinja references AND bare `"/admin/"` / `"/static/"` string literals in quotes.
+- [ ] `tests/unit/admin/test_architecture_admin_routes_named.py` — GREENFIELD: AST-scans `src/admin/routers/*.py`; every `@router.<method>(...)` decorator must have `name=` kwarg. Prerequisite for `url_for` coverage.
+- [ ] `tests/unit/admin/test_codemod_idempotent.py` — GREENFIELD: running the template codemod twice produces no additional changes.
+- [ ] `tests/unit/admin/test_oauth_callback_routes_exact_names.py` — Blocker 6 GREENFIELD enhancement: byte-pins OAuth callback route names AND paths together. Changing `/admin/auth/google/callback` name or path fails the test.
+- [ ] `tests/unit/admin/test_trailing_slash_tolerance.py` — Blocker 2 guard
 - [ ] `tests/unit/test_architecture_no_flask_imports.py` — empty allowlist check, ratchets per wave
 - [ ] `tests/unit/test_architecture_admin_sync_db_no_async.py` — Blocker 4 guard
-- [ ] `tests/unit/test_oauth_redirect_uris_immutable.py` — Blocker 6 guard
 - [ ] `tests/unit/test_architecture_csrf_exempt_covers_adcp.py` — first-order audit action #8a
 - [ ] `tests/unit/test_architecture_approximated_middleware_path_gated.py` — first-order audit action #8b (also satisfies near-blocker #1)
 - [ ] `tests/unit/test_architecture_admin_routes_excluded_from_openapi.py` — first-order audit action #8c
@@ -195,7 +214,7 @@ Full detail in `flask-to-fastapi-execution-details.md` Part 1.
 - [ ] `tests/unit/test_architecture_harness_overrides_isolated.py` — derivative guard (`app.dependency_overrides` leakage protection)
 - [ ] `tests/unit/test_foundation_modules_import.py` — smoke test that every foundation module imports cleanly
 - [ ] `tests/integration/test_schemas_discovery_external_contract.py` — contract test for `/schemas/adcp/v2.4/*` (first-order audit action #4)
-- [ ] **(total Wave 0 structural guards = 11)**
+- [ ] **(total Wave 0 structural guards = 14)**
 
 **Harness extension:**
 
@@ -223,7 +242,7 @@ Full detail in `flask-to-fastapi-execution-details.md` Part 1.
 - [ ] `tox -e integration` green
 - [ ] `tox -e bdd` green
 - [ ] `./run_all_tests.sh` green
-- [ ] `python scripts/codemod_templates.py --check templates/` returns exit 0 (idempotent re-run yields no diff)
+- [ ] `python scripts/codemod_templates_greenfield.py --check templates/` returns exit 0 (idempotent re-run yields no diff) — enforced by `test_codemod_idempotent.py`
 - [ ] Branch mergeable state verified
 - [ ] Single squashed merge commit on `main`
 

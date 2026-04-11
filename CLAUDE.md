@@ -11,7 +11,7 @@
 Six critical invariants that are easy to forget and destructive to miss:
 1. Admin handlers default to **sync `def`**, NOT `async def` (scoped_session event-loop bug)
 2. Middleware order: **Approximated runs BEFORE CSRF** (not after — counterintuitive but correct)
-3. Templates use `admin_prefix`/`static_prefix`, NOT `script_root` (Starlette's `include_router(prefix=...)` does not set `scope["root_path"]`)
+3. Templates use `{{ url_for('name', **params) }}` exclusively — for admin routes AND static assets. No prefix variables. Every admin route has `name="admin_..."`; static mount is `name="static"`. Starlette's `include_router(prefix=...)` does not set `scope["root_path"]`, so `url_for` is the only correct URL generator.
 4. `APIRouter(redirect_slashes=True, include_in_schema=False)` for all admin routers
 5. `@app.exception_handler(AdCPError)` must be Accept-aware (render HTML for `/admin/*` browsers, JSON otherwise)
 6. OAuth redirect URIs are byte-immutable contracts with Google Cloud Console

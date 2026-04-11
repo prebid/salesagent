@@ -530,7 +530,7 @@ def _lookup_idp_logout_url(tenant_id: str) -> str | None:
 | `url_for("auth.login")` | `request.url_for("auth_login")` | Flat name, no blueprint dot-separator. Returns a `URL` object with `.include_query_params()`. |
 | `redirect(...)` (302 by Flask default) | `RedirectResponse(..., status_code=303)` | 303 is the POST-redirect-GET spec-correct code; matches §11.1 convention. |
 | `flash("msg", "error")` (Flask global) | `flash(request, "msg", "error")` (§11.3) | `request` parameter required; flash bucket lives on `request.session`. |
-| `render_template("login.html", ...)` | `render(request, "login.html", {...})` | Wrapper at `src/admin/templating.py` injects `script_root`, `csrf_token`, `support_email`, `sales_agent_domain`. |
+| `render_template("login.html", ...)` | `render(request, "login.html", {...})` | Wrapper at `src/admin/templating.py` injects `csrf_token`, `support_email`, `sales_agent_domain`, and pre-registers a `_url_for` safe-lookup override on `templates.env.globals`. Templates use `{{ url_for('admin_auth_login') }}` for admin paths and `{{ url_for('static', path='/validation.css') }}` for static assets — **NO `script_root`/`admin_prefix`/`static_prefix` globals exist** (greenfield). |
 | `try: token = oauth.google.authorize_access_token(); except Exception` | `try: token = await oauth.google.authorize_access_token(request); except OAuthError` | Authlib's starlette_client raises `OAuthError` — catch the typed exception rather than bare `Exception`. |
 | `return make_response(redirect(...))` | `return RedirectResponse(..., status_code=303)` | No `make_response` needed; `RedirectResponse` IS the response. |
 

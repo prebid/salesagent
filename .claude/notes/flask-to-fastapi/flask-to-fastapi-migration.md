@@ -113,7 +113,7 @@ The first-order audit (§2.7) verified AdCP protocol safety. A subsequent **deep
 
 ### The six new blockers
 
-1. 🚨 **`script_root` / `script_name` silent template breakage — 147 refs across 45 templates.** Starlette's `include_router(prefix="/admin")` does NOT set `scope["root_path"]` (verified via runtime introspection); it stays empty. Flask's WSGIMiddleware mount currently sets it to `/admin`. Templates using `{{ script_name }}/logout`, `{{ script_name }}/tenant/...`, and JavaScript `fetch({{ script_name }}/...)` would render as `/logout`, `/tenant/...`, 404ing across the admin UI. **Fix:** split `script_name` into `admin_prefix="/admin"` and `static_prefix="/static"` Jinja globals in `render()`, extend the template codemod to handle the split, add guard test `test_templates_no_script_root.py`.
+1. 🚨 **`script_root` / `script_name` silent template breakage — 147 refs across 45 templates.** Starlette's `include_router(prefix="/admin")` does NOT set `scope["root_path"]` (verified via runtime introspection); it stays empty. Flask's WSGIMiddleware mount currently sets it to `/admin`. Templates using `{{ script_name }}/logout`, `{{ script_name }}/tenant/...`, and JavaScript `fetch({{ script_name }}/...)` would render as `/logout`, `/tenant/...`, 404ing across the admin UI. **Fix (GREENFIELD — full `url_for` adoption, per user directive):** every admin route gets `name="admin_<blueprint>_<endpoint>"` on its decorator; `StaticFiles(..., name="static")` is mounted on the outer app; every URL in every template uses `{{ url_for('admin_...', **params) }}` for admin paths and `{{ url_for('static', path='/...') }}` for static assets. **NO `admin_prefix`/`static_prefix` Jinja globals exist** — they are strictly forbidden and guarded. This is the canonical FastAPI docs pattern (verified in `Jinja2Templates._setup_env_defaults` at `starlette/templating.py:118-129` which auto-registers `url_for` as a Jinja global wrapping `request.url_for(...)` via `@pass_context`, and in `Mount.url_path_for` at `starlette/routing.py:434-459` which resolves `url_for('static', path=...)` natively for a named `StaticFiles` mount). The codemod is two-pass: Pass 1 rewrites `{{ script_name }}/path` legacy literals + Flask-dotted `url_for('bp.endpoint')` calls → flat `url_for('admin_bp_endpoint')`; Pass 2 flags JS template literals with runtime-param URLs for the per-render `js_*_base` context-var pattern (see §13). Missing/mistyped route names raise `starlette.routing.NoMatchFound` at render time; the mandatory guard test `test_templates_url_for_resolves.py` catches this at CI time by statically extracting every `url_for('name', ...)` from every template and asserting `name` exists in `{r.name for r in app.routes}`. A `_url_for` safe-lookup override in the `render()` wrapper adds template-filename logging before re-raising for production grep-ability.
 
 2. 🚨 **Trailing-slash handling differs between Flask and Starlette.** Flask's `strict_slashes=False` default matches both `/foo` and `/foo/`; Starlette does not. 111 `url_for()` calls across 30 templates are at risk of silent 404s. **Fix:** set `APIRouter(redirect_slashes=True, include_in_schema=False)` on every admin router, add guard test `test_trailing_slash_tolerance.py`.
 
@@ -140,7 +140,7 @@ The first-order audit (§2.7) verified AdCP protocol safety. A subsequent **deep
 - **Admin handler default flips to `def` (sync)** — was `async def` in the original plan. Async is reserved for handlers that `await` external I/O (OAuth, SSE, httpx).
 - **Middleware order swaps Approximated and CSRF** — Approximated runs before CSRF, not after.
 - **Redirect code changes from 302 to 307** — preserves POST body on external-domain redirect.
-- **`render()` wrapper uses `admin_prefix`/`static_prefix`** — not `script_root`.
+- **`render()` wrapper uses `url_for` exclusively** — no `admin_prefix`/`static_prefix`/`script_root` globals. Handlers pass any pre-resolved base URLs (for JS consumption) via per-render context vars named `js_*_base` (e.g. `js_workflows_base = str(request.url_for('admin_workflows_list_workflows', tenant_id=tenant_id))`). A `_url_for` safe-lookup override in `render()` catches `NoMatchFound` and logs the offending template filename before re-raising.
 - **`APIRouter` construction includes `redirect_slashes=True`** — matches Flask permissive default.
 - **Admin error handler renders `error.html`** — for HTML `Accept` on `/admin/*` paths.
 - **`FLASK_SECRET_KEY` transition becomes dual-read for v2.0** (supersedes user directive #5) — plan originally said hard-required rename, but `scripts/setup-dev.py`, `docker-compose.yml`, `tests/unit/test_setup_dev.py` (9 occurrences), and two docs files all reference the old name. Hard-removing breaks dev workflow and 9 tests. Dual-read `SESSION_SECRET or FLASK_SECRET_KEY` in v2.0, hard-remove in v2.1.
@@ -148,17 +148,20 @@ The first-order audit (§2.7) verified AdCP protocol safety. A subsequent **deep
 ### Additional structural guards (9 total, up from the original plan's 2)
 
 1. `test_architecture_no_flask_imports.py` — already planned
-2. `test_templates_url_for_resolves.py` — already planned
+2. `test_templates_url_for_resolves.py` — GREENFIELD: AST-extracts `url_for('name', ...)` from every template and asserts `name` exists in `{r.name for r in app.routes}`. Catches `NoMatchFound` footgun at CI time.
 3. `test_architecture_csrf_exempt_covers_adcp.py` — from first-order audit
 4. `test_architecture_approximated_middleware_path_gated.py` — from first-order audit
 5. `test_architecture_admin_routes_excluded_from_openapi.py` — from first-order audit
 6. **`test_architecture_admin_sync_db_no_async.py`** — NEW from deep audit (blocker 4)
-7. **`test_templates_no_script_root.py`** — NEW from deep audit (blocker 1)
+7. **`test_templates_no_hardcoded_admin_paths.py`** — GREENFIELD: forbids `script_name`/`script_root`/`admin_prefix`/`static_prefix` Jinja references AND bare `"/admin/"` / `"/static/"` string literals inside quotes. Blocker 1 guard.
 8. **`test_trailing_slash_tolerance.py`** — NEW from deep audit (blocker 2)
 9. **`test_oauth_redirect_uris_immutable.py`** — NEW from deep audit (blocker 6)
+10. **`test_architecture_admin_routes_named.py`** — GREENFIELD: AST-scans `src/admin/routers/*.py` and asserts every `@router.<method>(...)` decorator has `name="admin_..."` kwarg. Required because unnamed routes cannot be targets of `url_for`.
+11. **`test_oauth_callback_routes_exact_names.py`** — GREENFIELD: byte-pins the OAuth callback route names AND paths together (blocker #6 enhanced with name-immutability).
+12. **`test_codemod_idempotent.py`** — GREENFIELD: running the template codemod twice produces no additional changes.
 
 Plus two derivative guards:
-10. `test_architecture_single_worker_invariant.py` — prevent multi-worker regression (scheduler singleton)
+13. `test_architecture_single_worker_invariant.py` — prevent multi-worker regression (scheduler singleton)
 11. `test_architecture_harness_overrides_isolated.py` — prevent `app.dependency_overrides` leakage across test envs
 
 ### Derivative opportunities enabled by the migration (deferred to v2.1)
@@ -896,46 +899,69 @@ templates.env.filters["from_json"] = _from_json
 templates.env.filters["markdown"] = _markdown
 templates.env.globals["get_flashed_messages"] = get_flashed_messages
 
-def render(request, name, context=None, *, status_code=200):
-    """One-call wrapper injecting admin_prefix, static_prefix, csrf_token, support_email,
-    sales_agent_domain, and the current tenant. Replaces Flask's inject_context
-    context processor.
+# --- Safe url_for override with template-filename logging ---------
+# Starlette's default url_for (starlette/templating.py:118-129) raises
+# NoMatchFound with a message that omits the offending template filename.
+# We intercept, log the template name, then re-raise so production 500s
+# are grep-able. `setdefault` at line 129 means we MUST register this
+# override BEFORE any TemplateResponse call.
+from jinja2 import pass_context
+from starlette.datastructures import URL
+from starlette.routing import NoMatchFound
 
-    CORRECTED per deep audit blocker #1: admin_prefix and static_prefix replace the
-    old script_name/script_root variable because include_router(prefix="/admin")
-    does NOT set scope["root_path"] (verified via runtime introspection; see
-    flask-to-fastapi-deep-audit.md §1.1). Templates use:
-      {{ admin_prefix }}/tenant/...  for admin paths (renders /admin/tenant/...)
-      {{ static_prefix }}/foo.css    for static assets (renders /static/foo.css)
+@pass_context
+def _url_for(context: dict[str, Any], name: str, /, **path_params: Any) -> URL:
+    request: Request = context["request"]
+    try:
+        return request.url_for(name, **path_params)
+    except NoMatchFound:
+        template_name = getattr(context, "name", "<unknown>")
+        logger.error(
+            "NoMatchFound in template %s: url_for(%r, **%r). "
+            "Check that every admin router has name= on its decorator.",
+            template_name, name, path_params,
+        )
+        raise
+
+templates.env.globals["url_for"] = _url_for
+
+
+def render(request, name, context=None, *, status_code=200, headers=None):
+    """One-call wrapper. Greenfield FastAPI convention: every URL in every
+    template resolves via `{{ url_for('name', **params) }}` — for admin
+    routes AND static assets.
+
+    NO admin_prefix/static_prefix/script_root/script_name Jinja globals
+    exist; they are strictly forbidden and guarded by
+    `test_templates_no_hardcoded_admin_paths.py`.
+
+    Handlers pass `tenant` explicitly in the context dict when they need it
+    (no auto-injection — that would reintroduce Flask's inject_context N+1
+    DB pattern). For JS URL construction with runtime path params, handlers
+    pre-resolve base URLs via `js_*_base` context vars (see §13 example).
+
+    - {{ url_for('admin_accounts_list_accounts', tenant_id=t) }} → /admin/tenant/{t}/accounts
+    - {{ url_for('static', path='/validation.css') }}            → /static/validation.css
+    - {{ url_for('admin_auth_logout') }}                         → /admin/logout
     """
     base = {
         "request": request,
-        "admin_prefix": "/admin",   # hard-coded; matches build_admin_router() prefix
-        "static_prefix": "/static", # hard-coded; matches outer app StaticFiles mount
         "support_email": get_support_email(),
         "sales_agent_domain": get_sales_agent_domain() or "example.com",
         "csrf_token": getattr(request.state, "csrf_token", ""),
-        "tenant": _load_current_tenant_dict(request),  # replaces Flask inject_context DB lookup
     }
     if context:
-        base.update(context)
-    return templates.TemplateResponse(name, base, status_code=status_code)
-
-
-def _load_current_tenant_dict(request) -> dict | None:
-    """Per-request tenant load (replaces inject_context at src/admin/app.py:298-330).
-    Uses the repository pattern (no raw select) to respect CLAUDE.md Pattern #3."""
-    tenant_id = request.session.get("tenant_id")
-    if not tenant_id:
-        return None
-    from src.core.database.database_session import get_db_session
-    from src.core.database.repositories.tenant import TenantRepository
-    with get_db_session() as db:
-        tenant = TenantRepository(db).get_by_id(tenant_id)
-    return tenant.to_dict() if tenant else None
+        base.update(context)  # handler keys win — lets tests inject fakes
+    return templates.TemplateResponse(
+        request=request,
+        name=name,
+        context=base,
+        status_code=status_code,
+        headers=headers,
+    )
 ```
 
-Every handler calls `render(request, "foo.html", {...})`. No context processor.
+Every handler calls `render(request, "foo.html", {...})`. No context processor. The two-pass codemod rewrites (Pass 1) legacy `{{ script_name }}/static/foo.css` → `{{ url_for('static', path='/foo.css') }}` and `{{ script_name }}/tenant/{{ tenant_id }}/settings` → `{{ url_for('admin_tenants_settings', tenant_id=tenant_id) }}`; (Pass 2) existing Flask-dotted `{{ url_for('bp.endpoint', ...) }}` calls → `{{ url_for('admin_bp_endpoint', ...) }}` flat FastAPI names. Driven by a `FLASK_TO_FASTAPI_NAME` dict and `HARDCODED_PATH_TO_ROUTE` map generated mechanically from `app.register_blueprint()` introspection. JS template literals with mid-path runtime IDs (e.g. `` fetch(`{{ script_name }}/tenant/${id}`) ``) are flagged for manual review and handled via per-render `js_*_base` context vars set in the handler (see §13.4 worked example).
 
 ### 11.2 `SessionMiddleware` config (`src/admin/sessions.py`, ~40 LOC)
 
@@ -1274,19 +1300,23 @@ async def stream(tenant_id: str, tenant: CurrentTenantDep, request: Request):
 app.mount("/static", StaticFiles(directory="src/admin/static"), name="static")
 ```
 
-Move `/static` → `src/admin/static/`. Templates codemod `url_for('static', filename='x.js')` → `{{ script_root ~ '/static/x.js' }}`.
+Move `/static` → `src/admin/static/`. Templates use `{{ url_for('static', path='/x.js') }}` — the canonical Starlette pattern resolved natively by `Mount.url_path_for` at `starlette/routing.py:434-459` when the mount declares `name="static"`.
 
 ---
 
-## 12. Template Codemod Details (Option B)
+## 12. Template Codemod Details (Greenfield — full `url_for` adoption)
 
 ### 12.1 Mechanical transformations
 
 | From (Flask Jinja) | To (FastAPI-native Jinja) |
 |---|---|
-| `{{ url_for('accounts.list_accounts', tenant_id=t) }}` | `{{ url_for('accounts_list_accounts', tenant_id=t) }}` |
-| `{{ url_for('static', filename='app.js') }}` | `{{ script_root ~ '/static/app.js' }}` |
-| `{{ request.script_root }}` | `{{ script_root }}` |
+| `{{ url_for('accounts.list_accounts', tenant_id=t) }}` | `{{ url_for('admin_accounts_list_accounts', tenant_id=t) }}` |
+| `{{ url_for('static', filename='app.js') }}` | `{{ url_for('static', path='/app.js') }}` |
+| `{{ script_name }}/static/foo.css` | `{{ url_for('static', path='/foo.css') }}` |
+| `{{ script_name }}/logout` | `{{ url_for('admin_auth_logout') }}` |
+| `{{ script_name }}/tenant/{{ tenant_id }}/settings` | `{{ url_for('admin_tenants_settings', tenant_id=tenant_id) }}` |
+| `{{ request.script_root }}` | **DELETED** — never appears in greenfield templates |
+| `{{ admin_prefix }}` / `{{ static_prefix }}` | **DELETED** — strictly forbidden, guarded |
 | `{{ session.authenticated }}`, `{{ session.role }}`, `{{ session.email }}` | **Unchanged** (Starlette `request.session` is dict; `request` in context) |
 | `{{ g.test_mode }}` | `{{ test_mode }}` (inject via context dict) |
 | `{{ csrf_token() }}` | `{{ csrf_token }}` (parens removed, now a variable) |
@@ -1294,60 +1324,225 @@ Move `/static` → `src/admin/static/`. Templates codemod `url_for('static', fil
 | `{{ tenant.name }}` | **Unchanged** (passed in per-handler context) |
 | `{{ support_email }}` | **Unchanged** (`render()` injects globally) |
 
-### 12.2 Flat route naming
+### 12.2 Flat route naming convention
 
-Routes declared with `name="accounts_list_accounts"` (Flask's `accounts.list_accounts` flattened). Codemod is purely lexical.
+Pattern: **`admin_<blueprint>_<endpoint>`** (prefixed + flat).
 
+Example: `accounts.list_accounts` → `admin_accounts_list_accounts`
+
+Rationale for keeping the `admin_` prefix (rather than dropping it since `include_router(prefix="/admin")` already prefixes paths):
+1. **Namespace disambiguation with AdCP protocol routes.** Dropping the prefix risks a future name collision with `/api/v1/*` protocol route names (e.g., `list_products` at protocol level vs `products_list_products` at admin level). Prefixing `admin_` makes `rg 'name="admin_'` return exactly the admin surface.
+2. **Guard-test legibility.** `r.name.startswith("admin_")` is self-sufficient for admin-route filters without a parallel "known admin blueprints" map.
+3. **`include_router(prefix="/admin")` does NOT prefix route names** — only paths (verified in `fastapi/routing.py:1395` where `name=route.name` passes through verbatim). Path prefix and name prefix are independent namespaces, so explicit name prefix is non-redundant.
+4. **One-way door.** Dropping the prefix later is a trivial global rename; adding it back after a collision manifests is painful.
+
+Each admin route decorator:
 ```python
-# Old Flask
-@accounts_bp.route("/")  # endpoint "accounts.list_accounts"
-
-# New FastAPI
-@router.get("/tenant/{tenant_id}/accounts", name="accounts_list_accounts")
+@router.get("/tenant/{tenant_id}/accounts", name="admin_accounts_list_accounts")
+def list_accounts(...):
+    ...
 ```
 
-### 12.3 Codemod script sketch (`scripts/codemod_templates.py`)
-
-Pure regex (Jinja isn't parseable with Python AST).
-
+`StaticFiles` mount:
 ```python
-import re, pathlib
-
-URL_FOR = re.compile(r"""url_for\(\s*['"]([a-zA-Z_][a-zA-Z_0-9]*)\.([a-zA-Z_][a-zA-Z_0-9]*)['"]""")
-STATIC_URL_FOR = re.compile(r"""url_for\(\s*['"]static['"]\s*,\s*filename\s*=\s*(['"][^'"]+['"])\s*\)""")
-SCRIPT_ROOT = re.compile(r"\brequest\.script_root\b")
-CSRF_CALL = re.compile(r"\bcsrf_token\(\)")
-FLASH_CALL = re.compile(r"\bget_flashed_messages\(([^)]*)\)")
-G_ATTR = re.compile(r"\bg\.([a-zA-Z_]\w*)")
-
-def transform(src: str) -> str:
-    src = URL_FOR.sub(lambda m: f"url_for('{m.group(1)}_{m.group(2)}'", src)
-    src = STATIC_URL_FOR.sub(lambda m: f"script_root ~ '/static/' ~ {m.group(1)}", src)
-    src = SCRIPT_ROOT.sub("script_root", src)
-    src = CSRF_CALL.sub("csrf_token", src)
-    src = FLASH_CALL.sub(
-        lambda m: f"get_flashed_messages(request{', ' + m.group(1) if m.group(1).strip() else ''})",
-        src,
-    )
-    src = G_ATTR.sub(lambda m: m.group(1), src)
-    return src
+app.mount("/static", StaticFiles(directory="src/admin/static"), name="static")
 ```
 
-Run against 72 files, manual diff audit per-file.
+### 12.3 Two-pass codemod (`scripts/codemod_templates_greenfield.py`)
+
+Pass 1 handles legacy `{{ script_name }}/path` literals. Pass 2 rewrites existing Flask-dotted `url_for('bp.endpoint')` calls to flat `admin_bp_endpoint` names. Driven by two generated maps.
+
+```python
+#!/usr/bin/env python3
+"""Greenfield codemod: rewrite Flask-era Jinja URL constructions to FastAPI
+url_for with flat, prefixed route names."""
+from __future__ import annotations
+import argparse, re, sys
+from dataclasses import dataclass, field
+from pathlib import Path
+
+# Generated by scripts/generate_route_name_map.py from src/admin/blueprints/
+FLASK_TO_FASTAPI_NAME = {
+    "accounts.list_accounts":    "admin_accounts_list_accounts",
+    "accounts.create_account":   "admin_accounts_create_account",
+    "auth.logout":               "admin_auth_logout",
+    "tenants.dashboard":         "admin_tenants_dashboard",
+    "tenants.settings":          "admin_tenants_settings",
+    # ... one entry per Flask endpoint
+}
+
+# Generated by the same tool from Flask url_map.iter_rules()
+HARDCODED_PATH_TO_ROUTE = {
+    "/":                                         ("admin_core_root", ()),
+    "/logout":                                   ("admin_auth_logout", ()),
+    "/tenant/{tenant_id}":                       ("admin_tenants_dashboard", ("tenant_id",)),
+    "/tenant/{tenant_id}/settings":              ("admin_tenants_settings", ("tenant_id",)),
+    "/tenant/{tenant_id}/media-buys":            ("admin_operations_list_media_buys", ("tenant_id",)),
+    "/tenant/{tenant_id}/media-buy/{media_buy_id}":
+        ("admin_operations_media_buy_detail", ("tenant_id", "media_buy_id")),
+    # ... generated per blueprint
+}
+
+# --- Regex toolkit ---
+STATIC_RE = re.compile(
+    r"""\{\{\s*(?:script_name|script_root|request\.script_root)\s*\}\}
+        /static(?P<path>/[^\s'"`<]+)""",
+    re.VERBOSE,
+)
+
+# Match `{{ script_name }}/<path_with_jinja>` — sequence of /segment or /{{ var }}
+ADMIN_PATH_RE = re.compile(
+    r"""\{\{\s*(?:script_name|script_root|request\.script_root)\s*\}\}
+        (?P<path>(?:/(?:\{\{\s*[^}]+?\s*\}\}|[A-Za-z0-9_\-]+))+)""",
+    re.VERBOSE,
+)
+
+FLASK_URL_FOR_RE = re.compile(
+    r"""\{\{\s*url_for\(\s*(['"])(?P<dotted>[a-z_]+\.[a-z_]+)\1
+        (?P<rest>.*?)\s*\)\s*\}\}""",
+    re.VERBOSE | re.DOTALL,
+)
+
+# Paranoid post-pass: flag bare /admin/ literals the regex missed
+BARE_ADMIN_RE = re.compile(r"""["']/admin/[A-Za-z0-9_\-/{}]*["']""")
+
+# Detect JS template literals containing script_name — manual review pass
+JS_TEMPLATE_LITERAL_RE = re.compile(
+    r"`[^`]*\{\{\s*(?:script_name|script_root)\s*\}\}[^`]*`"
+)
+
+@dataclass
+class Report:
+    rewrites: int = 0
+    manual_review: list[str] = field(default_factory=list)
+    unknown_routes: set[str] = field(default_factory=set)
+
+def _rewrite_static(match):
+    return f"{{{{ url_for('static', path='{match.group('path')}') }}}}"
+
+def _extract_placeholders(jinja_path):
+    """/tenant/{{ tenant_id }}/settings → (/tenant/{tenant_id}/settings, {'tenant_id': 'tenant_id'})"""
+    mapping, idx = {}, 0
+    def _sub(m):
+        nonlocal idx
+        expr = m.group(1).strip()
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", expr):
+            placeholder = expr
+        else:
+            placeholder = f"p{idx}"; idx += 1
+        mapping[placeholder] = expr
+        return "{" + placeholder + "}"
+    norm = re.sub(r"\{\{\s*(.+?)\s*\}\}", _sub, jinja_path)
+    return norm, mapping
+
+def _rewrite_admin(match, report, file):
+    raw_path = match.group("path")
+    norm, mapping = _extract_placeholders(raw_path)
+    entry = HARDCODED_PATH_TO_ROUTE.get(norm)
+    if entry is None:
+        report.manual_review.append(f"{file}: unmatched admin path {norm!r}")
+        return match.group(0)
+    route_name, expected_params = entry
+    report.rewrites += 1
+    if not expected_params:
+        return f"{{{{ url_for('{route_name}') }}}}"
+    kwargs = ", ".join(f"{p}={mapping.get(p, p)}" for p in expected_params)
+    return f"{{{{ url_for('{route_name}', {kwargs}) }}}}"
+
+def _rewrite_flask_url_for(match, report):
+    dotted = match.group("dotted")
+    rest = match.group("rest")
+    new_name = FLASK_TO_FASTAPI_NAME.get(dotted)
+    if new_name is None:
+        report.unknown_routes.add(dotted)
+        return match.group(0)
+    report.rewrites += 1
+    return f"{{{{ url_for('{new_name}'{rest}) }}}}"
+
+def transform(src: str, path: Path, report: Report) -> str:
+    # Pre-pass: flag JS template literals for manual review
+    for m in JS_TEMPLATE_LITERAL_RE.finditer(src):
+        report.manual_review.append(f"{path}: JS template literal {m.group(0)[:80]}")
+    # Pass 1: {{ script_name }}/static/...
+    out = STATIC_RE.sub(_rewrite_static, src)
+    # Pass 2: {{ script_name }}/path/... (after static so they don't overlap)
+    out = ADMIN_PATH_RE.sub(lambda m: _rewrite_admin(m, report, path), out)
+    # Pass 3: Flask-dotted url_for → flat admin_<bp>_<endpoint>
+    out = FLASK_URL_FOR_RE.sub(lambda m: _rewrite_flask_url_for(m, report), out)
+    # Post-pass: paranoid check for bare /admin/ literals
+    for bare in BARE_ADMIN_RE.findall(out):
+        report.manual_review.append(f"{path}: bare /admin/ literal {bare}")
+    return out
+```
+
+The codemod is **idempotent** — a second run is a no-op because all patterns key off the pre-migration syntax. Enforced by `tests/unit/admin/test_codemod_idempotent.py`.
 
 ### 12.4 Validator guard (`tests/admin/test_templates_url_for_resolves.py`)
 
+Catches the `NoMatchFound` footgun at CI time by statically extracting every `url_for('name', ...)` call and verifying the name exists in the live route table:
+
 ```python
-def test_all_url_for_calls_resolve():
-    from src.app import app
-    route_names = {r.name for r in app.routes if hasattr(r, "name")}
-    violations = []
-    for tpl_path, calls in _walk_templates():
-        for name in calls:
-            if name not in route_names:
-                violations.append((tpl_path, name))
-    assert not violations, f"Unresolved url_for names: {violations}"
+import re
+from pathlib import Path
+import pytest
+from src.app import app
+
+URL_FOR_RE = re.compile(r"""\{\{\s*url_for\(\s*(['"])(?P<name>[a-zA-Z_][\w]*)\1""")
+
+def _extract_names(template_path: Path) -> set[str]:
+    return {m.group("name") for m in URL_FOR_RE.finditer(template_path.read_text())}
+
+@pytest.fixture(scope="module")
+def route_names() -> set[str]:
+    return {r.name for r in app.routes if getattr(r, "name", None)}
+
+@pytest.mark.parametrize(
+    "template_path",
+    sorted(Path("templates").rglob("*.html")),
+    ids=lambda p: str(p),
+)
+def test_all_url_for_names_exist(template_path: Path, route_names: set[str]):
+    names = _extract_names(template_path)
+    missing = names - route_names
+    assert not missing, (
+        f"{template_path} references unknown route names: {sorted(missing)}.\n"
+        f"Known admin routes: {sorted(n for n in route_names if n.startswith('admin_'))[:20]}..."
+    )
 ```
+
+This catches name typos at unit-test time, ~0.5s runtime. Param-level validation (e.g., `url_for('admin_tenant_settings')` without `tenant_id` kwarg) still raises `NoMatchFound` at render time — accepted limitation; integration tests cover the happy path.
+
+### 12.5 JavaScript URL construction for runtime-param cases
+
+For URLs where path params are only known at JS runtime (e.g., `fetch(\`${base}/creative/${creativeId}/approve\`)`), the handler pre-resolves a **base URL** via `request.url_for()` and passes it via the context dict:
+
+```python
+# In the handler
+return render(request, "tenant_dashboard.html", {
+    "tenant": tenant,
+    "js_workflows_base": str(request.url_for("admin_workflows_list_workflows", tenant_id=tenant_id)),
+    "js_creatives_base": str(request.url_for("admin_creatives_list_creatives", tenant_id=tenant_id)),
+})
+```
+
+```jinja
+<script>
+const workflowsBase = "{{ js_workflows_base }}";  // "/admin/tenant/t1/workflows"
+const response = await fetch(`${workflowsBase}/${workflowId}/steps/${stepId}/reject`, {...});
+</script>
+```
+
+The `str(...)` wrapping at the handler boundary is required — `request.url_for` returns a `URL` object, and while Jinja auto-stringifies in `{{ ... }}`, debugging paths that `json.dumps(context)` don't.
+
+For middle-of-path runtime IDs (e.g., `/admin/tenant/t/profiles/{runtimeId}/preview`), use the sentinel-replace pattern already proven in `templates/add_product_gam.html:1786`:
+
+```jinja
+<script>
+const url = `{{ url_for('admin_inventory_profiles_preview', tenant_id=tenant_id, profile_id=0) }}`.replace('/0/', `/${profileId}/`);
+</script>
+```
+
+The template calls `url_for` with `profile_id=0` as a sentinel; Starlette generates a concrete path; JS replaces `/0/` with the real ID. Requires the route convertor to accept `int=0`.
 
 Runs under `make quality`. Catches silent template breakage at boot time.
 
@@ -1394,7 +1589,7 @@ _STATUSES = ["active", "pending_approval", "rejected", "payment_required", "susp
 
 @router.get(
     "/tenant/{tenant_id}/accounts",
-    name="accounts_list_accounts",
+    name="admin_accounts_list_accounts",  # ← admin_<blueprint>_<endpoint> greenfield convention
     response_class=HTMLResponse,
 )
 def list_accounts(                    # ← sync def (NOT async def) per deep audit blocker #4
@@ -1425,20 +1620,20 @@ def list_accounts(                    # ← sync def (NOT async def) per deep au
 ```python
 @router.get(
     "/tenant/{tenant_id}/accounts/create",
-    name="accounts_create_account_form",
+    name="admin_accounts_create_account_form",
     response_class=HTMLResponse,
 )
-async def create_account_form(
+def create_account_form(  # sync def per blocker #4
     tenant_id: str, request: Request, tenant: CurrentTenantDep,
 ) -> HTMLResponse:
     return render(request, "create_account.html", {"tenant_id": tenant_id, "edit_mode": False})
 
 @router.post(
     "/tenant/{tenant_id}/accounts/create",
-    name="accounts_create_account",
+    name="admin_accounts_create_account",
     dependencies=[Depends(audit_action("create_account"))],
 )
-async def create_account(
+def create_account(  # sync def — writes DB via AccountUoW
     tenant_id: str, request: Request, tenant: CurrentTenantDep,
     name: Annotated[str, Form()],
     brand_domain: Annotated[str, Form()] = "",
@@ -1451,16 +1646,24 @@ async def create_account(
     if not name.strip():
         flash(request, "Account name is required.", "error")
         return RedirectResponse(
-            request.url_for("accounts_create_account_form", tenant_id=tenant_id),
+            str(request.url_for("admin_accounts_create_account_form", tenant_id=tenant_id)),
             status_code=303,
         )
-    # ... create account ...
+    with AccountUoW(tenant_id) as uow:
+        uow.accounts.create(
+            name=name.strip(), brand_domain=brand_domain.strip(),
+            operator=operator.strip(), billing=billing.strip(),
+            payment_terms=payment_terms.strip(), sandbox=(sandbox == "on"),
+            brand_id=brand_id.strip(),
+        )
     flash(request, f"Account '{name}' created successfully.", "success")
     return RedirectResponse(
-        request.url_for("accounts_list_accounts", tenant_id=tenant_id),
+        str(request.url_for("admin_accounts_list_accounts", tenant_id=tenant_id)),
         status_code=303,
     )
 ```
+
+Note the `str(...)` wrapping around `request.url_for(...)` — Starlette's `url_for` returns a `URL` object; `RedirectResponse` accepts strings or URL-like, but explicit `str()` is safer for consistency (and required if the resolved URL is later serialized to JSON in debug logs).
 
 **Changes labeled:** GET+POST split, `Form()` parameters declarative, audit via `dependencies=[...]`, `flash(request, ...)` explicit, `RedirectResponse(..., status_code=303)` spec-correct.
 

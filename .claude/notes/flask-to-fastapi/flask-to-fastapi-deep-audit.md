@@ -66,19 +66,32 @@ app.include_router(admin, prefix='/admin')
 
 **Root cause:** Flask overloaded `script_name` as both the admin URL prefix AND the static asset prefix, because both coincidentally shared `/admin/` via the WSGIMiddleware mount. Post-migration they diverge (`/admin/*` for routes, `/static/*` for assets).
 
-**Required fix (recommended):** split into two explicit Jinja globals:
-- `admin_prefix = "/admin"` — hard-coded in the `render()` wrapper
-- `static_prefix = "/static"` — hard-coded
+**Required fix (GREENFIELD — full `url_for` adoption, per user directive upgrading the original Pattern D compromise):**
 
-Codemod rewrites:
-- `\{\{\s*script_name\s*\}\}/static` → `{{ static_prefix }}`
-- `\{\{\s*script_name\s*\}\}` → `{{ admin_prefix }}`
+Every admin route gets `name="admin_<blueprint>_<endpoint>"` on its decorator. `StaticFiles(..., name="static")` is mounted on the outer app. Every URL in every template uses `{{ url_for('admin_...', **params) }}` for admin paths and `{{ url_for('static', path='/...') }}` for static assets. **NO `admin_prefix`/`static_prefix` Jinja globals exist** — they are strictly forbidden and guarded.
 
-**Codemod updates required:** the existing `scripts/codemod_templates.py` sketch in `flask-to-fastapi-migration.md` §12 does NOT handle this. It handles `url_for` dot→underscore, `request.script_root` → `script_root`, `csrf_token()` → `csrf_token`, but not the script_name split. **The codemod must be extended.**
+This is the canonical FastAPI docs pattern, verified in the live venv:
+- `starlette/templating.py:118-129` (`Jinja2Templates._setup_env_defaults`) — auto-registers `url_for` as a `@pass_context`-decorated Jinja global that calls `request.url_for(name, **path_params)`. The `setdefault` at line 129 means a pre-registered override wins, which is how the foundation module's `_url_for` safe-lookup hook installs.
+- `starlette/routing.py:434-459` (`Mount.url_path_for`) — handles `url_for('static', path='/foo.css')` via the `name == self.name and "path" in path_params` branch when the mount declares `name="static"`.
+- `fastapi/routing.py:1395` — `include_router(prefix="/admin")` passes `name=route.name` through verbatim, so admin route names do NOT get an automatic prefix; the `admin_` prefix must be explicit on the decorator.
 
-**Guard tests:**
-1. `tests/admin/test_templates_no_script_root.py` — greps all templates for `script_name`, `script_root`, `request.script_root`, `request.script_name`. Asserts zero matches after codemod runs. Ratchets prevent regression.
-2. `tests/admin/test_template_url_resolution.py` — renders a representative page (`tenant_dashboard.html`) with mock context, parses output HTML with BeautifulSoup, collects all `href` and `src` attributes, asserts each starts with `/admin/`, `/static/`, `http://`, or `https://`.
+**Two-pass codemod** (`scripts/codemod_templates_greenfield.py`):
+- Pass 1: `{{ script_name }}/static/foo.css` → `{{ url_for('static', path='/foo.css') }}`
+- Pass 1: `{{ script_name }}/tenant/{{ tenant_id }}/settings` → `{{ url_for('admin_tenants_settings', tenant_id=tenant_id) }}` (via `HARDCODED_PATH_TO_ROUTE` map)
+- Pass 2: `{{ url_for('accounts.list_accounts', ...) }}` → `{{ url_for('admin_accounts_list_accounts', ...) }}` (via `FLASK_TO_FASTAPI_NAME` map)
+- JS template literals with runtime-param URLs → flagged for manual review; handlers pre-resolve base URLs via `js_*_base` context vars set via `str(request.url_for('admin_...', ...))`.
+- Idempotent: re-running is a no-op because all patterns key off pre-migration syntax.
+
+**Guard tests (greenfield — replaces Pattern D guards):**
+1. `tests/unit/admin/test_templates_no_hardcoded_admin_paths.py` — regex-scans templates for `script_name`, `script_root`, `request.script_root`, `admin_prefix`, `static_prefix`, AND bare `"/admin/..."` / `"/static/..."` string literals inside quotes. Asserts zero matches. Ratchets prevent regression.
+2. `tests/unit/admin/test_templates_url_for_resolves.py` — AST-extracts every `url_for('name', ...)` call from every template and asserts `name` exists in `{r.name for r in app.routes}`. Catches `NoMatchFound` footgun at CI time. ~0.5s runtime.
+3. `tests/unit/admin/test_architecture_admin_routes_named.py` — AST-scans `src/admin/routers/*.py` and asserts every `@router.<method>(...)` decorator has `name=` kwarg. Required because unnamed routes cannot be targets of `url_for`.
+4. `tests/unit/admin/test_oauth_callback_routes_exact_names.py` — byte-pins OAuth callback route names AND paths together (blocker #6 cross-reference). Changing `/admin/auth/google/callback` name or path fails the test.
+5. `tests/unit/admin/test_codemod_idempotent.py` — running the codemod twice on the same template produces no additional changes.
+
+**Runtime safety net:** `_url_for` safe-lookup override in `src/admin/templating.py` (pre-registered on `templates.env.globals` before any `TemplateResponse` call) catches `NoMatchFound`, logs the template filename + route name + params, then re-raises. Converts silent 500s into grep-able log lines for production debugging.
+
+**Route naming convention:** `admin_<blueprint>_<endpoint>` (flat, prefixed). Example: `accounts.list_accounts` → `admin_accounts_list_accounts`. The `admin_` prefix is explicit because `include_router(prefix="/admin")` prefixes paths only, not names — and dropping the prefix risks future collisions with `/api/v1/*` protocol route names (e.g., `list_products` at protocol level vs `products_list_products` at admin level).
 
 **Wave assignment:** Wave 0 (foundation + codemod). Cannot ship without this fix.
 
@@ -659,14 +672,14 @@ The following updates must land in the plan before Wave 0 begins:
 1. **Flip admin handler default from `async def` to `def`** — update §10, §11, §13 examples
 2. **Swap middleware order** — Approximated BEFORE CSRF in §10.2
 3. **Add §2.8 or §2.9** — deep audit revisions summary pointing at this file
-4. **Update §11 foundation** — `render()` wrapper uses `admin_prefix`/`static_prefix` not `script_root`
+4. **Update §11 foundation** — `render()` wrapper uses `url_for` exclusively (NO `admin_prefix`/`static_prefix`/`script_root` globals); `_url_for` safe-lookup override pre-registered on `templates.env.globals` before first `TemplateResponse`
 5. **Update §12 codemod** — handle the `script_name` split, handle trailing slashes, handle 302→307
 6. **Update §16 assumptions** — downgrade "admin handlers async def" from HIGH to MEDIUM; add new assumptions for the 6 blockers
 7. **Update §21 verification** — add the 9 new guard tests
 
 ### Foundation modules (`flask-to-fastapi-foundation-modules.md`)
 
-1. **`templating.py`** — update `render()` to inject `admin_prefix="/admin"` and `static_prefix="/static"` as Jinja context; remove `script_root` usage
+1. **`templating.py`** — greenfield: NO `admin_prefix`/`static_prefix`/`script_root` in `render()`; pre-register `_url_for` safe-lookup override on `templates.env.globals` before first `TemplateResponse`; templates use `{{ url_for('admin_<bp>_<endpoint>', **params) }}` for admin paths and `{{ url_for('static', path='/...') }}` for static assets
 2. **`csrf.py`** — add `/_internal/` exempt; add `SessionMiddleware` before CSRF ordering note
 3. **`deps/auth.py`** — switch example handlers to `def`, note that async is for OAuth/SSE/httpx callers only; fix `AdminRedirect` handler to URL-encode `next_url`
 4. **`middleware/external_domain.py`** — add explicit path-gate check; change to 307 instead of 302; add body-preservation test
@@ -701,7 +714,7 @@ Sorted by severity:
 
 | # | Severity | Finding | Location | Fix wave |
 |---|---|---|---|---|
-| B1 | 🚨 BLOCKER | `script_root`/`script_name` silent template break (147 refs, 45 files) | `templates/**/*.html` + `render()` wrapper | Wave 0 |
+| B1 | 🚨 BLOCKER | `script_root`/`script_name` silent template break (147 refs, 45 files) — fixed greenfield: `url_for` everywhere (admin routes named `admin_<bp>_<endpoint>`, static named `"static"`), NO `admin_prefix`/`static_prefix` globals | `templates/**/*.html` + `render()` wrapper + `scripts/codemod_templates_greenfield.py` | Wave 0 |
 | B2 | 🚨 BLOCKER | Trailing-slash 404 divergence Flask vs Starlette (111 `url_for`) | admin routers + `base.html` | Wave 0 |
 | B3 | 🚨 BLOCKER | `@app.exception_handler(AdCPError)` returns JSON to HTML browsers | `src/app.py:82-88` + new `error.html` | Wave 1 |
 | B4 | 🚨 BLOCKER | Async event loop session interleaving — flip to `def` default | `src/admin/routers/*.py` | Wave 0 decision |

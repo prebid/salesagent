@@ -35,6 +35,21 @@ Everything below uses Python 3.12+ syntax. None of these modules touch async DB 
 ```python
 """Jinja2Templates singleton and render() wrapper for the admin UI.
 
+GREENFIELD FastAPI convention: every URL in every template resolves via
+`request.url_for('route_name', **params)`. There are NO `admin_prefix` /
+`static_prefix` / `script_root` / `script_name` Jinja globals. Every admin
+route has `name="admin_<blueprint>_<endpoint>"` on its decorator; the static
+mount declares `name="static"`.
+
+- request.url_for('admin_accounts_list_accounts', tenant_id=t) → /admin/tenant/{t}/accounts
+- request.url_for('static', path='/validation.css')             → /static/validation.css
+- request.url_for('admin_auth_logout')                           → /admin/logout
+
+Missing or mistyped route names raise `starlette.routing.NoMatchFound` at
+render time; the guard test `tests/unit/admin/test_templates_url_for_resolves.py`
+catches this at CI time by statically extracting every `url_for('name', ...)`
+call from every template and asserting `name` exists in the live route table.
+
 Replaces Flask's @app.context_processor inject_context (src/admin/app.py:298)
 and the custom Jinja filters declared at src/admin/app.py:154-155.
 
@@ -48,6 +63,10 @@ Design rules (load-bearing):
 - `get_flashed_messages` is registered as an `env.global` so existing template
   call sites keep compiling, but it is a trampoline that requires `request`
   as first positional arg — the codemod inserts it.
+- `url_for` is auto-registered by Starlette's `Jinja2Templates._setup_env_defaults`
+  (starlette/templating.py:118-129) as a `@pass_context`-decorated wrapper that
+  delegates to `request.url_for(name, **path_params)`. We override it below
+  with `_url_for` to add template-filename logging on `NoMatchFound`.
 """
 from __future__ import annotations
 
@@ -58,9 +77,12 @@ from typing import Any
 
 import markdown as md_lib
 from fastapi.templating import Jinja2Templates
+from jinja2 import pass_context
 from markupsafe import Markup
+from starlette.datastructures import URL
 from starlette.requests import Request
 from starlette.responses import Response
+from starlette.routing import NoMatchFound
 
 from src.admin.flash import get_flashed_messages
 from src.core.domain_config import get_sales_agent_domain, get_support_email
@@ -116,6 +138,38 @@ templates.env.filters["tojson_safe"] = _tojson_safe
 templates.env.globals["get_flashed_messages"] = get_flashed_messages
 
 
+# --- Safe url_for override: same API, better failure mode -------------------
+#
+# Starlette's default `url_for` (from Jinja2Templates._setup_env_defaults at
+# starlette/templating.py:118-129) raises `NoMatchFound(name, params)` with a
+# message that omits the offending template filename. When a 500 hits a user,
+# we want the template filename in the log, not just the route name. We
+# intercept, log, and re-raise.
+#
+# `setdefault` at starlette/templating.py:129 means our pre-registered function
+# wins; we MUST register BEFORE any TemplateResponse call. Since `templates` is
+# a module-level singleton, this override runs at import time.
+
+
+@pass_context
+def _url_for(context: dict[str, Any], name: str, /, **path_params: Any) -> URL:
+    request: Request = context["request"]
+    try:
+        return request.url_for(name, **path_params)
+    except NoMatchFound:
+        template_name = getattr(context, "name", "<unknown>")
+        logger.error(
+            "NoMatchFound in template %s: url_for(%r, **%r). "
+            "Check that every admin router has name= on its decorator and "
+            "the route name matches tests/unit/admin/test_architecture_admin_routes_named.py.",
+            template_name, name, path_params,
+        )
+        raise
+
+
+templates.env.globals["url_for"] = _url_for
+
+
 def render(
     request: Request,
     name: str,
@@ -126,19 +180,35 @@ def render(
 ) -> Response:
     """One-call template wrapper replacing Flask's context processor.
 
+    GREENFIELD: no admin_prefix, no static_prefix, no script_root, no script_name.
+    Templates use `{{ url_for('name', **params) }}` for every URL — for admin
+    routes (named `admin_<blueprint>_<endpoint>`) AND static assets (named
+    `static` via the StaticFiles mount on the outer app).
+
+    `csrf_token` is pulled from `request.state.csrf_token` (stamped by
+    CSRFMiddleware). `tenant` is NOT injected here — handlers pass it
+    explicitly via `context={"tenant": ...}` when they need it, to avoid
+    the N+1 DB hit that the old Flask inject_context performed.
+
+    For JS URL construction with runtime path params (Case 6 in the plan),
+    handlers pre-resolve base URLs via `js_*_base` context vars:
+        js_workflows_base=str(request.url_for("admin_workflows_list", tenant_id=t))
+    Templates use: const base = "{{ js_workflows_base }}";
+
     The returned object is a starlette.templating._TemplateResponse (which IS
     a Response). Every handler in every router calls this — there is no
     escape hatch to templates.TemplateResponse directly.
     """
     base: dict[str, Any] = {
         "request": request,
-        "script_root": request.scope.get("root_path", ""),
         "support_email": get_support_email(),
         "sales_agent_domain": get_sales_agent_domain() or "example.com",
         "csrf_token": getattr(request.state, "csrf_token", ""),
         # `tenant` is injected on-demand by handlers via CurrentTenantDep, NOT
         # here — the old inject_context did a DB lookup on every single render
         # which was an N+1 magnet. Handlers own tenant loading now.
+        # `admin_prefix`/`static_prefix`/`script_root` are STRICTLY FORBIDDEN
+        # — guarded by test_templates_no_hardcoded_admin_paths.py.
     }
     if context:
         # Explicit override semantics: handler keys win over base keys. This
