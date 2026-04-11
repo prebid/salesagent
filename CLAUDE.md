@@ -1,5 +1,21 @@
 # Prebid Sales Agent - Development Guide
 
+## 🚧 Active Migration: Flask → FastAPI v2.0.0
+
+**An in-progress migration is removing Flask from `src/admin/`.** If you're touching admin code, middleware, templates, OAuth flow, sessions, or the `src/app.py` middleware stack, **read the migration mission briefing first**:
+
+- **Entry point:** `.claude/notes/flask-to-fastapi/CLAUDE.md` (mission + 6 critical invariants + reading order)
+- **Ready-to-ship checklist:** `.claude/notes/flask-to-fastapi/implementation-checklist.md`
+- **Migration branch:** `feat/v2.0.0-flask-to-fastapi` (all migration work commits here)
+
+Six critical invariants that are easy to forget and destructive to miss:
+1. Admin handlers default to **sync `def`**, NOT `async def` (scoped_session event-loop bug)
+2. Middleware order: **Approximated runs BEFORE CSRF** (not after — counterintuitive but correct)
+3. Templates use `admin_prefix`/`static_prefix`, NOT `script_root` (Starlette's `include_router(prefix=...)` does not set `scope["root_path"]`)
+4. `APIRouter(redirect_slashes=True, include_in_schema=False)` for all admin routers
+5. `@app.exception_handler(AdCPError)` must be Accept-aware (render HTML for `/admin/*` browsers, JSON otherwise)
+6. OAuth redirect URIs are byte-immutable contracts with Google Cloud Console
+
 ## 🤖 For Claude (AI Assistant)
 
 This guide helps you work effectively with the Prebid Sales Agent codebase maintained under Prebid.org. Key principles:
