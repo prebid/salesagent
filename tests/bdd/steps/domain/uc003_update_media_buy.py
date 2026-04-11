@@ -987,20 +987,146 @@ def then_no_errors_field(ctx: dict) -> None:
         assert errors is None, f"Expected no 'errors' field in response, got: {errors}"
 
 
+@then('the response should contain an "errors" array')
+def then_response_has_errors_array(ctx: dict) -> None:
+    """Assert the response contains an 'errors' field with a non-empty list.
+
+    For error responses, ctx["error"] is set and ctx["response"] is deleted
+    by _promote_update_errors. This step checks the raw error response stored
+    in ctx["error_response"] or inspects ctx["error"] as proof that errors exist.
+    """
+    error_resp = ctx.get("error_response")
+    if error_resp is not None:
+        if hasattr(error_resp, "errors"):
+            assert error_resp.errors is not None and len(error_resp.errors) > 0, (
+                f"Error response has empty/None errors: {error_resp}"
+            )
+            return
+    # Fallback: _promote_update_errors sets ctx["error"] from errors[0]
+    error = ctx.get("error")
+    assert error is not None, (
+        "Expected response to contain 'errors' array but no error found — "
+        "neither ctx['error_response'] nor ctx['error'] is set"
+    )
+
+
+@then(parsers.parse('the response should NOT contain "{field_name}" field'))
+def then_response_not_contain_field(ctx: dict, field_name: str) -> None:
+    """Assert the error response does NOT contain a success-specific field.
+
+    BR-RULE-018 INV-2: Error responses must not include success fields
+    (media_buy_id, buyer_ref, affected_packages, etc.). Checks both the
+    error response object and raw error to ensure the field is absent.
+    """
+    error_resp = ctx.get("error_response")
+    if error_resp is not None and hasattr(error_resp, "model_dump"):
+        data = error_resp.model_dump(exclude_none=True)
+        assert field_name not in data, (
+            f"Error response should NOT contain '{field_name}' field "
+            f"(BR-RULE-018 INV-2), but found: {data.get(field_name)!r}"
+        )
+        return
+    # Fallback: check error object directly
+    error = ctx.get("error")
+    assert error is not None, f"Cannot check absence of '{field_name}' — no error_response or error in ctx"
+    field_val = getattr(error, field_name, None)
+    assert field_val is None, (
+        f"Error should NOT contain '{field_name}' field (BR-RULE-018 INV-2), but found: {field_val!r}"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# THEN steps — creative replacement assertions
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@then(parsers.parse('the package "{package_id}" should have creative assignments [{expected_ids}]'))
+def then_package_has_creative_assignments(ctx: dict, package_id: str, expected_ids: str) -> None:
+    """Assert the package's creative assignments match the expected set after update.
+
+    BR-RULE-024: creative_assignments on update replaces all existing.
+    Reads the package from DB and verifies the creative assignments list
+    contains exactly the expected creative IDs.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.models import CreativeAssignment
+
+    mb = ctx.get("existing_media_buy")
+    assert mb is not None, "No existing_media_buy in ctx"
+    tenant = ctx["tenant"]
+    real_pkg_id = _resolve_package_id(ctx, package_id)
+
+    with db_session(ctx) as session:
+        assignments = session.scalars(
+            select(CreativeAssignment).filter_by(
+                media_buy_id=mb.media_buy_id,
+                package_id=real_pkg_id,
+                tenant_id=tenant.tenant_id,
+            )
+        ).all()
+        actual_ids = {a.creative_id for a in assignments}
+
+    expected = {cid.strip() for cid in expected_ids.split(",")}
+    assert actual_ids == expected, (
+        f"Package '{package_id}' creative assignments mismatch. "
+        f"Expected: {sorted(expected)}, actual: {sorted(actual_ids)}"
+    )
+
+
+@then(parsers.parse("the old assignments [{old_ids}] should be removed"))
+def then_old_assignments_removed(ctx: dict, old_ids: str) -> None:
+    """Assert the old creative assignments are no longer present on the package.
+
+    Complements the 'should have creative assignments' step by explicitly
+    verifying the old IDs were removed, not just that new ones were added.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.models import CreativeAssignment
+
+    mb = ctx.get("existing_media_buy")
+    assert mb is not None, "No existing_media_buy in ctx"
+    tenant = ctx["tenant"]
+    pkg_obj = ctx.get("existing_package")
+    assert pkg_obj is not None, "No existing_package in ctx — cannot verify old assignments removed"
+
+    with db_session(ctx) as session:
+        assignments = session.scalars(
+            select(CreativeAssignment).filter_by(
+                media_buy_id=mb.media_buy_id,
+                package_id=pkg_obj.package_id,
+                tenant_id=tenant.tenant_id,
+            )
+        ).all()
+        actual_ids = {a.creative_id for a in assignments}
+
+    removed_ids = {cid.strip() for cid in old_ids.split(",")}
+    still_present = removed_ids & actual_ids
+    assert not still_present, (
+        f"Old creative assignments should be removed but still present: {sorted(still_present)}. "
+        f"Current assignments: {sorted(actual_ids)}"
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — partition/boundary: idempotency_key
 # ═══════════════════════════════════════════════════════════════════════
 
 
-@given(parsers.parse("the idempotency_key is set to {value}"))
+@given(parsers.re(r"the idempotency_key is set to (?P<value>.*)"))
 def given_idempotency_key(ctx: dict, value: str) -> None:
     """Set or omit idempotency_key on the update request.
 
     '<not provided>' means omit the field (test preservation semantics).
+    Empty string means set to '' (for boundary validation of empty keys).
     Any other value sets it as-is. Handles length placeholders like
     '<255 character string>' by generating a string of the described length.
+
+    Uses parsers.re instead of parsers.parse to match empty values
+    (partition: empty_string where the value after 'set to' is empty).
     """
-    import re
+    import re as re_mod
 
     kwargs = _ensure_update_defaults(ctx)
     stripped = value.strip()
@@ -1009,13 +1135,14 @@ def given_idempotency_key(ctx: dict, value: str) -> None:
         return
 
     # Handle length placeholders: <N character string>, <N char string>, <N chars>
-    length_match = re.match(r"<(\d+)\s*char(?:acter)?\s*string>", stripped)
+    length_match = re_mod.match(r"<(\d+)\s*char(?:acter)?\s*string>", stripped)
     if length_match:
         n = int(length_match.group(1))
         kwargs["idempotency_key"] = "x" * n
         return
 
-    kwargs["idempotency_key"] = stripped
+    # Empty string or any other value — set as-is
+    kwargs["idempotency_key"] = value
 
 
 # ═══════════════════════════════════════════════════════════════════════
