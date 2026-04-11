@@ -228,6 +228,7 @@ All `src/core/tools/*.py` `_impl` functions become `async def`. Some already are
 `pyproject.toml`:
 - REMOVE `psycopg2-binary>=2.9.9`
 - ADD `asyncpg>=0.30.0`
+  - **Fallback:** `psycopg[binary,pool]>=3.2.0` if Spike 2 (driver compat) fails. Agent B risk matrix recommends this fallback explicitly — psycopg3 async is also first-class and avoids asyncpg-specific footguns (prepared-statement-cache conflicts with pgbouncer transaction-mode pooling, JSONB codec differences, LISTEN/NOTIFY API drift).
 - REMOVE `types-psycopg2>=2.9.21.20251012`
 - (Keep `sqlalchemy>=2.0.0`)
 

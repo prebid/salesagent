@@ -1978,7 +1978,7 @@ Eight waves imply safety via backward-compat seams — exactly what the user rej
 - `sse-starlette>=2.2.0` (promoted from transitive)
 - `pydantic-settings>=2.7.0` (typed config)
 - `itsdangerous>=2.2.0` (explicit pin; Starlette transitive; now also used by roll-your-own CSRF)
-- `asyncpg>=0.30.0` — async Postgres driver (full-async pivot, 2026-04-11)
+- `asyncpg>=0.30.0` — async Postgres driver (full-async pivot, 2026-04-11). Fallback: `psycopg[binary,pool]>=3.2.0` if Spike 2 (driver compat) fails — see `CLAUDE.md` pre-Wave-0 spike sequence and Agent B risk matrix.
 - `pytest-asyncio>=0.25.0` (dev) OR equivalent anyio config — required for async test harness
 - `structlog>=24.4.0` — structured logging with async contextvar propagation (Agent E Category 16 idiom upgrade; major async debuggability win)
 

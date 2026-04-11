@@ -223,7 +223,7 @@ SessionLocal = scoped_session(sessionmaker(bind=_engine))
 2. Worked examples (`flask-to-fastapi-worked-examples.md`) — every handler is `async def`; every DB call-site is `async with` / `await`
 3. Main overview §13 — already updated to `async def` examples
 4. Replace the original structural guard `test_architecture_admin_sync_db_no_async.py` (wrong direction under Option A) with `test_architecture_admin_routes_async.py` (AST-scans admin routers and asserts every `@router.<method>(...)` handler is `async def`). Sibling guard `test_architecture_admin_async_db_access.py` asserts DB access uses `async with get_db_session()` + `await session.execute(...)`, not sync `with` or `run_in_threadpool` wrappers
-5. Dependency changes: remove `psycopg2-binary`, `types-psycopg2`; add `asyncpg>=0.30.0`; add `pytest-asyncio` (or equivalent); explicit `sqlalchemy[asyncio]` extra
+5. Dependency changes: remove `psycopg2-binary`, `types-psycopg2`; add `asyncpg>=0.30.0` (fallback `psycopg[binary,pool]>=3.2.0` if Spike 2 driver-compat fails); add `pytest-asyncio` (or equivalent); explicit `sqlalchemy[asyncio]` extra
 6. `tests/harness/_base.py::IntegrationEnv` becomes `async def __aenter__` / `async def __aexit__`; integration tests mass-convert to `async def` + `@pytest.mark.asyncio`
 7. `alembic/env.py` async adapter (standard SQLAlchemy pattern, ~30 LOC)
 8. `factory_boy` adapter (evaluate three options in checkpoint §3)

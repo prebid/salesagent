@@ -68,7 +68,7 @@ Every item references the companion doc where full detail lives. Tick every box 
 - [ ] **Pre-Wave-0 lazy-loading audit spike completed and approved (async pivot 2026-04-11)** — enumerates every `relationship()` definition in `src/core/database/models/` and classifies every access site as safe (in-scope), fixable (eager-load), or requires-rewrite. This audit gates the Wave 4-5 async absorption scope. If the audit reveals the scope is untenable, fall back to Option C (sync def admin) and defer async to v2.1. See `async-pivot-checkpoint.md` §4 Risk #1 for the full audit procedure.
 - [ ] **Pre-Wave-0 async driver compatibility spike completed (async pivot 2026-04-11)** — run the full test suite on a staging branch with `asyncpg` instead of `psycopg2-binary` to catch driver-compat surprises (JSONB codec, UUID/Interval types, LISTEN/NOTIFY API drift, COPY bulk imports). Estimated 1-2 days of debugging. See checkpoint §4 Risk #2.
 - [ ] **Agent F pre-Wave-0 hard gate items completed (non-code surface inventory):**
-  - [ ] `psycopg2-binary` → `asyncpg>=0.30.0,<0.32` swap verified on all platforms (F1.1.1-F1.1.4)
+  - [ ] `psycopg2-binary` → `asyncpg>=0.30.0,<0.32` swap verified on all platforms (F1.1.1-F1.1.4). **Fallback:** `psycopg[binary,pool]>=3.2.0` if Spike 2 (driver compat) fails — see `CLAUDE.md` pre-Wave-0 spike sequence.
   - [ ] `[tool.pytest.ini_options]` added to `pyproject.toml` with `asyncio_mode = "auto"` (F1.7.1, F8.2.1)
   - [ ] `DATABASE_URL` rewriter (`sslmode` → `ssl`) landed (F1.5.1)
   - [ ] `DatabaseConnection` class rewrite / delete plan agreed (F1.4.1)
