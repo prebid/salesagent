@@ -397,7 +397,30 @@ For transparency:
 
 - **Playwright end-to-end OAuth flow:** the audit trusted the Authlib Starlette client documentation. A Wave 1 staging smoke test should exercise the full Google OAuth flow against the new `auth.py` router before any traffic cutover.
 
-- **Benchmark of `run_in_threadpool` overhead on hot admin routes:** covered in the execution-details doc but not runtime-verified yet. Recommend benchmarking a read-heavy listing route and a write-heavy form route in Wave 1 before the Wave 2 bulk port.
+- **Benchmark of async SQLAlchemy vs pre-migration sync baseline on hot admin routes:** covered in the execution-details doc but not runtime-verified yet. Recommend benchmarking a read-heavy listing route and a write-heavy form route in Wave 1 (pre-async-conversion) and again in Wave 4 (post-async-conversion) to quantify latency profile change. Acceptable range is net-neutral to ~5% improvement; significantly worse is a signal that `pool_size` tuning is needed (Risk #6 in `async-pivot-checkpoint.md` §4). Original "`run_in_threadpool` overhead benchmark" framing is stale under the full-async pivot.
+
+### Non-code surface AdCP impact (Agent F confirmation, pivoted 2026-04-11)
+
+All 105 action items in Agent F's non-code surface inventory (`async-audit/agent-f-nonsurface-inventory.md`) have been verified AdCP-safe:
+
+| Surface | AdCP impact |
+|---|---|
+| Dep swap (psycopg2 → asyncpg) | NONE — wire format unchanged |
+| Pre-commit hooks + structural guards | NONE — dev-only |
+| CI workflows + tox envs | NONE — testing only |
+| Docker Dockerfile / compose | NONE — runtime env unchanged |
+| Deployment entrypoints | NONE — health check paths unchanged |
+| New `/health/pool` + `/health/schedulers` endpoints | ADDITIVE — new paths, no existing path changes |
+| `/metrics` endpoint (new) | ADDITIVE — new path, no existing path changes |
+| DB pool Prometheus metrics | NONE — operational telemetry only |
+| `contextvars` request-ID | NONE — internal propagation, log field only |
+| `DATABASE_URL` rewriter | INTERNAL — rewrites at engine construction, env var unchanged |
+| CLAUDE.md / docs updates | NONE |
+| Alembic env.py async rewrite | NONE — wire format stable under sync or async migration |
+| New env vars (`DB_POOL_SIZE`, `DB_POOL_MAX_OVERFLOW`, etc.) | ADDITIVE — defaults preserve current behavior |
+| Nginx tuning (worker_connections, proxy timeouts) | NONE — proxy behavior identical |
+
+**Verdict:** no non-code surface change touches AdCP protocol wire format. Side-effect of `/metrics` and `/health/pool` being additive endpoints means OpenAPI spec gains entries but does not remove or alter existing ones. AdCP contract preserved.
 
 ---
 
@@ -423,6 +446,8 @@ The v2.0 migration preserves two non-obvious architectural facts that are load-b
 ### 10.2 MCP scheduler lifespan is chained via `combine_lifespans`
 
 **File:** `src/app.py:68` — `lifespan=combine_lifespans(app_lifespan, mcp_app.lifespan)`. The FastMCP lifespan (`lifespan_context` at `src/core/main.py:82-103`) starts `delivery_webhook_scheduler` and `media_buy_status_scheduler`. These only run because `combine_lifespans` yields through both.
+
+**Note (2026-04-11 pivot):** Under the full-async SQLAlchemy pivot, scheduler bodies' DB access becomes `async with get_db_session() as session:` / `await session.execute(...)`. No structural change to the lifespan composition itself — schedulers are already running inside an async context via `asyncio.create_task(...)`. Only the DB call-sites inside the scheduler loops change.
 
 **Why this is load-bearing for AdCP protocol correctness:**
 - `delivery_webhook_scheduler` is what fires outbound AdCP webhooks to subscribers (creative approvals, media buy state changes, etc.) via `create_a2a_webhook_payload` / `create_mcp_webhook_payload`. If it stops, every human-in-the-loop approval silently stops notifying AdCP callers.

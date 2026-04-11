@@ -157,44 +157,67 @@ class AccountRepository:
         return list(result.scalars().all())
 ```
 
-### UoW pattern
+### Repository pattern (no UoW) — pivoted 2026-04-11 per Agent E Category 3
+
+FastAPI's request-scoped session IS the unit of work. Repositories take
+`session: AsyncSession` in `__init__`. Multiple repositories in the same
+request share one session via `Depends(get_session)` caching. Transactions
+commit on normal handler return, roll back on exception — all handled by
+the `get_session` DI factory.
+
+**No `async with UoW()` anywhere in handlers. No `AccountUoW` class.** The
+UoW abstraction was a Flask-era clean-architecture pattern that re-implements
+functionality FastAPI already provides for free. Under the pivot, a 2026
+greenfield FastAPI team does not write UoW classes — they write repositories
+that take an injected session.
 
 ```python
-class AccountUoW:
-    def __init__(self, tenant_id: str):
-        self.tenant_id = tenant_id
-        self._session: AsyncSession | None = None
-        self.accounts: AccountRepository | None = None
+# src/core/database/repositories/accounts.py
+from sqlalchemy.ext.asyncio import AsyncSession
+from src.admin.dtos import AccountDTO
+from src.core.database.models import Account
 
-    async def __aenter__(self):
-        self._session = SessionLocal()
-        self.accounts = AccountRepository(self._session)
-        return self
+class AccountRepository:
+    def __init__(self, session: AsyncSession):
+        self.session = session
 
-    async def __aexit__(self, exc_type, exc, tb):
-        if exc_type:
-            await self._session.rollback()
-        else:
-            await self._session.commit()
-        await self._session.close()
+    async def list_dtos(self, tenant_id: str, *, status: str | None = None) -> list[AccountDTO]:
+        stmt = select(Account).filter_by(tenant_id=tenant_id)
+        if status:
+            stmt = stmt.filter_by(status=status)
+        result = await self.session.execute(stmt)
+        return [AccountDTO.model_validate(a) for a in result.scalars().all()]
 ```
 
-Usage pattern in handlers:
+### Handler + Dep chain pattern
 
 ```python
+# src/admin/routers/accounts.py
+async def get_account_repo(session: SessionDep) -> AccountRepository:
+    return AccountRepository(session)
+
+AccountRepoDep = Annotated[AccountRepository, Depends(get_account_repo)]
+
+
 @router.get("/tenant/{tenant_id}/accounts", name="admin_accounts_list_accounts")
 async def list_accounts(
     tenant_id: str,
     request: Request,
     tenant: CurrentTenantDep,
+    accounts: AccountRepoDep,    # ← repository Dep, NOT UoW context manager
     status: Annotated[str | None, Query()] = None,
 ) -> HTMLResponse:
-    async with AccountUoW(tenant_id) as uow:
-        accounts = await uow.accounts.list_all(status=status)
+    dtos = await accounts.list_dtos(tenant_id, status=status)
     return render(request, "accounts_list.html", {
-        "tenant_id": tenant_id, "tenant": tenant, "accounts": accounts,
+        "tenant_id": tenant_id, "tenant": tenant, "accounts": dtos,
     })
 ```
+
+Handler body is 100% business logic. No session management. No `async with`. No `await uow.*`. The session is injected via `Depends(get_session)`, committed automatically by the DI factory on normal return, and rolled back on exception. Multiple repositories in the same handler share ONE session (FastAPI caches dep results per-request), so cross-repository transactions are implicit.
+
+### Test harness (updated per Agent E Category 14)
+
+All tests use `httpx.AsyncClient(transport=ASGITransport(app=app))` with `app.dependency_overrides[get_session] = lambda: session`. `TestClient` (sync) is deprecated for integration tests under async lifespan — it spawns its own event loop in a thread and conflicts with async lifespan state stored on `app.state`.
 
 ### `_impl` functions
 

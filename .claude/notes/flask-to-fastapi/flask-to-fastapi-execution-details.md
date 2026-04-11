@@ -19,7 +19,7 @@ This document elaborates three sections of `/Users/quantum/Documents/ComputedCha
 3. `/Users/quantum/Documents/ComputedChaos/salesagent/src/admin/sessions.py` exports `build_session_middleware_kwargs() -> dict`, returning `secret_key` from `SESSION_SECRET`, `session_cookie='adcp_session'`, `same_site='lax'`, `https_only=True` in production.
 4. `/Users/quantum/Documents/ComputedChaos/salesagent/src/admin/csrf.py` exposes a pure-ASGI `CSRFMiddleware` class plus `csrf_token(request)` jinja helper; `python -c "from src.admin.csrf import CSRFMiddleware"` succeeds.
 5. `/Users/quantum/Documents/ComputedChaos/salesagent/src/admin/oauth.py` registers an `authlib.integrations.starlette_client.OAuth` instance named `oauth` with a Google client; module-level constant `GOOGLE_CLIENT_NAME = "google"`.
-6. `/Users/quantum/Documents/ComputedChaos/salesagent/src/admin/deps/auth.py` exports `CurrentUserDep`, `RequireAdminDep`, `RequireSuperAdminDep` as `Annotated[...]` aliases with module-level `async def` dep functions.
+6. `/Users/quantum/Documents/ComputedChaos/salesagent/src/admin/deps/auth.py` exports `CurrentUserDep`, `RequireAdminDep`, `RequireSuperAdminDep` as `Annotated[...]` aliases with module-level `async def` dep functions (full-async pivot 2026-04-11 — dep functions use `async with get_db_session()` and `await db.execute(...)`).
 7. `/Users/quantum/Documents/ComputedChaos/salesagent/src/admin/app_factory.py::build_admin_router()` returns an empty `APIRouter(prefix="/admin", tags=["admin"])` — importable, callable, returns a non-None router.
 8. `/Users/quantum/Documents/ComputedChaos/salesagent/scripts/codemod_templates.py` runs to completion against all 72 templates in `/Users/quantum/Documents/ComputedChaos/salesagent/templates/` with exit code 0; stdout reports a count line `"72 templates processed, N transformations applied"`.
 9. After the codemod runs, `git diff --stat templates/` shows changes in at least 40 files (every template with a `url_for` call); `grep -R "url_for(" templates/ | wc -l` output unchanged (the codemod rewrites the *argument* of `url_for`, not its name).
@@ -293,7 +293,7 @@ FastAPI router during the freeze.
 | Deleted adapter `register_ui_routes` hooks break a downstream adapter we don't know about | Low | Medium | Grep `rg 'register_ui_routes' src/adapters/` — if more adapters show up, add them to the Wave 2 list. Currently only 2 call sites. |
 | Category-2 compat exception handler shape drift: new `{"success": false, ...}` differs subtly from old | Medium | High — external consumer (Datadog synthetic, dashboards) breaks | Golden fixtures captured from pre-Wave-2 live traffic via a shadow-trace sidecar; `test_category2_compat_error_shape.py` compares byte-for-byte. |
 | SessionMiddleware max-cookie-size hit on super-admin (many tenants in session) | Low | High | Measured in Wave 1 verification; if >3.5KB, switch to server-side `starlette-session` Redis backend before Wave 2 merges. |
-| `run_in_threadpool` overhead exceeds 5ms for a hot endpoint (e.g., `GET /admin/tenant/{id}/products`) | Medium | Medium | Benchmark in CI against Wave 1 baseline; acceptable range p99 <15ms overhead; above that, move specific routes to a hand-rolled async repo. |
+| Async SQLAlchemy latency profile regresses vs pre-migration sync baseline | Medium | Medium | Benchmark in CI async (Wave 4-5) vs pre-migration sync baseline (Wave 2); acceptable range is net-neutral to ~5% improvement under moderate concurrency; significantly worse signals `pool_size` tuning is needed (Risk #6 in `async-pivot-checkpoint.md` §4). Under low concurrency async has slightly higher per-request overhead; under high concurrency it wins big. |
 | Test harness `get_admin_client()` leaks state between tests when dep overrides persist | Medium | Medium | Teardown at `tests/harness/_base.py:827-832` already clears overrides; extend to also null `self._admin_client`. Integration test `test_harness_isolation.py`. |
 | Concurrent PR to `tests/integration/conftest.py` conflicts with fixture deletions | High | Low | Expected; document in freeze announcement. |
 | Datadog dashboards reference old `/admin/*/status` endpoints that now return different JSON | Medium | High — silent metric loss | Grep Datadog exports + ping platform team during Wave 2 entry criterion (assumption #18 verification). |
@@ -428,7 +428,7 @@ Do NOT open speculative PRs to these files during the freeze.
 | Docker image shrinkage less than 60MB (i.e., something else grew) | Low | Low | Non-blocker; log and investigate. Not a release blocker. |
 | SSE test flakiness from timing-sensitive disconnect semantics | High | Medium — CI flake | Use explicit timeouts and retries; mark SSE disconnect test as `@pytest.mark.flaky(reruns=3)` — acceptable for this class of test. |
 | CHANGELOG omits a breaking change | Medium | Medium — user confusion | PR template includes CHANGELOG checklist cross-referencing §15 dep changes, §19 flow changes, and §2 user directives. |
-| `activity_stream.py` running via `run_in_threadpool` for DB polling starves the threadpool | Medium | Medium | Poll loop uses `asyncio.sleep` between queries; benchmark showed <2 concurrent DB queries per stream. |
+| `activity_stream.py` SSE poll loop under async SQLAlchemy holds an AsyncSession open across `asyncio.sleep` boundaries | Medium | Medium | Open a fresh `async with get_db_session()` inside each tick rather than holding one across sleeps; benchmark showed <2 concurrent DB queries per stream. Avoids connection-pool pressure. |
 
 #### D. Rollback procedure
 
@@ -453,7 +453,7 @@ grep -n "flask_admin_app\|admin_wsgi\|_install_admin_mounts" src/app.py
 
 **Environment variables:** `SESSION_SECRET` stays (Flask ignored it, FastAPI now requires it, revert still has it).
 
-**Rollback window:** open until v2.1 (the async SQLAlchemy PR) merges. After v2.1, rollback becomes effectively impossible because async deps have spread through the codebase.
+**Rollback window:** open until Wave 4 (the async SQLAlchemy conversion) merges. After Wave 4, rollback becomes effectively impossible because async deps have spread through the codebase and the driver has switched to asyncpg (pivoted 2026-04-11 — async SQLAlchemy absorbed into v2.0).
 
 **Pre-release checklist:** tag `v1.99.0` (last-known-good Flask-era release) immediately before Wave 3 merges. Keep a container image of `v1.99.0` available in the registry for 30 days as the true rollback option: redeploy the old image, accept the downtime.
 
@@ -507,9 +507,9 @@ Grouped by verification strategy. HIGH confidence assumptions get single-line pl
 
 2. **`Annotated[T, Depends()]` is canonical idiom.** Verify: `rg 'Annotated\[' src/core/auth_context.py` shows current usage (line 256-257); no verification needed beyond reading. N/A fallback.
 
-3. **Sync SQLAlchemy + `run_in_threadpool` <5ms.** Verify: benchmark per Part 3.D. When: after Wave 1 routers land, before Wave 2 bulk port. Failure: p99 >15ms on hot endpoints. Fallback: hand-roll async for hot routes in v2.0, defer rest to v2.1.
+3. **Full async SQLAlchemy in v2.0** (pivoted 2026-04-11). Verify: benchmark per Part 3.D compares async vs pre-migration sync baseline. When: Wave 2 baseline captured; Wave 4-5 comparison run. Failure: regression >10% on read-heavy hot endpoints (write-heavy regressions up to 15% acceptable). Fallback: tune `pool_size` (Risk #6) OR (last resort) hand-roll `selectinload` eager-loads on the worst offenders; if that's not enough, fall back to Option C and defer async to v2.1. Pre-Wave-0 lazy-loading audit spike (Risk #1) is the early-warning gate — if the audit reveals relationship-access scope is untenable, switch to Option C before starting Wave 0.
 
-4. **Admin handlers `async def` + `run_in_threadpool`.** Verify: AST guard `test_architecture_admin_async_signatures.py` asserts every `src/admin/routers/*.py` handler is `async def`. When: Wave 1 entry. Failure: sync handler found. Fallback: rewrite that handler.
+4. **Admin handlers `async def` + full async SQLAlchemy end-to-end** (pivoted 2026-04-11). Verify: AST guard `test_architecture_admin_routes_async.py` (renamed from the original `test_architecture_admin_async_signatures.py` for consistency with sibling guards) asserts every `src/admin/routers/*.py` handler is `async def`; sibling guard `test_architecture_admin_async_db_access.py` asserts DB access uses `async with get_db_session()` + `await db.execute(...)` rather than sync `with` or `run_in_threadpool(_sync_fetch)`. The stale `test_architecture_admin_sync_db_no_async.py` from the pre-pivot sync-def resolution is DELETED (wrong direction). When: Wave 1 entry (handler signature guard); Wave 4 entry (async DB access guard). Failure: sync handler or sync DB access found. Fallback: rewrite that handler.
 
 5. **Starlette `SessionMiddleware` sufficient (<3.5KB).** See Group 3 detailed recipe below.
 
@@ -749,9 +749,13 @@ def test_allowlist_shrinks_over_time():
 
 **How it ratchets:** each wave PR edits the `ALLOWLIST` set to remove migrated files. Wave 1 removes 4 entries. Wave 2 removes 25. Wave 3 removes the last 5 (`src/admin/app.py`, `src/app.py`, `src/admin/utils/helpers.py`, `src/admin/server.py`, `src/admin/blueprints/activity_stream.py`). After Wave 3, `ALLOWLIST = set()` and `test_no_flask_imports_outside_allowlist` enforces zero tolerance.
 
-#### `tests/unit/test_architecture_admin_async_signatures.py`
+#### `tests/unit/test_architecture_admin_routes_async.py`
 
-Scans `src/admin/routers/*.py` and asserts every function decorated with `@router.get/post/put/delete/patch` is `async def`. Sibling to existing `test_architecture_repository_pattern.py`.
+Scans `src/admin/routers/*.py` and asserts every function decorated with `@router.get/post/put/delete/patch` is `async def`. Sibling to existing `test_architecture_repository_pattern.py`. **Pivoted 2026-04-11:** this guard was originally named `test_architecture_admin_async_signatures.py` under a pre-pivot draft; renamed for consistency with other `test_architecture_admin_*_async.py` guards in the full-async pivot. The stale `test_architecture_admin_sync_db_no_async.py` (which asserted async handlers must wrap DB in `run_in_threadpool`) is the wrong direction under the pivot and is DELETED; this guard replaces it.
+
+#### `tests/unit/test_architecture_admin_async_db_access.py`
+
+Scans `src/admin/routers/*.py` and asserts every DB access site uses `async with get_db_session()` + `await db.execute(...)` patterns, NOT sync `with get_db_session()` or `run_in_threadpool(_sync_fetch)` wrappers around DB work. The `run_in_threadpool` helper is still valid for file I/O, CPU-bound, and sync-third-party-library calls — the guard specifically flags calls where the wrapped function does DB work (identified by an inner `get_db_session()` call or a `Session`/`AsyncSession` parameter). Sibling guard added under the full-async pivot (2026-04-11).
 
 #### `tests/admin/test_templates_url_for_resolves.py`
 
@@ -963,45 +967,48 @@ All Playwright tests live under `/Users/quantum/Documents/ComputedChaos/salesage
 - **Stack state:** Docker + session cookie with lifetime set to 2 seconds via env override.
 - **Assertions:** (a) login works; (b) wait 3 seconds; (c) GET `/admin/` redirects to `/admin/login` with `303`; (d) no server error logs.
 
-### D. Benchmark harness (assumption #3)
+### D. Benchmark harness (assumption #3 — pivoted 2026-04-11 to async-vs-sync comparison)
 
 **Tool:** `pytest-benchmark` for deterministic microbenchmarks + `wrk` for macro load test.
 
 **Routes benchmarked:**
-1. **Read-heavy:** `GET /admin/tenant/t1/products` — lists 100 products via UoW. Measures `run_in_threadpool` wrapping `ProductRepo.list_for_tenant()`.
-2. **Write-heavy:** `POST /admin/tenant/t1/accounts` — creates one account, redirects. Measures `run_in_threadpool` wrapping `AccountRepo.create()` + session flush.
+1. **Read-heavy:** `GET /admin/tenant/t1/products` — lists 100 products via repository. Measures async DB latency end-to-end vs pre-migration sync baseline.
+2. **Write-heavy:** `POST /admin/tenant/t1/accounts` — creates one account, redirects. Measures async DB latency end-to-end vs pre-migration sync baseline.
 
-**Harness file:** `/Users/quantum/Documents/ComputedChaos/salesagent/tests/benchmark/test_run_in_threadpool_overhead.py`
+**Harness file:** `/Users/quantum/Documents/ComputedChaos/salesagent/tests/benchmark/test_admin_routes_async_vs_sync.py`
 
 ```python
+import asyncio
 import pytest
-from fastapi.concurrency import run_in_threadpool
 
 
-@pytest.mark.benchmark(group="threadpool-overhead")
-def test_threadpool_overhead_sync_noop(benchmark):
-    def noop():
-        return 1
-    result = benchmark(lambda: run_in_threadpool(noop))
-    # p50 < 1ms, p99 < 5ms per assumption #3
-
-
-@pytest.mark.benchmark(group="admin-routes")
+@pytest.mark.benchmark(group="admin-routes-async")
 def test_list_products_route(benchmark, integration_db):
+    """Async route benchmark — compares against pre-migration sync baseline."""
     from tests.harness import IntegrationEnv
-    with IntegrationEnv(tenant_id="t1", principal_id="p1") as env:
-        ...
-        client = env.get_admin_client()
-        benchmark(lambda: client.get("/admin/tenant/t1/products"))
-        # Acceptance: p50 < 50ms, p99 < 200ms
+    async def _run():
+        async with IntegrationEnv(tenant_id="t1", principal_id="p1") as env:
+            ...
+            client = env.get_admin_client()
+            await client.get("/admin/tenant/t1/products")
+    benchmark(lambda: asyncio.run(_run()))
+    # Acceptance: async p50 ≤ sync baseline p50 + 5%, p99 ≤ sync baseline p99 + 10%
+
+
+@pytest.mark.benchmark(group="admin-routes-async")
+def test_create_account_route(benchmark, integration_db):
+    """Async write-heavy — compares against pre-migration sync baseline."""
+    ...
 ```
 
 **Acceptance criteria:**
-- `test_threadpool_overhead_sync_noop`: p50 < 1ms, p99 < 5ms.
-- `test_list_products_route`: p50 < 50ms, p99 < 200ms.
-- `test_create_account_route`: p50 < 80ms, p99 < 300ms.
+- `test_list_products_route`: async p50 ≤ sync baseline p50 + 5%, p99 ≤ sync baseline p99 + 10%
+- `test_create_account_route`: async p50 ≤ sync baseline p50 + 5%, p99 ≤ sync baseline p99 + 15% (write-heavy tolerances wider)
+- Under HIGH concurrency (load test with `wrk -c 100 -t 10 -d 30s`): async throughput ≥ sync baseline (should win decisively)
 
-**Storage:** `pytest-benchmark --benchmark-json=test-results/wave-N/benchmark.json` committed to repo per wave. `scripts/compare_benchmarks.py` asserts wave N doesn't regress >20% from wave N-1.
+**Storage:** `pytest-benchmark --benchmark-json=test-results/wave-N/benchmark.json` committed to repo per wave. `scripts/compare_benchmarks.py` asserts wave N doesn't regress >20% from wave N-1. **Wave 2 captures the sync baseline; Wave 4 captures the post-async comparison.**
+
+**Failure fallback:** if async regresses significantly under the benchmark, first tune `pool_size` (Risk #6 in `async-pivot-checkpoint.md` §4). If that doesn't close the gap, apply `selectinload` eager-loading to the worst offenders. If THAT doesn't close the gap, invoke the last-resort fallback: revert to Option C (sync `def` admin handlers) and defer async to v2.1.
 
 ### E. Coverage parity automation
 

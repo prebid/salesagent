@@ -24,7 +24,422 @@ src/admin/
     fly_headers.py
 ```
 
-Everything below uses Python 3.12+ syntax. None of these modules touch async DB — SQLAlchemy 2.0 sync inside `get_db_session()` context managers, per v2.0.0 charter.
+Everything below uses Python 3.12+ syntax. Under the full-async SQLAlchemy pivot (2026-04-11, see `async-pivot-checkpoint.md`), these foundation modules use `AsyncSession` via `async with get_db_session() as db:` / `await db.execute(...)` — SQLAlchemy 2.0 async-native. The pre-pivot plan said "sync SQLAlchemy inside `get_db_session()` context managers, per v2.0.0 charter"; that charter was rewritten 2026-04-11 to absorb async into v2.0. Under Agent E's idiom upgrade (Categories 1-2 in `async-audit/agent-e-ideal-state-gaps.md`), handlers and deps prefer the DI pattern `session: SessionDep` via `Depends(get_session)` over inline `async with` — but both forms are valid and the guard tests accept either.
+
+---
+
+## 11.0 `src/core/database/engine.py` — Lifespan-scoped async engine (Agent E Category 1)
+
+> **Added 2026-04-11 under the Agent E idiom upgrade.** The engine is lifespan-scoped rather than module-global to prevent pytest-asyncio event-loop leak bugs (Agent B Risk Interaction B). Engine + sessionmaker live on `app.state.db_engine` / `app.state.db_sessionmaker` — never at module import time.
+
+### A. Implementation
+
+```python
+# src/core/database/engine.py
+"""AsyncEngine lifecycle — lifespan-scoped, never module-global."""
+from __future__ import annotations
+from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING, AsyncIterator
+
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine,
+)
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI
+
+
+def _build_async_url(sync_url: str) -> str:
+    """Rewrite postgresql:// → postgresql+asyncpg:// (idempotent).
+
+    Agent F F1.5.1 mitigation: also rewrite `sslmode=` → `ssl=` for asyncpg's
+    different TLS query-param vocabulary. The rewriter is where both URL
+    differences are handled in one place.
+    """
+    if sync_url.startswith("postgresql+asyncpg://"):
+        return sync_url
+    if sync_url.startswith("postgresql://"):
+        return "postgresql+asyncpg://" + sync_url[len("postgresql://"):]
+    raise ValueError(f"Unsupported DATABASE_URL scheme: {sync_url}")
+
+
+def make_engine(database_url: str, *, pool_size: int = 20, max_overflow: int = 10) -> AsyncEngine:
+    """Factory — callable from lifespan AND from test fixtures.
+
+    Pool sizing: default 20+10 matches benchmark tuning from async-pivot-checkpoint
+    Risk #6. xdist workers override via PYTEST_XDIST_WORKER_COUNT-aware fixture.
+    """
+    return create_async_engine(
+        _build_async_url(database_url),
+        echo=False,
+        pool_size=pool_size,
+        max_overflow=max_overflow,
+        pool_pre_ping=True,       # detect stale connections (Fly.io network blips)
+        pool_recycle=3600,        # recycle every hour (beat Fly's 2h idle kill)
+    )
+
+
+def make_sessionmaker(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
+    return async_sessionmaker(
+        bind=engine,
+        class_=AsyncSession,
+        expire_on_commit=False,   # MANDATORY for async — see Risk #5
+        autoflush=False,          # explicit flush, no surprises
+        autobegin=True,           # SQLA 2.0 default, still worth being explicit
+    )
+
+
+@asynccontextmanager
+async def database_lifespan(app: "FastAPI") -> AsyncIterator[None]:
+    """Create engine + sessionmaker on startup, dispose on shutdown.
+
+    Store on `app.state` so DI factories can read them off the current request.
+    """
+    from src.core.settings import get_settings  # pydantic-settings Settings
+    settings = get_settings()
+    engine = make_engine(settings.database_url)
+    app.state.db_engine = engine
+    app.state.db_sessionmaker = make_sessionmaker(engine)
+    try:
+        yield
+    finally:
+        await engine.dispose()
+```
+
+### B. Tests
+
+Integration test fixture that creates and disposes the engine per test; see §11.13 for the full `conftest.py`.
+
+### C. Integration
+
+- Public API: `make_engine()`, `make_sessionmaker()`, `database_lifespan(app)`
+- Called from `combined_lifespan` in `src/app.py`
+- NO module-level engine instance — everything is lifespan-scoped
+- Structural guard `test_architecture_no_module_level_engine.py` enforces this
+
+### D. Gotchas
+
+- **Module-level engines are forbidden.** Any `_engine = create_async_engine(...)` at module scope fails the guard.
+- **Pool sizing under xdist.** Override `pool_size` via a fixture that reads `PYTEST_XDIST_WORKER_COUNT`.
+- **`expire_on_commit=False` is MANDATORY.** With the default `True`, post-commit attribute access triggers a lazy-load that raises `MissingGreenlet` under `AsyncSession`. Risk #5 consequence: audit code that reads `created_at` / `updated_at` post-commit (they may be `None` now).
+
+---
+
+## 11.0.1 `src/core/database/deps.py` — SessionDep (Agent E Category 2)
+
+> **Added 2026-04-11 under the Agent E idiom upgrade.** The idiomatic FastAPI-native pattern: handlers receive `session: SessionDep` as a parameter. The DI layer owns session lifecycle. No `async with` in handler bodies.
+
+### A. Implementation
+
+```python
+# src/core/database/deps.py
+"""Session DI factory — the ONLY place handlers get a session from."""
+from typing import Annotated, AsyncIterator
+
+from fastapi import Depends, Request
+from sqlalchemy.ext.asyncio import AsyncSession
+
+
+async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
+    """Per-request session. Commits on normal exit, rolls back on exception.
+
+    Access pattern in handlers:
+        session: Annotated[AsyncSession, Depends(get_session)]
+        # OR:
+        session: SessionDep
+
+    NOT a nested context manager inside handler bodies. The DI layer owns
+    session lifecycle; handlers only own business logic.
+
+    Two deps that both declare `SessionDep` get the SAME session within a
+    single request (FastAPI caches dep results per-request). This is how
+    multiple repositories share one transaction automatically.
+    """
+    sessionmaker = request.app.state.db_sessionmaker
+    async with sessionmaker() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
+
+SessionDep = Annotated[AsyncSession, Depends(get_session)]
+```
+
+### B. Tests
+
+```python
+import pytest
+
+@pytest.mark.asyncio
+async def test_get_session_commits_on_success(client):
+    # Handler uses SessionDep; session commits on normal exit
+    r = await client.post("/test/increment-counter")
+    assert r.status_code == 200
+    # Verify DB state reflects committed write
+
+@pytest.mark.asyncio
+async def test_get_session_rolls_back_on_exception(client):
+    # Handler raises; session rolls back
+    r = await client.post("/test/raise-error")
+    assert r.status_code == 500
+    # Verify DB side effect was rolled back
+```
+
+### C. Integration
+
+- Every handler that needs DB: `session: SessionDep` parameter
+- Repository Deps chain through `SessionDep`: `async def get_account_repo(session: SessionDep) -> AccountRepository: return AccountRepository(session)`
+- No handler uses `async with get_db_session()` in its body
+
+### D. Gotchas
+
+- **Deps share session within a single request** — FastAPI caches dep results per request, so `get_session` is invoked once no matter how many deps transitively depend on it. Multiple repositories in the same handler share ONE transaction. Correct.
+- **Exception in ANY dep rolls back the whole request.** Correct — the request is atomic.
+- **Test overrides:** `app.dependency_overrides[get_session] = lambda: stub_session` is THE canonical injection mechanism. Never monkeypatch `get_session` internals.
+
+---
+
+## 11.0.2 `src/core/settings.py` — Pydantic Settings class (Agent E Category 15)
+
+> **Added 2026-04-11 under the Agent E idiom upgrade.** Every config value goes through a single `Settings` class loaded via `@lru_cache get_settings()`. No more `os.environ.get("FOO", "")` scattered throughout the codebase.
+
+### A. Implementation
+
+```python
+# src/core/settings.py
+"""Pydantic-settings Settings class — one source of truth for config."""
+from functools import lru_cache
+from typing import Literal
+
+from pydantic import Field, SecretStr
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """App-wide settings. Loaded from env, .env, or secret store."""
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    # Environment
+    app_env: Literal["dev", "staging", "production"] = "dev"
+
+    # Database
+    database_url: str = Field(..., alias="DATABASE_URL")
+
+    # Sessions & CSRF (FLASK_SECRET_KEY dual-read during v2.0 per directive #5)
+    session_secret: SecretStr = Field(..., alias="SESSION_SECRET", min_length=32)
+
+    # OAuth
+    google_client_id: str | None = Field(None, alias="GOOGLE_CLIENT_ID")
+    google_client_secret: SecretStr | None = Field(None, alias="GOOGLE_CLIENT_SECRET")
+
+    # Super admin
+    super_admin_emails: list[str] = Field(default_factory=list, alias="SUPER_ADMIN_EMAILS")
+    super_admin_domains: list[str] = Field(default_factory=list, alias="SUPER_ADMIN_DOMAINS")
+
+    # Test mode
+    adcp_auth_test_mode: bool = Field(False, alias="ADCP_AUTH_TEST_MODE")
+
+    # Feature flags
+    single_tenant_mode: bool = Field(False, alias="ADCP_SINGLE_TENANT_MODE")
+
+    # Domain
+    sales_agent_domain: str = "sales-agent.example.com"
+    support_email: str = "help@example.com"
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    return Settings()
+```
+
+### C. Integration
+
+- Every `os.environ.get(...)` in `src/admin/` and `src/core/` is replaced with `get_settings().field`
+- `SettingsDep = Annotated[Settings, Depends(get_settings)]` for handler DI
+- Structural guard `test_architecture_no_direct_env_access.py` enforces — only `src/core/settings.py` may read env directly
+
+### D. Gotchas
+
+- **`SecretStr`** wraps sensitive fields. Unwrap via `settings.session_secret.get_secret_value()` — never log the wrapped object directly.
+- **`@lru_cache(maxsize=1)`** makes `get_settings()` a singleton. Tests that need fresh settings clear the cache: `get_settings.cache_clear()`.
+- **Field aliases** map Python snake_case to env SCREAMING_SNAKE_CASE — the env layer does not see Python names.
+
+---
+
+## 11.0.3 `src/core/logging.py` — Structured logging via structlog (Agent E Category 16)
+
+> **Added 2026-04-11 under the Agent E idiom upgrade.** Async debugging is 3x harder without request-ID context-var propagation. Adding `structlog` in v2.0 (~250 LOC) avoids the much larger retrofit cost in v2.1 (~400 LOC touching every log line).
+
+### A. Implementation
+
+```python
+# src/core/logging.py
+"""Structlog configuration — JSON in prod, human in dev."""
+from contextlib import contextmanager
+import logging
+import sys
+from typing import Iterator
+
+import structlog
+from structlog.contextvars import bind_contextvars, unbind_contextvars
+
+from src.core.settings import get_settings
+
+
+def configure_logging() -> None:
+    """Called once from lifespan."""
+    settings = get_settings()
+
+    logging.basicConfig(
+        level=logging.INFO if settings.app_env != "dev" else logging.DEBUG,
+        stream=sys.stderr,
+        format="%(message)s",
+    )
+
+    processors = [
+        structlog.contextvars.merge_contextvars,      # adds bound vars
+        structlog.stdlib.add_log_level,
+        structlog.stdlib.add_logger_name,
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.StackInfoRenderer(),
+        structlog.processors.format_exc_info,
+    ]
+    if settings.app_env == "dev":
+        processors.append(structlog.dev.ConsoleRenderer(colors=True))
+    else:
+        processors.append(structlog.processors.JSONRenderer())
+
+    structlog.configure(
+        processors=processors,
+        wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
+        context_class=dict,
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        cache_logger_on_first_use=True,
+    )
+
+
+@contextmanager
+def bind_request_id(request_id: str) -> Iterator[None]:
+    """Bind request_id to the current contextvar context."""
+    bind_contextvars(request_id=request_id)
+    try:
+        yield
+    finally:
+        unbind_contextvars("request_id")
+
+
+@contextmanager
+def bind_tenant(tenant_id: str | None) -> Iterator[None]:
+    if tenant_id:
+        bind_contextvars(tenant_id=tenant_id)
+    try:
+        yield
+    finally:
+        if tenant_id:
+            unbind_contextvars("tenant_id")
+
+
+def get_logger(name: str) -> structlog.stdlib.BoundLogger:
+    return structlog.get_logger(name)
+```
+
+### C. Integration
+
+- `configure_logging()` called from `combined_lifespan` at startup
+- Every `logging.getLogger(__name__)` in new code becomes `from src.core.logging import get_logger; logger = get_logger(__name__)`
+- Under async, **contextvars propagate correctly across `await` boundaries** — every log line emitted during a request automatically carries the `request_id` bound by `RequestIDMiddleware` (§11.9.5)
+- Structural guard `test_architecture_uses_structlog.py` enforces structlog usage (allowlisted for existing files during migration)
+
+### D. Gotchas
+
+- **Under async, `logging` alone does NOT propagate context-vars** — you'd need to thread request_id through every function call. `structlog.contextvars.merge_contextvars` handles this for free.
+- **Log format change is OPS-VISIBLE.** In production, logs switch from stdlib format to JSON. Monitoring pipelines that grep stdlib format need an update. Document in release notes.
+
+---
+
+## 11.0.5 DTO layer — Pydantic v2 wrappers over ORM models (Agent E Category 5)
+
+> **Added 2026-04-11 under the Agent E idiom upgrade.** The DTO boundary is the **architectural prevention** for Risk #1 (lazy-load realization in production). If templates receive DTOs, lazy loads become impossible by construction.
+
+### A. File tree
+
+```
+src/admin/dtos/
+  __init__.py
+  account.py
+  tenant.py
+  user.py
+  product.py
+  media_buy.py
+  ... (one per major admin entity)
+```
+
+### B. Every DTO
+
+```python
+# src/admin/dtos/account.py
+from datetime import datetime
+from decimal import Decimal
+from typing import Annotated, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
+
+
+class AccountDTO(BaseModel):
+    """Flat account DTO — no relationships loaded. Used in list views."""
+    model_config = ConfigDict(from_attributes=True, strict=True, frozen=True)
+
+    account_id: str
+    tenant_id: str
+    name: Annotated[str, Field(min_length=1, max_length=255)]
+    status: Literal["active", "pending_approval", "rejected", "suspended", "closed"]
+    created_at: datetime
+    monthly_budget: Decimal | None
+
+    @field_serializer("monthly_budget")
+    def serialize_budget(self, value: Decimal | None) -> str | None:
+        return str(value.quantize(Decimal("0.01"))) if value is not None else None
+
+
+class AccountWithContactDTO(AccountDTO):
+    """Eager-loaded variant — includes primary_contact.
+
+    Returned only by `AccountRepository.get_with_contact()` which applies
+    `selectinload(Account.primary_contact)` to the query.
+    """
+    primary_contact: "AccountContactDTO | None" = None
+
+
+class AccountCreateRequest(BaseModel):
+    """Request body for POST /accounts. Explicitly NOT extending AccountDTO."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    account_id: Annotated[str, Field(pattern=r"^acc_[a-z0-9]{8}$")]
+    name: Annotated[str, Field(min_length=1, max_length=255)]
+    monthly_budget: Decimal | None = None
+```
+
+### C. Integration
+
+- Repositories return DTOs at the public surface — never ORM instances
+- Handlers pass DTOs into template contexts — not ORM instances
+- Structural guard `test_architecture_templates_receive_dtos_not_orm.py` enforces: every `render(request, "tpl", context)` call passes only primitives, Pydantic models, or the request
+
+### D. Gotchas
+
+- **`frozen=True`** prevents downstream mutation (templates can't "update" a DTO accidentally)
+- **`from_attributes=True`** enables `AccountDTO.model_validate(orm_instance)` — the ORM → DTO conversion at the repository boundary
+- **`strict=True`** prevents silent type coercion that might hide data model drift
+- **Eager-load contract:** DTOs with nested relationships MUST be returned only from repository methods that eager-loaded the relationships. Enforced by `test_architecture_repository_eager_loads.py`.
+- **AdCP boundary preservation:** admin DTOs live in `src/admin/dtos/`, SEPARATE from `src/core/schemas/` (AdCP library schemas). Changes to admin DTOs NEVER touch the AdCP wire format. CLAUDE.md Pattern #1 still applies to library schemas; admin DTOs are a different layer.
 
 ---
 
@@ -778,11 +1193,14 @@ def is_super_admin(email: str) -> bool:
     if domain and domain in env_domains:
         return True
 
+    # Async DB check — `is_super_admin` becomes async def under the full-async
+    # pivot (2026-04-11). Callers cascade: `_get_admin_user_or_none` → `is_super_admin`
+    # → `get_admin_user` → every admin handler. All become async.
     try:
-        with get_db_session() as db:
-            emails_cfg = db.scalars(
+        async with get_db_session() as db:
+            emails_cfg = (await db.execute(
                 select(TenantManagementConfig).filter_by(config_key="super_admin_emails")
-            ).first()
+            )).scalars().first()
             if emails_cfg and emails_cfg.config_value:
                 db_emails = {
                     e.strip().lower() for e in emails_cfg.config_value.split(",") if e.strip()
@@ -790,9 +1208,9 @@ def is_super_admin(email: str) -> bool:
                 if email_l in db_emails:
                     return True
 
-            domains_cfg = db.scalars(
+            domains_cfg = (await db.execute(
                 select(TenantManagementConfig).filter_by(config_key="super_admin_domains")
-            ).first()
+            )).scalars().first()
             if domains_cfg and domains_cfg.config_value:
                 db_domains = {
                     d.strip().lower() for d in domains_cfg.config_value.split(",") if d.strip()
@@ -806,20 +1224,82 @@ def is_super_admin(email: str) -> bool:
     return False
 
 
-def _load_tenant(tenant_id: str) -> dict[str, Any]:
-    """Load tenant row as a dict.
+# ---------------------------------------------------------------------------
+# Tenant lookup — Agent E Category 2+5 idiom upgrade (pivoted 2026-04-11)
+# ---------------------------------------------------------------------------
+#
+# Originally: `_load_tenant(tenant_id)` as a standalone sync function that
+# opened its own `with get_db_session()` block and returned a hand-built dict.
+#
+# Now: `TenantRepository.get_dto(tenant_id)` takes an injected `SessionDep`
+# and returns a typed `TenantDTO` (Pydantic v2 with `from_attributes=True`).
+# The dep chain is:
+#   SessionDep (session: Depends(get_session))
+#     → TenantRepoDep (repo: Depends(get_tenant_repo))
+#       → get_current_tenant (tenants: TenantRepoDep, ...)
+#
+# Every consumer of the old `_load_tenant` helper becomes a handler parameter
+# `tenant: CurrentTenantDep` which itself receives a `tenants: TenantRepoDep`.
+# No more inline `async with get_db_session()` in helpers; the DI factory owns
+# session lifecycle; the repository returns a DTO so templates never see a
+# lazy-loadable ORM object.
 
-    Why dict (not ORM object): the route handler must be able to pass the
-    tenant into template contexts, which are serialized into cookies by
-    SessionMiddleware if mis-stored. Returning a plain dict prevents
-    accidental ORM object serialization attempts. The shape is DELIBERATELY
-    minimal — add fields only when a handler needs them.
+# src/core/database/repositories/tenant.py
+# class TenantRepository:
+#     def __init__(self, session: AsyncSession):
+#         self.session = session
+#
+#     async def get_dto(self, tenant_id: str) -> TenantDTO | None:
+#         stmt = select(Tenant).filter_by(tenant_id=tenant_id)
+#         result = await self.session.execute(stmt)
+#         orm = result.scalars().first()
+#         return TenantDTO.model_validate(orm) if orm else None
 
-    Raises HTTPException(404) if tenant not found. The AdminRedirect exception
-    is NOT raised here — that's for unauthenticated, not missing-resource.
+# src/admin/deps/tenant.py
+# async def get_tenant_repo(session: SessionDep) -> TenantRepository:
+#     return TenantRepository(session)
+#
+# TenantRepoDep = Annotated[TenantRepository, Depends(get_tenant_repo)]
+#
+# async def get_current_tenant(
+#     request: Request,
+#     user: AdminUserDep,
+#     tenant_id: str,
+#     tenants: TenantRepoDep,
+#     users: UserRepoDep,
+# ) -> TenantDTO:
+#     if user.role == "super_admin":
+#         tenant = await tenants.get_dto(tenant_id)
+#         if not tenant:
+#             raise HTTPException(404, f"Tenant {tenant_id} not found")
+#         return tenant
+#     # ... per-user access check via UserRepoDep ...
+#     tenant = await tenants.get_dto(tenant_id)
+#     if not tenant:
+#         raise HTTPException(404, f"Tenant {tenant_id} not found")
+#     return tenant
+
+# CurrentTenantDep = Annotated[TenantDTO, Depends(get_current_tenant)]
+
+# For the small number of code sites that still need the legacy helper shape
+# during the Wave 4 migration (e.g., `_get_admin_user_or_none` for the
+# is_super_admin cascade), we retain a thin transitional wrapper:
+
+async def _load_tenant(tenant_id: str) -> dict[str, Any]:
+    """DEPRECATED transitional helper — use TenantRepository.get_dto() instead.
+
+    Remains in place only until every caller has been migrated to the
+    `TenantRepoDep` Dep pattern. New code MUST use the repository. This helper
+    is flagged for removal in Wave 5.
+
+    Under the full-async pivot (2026-04-11), this helper is `async def` and
+    opens its own session inline. The idiomatic replacement is `TenantRepoDep`
+    + `async def get_current_tenant(..., tenants: TenantRepoDep, ...)`.
     """
-    with get_db_session() as db:
-        tenant = db.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+    async with get_db_session() as db:
+        tenant = (await db.execute(
+            select(Tenant).filter_by(tenant_id=tenant_id)
+        )).scalars().first()
         if tenant is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -834,7 +1314,6 @@ def _load_tenant(tenant_id: str) -> dict[str, Any]:
             "ad_server": tenant.ad_server,
             "approval_mode": getattr(tenant, "approval_mode", None),
             "auth_setup_mode": getattr(tenant, "auth_setup_mode", False),
-            # Add fields here when a template needs them — don't bloat blindly
         }
 
 
@@ -1158,7 +1637,7 @@ async def admin_redirect_handler(request: Request, exc: AdminRedirect) -> Redire
 
 ### D. Gotchas
 
-- **Sync DB in async routes:** `_load_tenant` is sync. Calling it from an async handler blocks the event loop. For v2.0.0 this is acceptable (existing REST routes do the same); v2.1 moves to async SQLAlchemy.
+- **Async DB (pivoted 2026-04-11):** `_load_tenant`, `_user_has_tenant_access`, and `_tenant_has_auth_setup_mode` are `async def` under the full-async pivot. All DB access uses `async with get_db_session() as db:` / `(await db.execute(select(...))).scalars().first()`. `run_in_threadpool` is reserved for file I/O, CPU-bound, or sync third-party libraries. Under the Agent E idiom upgrade (Category 2), new code should prefer `TenantRepoDep` via `Depends(get_tenant_repo)` over calling `_load_tenant` directly — the standalone helper is transitional and will be removed in Wave 5. See `async-pivot-checkpoint.md` §3 for the target-state patterns.
 - **`request.session` raises AssertionError** if `SessionMiddleware` is not installed. The `try/except` in `_get_admin_user_or_none` catches this to make unit tests without middleware work (they get `None`).
 - **Session fixation:** On privilege elevation (login), Starlette's SessionMiddleware does NOT rotate the session cookie. Add a manual cookie-clear + re-set in the login handler. Tracked.
 - **Case-insensitive email comparison:** All email matching is lowercase. The database schema stores emails case-preserved but indexes on `lower(email)`. The dataclass enforces lowercase at construction.
@@ -2547,6 +3026,268 @@ class TestAppFactory:
 - **`UnifiedAuthMiddleware` placement:** NOT added here. It's registered at the root app level in `src/app.py` once, because it applies to MCP, A2A, REST, and admin uniformly. Admin routes that need session-based auth use the admin deps; they ignore `request.state.auth_context`.
 - **`init_oauth` is a startup side effect** inside `build_admin()`. If tests call `build_admin()` multiple times, `oauth.register(name="google")` must be idempotent — guarded by the `hasattr(oauth, "google")` check in `init_oauth`.
 - **Static files** mounted at `/static` (not `/admin/static`) because the codemod rewrites templates to `{{ script_root ~ '/static/x.js' }}`. `script_root` is `/admin` on admin routes, so the URL becomes `/admin/static/x.js`. Wait — that requires static to be mounted at `/admin/static` after all. Resolution: mount at `/admin/static` AND at `/static` for API routes. Or just `/admin/static` and drop the `script_root` prefix entirely. **Decision:** Mount `/admin/static`. Templates use `{{ request.url_for('static', path='x.js') }}` via the named static mount.
+
+---
+
+## 11.9.5 `src/admin/middleware/request_id.py` — Request ID propagation (Agent E Category 8)
+
+> **Added 2026-04-11 under the Agent E idiom upgrade.** Under async, contextvars propagate correctly across `await` boundaries. The combination `RequestIDMiddleware` + `structlog.contextvars.merge_contextvars` means every log line emitted during a request automatically carries the `request_id` — critical for debugging async-interleaved requests.
+
+### A. Implementation
+
+```python
+# src/admin/middleware/request_id.py
+"""Generates and propagates X-Request-ID for every request.
+
+Read by the structured logger to include in every log line emitted during
+handling of this request. Critical for debugging async-interleaved requests.
+"""
+import uuid
+
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+
+class RequestIDMiddleware:
+    def __init__(self, app: ASGIApp, header_name: str = "x-request-id") -> None:
+        self.app = app
+        self.header_name = header_name.lower().encode("latin-1")
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        # Reuse upstream request ID if present, otherwise generate
+        incoming: str | None = None
+        for name, value in scope["headers"]:
+            if name == self.header_name:
+                incoming = value.decode("latin-1")
+                break
+
+        request_id = incoming or uuid.uuid4().hex
+        scope["state"] = scope.get("state", {}) | {"request_id": request_id}
+
+        # Propagate via structlog context-var (see §11.0.3)
+        from src.core.logging import bind_request_id
+        with bind_request_id(request_id):
+            async def send_with_header(message: Message) -> None:
+                if message["type"] == "http.response.start":
+                    headers = list(message.get("headers", []))
+                    headers.append((self.header_name, request_id.encode("latin-1")))
+                    message["headers"] = headers
+                await send(message)
+            await self.app(scope, receive, send_with_header)
+```
+
+### C. Integration
+
+- Registered as the **outermost** middleware in `src/app.py` so every request gets a `request_id` before anything else runs
+- Order: `RequestIDMiddleware → FlyHeaders → ExternalDomainRedirect → UnifiedAuth → Session → CSRF → RestCompat → CORS → handler`
+- Emits `X-Request-ID` on responses; echoes upstream value if the client sent one
+- Structural guard `test_architecture_middleware_order.py` enforces the registration order
+
+### D. Gotchas
+
+- **AdCP boundary:** `X-Request-ID` is a universal debug header; no AdCP wire format claims it. Safe to add. See `async-audit/agent-e-ideal-state-gaps.md` Category 8 Section 3 cross-check.
+- **Response header propagation requires intercepting `send`.** The wrapped `send_with_header` only acts on the first `http.response.start` message.
+
+---
+
+## 11.11 `src/app.py` — Exception handlers (Agent E Category 6)
+
+> **Added 2026-04-11 under the Agent E idiom upgrade.** The plan covered `AdCPError` (Blocker 3) and `AdminRedirect` but missed four other handlers a 2026 FastAPI app needs: `HTTPException` (Accept-aware), `RequestValidationError`, `AdminAccessDenied`, and the catch-all `Exception`.
+
+### A. Implementation
+
+```python
+# src/app.py (exception handlers)
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from src.admin.deps.auth import AdminAccessDenied, AdminRedirect
+from src.admin.templating import render
+from src.core.errors import AdCPError
+from src.core.settings import get_settings
+
+
+def _wants_html(request: Request) -> bool:
+    """Is this an admin browser?"""
+    accept = request.headers.get("accept", "")
+    return request.url.path.startswith("/admin/") and "text/html" in accept
+
+
+@app.exception_handler(AdCPError)
+async def adcp_error_handler(request: Request, exc: AdCPError):
+    """Accept-aware: HTML for admin browsers, JSON for APIs. (Blocker 3)"""
+    if _wants_html(request):
+        return render(request, "error.html", {
+            "error": exc.message,
+            "status_code": exc.status_code,
+        }, status_code=exc.status_code)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.message, "type": exc.__class__.__name__},
+    )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    """Accept-aware 404/403/401 etc."""
+    if _wants_html(request):
+        return render(request, f"{exc.status_code}.html", {
+            "detail": exc.detail,
+        }, status_code=exc.status_code)
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError):
+    """For JSON, return structured errors. HTML re-render handled per-form by each handler."""
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": "Validation failed",
+            "errors": [
+                {"field": ".".join(str(x) for x in e["loc"][1:]), "message": e["msg"]}
+                for e in exc.errors()
+            ],
+        },
+    )
+
+
+@app.exception_handler(AdminRedirect)
+async def admin_redirect_handler(request: Request, exc: AdminRedirect):
+    from urllib.parse import quote
+    from starlette.responses import RedirectResponse
+    url = f"{exc.to}?next={quote(exc.next_url, safe='')}" if exc.next_url else exc.to
+    return RedirectResponse(url=url, status_code=303)
+
+
+@app.exception_handler(AdminAccessDenied)
+async def admin_access_denied_handler(request: Request, exc: AdminAccessDenied):
+    return render(request, "403.html", {"message": exc.message}, status_code=403)
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Catch-all. Sanitizes in production, full detail in dev."""
+    from src.core.logging import get_logger
+    logger = get_logger(__name__)
+    logger.exception("unhandled_exception", method=request.method, path=request.url.path)
+    msg = "Internal server error" if get_settings().app_env == "production" else f"{type(exc).__name__}: {exc}"
+    if _wants_html(request):
+        return render(request, "500.html", {"message": msg}, status_code=500)
+    return JSONResponse(status_code=500, content={"detail": msg})
+```
+
+### C. Integration
+
+- Register all 6 handlers on the root app in `src/app.py` during `build_admin()` wiring
+- Structural guard `test_architecture_exception_handlers_complete.py` asserts all 6 are registered
+
+### D. Gotchas
+
+- **Handler order matters.** FastAPI dispatches to the most specific handler first (subclass before superclass), so `AdCPError` handler fires before `Exception`. Correct.
+- **`AdCPError` JSON shape is byte-stable** for API callers — Agent D M9 `test_openapi_byte_stability.py` + an explicit JSON schema snapshot protect this.
+- **`_wants_html` only returns True on admin paths.** API callers (`/api/v1/*`, `/mcp`, `/a2a`) always get JSON, regardless of their `Accept` header. This preserves AdCP wire format.
+
+---
+
+## 11.13 Test harness fixtures — async-native via httpx + ASGITransport (Agent E Category 14)
+
+> **Added 2026-04-11 under the Agent E idiom upgrade.** Sync `TestClient(app)` spawns its own event loop in a thread and conflicts with async lifespan state stored on `app.state`. `httpx.AsyncClient(transport=ASGITransport(app=app))` runs in the test's own event loop and sees `app.state` correctly.
+
+### A. Implementation
+
+```python
+# tests/conftest.py (async fragment — layered with existing sync conftest)
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
+
+import pytest
+import pytest_asyncio
+from httpx import AsyncClient
+from httpx._transports.asgi import ASGITransport
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.app import app
+from src.core.database.engine import make_engine, make_sessionmaker
+from src.core.database.deps import get_session
+from src.core.settings import get_settings
+
+
+@pytest_asyncio.fixture(scope="function")
+async def engine():
+    """Per-test engine, tied to the current event loop. Prevents leak under xdist."""
+    eng = make_engine(get_settings().database_url)
+    try:
+        yield eng
+    finally:
+        await eng.dispose()
+
+
+@pytest_asyncio.fixture(scope="function")
+async def session_factory(engine):
+    return make_sessionmaker(engine)
+
+
+@pytest_asyncio.fixture(scope="function")
+async def session(session_factory) -> AsyncIterator[AsyncSession]:
+    """Per-test session, auto-rolled back."""
+    async with session_factory() as s:
+        yield s
+        await s.rollback()
+
+
+@pytest_asyncio.fixture(scope="function")
+async def client(session) -> AsyncIterator[AsyncClient]:
+    """ASGI test client with session dependency override."""
+    async def _override():
+        yield session
+
+    app.dependency_overrides[get_session] = _override
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as c:
+            yield c
+    finally:
+        app.dependency_overrides.clear()
+```
+
+### B. Example test
+
+```python
+import pytest
+
+@pytest.mark.asyncio
+async def test_list_accounts(client, session):
+    # Factory creates test data through the injected session
+    await AccountFactory.create(tenant_id="t1", name="Test Account", session=session)
+
+    r = await client.get(
+        "/admin/tenant/t1/accounts",
+        cookies={"adcp_session": _signed({"user": "alice@example.com"})},
+    )
+    assert r.status_code == 200
+    assert "Test Account" in r.text
+```
+
+### C. Integration
+
+- `pytest-asyncio>=1.1.0` with `asyncio_mode = "auto"` in `[tool.pytest.ini_options]` — Agent F F1.7.1 gate
+- Per-test function-scoped event loop prevents the engine binding leak
+- `app.dependency_overrides[get_session]` is THE canonical injection — no `monkeypatch.setattr` on internal functions
+- Structural guard `test_architecture_tests_use_async_client.py` asserts no new `TestClient(app)` usage
+
+### D. Gotchas
+
+- **`TestClient` is deprecated for integration tests under async lifespan.** It still works for unit tests that don't exercise the lifespan, but any test that relies on `app.state.db_engine` must use `AsyncClient + ASGITransport`.
+- **`app.dependency_overrides.clear()` in `finally`** prevents test-to-test leakage. Agent B Risk #35 cascade.
+- **Session fixture rollback** replaces per-test transaction management. No need for `integration_db` fixture shenanigans under async.
 
 ---
 

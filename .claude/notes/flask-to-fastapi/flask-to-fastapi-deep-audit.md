@@ -178,18 +178,20 @@ async def adcp_error_handler(request: Request, exc: AdCPError):
 
 ---
 
-### 1.4 Session scoping on the async event-loop thread — plan must default to sync `def` admin handlers
+### 1.4 Session scoping on the async event-loop thread — PIVOTED 2026-04-11 to full async SQLAlchemy (Option A, absorbed into v2.0)
 
 **Severity:** 🚨 BLOCKER (architectural default change)
 
-**The mechanism:** `src/core/database/database_session.py:148` uses:
+**Status (2026-04-11):** This blocker's resolution has PIVOTED. The original analysis proposed sync `def` admin handlers (Option C in the list below) as a scope-reduction compromise to defer async SQLAlchemy to v2.1. User directive on 2026-04-11 reversed this: v2.0 absorbs full async SQLAlchemy (Option A from the list below), eliminating the `scoped_session` race entirely rather than working around it. **The "sync def handler" resolution text below is historical context — the new plan is Option A. See `async-pivot-checkpoint.md` for the full new target state.**
+
+**The mechanism (unchanged — this is still what's broken today):** `src/core/database/database_session.py:148` uses:
 ```python
 SessionLocal = scoped_session(sessionmaker(bind=_engine))
 ```
 
 `scoped_session` with default scopefunc uses `threading.get_ident()` — one session per thread. Under Flask + `a2wsgi.WSGIMiddleware`, each request spins up a dedicated worker thread, so each request gets its own session identity. **Isolated.**
 
-Under the proposed FastAPI migration with `async def` handlers:
+Under the proposed FastAPI migration with `async def` handlers and unchanged sync SQLAlchemy:
 - Multiple concurrent admin requests run on the **same event loop thread**
 - Each request's `with get_db_session()` block gets the **same** scoped_session identity
 - If request A commits mid-transaction and request B is still writing, they share a transaction
@@ -197,30 +199,49 @@ Under the proposed FastAPI migration with `async def` handlers:
 
 **Current state check (verified):** `rg 'run_in_threadpool' src/` returns 0 matches. Today's AdCP REST endpoints in `src/routes/api_v1.py` are already `async def` and call `_impl` directly without threadpool offload. **This is already a pre-existing latent bug** — if two concurrent AdCP REST requests touch the DB at the same time, they interleave. It hasn't bitten production because traffic is low and `scoped_session` happens to commit quickly.
 
-**The migration plan would make this worse** by adding ~232 admin routes with DB access, all defaulting to `async def`.
+**The migration plan would make this worse** by adding ~232 admin routes with DB access.
 
-**Fix options:**
+**Fix options (historical, for context):**
 
-**Option A (recommended): default admin handlers to `def` (sync).** FastAPI detects non-async handlers and automatically offloads them to a threadpool worker via `starlette.concurrency.run_in_threadpool`. Each threadpool worker has its own thread identity, so `scoped_session` isolates them. This matches today's Flask semantics exactly.
+- **Option A: Switch to async SQLAlchemy end-to-end.** Replace `scoped_session(sessionmaker(...))` with `async_sessionmaker(_engine, class_=AsyncSession, expire_on_commit=False)`. Admin handlers become `async def` with `async with get_db_session()` / `await session.execute(...)`. The scoped_session thread-identity race is eliminated entirely because `AsyncSession` does not use thread-identity scoping. Driver moves from `psycopg2-binary` to `asyncpg`. Correct long-term, touches 100+ files, requires careful lazy-loading audit, but fixes the pre-existing `src/routes/api_v1.py` latent bug as a side effect.
+- **Option B: Every `async def` admin handler wraps sync DB calls in `run_in_threadpool(_sync_fetch)`.** Feasible but bug-prone — one forgotten wrap causes session interleaving. Not chosen.
+- **Option C: Default admin handlers to sync `def`.** FastAPI auto-offloads to threadpool workers; each worker thread has its own session identity so `scoped_session` isolates correctly. Matches today's Flask semantics. Minimal v2.0 scope. Does NOT fix the pre-existing REST latent bug (which is on `async def` handlers). Was the pre-pivot choice.
 
-**Option B: every `async def` admin handler wraps sync DB calls in `run_in_threadpool(_sync_fetch)`.** Feasible but bug-prone — one forgotten wrap causes session interleaving.
+**Resolution: Option A (chosen 2026-04-11).** The user directive absorbed async SQLAlchemy into v2.0 as Waves 4-5. Rationale:
 
-**Option C: switch to async SQLAlchemy (already planned for v2.1).** Correct long-term, but v2.1 scope creep into v2.0.
+1. **Greenfield 2026 FastAPI codebases write fully async code.** Sync `def` + threadpool is a scope-reduction hack, not the end state.
+2. **Fixes a pre-existing latent bug as a side effect.** `src/routes/api_v1.py` already has the scoped_session race on async tasks. Option A eliminates it; Option C leaves it intact.
+3. **Eliminates the v2.1 async follow-on from the roadmap.** One migration, one branch, one release.
+4. **AdCP schema impact: zero.** Verified — wire format, MCP tool signatures, A2A protocol, REST endpoint bodies, OpenAPI surface, auth context, `AdCPError` hierarchy, webhook payloads — all unchanged. The pivot is purely an internal implementation-language change. Full verification in `async-pivot-checkpoint.md` §9.
 
-**Recommendation:** **Option A as the default**, Option B only when a handler awaits on external I/O (OAuth calls, webhook POSTs, HTTP client calls) that warrant the handler being async.
+**Scope implication:** v2.0 grows from ~18,000 LOC (original estimate) to ~30,000-35,000 LOC; wave count grows from 4 to 5-6 (adding Wave 4 = async DB layer, Wave 5 = async cleanup + release).
 
-**Plan changes required:**
-1. Foundation modules (`flask-to-fastapi-foundation-modules.md`) — rewrite the example handlers to use `def` not `async def`
-2. Worked examples (`flask-to-fastapi-worked-examples.md`) — same
-3. Main overview §13 — update the three `accounts.py` examples to use `def`
-4. Add a structural guard: `tests/unit/test_architecture_admin_sync_db_no_async.py` — AST-scans admin router files, flags any `async def` handler that calls `get_db_session()` directly without `run_in_threadpool`
+**Pre-Wave-0 lazy-loading audit spike (MANDATORY before committing to Option A scope):** `relationship()` access sites in SQLAlchemy lazily load under AsyncSession only within an active async session scope — out-of-scope access raises `sqlalchemy.exc.MissingGreenlet` (a HARD FAILURE). The audit enumerates every `relationship()` definition in `src/core/database/models/` and classifies every access site as safe (in-scope), fixable (eager-load via `selectinload`/`joinedload`), or requiring rewrite. If the audit reveals the scope is untenable, fall back to Option C and defer async to v2.1. Estimated effort: 1-3 days. See `async-pivot-checkpoint.md` §4 Risk #1 for the full audit procedure.
 
-**What to keep `async def`:**
+**Plan changes required (under Option A):**
+1. Foundation modules (`flask-to-fastapi-foundation-modules.md`) — rewrite `get_db_session` call sites to `async with`; rewrite repository examples to `await session.execute(...)`; rewrite UoW classes to `async def __aenter__` / `async def __aexit__`
+2. Worked examples (`flask-to-fastapi-worked-examples.md`) — every handler is `async def`; every DB call-site is `async with` / `await`
+3. Main overview §13 — already updated to `async def` examples
+4. Replace the original structural guard `test_architecture_admin_sync_db_no_async.py` (wrong direction under Option A) with `test_architecture_admin_routes_async.py` (AST-scans admin routers and asserts every `@router.<method>(...)` handler is `async def`). Sibling guard `test_architecture_admin_async_db_access.py` asserts DB access uses `async with get_db_session()` + `await session.execute(...)`, not sync `with` or `run_in_threadpool` wrappers
+5. Dependency changes: remove `psycopg2-binary`, `types-psycopg2`; add `asyncpg>=0.30.0`; add `pytest-asyncio` (or equivalent); explicit `sqlalchemy[asyncio]` extra
+6. `tests/harness/_base.py::IntegrationEnv` becomes `async def __aenter__` / `async def __aexit__`; integration tests mass-convert to `async def` + `@pytest.mark.asyncio`
+7. `alembic/env.py` async adapter (standard SQLAlchemy pattern, ~30 LOC)
+8. `factory_boy` adapter (evaluate three options in checkpoint §3)
+9. Benchmark harness compares async vs pre-migration sync baseline, not threadpool-overhead
+
+**What stays `async def` for different reasons** (unchanged under the pivot — these were already correctly async):
 - OAuth callbacks (await Authlib)
-- SSE handlers (await `request.is_disconnected()`, async generators)
+- SSE handlers (async generators + await `request.is_disconnected()`)
 - Outbound webhook senders (await httpx)
 
-**Wave assignment:** Wave 0 (decide the default before any router ports).
+**What `run_in_threadpool` is still used for** (non-DB blocking operations only):
+- File I/O (favicon upload, image writes)
+- CPU-bound synchronous work (image processing, sync cryptography libs)
+- Third-party sync libraries that cannot be made async
+
+**What `run_in_threadpool` is NEVER used for under Option A:** DB access. That path is always `async with get_db_session()` / `await session.execute(...)`.
+
+**Wave assignment:** Wave 0 (decide the default before any router ports) AND Wave 4-5 (absorb async SQLAlchemy migration). The Wave 4-5 entry gate is the pre-Wave-0 lazy-loading audit spike outcome.
 
 ---
 
@@ -447,6 +468,28 @@ Not FastAPI's default `{"detail": "Not Found"}`. **Any external validator that t
 
 ---
 
+### 2.9 Deployment entrypoint has THREE sync-psycopg2 paths (Agent F finding — pivoted 2026-04-11)
+
+**Severity:** 🚨 BLOCKER (hard-fails Wave 4 container startup)
+
+Deep audit did not catch `scripts/deploy/run_all_services.py` as a sync-DB path because it uses the `DatabaseConnection` class from `src/core/database/db_config.py` instead of `get_db_session()`. Under the async pivot (when `psycopg2-binary` is removed from `pyproject.toml`), three paths break simultaneously:
+
+1. **`scripts/deploy/entrypoint_admin.sh:9`** does `python -c "import psycopg2; psycopg2.connect('${DATABASE_URL}')"`. This is a shell probe that runs before any Python app starts. When `psycopg2` is removed from `pyproject.toml`, this line fails and the container refuses to start. **Hard blocker for Wave 4 merge.**
+2. **`scripts/deploy/run_all_services.py:65-125`** (`check_database_health()`) calls `get_db_connection()` → `psycopg2.connect(...)` for a startup health check. Same issue.
+3. **`scripts/deploy/run_all_services.py:128-164`** (`check_schema_issues()`) calls `get_db_connection()` → `psycopg2.connect(...)` for a schema audit. Same issue.
+4. **`src/core/database/db_config.py:105-172`** `DatabaseConnection` class is a sync-psycopg2 wrapper independent from SQLAlchemy. Used only by the three call sites above.
+
+**Mitigation plan (Option D, recommended):**
+- Delete `DatabaseConnection` class and `get_db_connection()` helper
+- Replace with a 5-line `asyncio.run(asyncpg.connect(...).fetchval(...))` utility in `scripts/deploy/run_all_services.py`
+- Delete `entrypoint_admin.sh` in Wave 3 cleanup (it references `flask_caching` which is also going away, and is not wired up in the current `Dockerfile` entrypoint — orphan)
+
+**Why this matters:** deep audit Blocker #4 focused on SQLAlchemy scoped_session. This is a parallel sync-DB path that deep audit did not surface because it's in deployment scripts, not application code. All three paths must be rewritten or deleted in Wave 4 alongside the `pyproject.toml` driver swap, or the container will fail `docker build` / startup probes.
+
+**Wave assignment:** Wave 4 (same PR as the `psycopg2-binary` removal).
+
+---
+
 ## Section 3 — Shared Infrastructure Interactions (2nd order)
 
 ### 3.1 Scheduler singleton risk under multi-worker
@@ -644,11 +687,11 @@ References:
 
 The plan should add these guards. Some overlap with the original audit's proposals but with more detail:
 
-### 5.1 `tests/unit/test_architecture_admin_sync_db_no_async.py` (NEW)
+### 5.1 `tests/unit/test_architecture_admin_routes_async.py` (NEW — pivoted 2026-04-11)
 
-**Purpose:** prevent the async-event-loop session scoping bug (Blocker 1.4).
+**Purpose:** enforce the full-async admin handler invariant (Blocker 1.4 Option A resolution). Original plan was `test_architecture_admin_sync_db_no_async.py` (asserted async handlers must wrap DB work in `run_in_threadpool`) — that guard was the wrong direction under the full-async pivot and is DELETED.
 
-**Logic:** AST-scan `src/admin/routers/*.py`. For every `async def` handler, flag any call to `get_db_session()` that isn't wrapped in `run_in_threadpool()`. Allowlist empty at start.
+**Logic:** AST-scan `src/admin/routers/*.py`. For every function decorated with `@router.get/post/put/delete/patch`, assert it is `async def`. Allowlist empty at start. Sibling guard `test_architecture_admin_async_db_access.py` asserts DB call-sites use `async with get_db_session()` + `await session.execute(...)` and NOT `run_in_threadpool(_sync_fetch)` wrappers (which would indicate a sync DB call that slipped through).
 
 ### 5.2 `tests/admin/test_templates_no_script_root.py` (NEW)
 
@@ -708,13 +751,15 @@ The following updates must land in the plan before Wave 0 begins:
 
 ### Main overview (`flask-to-fastapi-migration.md`)
 
-1. **Flip admin handler default from `async def` to `def`** — update §10, §11, §13 examples
+1. **Admin handlers are `async def` end-to-end with full async SQLAlchemy** (pivoted 2026-04-11) — update §10, §11, §13 examples; §18 converted from v2.1 deferral to v2.0 Wave 4-5 absorption
 2. **Swap middleware order** — Approximated BEFORE CSRF in §10.2
 3. **Add §2.8 or §2.9** — deep audit revisions summary pointing at this file
 4. **Update §11 foundation** — `render()` wrapper uses `url_for` exclusively (NO `admin_prefix`/`static_prefix`/`script_root` globals); `_url_for` safe-lookup override pre-registered on `templates.env.globals` before first `TemplateResponse`
 5. **Update §12 codemod** — handle the `script_name` split, handle trailing slashes, handle 302→307
-6. **Update §16 assumptions** — downgrade "admin handlers async def" from HIGH to MEDIUM; add new assumptions for the 6 blockers
-7. **Update §21 verification** — add the 9 new guard tests
+6. **Update §16 assumptions** — rewrite "admin handlers async def + run_in_threadpool" to "admin handlers async def + full async SQLAlchemy"; rewrite "sync SQLAlchemy stays sync" to "full async SQLAlchemy absorbed into v2.0"
+7. **Update §21 verification** — add the 9 new guard tests; rename the sync-db guard to `test_architecture_admin_routes_async.py`
+8. **Update §15 dependencies** — remove `psycopg2-binary` + `types-psycopg2`; add `asyncpg>=0.30.0`; explicit `sqlalchemy[asyncio]` extra
+9. **Expand §14 wave count from 4 to 5-6** — add Wave 4 (async DB layer) and Wave 5 (async cleanup + release)
 
 ### Foundation modules (`flask-to-fastapi-foundation-modules.md`)
 
@@ -756,7 +801,7 @@ Sorted by severity:
 | B1 | 🚨 BLOCKER | `script_root`/`script_name` silent template break (147 refs, 45 files) — fixed greenfield: `url_for` everywhere (admin routes named `admin_<bp>_<endpoint>`, static named `"static"`), NO `admin_prefix`/`static_prefix` globals | `templates/**/*.html` + `render()` wrapper + `scripts/codemod_templates_greenfield.py` | Wave 0 |
 | B2 | 🚨 BLOCKER | Trailing-slash 404 divergence Flask vs Starlette (111 `url_for`) | admin routers + `base.html` | Wave 0 |
 | B3 | 🚨 BLOCKER | `@app.exception_handler(AdCPError)` returns JSON to HTML browsers | `src/app.py:82-88` + new `error.html` | Wave 1 |
-| B4 | 🚨 BLOCKER | Async event loop session interleaving — flip to `def` default | `src/admin/routers/*.py` | Wave 0 decision |
+| B4 | 🚨 BLOCKER | Async event loop session interleaving — pivoted 2026-04-11 to full async SQLAlchemy (Option A) absorbed into v2.0 Waves 4-5 | `src/core/database/database_session.py` + `src/admin/routers/*.py` + alembic env + test harness | Wave 0 decision + Wave 4-5 execution |
 | B5 | 🚨 BLOCKER | Middleware order — Approximated must run BEFORE CSRF | `src/app.py` middleware stack | Wave 1 |
 | B6 | 🚨 BLOCKER | OAuth redirect URIs must be byte-identical to Google Cloud Console | `src/admin/routers/auth.py` | Wave 1 + staging smoke |
 | R1 | ⚠️ RISK | `require_tenant_access` doesn't check `tenant.is_active` (pre-existing) | `src/admin/utils/helpers.py:291-372` | Wave 2 |

@@ -48,10 +48,10 @@ Flask contributes:
 - Removes ~80 MB from Docker image (Flask + flask-caching + flask-socketio + waitress + a2wsgi)
 - Unifies auth/session/middleware across all transports (MCP/A2A/REST/admin share one stack)
 - Eliminates the WSGI↔ASGI bridge overhead
-- Unlocks future async SQLAlchemy migration (v2.1)
+- Eliminates the scoped_session interleaving latent bug in `src/routes/api_v1.py` as a side effect of the full-async conversion (see async-pivot-checkpoint.md §4 Risk #15)
 - Simplifies testing (admin tests use the same `TestClient` + `dependency_overrides` pattern as REST tests)
 
-**Migration strategy:** 4 waves (Foundation+codemod → Foundational routers+session cutover → Bulk blueprint port → SSE+cleanup). Flask catch-all stays live through Wave 2 as a safety net.
+**Migration strategy:** 5-6 waves (Foundation+codemod → Foundational routers+session cutover → Bulk blueprint port → SSE+cleanup → Async DB layer → Async cutover & release). Flask catch-all stays live through Wave 2 as a safety net. A mandatory pre-Wave-0 lazy-loading audit spike (see async-pivot-checkpoint.md §4 Risk #1) gates the Wave 4-5 scope. See `async-pivot-checkpoint.md` for full detail on the full-async absorption.
 
 ---
 
@@ -62,7 +62,7 @@ Flask contributes:
 3. **Session cookie hard cutover:** one forced re-login at deploy is acceptable.
 4. **URL prefix stays `/admin/`** (bookmarks, docs, runbooks all reference it; zero benefit to moving to root).
 5. **`SESSION_SECRET` env var hard-required, `KeyError` at startup, no `secrets.token_hex()` fallback.** The old dev-mode fallback was a security smell anyway.
-6. **Async SQLAlchemy deferred to v2.1** (separate follow-on PR that builds on v2.0). v2.0 admin handlers wrap sync UoW in `run_in_threadpool`. See §18.
+6. **Full async SQLAlchemy absorbed into v2.0** (Option A from deep audit §1.4; pivoted 2026-04-11). v2.0 admin handlers are `async def` end-to-end with `AsyncSession` + `async_sessionmaker`; driver moves from `psycopg2-binary` to `asyncpg`. `run_in_threadpool` is reserved for genuinely blocking non-DB work (file I/O, CPU-bound calls, sync third-party libraries). See `async-pivot-checkpoint.md` (new target state in §3) and §18 (v2.0 Wave 4-5 execution).
 7. **CSRF: roll-your-own Double Submit Cookie (~100 LOC, `src/admin/csrf.py`).** No external dep risk, bespoke to our form-post admin UI. See §11.6.
 8. **Error-shape split** (refined post AdCP safety audit):
    - **Category 1** (internal admin UI AJAX endpoints called by our own JavaScript — e.g. `change_account_status`, `src/admin/blueprints/api.py` dashboard AJAX, `src/admin/blueprints/format_search.py` format picker, **and `src/adapters/gam_reporting_api.py`** which is admin-session-authed) → native FastAPI `{"detail": "..."}`. We update our own JS in the same PR.
@@ -119,7 +119,7 @@ The first-order audit (§2.7) verified AdCP protocol safety. A subsequent **deep
 
 3. 🚨 **`@app.exception_handler(AdCPError)` returns JSON to HTML admin browsers.** Today, an admin user clicking "Create Product" that fails with `AdCPValidationError` sees a Flask error page. Post-migration, the global FastAPI handler returns `{"error_code": "...", "message": "..."}` as JSON — the browser displays a raw JSON blob. **Fix:** make the handler Accept-aware — if `request.url.path.startswith("/admin")` AND `"text/html" in accept`, render `templates/error.html`; otherwise return JSON. Requires a new `error.html` template.
 
-4. 🚨 **Session scoping on the async event-loop thread.** `src/core/database/database_session.py:148` uses `scoped_session` with default `threading.get_ident()` scopefunc. Under Flask+a2wsgi, each request runs on its own worker thread → isolated sessions. Under the plan's `async def` admin handlers, concurrent requests share the event-loop thread → **the same `scoped_session` identity** → transaction interleaving, stale reads, duplicate commits. **Fix:** flip the plan's default from `async def` to **`def` (sync)** for admin handlers. FastAPI auto-offloads sync handlers to a threadpool; each worker thread has its own session identity. Keep `async def` ONLY for OAuth callbacks (await Authlib), SSE handlers (async generators), and outbound webhook senders (await httpx). Add structural guard `test_architecture_admin_sync_db_no_async.py` — AST-scans admin routers, flags `async def` handlers calling `get_db_session()` without `run_in_threadpool`.
+4. 🚨 **Session scoping on the async event-loop thread — PIVOTED 2026-04-11 to full async SQLAlchemy.** `src/core/database/database_session.py:148` uses `scoped_session` with default `threading.get_ident()` scopefunc. Under Flask+a2wsgi, each request runs on its own worker thread → isolated sessions. Under `async def` handlers sharing the event loop thread, concurrent requests share the same `scoped_session` identity → transaction interleaving, stale reads, duplicate commits. **Original fix (Option C):** default admin handlers to sync `def` so FastAPI auto-offloads them to distinct threadpool workers. **Pivoted fix (Option A, chosen):** replace `scoped_session(sessionmaker(...))` with `async_sessionmaker(_engine, class_=AsyncSession, expire_on_commit=False)`, switch the driver `psycopg2-binary` → `asyncpg`, and convert admin handlers, repositories, UoW, `_impl` functions, alembic env, and the test harness to async. The scoped_session race is eliminated entirely because there is no more thread-identity scoping to race on. This also fixes a pre-existing latent bug where the REST routes in `src/routes/api_v1.py` already share `scoped_session` identity across async tasks. Add structural guard `test_architecture_admin_routes_async.py` — AST-scans admin routers and asserts every `@router.<method>(...)` handler is `async def`. See `async-pivot-checkpoint.md` for the full new plan including pre-Wave-0 lazy-loading audit spike (Risk #1).
 
 5. 🚨 **Middleware ordering bug — CSRF must run AFTER Approximated, not before.** The plan's proposed order puts `CSRFMiddleware` BEFORE `ApproximatedExternalDomainMiddleware`. Failure scenario: external-domain user POSTs to `/admin/tenant/t1/accounts/create` via Approximated. CSRF fires first, user has no session cookie (different domain), CSRF fails with 403, redirect never runs. The entire external-domain onboarding flow breaks. **Fix:** swap the order — `ApproximatedExternalDomainMiddleware` runs BEFORE `CSRFMiddleware`. Corrected stack:
    ```python
@@ -137,7 +137,7 @@ The first-order audit (§2.7) verified AdCP protocol safety. A subsequent **deep
 
 ### Plan defaults that change as a result
 
-- **Admin handler default flips to `def` (sync)** — was `async def` in the original plan. Async is reserved for handlers that `await` external I/O (OAuth, SSE, httpx).
+- **Admin handlers are `async def` end-to-end with full async SQLAlchemy** (pivoted 2026-04-11 from the original sync-def flip). Every handler uses `async with get_db_session() as session:` and `await session.execute(...)` via repositories. `run_in_threadpool` is reserved for file I/O, CPU-bound, or sync-third-party operations only — never for DB access. See `async-pivot-checkpoint.md` §3 for target-state code.
 - **Middleware order swaps Approximated and CSRF** — Approximated runs before CSRF, not after.
 - **Redirect code changes from 302 to 307** — preserves POST body on external-domain redirect.
 - **`render()` wrapper uses `url_for` exclusively** — no `admin_prefix`/`static_prefix`/`script_root` globals. Handlers pass any pre-resolved base URLs (for JS consumption) via per-render context vars named `js_*_base` (e.g. `js_workflows_base = str(request.url_for('admin_workflows_list_workflows', tenant_id=tenant_id))`). A `_url_for` safe-lookup override in `render()` catches `NoMatchFound` and logs the offending template filename before re-raising.
@@ -152,7 +152,7 @@ The first-order audit (§2.7) verified AdCP protocol safety. A subsequent **deep
 3. `test_architecture_csrf_exempt_covers_adcp.py` — from first-order audit
 4. `test_architecture_approximated_middleware_path_gated.py` — from first-order audit
 5. `test_architecture_admin_routes_excluded_from_openapi.py` — from first-order audit
-6. **`test_architecture_admin_sync_db_no_async.py`** — NEW from deep audit (blocker 4)
+6. **`test_architecture_admin_routes_async.py`** — NEW from deep audit (blocker 4, pivoted 2026-04-11). AST-scans `src/admin/routers/*.py` and asserts every `@router.<method>(...)` handler is `async def`. This replaces the original `test_architecture_admin_sync_db_no_async.py` proposal (wrong direction under the full-async pivot). Sibling guard `test_architecture_admin_async_db_access.py` asserts DB access uses `async with get_db_session()` / `await session.execute(...)`, not sync `with` or raw threadpool wrappers.
 7. **`test_templates_no_hardcoded_admin_paths.py`** — GREENFIELD: forbids `script_name`/`script_root`/`admin_prefix`/`static_prefix` Jinja references AND bare `"/admin/"` / `"/static/"` string literals inside quotes. Blocker 1 guard.
 8. **`test_trailing_slash_tolerance.py`** — NEW from deep audit (blocker 2)
 9. **`test_oauth_redirect_uris_immutable.py`** — NEW from deep audit (blocker 6)
@@ -634,7 +634,8 @@ Teardown at `tests/harness/_base.py:827-832` clears `app.dependency_overrides` o
 - **FastAPI** 0.128.0 (locked) — `Annotated[T, Depends()]` is the idiomatic pattern
 - **Starlette** 0.50.0 (locked) — `Jinja2Templates` API changed in FastAPI 0.108+ (`request` is now first kwarg)
 - **Pydantic** v2.10+ — `ConfigDict(frozen=True, strict=True, extra="forbid")` is canonical
-- **SQLAlchemy** 2.0.36+ — async engine fully mature; deferring to v2.1
+- **SQLAlchemy** 2.0.36+ — async engine fully mature; absorbed into v2.0 (pivoted 2026-04-11)
+- **asyncpg** 0.30.0+ — replaces `psycopg2-binary` as the Postgres driver; SQLAlchemy async engine's expected driver
 - **uvicorn** 0.34.0+ — `--proxy-headers --forwarded-allow-ips='*'` replaces custom ProxyFix
 - **Python** 3.12 / 3.13 — 3.12 is the safest "modern" floor
 
@@ -1658,7 +1659,9 @@ Runs under `make quality`. Catches silent template breakage at boot time.
 
 ## 13. Three Worked Route Examples (from real `accounts.py`)
 
-### 13.1 `list_accounts` — GET with query arg, UoW, template
+### 13.1 `list_accounts` — GET with query arg, repository DI, template
+
+> **Pivoted 2026-04-11 (Agent E E5):** the §13 worked examples were rewritten to use `SessionDep` / `AccountRepoDep` via `Depends(get_session)` — the idiomatic FastAPI-native request-scoped DI pattern — rather than `async with AccountUoW(tenant_id)` context managers in handler bodies. FastAPI's request-scoped session IS the unit of work; the `get_session` DI factory commits on normal handler return and rolls back on exception. Handlers never construct sessions, never call `async with`, and receive DTOs (not ORM instances) from repositories to prevent lazy-load realization across the session boundary. See Agent E Categories 1, 2, 3, 5 in `async-audit/agent-e-ideal-state-gaps.md` for the full idiom rationale.
 
 **Before (Flask):**
 ```python
@@ -1671,71 +1674,87 @@ def list_accounts(tenant_id):
         return render_template("accounts_list.html", tenant_id=tenant_id, accounts=accounts, ...)
 ```
 
-**After (FastAPI-native):**
+**After (FastAPI-native, full-async):**
 ```python
-from typing import Annotated
-from fastapi import APIRouter, Query, Request
+from typing import Annotated, Sequence
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse
 
-from src.admin.templating import render
 from src.admin.deps.auth import CurrentTenantDep
-from src.core.database.repositories.uow import AccountUoW
+from src.admin.dtos import AccountDTO
+from src.admin.templating import render
+from src.core.database.deps import SessionDep
+from src.core.database.repositories.accounts import AccountRepository
 
-# CORRECTED per deep audit blockers #2, #4:
+# CORRECTED per deep audit blockers #2, #4 (pivoted 2026-04-11):
 #   redirect_slashes=True → matches Flask permissive default (111 url_for calls)
 #   include_in_schema=False → keeps /openapi.json equal to AdCP REST surface
 router = APIRouter(tags=["admin-accounts"], redirect_slashes=True, include_in_schema=False)
 
 _STATUSES = ["active", "pending_approval", "rejected", "payment_required", "suspended", "closed"]
 
+
+# Dep factory — the repository is itself a Dep, chains through SessionDep
+async def get_account_repo(session: SessionDep) -> AccountRepository:
+    return AccountRepository(session)
+
+AccountRepoDep = Annotated[AccountRepository, Depends(get_account_repo)]
+
+
 @router.get(
     "/tenant/{tenant_id}/accounts",
     name="admin_accounts_list_accounts",  # ← admin_<blueprint>_<endpoint> greenfield convention
     response_class=HTMLResponse,
 )
-def list_accounts(                    # ← sync def (NOT async def) per deep audit blocker #4
-    tenant_id: str,
+async def list_accounts(              # ← async def end-to-end with full async SQLAlchemy (pivoted 2026-04-11)
+    tenant_id: Annotated[str, "Path()"],
     request: Request,
     tenant: CurrentTenantDep,
+    accounts: AccountRepoDep,
     status: Annotated[str | None, Query()] = None,
 ) -> HTMLResponse:
-    """FastAPI auto-offloads sync handlers to a threadpool worker, so each request
-    gets its own thread identity → scoped_session isolates correctly.
+    """Handler is 100% business logic. No session management. No context manager.
 
-    Async is reserved for OAuth callbacks, SSE, and outbound httpx. See deep audit §1.4.
+    The repository returns DTOs (Pydantic models with `from_attributes=True`),
+    not ORM instances — templates never see lazy loads, so Risk #1 is impossible
+    by construction. The session is injected via `Depends(get_session)` and
+    committed automatically by the DI factory on normal return.
     """
-    with AccountUoW(tenant_id) as uow:
-        accounts = uow.accounts.list_all(status=status)
+    dtos: Sequence[AccountDTO] = await accounts.list_dtos(tenant_id, status=status)
     return render(request, "accounts_list.html", {
-        "tenant_id": tenant_id, "tenant": tenant, "accounts": accounts,
+        "tenant_id": tenant_id, "tenant": tenant, "accounts": dtos,
         "status_filter": status, "statuses": _STATUSES,
     })
 ```
 
-**Changes labeled:** verb-explicit decorator, `name=` for `url_for`, auth via `CurrentTenantDep`, declarative `Query()`, **sync `def` handler (not `async def`)** — FastAPI auto-offloads to threadpool so each worker thread has its own `scoped_session` identity (prevents transaction interleaving per deep audit blocker #4), `render()` wrapper, explicit return type, `redirect_slashes=True` + `include_in_schema=False` on the router.
+**Changes labeled:** verb-explicit decorator, `name=` for `url_for`, auth via `CurrentTenantDep`, declarative `Query()`, **`async def` handler with `Depends(get_session)` via `AccountRepoDep`** (pivoted 2026-04-11 — replaces both the original `async def` + sync UoW and the pre-pivot `def` sync resolution), repository returns `AccountDTO` (not ORM), no `async with` / `await uow.*` boilerplate in the handler body, `render()` wrapper, explicit return type, `redirect_slashes=True` + `include_in_schema=False` on the router. The scoped_session interleaving bug is eliminated because `AsyncSession` does not use thread-identity scoping; lazy-load Risk #1 is eliminated by the DTO boundary.
 
 ### 13.2 `create_account` — GET + POST split into two handlers
 
 **After — two handlers (Flask conflation was an accident, not a design):**
 
 ```python
+from fastapi import Form
+
 @router.get(
     "/tenant/{tenant_id}/accounts/create",
     name="admin_accounts_create_account_form",
     response_class=HTMLResponse,
 )
-def create_account_form(  # sync def per blocker #4
-    tenant_id: str, request: Request, tenant: CurrentTenantDep,
+async def create_account_form(  # async def end-to-end (pivoted 2026-04-11)
+    tenant_id: Annotated[str, "Path()"], request: Request, tenant: CurrentTenantDep,
 ) -> HTMLResponse:
     return render(request, "create_account.html", {"tenant_id": tenant_id, "edit_mode": False})
 
 @router.post(
     "/tenant/{tenant_id}/accounts/create",
     name="admin_accounts_create_account",
+    status_code=303,
     dependencies=[Depends(audit_action("create_account"))],
 )
-def create_account(  # sync def — writes DB via AccountUoW
-    tenant_id: str, request: Request, tenant: CurrentTenantDep,
+async def create_account(  # async def — writes DB via AccountRepoDep (pivoted 2026-04-11)
+    tenant_id: Annotated[str, "Path()"], request: Request, tenant: CurrentTenantDep,
+    accounts: AccountRepoDep,
     name: Annotated[str, Form()],
     brand_domain: Annotated[str, Form()] = "",
     operator: Annotated[str, Form()] = "",
@@ -1750,13 +1769,16 @@ def create_account(  # sync def — writes DB via AccountUoW
             str(request.url_for("admin_accounts_create_account_form", tenant_id=tenant_id)),
             status_code=303,
         )
-    with AccountUoW(tenant_id) as uow:
-        uow.accounts.create(
-            name=name.strip(), brand_domain=brand_domain.strip(),
-            operator=operator.strip(), billing=billing.strip(),
-            payment_terms=payment_terms.strip(), sandbox=(sandbox == "on"),
-            brand_id=brand_id.strip(),
-        )
+    # Repository takes a DTO/request model, returns a DTO, no ORM leakage.
+    # The session is committed automatically by the get_session DI factory
+    # when the handler returns normally; rolled back on exception.
+    await accounts.create(
+        tenant_id=tenant_id,
+        name=name.strip(), brand_domain=brand_domain.strip(),
+        operator=operator.strip(), billing=billing.strip(),
+        payment_terms=payment_terms.strip(), sandbox=(sandbox == "on"),
+        brand_id=brand_id.strip(),
+    )
     flash(request, f"Account '{name}' created successfully.", "success")
     return RedirectResponse(
         str(request.url_for("admin_accounts_list_accounts", tenant_id=tenant_id)),
@@ -1766,7 +1788,7 @@ def create_account(  # sync def — writes DB via AccountUoW
 
 Note the `str(...)` wrapping around `request.url_for(...)` — Starlette's `url_for` returns a `URL` object; `RedirectResponse` accepts strings or URL-like, but explicit `str()` is safer for consistency (and required if the resolved URL is later serialized to JSON in debug logs).
 
-**Changes labeled:** GET+POST split, `Form()` parameters declarative, audit via `dependencies=[...]`, `flash(request, ...)` explicit, `RedirectResponse(..., status_code=303)` spec-correct.
+**Changes labeled:** GET+POST split, `Form()` parameters declarative, audit via `dependencies=[...]`, `flash(request, ...)` explicit, `RedirectResponse(..., status_code=303)` spec-correct, **`async def` + `AccountRepoDep` via `Depends(get_session)`** (pivoted 2026-04-11), no `async with UoW` boilerplate, session commit/rollback owned by DI layer.
 
 ### 13.3 `change_status` — POST JSON API (category 1, native error shape)
 
@@ -1788,24 +1810,27 @@ class StatusChangeResponse(BaseModel):
     dependencies=[Depends(audit_action("change_account_status"))],
 )
 async def change_status(
-    tenant_id: str, account_id: str, payload: StatusChangeRequest,
+    tenant_id: Annotated[str, "Path()"], account_id: Annotated[str, "Path()"],
+    payload: StatusChangeRequest,
     tenant: CurrentTenantDep, request: Request,
+    accounts: AccountRepoDep,
 ) -> StatusChangeResponse:
-    # CSRF validation happens in CSRFMiddleware (applied globally)
-    def _update():
-        with AccountUoW(tenant_id) as uow:
-            account = uow.accounts.get_by_id(account_id)
-            if account is None:
-                raise HTTPException(status_code=404, detail="Account not found.")
-            allowed = _STATUS_TRANSITIONS.get(account.status, set())
-            if payload.status not in allowed:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Cannot transition from '{account.status}' to '{payload.status}'.",
-                )
-            uow.accounts.update_status(account_id, payload.status)
-            return StatusChangeResponse(success=True, status=payload.status)
-    return await run_in_threadpool(_update)
+    # CSRF validation happens in CSRFMiddleware (applied globally).
+    # Direct async DB work — no run_in_threadpool wrapper under the full-async
+    # pivot (2026-04-11). AccountRepoDep is backed by Depends(get_session);
+    # the session commits on normal return, rolls back on exception — owned
+    # entirely by the DI factory.
+    account = await accounts.get_by_id(account_id, tenant_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="Account not found.")
+    allowed = _STATUS_TRANSITIONS.get(account.status, set())
+    if payload.status not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot transition from '{account.status}' to '{payload.status}'.",
+        )
+    await accounts.update_status(account_id, tenant_id, payload.status)
+    return StatusChangeResponse(success=True, status=payload.status)
 ```
 
 **This is a category-1 endpoint** (internal admin AJAX). Native `{"detail": "..."}` error shape. Admin UI JS updated in same PR.
@@ -1839,9 +1864,13 @@ Registered via `app.add_exception_handler(HTTPException, legacy_error_shape_hand
 
 ---
 
-## 14. Migration Strategy — 4 Waves (not 8)
+## 14. Migration Strategy — 5-6 Waves (pivoted 2026-04-11 from 4)
 
-The "written today" framing pushes toward fewer, bigger, atomic PRs. Eight waves presume backward-compat matters — it doesn't here. But one giant PR (~18,000 LOC) is unreviewable. Four waves keep each PR at ~one week of work.
+The "written today" framing pushes toward fewer, bigger, atomic PRs. Eight waves presume backward-compat matters — it doesn't here. But one giant PR (~30,000-35,000 LOC post-pivot) is unreviewable. Five-to-six waves keep each PR at ~one week of work.
+
+**Wave 0-3** ship the Flask removal + admin FastAPI rewrite (originally the whole scope).
+**Wave 4-5** absorb the async SQLAlchemy migration that the original plan deferred to v2.1 (see §18 and `async-pivot-checkpoint.md`).
+**Mandatory pre-Wave-0 lazy-loading audit spike** — see checkpoint §4 Risk #1. If the spike's outcome demands deferring async, fall back to the original 4-wave plan and push async to v2.1.
 
 **Flask catch-all stays live until Wave 3 as the migration safety net.**
 
@@ -1889,7 +1918,37 @@ Delete Flask blueprint files. **Delete dead code:** `src/services/gam_inventory_
 - Replace `.pre-commit-hooks/check_route_conflicts.py` with FastAPI-aware version
 - Move `/templates/` → `src/admin/templates/` and `/static/` → `src/admin/static/`
 - Add structural guard `tests/unit/test_architecture_no_flask_imports.py`
-- Release notes + v2.0.0 CHANGELOG
+- Wave 3 merges but the v2.0.0 release notes + CHANGELOG wait until Wave 5 (post-async-absorption)
+
+### Wave 4 — Async database layer (~7,000-10,000 LOC, pivoted 2026-04-11)
+
+- Driver swap: remove `psycopg2-binary` + `types-psycopg2`, add `asyncpg>=0.30.0`
+- `src/core/database/database_session.py`: `create_engine` → `create_async_engine`, `scoped_session(sessionmaker(...))` → `async_sessionmaker(_engine, class_=AsyncSession, expire_on_commit=False)`
+- `get_db_session()` becomes an `@asynccontextmanager` yielding `AsyncSession`
+- Engine and sessionmaker are lifespan-scoped (stored on `app.state.db_engine` / `app.state.db_sessionmaker`) via `database_lifespan(app)` to prevent pytest-asyncio event-loop leak (Agent E Category 1)
+- `alembic/env.py`: async adapter (~30 LOC, standard pattern)
+- All repositories become `async def` with `await session.execute(select(...))` + `.scalars()` pattern
+- `SessionDep = Annotated[AsyncSession, Depends(get_session)]` defined in `src/core/database/deps.py`; repository factory Deps (e.g. `AccountRepoDep`) chain through it — handlers do NOT use `async with` for session management (Agent E Category 2)
+- UoW classes either implement `async def __aenter__` / `async def __aexit__` OR are deleted entirely in favor of DI (Agent E Category 3: the request-scoped session IS the unit of work)
+- `tests/harness/_base.py::IntegrationEnv` converts to `async def __aenter__` / `async def __aexit__`
+- Test harness migrates from sync `TestClient(app)` to `httpx.AsyncClient(transport=ASGITransport(app=app))` with `app.dependency_overrides[get_session]` pattern
+- `factory_boy` adapter (decide between the three options in `async-pivot-checkpoint.md` §3)
+- Integration tests mass-converted to `async def` + `@pytest.mark.asyncio` (scriptable via AST transform)
+- Agent D mitigations M1-M9: 8 missing `await` in `src/routes/api_v1.py` + 2 in `capabilities.py` + 7 guard/regression tests for AdCP wire-format stability
+- Connection pool tuning (Risk #6)
+
+**Entry gate:** Pre-Wave-0 lazy-loading audit spike (Risk #1) completed and approved — this Wave cannot begin until the audit confirms the scope is manageable.
+
+### Wave 5 — Async cleanup + v2.0.0 release (~3,000-5,000 LOC)
+
+- Convert remaining sync `_impl` functions in `src/core/tools/*.py` (most are already async)
+- Benchmark async vs sync baseline (Risk #10) — must be net neutral or positive on hot admin routes
+- Audit `created_at` / `updated_at` post-commit access sites (Risk #5 — `expire_on_commit=False` consequence)
+- Startup log assertion: schedulers (delivery_webhook, media_buy_status) report "alive" on first tick
+- Add `/health/pool` + `/health/schedulers` endpoints exposing AsyncEngine pool telemetry
+- v2.0.0 CHANGELOG: document breaking change from psycopg2 → asyncpg, `expire_on_commit=False` default, async handler signatures
+- `pyproject.toml` version bump to 2.0.0
+- v2.0.0 tag + production deploy plan approval
 
 ### Why not 8 waves?
 
@@ -1912,11 +1971,19 @@ Eight waves imply safety via backward-compat seams — exactly what the user rej
 - `waitress>=3.0.0`
 - `a2wsgi>=1.10.0`
 - `types-waitress` (dev)
+- `psycopg2-binary>=2.9.9` — replaced by `asyncpg` under the full-async pivot (2026-04-11)
+- `types-psycopg2>=2.9.21.20251012` (dev) — no longer needed after driver swap
 
 **ADDED:**
 - `sse-starlette>=2.2.0` (promoted from transitive)
 - `pydantic-settings>=2.7.0` (typed config)
 - `itsdangerous>=2.2.0` (explicit pin; Starlette transitive; now also used by roll-your-own CSRF)
+- `asyncpg>=0.30.0` — async Postgres driver (full-async pivot, 2026-04-11)
+- `pytest-asyncio>=0.25.0` (dev) OR equivalent anyio config — required for async test harness
+- `structlog>=24.4.0` — structured logging with async contextvar propagation (Agent E Category 16 idiom upgrade; major async debuggability win)
+
+**UPDATED (async-pivot additions):**
+- `sqlalchemy>=2.0.36` — now with `asyncio` extra pulled in explicitly for `create_async_engine`, `async_sessionmaker`, `AsyncSession`
 
 **NOT ADDED (explicit rejection):** `fastapi-csrf-protect`, `starlette-csrf`, `fastapi-csrf-jinja`, `csrf-starlette-fastapi` — CSRF is implemented in-tree.
 
@@ -1945,8 +2012,8 @@ Eight waves imply safety via backward-compat seams — exactly what the user rej
 
 1. **FastAPI 0.128 / Starlette 0.50 ABI-stable** for migration duration. Pin exact versions during Wave 2.
 2. **`Annotated[T, Depends()]` is canonical 2026 FastAPI idiom.**
-3. **Sync SQLAlchemy stays sync;** UoW wrapped in `run_in_threadpool`. Benchmark <5ms overhead per request.
-4. **Admin handlers `async def` + `run_in_threadpool`.** Structural guard against raw UoW in async scope.
+3. **Full async SQLAlchemy in v2.0** (pivoted 2026-04-11). `create_async_engine` + `async_sessionmaker` + `AsyncSession`. Pre-Wave-0 lazy-loading audit spike (see `async-pivot-checkpoint.md` Risk #1) gates the absorption. Benchmark async vs. the pre-migration sync baseline to quantify the latency profile change; acceptable range is net-neutral to ~5% improvement under moderate concurrency.
+4. **Admin handlers `async def` + async SQLAlchemy end-to-end.** Structural guard `test_architecture_admin_routes_async.py` asserts every handler is `async def`; sibling guard asserts DB access uses `async with get_db_session()` / `await session.execute(...)`. `run_in_threadpool` remains valid for non-DB blocking operations only and is never used for DB access.
 5. **Starlette `SessionMiddleware` sufficient** (payloads <3.5KB).
 6. **`SESSION_SECRET` set in every deploy.** Hard `KeyError` at startup.
 7. **Admins tolerate one forced re-login** at cutover.
@@ -1983,7 +2050,7 @@ Eight waves imply safety via backward-compat seams — exactly what the user rej
 ## 17. All 15 Debatable Surfaces (resolved + counterarguments)
 
 1. **Module layout: `src/admin/` (chosen) vs `src/web/admin/` vs `src/routes/admin/`** — `src/web/admin/` signals presentation layer; `src/routes/admin/` mirrors REST. Counter: both cause import churn for marginal gain. **Chosen: keep `src/admin/`, rewrite contents.**
-2. **Sync vs async SQLAlchemy** — async unlocks `async with` UoW. Counter: touches 100+ files, triples scope. **Chosen: sync + `run_in_threadpool`, async deferred to v2.1.**
+2. **Sync vs async SQLAlchemy** — async unlocks `async with` UoW natively. Counter: touches 100+ files, triples scope. **Pivoted 2026-04-11: full async absorbed into v2.0.** Rationale: a greenfield FastAPI 2026 team writes fully async code end-to-end; the sync+`run_in_threadpool` compromise was a scope-reduction hack; going fully async eliminates the v2.1 async follow-on entirely and fixes the pre-existing `src/routes/api_v1.py` scoped_session latent bug as a side effect. See `async-pivot-checkpoint.md` §§1-5 for the full rationale, 2nd/3rd order risks, and revised scope (~30,000-35,000 LOC, 5-6 waves, pre-Wave-0 lazy-loading audit required).
 3. ~~**CSRF library**~~ **RESOLVED → roll-your-own Double Submit Cookie (~100 LOC).** Zero external dep.
 4. **`SessionMiddleware` cookie vs Redis server-side** — Redis if payloads grow. Counter: payloads stay under 4KB. **Chosen: signed cookies.**
 5. **`BaseHTTPMiddleware` vs pure ASGI** — `BaseHTTPMiddleware` easier but Starlette #1729. **Chosen: pure ASGI.**
@@ -2000,22 +2067,75 @@ Eight waves imply safety via backward-compat seams — exactly what the user rej
 
 ---
 
-## 18. Future Work: v2.1 Async SQLAlchemy (separate PR)
+## 18. Async SQLAlchemy in v2.0 Waves 4-5 (absorbed, not deferred)
 
-**v2.1 is a follow-on PR that depends on v2.0 being merged first.**
+**Pivoted 2026-04-11** — what was originally a v2.1 follow-on is now absorbed into v2.0 as Waves 4-5. See `async-pivot-checkpoint.md` for the full target state, risk register, and revised scope estimate.
 
-**Scope:**
+**Scope (per checkpoint §3):**
 - Convert `create_engine` → `create_async_engine` in `src/core/database/database_session.py`
-- Convert `Session` → `AsyncSession` via `async_sessionmaker`
-- Convert all repository classes to `async def` methods
-- Convert UoW classes to `async with` context managers
-- **Delete every `run_in_threadpool(_sync_fn)` wrapper** in admin routers
-- Update ~100+ files that import `get_db_session`
-- Pin floors: `sqlalchemy[asyncio]>=2.0.36`, `asyncpg>=0.30.0`
+- Convert `Session` → `AsyncSession` via `async_sessionmaker(_engine, class_=AsyncSession, expire_on_commit=False)` — the `expire_on_commit=False` setting is critical for async because committed-object lazy loads otherwise trigger `MissingGreenlet`
+- Convert all repository classes to `async def` methods; use `await session.execute(select(...))` + `.scalars()` rather than sync `session.scalars(...).first()`
+- Convert UoW classes to `async def __aenter__` / `async def __aexit__` (or delete them entirely under the Agent E idiom upgrade: FastAPI's request-scoped session IS the unit of work)
+- Driver swap: `psycopg2-binary` → `asyncpg` (~6 URL rewrite sites); alembic env.py async adapter
+- Convert remaining sync `_impl` functions in `src/core/tools/*.py` to `async def` (several are already async)
+- Convert `tests/harness/_base.py::IntegrationEnv` to `async def __aenter__` / `async def __aexit__`; mass-convert integration tests to `async def` + `@pytest.mark.asyncio`
+- Adapt `factory_boy` — see checkpoint §3 "factory_boy" for the three options to evaluate
+- Audit every `relationship()` access site for lazy-load out of session scope (Risk #1 — the single biggest v2.0 scope risk)
+- Bump `pool_size` to match or exceed the pre-migration sync threadpool capacity (Risk #6)
 
-**Why separable:** v2.0 establishes clean seams by making every admin handler `async def` with explicit `run_in_threadpool(_sync_fn)` calls. v2.1 replaces each `run_in_threadpool` call-site one at a time — the handler signature stays identical, only the body changes.
+**Why absorbed, not separable:** the original "separable" argument assumed a sync `def` admin-handler seam with explicit `run_in_threadpool` calls. Under the pivot, that seam never exists — admin handlers go straight to async, and extracting sync UoW call-sites would be a second refactor on the same files. Absorbing the work means one migration, one branch, one release.
 
-**Why NOT in v2.0:** Going async touches 100+ files beyond admin. Bundling would triple v2.0's scope, extend branch lifetime to 3-4 weeks.
+**Pre-Wave-0 spike (MANDATORY):** run the lazy-loading audit (checkpoint §4 Risk #1) before committing to the Wave 4-5 scope. If the audit reveals the scope is untenable (hundreds of out-of-scope relationship accesses with no clean fix), fall back to Option C: v2.0 as originally planned with sync admin + v2.1 does async separately.
+
+---
+
+## 18.5 Non-Code Surface Impact (Agent F inventory)
+
+The async pivot touches 27+ categories of non-code surface (per `async-audit/agent-f-nonsurface-inventory.md`). Highlights:
+
+### Dep graph (9 action items, ~2h effort)
+- `psycopg2-binary` → `asyncpg>=0.30.0,<0.32` swap
+- `types-psycopg2` removal (mypy)
+- `greenlet` explicitly verified in uv.lock
+- `pytest-asyncio>=1.1.0,<2.0` pinned
+- `factory-boy` needs async adapter (custom wrapper at `tests/factories/_async_adapter.py`)
+
+### Build + CI (15 action items, ~6h effort)
+- `[tool.pytest.ini_options] asyncio_mode = "auto"` MUST be added pre-Wave-0
+- Postgres version aligned to 17 across all CI/compose/agent-db
+- New `tox -e driver-compat` env
+- New `tox -e benchmark` env
+- Dead `test-migrations` pre-commit hook removed
+- 5 new pre-commit hooks for async patterns
+
+### Docker + deployment (12 action items, ~4h effort)
+- `Dockerfile` libpq removal (save ~8MB)
+- `scripts/deploy/run_all_services.py` has THREE sync-psycopg2 paths that break (see deep-audit §2.9)
+- `scripts/deploy/entrypoint_admin.sh:9` has a direct `psycopg2.connect()` probe
+- `DatabaseConnection` class at `src/core/database/db_config.py:105-172` is a separate sync-DB path
+
+### Observability (10 action items, ~8h effort)
+- `/health/pool`, `/health/schedulers`, `/metrics` endpoints (new)
+- DB pool Prometheus gauges (new)
+- asyncio task gauge, event loop lag histogram (new)
+- `contextvars`-based request-ID propagation (replaces thread-local)
+
+### Docs (20+ action items, ~15h effort)
+- CLAUDE.md Pattern #3, #5, #8 async updates
+- `docs/development/patterns-reference.md` repository example
+- `docs/development/troubleshooting.md` async error section (new)
+- `docs/deployment/environment-variables.md` DB_POOL_SIZE etc
+- NEW: `docs/development/async-debugging.md`
+- NEW: `docs/development/async-cookbook.md`
+- NEW: `docs/development/lazy-loading-guide.md`
+- NEW: `docs/development/asyncpg-migration.md`
+
+### Structural guards (10 action items, ~25h effort)
+- **3 new MUST-0 guards:** no-default-lazy-relationship, no-server-default-without-refresh, no-module-level-get-engine
+- **3 new MUST-4 guards:** admin-routes-async, admin-async-db-access, templates-no-orm-objects
+- Update 22 existing guards' allowlists as Wave 4 progresses
+
+**Total non-code effort:** ~60 engineer-hours = ~8 person-days spread across Waves 0, 4, 5. See `async-audit/agent-f-nonsurface-inventory.md` for the per-item breakdown.
 
 ---
 

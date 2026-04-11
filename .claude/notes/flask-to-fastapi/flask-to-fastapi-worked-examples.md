@@ -12,7 +12,7 @@ Conventions used below (established in §11 of the main doc):
 - `flash(request, msg, category)` → native utility at `src/admin/flash.py`
 - `AdminRedirect` → typed exception handled by `src/app.py` → `RedirectResponse(303)`
 - `oauth` → module-level `authlib.integrations.starlette_client.OAuth` instance at `src/admin/oauth.py`
-- All sync SQLAlchemy wrapped in `starlette.concurrency.run_in_threadpool`
+- All SQLAlchemy is async (full-async pivot 2026-04-11): `async with get_db_session() as db:` / `await db.execute(...)` / `.scalars().first()`. `run_in_threadpool` is used only for genuinely blocking non-DB operations (file I/O, CPU-bound work, sync third-party libraries) — never for DB access. See `async-pivot-checkpoint.md` §3 for target-state patterns.
 - CSRF validated globally by `CSRFMiddleware` (§11.6); form templates include `<input name="csrf_token" value="{{ csrf_token }}">`
 
 ---
@@ -269,12 +269,12 @@ async def login(
     oauth_configured = bool(client_id and client_secret)
     test_mode = os.environ.get("ADCP_AUTH_TEST_MODE", "").lower() == "true"
 
-    tenant_context, tenant_name = await run_in_threadpool(_detect_tenant_from_host, request)
+    tenant_context, tenant_name = await _detect_tenant_from_host(request)
     oidc_enabled = False
     oidc_configured = False
 
     if tenant_context:
-        oidc_configured, oidc_enabled = await run_in_threadpool(_load_oidc_flags, tenant_context)
+        oidc_configured, oidc_enabled = await _load_oidc_flags(tenant_context)
         if oidc_enabled and not test_mode and not just_logged_out:
             return RedirectResponse(
                 request.url_for("oidc_login", tenant_id=tenant_context),
@@ -300,27 +300,40 @@ async def login(
     })
 
 
-def _detect_tenant_from_host(request: Request) -> tuple[str | None, str | None]:
-    """Mirror of Flask login()'s tenant-detection block. Sync — DB access."""
+async def _detect_tenant_from_host(request: Request) -> tuple[str | None, str | None]:
+    """Mirror of Flask login()'s tenant-detection block. Async DB access (pivoted 2026-04-11).
+
+    Note: also applies to `_enumerate_tenants_for_user` and `_lookup_idp_logout_url`
+    elsewhere in this file — same transformation pattern: drop `run_in_threadpool`
+    wrapper at call sites, make helper `async def`, replace `with get_db_session()`
+    → `async with get_db_session()`, replace `db.scalars(stmt).first()` →
+    `(await db.execute(stmt)).scalars().first()`.
+    """
     host = request.headers.get("host", "")
     approximated = request.headers.get("apx-incoming-host")
-    with get_db_session() as db:
+    async with get_db_session() as db:
         if approximated:
-            tenant = db.scalars(select(Tenant).filter_by(virtual_host=approximated)).first()
+            tenant = (await db.execute(
+                select(Tenant).filter_by(virtual_host=approximated)
+            )).scalars().first()
             if tenant:
                 return tenant.tenant_id, tenant.name
         if is_sales_agent_domain(host) and not host.startswith("admin."):
             subdomain = extract_subdomain_from_host(host)
             if subdomain:
-                tenant = db.scalars(select(Tenant).filter_by(subdomain=subdomain)).first()
+                tenant = (await db.execute(
+                    select(Tenant).filter_by(subdomain=subdomain)
+                )).scalars().first()
                 if tenant:
                     return tenant.tenant_id, tenant.name
     return None, None
 
 
-def _load_oidc_flags(tenant_id: str) -> tuple[bool, bool]:
-    with get_db_session() as db:
-        config = db.scalars(select(TenantAuthConfig).filter_by(tenant_id=tenant_id)).first()
+async def _load_oidc_flags(tenant_id: str) -> tuple[bool, bool]:
+    async with get_db_session() as db:
+        config = (await db.execute(
+            select(TenantAuthConfig).filter_by(tenant_id=tenant_id)
+        )).scalars().first()
         if config and config.oidc_client_id:
             return True, bool(config.oidc_enabled)
     return False, False
@@ -1407,10 +1420,14 @@ async def upload_favicon(
         return RedirectResponse(settings_url, status_code=303)
 
     try:
-        await run_in_threadpool(_update_tenant_favicon_url, tenant_id, public_url)
+        # Async DB update — no run_in_threadpool wrapper for DB work under the
+        # full-async pivot (2026-04-11). run_in_threadpool remains valid for
+        # file I/O (filepath.unlink cleanup below) because pathlib is sync.
+        await _update_tenant_favicon_url(tenant_id, public_url)
     except Exception:
         logger.error("Favicon DB update failed after disk write for %s", tenant_id, exc_info=True)
-        # Rollback: remove the file we just wrote to keep disk/DB consistent
+        # Rollback: remove the file we just wrote to keep disk/DB consistent.
+        # filepath.unlink is sync I/O — run_in_threadpool is correct here.
         try:
             await run_in_threadpool(filepath.unlink, missing_ok=True)
         except Exception:
@@ -1429,14 +1446,16 @@ def _remove_stale_favicons(tenant_dir: Path) -> None:
             old.unlink()
 
 
-def _update_tenant_favicon_url(tenant_id: str, public_url: str) -> None:
-    with get_db_session() as db:
-        t = db.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+async def _update_tenant_favicon_url(tenant_id: str, public_url: str) -> None:
+    async with get_db_session() as db:
+        t = (await db.execute(
+            select(Tenant).filter_by(tenant_id=tenant_id)
+        )).scalars().first()
         if t is None:
             raise HTTPException(status_code=404, detail="Tenant not found")
         t.favicon_url = public_url
         t.updated_at = datetime.now(UTC)
-        db.commit()
+        await db.commit()
 ```
 
 ### 4.3.3 Every change labeled
@@ -1449,7 +1468,7 @@ def _update_tenant_favicon_url(tenant_id: str, public_url: str) -> None:
 | `file.seek(0,2); file.tell(); file.seek(0)` to measure size | Chunked read loop with running `total` counter and early exit | Flask's MAX_CONTENT_LENGTH didn't enforce by default; FastAPI's default `Starlette` max form size is very large. We enforce explicitly by chunking. |
 | Content-type never checked | `ct in ALLOWED_FAVICON_CONTENT_TYPES` | Defense in depth — extension can be forged on a renamed `.png` that's actually HTML. |
 | `os.path.realpath` check | `tenant_dir.relative_to(base)` with `try/except ValueError` | Cleaner; pathlib does the traversal check without string prefix math. |
-| Sync DB update inline | `await run_in_threadpool(_update_tenant_favicon_url, ...)` | §18 pattern. |
+| Sync DB update inline | `await _update_tenant_favicon_url(...)` (direct async call; `_update_tenant_favicon_url` is `async def` with `async with get_db_session()` under the full-async pivot) | Pivoted 2026-04-11 — async DB end-to-end. See §18 + `async-pivot-checkpoint.md` §3. |
 | No rollback on DB failure after disk write | Explicit `filepath.unlink(missing_ok=True)` on DB exception | Keeps disk and DB consistent; the old code left orphan files. |
 | `@log_admin_action("upload_favicon")` decorator | `dependencies=[Depends(audit_action("upload_favicon"))]` | Dep-based side effects; no decorator stacking. |
 | `flash("msg", "error")` | `flash(request, "msg", "error")` | §11.3. |
