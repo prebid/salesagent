@@ -108,20 +108,40 @@ Each line below is content that the fresh session's opus agents must rewrite fro
 
 ### Database layer (`src/core/database/database_session.py`)
 
+> **⚠️ CORRECTED 2026-04-12 (3-round verification audit):** The code block below was stale — showed module-level engine creation. The correct pattern is lifespan-scoped engine per Agent E Category 1, with `autoflush=False` added per async best practice.
+
 ```python
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
 
-_engine = create_async_engine(
-    connection_string.replace("postgresql://", "postgresql+asyncpg://"),
-    echo=False,
-    pool_size=20,
-    max_overflow=10,
-)
-SessionLocal = async_sessionmaker(_engine, class_=AsyncSession, expire_on_commit=False)
+# Engine is created in lifespan, NOT at module level — prevents pytest-asyncio
+# event-loop leak (Risk Interaction B) and ensures proper shutdown via dispose().
+async def database_lifespan(app):
+    """Create engine at startup, dispose at shutdown."""
+    url = connection_string.replace("postgresql://", "postgresql+asyncpg://")
+    engine = create_async_engine(
+        url,
+        echo=False,
+        pool_size=20,
+        max_overflow=10,
+        pool_pre_ping=True,
+        pool_recycle=3600,
+        # statement_timeout via connect_args (NOT event listener — asyncpg has no
+        # dbapi_conn.cursor(), so the psycopg2-era event listener crashes).
+        connect_args={"server_settings": {"statement_timeout": "30000"}},
+    )
+    app.state.db_engine = engine
+    app.state.session_factory = async_sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False, autoflush=False,
+    )
+    yield
+    await engine.dispose()
 
 @asynccontextmanager
 async def get_db_session() -> AsyncIterator[AsyncSession]:
-    session = SessionLocal()
+    """Request-scoped session. Used by the SessionDep DI factory."""
+    session = _get_session_factory()()
     try:
         yield session
         await session.commit()
@@ -132,7 +152,11 @@ async def get_db_session() -> AsyncIterator[AsyncSession]:
         await session.close()
 ```
 
-Note the `expire_on_commit=False` — critical for async sessions because committed-object lazy loads no longer work; setting this prevents the post-commit auto-expire that would trigger lazy loads.
+Key design decisions in this code block:
+- **`expire_on_commit=False`** — critical for async sessions; prevents post-commit auto-expire that would trigger `MissingGreenlet` on attribute access.
+- **`autoflush=False`** — prevents surprise writes under the async model; flushes are explicit via `await session.flush()`.
+- **Lifespan-scoped engine** (not module-level) — asyncpg's connection pool binds to the event loop at creation time; module-level creation causes `RuntimeError: Event loop is closed` in pytest-asyncio with function-scoped loops.
+- **`connect_args` for `statement_timeout`** — replaces the psycopg2-era `@event.listens_for("connect")` handler which calls `dbapi_conn.cursor()` (doesn't exist on asyncpg connections; would crash on every new connection).
 
 ### Repository pattern
 
@@ -171,22 +195,24 @@ functionality FastAPI already provides for free. Under the pivot, a 2026
 greenfield FastAPI team does not write UoW classes — they write repositories
 that take an injected session.
 
+> **⚠️ CORRECTED 2026-04-12 (pattern consistency audit):** Repositories return **ORM model objects**, NOT DTOs. This is consistent with the existing codebase where all repos (`AccountRepository`, `MediaBuyRepository`, etc.) return ORM objects. DTO conversion happens in the **handler layer**, not the repository — this keeps repositories as pure data-access and avoids mixing concerns. See `CLAUDE.md` Critical Pattern #3.
+
 ```python
 # src/core/database/repositories/accounts.py
 from sqlalchemy.ext.asyncio import AsyncSession
-from src.admin.dtos import AccountDTO
+from sqlalchemy import select
 from src.core.database.models import Account
 
 class AccountRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def list_dtos(self, tenant_id: str, *, status: str | None = None) -> list[AccountDTO]:
+    async def list_all(self, tenant_id: str, *, status: str | None = None) -> list[Account]:
         stmt = select(Account).filter_by(tenant_id=tenant_id)
         if status:
             stmt = stmt.filter_by(status=status)
         result = await self.session.execute(stmt)
-        return [AccountDTO.model_validate(a) for a in result.scalars().all()]
+        return list(result.scalars().all())
 ```
 
 ### Handler + Dep chain pattern
@@ -204,10 +230,13 @@ async def list_accounts(
     tenant_id: str,
     request: Request,
     tenant: CurrentTenantDep,
-    accounts: AccountRepoDep,    # ← repository Dep, NOT UoW context manager
+    repo: AccountRepoDep,    # ← repository Dep, NOT UoW context manager
     status: Annotated[str | None, Query()] = None,
 ) -> HTMLResponse:
-    dtos = await accounts.list_dtos(tenant_id, status=status)
+    accounts = await repo.list_all(tenant_id, status=status)
+    # DTO conversion happens HERE in the handler, NOT in the repository.
+    # Repos return ORM objects (consistent with existing codebase pattern).
+    dtos = [AccountDTO.from_orm(a) for a in accounts]
     return render(request, "accounts_list.html", {
         "tenant_id": tenant_id, "tenant": tenant, "accounts": dtos,
     })
@@ -733,3 +762,43 @@ Everything the fresh session needs is on disk:
 - Auto-memory reference entry
 
 The fresh session's first action: read this file.
+
+---
+
+## 5. Verification audit findings (2026-04-12)
+
+Three rounds of parallel Opus subagent verification (14 agents total) audited this checkpoint against the actual source code, traced derivative consequences through 4 orders, hunted for silent breaking bugs, and checked compliance with the project's CLAUDE.md rules.
+
+### 5.1 Code block corrections applied to this file
+
+1. **Database layer code block (Section 3):** Corrected from module-level engine to lifespan-scoped engine per Agent E Category 1. Added `autoflush=False`. Replaced `statement_timeout` event listener with `connect_args={"server_settings": ...}` (asyncpg has no `dbapi_conn.cursor()`).
+2. **Repository pattern code block (Section 3):** Removed `list_dtos()` from repository example. Repositories return ORM objects (consistent with existing codebase). DTO conversion belongs in handlers.
+3. **Handler code block (Section 3):** Updated to show DTO conversion in handler: `dtos = [AccountDTO.from_orm(a) for a in repo.list_all(...)]`.
+
+### 5.2 Ground truth corrections (from forensic source code audit)
+
+| Fact | Plan Said | Code Says | Impact |
+|---|---|---|---|
+| OIDC callback path | `{tenant_id}` in URL | NO tenant_id — `/auth/oidc/callback` (`oidc.py:209`) | Guard test would pin wrong path |
+| GAM callback path | `/auth/gam/callback` NOT under `/admin` | Gets `/admin` prefix from nginx SCRIPT_NAME (`auth.py:931`) | Guard test would pin wrong path |
+| Relationship count | 58 | **68** (verified grep) | Spike 1 lazy-load audit undersized |
+| Template count | 74 (FE audit) | **72** (verified glob) | Codemod criteria already correct |
+| Engine initialization | Module-level | **Lazy singleton** (`get_engine()` with `if _engine is None:`) | Migration is a pattern change |
+| ContextVar count | Multiple implied | **1** (`current_tenant` in `config_loader.py:57`) | Simpler than expected |
+
+### 5.3 Derivative consequences requiring new mitigation
+
+1. **`onupdate=func.now()` columns stale post-commit** (Risk #5 variant). `updated_at` columns with `onupdate=func.now()` are DB-side UPDATE triggers. With `expire_on_commit=False`, the ORM instance retains the OLD value after commit. Fix: application-side `obj.updated_at = func.now()` before commit, or explicit `await session.refresh(obj, ['updated_at'])`.
+2. **GAM services have private `scoped_session` instances.** `gam_inventory_service.py` and `gam_orders_service.py` bypass `database_session.py` with their own module-level `scoped_session`. Must migrate to centralized `get_sync_db_session()` (Decision 9 sync-bridge).
+3. **Dual-engine connection pool budget.** psycopg2 pool (10+20=30) + asyncpg pool (20+10=30) = 60 peak connections against `max_connections=100`. Under burst load, both pools saturating simultaneously would hit the limit. Fix: tune combined `pool_size` to stay under `max_connections - 15` (headroom for superuser/replication).
+4. **Template relationship access needs DTO audit.** Every template that accesses ORM relationship attributes (`product.pricing_options`, `creative.media_buys`) must have the corresponding DTO include that data. Without this, `AttributeError` on Pydantic models or `MissingGreenlet` on ORM objects.
+
+### 5.4 Pattern corrections
+
+1. **Repositories return ORM objects, not DTOs.** The `list_dtos()` pattern in the original checkpoint was inconsistent with the existing codebase. All current repositories (`AccountRepository`, `MediaBuyRepository`, etc.) return ORM model objects. DTO conversion belongs in the handler layer.
+2. **Feature flag recommended for Waves 1-2.** `ADCP_USE_FASTAPI_ADMIN=true/false` enables instant rollback during the dual-mount phase without container swaps or data loss. Eliminates Wave 2 code freeze. ~50 LOC.
+3. **`form_error_response()` shared helper.** DRY invariant requires extracting form-validation-error re-rendering pattern before 25 router files are written. Prevents duplication caught by `check_code_duplication.py`.
+
+### 5.5 Full findings reference
+
+The complete findings (55 items across 7 categories) are documented in `implementation-checklist.md` Section 3.5. This checkpoint section provides the summary; the checklist is the source of truth for tracking.

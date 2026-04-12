@@ -10,7 +10,7 @@
 
 The database layer is **fundamentally sound** for the async migration — the repository pattern is well-established, query patterns use SQLAlchemy 2.0 style consistently, and the multi-engine pool math works within PG `max_connections=100` for single-container deployment. However, the audit surfaced **3 critical blockers**, **8 high-severity issues**, and **15+ medium/low findings** that must be addressed before or during Wave 4.
 
-**The #1 risk across all 6 audits: ALL 58 relationships have implicit `lazy="select"` and zero explicit `lazy=` arguments.** Combined with 6 Product/Tenant `@property` methods that synchronously access relationships, Spike 1's `lazy="raise"` sweep will produce a significant blast radius. This is expected but the audit quantifies it precisely.
+**The #1 risk across all 6 audits: ALL 68 relationships (corrected from 58, verified 2026-04-12) have implicit `lazy="select"` and zero explicit `lazy=` arguments.** Combined with 6 Product/Tenant `@property` methods that synchronously access relationships, Spike 1's `lazy="raise"` sweep will produce a significant blast radius. This is expected but the audit quantifies it precisely.
 
 **The #1 surprise: the statement_timeout event listener will CRASH under asyncpg.** The `@event.listens_for(_engine, "connect")` at `database_session.py:139` uses `dbapi_conn.cursor()` — a psycopg2 API that asyncpg does not expose. Every async connection will fail on first use. This is a Wave 4 hard blocker that was not in any prior plan document.
 

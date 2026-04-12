@@ -304,8 +304,8 @@ redirect_uri = base_url.replace("/auth/google/callback", "/admin/auth/google/cal
 
 Google Cloud Console has these URIs pre-registered:
 - `https://<tenant>.scope3.com/admin/auth/google/callback`
-- `https://<tenant>.scope3.com/admin/auth/oidc/{tenant_id}/callback`
-- `https://<tenant>.scope3.com/auth/gam/callback` (GAM OAuth flow)
+- `https://<tenant>.scope3.com/admin/auth/oidc/callback` (NO `{tenant_id}` — tenant context is in the session; corrected 2026-04-12, verified at `src/admin/blueprints/oidc.py:209,215`)
+- `https://<tenant>.scope3.com/admin/auth/gam/callback` (WITH `/admin` prefix — route in `auth.py:959`, gets prefix from nginx `SCRIPT_NAME`; corrected 2026-04-12)
 
 **The risk:** during the migration, it's easy to "clean up" these paths by moving them into the admin router (`/admin/auth/...`). If the new router is mounted at `prefix="/admin"` and the route is registered as `@router.get("/auth/google/callback", ...)`, the effective path is `/admin/auth/google/callback` — **this matches**.
 
@@ -317,8 +317,8 @@ BUT if the route is accidentally registered as `@router.get("/admin/auth/google/
 # tests/unit/test_oauth_redirect_uris_immutable.py
 EXPECTED_CALLBACK_ROUTES = {
     "/admin/auth/google/callback",
-    "/admin/auth/oidc/{tenant_id}/callback",
-    "/auth/gam/callback",   # note: NOT under /admin prefix
+    "/admin/auth/oidc/callback",          # NO {tenant_id} — tenant in session (corrected 2026-04-12)
+    "/admin/auth/gam/callback",           # WITH /admin prefix (corrected 2026-04-12)
 }
 
 def test_oauth_callback_routes_registered():

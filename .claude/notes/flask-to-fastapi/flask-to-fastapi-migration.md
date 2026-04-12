@@ -13,13 +13,13 @@ This overview covers every section at medium depth. Three companion files contai
 
 - **[flask-to-fastapi-foundation-modules.md](flask-to-fastapi-foundation-modules.md)** (~2,500 lines) — §11 deep dive. Full working implementations of all 11 foundation modules (`templating.py`, `sessions.py`, `flash.py`, `deps/auth.py`, `deps/tenant.py`, `deps/audit.py`, `oauth.py`, `csrf.py`, `middleware/external_domain.py`, `middleware/fly_headers.py`, `app_factory.py`) with their tests, integration notes, and known gotchas. Includes the full `is_super_admin()` four-tier fallback, the `_read_csrf_from_body` ASGI receive-channel re-injection pattern, and the per-tenant OIDC client cache with concurrency lock.
 
-- **[flask-to-fastapi-worked-examples.md](flask-to-fastapi-worked-examples.md)** (~2,800 lines) — §13 deep dive. Five hard-case route translations with the real Flask source read from disk and faithful FastAPI translations: (1) Google OAuth login + callback flow from `src/admin/blueprints/auth.py`, (2) per-tenant OIDC dynamic client registration from `src/admin/blueprints/oidc.py`, (3) tenant favicon file upload from `src/admin/blueprints/tenants.py`, (4) SSE activity stream from `src/admin/blueprints/activity_stream.py`, (5) complex product-creation form from `src/admin/blueprints/products.py`. Each includes Flask source, FastAPI translation, change-by-change labels, edge cases, and integration test patterns.
+- **[flask-to-fastapi-worked-examples.md](flask-to-fastapi-worked-examples.md)** (~2,800 lines) — §13 deep dive. Five hard-case route translations with the real Flask source read from disk and faithful FastAPI translations: (1) Google OAuth login + callback flow from `src/admin/blueprints/auth.py`, (2) per-tenant OIDC dynamic client registration from `src/admin/blueprints/oidc.py`, (3) tenant favicon file upload from `src/admin/blueprints/tenants.py`, (4) ~~SSE activity stream from `src/admin/blueprints/activity_stream.py`~~ **[D8 DELETE: SSE example is moot — route is orphan code]**, (5) complex product-creation form from `src/admin/blueprints/products.py`. Each includes Flask source, FastAPI translation, change-by-change labels, edge cases, and integration test patterns.
 
 - **[flask-to-fastapi-execution-details.md](flask-to-fastapi-execution-details.md)** (~1,150 lines) — §14 / §16 / §21 deep dive. Three parts: (1) per-wave execution details with acceptance criteria, file-level checklists, risk assessment tables, rollback procedures, merge-conflict resolution, time estimates, and entry/exit criteria for all 4 waves; (2) full verification recipes for all 28 assumptions, grouped by confidence with how/when/fallback for each; (3) concrete structural guard tests with AST scan patterns, 5 integration test templates, Playwright e2e test plan, benchmark harness for `run_in_threadpool` overhead, and the `scripts/check_coverage_parity.py` automation.
 
 - **[flask-to-fastapi-adcp-safety.md](flask-to-fastapi-adcp-safety.md)** (~620 lines) — pre-implementation audit verifying the migration does NOT touch AdCP-protocol surfaces and does NOT require updates from external AdCP consumers. Contains: classification of every file as AdCP-protocol vs internal, scoped exception handler verification, OpenAPI surface impact analysis, middleware body-read interaction traces, `SessionMiddleware` `Set-Cookie` leak verification from Starlette 0.50 source, CSRF exempt list completeness check, `ApproximatedExternalDomainMiddleware` path-gating invariant (near-blocker if dropped), all 21 existing structural guards compatibility analysis, webhook payload preservation concerns for `creatives.py`/`operations.py`, and 8 prioritized action items that MUST land in the plan before implementation.
 
-- **[flask-to-fastapi-deep-audit.md](flask-to-fastapi-deep-audit.md)** (~1,500 lines) — deep 2nd/3rd-order audit that surfaced **six previously unseen BLOCKERS**, twenty new RISKS, and forty-plus cleanup OPPORTUNITIES the first-order audit missed. Contains: detailed elaboration of the path-gating near-blocker with threat model, implicit Flask invariant audit (147 `script_root` references, 111 trailing-slash-dependent `url_for` calls, `@app.exception_handler(AdCPError)` HTML regression, session scoping on async event loop, middleware ordering bug — CSRF must run AFTER Approximated), shared infrastructure interaction analysis (scheduler singletons, SSE rate limits, `app.dependency_overrides` leakage), plan revisions required (flip admin default from `async def` to `def`, swap middleware order, add 9 new structural guards), and derivative opportunities enabled by Flask removal (drop nginx ~30MB, ratchet REST to Annotated, consolidate guards). **Every design decision in this overview should be cross-checked against the deep audit before implementation begins.**
+- **[flask-to-fastapi-deep-audit.md](flask-to-fastapi-deep-audit.md)** (~1,500 lines) — deep 2nd/3rd-order audit that surfaced **six previously unseen BLOCKERS**, twenty new RISKS, and forty-plus cleanup OPPORTUNITIES the first-order audit missed. Contains: detailed elaboration of the path-gating near-blocker with threat model, implicit Flask invariant audit (147 `script_root` references, 111 trailing-slash-dependent `url_for` calls, `@app.exception_handler(AdCPError)` HTML regression, session scoping on async event loop, middleware ordering bug — CSRF must run AFTER Approximated), shared infrastructure interaction analysis (scheduler singletons, SSE rate limits, `app.dependency_overrides` leakage), plan revisions required (~~flip admin default from `async def` to `def`~~ **STALE — async pivot (2026-04-11): admin handlers are `async def` end-to-end**, swap middleware order, add 9 new structural guards), and derivative opportunities enabled by Flask removal (drop nginx ~30MB, ratchet REST to Annotated, consolidate guards). **Every design decision in this overview should be cross-checked against the deep audit before implementation begins.**
 
 **When to use which document:**
 - Planning a wave? Start here (overview) then read the execution-details doc for that wave's checklist
@@ -230,7 +230,7 @@ All in `src/admin/blueprints/` unless noted. ~232 routes total.
 | `api.py` | `/api` | 7 | 448 | Internal AJAX (cat 1) |
 | `format_search.py` | `/api/formats` | 4 | 320 | Internal AJAX (cat 1) |
 | `schemas.py` | `/schemas` | 6 | 207 | JSON Schema validation |
-| `activity_stream.py` | root | 3 | 390 | SSE (EventSource) |
+| `activity_stream.py` | root | 3 | 390 | ~~SSE (EventSource)~~ **STALE — D8 DELETE** |
 
 **Top-level admin JSON APIs (category 2 — may have external consumers):**
 
@@ -293,7 +293,7 @@ All in `src/admin/blueprints/` unless noted. ~232 routes total.
 
 **Session storage:** Flask built-in itsdangerous signed cookies. Settings in `src/admin/app.py:115-130`:
 - `SESSION_COOKIE_SECURE`, `SESSION_COOKIE_HTTPONLY`, `SESSION_COOKIE_SAMESITE`, `SESSION_COOKIE_PATH`, `SESSION_COOKIE_DOMAIN`
-- `SESSION_COOKIE_HTTPONLY=False` in production — historically to let EventSource read the cookie (cargo-culted; browsers send HttpOnly cookies on EventSource automatically)
+- `SESSION_COOKIE_HTTPONLY=False` in production — ~~historically to let EventSource read the cookie (cargo-culted; browsers send HttpOnly cookies on EventSource automatically)~~ **STALE — D8 DELETE: SSE route is orphan code; `HttpOnly=True` restored under Decision 8 + CSRF strategy**
 
 **`flask.session` usage:** 159 occurrences across 16 files under `src/admin/`. Heaviest in `auth.py` (63), `public.py` (21), `oidc.py` (12), `core.py` (8).
 
@@ -1921,9 +1921,9 @@ Delete Flask blueprint files. **Delete dead code:** `src/services/gam_inventory_
 
 **Branch lifetime target: 1 week.** Announce `src/admin/` freeze during the wave.
 
-### Wave 3 — Activity stream SSE + cleanup cutover (~2,500 LOC)
+### Wave 3 — ~~Activity stream SSE +~~ cleanup cutover (~2,500 LOC)
 
-- Port `activity_stream.py` to `sse-starlette.EventSourceResponse`
+- ~~Port `activity_stream.py` to `sse-starlette.EventSourceResponse`~~ **STALE — D8 DELETE**
 - Remove `flask`, `flask-caching`, `flask-socketio`, `python-socketio`, `simple-websocket`, `waitress`, `a2wsgi`, `types-waitress` from `pyproject.toml`
 - Delete `src/admin/app.py` (old Flask factory)
 - Delete `_install_admin_mounts`, `flask_admin_app`, `admin_wsgi`, `CustomProxyFix` from `src/app.py`
@@ -2068,7 +2068,7 @@ Eight waves imply safety via backward-compat seams — exactly what the user rej
 4. **`SessionMiddleware` cookie vs Redis server-side** — Redis if payloads grow. Counter: payloads stay under 4KB. **Chosen: signed cookies.**
 5. **`BaseHTTPMiddleware` vs pure ASGI** — `BaseHTTPMiddleware` easier but Starlette #1729. **Chosen: pure ASGI.**
 6. **Wave count: 5-6 (chosen post-pivot) vs 4 (pre-pivot) vs 2 vs 8** — 2 unreviewable, 8 too much coordination. Pre-pivot was 4; the 2026-04-11 pivot added Wave 4 (async DB layer) and Wave 5 (async cleanup + release).
-7. **Port SSE vs drop activity stream** — dropping saves ~400 LOC. Counter: user-visible. **Chosen: port.**
+7. ~~**Port SSE vs drop activity stream** — dropping saves ~400 LOC. Counter: user-visible. **Chosen: port.**~~ **STALE — D8 DELETE (2026-04-11): SSE route is orphan code, deleted not ported.**
 8. **Per-tenant OIDC complexity** — simplification drops ~150 LOC. Counter: multi-tenant is a product requirement. **Chosen: keep.**
 9. **Dual-mode `require_tenant_access` split into two deps** — doubles dep count. **Chosen: split** (single-responsibility composes better).
 10. **Keep `/admin/` prefix vs move to root** — every bookmark says `/admin/`. **Chosen: keep.**

@@ -23,7 +23,18 @@
 
 ## How to use this file
 
-This checklist consolidates every action item from the six companion migration documents into a single gate-by-gate sequence. Each checkbox is either a prerequisite, a blocker fix, an action item, a wave acceptance criterion, a rollback trigger, a post-migration verification step, or a deferred tech-debt tracking item. If you only read ONE file before shipping a wave, read this one.
+> **Implementation agents: START with [`execution-plan.md`](execution-plan.md), NOT this file.**
+> The execution plan has 13 phases in strict order, each a standalone briefing with
+> everything you need (goal, prereqs, knowledge sources, work items, exit gate).
+> This checklist is the **verification/tracking** document — tick boxes here AFTER
+> completing work defined in the execution plan.
+
+This checklist consolidates every action item from the companion migration documents into categorized sections. Each checkbox is a prerequisite, blocker fix, action item, wave acceptance criterion, rollback trigger, post-migration verification step, or deferred tech-debt tracking item.
+
+**Relationship between this file and `execution-plan.md`:**
+- **`execution-plan.md`** = what to do, in what order (read BEFORE coding)
+- **`implementation-checklist.md`** (this file) = verification tracking (tick AFTER completing)
+- Items in this file are tagged with `[§X]` references; the execution plan pulls items from ALL sections into phase-ordered work lists
 
 Every item references the companion doc where full detail lives. Tick every box for a given section before declaring that section "done." The deep audit's six BLOCKERS (Section 2) MUST be fixed in Wave 0 — shipping Wave 1 without them will cause silent production breakage.
 
@@ -49,8 +60,8 @@ Every item references the companion doc where full detail lives. Tick every box 
 - [ ] `SESSION_SECRET` documented in `docs/deployment/environment-variables.md`
 - [ ] OAuth redirect URIs currently registered in Google Cloud Console enumerated and documented in a migration runbook — at minimum:
   - [ ] `https://<tenant>.scope3.com/admin/auth/google/callback`
-  - [ ] `https://<tenant>.scope3.com/admin/auth/oidc/{tenant_id}/callback`
-  - [ ] `https://<tenant>.scope3.com/auth/gam/callback` (NOT under `/admin`)
+  - [ ] `https://<tenant>.scope3.com/admin/auth/oidc/callback` (NO `{tenant_id}` in URL — tenant context comes from the session, verified at `src/admin/blueprints/oidc.py:209,215`)
+  - [ ] `https://<tenant>.scope3.com/admin/auth/gam/callback` (WITH `/admin` prefix — route registered in `auth.py:959` under `auth_bp` which is mounted at `/admin` via nginx `SCRIPT_NAME`; verified at `src/admin/blueprints/auth.py:931`)
 - [ ] External consumer contracts confirmed for Category-2 files:
   - [ ] `src/admin/tenant_management_api.py` (6 routes, `X-Tenant-Management-API-Key`)
   - [ ] `src/admin/sync_api.py` (9 routes, `X-API-Key`, duplicate mount at `/api/sync`)
@@ -82,7 +93,7 @@ Every item references the companion doc where full detail lives. Tick every box 
   - [ ] **Structural guard #2** `tests/unit/test_architecture_get_db_connection_callers_allowlist.py` — AST-walks every `src/**/*.py` and `scripts/**/*.py` for `Call` nodes invoking `get_db_connection`, allowlists exactly 1 file: `scripts/deploy/run_all_services.py`. Catches the failure mode where someone adds `DatabaseConnection` inside the runtime process (fork-unsafe AND pool-uncoordinated). Excludes `db_config.py` (definition file) and `examples/`/`tests/` by directory scope.
   - [ ] **Risk #34 (NEW, HIGH)**: `run_all_services.py:175` imports `src.core.database.database.init_db` which under async pivot opens the SQLAlchemy async engine in the parent process. Then `:231` `Popen`s uvicorn — duplicate pooled connection FDs leak into the child. Either (a) `init_db()` calls `await reset_engine()` in `finally`, OR (b) `run_all_services.py` runs init via `subprocess.run([sys.executable, "-m", "scripts.setup.init_database"])` like migrations already do at `:207`. **Strongly prefer (b)** — matches the existing migration pattern, no in-process state leak risk. Add to async-pivot-checkpoint.md §4 risk register.
   - [ ] **Spike 5.5 additional check**: verify `run_all_services.py`'s init flow does NOT eagerly hold any PG sockets in the parent process after `init_database()` returns and before `threading.Thread(target=run_mcp_server).start()`. Either grep `/proc/<pid>/fd/` for PG sockets (Linux) or run `pg_stat_activity` query and confirm zero connections from PID 1 outside of the transient `DatabaseConnection` window.
-  - [ ] Alembic `env.py` async rewrite validated via Spike 6 (F2.5.1)
+  - [ ] ~~Alembic `env.py` async rewrite validated via Spike 6~~ **ELIMINATED per DB-4 (database deep-audit 2026-04-11): keep `env.py` sync with psycopg2.** Alembic gains nothing from running async — migrations are serial, single-connection operations. All 161 existing migrations use sync patterns that work under the greenlet bridge. Spike 6 scope reduced to: `render_item` hook for JSONType + advisory lock for multi-container safety (~0.5 day, not full async rewrite).
   - [ ] CI Postgres version aligned to 17 across all workflows (F2.4.1)
   - [ ] Dead `test-migrations` pre-commit hook removed (F2.3.1)
   - [ ] 3 new structural guards added (F6.2.1, F6.2.5, F6.2.6)
@@ -148,8 +159,8 @@ Full detail in `flask-to-fastapi-deep-audit.md` §1.
   - [ ] Pre-Wave-0 lazy-loading audit spike completed and approved (Risk #1 in `async-pivot-checkpoint.md` §4) — enumerates every `relationship()` access site and classifies as safe / eager-loadable / requires-rewrite
   - [ ] `src/core/database/database_session.py` converted: `create_engine` → `create_async_engine`, `scoped_session(sessionmaker(...))` → `async_sessionmaker(_engine, class_=AsyncSession, expire_on_commit=False)`
   - [ ] `get_db_session()` is an `@asynccontextmanager` yielding `AsyncSession`
-  - [ ] Driver swap: `psycopg2-binary` + `types-psycopg2` removed, `asyncpg>=0.30.0` added in `pyproject.toml`
-  - [ ] `alembic/env.py` uses async adapter (standard `create_async_engine` + `run_sync` pattern)
+  - [ ] Driver addition: `asyncpg>=0.30.0,<0.32` added alongside (NOT replacing) `psycopg2-binary` + `types-psycopg2` in `pyproject.toml` — psycopg2 RETAINED per Decisions 1 (Path B sync adapter factory), 2 (pre-fork orchestrator health check), and 9 (sync-bridge for background sync). Removal deferred to v2.1+.
+  - [ ] ~~`alembic/env.py` uses async adapter~~ **ELIMINATED per DB-4: `env.py` stays sync with psycopg2** — see Section 1.1 Spike 6 correction above. `postgresql+asyncpg://` URL rewriting is applied ONLY at async engine construction in `database_session.py`, NOT in Alembic.
   - [ ] All repository classes use `async def` methods with `(await session.execute(select(...))).scalars().first()` pattern
   - [ ] All UoW classes implement `async def __aenter__` / `async def __aexit__` — OR deleted entirely under the Agent E idiom upgrade (FastAPI DI request-scoped session IS the unit of work; see `async-pivot-checkpoint.md` §3)
   - [ ] All admin router handlers are `async def` with `async with get_db_session()` / `await` DB calls (or, preferred, `session: SessionDep` via `Depends(get_session)`)
@@ -180,8 +191,8 @@ Full detail in `flask-to-fastapi-deep-audit.md` §1.
 - [ ] **Blocker 6: OAuth redirect URIs byte-identical**
   - [ ] `tests/unit/test_oauth_redirect_uris_immutable.py` exists and pins the EXACT set:
     - `/admin/auth/google/callback`
-    - `/admin/auth/oidc/{tenant_id}/callback`
-    - `/auth/gam/callback` (note: NOT under `/admin`)
+    - `/admin/auth/oidc/callback` (NO `{tenant_id}` — tenant context is in the session; corrected per FE-3 audit 2026-04-11, verified at `src/admin/blueprints/oidc.py:209`)
+    - `/admin/auth/gam/callback` (WITH `/admin` prefix — corrected per FE-3 audit 2026-04-11, verified at `src/admin/blueprints/auth.py:931,959`)
   - [ ] Guard test asserts each expected route is in `{r.path for r in app.routes if hasattr(r, "path")}`
   - [ ] `src/admin/oauth.py` carries a comment referencing the byte-identity requirement
   - [ ] Wave 1 staging smoke test walks the REAL Google OAuth flow end-to-end (documented and executed before Wave 2 begins)
@@ -209,11 +220,80 @@ Full detail in `flask-to-fastapi-adcp-safety.md` §7.
 
 ---
 
+## Section 3.5 — Verification audit findings (3-round Opus audit, 2026-04-12)
+
+Three rounds of parallel Opus subagent verification (14 agents total) audited the plan against actual source code, derivative consequences, silent breaking bugs, code pattern consistency, CLAUDE.md compliance, and senior engineering practices. All findings below are scoped into specific waves.
+
+### 3.5.1 Silent breaking bugs (pass all tests, break production)
+
+- [ ] **SB-1 [CRITICAL, Wave 4b]: Product `@property` methods trigger lazy loads on 3 relationships.** `src/core/database/models.py:341-489` — five `@property` methods (`effective_format_ids`, `effective_properties`, `effective_property_tags`, `effective_implementation_config`, `is_gam_tenant`) access `self.inventory_profile`, `self.tenant`, `self.adapter_config`. `ProductRepository.list_all()` eagerly loads `tenant` and `pricing_options` but NOT `inventory_profile`. Production paths raise `MissingGreenlet`. **Fix:** Add `selectinload(Product.inventory_profile)` to all Product repository methods whose callers access these properties. Add to Spike 1 acceptance criteria: every Product `@property` must be exercised against every repo method.
+- [ ] **SB-2 [CRITICAL, Wave 2]: `request.form.getlist()` — 20+ call sites silently lose multi-value form data.** `src/admin/blueprints/products.py` has 12+ calls for `<select multiple>` fields (countries, channels, formats, principals, property_tags). FastAPI `Form()` returns only the LAST value, not a list. **Fix:** Use `List[str] = Form()` for multi-value fields. Add foundation-module pattern doc and structural guard `test_architecture_form_getlist_parity.py` in Wave 0.
+- [ ] **SB-3 [HIGH, Wave 0]: `session.*` and `g.*` template variables silently render as empty.** `templates/base.html:145` uses `{% if g.test_mode %}` (test mode banner); lines 155-183 read `session.role`, `session.authenticated`, `session.email`. Starlette does NOT auto-inject `g` or `session` into Jinja context. **Fix:** `render()` wrapper must pass `test_mode`, `user_role`, `user_email`, `user_authenticated`, `username` as explicit context variables. Add `test_template_context_completeness.py` guard asserting every variable used in `base.html` is present in `render()` context dict.
+- [ ] **SB-4 [HIGH, Wave 4a]: `onupdate=func.now()` columns permanently stale after UPDATE+commit.** Unlike `server_default` (INSERT-time, covered by Risk #5), `onupdate=func.now()` fires on UPDATE. With `expire_on_commit=False`, response returns OLD `updated_at`. Cannot be fixed with ORM-side `default=`. **Fix:** Set `obj.updated_at = func.now()` application-side before commit, or `await session.refresh(obj, ['updated_at'])` after commit. Add `test_onupdate_columns_refreshed.py` in Wave 4.
+- [ ] **SB-5 [HIGH, Wave 4b]: N+1 lazy load in `get_object_lifecycle` (`context_manager.py:430`).** Inside a loop, `mapping.workflow_step` triggers per-row lazy load → `MissingGreenlet` under async. **Fix:** Add `joinedload(ObjectWorkflowMapping.workflow_step)` to the query at line 414.
+
+### 3.5.2 Loud but scoped breaks (caught by tests)
+
+- [ ] **LB-1 [HIGH, Spike 2 + Wave 4a]: `asyncpg` bypasses `json_serializer` parameter.** `database_session.py:114,130` passes `json_serializer=_pydantic_json_serializer` to `create_engine`. asyncpg uses its own native JSONB codec that ignores this. Pydantic types fail with `TypeError` on JSONB write. **Fix:** Register custom asyncpg JSONB codec via `asyncpg.Connection.set_type_codec()` at engine-level `connect` event. Add `test_jsonb_roundtrip_asyncpg.py` to Spike 2 criteria.
+- [ ] **LB-2 [HIGH, Wave 4a]: `statement_timeout` event listener crashes under asyncpg.** `database_session.py:139-144` uses `dbapi_conn.cursor()` which doesn't exist on asyncpg connections. **Fix:** Replace with `connect_args={"server_settings": {"statement_timeout": "30000"}}` on async engine. Already corrected in `async-pivot-checkpoint.md` code block (2026-04-12).
+- [ ] **LB-3 [MEDIUM, Wave 4b]: `bulk_insert_mappings` / `bulk_update_mappings` removed in `AsyncSession`.** `gam_inventory_service.py:98,104,734,739`. **Fix:** Rewrite to Core `insert().values()` pattern. These are inside the sync-bridge scope (Decision 9), so they stay sync but must use `get_sync_db_session()`, not the async session.
+
+### 3.5.3 Scope gaps (not previously in any wave — now added)
+
+- [ ] **SG-1 [CRITICAL, Wave 2c + Wave 3]: `gam_inventory_service.py` has 8 Flask routes NOT in any wave scope.** `src/services/gam_inventory_service.py:1484-1680` — `create_inventory_endpoints(app)` registers 8 `@app.route()` decorators directly on the Flask app (called from `src/admin/app.py:391`). These live in `src/services/`, not `src/admin/blueprints/`, so they are missed by the Wave 2 "22 blueprints" scope. **Fix:** Port to `src/admin/routers/inventory_api.py` in Wave 2c. Delete `create_inventory_endpoints()` in Wave 3.
+- [ ] **SG-2 [CRITICAL, Wave 3]: `atexit` handlers incompatible with async shutdown.** `src/services/webhook_delivery_service.py:185` and `src/services/delivery_simulator.py:45` register `atexit.register(self._shutdown)`. Under uvicorn, `atexit` fires AFTER the event loop is closed. **Fix:** Move to FastAPI lifespan post-yield block in Wave 3.
+- [ ] **SG-3 [HIGH, Wave 2c]: `register_ui_routes(app: Flask)` adapter interface not addressed.** `src/adapters/base.py:481`, `google_ad_manager.py:1694`, `mock_ad_server.py:1346` take a Flask `app` object. **Fix:** Change interface to accept `APIRouter` in Wave 2c; re-home content into `src/admin/routers/adapters.py`.
+- [ ] **SG-4 [HIGH, Wave 4]: GAM services have private `scoped_session` instances.** `gam_inventory_service.py` and `gam_orders_service.py` create their own module-level `scoped_session` bypassing `database_session.py`. **Fix:** Migrate to centralized `get_sync_db_session()` (Decision 9 sync-bridge) in Wave 4. Add structural guard `test_architecture_no_private_scoped_session.py`.
+- [ ] **SG-5 [HIGH, Wave 1b]: `SameSite=None` → `Lax` may break OIDC `form_post` callbacks.** `src/admin/app.py:117` currently sets `SESSION_COOKIE_SAMESITE = "None"`. OIDC providers using `response_mode=form_post` send cross-origin POSTs — `SameSite=Lax` blocks the cookie. **Fix:** Investigate which OIDC providers use `form_post` vs `query`. If any use `form_post`, the CSRF strategy needs adjustment. Add `test_oidc_form_post_samesite.py` in Wave 1b.
+- [ ] **SG-6 [MEDIUM, Wave 2+3]: 7 files outside `src/admin/` import Flask.** `background_sync_service.py:472`, `gam_inventory_service.py` (8 sites), `gam_inventory_discovery.py:1074`, `gam_reporting_api.py:16,68`, `mock_ad_server.py:1349`, `google_ad_manager.py:25,1696`. **Fix:** Each must be migrated or removed per-wave. Track in `test_architecture_no_flask_imports.py` allowlist.
+
+### 3.5.4 Async edge cases (from SQLAlchemy async specialist audit)
+
+- [ ] **AE-1 [CRITICAL, Spike 1]: Product `@property` lazy-load audit.** 5 properties across 3 relationships — see SB-1. Spike 1's `lazy="raise"` blanket must exercise these properties explicitly, not just run integration tests that happen to use eager-loading code paths.
+- [ ] **AE-2 [HIGH, Spike 2]: asyncpg JSONB codec incompatibility.** See LB-1. Add to Spike 2 pass criteria: Pydantic-typed JSONB roundtrip test.
+- [ ] **AE-3 [HIGH, Wave 4b]: `session.merge()` in `delivery.py:274` needs `await`.** Missing `await` returns a coroutine object, not the merged instance.
+- [ ] **AE-4 [MEDIUM, Wave 4b]: `inspect(product)` + lazy load in `product_pricing.py:38-43`.** Line 43 unconditionally accesses `product.pricing_options`. Under async → `MissingGreenlet`. File is deleted per Decision 5, so this is self-resolving.
+
+### 3.5.5 Testing infrastructure additions (6 components, ~2,125 LOC)
+
+- [ ] **TI-1 [Phase -1]: Response fingerprint system (~430 LOC).** Capture Flask response shapes as committed JSON fixtures before Wave 1; compare against FastAPI per-wave. Files: `tests/migration/fingerprint.py`, `tests/migration/conftest_fingerprint.py`, `tests/migration/test_response_fingerprints.py`, `tests/migration/fixtures/fingerprints/*.json`.
+- [ ] **TI-2 [Phase 1a-2c]: Dual-stack shadow test mode (~255 LOC).** During Waves 1-2 (both stacks coexist), shadow-test safe requests against both Flask and FastAPI, compare responses. Files: `tests/migration/dual_stack_client.py`, `tests/migration/conftest_dual_stack.py`.
+- [ ] **TI-3 [Phase 4a]: Async correctness test harness (~410 LOC).** Concurrent session isolation, MissingGreenlet provocation, event loop blocking detection, connection pool stress. Files: `tests/migration/test_async_correctness.py`, `tests/migration/blocking_detector.py`.
+- [ ] **TI-4 [Phase -1]: Structural guard meta-tests (~400 LOC).** Each new guard gets a "known violation" fixture proving it catches errors. Companion coverage test prevents guard rot. File: `tests/unit/test_architecture_guard_meta.py`.
+- [ ] **TI-5 [Phase -1 through Phase 5]: Wave checkpoint tests (~300 LOC).** Per-wave invariant gates (route parity, import counts, schema match). File: `tests/migration/test_wave_checkpoints.py`.
+- [ ] **TI-6 [Phase 3+]: Production canary system (~330 LOC).** Post-deploy synthetic transactions, health check expansion (`/health/deep`), metric comparison, auto-rollback triggers. Files: `scripts/canary/production_canary.py`, `src/routes/health_deep.py`.
+
+### 3.5.6 Engineering practice additions (from senior eng audit)
+
+- [ ] **EP-1 [Phase 0]: Feature flag for Flask/FastAPI routing toggle (~50 LOC).** `ADCP_USE_FASTAPI_ADMIN=true/false` routes `/admin/*` traffic between stacks. Enables instant rollback without container swaps. Eliminates Wave 2 code freeze. Removed in Wave 3.
+- [ ] **EP-2 [Phase 0]: `X-Served-By` response header (~20 LOC).** Middleware adds `X-Served-By: flask` or `X-Served-By: fastapi` during dual-mount phase. Makes "zero Flask traffic" assertion verifiable.
+- [ ] **EP-3 [Phase 0]: Shared `form_error_response()` helper.** DRY pattern for form-validation-error re-rendering across 25 router files. Prevents duplication caught by `check_code_duplication.py`.
+- [ ] **EP-4 [All waves]: Golden-fixture characterization tests.** Before each router port, capture Flask response shapes as golden fixtures. After port, assert FastAPI matches. TDD adaptation for ports.
+- [ ] **EP-5 [All waves]: FIXME comments at source for all new allowlist entries.** Per CLAUDE.md structural guard rules: "Every allowlisted violation has a `FIXME(salesagent-xxxx)` comment at the source location."
+- [ ] **EP-6 [Wave 0]: Relationship count corrected to 68.** All doc references to "58 relationships" updated to 68 (verified by grep of `src/core/database/models.py`).
+- [ ] **EP-7 [Wave 1b]: Customer communication plan for forced re-login.** Fortune 500 clients need 48-hour advance notice, not just a team announcement.
+
+### 3.5.7 Code pattern corrections (from consistency audit)
+
+- [ ] **CP-1 [Wave 0 design]: Repositories return ORM objects, NOT DTOs.** `list_dtos()` method removed from repository examples. DTO conversion happens in handler layer: `dtos = [AccountDTO.from_orm(a) for a in repo.list_all(...)]`. Corrected in `async-pivot-checkpoint.md` (2026-04-12).
+- [ ] **CP-2 [Wave 2]: `request.form.getlist()` → `List[str] = Form()` migration pattern.** Document the FastAPI equivalent for multi-value form fields in foundation-modules worked examples.
+
+---
+
 ## Section 4 — Per-wave acceptance checklists
 
 Full detail in `flask-to-fastapi-execution-details.md` Part 1.
 
 ### Wave 0 — Foundation + template codemod (~2,500 LOC)
+
+> **Knowledge sources for this wave:**
+> - `flask-to-fastapi-foundation-modules.md` §11.1-11.15 — all 11 foundation module implementations with code
+> - `flask-to-fastapi-migration.md` §11-12 — foundation module descriptions + template codemod details
+> - `async-pivot-checkpoint.md` §3 — target async state (code blocks corrected 2026-04-12)
+> - `async-audit/agent-e-ideal-state-gaps.md` — 14 FastAPI-idiom upgrades (minimum apply: E1/E2/E3/E5/E6/E8)
+> - `async-audit/frontend-deep-audit.md` — 7 critical blockers for templates/JS/OAuth
+> - `flask-to-fastapi-deep-audit.md` §1 — 6 blockers (Blockers 1,2 fixed in Wave 0)
+> - `implementation-checklist.md` §3.5 — 55 verification audit findings scoped per wave
 
 **Entry criteria:**
 
@@ -326,6 +406,13 @@ Full detail in `flask-to-fastapi-execution-details.md` Part 1.
 
 ### Wave 1 — Foundational routers + session cutover (~4,000 LOC)
 
+> **Knowledge sources for this wave:**
+> - `flask-to-fastapi-worked-examples.md` §4.1-4.3 — OAuth login/logout + favicon upload worked examples
+> - `flask-to-fastapi-deep-audit.md` §1 — Blockers 3,5,6 fixed in Wave 1
+> - `async-audit/frontend-deep-audit.md` §3 — OAuth + session + auth flow audit
+> - `flask-to-fastapi-foundation-modules.md` §11.4 — deps/auth.py implementation
+> - `flask_migration_critical_knowledge.md` items 2,4,5,6,17 — OIDC path, 307 default, CSRF unenforced, tojson, SameSite
+
 **Entry criteria:**
 
 - [ ] Wave 0 merged to `main`
@@ -397,6 +484,13 @@ Full detail in `flask-to-fastapi-execution-details.md` Part 1.
 - [ ] Branch mergeable state verified
 
 ### Wave 2 — Bulk blueprint migration (~9,000 LOC)
+
+> **Knowledge sources for this wave:**
+> - `flask-to-fastapi-worked-examples.md` §4.4-4.5 — products + GAM adapter worked examples
+> - `flask-to-fastapi-migration.md` §3 — current-state Flask inventory (route counts per blueprint)
+> - `flask-to-fastapi-adcp-safety.md` §1-7 — AdCP boundary classification (Category 1 vs 2)
+> - `async-audit/frontend-deep-audit.md` §1-2 — Jinja templates + JS fetch audit
+> - `flask_migration_critical_knowledge.md` items 11,12,16 — GAM 8 direct routes, Flask imports outside admin, getlist
 
 **Entry criteria:**
 
@@ -525,6 +619,12 @@ Full detail in `flask-to-fastapi-execution-details.md` Part 1.
 
 ### Wave 3 — ~~Activity stream SSE +~~ Cache migration + Flask cleanup cutover (~2,500 LOC)
 
+> **Knowledge sources for this wave:**
+> - `flask-to-fastapi-foundation-modules.md` §11.15 — SimpleAppCache implementation (Decision 6)
+> - `flask-to-fastapi-execution-details.md` §Wave 3 — rollback procedure + proxy-header smoke tests
+> - `flask-to-fastapi-migration.md` §15 — dependency changes
+> - `flask_migration_critical_knowledge.md` items 7,10 — psycopg2 retained, SSE orphan
+
 > **⚠️ STALE heading corrected 2026-04-11 (Decision 8 DELETE).** The SSE port was removed from Wave 3 scope. SSE route is deleted in Wave 4. Wave 3 now focuses on cache migration (Decision 6 SimpleAppCache) and Flask removal.
 
 **Entry criteria:**
@@ -640,6 +740,15 @@ The Flask removal also removes Flask's internal WSGI proxy-header stack (`Custom
 
 ### Wave 4 — Async database layer (~7,000-10,000 LOC, pivoted 2026-04-11)
 
+> **Knowledge sources for this wave:**
+> - `async-pivot-checkpoint.md` §3 — full target state (corrected 2026-04-12: lifespan-scoped engine, autoflush=False, connect_args)
+> - `async-audit/agent-a-scope-audit.md` — file-by-file async conversion inventory
+> - `async-audit/agent-b-risk-matrix.md` — 33 risks with mitigations + lazy-load cookbook
+> - `async-audit/agent-d-adcp-verification.md` — 10 missing await sites + M1-M9 mitigations
+> - `async-audit/database-deep-audit.md` — 3 critical blockers (statement_timeout, commit atomicity, MissingGreenlet)
+> - `async-audit/testing-strategy.md` — test harness conversion plan
+> - `flask_migration_critical_knowledge.md` items 1,3,7,8,9,13,14,15 — fork-safety, factory shim, psycopg2 retained, Alembic sync, statement_timeout, Product lazy-load, asyncpg JSONB, onupdate staleness
+
 **Entry criteria:**
 
 - [ ] Wave 3 merged to `main` and stable in staging ≥ 3 business days
@@ -655,7 +764,7 @@ The Flask removal also removes Flask's internal WSGI proxy-header stack (`Custom
   - [ ] `get_db_session()` becomes `@asynccontextmanager async def` yielding `AsyncSession`
   - [ ] Engine is lifespan-scoped (not module-level) per Agent E Category 1 guidance — created in `database_lifespan(app)` and stored on `app.state.db_engine`
   - [ ] `SessionDep = Annotated[AsyncSession, Depends(get_session)]` defined in `src/core/database/deps.py`
-- [ ] `alembic/env.py` rewrite — standard async adapter pattern (~30 LOC, `create_async_engine` + `connection.run_sync(do_run_migrations)`)
+- [ ] ~~`alembic/env.py` rewrite~~ **ELIMINATED per DB-4: `env.py` stays sync with psycopg2.** Spike 6 reduced to `render_item` hook + advisory lock (~0.5 day). See Section 1.1 correction.
 - [ ] All repository classes converted to `async def` methods with `(await session.execute(select(...))).scalars().first()` pattern
 - [ ] UoW classes either converted to `async def __aenter__` / `async def __aexit__` OR deleted in favor of `SessionDep` + per-repository Dep factories (Agent E preferred: FastAPI's request-scoped session IS the unit of work)
 - [ ] All `src/core/tools/*.py` `_impl` functions converted to `async def` (several already are per Agent D Section 1.3 inventory)
@@ -715,6 +824,11 @@ In addition to the code conversion work:
 - [ ] Staging deploy completes with zero 500s on hot admin routes for 24h
 
 ### Wave 5 — Async cleanup + v2.0.0 release (~3,000-5,000 LOC)
+
+> **Knowledge sources for this wave:**
+> - `async-audit/agent-e-ideal-state-gaps.md` — remaining idiom upgrades deferred to v2.1
+> - `async-audit/agent-f-nonsurface-inventory.md` — non-code action items (docs, CI, Dockerfile)
+> - `implementation-checklist.md` §6-7 — post-migration verification + planning artifact cleanup
 
 **Entry criteria:**
 

@@ -219,7 +219,7 @@ from authlib.integrations.base_client.errors import OAuthError
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select
-from starlette.concurrency import run_in_threadpool
+from starlette.concurrency import run_in_threadpool  # STALE — async pivot: unused import (DB helpers are async def). Remove when implementing.
 
 from src.admin.auth_utils import extract_user_info
 from src.admin.domain_access import get_user_tenant_access
@@ -256,7 +256,7 @@ async def login(
     """Show login page or redirect to the appropriate OAuth provider.
 
     The tenant-resolution logic (Apx-Incoming-Host / subdomain → tenant_id →
-    OIDC check) is pushed into a sync helper that we wrap in run_in_threadpool.
+    OIDC check) is pushed into async helpers called directly with `await` (full-async pivot 2026-04-11).
     """
     # Anchor the post-login redirect safely in the session (never trust the query arg directly)
     if next:
@@ -893,7 +893,7 @@ from authlib.integrations.base_client.errors import OAuthError
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select
-from starlette.concurrency import run_in_threadpool
+from starlette.concurrency import run_in_threadpool  # STALE — async pivot: unused import (DB helpers are async def). Remove when implementing.
 
 from src.admin.auth_utils import extract_user_info
 from src.admin.flash import flash
@@ -2143,7 +2143,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
-from starlette.concurrency import run_in_threadpool
+from starlette.concurrency import run_in_threadpool  # STALE — async pivot: unused import (DB helpers are async def). Remove when implementing.
 
 from src.admin.deps.audit import audit_action
 from src.admin.deps.auth import AdminUserDep, CurrentTenantDep

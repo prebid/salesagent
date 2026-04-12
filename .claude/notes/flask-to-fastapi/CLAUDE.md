@@ -55,15 +55,16 @@ These were surfaced by the 2nd/3rd-order audit. Every one of them has shipped-br
 
 | File | When to read | Detail level |
 |---|---|---|
-| `CLAUDE.md` (this file) | First, always | Entry point / map, 182 lines |
-| `flask-to-fastapi-migration.md` | Context pass + before any wave | Overview, 2302 lines |
-| `flask-to-fastapi-deep-audit.md` | **Before writing any admin code** | 6 blockers + 20 risks, 885 lines |
-| `flask-to-fastapi-adcp-safety.md` | Before touching MCP/REST surface | 1st-order audit, 480 lines |
-| `flask-to-fastapi-foundation-modules.md` | When implementing a foundation module | Full code + tests, 3337 lines |
-| `flask-to-fastapi-worked-examples.md` | When translating a specific blueprint | 5 worked examples, 2843 lines |
-| `flask-to-fastapi-execution-details.md` | When starting / shipping a wave | Per-wave acceptance + rollback, 1150 lines |
-| `async-pivot-checkpoint.md` | **Before touching Blocker #4** (canonical pivot doc) | Absorbed-async v2.0 target state, 507 lines |
-| `implementation-checklist.md` | **Before opening a PR** (source of truth) | Consolidated ready-to-ship checklist, 891 lines |
+| `CLAUDE.md` (this file) | First, always | Entry point / map |
+| **`execution-plan.md`** | **START HERE for implementation** | **13 phases in strict order, standalone briefings** |
+| `implementation-checklist.md` | Tick boxes AFTER completing work | Verification tracking, 55 audit findings |
+| `async-pivot-checkpoint.md` | Before touching async/DB code | Target state (corrected 2026-04-12) |
+| `flask-to-fastapi-migration.md` | Context pass (reference only) | Overview |
+| `flask-to-fastapi-deep-audit.md` | Before writing admin code | 6 blockers + 20 risks |
+| `flask-to-fastapi-adcp-safety.md` | Before touching MCP/REST surface | 1st-order audit |
+| `flask-to-fastapi-foundation-modules.md` | When implementing a foundation module | Full code + tests |
+| `flask-to-fastapi-worked-examples.md` | When translating a specific blueprint | 5 worked examples |
+| `flask-to-fastapi-execution-details.md` | Rollback procedures reference | Per-wave rollback |
 
 ---
 
@@ -122,7 +123,7 @@ The 9 questions Agent A identified. **Decisions 1, 7, and 9 were resolved via ul
 
 Per Agent B §4 and Agent A §6, the 5.5-7.5 day spike sequence gates Wave 4-5 entry. **Expanded from 7 to 10 spikes on 2026-04-11** to add Spikes 4.25, 4.5 and 5.5 validating Decisions 3, 7 and 9 deep-think resolutions:
 
-1. **Spike 1 — Lazy-load audit** (HARD GATE): set `lazy="raise"` on all 58 relationships, run `tox -e integration`. Pass: <40 failures fixable in <2 days. **Fail = abandon absorbed-async, revert to sync-def Option C + defer async to v2.1.**
+1. **Spike 1 — Lazy-load audit** (HARD GATE): set `lazy="raise"` on all 68 relationships (verified 2026-04-12 by grep of `models.py`), run `tox -e integration`. Pass: <40 failures fixable in <2 days. **Fail = abandon absorbed-async, revert to sync-def Option C + defer async to v2.1.**
 2. **Spike 2 — Driver compat**: run tests under `asyncpg`. Fail = switch to `psycopg[binary,pool]>=3.2.0`.
 3. **Spike 3 — Performance baseline**: capture sync latency on 20 admin routes + 5 MCP tool calls as `baseline-sync.json` for Wave 4 comparison. **Under Path B (Decision 1), the baseline includes adapter `run_in_threadpool` wraps** — Wave 5 benchmark parity measurements must NOT compare sync baseline vs "bare async" but vs "async + threadpool-wrapped adapters" since that is the v2.0 production shape.
 4. **Spike 4 — Test harness**: convert `tests/harness/_base.py` + 5 representative tests; verify xdist + factory-boy work.
@@ -170,7 +171,7 @@ These are the places where "copy what the rest of the repo does" is **wrong**. A
 - **Middleware order: Approximated BEFORE CSRF.** Counterintuitive relative to standard stacks where CSRF sits near the outside. Here, Approximated's external-domain redirect must fire before CSRF sees the form body. See blocker 5.
 - **Templates use `{{ url_for('name', **params) }}` exclusively** — for admin routes AND static assets. No prefix variables, no Jinja globals holding URL strings, no `script_root`, no `admin_prefix`, no `static_prefix`. Every admin route has `name="admin_<blueprint>_<endpoint>"`; the static mount is `name="static"`. This is the FastAPI canonical pattern from the official docs, verified in `Jinja2Templates._setup_env_defaults` at `starlette/templating.py:118-129` (auto-registers `url_for` as a Jinja global that calls `request.url_for(...)` via `@pass_context`). `NoMatchFound` at render time on a missing name is caught pre-merge by `test_templates_url_for_resolves.py`.
 - **`AdCPError` handler branches on `Accept`.** For admin HTML browser users, render `templates/error.html`. For JSON API callers, return JSON. Different from the plain JSON-only handler at `src/app.py:82-88` — do not copy that one.
-- **⚠️ PIVOTED: Async admin handlers wrap DB access in `async with get_db_session() as session:` or `async with UoW() as uow:`**, NOT in `run_in_threadpool`. Under full async SQLAlchemy, `get_db_session()` is an async context manager yielding an `AsyncSession`; repositories return via `await session.execute(...)`. `run_in_threadpool` remains valid for non-DB blocking operations only.
+- **⚠️ PIVOTED: Async admin handlers use `session: SessionDep` via `Depends(get_session)` and repository-factory Deps**, NOT `async with UoW()` or direct `async with get_db_session()`. FastAPI's request-scoped session IS the unit of work — no `UoW` classes in admin handlers. Repositories take `session: AsyncSession` in `__init__`; multiple repositories in the same handler share one session via FastAPI's per-request Depends caching. Transactions commit on normal return, roll back on exception — all handled by the `get_session` DI factory. `run_in_threadpool` remains valid for non-DB blocking operations only (file I/O, CPU-bound, sync adapters per Decision 1 Path B).
 - **`FLASK_SECRET_KEY` is dual-read alongside `SESSION_SECRET`** during v2.0 for dev ergonomics. It is hard-removed in v2.1. Do not rip it out in v2.0 — you will break every dev's local `.env`.
 
 ---
