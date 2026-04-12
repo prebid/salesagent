@@ -365,6 +365,467 @@ def get_logger(name: str) -> structlog.stdlib.BoundLogger:
 
 ---
 
+## 11.0.4 `src/core/database/repositories/base.py` — Repository base + per-repository dep factories (Agent E Categories 2 + 3)
+
+> **Added 2026-04-11 under the Agent E idiom upgrade.** This is the operational recipe for the two biggest idiom upgrades in the Agent E audit: Category 2 (SessionDep DI, E1) and Category 3 (no-UoW repository pattern, E2+E3). §11.0.1 SessionDep tells you *how* the session enters the request; this section tells you *how* repositories compose on top of it and how `_impl` functions receive sessions from non-request callers.
+
+### A. Why the UoW class goes away
+
+The existing codebase has a `BaseUoW` at `src/core/database/repositories/uow.py` with seven concrete subclasses (`MediaBuyUoW`, `ProductUoW`, `WorkflowUoW`, `TenantConfigUoW`, `AccountUoW`, `CreativeUoW`, `AdminCreativeUoW`). Under Flask + sync SQLAlchemy, UoW earned its keep — it bundled "open a `get_db_session()` cm, instantiate one or more repositories over that session, commit on clean exit, rollback on exception" into a single reusable `__enter__`/`__exit__` pair. Every handler body wrote `with SomeUoW(tenant_id) as uow: ...`.
+
+Under FastAPI + async SQLAlchemy + `Depends(get_session)`, **every line of that lifecycle logic is already handled for free by the DI layer**:
+
+| UoW responsibility | FastAPI equivalent |
+|---|---|
+| Open a session on `__enter__` | `get_session()` opens an `AsyncSession` at request start (§11.0.1) |
+| Commit on clean exit | `get_session()` commits after `yield` on handler success |
+| Rollback on exception | `get_session()` catches and rolls back |
+| Bundle multiple repositories in one session | Every repo dep factory takes `SessionDep`; FastAPI's per-request dep cache guarantees they all receive the **same** `AsyncSession` instance |
+| Ensure one transaction per "unit of work" | A request **is** the unit of work — the DI layer commits once at the end |
+| Prevent session-construction sprawl | Handlers never see `async with sessionmaker()` — the DI layer owns it |
+
+A UoW class in this world is a wrapper that calls `Depends(get_session)` for you, forgets to cache, and forces every handler into a context-manager body instead of a clean parameter list. It also fixes `tenant_id` at construction time, which conflates "data-access scoping" (a repo method argument) with "transactional scoping" (the session lifetime) — two orthogonal concerns that should not share a constructor.
+
+**Greenfield rule:** no `__aenter__`/`__aexit__`, no `commit()`/`rollback()`, no `tenant_id` in `__init__`, no `_session_cm`. Repositories are thin, stateless, per-method objects over an injected session.
+
+### B. The base class
+
+```python
+# src/core/database/repositories/base.py
+"""Repository base — stateless wrappers over an injected AsyncSession.
+
+Design invariants (enforced by test_architecture_repository_shape.py):
+
+1. `__init__` takes exactly one argument beyond `self`: the session.
+2. No `__aenter__` / `__aexit__` / `__enter__` / `__exit__`.
+3. No `commit()`, `rollback()`, `flush()` as public methods — only
+   `session.flush()` inside write methods when you need to materialize
+   server-side defaults or PKs for cross-repository reads.
+4. `tenant_id` is NEVER a constructor argument. It is a per-method
+   keyword, so the same repository instance can (in principle) serve
+   queries across tenants — though in practice every call site passes
+   one tenant, FastAPI dep caching wins, and the repo is recreated
+   per-request anyway.
+5. Return DTOs (Pydantic models) from read methods. Return ORM
+   instances ONLY when the caller is itself a repository composing a
+   larger write (see §11.0.5 DTO layer).
+"""
+from __future__ import annotations
+
+from typing import Generic, TypeVar
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+#: Type variable for the ORM model a concrete repository wraps.
+ModelT = TypeVar("ModelT")
+
+
+class BaseRepository(Generic[ModelT]):
+    """Base class for all async repositories.
+
+    Subclasses override nothing on the base — they simply add domain
+    methods. The base exists to (a) document the shape via one place,
+    (b) give the structural guard a single parent class to scan for,
+    and (c) optionally hold generic helpers like `by_id()` once the
+    pattern stabilises.
+
+    Usage:
+
+        class AccountRepository(BaseRepository[Account]):
+            async def list_by_tenant(self, tenant_id: str) -> list[AccountDTO]:
+                stmt = select(Account).filter_by(tenant_id=tenant_id)
+                result = await self.session.execute(stmt)
+                return [AccountDTO.model_validate(a) for a in result.scalars().all()]
+
+    Deliberately NOT on this class:
+
+    * `async def __aenter__(self) -> Self` — DI owns lifecycle.
+    * `async def commit(self) -> None` — DI owns transactions.
+    * `tenant_id: str` constructor arg — scoping is a method-level concern.
+    * `_session_cm` attribute — there is no context manager to hold.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+```
+
+The base is intentionally near-empty. Do **not** add a `commit()` method "for convenience" — the whole point is that repositories never touch the transaction boundary. If a test fails because the handler's changes were not visible, the correct answer is to `await session.flush()` at the write site, not to commit.
+
+### C. Example concrete repository — `AccountRepository`
+
+```python
+# src/core/database/repositories/account.py
+"""Account repository — async, DTO-returning, dep-factory friendly.
+
+Eager-load contract (asserted by test_architecture_repository_eager_loads.py):
+
+    list_dtos            — no relationships loaded
+    get_with_contact     — Account.primary_contact (selectinload)
+    create_from_dto      — write, no eager loads needed
+"""
+from __future__ import annotations
+
+from typing import Sequence
+
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
+
+from src.admin.dtos.account import (
+    AccountCreateDTO,
+    AccountDTO,
+    AccountWithContactDTO,
+)
+from src.core.database.models import Account
+from src.core.database.repositories.base import BaseRepository
+
+
+class AccountRepository(BaseRepository[Account]):
+    """Async data-access for `Account` + related aggregates."""
+
+    async def list_dtos(
+        self,
+        tenant_id: str,
+        *,
+        status: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> Sequence[AccountDTO]:
+        """List accounts for a tenant, optionally filtered by status.
+
+        Returns `AccountDTO` — no relationships loaded. If the caller
+        needs the primary contact, use `get_with_contact` instead.
+        """
+        stmt = (
+            select(Account)
+            .filter_by(tenant_id=tenant_id)
+            .order_by(Account.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        if status is not None:
+            stmt = stmt.filter_by(status=status)
+
+        result = await self.session.execute(stmt)
+        orm_rows = result.scalars().all()
+        return [AccountDTO.model_validate(a) for a in orm_rows]
+
+    async def get_with_contact(
+        self,
+        account_id: str,
+        *,
+        tenant_id: str,
+    ) -> AccountWithContactDTO | None:
+        """Fetch one account with `primary_contact` eagerly loaded.
+
+        The `selectinload` below is load-bearing — under async sessions,
+        accessing `account.primary_contact` on a committed instance
+        triggers `MissingGreenlet`. The DTO pulls the relationship
+        across the boundary, so after this method returns the session
+        can be safely closed without breaking the DTO shape.
+        """
+        stmt = (
+            select(Account)
+            .filter_by(account_id=account_id, tenant_id=tenant_id)
+            .options(selectinload(Account.primary_contact))
+        )
+        result = await self.session.execute(stmt)
+        orm = result.scalars().first()
+        return AccountWithContactDTO.model_validate(orm) if orm else None
+
+    async def create_from_dto(
+        self,
+        dto: AccountCreateDTO,
+        *,
+        tenant_id: str,
+    ) -> AccountDTO:
+        """Persist a new account and return the hydrated DTO.
+
+        We `flush()` (not `commit()`) so that server defaults like
+        `created_at` are populated on the ORM instance, letting us
+        `model_validate()` into a complete DTO. The actual commit
+        happens in `get_session` at handler return.
+        """
+        account = Account(
+            account_id=dto.account_id,
+            tenant_id=tenant_id,
+            operator=dto.operator,
+            brand=dto.brand.model_dump(mode="json"),
+            status="pending_approval",
+            sandbox=dto.sandbox,
+            display_name=dto.display_name,
+        )
+        self.session.add(account)
+        await self.session.flush()
+        return AccountDTO.model_validate(account)
+```
+
+### D. Dep factories — the glue between SessionDep and handlers
+
+```python
+# src/admin/routers/deps/repositories.py
+"""Per-repository dep factories.
+
+Every repository dep follows the same shape:
+
+    async def get_<repo>_repo(session: SessionDep) -> <Repo>:
+        return <Repo>(session)
+
+    <Repo>Dep = Annotated[<Repo>, Depends(get_<repo>_repo)]
+
+Do not add logic to these factories. If you find yourself wanting to
+"wrap the session in a transaction" or "bind tenant_id to the repo",
+stop — that is a sign you are recreating UoW. The tenant comes from
+the request path parameter; the transaction comes from `get_session`.
+"""
+from typing import Annotated
+
+from fastapi import Depends
+
+from src.core.database.deps import SessionDep
+from src.core.database.repositories.account import AccountRepository
+from src.core.database.repositories.creative import (
+    CreativeAssignmentRepository,
+    CreativeRepository,
+)
+from src.core.database.repositories.currency_limit import CurrencyLimitRepository
+from src.core.database.repositories.media_buy import MediaBuyRepository
+from src.core.database.repositories.product import ProductRepository
+from src.core.database.repositories.tenant_config import TenantConfigRepository
+from src.core.database.repositories.workflow import WorkflowRepository
+
+
+async def get_account_repo(session: SessionDep) -> AccountRepository:
+    return AccountRepository(session)
+
+
+async def get_media_buy_repo(session: SessionDep) -> MediaBuyRepository:
+    return MediaBuyRepository(session)
+
+
+async def get_product_repo(session: SessionDep) -> ProductRepository:
+    return ProductRepository(session)
+
+
+async def get_workflow_repo(session: SessionDep) -> WorkflowRepository:
+    return WorkflowRepository(session)
+
+
+async def get_tenant_config_repo(session: SessionDep) -> TenantConfigRepository:
+    return TenantConfigRepository(session)
+
+
+async def get_creative_repo(session: SessionDep) -> CreativeRepository:
+    return CreativeRepository(session)
+
+
+async def get_creative_assignment_repo(
+    session: SessionDep,
+) -> CreativeAssignmentRepository:
+    return CreativeAssignmentRepository(session)
+
+
+async def get_currency_limit_repo(session: SessionDep) -> CurrencyLimitRepository:
+    return CurrencyLimitRepository(session)
+
+
+# Type aliases for handler signatures
+AccountRepoDep = Annotated[AccountRepository, Depends(get_account_repo)]
+MediaBuyRepoDep = Annotated[MediaBuyRepository, Depends(get_media_buy_repo)]
+ProductRepoDep = Annotated[ProductRepository, Depends(get_product_repo)]
+WorkflowRepoDep = Annotated[WorkflowRepository, Depends(get_workflow_repo)]
+TenantConfigRepoDep = Annotated[TenantConfigRepository, Depends(get_tenant_config_repo)]
+CreativeRepoDep = Annotated[CreativeRepository, Depends(get_creative_repo)]
+CreativeAssignmentRepoDep = Annotated[CreativeAssignmentRepository, Depends(get_creative_assignment_repo)]
+CurrencyLimitRepoDep = Annotated[CurrencyLimitRepository, Depends(get_currency_limit_repo)]
+```
+
+### E. Cross-repository composition: how one request commits atomically
+
+```python
+# src/admin/routers/accounts.py (excerpt)
+from fastapi import APIRouter
+
+from src.admin.deps.audit import AuditRepoDep
+from src.admin.deps.auth import CurrentTenantDep
+from src.admin.dtos.account import AccountCreateDTO, AccountDTO
+from src.admin.routers.deps.repositories import (
+    AccountRepoDep,
+    CurrencyLimitRepoDep,
+)
+from src.admin.routers.deps.users import UserRepoDep
+
+router = APIRouter(
+    tags=["admin-accounts"],
+    redirect_slashes=True,
+    include_in_schema=False,
+)
+
+
+@router.post(
+    "/tenant/{tenant_id}/accounts",
+    name="admin_accounts_create_account",
+    status_code=201,
+    response_model=AccountDTO,
+)
+async def create_account(
+    tenant_id: str,
+    payload: AccountCreateDTO,
+    tenant: CurrentTenantDep,
+    accounts: AccountRepoDep,
+    users: UserRepoDep,
+    currencies: CurrencyLimitRepoDep,
+    audit: AuditRepoDep,
+) -> AccountDTO:
+    """Create a new account + grant owner access + log the event.
+
+    Four repositories, one session, one transaction. If ANY of the
+    four operations below raises, `get_session` rolls everything
+    back atomically. If all four return, `get_session` commits once
+    at handler exit.
+
+    Per-request dep caching is what makes this work: `accounts`,
+    `users`, `currencies`, and `audit` all transitively depend on
+    `SessionDep`, and FastAPI resolves `get_session` exactly once per
+    request — the same `AsyncSession` instance flows into every repo.
+    """
+    await currencies.assert_within_budget(tenant_id, currency=payload.currency)
+    account = await accounts.create_from_dto(payload, tenant_id=tenant_id)
+    await users.grant_access(
+        email=payload.owner_email,
+        tenant_id=tenant_id,
+        account_id=account.account_id,
+    )
+    await audit.log_event(
+        "account_created",
+        tenant_id=tenant_id,
+        resource_type="account",
+        resource_id=account.account_id,
+        actor_email=tenant.viewer_email,
+    )
+    # No `await session.commit()` anywhere. get_session handles it.
+    return account
+```
+
+**The critical invariant:** all four repositories share one `AsyncSession` because all four dep factories transitively depend on the same `SessionDep` — FastAPI caches the resolved dep once per request (this is the default behaviour of `Depends`, and `use_cache=False` should never be passed on a session dep). Cross-repo writes are therefore implicitly atomic. You get the UoW semantics without writing a UoW class.
+
+### F. The `_impl` escape hatch — how transport-agnostic business logic gets a session
+
+`_impl` functions live at `src/core/tools/*.py` and must stay transport-agnostic per Pattern #5 (CLAUDE.md) and guards `test_transport_agnostic_impl.py`, `test_impl_resolved_identity.py`. They are called from four different places: MCP tool wrappers, A2A raw wrappers, REST API routes in `src/routes/api_v1.py`, and unit/integration tests that bypass the transport layer entirely. Three of those four have no `Request` object and cannot use `Depends()`.
+
+**The rule:** `_impl` functions take an explicit `session: AsyncSession` parameter, and construct repositories inside the body. Not `Depends(get_session)` — that only resolves inside a FastAPI route. Not `async with get_db_session()` — that would hide the session from callers. The transport wrappers pass the session in.
+
+```python
+# src/core/tools/accounts.py
+async def _create_account_impl(
+    req: CreateAccountRequest,
+    *,
+    identity: ResolvedIdentity,       # Pattern #5 — NOT Context/ToolContext
+    session: AsyncSession,             # explicit, not Depends()
+) -> CreateAccountResult:
+    """Business logic — no transport awareness, no DI magic."""
+    accounts = AccountRepository(session)
+    users = UserRepository(session)
+    audit = AuditLogRepository(session)
+
+    account = await accounts.create_from_dto(req.to_dto(), tenant_id=identity.tenant_id)
+    await users.grant_access(
+        email=req.owner_email,
+        tenant_id=identity.tenant_id,
+        account_id=account.account_id,
+    )
+    await audit.log_event(
+        "account_created",
+        tenant_id=identity.tenant_id,
+        resource_id=account.account_id,
+        actor_email=identity.actor_email,
+    )
+    return CreateAccountResult(account=account)
+```
+
+Wrapping it at the four transport boundaries:
+
+```python
+# src/core/main.py — MCP wrapper
+@mcp.tool()
+async def create_account(ctx: Context, req: CreateAccountRequest) -> CreateAccountResponse:
+    identity = resolve_identity(ctx.http.headers, protocol="mcp")
+    from src.core.database.scope import session_scope
+    async with session_scope() as session:
+        return await _create_account_impl(req, identity=identity, session=session)
+
+
+# src/a2a_server/adcp_a2a_server.py — A2A raw function
+async def create_account_raw(headers: dict[str, str], req: CreateAccountRequest) -> CreateAccountResponse:
+    from src.core.database.scope import session_scope
+    identity = resolve_identity(headers, protocol="a2a")
+    async with session_scope() as session:
+        return await _create_account_impl(req, identity=identity, session=session)
+
+
+# src/routes/api_v1.py — REST wrapper (inside FastAPI, uses SessionDep)
+@router.post("/api/v1/accounts", status_code=201)
+async def create_account_route(
+    req: CreateAccountRequest,
+    identity: ResolvedIdentityDep,
+    session: SessionDep,              # proper DI here; no session_scope()
+) -> CreateAccountResponse:
+    return await _create_account_impl(req, identity=identity, session=session)
+```
+
+**Why the REST wrapper uses `SessionDep` but the MCP/A2A wrappers use `session_scope()`:** the REST route is a FastAPI endpoint, so `Depends(get_session)` resolves naturally and carries the request-scoped transaction contract. MCP tools and A2A raw functions run inside their own transport layer's request abstraction, **not** FastAPI's `Request` object. They cannot use `Depends(get_session)`. `session_scope()` (§11.0.6) is the non-request analog and gives them the same open-commit-or-rollback-close guarantee.
+
+### G. UoW → repository-dep deletion map
+
+When Wave 4 lands, every UoW subclass in `src/core/database/repositories/uow.py` is deleted. Here is the one-to-many map:
+
+| Deleted class | Replaced by (dep factories) |
+|---|---|
+| `BaseUoW` | `BaseRepository` (§11.0.4 base) |
+| `MediaBuyUoW` | `MediaBuyRepoDep` + `CurrencyLimitRepoDep` |
+| `ProductUoW` | `ProductRepoDep` |
+| `WorkflowUoW` | `WorkflowRepoDep` |
+| `TenantConfigUoW` | `TenantConfigRepoDep` |
+| `AccountUoW` | `AccountRepoDep` |
+| `CreativeUoW` | `CreativeRepoDep` + `CreativeAssignmentRepoDep` |
+| `AdminCreativeUoW` | `CreativeRepoDep` + `CreativeAssignmentRepoDep` + `MediaBuyRepoDep` + `ProductRepoDep` + `WorkflowRepoDep` + `TenantConfigRepoDep` (handler takes six repos; per-request dep cache means one session still backs all six) |
+
+**Rule-of-thumb:** count the attributes of the UoW subclass (`uow.media_buys`, `uow.currency_limits`, etc.) and add that many `*RepoDep` parameters to the handler signature, one per attribute. If the list gets long (five or more), consider whether the handler is doing too much — but do NOT re-introduce a UoW wrapper.
+
+### H. Why no handler-level `session` parameter for admin routes
+
+It is tempting to shortcut the dep-factory layer and write:
+
+```python
+# Tempting but WRONG for admin routes — avoid
+async def list_accounts(
+    tenant_id: str,
+    session: SessionDep,      # handler touches session directly
+    ...
+) -> HTMLResponse:
+    accounts = AccountRepository(session)
+    ...
+```
+
+This works and is technically equivalent, but it leaks `AsyncSession` into the handler surface area. Three problems:
+
+1. **Test overrides become less expressive.** `app.dependency_overrides[get_account_repo] = lambda: fake_repo` is more targeted than overriding the entire session.
+2. **Refactoring shifts the construction site.** If you later decide `AccountRepository(session, *, audit_logger=...)` needs an extra dependency, every handler has to learn about it. With the dep factory, only one file changes.
+3. **The structural guard `test_architecture_no_session_in_admin_handlers.py` disallows `SessionDep` as an admin handler parameter** — it wants handlers to depend on repositories, not sessions. The exception is `src/routes/api_v1.py` (REST API, which passes the session directly into `_impl`) and `_impl` functions themselves.
+
+**Admin handlers depend on `*RepoDep`, not `SessionDep`.** REST routes and `_impl` wrappers can depend on `SessionDep` because they are the layer that owns the transport-to-`_impl` boundary.
+
+### I. Gotchas
+
+- **`session.commit()` never appears in repository methods.** Enforced by `test_architecture_no_commit_in_repository.py`. The only files allowed to call `await session.commit()` are `src/core/database/deps.py` (the `get_session` DI factory) and `src/core/database/scope.py` (the `session_scope()` helper from §11.0.6).
+- **`self.session` is an `AsyncSession`, never `Session`.** The guard `test_architecture_repository_session_is_async.py` AST-scans for this.
+- **Do not inject `tenant_id` at construction.** The guard `test_architecture_repository_no_tenant_in_init.py` catches new violations.
+- **Do not cache repositories across requests.** They hold a session reference, and the session is per-request. Creating a repository at module import time and reusing it across requests breaks the per-request transaction boundary and leaks `AsyncSession` objects across event loops.
+- **Eager-load contract drift is silent.** If you add a relationship access in a method body without updating the `selectinload(...)` options *and* the docstring, tests pass locally (the relationship lazy-loads the first time) but production fails with `MissingGreenlet`. The guard `test_architecture_repository_eager_loads.py` catches method/option drift.
+- **Cross-repository writes require one of them to `flush()`.** If repo A creates a row and repo B needs the row's PK for a FK lookup, repo A must `await self.session.flush()` before returning.
+- **The `BaseUoW` deprecation burns a release.** Delete the UoW subclasses one PR at a time during Waves 4a-4b. Each PR updates its handlers and `_impl` call sites in the same commit. Only the very last PR of Wave 4b deletes `BaseUoW` itself, after `grep -r "UoW" src/ tests/` returns zero. Do not try to delete them all in one commit — the blast radius is 40+ files.
+
+---
+
 ## 11.0.5 DTO layer — Pydantic v2 wrappers over ORM models (Agent E Category 5)
 
 > **Added 2026-04-11 under the Agent E idiom upgrade.** The DTO boundary is the **architectural prevention** for Risk #1 (lazy-load realization in production). If templates receive DTOs, lazy loads become impossible by construction.
@@ -440,6 +901,453 @@ class AccountCreateRequest(BaseModel):
 - **`strict=True`** prevents silent type coercion that might hide data model drift
 - **Eager-load contract:** DTOs with nested relationships MUST be returned only from repository methods that eager-loaded the relationships. Enforced by `test_architecture_repository_eager_loads.py`.
 - **AdCP boundary preservation:** admin DTOs live in `src/admin/dtos/`, SEPARATE from `src/core/schemas/` (AdCP library schemas). Changes to admin DTOs NEVER touch the AdCP wire format. CLAUDE.md Pattern #1 still applies to library schemas; admin DTOs are a different layer.
+
+---
+
+## 11.0.6 `src/core/database/scope.py` — Non-request `session_scope()` helper (Agent E Category 2 / scheduler edition)
+
+> **Added 2026-04-11 under the Agent E idiom upgrade.** §11.0.1 `SessionDep` solves "how does a request handler get a session". This section solves "how does a scheduler, background task, CLI script, or alembic migration get a session when there is no `Request` at all". It is the non-request analog and it shares the lifespan-scoped sessionmaker with §11.0.1, so both paths commit/rollback through identical code.
+
+### A. The problem
+
+The following places in the codebase currently call `get_db_session()` without a `Request`:
+
+1. `src/services/delivery_webhook_scheduler.py::_send_reports` — runs on an `asyncio.sleep(SLEEP_INTERVAL_SECONDS)` loop inside the MCP lifespan
+2. `src/services/media_buy_status_scheduler.py` — similar periodic loop
+3. `src/services/background_sync_service.py` — long-running GAM sync jobs (multi-hour)
+4. `src/services/background_approval_service.py` — approval task worker
+5. `src/services/order_approval_service.py` — GAM order polling
+6. `src/services/property_verification_service.py` — DNS / ASA verification worker
+7. CLI scripts under `scripts/ops/*.py` (migrations, seeding, one-off ops)
+8. `alembic/env.py` itself (via `EnvironmentContext`)
+
+None of these have a FastAPI `Request`. None can call `Depends(get_session)`. All currently open a session via the sync `get_db_session()` context manager, which goes away in Wave 4 when the engine becomes fully async. They need a replacement that yields an `AsyncSession`, commits on clean exit, rolls back on exception, **shares the lifespan-scoped sessionmaker** so the scheduler tick uses the same connection pool the HTTP handlers use, works from code that is NOT inside a request scope, and degrades gracefully when called from outside a running app (CLI, alembic, pytest).
+
+### B. Implementation
+
+```python
+# src/core/database/scope.py
+"""Non-request session helper.
+
+Parallels `src/core/database/deps.py::get_session` for code paths that
+do not have a `fastapi.Request`:
+
+    * Scheduler ticks (asyncio.create_task loops in MCP lifespan)
+    * Background workers (GAM sync, approval polling)
+    * CLI scripts
+    * Alembic migrations
+    * Pytest fixtures that set up data outside a request
+
+The sessionmaker lives in a ContextVar, seeded once by
+`database_lifespan()` at startup and cleared on shutdown.
+"""
+from __future__ import annotations
+
+import contextlib
+from contextvars import ContextVar, Token
+from typing import AsyncIterator
+
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
+)
+
+
+_current_sessionmaker: ContextVar[async_sessionmaker[AsyncSession] | None] = ContextVar(
+    "current_sessionmaker",
+    default=None,
+)
+
+
+class SessionScopeNotInitialised(RuntimeError):
+    """Raised when `session_scope()` is called before a sessionmaker is set.
+
+    Typical causes:
+    * CLI script that forgot to wrap its body in `database_lifespan(app)`.
+    * Unit test that imported a module calling `session_scope()` at
+      collection time. Fix: move the call inside the test body and let
+      the fixture seed the ContextVar.
+    * Alembic migration run directly via `python alembic/env.py` without
+      configuring the engine. Fix: the new async `env.py` (section F)
+      seeds the ContextVar itself.
+    """
+
+
+def set_sessionmaker(sm: async_sessionmaker[AsyncSession]) -> Token:
+    """Install the current sessionmaker. Returns the Token for later reset."""
+    return _current_sessionmaker.set(sm)
+
+
+def reset_sessionmaker(token: Token) -> None:
+    """Restore the previous sessionmaker from a token returned by set_sessionmaker."""
+    _current_sessionmaker.reset(token)
+
+
+def current_sessionmaker() -> async_sessionmaker[AsyncSession]:
+    """Read the current sessionmaker or raise if unset."""
+    sm = _current_sessionmaker.get()
+    if sm is None:
+        raise SessionScopeNotInitialised(
+            "session_scope() was called before a sessionmaker was installed. "
+            "Start the app via `database_lifespan(app)`, or install one "
+            "manually via `set_sessionmaker(make_sessionmaker(engine))` in "
+            "your CLI / scheduler / migration entry point."
+        )
+    return sm
+
+
+@contextlib.asynccontextmanager
+async def session_scope() -> AsyncIterator[AsyncSession]:
+    """Yield a fresh AsyncSession, commit on exit, rollback on exception.
+
+    Usage:
+
+        async with session_scope() as session:
+            repo = MediaBuyRepository(session)
+            await repo.do_work()
+            # session.commit() happens here automatically
+            # session.rollback() happens if do_work raises
+
+    The session is short-lived — one `session_scope()` block should
+    correspond to ONE logical unit of work (one scheduler tick, one
+    CLI subcommand, one phase of a multi-phase background job). Do
+    NOT nest `async with session_scope()` inside another one — use
+    savepoints (not this helper) if you need sub-transactions.
+    """
+    sessionmaker = current_sessionmaker()
+    async with sessionmaker() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+```
+
+### C. Lifespan integration — how `database_lifespan` seeds the ContextVar
+
+```python
+# src/core/database/engine.py (updated from §11.0)
+@asynccontextmanager
+async def database_lifespan(app: "FastAPI") -> AsyncIterator[None]:
+    """Create engine + sessionmaker on startup, dispose on shutdown.
+
+    ALSO seeds the `_current_sessionmaker` ContextVar so that non-request
+    code (schedulers, background tasks) can call `session_scope()` and
+    share the same sessionmaker as HTTP handlers.
+    """
+    from src.core.database.scope import (
+        reset_sessionmaker,
+        set_sessionmaker,
+    )
+    from src.core.settings import get_settings
+
+    settings = get_settings()
+    engine = make_engine(settings.database_url)
+    sessionmaker = make_sessionmaker(engine)
+
+    app.state.db_engine = engine
+    app.state.db_sessionmaker = sessionmaker
+
+    scope_token = set_sessionmaker(sessionmaker)
+    try:
+        yield
+    finally:
+        reset_sessionmaker(scope_token)
+        await engine.dispose()
+```
+
+Both paths — `get_session` (from `app.state.db_sessionmaker`) and `session_scope()` (from the ContextVar) — now share the **same** `sessionmaker` instance. A scheduler tick borrows from the same pool as HTTP handlers. Under xdist the per-test lifespan seeds a per-test ContextVar so workers do not collide.
+
+### D. Scheduler tick pattern
+
+Short-lived session per tick — NOT per scheduler lifetime.
+
+```python
+# src/services/delivery_webhook_scheduler.py
+"""Delivery webhook scheduler — periodic loop, fresh session per tick."""
+import asyncio
+import logging
+
+from src.core.database.scope import session_scope
+from src.core.database.repositories.media_buy import MediaBuyRepository
+
+logger = logging.getLogger(__name__)
+SLEEP_INTERVAL_SECONDS = 30.0
+
+
+class DeliveryWebhookScheduler:
+    """Periodic worker that sends delivery webhooks for in-flight media buys."""
+
+    def __init__(self) -> None:
+        self._task: asyncio.Task | None = None
+        self._lock = asyncio.Lock()
+        self._stopped = asyncio.Event()
+
+    async def start(self) -> None:
+        async with self._lock:
+            if self._task is not None:
+                return
+            self._stopped.clear()
+            self._task = asyncio.create_task(self._run())
+
+    async def stop(self) -> None:
+        self._stopped.set()
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None
+
+    async def _run(self) -> None:
+        """Long-lived loop. Each iteration opens ONE fresh session."""
+        while not self._stopped.is_set():
+            try:
+                await self._tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("delivery_webhook_scheduler tick failed")
+            await asyncio.sleep(SLEEP_INTERVAL_SECONDS)
+
+    async def _tick(self) -> None:
+        """One scheduler iteration. Opens a session, does the work, commits.
+
+        Key invariant: the session is opened HERE, not in `_run`. A
+        long-lived session held across ticks would:
+
+        1. Occupy a connection pool slot for the entire scheduler lifetime.
+        2. Accumulate stale identity-map entries that grow unboundedly.
+        3. Hit `pool_recycle=3600` and start raising `DisconnectionError`
+           mid-tick.
+        """
+        async with session_scope() as session:
+            media_buys = MediaBuyRepository(session)
+            pending = await media_buys.list_pending_webhook_deliveries()
+            for buy in pending:
+                await self._send_one(buy, session=session)
+            # commit happens at `async with` exit
+```
+
+### E. CLI script pattern
+
+Two shapes depending on whether the script needs the full app or just the DB.
+
+**Shape 1 — full-app lifespan (recommended):**
+
+```python
+# scripts/ops/reseed_property_tags.py
+"""One-off script to re-seed property_tags for a tenant."""
+import asyncio
+import sys
+
+from src.app import app
+from src.core.database.engine import database_lifespan
+from src.core.database.repositories.tenant_config import TenantConfigRepository
+from src.core.database.scope import session_scope
+
+
+async def main(tenant_id: str) -> None:
+    async with database_lifespan(app):
+        async with session_scope() as session:
+            tenant_config = TenantConfigRepository(session)
+            await tenant_config.reseed_property_tags(tenant_id)
+            print(f"Reseeded property_tags for {tenant_id}")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        sys.exit("Usage: reseed_property_tags.py <tenant_id>")
+    asyncio.run(main(sys.argv[1]))
+```
+
+**Shape 2 — DB-only, no app (for alembic-adjacent tooling):**
+
+```python
+# scripts/ops/dump_media_buys_csv.py
+"""Bulk export — builds its own engine, no FastAPI app needed."""
+import asyncio
+import os
+import sys
+
+from src.core.database.engine import make_engine, make_sessionmaker
+from src.core.database.repositories.media_buy import MediaBuyRepository
+from src.core.database.scope import (
+    reset_sessionmaker,
+    session_scope,
+    set_sessionmaker,
+)
+
+
+async def main(tenant_id: str) -> None:
+    engine = make_engine(os.environ["DATABASE_URL"])
+    token = set_sessionmaker(make_sessionmaker(engine))
+    try:
+        async with session_scope() as session:
+            repo = MediaBuyRepository(session)
+            async for row in repo.stream_all_as_csv(tenant_id):
+                sys.stdout.write(row)
+    finally:
+        reset_sessionmaker(token)
+        await engine.dispose()
+
+
+if __name__ == "__main__":
+    asyncio.run(main(sys.argv[1]))
+```
+
+Shape 2 is marginally more code but lets the script run without any `src.app` imports — useful for fast smoke tests and for alembic, which cannot import the full app without circular-import headaches.
+
+### F. Alembic `env.py` — async rewrite
+
+```python
+# alembic/env.py
+"""Async alembic environment.
+
+Run migration scripts against an async engine. Individual migrations
+remain sync — only the envelope is async. Standard SQLAlchemy 2.0
+pattern.
+"""
+import asyncio
+from logging.config import fileConfig
+
+from alembic import context
+from sqlalchemy import pool
+from sqlalchemy.ext.asyncio import async_engine_from_config
+
+from src.core.database.models import Base
+
+config = context.config
+
+if config.config_file_name is not None:
+    fileConfig(config.config_file_name)
+
+target_metadata = Base.metadata
+
+
+def _do_run_migrations(connection) -> None:
+    """Sync body — migrations themselves are not async."""
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        compare_type=True,
+        compare_server_default=True,
+    )
+    with context.begin_transaction():
+        context.run_migrations()
+
+
+async def run_async_migrations_online() -> None:
+    """Async envelope that drives a sync migration body."""
+    from src.core.database.engine import _build_async_url
+
+    raw_url = config.get_main_option("sqlalchemy.url")
+    config.set_main_option("sqlalchemy.url", _build_async_url(raw_url))
+
+    connectable = async_engine_from_config(
+        config.get_section(config.config_ini_section, {}),
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
+
+    async with connectable.connect() as connection:
+        await connection.run_sync(_do_run_migrations)
+
+    await connectable.dispose()
+
+
+def run_migrations_online() -> None:
+    """Entry point called by `alembic upgrade head`."""
+    asyncio.run(run_async_migrations_online())
+
+
+def run_migrations_offline() -> None:
+    """Offline mode — dumps SQL without connecting."""
+    url = config.get_main_option("sqlalchemy.url")
+    context.configure(
+        url=url,
+        target_metadata=target_metadata,
+        literal_binds=True,
+        dialect_opts={"paramstyle": "named"},
+    )
+    with context.begin_transaction():
+        context.run_migrations()
+
+
+if context.is_offline_mode():
+    run_migrations_offline()
+else:
+    run_migrations_online()
+```
+
+`NullPool` is used deliberately: alembic runs one connection and exits. A pooled engine would keep connections alive after `upgrade` finishes, delaying script exit.
+
+### G. Long-running background jobs — GAM sync
+
+`src/services/background_sync_service.py` runs GAM sync jobs that can take multiple hours. Holding one `AsyncSession` for the entire run is wrong for three reasons:
+
+1. The pool has `pool_recycle=3600` — after one hour the connection is rotated and any open session on it starts raising `DisconnectionError`.
+2. One hour of asyncpg idle time blows through TCP keepalives on Fly.io's proxy layer, causing random mid-job failures.
+3. The identity-map grows unbounded over hours of writes, consuming memory proportional to the sync size.
+
+**Refactor rule: one `async with session_scope()` per PHASE of the sync, not per run.**
+
+```python
+# src/services/background_sync_service.py (post Wave 4)
+async def run_gam_sync(tenant_id: str) -> SyncReport:
+    """Multi-phase GAM sync. Each phase gets a fresh session."""
+    report = SyncReport()
+
+    # Phase 1: discover line items
+    async with session_scope() as session:
+        discovery = GamDiscoveryRepository(session)
+        line_items = await discovery.fetch_and_persist(tenant_id)
+        report.discovery_count = len(line_items)
+
+    # Phase 2: reconcile with internal media buys
+    async with session_scope() as session:
+        reconciler = GamReconcileRepository(session)
+        report.reconciled_count = await reconciler.reconcile(tenant_id, line_items)
+
+    # Phase 3: write delivery metrics
+    async with session_scope() as session:
+        metrics = DeliveryMetricsRepository(session)
+        report.metrics_count = await metrics.bulk_upsert(tenant_id, line_items)
+
+    return report
+```
+
+Each phase commits independently. If phase 2 fails, phase 1's writes are already committed — which is usually what you want for a long-running job, because partial progress is better than losing everything and restarting from the beginning of phase 1.
+
+Decision #9 in the folder `CLAUDE.md` open-decisions list asks "how should background_sync_service handle long jobs" — Option A is this phase-per-session refactor; Option B is the sync-bridge fallback (run the whole job under `run_in_threadpool` with the sync psycopg2 path, kept on life-support just for this one service). Option A is strongly preferred because it keeps the codebase on one driver.
+
+### H. Interaction with `src/core/main.py::lifespan_context`
+
+The MCP lifespan (`src/core/main.py`) starts `delivery_webhook_scheduler` and `media_buy_status_scheduler`. After Wave 4, both schedulers call `session_scope()` from their tick bodies. For that call to resolve, **the MCP lifespan must run INSIDE `database_lifespan` so the ContextVar is seeded by the time the scheduler's `asyncio.create_task` fires.**
+
+The lifespan composition in `src/app.py` becomes:
+
+```python
+@asynccontextmanager
+async def combined_lifespan(app: FastAPI) -> AsyncIterator[None]:
+    async with database_lifespan(app):          # seeds _current_sessionmaker
+        async with mcp_lifespan(app):           # starts schedulers (they can now session_scope())
+            yield
+```
+
+The order is load-bearing. If `mcp_lifespan` starts first, the scheduler tick fires before `database_lifespan` has seeded the ContextVar, and `session_scope()` raises `SessionScopeNotInitialised`. The folder `CLAUDE.md` "MCP schedulers are lifespan-coupled" note already covers this — this section is just the concrete "which goes first" answer: **database first, MCP second.**
+
+### I. Gotchas
+
+- **`session_scope()` never appears inside a FastAPI route.** Routes use `SessionDep`. If you find `session_scope()` inside a `@router.get(...)` handler, it is a bug — FastAPI already has a session for you, and opening a second one means your request is running two transactions. The guard `test_architecture_no_session_scope_in_routes.py` enforces this.
+- **Never nest `async with session_scope()` inside another `async with session_scope()`.** Two sessions, two transactions, no implicit atomicity. Use one outer scope and pass the session down. Nesting is allowed only in tests where the outer scope is a fixture.
+- **`SessionScopeNotInitialised` at test collection time is almost always a module-level import side effect.** Move the `session_scope()` call inside a function body.
+- **CLI scripts that do NOT use `database_lifespan` must call `reset_sessionmaker(token)` in a `finally` block** — without it, the ContextVar holds a reference to a disposed engine, and any subsequent `session_scope()` gets a session backed by a closed pool. `try / finally` is not optional here.
+- **Alembic envelope calls `asyncio.run()` directly**, which creates a fresh event loop. That means `env.py` cannot share an event loop with a running app — alembic is always out-of-process.
+- **`background_sync_service.py` Option A (phase-per-session) requires each phase to be idempotent on retry.** Build phase 1's writes with UPSERT semantics or guard with an already-processed check.
+- **`ContextVar` vs module-global.** A module-global `_sessionmaker` leaks between tests if pytest runs them in the same worker; a `ContextVar` is cleared by Python's context propagation rules. Tests that install their own sessionmaker should use `set_sessionmaker` / `reset_sessionmaker` in fixture setup/teardown.
 
 ---
 
