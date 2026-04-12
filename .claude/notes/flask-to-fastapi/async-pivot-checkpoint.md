@@ -391,6 +391,24 @@ result = await run_in_threadpool(adapter.create_media_buy, request, packages, ..
 
 **Adjacent fork-safety concern (Risk #34, see §4):** `run_all_services.py:175` calls `src.core.database.database.init_db()` which under async pivot opens the SQLAlchemy async engine in the parent process. This is the **same bug class** as Decision 2 but at a different code path. Mitigation: either `init_db()` calls `await reset_engine()` in `finally`, OR `run_all_services.py:175` runs init via `subprocess.run([sys.executable, "-m", "scripts.setup.init_database"])` like migrations already do at `:207`. **Strongly prefer the subprocess pattern** — matches the existing migration pattern, no in-process state leak risk.
 
+### SSE / long-lived connections — Decision 8 DELETE (2026-04-11 deep-think)
+
+The codebase has exactly **one SSE endpoint**: `src/admin/blueprints/activity_stream.py:226-364`. Decision 8 deep-think confirmed it is **orphan code**:
+- `templates/tenant_dashboard.html:972` literally says `// Use simple polling instead of EventSource for reliability`
+- Template fetch-polls `/tenant/{id}/activity` (JSON) at 5s intervals (line 978 `setInterval(pollActivities, 5000)`)
+- Zero `new EventSource(` exists anywhere in `templates/` or `static/`
+- Only `/events` references: one integration smoke test probe (`test_admin_ui_routes_comprehensive.py:367-370`) and one docs line (`troubleshooting.md:74`)
+
+**Wave 4 action:** DELETE the SSE route + generator + rate-limit state (`MAX_CONNECTIONS_PER_TENANT`, `connection_counts`, `connection_timestamps`, lines 22-24) + HEAD probe. Net: **−170 LOC, −3 unwritten test files, −1 pip dep (`sse_starlette`)**. Also delete the smoke test and docs reference.
+
+**Two surviving routes** (`/activity` JSON poll + `/activities` REST API) convert mechanically: `def → async def`, `with get_db_session → async with get_db_session`, `db_session.scalars(stmt).all() → (await db_session.execute(stmt)).scalars().all()`. Additionally fix `api_mode=False → api_mode=True` on the `/activity` JSON poll route (pre-existing bug — JS `fetch` sees HTML 302 redirect on auth failure, never gets the 401 the template expects).
+
+**Post-deletion:** the codebase has **zero** long-lived connection handlers, so Risk #29 (WebSocket/SSE holding pool connections) reduces to "no surface area." Structural guard `tests/unit/test_architecture_no_sse_handlers.py` asserts no function in `src/admin/routers/**` uses `EventSourceResponse` or returns `StreamingResponse` with `mimetype="text/event-stream"`, ratchet to zero tolerance after Wave 4.
+
+**`get_recent_activities` retains per-call session lifetime** — each invocation opens its own `async with get_db_session()` block, formats `AuditLog` column data into dicts (no relationship access), and returns. Under `lazy="raise"` (Spike 1), the formatter accesses only columns (`audit_log.log_id`, `audit_log.timestamp`, `audit_log.details`, etc.), not relationships — safe.
+
+**If SSE is ever needed again** for sub-5s activity latency, the correct shape is **WebSocket** (bidirectional, lower framing overhead), not SSE. Document this guidance in the surviving `activity_stream.py` file header.
+
 ## 4. 2nd and 3rd order risks — the fresh session MUST investigate these
 
 **(#1 is the biggest unknown — do this audit FIRST before committing to v2.0 scope.)**
