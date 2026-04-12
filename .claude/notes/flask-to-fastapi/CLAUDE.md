@@ -96,6 +96,14 @@ After the database audit, a third audit round focused on the frontend surfaces i
 |---|---|
 | `async-audit/frontend-deep-audit.md` | **Before touching any template, JS file, or admin route handler.** 7 critical blockers (OIDC callback path wrong in docs, base.html cascade, 302→307 redirect default, CSRF added where none existed, tojson filter missing, AJAX Accept false-positive, duplicate adapter route). 10 high-severity issues. Key numbers: 197 Flask routes, 74 templates, 366 flash() calls, ~147 script_root refs, ~115 fetch() calls, 338 redirect() calls. CSRF recommendation: SameSite=Lax + Origin validation (0.5 day) instead of adding tokens to all 80+ fetch calls (2-3 days). |
 
+### Comprehensive testing strategy (2026-04-11)
+
+6 parallel Opus subagents designed a multi-tier testing strategy covering unit tests + structural guards, integration test async conversion, E2E + admin UI, performance benchmarks, BDD behavioral tests, and migration safety + rollback verification.
+
+| Report | When to read |
+|---|---|
+| `async-audit/testing-strategy.md` | **Before writing any test or defining any wave gate.** 6 tiers, ~6,000+ existing tests as safety net, 18 new structural guards, ~217 new migration-specific tests, performance benchmarks at 4 concurrency levels, chaos/fault injection for 7 failure modes. Key: conftest.py autouse fixture overhaul is highest-blast-radius single change (affects all 4,052 unit tests). Integration test async conversion (1,817 tests) via libcst AST rewriter. BDD stays sync with asyncio.run() bridge. Wave 3 Flask removal is the only irreversible wave. Total testing effort: ~35-40 person-days across Waves 0-5. |
+
 ### Open decisions blocking Wave 4 (from Agent A §7)
 
 The 9 questions Agent A identified. **Decisions 1, 7, and 9 were resolved via ultrathink deep-think analysis on 2026-04-11** (3 parallel Opus subagents, each producing 1st/2nd/3rd-order derivative analysis). Decisions 2, 3, 5, 8 were resolved earlier by Audit 06 (see meta-audit round). Decisions 4 and 6 are mechanical Wave 4 work, not blockers. **Ledger closed.**
