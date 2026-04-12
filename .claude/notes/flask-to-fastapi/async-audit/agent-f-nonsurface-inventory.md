@@ -15,11 +15,13 @@
 - **SHOULD (inside the main async waves):** 51
 - **CAN (defer to v2.1 / polish wave):** 24
 
+> **⚠️ CORRECTIONS APPLIED 2026-04-11.** Findings #1, #2, and #10 below recommend removing psycopg2-binary + libpq. **All three are reversed** by Decisions 1, 2, 9 (and Audit 06's overrule of Decision 2). The "Top surprises" list is preserved verbatim for traceability of the original audit, but the resolutions in §1.1, §1.2, §1.4 are now **additive (keep psycopg2 alongside asyncpg)** rather than substitutive (remove psycopg2). See §1.1, §1.2, §1.4 reversal banners for full reasoning. The original "MUST fix before Wave 4 merge" pre-Wave-0 budget shrinks because the swap-and-fallout work is no longer needed; the new budget gains the dual session factory work and the structural guard.
+
 **Top surprises that no previous agent has flagged:**
 
-1. **`scripts/deploy/entrypoint_admin.sh:9` does `import psycopg2; psycopg2.connect('${DATABASE_URL}')` at shell startup.** When Agent B/C propose removing `psycopg2-binary` from `pyproject.toml`, this entrypoint script breaks immediately in production and the container never comes up. Agent B's Risk #2 and #33 discuss psycopg2 → asyncpg at the library level but do not touch this shell script. **MUST fix before Wave 4 merge.** (Citation: `scripts/deploy/entrypoint_admin.sh:9`.)
+1. **`scripts/deploy/entrypoint_admin.sh:9` does `import psycopg2; psycopg2.connect('${DATABASE_URL}')` at shell startup.** When Agent B/C propose removing `psycopg2-binary` from `pyproject.toml`, this entrypoint script breaks immediately in production and the container never comes up. Agent B's Risk #2 and #33 discuss psycopg2 → asyncpg at the library level but do not touch this shell script. ~~**MUST fix before Wave 4 merge.**~~ **REVERSED 2026-04-11:** psycopg2-binary STAYS (Decision 2 OVERRULE), so the entrypoint script needs no change. (Citation: `scripts/deploy/entrypoint_admin.sh:9`.)
 
-2. **`scripts/deploy/run_all_services.py:65-125` calls the sync `get_db_connection()` at container startup** (reaches into `src/core/database/db_config.py:168` which does raw `psycopg2.connect`, separate from `database_session.py` sync engine). Agent B assumed the pivot touches SQLAlchemy only, but the deploy entrypoint has its own sync-psycopg2 path. It will still "work" with asyncpg kept as a second driver, but if we want to remove psycopg2 entirely, this path must switch to `asyncpg.connect()` wrapped in `asyncio.run()` or use the async SQLAlchemy engine from within a lifespan. (Citations: `scripts/deploy/run_all_services.py:65`, `scripts/deploy/run_all_services.py:133`, `src/core/database/db_config.py:105-127`.)
+2. **`scripts/deploy/run_all_services.py:65-125` calls the sync `get_db_connection()` at container startup** (reaches into `src/core/database/db_config.py:168` which does raw `psycopg2.connect`, separate from `database_session.py` sync engine). Agent B assumed the pivot touches SQLAlchemy only, but the deploy entrypoint has its own sync-psycopg2 path. It will still "work" with asyncpg kept as a second driver, but if we want to remove psycopg2 entirely, this path must switch to `asyncpg.connect()` wrapped in `asyncio.run()` or use the async SQLAlchemy engine from within a lifespan. **REVERSED 2026-04-11:** Audit 06 confirmed these calls are pre-uvicorn (lines actually `:84,135` not `:65,133`), making `asyncio.run()` structurally wrong (loop-bound asyncpg state would conflict with uvicorn's loop). `DatabaseConnection` STAYS as the raw-psycopg2 pre-uvicorn path. (Citations: `scripts/deploy/run_all_services.py:84`, `scripts/deploy/run_all_services.py:135`, `src/core/database/db_config.py:105-127`.)
 
 3. **Pre-commit hook `test-migrations` still runs against SQLite** (`.pre-commit-config.yaml:153-158` — `DATABASE_URL=sqlite:///.test.db`). SQLite is already unsupported by policy (CLAUDE.md Pattern #3) but the hook is at `stages: [manual]` so it has lingered. Under async + asyncpg, SQLite is doubly impossible. This hook is dead code and must be removed or replaced with a Postgres-based migration smoke. (Citation: `.pre-commit-config.yaml:153-158`.)
 
@@ -35,13 +37,14 @@
 
 9. **`scripts/run_admin_ui.py` is an orphan Flask runner** — mentioned in the migration plan for deletion in Wave 3. It does `from src.admin.app import create_app` and runs Waitress/Werkzeug. Under full async, `create_app()` becomes a FastAPI factory and this shim breaks. Agent A/C handle this at the code level but the file's removal blocks the CI job that may still reference it. Verify nothing in `.github/workflows/*.yml` calls `scripts/run_admin_ui.py` — **confirmed none do** (all refer to `docker compose` or direct pytest).
 
-10. **`Dockerfile:17-20` installs `libpq-dev` as a build-time dep in the builder stage and `libpq5` at runtime.** Neither is needed for asyncpg (which is pure-Python + its own C extension for the protocol codec, not libpq-based). Removing `libpq-dev` saves ~5MB builder image, and removing `libpq5` saves ~3MB runtime. Low priority. (Citations: `Dockerfile:17-20`, `Dockerfile:63-68`.)
+10. **`Dockerfile:17-20` installs `libpq-dev` as a build-time dep in the builder stage and `libpq5` at runtime.** Neither is needed for asyncpg (which is pure-Python + its own C extension for the protocol codec, not libpq-based). Removing `libpq-dev` saves ~5MB builder image, and removing `libpq5` saves ~3MB runtime. Low priority. **REVERSED 2026-04-11:** psycopg2-binary STAYS for Decisions 1, 2, 9 sync paths. Although psycopg2-binary bundles its own libpq, Decision 9 keeps the door open for swapping to source-built psycopg2 in v2.1+ — keeping libpq-dev + libpq5 avoids a future Dockerfile change at the same time as a deps swap. Image savings adjust ~80MB → ~75MB. (Citations: `Dockerfile:17-20`, `Dockerfile:63-68`.)
 
-**Go/no-go impact:**
-- Finding #1 (entrypoint_admin.sh) is a hard blocker but trivial to fix (one line).
-- Finding #2 (run_all_services.py health check) is a MUST, small effort.
-- Finding #4 (PG version skew) must be resolved before driver spike; otherwise Spike 2 (Risk #2) produces false positives.
-- None of the other findings shift the go decision by themselves. Collectively they add ~1.5 days to the "pre-Wave-0 hard gate" budget. The MUST bucket now has 18 items totalling ~3-4 days of work alongside Agent B's existing 8 spikes.
+**Go/no-go impact (CORRECTED 2026-04-11):**
+- ~~Finding #1 (entrypoint_admin.sh) is a hard blocker but trivial to fix (one line).~~ **No longer a blocker** — psycopg2 STAYS, entrypoint script unchanged.
+- ~~Finding #2 (run_all_services.py health check) is a MUST, small effort.~~ **No longer a blocker** — `DatabaseConnection` STAYS as the raw-psycopg2 pre-uvicorn path (Audit 06 OVERRULE).
+- Finding #4 (PG version skew) **REMAINS a blocker** before driver spike; align CI to PG17 to match local + production. Decisions 1/9 do not change this — Spike 2 still runs against asyncpg even though psycopg2 also stays.
+- Finding #10 (libpq removal) **REVERSED** — keep libpq-dev + libpq5 in the Dockerfile.
+- The MUST bucket originally had 18 items totalling ~3-4 days; with the F1.1, F1.2, F1.4, #1, #2, #10 reversals plus the new structural guard work (test_architecture_no_runtime_psycopg2.py + the dual-session-factory implementation), it now has ~14 items totalling ~3-4 days (similar effort, different shape — less swap-and-fallout, more dual-engine implementation). The new pre-Wave-0 budget item is **Spike 5.5** (0.5 day, two-engine coexistence test) which validates the additive plan.
 
 ---
 
@@ -51,17 +54,27 @@
 
 #### 1.1 `psycopg2-binary` → `asyncpg` swap in `pyproject.toml`
 
-**Current state:**
-- `pyproject.toml:19` — `"psycopg2-binary>=2.9.9"` (main dep)
-- `pyproject.toml:74` — `"types-psycopg2>=2.9.21.20251012"` (dev dep, optional-dependencies)
-- `pyproject.toml:101` — same `types-psycopg2` in the `[dependency-groups] dev` block (duplicate block — see finding 1.2)
-- `uv.lock:122, 228, 3091+` — psycopg2-binary 2.9.11 is the resolved version with wheels for cp312 macOS/Linux/Windows
+> **⚠️ CORRECTED 2026-04-11 — PARTIAL REVERSAL.** The "remove psycopg2-binary" plan below is **superseded** by Decisions 1, 2, and 9 (and Audit 06 Decision 2 OVERRULE). Three independent sync-psycopg2 paths must be retained, so `psycopg2-binary` and `types-psycopg2` STAY in `pyproject.toml`. `asyncpg` is added ALONGSIDE, not replacing. The findings below are preserved for traceability but the "Change required" list is updated to reflect the additive (not substitutive) plan.
+>
+> **Three retained sync-psycopg2 paths:**
+> 1. **Decision 2 (Audit 06 OVERRULE):** `src/core/database/db_config.py::DatabaseConnection` is called from `scripts/deploy/run_all_services.py:84,135` as a pre-uvicorn health check — runs BEFORE the asyncio event loop is created, cannot use `asyncio.run()` because the eventual uvicorn process needs a clean loop. (Original Agent F finding 1.4 missed this caller.)
+> 2. **Decision 1 (Path B):** new `get_sync_db_session()` factory in `database_session.py` lives alongside async `get_db_session()`. Adapter code (running in `run_in_threadpool`) needs sync sessions because adapters stay sync `def` (Path B chosen because porting `googleads==49.0.0` off `suds-py3` is ~1500 LOC for zero AdCP-visible benefit).
+> 3. **Decision 9 (sync-bridge):** new `src/services/background_sync_db.py` module with a separate sync engine for multi-hour `background_sync_service` jobs (asyncpg `pool_recycle=3600` rotates connections under long-held async sessions, identity map grows unbounded, Fly.io TCP keepalives expire).
+>
+> All three paths use sync `psycopg2`; each has a different consumer and a different engine configuration (db_config raw connection / Path B pooled session 5+10/30s timeout / sync-bridge pooled session 2+3/600s timeout). New structural guard `tests/unit/test_architecture_no_runtime_psycopg2.py` allowlists ONLY `db_config.py` + `background_sync_db.py` (and `database_session.py` for the Path B factory). Runtime introduction of psycopg2 anywhere else fails CI.
 
-**Change required (what Agent A/C already cover):**
-- Remove `psycopg2-binary>=2.9.9`
-- Add `asyncpg>=0.30.0`
-- Remove `types-psycopg2>=2.9.21.20251012` (both copies — main `[project.optional-dependencies]` dev and `[dependency-groups] dev`)
+**Current state:**
+- `pyproject.toml:19` — `"psycopg2-binary>=2.9.9"` (main dep) — **RETAINED**
+- `pyproject.toml:74` — `"types-psycopg2>=2.9.21.20251012"` (dev dep, optional-dependencies) — **RETAINED**
+- `pyproject.toml:101` — same `types-psycopg2` in the `[dependency-groups] dev` block (duplicate block — see finding 1.2) — **RETAINED in both blocks**
+- `uv.lock:122, 228, 3091+` — psycopg2-binary 2.9.11 is the resolved version with wheels for cp312 macOS/Linux/Windows — **NO CHANGE**
+
+**Change required (CORRECTED 2026-04-11 — additive, not substitutive):**
+- ~~Remove `psycopg2-binary>=2.9.9`~~ **KEEP** — required by Decisions 1, 2, 9
+- **Add** `asyncpg>=0.30.0,<0.32` (alongside psycopg2, both coexist)
+- ~~Remove `types-psycopg2>=2.9.21.20251012`~~ **KEEP** in both blocks — `db_config.py` + `background_sync_db.py` import psycopg2 at runtime
 - Add `sqlalchemy[asyncio]>=2.0.0` (forces `greenlet` explicitly as a documented transitive — or keep `sqlalchemy>=2.0.0` and let `greenlet` come in via the asyncio extra)
+- **Add** `dependency-groups.dev`: `tests/unit/test_architecture_no_runtime_psycopg2.py` enforces the allowlist (db_config.py + background_sync_db.py + database_session.py only)
 
 **Change required (THIS agent's scope — extra actions):**
 
@@ -89,18 +102,22 @@
 
 #### 1.2 Build-time compilation for asyncpg
 
+> **⚠️ CORRECTED 2026-04-11 — PARTIAL REVERSAL.** Action F1.2.1 (remove `libpq-dev` + `libpq5`) is **superseded** by Decisions 1, 2, 9 which retain `psycopg2-binary` for three sync paths. Although `psycopg2-binary` ships its own bundled libpq, any future swap to source-built `psycopg2` (no binary) would need libpq dev headers. More importantly, Decision 9's `background_sync_db.py` keeps the door open for switching to non-binary psycopg2 in v2.1+ if the binary build proves slow. **Keep `libpq5` in runtime, keep `libpq-dev` in builder.** The Docker image savings adjust from the original ~80MB total (Agent F overall) to ~75MB (because the libpq components stay).
+
 **Current state:**
-- `Dockerfile:17-20` installs `gcc`, `libpq-dev`, `git` in builder stage
-- `Dockerfile:65-68` runtime stage installs `libpq5`, `curl`, `nginx`
-- `uv sync --frozen` at `Dockerfile:38-40` uses the lockfile
+- `Dockerfile:17-20` installs `gcc`, `libpq-dev`, `git` in builder stage — **RETAINED**
+- `Dockerfile:65-68` runtime stage installs `libpq5`, `curl`, `nginx` — **RETAINED**
+- `uv sync --frozen` at `Dockerfile:38-40` uses the lockfile — no change
 
-**Change required:**
+**Change required (CORRECTED 2026-04-11):**
 
-**Action F1.2.1 [SHOULD, Wave 4]** — asyncpg has pre-built wheels for glibc and does NOT need `libpq-dev` at build time OR `libpq5` at runtime. Remove `libpq-dev` from builder, `libpq5` from runtime. Keep `gcc` because some transitive C extensions (e.g. `cryptography`, `pillow`) may still need it under sdist fallback scenarios. Measure image size reduction: ~5MB builder + ~3MB runtime = **~8MB total**.
+**Action F1.2.1 [REVERSED — DO NOT REMOVE]** — ~~asyncpg has pre-built wheels for glibc and does NOT need `libpq-dev` at build time OR `libpq5` at runtime. Remove `libpq-dev` from builder, `libpq5` from runtime.~~ **KEEP both.** `psycopg2-binary` ships its own bundled libpq today, but Decision 9's sync-bridge module reserves the option to swap to source-built psycopg2 in v2.1+ if asyncpg's binary distribution constrains us. Removing libpq now would force a future Dockerfile change at the same time as a non-trivial deps swap — keep them coupled.
 
 **Action F1.2.2 [CAN, v2.1]** — Add a `--no-compile` flag to uv sync inside Docker to avoid compiling sdists for transitive deps. Minor optimization, defer.
 
-**Priority:** SHOULD 1.2.1, CAN 1.2.2.
+**Priority:** REVERSED for 1.2.1 (action is now "no change"); CAN for 1.2.2.
+
+**Net image size impact (corrected):** Original Agent F estimate of "~80MB savings" assumed psycopg2-binary + types-psycopg2 + libpq-dev + libpq5 all removed. Corrected estimate: ~75MB savings (only the Wave 3 Flask removal + nginx slim base + cleanup of dead deps; psycopg2 + libpq stay).
 
 ---
 
@@ -123,39 +140,37 @@
 
 #### 1.4 `src/core/database/db_config.py:DatabaseConnection` — raw psycopg2.connect
 
+> **⚠️ CORRECTED 2026-04-11 — REVERSED.** Action F1.4.1 (delete `DatabaseConnection`) is **superseded by Audit 06 Decision 2 OVERRULE.** The `DatabaseConnection` class STAYS. The callers list in this finding was **incomplete** — it missed `scripts/deploy/run_all_services.py:84,135` calling `get_db_connection()` as **pre-uvicorn health checks**. Those checks run BEFORE the asyncio event loop is created (entrypoint script gates uvicorn startup on DB reachability), so `asyncio.run(asyncpg.connect(...))` is **structurally wrong** — it would create-and-tear-down an event loop just to do a single SELECT, then uvicorn would create a fresh loop, and any module-level state initialized during the throwaway loop becomes invalid (asyncpg connection pools are loop-bound). The simplest correct shape is "keep `DatabaseConnection` as the raw-psycopg2 pre-uvicorn path." See Audit 06 Decision 2 OVERRULE for the full reasoning trail.
+
 **Current state (critical finding — not covered by any other agent):**
 
 `src/core/database/db_config.py:105-172` defines a `DatabaseConnection` class and `get_db_connection()` helper that do raw `psycopg2.connect(...)` with `psycopg2.extras.DictCursor`. This class is **separate** from the SQLAlchemy engine in `database_session.py` — it exists for bootstrap/health checks that run before the engine is available or from contexts where SQLAlchemy is overkill.
 
-**Callers of `get_db_connection()`:**
-- `scripts/deploy/run_all_services.py:65, 133` — container startup health check
+**Callers of `get_db_connection()` (CORRECTED 2026-04-11):**
+- `scripts/deploy/run_all_services.py:84,135` — **container startup health check, pre-uvicorn (cannot use async)** — Audit 06 added these
 - `scripts/setup/init_database.py` — initial DB bootstrap
 - `scripts/setup/init_database_ci.py:22` — CI setup
 
-**Change required:**
+The original Agent F report listed only `:65, 133` in `run_all_services.py`. The actual line numbers as of 2026-04-11 are `:84, 135` (file was updated). Both calls are pre-uvicorn — the entrypoint script needs the DB to be reachable BEFORE it execs uvicorn. Spawning an event loop just for the check would leave a dangling loop reference that would later conflict with uvicorn's loop creation.
 
-**Action F1.4.1 [MUST, Wave 0]** — The `DatabaseConnection` class is the **second sync-DB path** that must be addressed. Options:
-- **Option A:** rewrite to use asyncpg directly, with `asyncio.run(...)` wrapper at call sites. Ugly because all callers are sync scripts.
-- **Option B:** keep psycopg2 as a TRANSIENT dep just for this one bootstrap path. Means psycopg2 stays in `pyproject.toml`. Defeats the purpose of "remove psycopg2".
-- **Option C (recommended):** rewrite `DatabaseConnection` to use SQLAlchemy's sync engine with `asyncpg` dialect via `create_engine("postgresql+psycopg2://...")` → **no, because psycopg2 is gone**. Instead use `sqlalchemy.ext.asyncio.create_async_engine(...)` and wrap in `asyncio.run(...)` for the one-shot health check. Or even simpler: use asyncpg's `asyncpg.connect(...)` + `asyncio.run(...)` directly, bypassing SQLAlchemy for this bootstrap path.
-- **Option D (simplest):** delete `DatabaseConnection` entirely. Its three callers are all scripts doing "is the DB alive?" checks. Replace with a 5-line async helper that does `asyncio.run(asyncpg.connect(DATABASE_URL))` + `.close()`. The init_db() path in `init_database.py` uses SQLAlchemy anyway (line 9) — only `run_all_services.py` uses `get_db_connection()` for a raw SELECT 1.
+**Change required (CORRECTED 2026-04-11):**
 
-**Recommended:** Option D. Delete `DatabaseConnection` and `get_db_connection()`. Replace callers with:
+**Action F1.4.1 [REVERSED — KEEP DatabaseConnection]** — ~~Delete `DatabaseConnection` entirely.~~ **KEEP it as the raw-psycopg2 pre-uvicorn path.** `psycopg2-binary` stays in `pyproject.toml` (per F1.1 reversal). Add structural guard `tests/unit/test_architecture_no_runtime_psycopg2.py` with allowlist:
+
 ```python
-# scripts/deploy/run_all_services.py
-import asyncio, asyncpg
-async def _check():
-    conn = await asyncpg.connect(os.environ["DATABASE_URL"])
-    try:
-        await conn.fetchval("SELECT 1")
-    finally:
-        await conn.close()
-asyncio.run(_check())
+# Allowed psycopg2 importers (the only files that may import psycopg2 at runtime)
+ALLOWED_PSYCOPG2_IMPORTERS = {
+    "src/core/database/db_config.py",          # raw connection for pre-uvicorn health check
+    "src/core/database/database_session.py",   # Decision 1 Path B sync session factory
+    "src/services/background_sync_db.py",      # Decision 9 sync-bridge for multi-hour syncs
+}
 ```
 
-**Action F1.4.2 [MUST, Wave 4]** — Audit `scripts/setup/init_database.py`, `scripts/setup/init_database_ci.py`, `scripts/setup/setup_tenant.py` for sync DB patterns. Each may need the same asyncio.run() wrapping treatment.
+The guard walks every `import psycopg2` and `from psycopg2 import ...` AST node and fails if the importing file is not in the allowlist. New violations require either fixing the violation OR adding the file to the allowlist with a justification comment.
 
-**Priority:** MUST. This is the single most important non-obvious finding in this report.
+**Action F1.4.2 [REVERSED — Audit 06 SUBSTITUTE]** — ~~Audit `scripts/setup/init_database.py`, `scripts/setup/init_database_ci.py`, `scripts/setup/setup_tenant.py` for sync DB patterns and async-wrap them.~~ **KEEP these as sync** — they are one-shot bootstrap scripts that do not run inside the uvicorn event loop. `asyncio.run()` would work but adds complexity for zero benefit. Sync `psycopg2.connect(...)` is the correct shape for one-shot scripts.
+
+**Priority:** REVERSED. This finding's recommendation was **wrong** — the meta-audit (Audit 06) caught the missed health-check callers and the architectural reason `asyncio.run()` is wrong for pre-uvicorn paths. Preserved for traceability of how the deep-think round corrected the original audit.
 
 ---
 

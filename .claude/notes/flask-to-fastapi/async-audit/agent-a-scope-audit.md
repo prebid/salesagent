@@ -177,7 +177,7 @@ Line 2029: response = await core_get_products_tool(...)                     # aw
 | `src/services/delivery_webhook_scheduler.py` | `async def _run_scheduler` + `async def _send_reports` with `with get_db_session() as session:` inside (lines 92, 134) | Change `with` to `async with`; add `await` before `session.execute` / repository methods; `MediaBuyRepository.get_all_by_statuses` becomes `async`. Scheduler task creation shape unchanged (already `asyncio.create_task`). | +40 | MEDIUM |
 | `src/services/media_buy_status_scheduler.py` | Similar to above, 1 `get_db_session()` use at line 83 in scheduler tick | Same pattern | +30 | MEDIUM |
 | `src/services/background_approval_service.py` | Sync background | Convert to async | +20 | LOW |
-| `src/services/background_sync_service.py` | 9 `get_db_session()` uses | Full async conversion | +80 | MEDIUM |
+| `src/services/background_sync_service.py` | 9 `get_db_session()` uses, multi-hour `threading.Thread` GAM sync workers | **Decision 9 (2026-04-11): NOT converted to async — sync-bridge instead.** New `src/services/background_sync_db.py` module exposes `get_sync_db_session()` backed by a separate sync psycopg2 engine (pool 2+3, statement_timeout=600s). Background threads stay sync; async request path is untouched. Bundles Wave 3 flask-caching correction (line 472 `from flask import current_app` ImportError → `SimpleAppCache` helper). Validated by Spike 5.5. Structural guard `test_architecture_sync_bridge_scope.py` allowlist contains ONLY this file. Sunset v2.1+. | +200 (new module) +30 (call site updates) | **HIGH (mitigated)** |
 | `src/services/order_approval_service.py` | 7 `get_db_session()` uses | Convert to async | +70 | MEDIUM |
 | `src/services/protocol_webhook_service.py` | 1 `get_db_session()` use | Convert to async | +10 | LOW |
 | `src/services/webhook_delivery_service.py` | 1 `get_db_session()` use | Convert to async | +10 | LOW |
@@ -192,11 +192,13 @@ Line 2029: response = await core_get_products_tool(...)                     # aw
 | `src/services/setup_checklist_service.py` | 2 uses | Convert to async | +15 | LOW |
 | `src/services/gcp_service_account_service.py` | 3 uses | Convert to async | +20 | LOW |
 
-**Services layer subtotal: ~+460 LOC**
+**Services layer subtotal: ~+610 LOC** (was +460 pre-Decision-9; +150 LOC delta for `background_sync_db.py` new module + sync-bridge call-site rewiring at 9 sites in `background_sync_service.py`. The original +80 LOC "full async conversion" is replaced by +30 LOC of sync-session swap because adapter calls and DB writes inside the worker stay sync.)
 
 ### 2.6 Adapters layer
 
-**Verdict:** adapters largely use **Pydantic schema Principal** (not ORM), not ORM relationships. Most `self.principal.name`, `self.principal.platform_mappings` accesses are safe. But several adapter files use `get_db_session()` for workflow/audit persistence.
+**⚠️ Decision 1 RESOLVED 2026-04-11 — Path B (sync adapters + threadpool wrap).** The original §2.6 estimate below (+345 LOC, +100 LOC HIGH on `google_ad_manager.py`) assumed full async conversion with the cascading async/await contagion. **That is no longer the plan.** Adapters stay sync `def`. The 18 adapter call sites in `src/core/tools/*.py` (and 1 in `src/admin/blueprints/operations.py:252`) wrap in `await run_in_threadpool(...)`. Adapter internals continue using `get_sync_db_session()` from the dual session factory. `AuditLogger.log_operation` splits into `_log_operation_sync` (used inside worker threads) + async public wrapper. Threadpool tuned to 80 via `anyio.to_thread.current_default_thread_limiter().total_tokens` in lifespan startup. Structural guard `test_architecture_adapter_calls_wrapped_in_threadpool.py` prevents drift. Full implementation reference: `flask-to-fastapi-foundation-modules.md` §11.14. Full target state: `async-pivot-checkpoint.md` §3 "Adapters (Decision 1 Path B)". The table below is **kept for traceability** of the original deep-audit but the LOC deltas are stale — the corrected scope is at the end of this section.
+
+**Verdict (pre-Decision-1):** adapters largely use **Pydantic schema Principal** (not ORM), not ORM relationships. Most `self.principal.name`, `self.principal.platform_mappings` accesses are safe. But several adapter files use `get_db_session()` for workflow/audit persistence.
 
 | File | Current state | Change required | Est LOC | Risk |
 |---|---|---|---|---|
@@ -215,11 +217,37 @@ Line 2029: response = await core_get_products_tool(...)                     # aw
 
 **Adapters subtotal: ~+345 LOC**
 
-**IMPORTANT:** The adapter base class interface (`src/adapters/base.py`) defines methods like `create_media_buy`, `get_media_buy_delivery`, etc. These are currently **sync**. Converting them to `async def` is a **large-surface contract change**:
+**IMPORTANT (pre-Decision-1, STALE):** The adapter base class interface (`src/adapters/base.py`) defines methods like `create_media_buy`, `get_media_buy_delivery`, etc. These are currently **sync**. Converting them to `async def` is a **large-surface contract change**:
 - ~20 methods on `AdServerAdapter` base class
 - Every caller (`_impl` functions, schedulers, admin blueprints that use adapters directly) must `await` adapter calls
 
 However, converting the adapter base class is **required** because once the DB layer is async, adapter methods that touch the DB must also be async, and the async/await contagion propagates through the call graph.
+
+**CORRECTED scope (Decision 1 Path B, 2026-04-11):**
+
+| File | Decision 1 disposition | Est LOC | Risk |
+|---|---|---|---|
+| `src/adapters/base.py` | **Stays sync.** No interface change. | 0 | LOW |
+| `src/adapters/base_workflow.py` | Stays sync. Internal `get_db_session()` swapped to `get_sync_db_session()` (1-line import). | +5 | LOW |
+| `src/adapters/google_ad_manager.py` | Stays sync. 7 `get_db_session()` → `get_sync_db_session()`. **No method-signature changes.** | +15 | LOW (was HIGH) |
+| `src/adapters/gam_reporting_api.py` | Stays sync. 8 swaps. | +15 | LOW (was MEDIUM) |
+| `src/adapters/gam/managers/*.py` | Stays sync. 9 swaps across 3 files. | +20 | LOW |
+| `src/adapters/mock_ad_server.py` | Stays sync. 3 swaps. **`threading.Thread` background path stays sync** (the `mock_ad_server.py threading.Thread → asyncio.create_task` conversion in Decision 7 is for a different code path inside `ContextManager` callers, NOT the adapter's mock-task scheduler). | +10 | LOW |
+| `src/adapters/{kevel,xandr,broadstreet/adapter,triton_digital}.py` | Stay sync. 0-5 swaps each. | +20 total | LOW |
+| **NEW: 18 adapter call sites in `src/core/tools/*.py` + 1 in `src/admin/blueprints/operations.py:252`** | Wrap each `self.adapter.method(...)` in `await run_in_threadpool(...)`. Use `functools.partial` when kwargs are needed (anyio's `to_thread` doesn't accept `**kwargs`). | +90 (≈5 LOC × 18 sites) | MEDIUM (mechanical but easy to miss a site → structural guard) |
+| **NEW: `database_session.py` dual factory (async + sync)** | Add `get_sync_db_session()` alongside async `get_db_session()`. Separate engine, pool 5+10, 30s statement_timeout, `application_name='adcp-salesagent-sync-pathb'`. | +60 | LOW |
+| **NEW: `AuditLogger.log_operation` split** | `_log_operation_sync` (internal, used in worker threads) + async public wrapper using `run_in_threadpool`. | +25 | LOW |
+| **NEW: lifespan startup threadpool tune** | `anyio.to_thread.current_default_thread_limiter().total_tokens = int(os.environ.get("ADCP_THREADPOOL_SIZE", "80"))` | +5 | LOW |
+| **NEW: structural guard** `test_architecture_adapter_calls_wrapped_in_threadpool.py` | AST-walk every `self.adapter.X(...)` call site; require enclosing `await run_in_threadpool(...)`. Allowlist only the 18 known sites. | +120 (test file) | LOW |
+
+**Adapters subtotal (corrected): ~+385 LOC** (was ~+345 LOC under full async; the +40 LOC delta is the dual factory + AuditLogger split + threadpool tune + structural guard, OFFSET BY removing the ~+165 LOC of adapter method-signature `def → async def` rewrites that no longer happen). The shape of the work is fundamentally different — fewer files touched at the adapter layer, more files touched at the call-site layer.
+
+**Why Path B over full async:**
+
+1. **`googleads==49.0.0` is sync-only** (depends on `suds-py3`, no async port). Full async requires forking/replacing the GAM SDK or rewriting on top of `aiohttp` directly — ~1500 LOC, zero AdCP-visible benefit.
+2. **4 of 5 adapters use `requests`** (sync HTTP client). Full async requires rewriting all four to `httpx` or `aiohttp` for zero AdCP-visible benefit.
+3. **AdCP protocol surface is unchanged** either way. Path B is invisible to MCP/A2A/REST clients.
+4. **Threadpool capacity** at 80 covers expected burst load (max ~50 concurrent media buys per spec). Pool math (60 peak DB connections within PG `max_connections=100`) works for both engines coexisting — see `async-pivot-checkpoint.md` §3 "Background sync sync-bridge".
 
 ### 2.7 Admin layer (v2.0 migration target)
 
@@ -672,23 +700,25 @@ This is slightly longer than the checkpoint's 4-6 week estimate, driven primaril
 
 ## 7. Open questions (need user input)
 
-1. **Should the adapter base class (`AdServerAdapter`) become fully async, or do we keep it sync and wrap in `run_in_threadpool` for now?** Full async is cleaner but requires updating ~20 methods on the base class and cascading through every adapter + caller. Sync-with-threadpool is a partial solution that keeps the door open for later but leaks blocking work into the event loop. **Recommendation: full async, because the adapters internally make async I/O calls (`aiohttp`) anyway today in several places. But need user confirmation.**
+> **Status 2026-04-11: LEDGER CLOSED.** All 9 questions are now resolved. Decisions 1, 7, 9 went through Opus deep-think 1st/2nd/3rd-order analysis on 2026-04-11. Decisions 2, 3, 5, 8 were resolved by Audit 06 (meta-audit round). Decisions 4, 6 are mechanical Wave 4 work. Resolutions are mirrored in `CLAUDE.md` "Open decisions blocking Wave 4" and `async-pivot-checkpoint.md` §3.
 
-2. **Do we keep `DatabaseConnection` + `get_db_connection()` in `db_config.py` (unused but potentially referenced by future scripts/ops), or delete them as dead code?** **Recommendation: delete.** They are not imported by any `src/` code path (verified via grep — only self-referenced in `db_config.py`).
+1. **Should the adapter base class (`AdServerAdapter`) become fully async, or do we keep it sync and wrap in `run_in_threadpool` for now?** **RESOLVED 2026-04-11: Path B (sync adapters + `run_in_threadpool` wrap).** Full async requires porting `googleads==49.0.0` off `suds-py3` and rewriting 4 `requests`-based adapters (~1500 LOC) for zero AdCP-visible benefit. 18 adapter call sites in `src/core/tools/*.py` + 1 in `src/admin/blueprints/operations.py:252` wrap in `await run_in_threadpool(...)`. Dual session factory in `database_session.py`, AuditLogger split, anyio limiter to 80, structural guard `test_architecture_adapter_calls_wrapped_in_threadpool.py`. See §2.6 corrected scope, `flask-to-fastapi-foundation-modules.md` §11.14, `async-pivot-checkpoint.md` §3 "Adapters (Decision 1 Path B)".
 
-3. **Should factory-boy sessions be wrapped with a custom `AsyncSQLAlchemyModelFactory`, or should we bite the bullet and switch to a different factory library (e.g., `polyfactory` which has async support)?** **Recommendation: custom shim for v2.0 (preserves existing test investment); revisit polyfactory for v2.x.**
+2. **Do we keep `DatabaseConnection` + `get_db_connection()` in `db_config.py`?** **RESOLVED (Audit 06 OVERRULE): KEEP.** This audit's grep was incomplete — `scripts/deploy/run_all_services.py:84,135` calls `get_db_connection()` as pre-uvicorn health checks. `psycopg2-binary` is also retained for Decision 1's Path B sync factory and Decision 9's sync-bridge. New structural guard `test_architecture_no_runtime_psycopg2.py` allowlists only `db_config.py` + `background_sync_db.py`.
 
-4. **`src/core/database/queries.py` (282 LOC, 7 sync functions)** — confirmed to take `session` as parameter and use `session.scalars(...)`. Straightforward async conversion. ~+50 LOC.
+3. **Should factory-boy sessions be wrapped with a custom `AsyncSQLAlchemyModelFactory`?** **RESOLVED: custom shim** with `sqlalchemy_session_persistence = None` so `_create()` only calls `session.add()`; commits belong to fixtures. Full recipe in `flask-to-fastapi-foundation-modules.md` §11.13.1 (D).
 
-5. **`src/core/database/product_pricing.py` and `src/core/database/database_schema.py`** — `product_pricing.py` is Python-only helpers, no DB access. `database_schema.py` not audited. Low risk.
+4. **`src/core/database/queries.py` (282 LOC, 7 sync functions)** — **NOT a blocker.** Mechanical Wave 4 work, three transforms per function: `def → async def`, `session.scalars(stmt).first() → (await session.execute(stmt)).scalars().first()`, add `await` to commits. ~+50 LOC. Callers grep-enumerable.
 
-6. **Does the caching layer (flask-caching referenced in `pyproject.toml`) persist across async calls correctly?** Flask-caching is dropped in Wave 3. No concern.
+5. **`src/core/database/product_pricing.py` and `src/core/database/database_schema.py`** — **RESOLVED (Audit 06 SUBSTITUTE).** `database_schema.py` is **orphan** (its own docstring says "reference only; use Alembic migrations") — delete in Wave 5 cleanup. `product_pricing.py` has a **latent lazy-load hotspot** at lines 16-71 — `inspect(product).unloaded` silently early-returns when `pricing_options` isn't eager-loaded. Wave 4 fix: raise `RuntimeError` instead of silent early-return; add all callers to Spike 1's explicit eager-load audit list.
 
-7. **The `ContextManager` class (`src/core/context_manager.py`)** — is it thread-safe vs task-safe? It's used in `_impl` functions + schedulers + admin. Needs audit.
+6. **Flask-caching in pyproject.toml** — **RESOLVED (Decision 9 correction): NOT zero consumers.** Grep shows 3 active sites: `src/admin/blueprints/inventory.py:874`, `:1133`, `src/services/background_sync_service.py:472` (the last is also the Wave 3 `from flask import current_app` ImportError blocker). Wave 3 replaces with `src/admin/cache.py::SimpleAppCache` (~40 LOC `cachetools.TTLCache` wrapper on `app.state.inventory_cache`). Three consumer sites migrate BEFORE `flask-caching` removal.
 
-8. **`src/admin/blueprints/activity_stream.py` has an SSE endpoint.** SSE under FastAPI uses `StreamingResponse`. The existing implementation uses Flask's `stream_with_context`. Converting to FastAPI async streaming is straightforward (StreamingResponse + async generator) but the DB access inside the stream must use async session — and an SSE stream is long-lived, so the session lifetime needs care (open/close per event, not per stream).
+7. **`ContextManager` class** — **RESOLVED 2026-04-11: refactor to stateless async module functions.** The `ContextManager(DatabaseManager)` inheritance caches `self._session` on a process-wide singleton; under `async_sessionmaker` on the single event-loop thread, every concurrent task shares the same cached session → transaction interleaving. `async_sessionmaker` does NOT fix this because the singleton sits above the session factory. Refactor: delete `ContextManager` class + `_context_manager_instance` + `get_context_manager()` + `DatabaseManager` entirely. 12 public methods become module-level `async def` functions taking `session: AsyncSession` as first parameter. 7 production callers (incl. dead `main.py:166` + module-load side effect in `mcp_context_wrapper.py:345`). ~400 LOC across ~15 files; ~50 test patches, 20 collapsible via single `tests/harness/media_buy_update.py` update. `mock_ad_server.py` `threading.Thread` background task → `asyncio.create_task` + `async with session_scope()`. Validated by Spike 4.5. Structural guard `test_architecture_no_singleton_session.py`. Error-path composition gotcha: use SEPARATE `async with session_scope()` for error-logging writes (outer rolls back on raise → wipes error log). See `async-pivot-checkpoint.md` §3 "ContextManager refactor".
 
-9. **`src/services/background_sync_service.py` (9 `get_db_session()` uses)** — the checkpoint doesn't mention it. This service runs sync jobs that talk to GAM. It may need special handling if the jobs span hours.
+8. **`src/admin/blueprints/activity_stream.py` SSE endpoint.** **RESOLVED (Audit 06 SUBSTITUTE): already correct in current code.** `get_recent_activities()` at line 167 opens/closes per poll tick (~5ms). Real Wave 4 work: `time.sleep(2) → await asyncio.sleep(2)`, `def generate() → async def generate()`, `Response(generate(), ...) → StreamingResponse(generate(), ...)`, drop wildcard CORS. ~20 LOC. SSE is partially dead code anyway — templates poll, not EventSource.
+
+9. **`src/services/background_sync_service.py`** — **RESOLVED 2026-04-11: Option B sync-bridge.** Service runs multi-hour GAM inventory sync jobs via `threading.Thread` workers, incompatible with async SQLAlchemy (asyncpg `pool_recycle=3600` rotates mid-session, identity map grows unbounded over hours, Fly.io TCP keepalives expire). New `src/services/background_sync_db.py` module with separate sync psycopg2 engine + `get_sync_db_session()` factory. Background threads use the sync-bridge; async request path untouched. `psycopg2-binary` + `types-psycopg2` + `libpq-dev` + `libpq5` retained. Also fixes Wave 3 `from flask import current_app` ImportError at line 472 (replaced with `SimpleAppCache` helper, see Decision 6). Scope guarded by `test_architecture_sync_bridge_scope.py` ratcheting allowlist (background_sync_service.py only). Validated by Spike 5.5 (4 test cases: lazy-init/dispose, MVCC bidirectional, 5-async + 1-sync no-deadlock, post-dispose leaks ≤1). Sunset target v2.1+. See §2.5 row + `async-pivot-checkpoint.md` §3 "Background sync sync-bridge".
 
 ---
 

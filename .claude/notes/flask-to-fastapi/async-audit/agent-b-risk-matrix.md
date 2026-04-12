@@ -23,6 +23,7 @@ I have enough grounding. Now let me produce the risk analysis report. The body o
 | 5 | `expire_on_commit=False` — DB-default fields (`created_at`, `server_default`) stale post-commit | **M** | Partial — needs regression tests on insert flows | 0.5–1 day | N/A — must set `expire_on_commit=False` for async, not optional |
 | 6 | Connection pool saturation under load (asyncpg pool vs SQLAlchemy pool, max_size tuning) | **M** | Yes, benchmark harness | 1 day benchmark + tune | Yes — grow pool; if not enough, fall back to PgBouncer transaction pooling |
 | 7 | MCP scheduler ticks wired to async DB under `combine_lifespans` | **M** | Yes, lifespan alive-tick test + existing scheduler-composition guard | 0.5 day | Partial — schedulers can live in `run_in_threadpool` block; reduces concurrency but works |
+| **7.5** | **Background sync long-session multi-hour failure (Decision 9, 2026-04-11)** | **H** | Yes, Spike 5.5 (4 test cases: lazy-init/dispose, MVCC bidirectional, 5-async + 1-sync no-deadlock, post-dispose leaks ≤1) | 0.5 day Spike + ~200 LOC sync-bridge module | **Soft** — fallback Option A (asyncio task + per-page session checkpoint), suboptimal but viable. Sunset target v2.1+. See deep dive after Risk #7. |
 | 8 | A2A handler async-DB conversion + SDK async contract | **L** | Yes (A2A TestClient test suite) | 0.5 day | Yes — per-handler sync escape via `asyncio.to_thread` |
 | 9 | Middleware state propagation (CSRF, Approximated, ProxyHeaders, Unified auth) | **L** | Already enforced by middleware ordering tests | 0 days (already async) | N/A — no change |
 | 10 | Performance regression under low concurrency / warm-path latency | **M** | Yes, benchmark harness (pre/post) | 1 day benchmark | Partial — tune `pool_size` + reduce `await` fan-out; full rollback fallback exists |
@@ -959,6 +960,75 @@ If scheduler async conversion creates connection leaks or shutdown hangs:
 **AdCP compliance:** RISK — if schedulers silently stop, webhooks stop firing, AdCP callers stop receiving creative-approval notifications. The alive-tick log (Step 3) is the main defense.
 
 **Point of no return:** Wave 4 — scheduler bodies converted. Rollback means reverting scheduler conversion.
+
+---
+
+### Risk #7.5 — Background sync long-session multi-hour failure
+
+**Severity: HIGH** | **Added 2026-04-11 (Decision 9 deep-think)** | **Resolved by sync-bridge**
+
+#### A. Root cause
+
+`src/services/background_sync_service.py` runs **multi-hour GAM inventory sync jobs** via `threading.Thread` workers. Each worker holds a single session for the lifetime of the sync (potentially 2-6 hours for large publishers). Under absorbed-async with `AsyncSession` + `asyncpg`, this pattern is **incompatible by construction** with three distinct failure modes that compound:
+
+1. **`pool_recycle=3600` rotates connections under the session.** asyncpg/SQLAlchemy's pool recycles physical connections after 1 hour to defend against stale sockets and DB-side `idle_in_transaction` timers. A 4-hour sync that holds an `AsyncSession` across recycle boundaries gets `OperationalError: connection is closed in the middle of a transaction`. The session has no awareness of the rotation — it discovers it on the next `await session.execute()` and the entire sync rolls back.
+
+2. **Identity map grows unbounded.** `Session.identity_map` accumulates every loaded ORM instance. A multi-hour sync that pages through 500k inventory items per tenant accumulates ~2-4 GB of `Inventory` objects in memory. Async sessions have NO automatic eviction.
+
+3. **Fly.io TCP keepalive expiry.** Fly.io's edge proxies time out idle TCP connections after ~5 minutes. A long sync that processes a single GAM API page over a 6-minute interval (slow rate-limited reporting endpoint) without round-tripping to the DB loses the asyncpg connection mid-sync.
+
+This is **not theoretical**. The Wave 3 `from flask import current_app` ImportError at line 472 is symptomatic of the service being lifted-and-shifted from Flask without correctly handling its threading model — the root cause is that the service was never designed for the FastAPI runtime.
+
+#### B. Detection
+
+**Pre-Wave-0 (Spike 5.5):** prove async asyncpg engine + sync psycopg2 engine coexist in one Python process. 4 test cases:
+- (a) engine lazy-init + dispose cycle clean (no leaked tasks, no leaked file descriptors via `lsof`)
+- (b) MVCC visibility bidirectional (async write commits → sync `SELECT` sees the row; sync write commits → async `await session.execute(SELECT)` sees the row, both within `<1s` to confirm there's no read-isolation pinning)
+- (c) 5 concurrent async requests + 1 sync background thread issuing 100 statements over 60s — no deadlock, no `TimeoutError`, no `pool overflow exceeded`
+- (d) post-`dispose_sync_bridge()` + post-`engine.dispose()` connection leaks ≤1 from baseline (pgs `pg_stat_activity`)
+
+**In production:** add `application_name='adcp-salesagent-sync-bridge'` to the sync-bridge engine so `pg_stat_activity` distinguishes between three engines (async-main, sync-pathb, sync-bridge). Add an alert on `pg_stat_activity.state_change` >1 hour for the sync-bridge connection — long-running sessions are EXPECTED, but rotated/zombie connections must alert.
+
+#### C. Mitigation (the resolution)
+
+**Decision 9: Option B sync-bridge.** New module `src/services/background_sync_db.py` (~200 LOC) exposes:
+- `get_sync_engine()` — lazy-init psycopg2 engine, pool 2+3, `statement_timeout=600s`, `application_name='adcp-salesagent-sync-bridge'`, **no** `pool_recycle` (the worker explicitly rotates sessions per GAM API page)
+- `get_sync_db_session()` — sync `Session` factory bound to the bridge engine
+- `dispose_sync_bridge()` — explicit dispose called from the lifespan shutdown after `wait_for_shutdown(30s)`
+
+The 9 `get_db_session()` call sites in `background_sync_service.py` migrate to `get_sync_db_session()`. Background `threading.Thread` workers stay sync (intentionally — Decision 1 confirms threadpool capacity at 80 has headroom). The async request path is untouched.
+
+**Pool math across all three engines (within PG `max_connections=100`):**
+- async asyncpg engine: pool 15 + max_overflow 25 = 40 peak
+- sync Path-B engine (Decision 1): pool 5 + max_overflow 10 = 15 peak
+- sync sync-bridge engine (Decision 9): pool 2 + max_overflow 3 = 5 peak
+- **Total: 60 peak connections**, leaving 40 headroom for admin connections + monitoring + Alembic.
+
+**Shutdown ordering** (in `lifespan` shutdown phase):
+1. `request_shutdown()` — set the global stop flag
+2. `await wait_for_shutdown(30s)` — give running syncs time to finish their current GAM page
+3. `await dispose_sync_bridge()` — dispose the sync engine
+4. `await async_engine.dispose()` — dispose the async engine
+
+#### D. Fallback
+
+**Soft blocker, fallback to Option A** (asyncio task + single async session per sync, suboptimal but viable):
+- Replace `threading.Thread` with `asyncio.create_task` running an `async def sync_worker(...)` coroutine
+- Each sync gets its own `async with session_scope()` for the entire duration
+- Mitigates failure modes 1 (pool_recycle) and 3 (Fly.io TCP keepalive) by checkpointing state to the DB after every GAM page (~30s) — the session never sits idle long enough to be rotated or timed out
+- Failure mode 2 (identity map growth) is mitigated via explicit `session.expire_all()` after each page commit
+
+Option A is suboptimal because it puts multi-hour CPU work on the event loop's threadpool budget (every `await asyncio.sleep(0)` cooperates back, but rate-limit waits between GAM pages dominate). Spike 5.5 fail action: document the choice in `spike-decision.md` and proceed with Option A.
+
+**Sunset target v2.1+:** even Option B is a stopgap. The right long-term fix is a phase-per-session async refactor (each GAM page = one short-lived session, checkpointed via Alembic-tracked job state in `sync_jobs` table). This is intentionally deferred — the sync-bridge gives v2.0 a shippable shape without forcing the larger refactor.
+
+#### E. AdCP compliance
+
+LOW RISK — `background_sync_service` is internal-only. It does not expose an AdCP surface. The only AdCP-visible failure mode is "creative approval webhooks delayed because sync didn't finish on schedule" which is bounded by the existing scheduler ticks, not by the sync-bridge.
+
+#### F. Point of no return
+
+Wave 4 — once `background_sync_db.py` is shipped and `psycopg2-binary` is reinstated in `pyproject.toml`, rolling back means re-deleting the module + reverting the partial Agent F F1.1.1/F1.2.1 reversal + accepting that the multi-hour-sync failure will surface in production. No clean rollback after Wave 4 ships.
 
 ---
 
@@ -2020,6 +2090,8 @@ If neither option works, set statement_timeout at the Postgres server level (con
 
 ### Risk #19 — `DatabaseManager` class sync `__enter__`/`__exit__`
 
+> **RESOLVED 2026-04-11 by Decision 7 (ContextManager refactor):** `DatabaseManager` is **deleted entirely**. Only `ContextManager` subclassed it, and Decision 7's refactor flattens `ContextManager` into stateless module-level `async def` functions taking `session: AsyncSession` as the first parameter. With no subclasses left, `DatabaseManager` has no remaining callers and the entire base class disappears in Wave 4. The risk below is preserved for traceability but the mitigation column in Section 1 is now "delete (Decision 7)" instead of "convert to async". See `async-pivot-checkpoint.md` §3 "ContextManager refactor" for the full target state.
+
 #### A. Root cause
 `database_session.py:287-338` defines a `DatabaseManager` class with sync context manager methods. Any caller breaks under async:
 ```python
@@ -2030,13 +2102,15 @@ with DatabaseManager() as db:
 #### B. Detection
 Grep: `grep -rn "DatabaseManager" src/ tests/`
 
-#### C. Mitigation
-1. Grep for all callers
-2. Convert to async: `async with DatabaseManager() as db:` with `__aenter__`/`__aexit__`
-3. Each caller converts mechanically
+#### C. Mitigation (Decision 7 resolution)
+1. Grep for all callers — confirmed: only `ContextManager` subclasses `DatabaseManager` (no production callers use it directly)
+2. Delete `class DatabaseManager` from `database_session.py` (~50 LOC)
+3. Delete `class ContextManager(DatabaseManager)` from `context_manager.py`
+4. Convert 12 `ContextManager` public methods to module-level `async def` functions taking `session: AsyncSession` as first parameter
+5. Update 7 production callers to acquire their own session via `async with session_scope():` and pass it explicitly
 
 #### D. Fallback
-Delete `DatabaseManager` if unused — check usage first.
+Hard-coded: deletion is the only resolution. If Decision 7 is reversed (Spike 4.5 fails), `DatabaseManager` gets `__aenter__`/`__aexit__` added and the original "convert to async" plan applies — but Decision 7's deep-think analysis confirmed the singleton-cached-session bug is unfixable without the refactor.
 
 ---
 
@@ -2197,29 +2271,63 @@ Force kill on shutdown (SIGKILL after 30s). Fly.io's default graceful-shutdown i
 
 ### Risk #28 — `audit_logger` module-level singleton
 
+> **PARTIALLY RESOLVED 2026-04-11 by Decision 1 (Path B):** the simple "convert all callers to async" plan is **wrong** because adapter call paths are sync threads under Path B and cannot `await`. Resolution is a **split**: `AuditLogger.log_operation` becomes a thin async wrapper that delegates to `AuditLogger._log_operation_sync` via `run_in_threadpool`. Adapter code (running inside `run_in_threadpool`) calls `_log_operation_sync` directly using `get_sync_db_session()`. Async code (request handlers, schedulers, `_impl` functions) calls the public `await audit_logger.log_operation(...)` which forwards into the thread. Both paths write to the same `audit_logs` table; the only difference is which session factory they use. See `flask-to-fastapi-foundation-modules.md` §11.14 (E) for the complete code.
+
 #### A. Root cause
-`src/core/audit_logger.py` (if it exists as a module singleton) uses `get_db_session()` in sync mode. Converting to async means every caller becomes async. Fanout via grep: `grep -rn "audit_logger\|AuditLogger\|log_action" src/`.
+`src/core/audit_logger.py` uses `get_db_session()` in sync mode. **Naive plan would convert all callers to async** — but adapter code runs inside `run_in_threadpool` (Decision 1 Path B) and **cannot `await` the audit logger**. Fanout via grep: `grep -rn "audit_logger\|AuditLogger\|log_action" src/`.
 
 #### B. Detection
-After conversion, every sync caller breaks with `coroutine was never awaited` warning and `TypeError`.
+After conversion, every sync caller breaks with `coroutine was never awaited` warning and `TypeError`. Plus: any adapter call site inside `run_in_threadpool` that tries to `await audit_logger.log_operation(...)` raises `RuntimeError: cannot use 'await' in a non-async function`.
 
-#### C. Mitigation
-1. Grep callers
-2. Convert caller sites to async
-3. Pass DB session in as arg rather than grabbing a new one (DI-friendly)
+#### C. Mitigation (Decision 1 Path B resolution)
+Split into sync internal + async public wrapper:
 
 ```python
-# Before
-def log_action(action: str, user: str):
-    with get_db_session() as s:
-        s.add(AuditLog(...))
-        s.commit()
+# src/core/audit_logger.py — AFTER (Decision 1 Path B)
 
-# After
-async def log_action(session: AsyncSession, action: str, user: str):
-    session.add(AuditLog(...))
-    # Commit handled by UoW — don't double-commit
+class AuditLogger:
+    def _log_operation_sync(
+        self,
+        principal_name: str,
+        operation: str,
+        details: dict,
+        success: bool = True,
+    ) -> None:
+        """Internal sync implementation. Used by adapter code running in run_in_threadpool.
+        Uses get_sync_db_session() from the dual session factory."""
+        from src.core.database.database_session import get_sync_db_session
+        with get_sync_db_session() as session:
+            session.add(AuditLog(
+                principal_name=principal_name,
+                operation=operation,
+                details=details,
+                success=success,
+                timestamp=datetime.utcnow(),
+            ))
+            session.commit()
+
+    async def log_operation(
+        self,
+        principal_name: str,
+        operation: str,
+        details: dict,
+        success: bool = True,
+    ) -> None:
+        """Async public wrapper. Used by request handlers, schedulers, _impl functions."""
+        from starlette.concurrency import run_in_threadpool
+        await run_in_threadpool(
+            self._log_operation_sync,
+            principal_name=principal_name,
+            operation=operation,
+            details=details,
+            success=success,
+        )
 ```
+
+**Adapter code calls `_log_operation_sync` directly** (no threadpool wrap — already on a worker thread). **Async code calls `await log_operation(...)`** which forwards into the threadpool. Both paths write to the same `audit_logs` table via different session factories.
+
+#### D. Fallback
+N/A — the split is the only resolution that supports both sync (Path B adapter) and async (request handler) callers without duplicating the `INSERT INTO audit_logs` SQL across two implementations.
 
 This also aligns with the repository pattern: audit is a repository method, not a free function.
 
