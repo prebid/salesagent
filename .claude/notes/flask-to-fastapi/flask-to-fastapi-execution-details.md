@@ -4,11 +4,160 @@ Plan mode is active and I do not have Write access. I will deliver the full deep
 
 # Flask → FastAPI Migration: Deep Elaboration of §14, §16, §21
 
-This document elaborates three sections of `/Users/quantum/Documents/ComputedChaos/salesagent/.claude/notes/flask-to-fastapi-migration.md`: the 4-wave migration strategy (§14), the 28 assumptions (§16), and the verification strategy (§21). All file paths are absolute. Line numbers reference the current HEAD of the repository.
+This document elaborates three sections of `/Users/quantum/Documents/ComputedChaos/salesagent/.claude/notes/flask-to-fastapi/flask-to-fastapi-migration.md`: the 5-6 wave migration strategy (§14, expanded from 4 to 5-6 waves by the 2026-04-11 async pivot that absorbed async SQLAlchemy into v2.0 as Waves 4-5 — see `async-pivot-checkpoint.md`), the 28 assumptions (§16), and the verification strategy (§21). All file paths are absolute. Line numbers reference the current HEAD of the repository.
 
 ---
 
 ## PART 1: Per-Wave Execution Detail (elaborates §14)
+
+### Pre-Wave-0 — Spike sequence gate (5-7 days, hard gate)
+
+This gate was added by the 2026-04-11 async pivot (`async-pivot-checkpoint.md`). Under the pivot, v2.0 absorbs full async SQLAlchemy as Waves 4-5. Before a single Wave 0 line of code is written, a 5-7 day spike sequence must execute on a throwaway branch `spike/async-pivot-gate` to prove the absorbed-async scope is tractable. The spike gate has one hard blocker (Spike 1) and six soft blockers. If the hard blocker fails, the entire pivot reverts and v2.0 falls back to Option C (sync-def admin handlers) with async SQLAlchemy deferred to v2.1. The gate is governed by `async-audit/agent-b-risk-matrix.md` §4 and `async-audit/agent-a-scope-audit.md` §6; CLAUDE.md §"Mandatory pre-Wave-0 spike sequence" enumerates the 7-spike list that every fresh session must honor.
+
+#### A. Detailed acceptance criteria
+
+1. Spike branch `spike/async-pivot-gate` exists, forked from current `main`, and does not merge back — it is discarded after the gate decision.
+2. **Spike 1 (Lazy-load audit — HARD BLOCKER):** `src/core/database/database_session.py` rewritten to `create_async_engine` + `async_sessionmaker(expire_on_commit=False)`, `postgresql+asyncpg://` URL rewrite in place, and **every** `relationship()` in `src/core/database/models.py` (all 58-68 definitions per Agent A §4.1) annotated with `lazy="raise"`. `tox -e integration -- -x -v 2>&1 | tee spike-results.log` run to completion. Output classified into unique `InvalidRequestError: 'X.y' is not available due to lazy='raise'` failure categories. **Pass:** fewer than 40 unique failure categories AND total estimated fix cost < 2 days (each fix being a mechanical `selectinload(...)` / `joinedload(...)` addition in the relevant repository call site). **Fail:** 100+ unique failures OR non-obvious fixes in critical paths (cross-boundary lazy loads from `_impl` into admin serialization).
+3. **Spike 2 (Driver compat — soft blocker):** `tox -e unit` + `tox -e integration` run under `DATABASE_URL=postgresql+asyncpg://...` on the spike branch. Every `TypeError`, `asyncpg.exceptions.*`, `InterfaceError` captured and classified by category (JSONB codec per Risk #17, event listener per Risk #18, `json_serializer` per Risk #22, prepared-statement cache conflict, UUID/Interval/Array codec). **Pass:** all integration tests pass OR fail only with lazy-load errors (not driver errors); JSONB roundtrip via `JSONType(model=X)` works for both typed and untyped columns; `SHOW statement_timeout` returns the configured value; Pydantic `json_serializer` emits correct JSONB on writes. **Fail:** multiple codec issues requiring >4 hours of manual fixes, OR statement timeout not applied, OR typed-column round-trip broken.
+4. **Spike 3 (Performance baseline — soft blocker):** Committed `tests/performance/bench_admin_routes.py` and `tests/performance/bench_mcp_tools.py` harnesses. Run sync baseline on `main`: `pytest tests/performance/bench_admin_routes.py --benchmark-json=baseline-sync.json` + the MCP equivalent. Run async stack on `spike/async-pivot-gate` (with Spike 1's minimal lazy-load fixes applied): emit `spike-async.json` and `spike-async-mcp.json`. Compare p50/p95 latencies at 1/50/200 req/s concurrency points. **Pass:** low-concurrency (1 req/s) async within ±20% of sync; medium-concurrency (50 req/s) async within ±10% of sync; high-concurrency (200+ req/s) async outperforms sync by ≥20% (or sync saturates while async does not). The `baseline-sync.json` artifact is committed to the repo at `tests/performance/baselines/baseline-sync.json` as the Wave 5 comparison oracle. **Fail:** low-concurrency async >40% slower than sync, OR pool saturates at <100 concurrent, OR connection wait time spikes >500ms at moderate load.
+5. **Spike 4 (Test harness — soft blocker):** `tests/harness/_base.py` converted: `__enter__`/`__exit__` duplicated as `__aenter__`/`__aexit__`. Factory-boy `AsyncSQLAlchemyModelFactory` shim landed (Agent B §4 Spike 4 / Agent A §7 decision 3). 5 representative integration tests selected (one per domain: accounts, products, principals, media_buys, creatives) and converted to `@pytest.mark.asyncio` + `async def` + `async with`. Run under `tox -e integration -- tests/integration/test_<picked>.py -n 4` (xdist 4 workers). **Pass:** all 5 converted tests pass; xdist parallelism holds (each worker binds its own DB, no event-loop collisions); factory-boy shim writes rows successfully; no `RuntimeError: Event loop is closed` in teardown. **Fail:** xdist workers collide on event-loop state, OR factory-boy cannot bind sessions, OR session fixture teardown hangs.
+6. **Spike 5 (Scheduler alive-tick — soft blocker):** `delivery_webhook_scheduler` and `media_buy_status_scheduler` tick bodies converted to `async with get_db_session()` / `await session.execute(...)`. Spike container started (`docker compose up -d`) and run for 5 minutes. Container logs grepped for `"delivery_webhook_scheduler alive"` and `"media_buy_status_scheduler alive"` — both present within 60 seconds of startup. One webhook forced (e.g., by creating a media buy with a push-notification config against a test fixture); delivery verified. **Pass:** both alive-tick lines visible, webhook delivered, no `CancelledError` / `MissingGreenlet` / `InvalidRequestError` in logs. **Fail:** alive-tick missing, OR scheduler crashes first tick, OR webhook payload construction fails with `MissingGreenlet` (this last one expands Wave 4 scope; soft-fails rather than gate-fails).
+7. **Spike 6 (Alembic async — soft blocker):** `alembic/env.py` rewritten with the standard async adapter pattern (`create_async_engine` + `async with connectable.connect() as connection: await connection.run_sync(do_run_migrations)` + `asyncio.run()` wrapper). Test DB dropped and recreated. Run `alembic upgrade head` — all 161 migrations apply cleanly. Run `alembic downgrade -1` then `alembic upgrade +1` — roundtrip works. Pick one migration that uses `op.execute(text("..."))` and verify it runs. **Pass:** upgrade, downgrade, roundtrip all clean. **Fail:** any migration errors inside `run_sync` callback OR `RuntimeError: asyncio.run() cannot be called from a running event loop` surfaces. Fail-action is to keep `alembic/env.py` sync with a boot-time `postgresql+asyncpg://` rewriter; this is documented in Risk #4 of `async-audit/agent-b-risk-matrix.md`.
+8. **Spike 7 (`server_default` audit — soft blocker):** `grep -n "server_default" src/core/database/models.py` enumerates every column with a DB-side default. Each column classified: (a) safe under `expire_on_commit=False` because no caller reads it post-INSERT; (b) rewrite to `default=datetime.utcnow` (client-side); (c) must add `await session.refresh(obj)` at call sites. **Pass:** fewer than 30 total `server_default=` columns AND each is either safe or has a clear rewrite path (no `gen_random_uuid()`-style defaults that can't be client-side-replaced). **Fail:** >30 columns with many non-trivial rewrites.
+9. **Spike 8 (Go/no-go decision gate):** a written decision meeting note committed at `.claude/notes/flask-to-fastapi/spike-decision.md` summarizing each spike's pass/fail state, including `spike-results.log` excerpts for Spike 1, `baseline-sync.json` for Spike 3, and the final go/no-go call. Go condition: **Spike 1 PASSES** AND no more than 2 soft spikes fail. No-go condition: Spike 1 FAILS OR more than 2 soft spikes fail.
+10. The `baseline-sync.json` and `baseline-sync-mcp.json` artifacts are committed to `tests/performance/baselines/` on the migration branch (NOT on the spike branch, which is discarded). Wave 5 Spike F uses these as the comparison oracle.
+11. All 9 open decisions from CLAUDE.md §"Open decisions blocking Wave 4" have signed-off answers recorded in `spike-decision.md` — including adapter base-class async strategy (decision 1), `DatabaseConnection` deletion (decision 2), factory-boy shim vs polyfactory (decision 3), `queries.py` / `database_schema.py` / `product_pricing.py` audit results (decisions 4-5), flask-caching async compat (decision 6), `context_manager.py` ContextVar propagation (decision 7), SSE session lifetime strategy (decision 8), and `background_sync_service.py` handling for long-running GAM jobs (decision 9).
+12. `pyproject.toml` on `main` (NOT on the spike branch) has `asyncpg>=0.30.0,<0.32` and (if Spike 2 mandated fallback) `psycopg[binary,pool]>=3.2.0` as the driver choice recorded in an Agent F F1.1.1 note.
+13. `[tool.pytest.ini_options]` section added to `pyproject.toml` with `asyncio_mode = "auto"` (Agent F F1.7.1 / F8.2.1).
+14. New `tox -e driver-compat` environment defined in `tox.ini` that runs `tests/integration/` under the chosen async driver (Agent F F2.1.2 / F2.4.5).
+15. Spike branch `spike/async-pivot-gate` deleted from origin after decision committed; the gate is a discard-and-document experiment, not an incremental merge.
+
+#### B. File-level checklist
+
+**CREATE (on `spike/async-pivot-gate`, discarded after gate):**
+- `/Users/quantum/Documents/ComputedChaos/salesagent/tests/performance/bench_admin_routes.py` (~200 LOC, moved to `main` after gate closes)
+- `/Users/quantum/Documents/ComputedChaos/salesagent/tests/performance/bench_mcp_tools.py` (~150 LOC, moved to `main` after gate closes)
+- `/Users/quantum/Documents/ComputedChaos/salesagent/tests/performance/baselines/baseline-sync.json` (captured from `main`, committed to `main`)
+- `/Users/quantum/Documents/ComputedChaos/salesagent/tests/performance/baselines/baseline-sync-mcp.json` (same)
+
+**CREATE (on `main`, persists):**
+- `/Users/quantum/Documents/ComputedChaos/salesagent/.claude/notes/flask-to-fastapi/spike-decision.md` (~300 LOC — go/no-go decision record, spike results, open-decisions resolutions)
+- `/Users/quantum/Documents/ComputedChaos/salesagent/tests/performance/` directory — new
+- `/Users/quantum/Documents/ComputedChaos/salesagent/tests/performance/baselines/` directory — new
+
+**MODIFY (on `main`, persists regardless of spike outcome):**
+- `/Users/quantum/Documents/ComputedChaos/salesagent/pyproject.toml` — add `[tool.pytest.ini_options]` with `asyncio_mode = "auto"`, add `asyncpg>=0.30.0,<0.32` (or `psycopg[binary,pool]>=3.2.0` if Spike 2 mandated fallback) alongside (not replacing) `psycopg2-binary` — the psycopg2 pin stays in place until Wave 4 lands the conversion
+- `/Users/quantum/Documents/ComputedChaos/salesagent/tox.ini` — add `[testenv:driver-compat]` environment (Agent F F2.1.2)
+
+**MODIFY (on `spike/async-pivot-gate` only, discarded):**
+- `/Users/quantum/Documents/ComputedChaos/salesagent/src/core/database/database_session.py` — async engine + session (spike experiment)
+- `/Users/quantum/Documents/ComputedChaos/salesagent/src/core/database/models.py` — `lazy="raise"` annotations on all relationships (spike experiment only — must not land on `main`)
+- `/Users/quantum/Documents/ComputedChaos/salesagent/alembic/env.py` — async adapter (spike experiment)
+- `/Users/quantum/Documents/ComputedChaos/salesagent/tests/harness/_base.py` — `__aenter__`/`__aexit__` addition (spike experiment)
+- `/Users/quantum/Documents/ComputedChaos/salesagent/src/services/delivery_webhook_scheduler.py` + `media_buy_status_scheduler.py` — tick bodies async (spike experiment)
+
+**DELETE:** None. The spike is pure addition on a throwaway branch.
+
+#### C. Risk assessment
+
+| Risk | Likelihood | Impact | Mitigation |
+|---|---|---|---|
+| Spike 1 reveals 100+ lazy-load failures, killing the pivot and triggering a major replan (back to sync-def Option C, defer async to v2.1, 2-3 weeks of plan rewrite) | Medium | Critical — the entire absorbed-async v2.0 scope collapses | Accept the rework. The spike exists specifically to catch this before Wave 4 starts — catching it late in Wave 4 is an order of magnitude worse. The fallback plan (sync-def Option C from `flask-to-fastapi-deep-audit.md` §1.4) is pre-written and can be restored by reverting the async-pivot commits on `main`. |
+| `asyncpg` has a JSONB codec incompatibility with `JSONType(model=X)` (Risk #17 in Agent B matrix) and the spike cannot work around it in 4 hours | Medium | High — driver pivots to `psycopg[binary,pool]>=3.2.0` | Spike 2 is the detection mechanism. Fallback is pre-authorized in `async-pivot-checkpoint.md` §3 "Driver change" — switch driver, no other plan changes required. Agent B §2 Risk #17 documents the asyncpg JSON codec registration recipe if the workaround is <4 hours. |
+| Spike 1 passes but developers skip the `lazy="raise"` annotation step, running integration tests against the default `lazy="select"` posture and getting false-green | Medium | High — Wave 4 detonates with lazy-load failures that should have been caught in Spike 1 | Spike 1 acceptance criterion #2 requires `lazy="raise"` on ALL 58-68 relationships; `spike-decision.md` must include a `git diff src/core/database/models.py | grep -c "lazy=\"raise\""` count that matches the relationship count. |
+| Spike branch diverges from `main` during the 5-7 day spike window, and the gate decision becomes stale by the time Wave 4 starts | Medium | Medium | Spike branch is capped at 7 days. If `main` changes materially (new `relationship()` definitions, new `_impl` functions, new repositories), the spike is rerun on a fresh branch forked from current `main`. The gate is "the spike passed as of commit `<sha>`", not a blanket clearance. |
+| Spike 2 driver-compat surfaces problems ONLY under load, not at the unit+integration test level | Low | High — asyncpg issue lands in staging | Spike 3 (performance baseline) runs under 1/50/200 req/s concurrency and surfaces pool contention that unit-level driver-compat can miss. The two spikes are complementary, not redundant. |
+| Open-decisions resolution in `spike-decision.md` is rushed or dismissive, leaving Wave 4 to re-litigate adapter base-class strategy (decision 1) or SSE session lifetime (decision 8) mid-wave | Medium | High — Wave 4 scope doubles or stalls | Every decision in CLAUDE.md §"Open decisions blocking Wave 4" requires a signed-off answer before the go-decision. A decision of the form "revisit in Wave 4" is explicitly NOT acceptable — either answer it now or cut its scope from Wave 4. |
+| Spike 5 (scheduler alive-tick) passes but under production lifespan composition (`combine_lifespans(app_lifespan, mcp_app.lifespan)` at `src/app.py:68`) a deadlock on shutdown surfaces that the spike didn't exercise | Low | Medium | Spike 5 should run a forced shutdown (`docker compose down -t 10`) and check for deadlock-related tracebacks in logs. Agent B Risk #26 documents this specifically and pre-Wave-0 must exercise it. |
+| Spike 7 (`server_default` audit) finds a `gen_random_uuid()` default that has no client-side replacement and cascades into a post-INSERT `await session.refresh()` requirement in >20 call sites | Low | Medium | Agent B Risk #5 classifies this as a soft fail — the mitigation (explicit `refresh()`) is well-understood and adds ~0.5-1 day of work. Not a gate-fail. |
+| Performance baseline (Spike 3) is captured on a developer laptop and the numbers diverge from CI's actual timings | Medium | Medium | Spike 3 must run inside the `test-stack` Docker stack on the agent's machine (OR on a CI job pinned to a dedicated runner), with the results recorded with the hardware fingerprint. The Wave 5 benchmark comparison re-runs on the same topology. |
+
+#### D. Rollback procedure
+
+The spike is a **throwaway branch**, not a merge. "Rollback" has two distinct meanings here:
+
+**Spike branch rollback (no-op):** `git branch -D spike/async-pivot-gate && git push origin :spike/async-pivot-gate`. The branch is deleted from origin. No `main` changes involved.
+
+**Gate failure rollback (pivot reversion):** if Spike 1 fails or the go-condition is not met, the 2026-04-11 async pivot itself is reverted. This means:
+
+```bash
+git checkout main
+git revert -m 1 <pivot-propagation-commit-sha>   # 3e0afa02 and d8957931 and subsequent
+git revert -m 1 <additional-pivot-commits>
+git push origin main
+```
+
+The reverts restore the plan files to their pre-pivot state (sync-def Option C admin handlers, async SQLAlchemy deferred to v2.1). Agent F non-surface changes (Dockerfile, CI, pre-commit updates) that are defensible independent of async can be preserved by cherry-picking non-async parts; the judgment call is made in `spike-decision.md`.
+
+**Post-gate-failure actions:**
+- v2.0 scope reverts to 4 waves (Wave 0-3 Flask removal + admin FastAPI rewrite)
+- v2.1 roadmap gains an "async SQLAlchemy migration" epic with the Agent A scope audit as its starting inventory
+- The `pyproject.toml` `asyncpg` dep is removed (left only the legacy `psycopg2-binary`)
+- `baseline-sync.json` stays in the repo as future-v2.1 comparison oracle
+- `.claude/notes/flask-to-fastapi/CLAUDE.md` is updated to note the pivot was attempted and failed, with a reference to `spike-decision.md`
+
+**Database:** no migrations.
+**Environment variables:** none to back out.
+**Rollback window:** indefinite — there is no downstream code depending on the spike.
+
+#### E. Merge-conflict resolution
+
+**Freeze scope:** none. The spike runs on a branch; `main` stays open for unrelated work during the spike window.
+
+**Announcement template:**
+```
+[MIGRATION] Pre-Wave-0 async pivot spike runs <date> to <date+7>.
+No main-branch freeze. The spike lives on spike/async-pivot-gate and
+will be deleted after the go/no-go decision. A written decision lands
+at .claude/notes/flask-to-fastapi/spike-decision.md.
+
+Unrelated PRs can proceed. Do NOT merge anything that touches
+src/core/database/models.py, src/core/database/database_session.py,
+alembic/env.py, or tests/harness/_base.py during the spike window —
+those would invalidate the spike measurements. If one of those files
+urgently needs a fix, ping @migration-squad and we'll coordinate.
+```
+
+**Rebase strategy:** the spike branch is never rebased — it is discarded. If `main` changes materially during the spike window, the spike is rerun on a fresh fork from the new `main`.
+
+#### F. Time estimate
+
+- **Low (3 days):** all spikes pass cleanly on first run; no asyncpg codec surprises; lazy-load audit yields <20 failures all mechanically fixable; `spike-decision.md` writes itself. Skilled async-SQLAlchemy dev on the spike.
+- **Expected (5 days):** 1 day for Spike 1 (lazy-load audit + fix classification) + 1 day for Spike 2 (driver compat) + 0.5 day Spike 3 (benchmark setup + runs) + 0.5 day Spike 4 (harness + 5 converted tests) + 0.5 day Spike 5 (scheduler alive-tick) + 0.5 day Spike 6 (alembic) + 0.5 day Spike 7 (`server_default` audit) + 0.5 day writing `spike-decision.md` and resolving the 9 open decisions.
+- **High (7 days):** Spike 1 reveals 60-90 lazy-load failures requiring careful classification (close to the 100-failure hard limit), Spike 2 asyncpg-fails and we re-run under psycopg3 (extra 1 day), the 9 open decisions trigger 2-3 rounds of user clarification, benchmark hardware concerns require re-running Spike 3 on a cleaner environment.
+
+#### G. Entry / exit criteria
+
+**Entry:**
+- `main` is green (`make quality` + `tox -e integration` + `tox -e bdd`) at the fork point.
+- `feat/v2.0.0-flask-to-fastapi` async-pivot documentation (checkpoint + audit reports + implementation-checklist updates) is committed — no fresh reader should open a spike without reading `async-pivot-checkpoint.md` first.
+- Agent A scope audit, Agent B risk matrix, Agent D AdCP verification, Agent E ideal-state gaps, Agent F non-surface inventory all committed.
+- Staging PostgreSQL available for Spike 3 benchmark runs.
+- Team availability: one senior async-SQLAlchemy engineer available for the full spike window.
+- Docker test stack can be stood up on the spike-runner's machine (`./run_all_tests.sh` passes on main before the spike begins).
+- CLAUDE.md § "Open decisions blocking Wave 4" has been read by the spike owner.
+
+**Exit (go condition):**
+- Spike 1 PASSES (<40 unique lazy-load failures, fix cost <2 days).
+- At most 2 of Spikes 2-7 fail.
+- `spike-decision.md` committed to `main` with the go call, spike results excerpts, and all 9 open-decision resolutions signed off.
+- `baseline-sync.json` + `baseline-sync-mcp.json` committed to `tests/performance/baselines/`.
+- `pyproject.toml` has the driver choice and `asyncio_mode = "auto"` landed.
+- `tox -e driver-compat` environment exists and runs (even if it currently fails — the env definition is what's needed).
+- Spike branch deleted from origin.
+- **Wave 0 is now cleared to open.**
+
+**Exit (no-go condition):**
+- Spike 1 FAILS OR more than 2 soft spikes fail.
+- `spike-decision.md` committed with the no-go call and a detailed failure analysis.
+- Pivot-propagation commits reverted per §D above.
+- `async-pivot-checkpoint.md` marked superseded; `.claude/notes/flask-to-fastapi/CLAUDE.md` updated to reflect the revert.
+- v2.0 scope returns to 4-wave Flask-removal plan; Wave 0 opens under the sync-def Option C plan.
+- v2.1 epic opened for async SQLAlchemy absorption as a standalone migration.
+
+**Wave 0 dependency:** Wave 0 (Flask foundation work) and pre-Wave-0 spikes can in principle overlap — Wave 0 is Flask-to-FastAPI foundation and does not touch the database layer. BUT: under the pivot, Wave 0's `src/admin/deps/auth.py` uses `async def` dep functions with `async with get_db_session()`, which assumes Wave 4 target-state DB patterns. If the spike gate fails, Wave 0's `deps/auth.py` must be rewritten to sync-def Option C signatures. **Decision: Wave 0 does NOT open until the spike gate lands, to avoid writing code that may need to be rewritten in-place within days.**
+
+---
 
 ### Wave 0 — Foundation + template codemod (~2,500 LOC)
 
@@ -494,6 +643,333 @@ Tag v2.0.0-rc1 will land in staging 72h before production cut.
 - v2.0.0 tagged.
 - Staging canary runs for 48h without incident.
 - Production deploy completes.
+
+---
+
+### Wave 4 — Async database layer (~7,000-10,000 LOC, absorbed async pivot 2026-04-11)
+
+#### A. Detailed acceptance criteria
+
+1. `/Users/quantum/Documents/ComputedChaos/salesagent/src/core/database/database_session.py` fully rewritten to async: `create_async_engine(...)` replacing `create_engine(...)`, `async_sessionmaker(class_=AsyncSession, expire_on_commit=False, autoflush=False)` replacing `scoped_session(sessionmaker(...))`, `get_db_session()` is an `@asynccontextmanager async def` yielding `AsyncSession`. `scoped_session` is deleted entirely (the thread-identity scoping that caused Blocker #4 is gone, eliminating that class of bug by construction).
+2. `/Users/quantum/Documents/ComputedChaos/salesagent/src/core/database/engine.py` (NEW) owns the `create_async_engine(...)` call and exposes a `database_lifespan(app)` context manager that creates the engine on startup, stores it on `app.state.db_engine`, and calls `await engine.dispose()` on shutdown. Engine is **lifespan-scoped**, not module-level (Agent E Category 1).
+3. `/Users/quantum/Documents/ComputedChaos/salesagent/src/core/database/deps.py` (NEW) exposes `SessionDep = Annotated[AsyncSession, Depends(get_session)]` where `get_session` reads the engine from `app.state.db_engine`, yields a fresh `AsyncSession` per request, commits on normal exit, rolls back on exception, and closes in `finally`.
+4. `/Users/quantum/Documents/ComputedChaos/salesagent/src/core/database/scope.py` (NEW, optional per Agent E) exposes `session_var: ContextVar[AsyncSession]` for non-request-scoped code paths (schedulers, background tasks, CLI scripts) that need an ambient session without going through `Depends`. Used only where the FastAPI DI cannot reach.
+5. All 11 repository files under `/Users/quantum/Documents/ComputedChaos/salesagent/src/core/database/repositories/` rewritten with async methods: every `self._session.scalars(...)` becomes `(await self._session.execute(stmt)).scalars()`; every `self._session.flush()` becomes `await self._session.flush()`; every `session.commit()` becomes `await session.commit()`. Total: `media_buy.py` (525 LOC), `creative.py` (476), `workflow.py` (296), `delivery.py` (276), `account.py` (273), `adapter_config.py` (175), `product.py` (174), `tenant_config.py` (57), `currency_limit.py` (37), `__init__.py` (41), `uow.py` (286).
+6. `src/core/database/repositories/uow.py::BaseUoW` and its 7 subclasses (`MediaBuyUoW`, `ProductUoW`, `WorkflowUoW`, `TenantConfigUoW`, `AccountUoW`, `CreativeUoW`, `AdminCreativeUoW`) either (a) implement `async def __aenter__` / `async def __aexit__` OR (b) are **deleted entirely** in favor of the `SessionDep` + per-repository Dep factory pattern per Agent E Category 3 ("FastAPI's request-scoped session IS the unit of work"). The chosen approach is locked in pre-Wave-0 decision #1 and consistent across the wave — no half-converted UoW leftovers.
+7. **All 10 sync `_impl` functions converted to `async def`** per Agent A §2.3: `_get_adcp_capabilities_impl`, `_list_creative_formats_impl`, `_list_accounts_impl`, `_list_creatives_impl`, `_sync_creatives_impl`, `_list_authorized_properties_impl`, `_update_media_buy_impl`, `_get_media_buy_delivery_impl`, `_get_media_buys_impl`, `_update_performance_index_impl`. (The other 5 are already async: `_get_products_impl`, `_sync_accounts_impl`, `_create_media_buy_impl`, `_get_signals_impl`, `_activate_signal_impl`.)
+8. **Agent D M1 — 8 missing `await` keywords added in `src/routes/api_v1.py`** at lines 200, 214, 252, 284, 305, 324, 342, 360. Each is a 1-character insertion in the same PR that converts the corresponding `_raw` to async. `tests/unit/test_api_v1_routes_await_all_impls.py` (NEW) AST-walks the file and asserts every call to an async `_raw`/`_impl` is `await`-prefixed.
+9. **Agent D M2 — 2 missing `await` keywords added in `src/core/tools/capabilities.py`** at lines 265, 310.
+10. **Agent D M3 — 8 missing `await` keywords added in `src/a2a_server/adcp_a2a_server.py`** at lines 1558, 1587, 1774, 1798, 1842, 1892, 1961, 2000. Same pattern as M1/M2 — fixes pre-existing latent bug that becomes active once the callees are async.
+11. `/Users/quantum/Documents/ComputedChaos/salesagent/alembic/env.py` rewritten to async (~30 LOC) using the standard SQLAlchemy async pattern: `create_async_engine(_ASYNC_URL)` + `async with connectable.connect() as connection: await connection.run_sync(do_run_migrations)` + `asyncio.run()` wrapper. Existing 161 migration scripts are unchanged (they run inside `run_sync`).
+12. `pyproject.toml` driver swap: `psycopg2-binary` removed, `types-psycopg2` removed (both duplicates at lines 74 and 101), `asyncpg>=0.30.0,<0.32` and `asyncpg-stubs>=0.30.0` added. **Fallback:** if Spike 2 mandated `psycopg[binary,pool]>=3.2.0`, that substitutes for asyncpg and the `postgresql+asyncpg://` URL rewrite becomes `postgresql+psycopg://`. `greenlet` pinned explicitly.
+13. `src/core/database/db_config.py::DatabaseConnection` class + `get_db_connection()` helper **deleted** per Agent A §7 decision 2 (dead production code, grep-verified not imported by any runtime path). The file may be deleted entirely if nothing else references it.
+14. All supporting-core files from Agent A §2.4 converted to async: `src/core/auth.py` (`get_principal_object`, `get_principal_adapter_mapping` — 21 call sites across 9 `_impl` files gain `await`), `src/core/config_loader.py` (5 DB uses), `src/core/audit_logger.py` (5 uses), `src/core/strategy.py` (`StrategyManager`, 5 uses), `src/core/tenant_status.py`, `src/core/format_resolver.py`, `src/core/signals_agent_registry.py`, `src/core/creative_agent_registry.py`, `src/core/webhook_delivery.py`, plus the three `src/core/helpers/*.py` and `src/core/utils/tenant_utils.py` one-use files.
+15. All services-layer files from Agent A §2.5 converted: `delivery_webhook_scheduler.py` + `media_buy_status_scheduler.py` tick bodies (`with get_db_session()` → `async with`, repository calls `await`-ed), plus `auth_config_service.py` (10 uses — largest), `background_sync_service.py` (9 uses), `order_approval_service.py` (7 uses), and the 13 smaller services. `src/services/background_sync_service.py` handling locked in per pre-Wave-0 decision #9 (session-per-tick vs session-per-job).
+16. All adapter files from Agent A §2.6 converted: `src/adapters/base.py` base class methods declared `async def` (cascades to every adapter caller — this is the architectural decision from pre-Wave-0 decision #1), `src/adapters/google_ad_manager.py` (7 uses, largest), `src/adapters/gam_reporting_api.py` (8 uses), `src/adapters/gam/managers/workflow.py` (5), `broadstreet/adapter.py` (5), `mock_ad_server.py` (3), `gam/managers/targeting.py` (3), `xandr.py` (1), `gam/managers/orders.py` (1), `base_workflow.py` (1), plus `kevel.py`/`triton_digital.py` which gain `async def` signatures for base-class compliance even without DB access.
+17. **Admin routers under `src/admin/routers/*.py` (landed in Waves 1-3) have their handler DB access patterns updated to async-target-state** per the Wave 0 foundation that was already `async def`: inline sync `with get_db_session()` bodies (if any slipped in) become `async with`, `session.scalars()` becomes `await session.execute().scalars()`. Admin routers are already `async def` by Wave 0 contract; this step is a scan-and-fix, not a rewrite.
+18. **Agent D M4-M9 AdCP wire-safety mitigations land in the same PR as the conversions they guard:**
+    - M4: `tests/unit/test_api_v1_routes_await_all_impls.py` — AST walk asserting every `_raw`/`_impl` call is `await`-prefixed.
+    - M5: `tests/integration/test_get_media_buys_wire_datetime_present.py` — creates a media buy without explicit `created_at`, fetches via `get_media_buys`, asserts `created_at` is not None in the wire response.
+    - M6: `tests/unit/test_architecture_no_server_default_without_refresh.py` — AST-parses `src/core/database/models.py`, flags `server_default=` without parallel `default=` or `# NOQA: server-default-refreshed` exemption.
+    - M7: `server_default=func.now()` → `default=datetime.utcnow` migration for `Creative.created_at`, `Creative.updated_at`, `MediaBuy.created_at`, `MediaBuy.updated_at`.
+    - M8: `tests/unit/test_architecture_adcp_datetime_nullability.py` — asserts `GetMediaBuysMediaBuy.created_at`/`updated_at` remain `datetime | None` to prevent schema tightening.
+    - M9: `tests/unit/test_openapi_byte_stability.py` — snapshots `app.openapi()` to `tests/unit/fixtures/openapi_snapshot.json` and byte-diffs in CI.
+19. `tests/harness/_base.py::IntegrationEnv` converts to `async def __aenter__` / `async def __aexit__` per Agent A §2.11. Sync `__enter__`/`__exit__` either deleted (clean break) or kept as a deprecation shim that `asyncio.run()`-wraps the async path (decided at Wave 4 entry based on test-corpus readiness).
+20. `tests/factories/_async_shim.py` (NEW) implements a custom `AsyncSQLAlchemyModelFactory` per pre-Wave-0 decision #3, enabling factory-boy to drive INSERT through an async session via `session.run_sync(...)`. All 11 factories under `tests/factories/` switched over.
+21. All ~166 integration tests converted to `async def` + `@pytest.mark.asyncio` + `async with`. Conversion is AST-driven (scripted rewriter) with manual audit of the ~20 tests that use the harness in unusual ways. `tests/integration/conftest.py` fixtures that yield DB state become async fixtures.
+22. Tests switch from sync `TestClient(app)` to `httpx.AsyncClient(transport=ASGITransport(app=app))` with `app.dependency_overrides[get_session]` per Agent E Category 14. Per-test engine fixture (function-scoped) + per-test session fixture prevents event-loop leak across tests.
+23. `DB_POOL_SIZE` and `DB_POOL_MAX_OVERFLOW` env vars introduced with production-safe defaults (pool sized to match or exceed the pre-migration sync-threadpool capacity per Risk #6). `pool_pre_ping=True` and `pool_recycle=3600` set to handle Fly.io network blips and 2h idle connection kill.
+24. **Agent F pre-Wave-0 / Wave 4 tooling items land:** `scripts/deploy/entrypoint_admin.sh:9` psycopg2 probe rewritten or deleted (F3.6.1), `scripts/deploy/run_all_services.py::check_database_health` + `::check_schema_issues` + `::init_database` rewritten for async (F3.5.1-3), `Dockerfile` `libpq-dev`/`libpq5` removal (F1.2.1 / F3.1.1), `docker-compose*.yml` DATABASE_URL compatibility verified (F3.2.1 / F3.3.1 / F3.4.1), `/health/pool` and `/metrics` endpoints added (F4.1.1 / F4.1.3), DB pool Prometheus gauges (F4.1.4), `contextvars` request-ID propagation (F4.3.1), 3 new structural guards — admin routes async (F6.2.2), async DB access (F6.2.3), templates no ORM (F6.2.4).
+25. **`./run_all_tests.sh` green** — all 5 tox envs (`unit`, `integration`, `bdd`, `e2e`, `admin`) pass. `make quality` green. `tox -e driver-compat` green. Wave 4 is ship-ready when the full CI matrix holds.
+
+#### B. File-level checklist
+
+**CREATE:**
+- `/Users/quantum/Documents/ComputedChaos/salesagent/src/core/database/engine.py` (~120 LOC — `database_lifespan` context manager, lifespan-scoped engine construction, Agent E Category 1)
+- `/Users/quantum/Documents/ComputedChaos/salesagent/src/core/database/deps.py` (~80 LOC — `SessionDep`, `get_session` factory, per-request commit/rollback)
+- `/Users/quantum/Documents/ComputedChaos/salesagent/src/core/database/scope.py` (~40 LOC — `session_var: ContextVar[AsyncSession]` for non-request-scoped paths, optional per Agent E)
+- `/Users/quantum/Documents/ComputedChaos/salesagent/tests/factories/_async_shim.py` (~150 LOC — `AsyncSQLAlchemyModelFactory` adapter per pre-Wave-0 decision #3)
+- `/Users/quantum/Documents/ComputedChaos/salesagent/tests/unit/test_api_v1_routes_await_all_impls.py` (~120 LOC — M4 structural guard)
+- `/Users/quantum/Documents/ComputedChaos/salesagent/tests/integration/test_get_media_buys_wire_datetime_present.py` (~80 LOC — M5 wire-safety)
+- `/Users/quantum/Documents/ComputedChaos/salesagent/tests/unit/test_architecture_no_server_default_without_refresh.py` (~100 LOC — M6 structural guard)
+- `/Users/quantum/Documents/ComputedChaos/salesagent/tests/unit/test_architecture_adcp_datetime_nullability.py` (~60 LOC — M8 schema-drift guard)
+- `/Users/quantum/Documents/ComputedChaos/salesagent/tests/unit/test_openapi_byte_stability.py` (~100 LOC — M9 OpenAPI snapshot)
+- `/Users/quantum/Documents/ComputedChaos/salesagent/tests/unit/fixtures/openapi_snapshot.json` (snapshot baseline, updated only on intentional schema changes)
+- `/Users/quantum/Documents/ComputedChaos/salesagent/tests/unit/test_architecture_admin_routes_async.py` (~100 LOC — F6.2.2 structural guard)
+- `/Users/quantum/Documents/ComputedChaos/salesagent/tests/unit/test_architecture_admin_async_db_access.py` (~100 LOC — F6.2.3 structural guard)
+- `/Users/quantum/Documents/ComputedChaos/salesagent/tests/unit/test_architecture_templates_no_orm.py` (~100 LOC — F6.2.4 structural guard)
+
+**MODIFY (major rewrites):**
+- `/Users/quantum/Documents/ComputedChaos/salesagent/src/core/database/database_session.py` — full rewrite to async (~465 LOC → ~500 LOC; +200/-120 net per Agent A §2.1)
+- 11 repository files (`media_buy.py`, `creative.py`, `workflow.py`, `uow.py`, `delivery.py`, `account.py`, `adapter_config.py`, `product.py`, `tenant_config.py`, `currency_limit.py`, `__init__.py`)
+- `alembic/env.py` (~91 LOC sync → ~30 LOC async)
+- `tests/harness/_base.py` (~915 LOC — add `__aenter__`/`__aexit__`, ~+200 LOC delta)
+- `src/adapters/base.py` (base class methods → `async def`, cascades)
+- `src/adapters/google_ad_manager.py`, `gam_reporting_api.py`, `mock_ad_server.py`, `kevel.py`, `xandr.py`, `triton_digital.py`, `base_workflow.py`, `broadstreet/adapter.py`, `gam/managers/*.py` (Agent A §2.6)
+- `src/core/tools/capabilities.py` + 8 other `_impl` files per Agent A §2.3
+- `src/routes/api_v1.py` (M1 — 8 `await` insertions)
+- `src/a2a_server/adcp_a2a_server.py` (M3 — 8 `await` insertions + 4 DB-access sites to async)
+- `src/core/auth.py`, `config_loader.py`, `audit_logger.py`, `strategy.py` + 8 other `src/core/` files per Agent A §2.4
+- `src/services/delivery_webhook_scheduler.py`, `media_buy_status_scheduler.py`, `auth_config_service.py`, `background_sync_service.py`, `order_approval_service.py` + 12 other services per Agent A §2.5
+- `src/admin/utils/helpers.py::get_tenant_config_from_db` — canonical lazy-load hotspot, add `selectinload(Tenant.adapter_config)` per Spike 3 result
+- All 11 factory files — adopt `AsyncSQLAlchemyModelFactory` from the shim
+- `tests/integration/conftest.py` + `tests/conftest.py` — async fixtures
+- `pyproject.toml` — driver swap + psycopg2 removal
+- `Dockerfile` — remove `libpq-dev`/`libpq5` if no longer needed (F1.2.1 / F3.1.1)
+- `scripts/deploy/entrypoint_admin.sh` (F3.6.1)
+- `scripts/deploy/run_all_services.py` (F3.5.1-3)
+- `~166` integration test files — AST-rewriter conversion to `async def` + `@pytest.mark.asyncio`
+- `src/core/database/models.py` — 5 poisonous `@property` methods (lines 193, 341, 355, 454, 468 per Agent A §8) refactored or `selectinload`-fed
+
+**DELETE:**
+- `src/core/database/db_config.py::DatabaseConnection` + `get_db_connection()` if Agent A §7 decision 2 resolves as DELETE (Audit 06 overrule: KEEP because called by deploy scripts pre-uvicorn)
+- `tests/unit/test_architecture_admin_sync_db_no_async.py` must NOT exist (explicitly NOT to be created under the pivot — it would enforce the wrong direction; the stale Option C guard)
+
+**Wave 4a pilot scope (first merge):** convert `src/core/database/database_session.py` + `engine.py` + `deps.py` + the `accounts` domain end-to-end (`accounts.py` repository + `_list_accounts_impl` + `_sync_accounts_impl` + `src/routes/api_v1.py:360` + admin `accounts.py` router + integration tests for accounts) as the pilot. If the pilot lands clean, Wave 4b-f cascade. If the pilot hits lazy-load bombs not caught by Spike 1, the wave pauses and the audit reruns.
+
+#### C. Risk assessment
+
+| Risk | Likelihood | Impact | Mitigation |
+|---|---|---|---|
+| **Lazy-load `MissingGreenlet` bombs** on relationship access outside session scope (Agent B Risk #1) | Medium (after Spike 1 passes) | **Critical** — any bomb takes down a whole route | Spike 1 is the first-line defense; Spike 3 (performance bench) exercises hot paths a second time. In-Wave-4 detection uses Agent B §3 "9-pattern lazy-load cookbook" for root-causing and fixing. If a bomb surfaces post-merge in staging, single-route rollback is impossible (the repository layer is shared) — full-wave revert is the only option. `src/admin/utils/helpers.py::get_tenant_config_from_db` is the canonical hotspot (confirmed by Agent A §8). |
+| **`scoped_session` singleton** is the `ContextManager`-based ambient session used by `src/core/context_manager.py`; removing `scoped_session` breaks call sites that currently depend on thread-identity scoping (Agent B Risk #12 / Agent A §7 decision 7) | Medium | High — audit tools silently log to the wrong request | Pre-Wave-0 decision #7 locks the ContextVar-propagation strategy. Agent F F4.3.1 introduces `contextvars` request-ID propagation to replace thread-identity scoping. Integration test `tests/integration/test_audit_log_propagation.py` asserts that an audit log written inside `_list_accounts_impl` lands under the correct tenant_id under concurrent requests. |
+| **`asyncio.run()` in handlers** — any `_impl` that calls `asyncio.run(...)` to drive async code from sync context becomes a fatal nested-loop error once the handler itself is async (Agent B Risk #7 / Risk #8 interaction) | Low | High | AST structural guard: `tests/unit/test_architecture_no_asyncio_run_in_handlers.py` scans admin routers and `_impl` functions and fails if `asyncio.run(` appears. One-time manual audit of `src/services/` identifies any standalone sync entry points. |
+| **`background_sync_service.threading.Thread`** — service spawns long-lived worker threads that open `get_db_session()` (9 usages per Agent A §2.5); under async those threads have no event loop (Agent B Risk #14 + pre-Wave-0 decision #9) | High | Medium | Decision #9 locks the strategy at spike time (session-per-tick via `asyncio.run_coroutine_threadsafe` OR full conversion to an `asyncio.create_task` pattern). The `background_sync` service is the single biggest single-file risk in `src/services/`. Spike 5 (scheduler alive-tick) validates the chosen approach end-to-end. |
+| **Module-level engines in `gam_*_service.py` and similar** — Agent B Risk #33 documents that several `src/services/*.py` and `src/adapters/*.py` files do `from src.core.database.database_session import get_db_session` at module load, which under lifespan-scoped engine construction may bind to the wrong engine OR trigger eager engine construction at import time (wrong event loop) | Medium | High — rare but nasty import-order bug | Agent F F7.3.1 requires an import-order test. The Agent E Category 1 fix (lifespan-scoped engine) explicitly **does not create** the engine at module load; `get_db_session` is a function that reads `app.state.db_engine` at call time. Any caller that holds a reference to the engine across lifespan boundaries is flagged by the import-order test. |
+| **Adapter base-class async cascade** — `AdServerAdapter` base methods become `async def`, and every caller (schedulers, `_impl` functions, admin blueprints) must await (pre-Wave-0 decision #1 / Agent A §7) | High | High — not a bug, but a wide-surface mechanical change | Decision #1 locked pre-Wave-0 to "full async adapter base class". The cascade is ~20 methods on 9 adapters and ~30 call sites. Scripted `ast`-based rewrite applies `await` everywhere; manual audit catches the handful of non-obvious sites. |
+| **`asyncpg` JSONB type codec vs `JSONType(model=X)`** (Agent B Risk #17) interacts with Pydantic round-tripping on JSONB columns | Low (caught in Spike 2) | High if caught in Wave 4 rather than Spike | If Spike 2 caught it, the fix is already in `main`. If not — Agent B §2 Risk #17 has the asyncpg JSON codec registration recipe. Fallback driver (`psycopg[binary,pool]`) is ready. |
+| **`expire_on_commit=False` consequence** — `created_at`/`updated_at` server defaults no longer refresh post-commit; 4 callers (`Creative.created_at`/`updated_at`, `MediaBuy.created_at`/`updated_at`) read these post-INSERT | Medium | Medium | M7 migration handles the 4 known cases (`server_default=func.now()` → `default=datetime.utcnow`). M6 structural guard prevents new instances. M5 wire-safety integration test catches regressions. Spike 7 surveyed the overall `server_default=` surface at gate time. |
+| **Agent D M1-M9 mitigations not all landing in the same PR as their conversion** — developer lands a `_raw` async conversion but forgets the paired `await` in `api_v1.py` or `a2a_server.py`, causing a latent coroutine-not-awaited warning that becomes a production 500 | Medium | High | M4 structural guard is the backstop: CI fails on any unmarked missing `await`. Agent D's inventory at Agent A §2.3 lists the 18 (8+2+8) exact line numbers to update; the conversion PR template has a checkbox per mitigation. |
+| **Test conversion mass-rewrite introduces assertion drift** — the AST rewriter converts test bodies but subtle semantic differences in async fixtures cause tests to silently pass the wrong thing | Medium | Medium | Mass-rewrite PR is landed AFTER a sample of 20 hand-converted tests has been verified pass/fail behavior matches pre-conversion. The AST rewriter is committed as a script under `scripts/` so reviewers can run it themselves. |
+| **Connection pool under sizing** vs the previous sync threadpool — async pool default (5+10 overflow = 15) is smaller than sync threadpool default (40) (Agent B Risk #6) | Medium | High — handlers block waiting for connections under load | `DB_POOL_SIZE` env var introduced, production default 40 or higher. Benchmark in Wave 5 Spike F validates. `pool_pre_ping=True` + `pool_recycle=3600` handle connection-health issues. |
+| **Wave 4a pilot rollback is expensive** — the Wave 4a foundation (engine + deps + shim + 1 domain) must land before any Wave 4b-f work; reverting 4a after 4b is in-flight requires rolling back 4b as well | High (structurally true) | Medium | Wave 4a is a separate PR that merges first and soaks for 3 business days before Wave 4b opens. Entry criterion for Wave 4b: Wave 4a staging canary clean for 72h. |
+| **Alembic async env.py has a subtle bug that only surfaces on `downgrade`** — not all migrations are symmetric, and the async runner may choke on a migration that uses `connection.execute(text(...))` in a downgrade path | Low | Medium | Spike 6 validated the upgrade/downgrade roundtrip on a fresh test DB. Agent B Risk #4 fallback: keep `alembic/env.py` sync with a boot-time `postgresql+asyncpg://` URL rewriter. Fallback adds +0.5 day and is pre-authorized. |
+| **BDD step files (`tests/bdd/`) drift** — step dispatchers use `ctx["env"]` and call `env.call_via(...)`; under async the dispatcher must `await` the call but the step function is sync | Medium | Medium | Agent A §2.11 documents the conversion (~100 LOC). Step files adopt `pytest-bdd`'s async step support OR the step function wraps with `asyncio.run()`. Decision locked at Wave 4 entry. |
+
+#### D. Rollback procedure
+
+Wave 4 is the **hardest rollback in the migration**, harder than Wave 3 (which was the Flask cutover). The difficulty scales with how deep into Wave 4 the team has merged.
+
+**Wave 4a pilot rollback (accounts domain only):**
+```bash
+git checkout main
+git revert -m 1 <wave-4a-merge-sha>
+# Restores sync src/core/database/database_session.py, drops src/core/database/engine.py,
+# restores psycopg2-binary in pyproject.toml, restores sync accounts repository + _impl.
+# Expected to revert cleanly because no dependent code has been merged yet.
+git push origin main
+```
+
+**Wave 4b-f partial rollback:** NOT RECOMMENDED. After any Wave 4b-f module lands, its dependencies (shared repository layer, `src/core/auth.py`, `src/core/config_loader.py`) have been rewritten to async and can no longer be rolled back piecemeal. If a single Wave 4b-f module is broken, fix-forward. If the overall wave is broken, full revert.
+
+**Full Wave 4 revert:**
+```bash
+git checkout main
+git revert -m 1 <wave-4-final-merge-sha>
+git revert -m 1 <wave-4f-merge-sha>
+... (continue in reverse merge order)
+git revert -m 1 <wave-4a-merge-sha>
+# Rebuild lockfile (asyncpg → psycopg2-binary restored)
+uv lock
+# Rebuild Docker image
+docker build .
+# Verify driver restoration
+grep -A 2 psycopg2-binary pyproject.toml
+# Run migrations — alembic/env.py is now sync again, OK
+uv run alembic upgrade head
+```
+
+**Consequence of a full Wave 4 revert:**
+- Any database migrations landed during Wave 4 that used Wave-4-era patterns (unlikely — migrations are driver-agnostic at the `op.*` level) may need manual intervention.
+- `tests/performance/baselines/baseline-sync.json` remains as the async-era comparison oracle; reverting doesn't invalidate it.
+- v1.99.0 container image remains the true last-known-good rollback (from Wave 3 exit criteria).
+- Spike gate decisions in `spike-decision.md` stay on record; a future v2.1 async attempt starts from that spike data.
+
+**Database:** no migrations required by Wave 4 itself (the rewrite is all application-layer). Individual Wave 4 commits may include unrelated migrations that must be handled on their own.
+
+**Environment variables:** `DB_POOL_SIZE`, `DB_POOL_MAX_OVERFLOW` can stay set on revert (sync engine ignores them).
+
+**Rollback window:** Wave 4a pilot is revertable for 7 calendar days after merge. Full Wave 4 is revertable until Wave 5 merges; after Wave 5, `psycopg2-binary` is deleted from `pyproject.toml` and the `SessionLocal` sync class is removed, making rollback require re-implementing the sync layer.
+
+**Pre-wave checklist:** tag `v1.99.0` is ALREADY applied at Wave 3 exit. Tag `v2.0.0-rc.1` applied just before Wave 4a merges as the "Wave 3 stable + async pilot ready" state. If Wave 4 is rolled back entirely, redeploy the `v2.0.0-rc.0` image (= Wave 3 post-merge state) as the running app.
+
+#### E. Merge-conflict resolution
+
+**Freeze scope (during Wave 4 branch lifetime):**
+- `src/core/database/**` (every file)
+- `src/core/auth.py`, `config_loader.py`, `audit_logger.py`, `strategy.py`
+- `src/services/*.py` (every file)
+- `src/adapters/**` (every file)
+- `src/core/tools/*.py` (every `_impl` file)
+- `src/routes/api_v1.py`
+- `src/a2a_server/adcp_a2a_server.py` (DB access sites + `await` insertions)
+- `alembic/env.py`
+- `tests/harness/_base.py`
+- `tests/factories/**`
+- `tests/integration/**` (entire tree — mass-rewrite)
+- `tests/conftest.py`, `tests/integration/conftest.py`, `tests/conftest_db.py`
+- `pyproject.toml` (driver swap + psycopg2 removal)
+- `Dockerfile`, `scripts/deploy/entrypoint_admin.sh`, `scripts/deploy/run_all_services.py`
+
+**Announcement template:** see rollback `.md` template in other waves.
+
+**Rebase strategy:** Wave 4a pilot rebases normally onto main — the freeze is one-directional. Wave 4b-f sub-branches rebase onto the Wave 4a-merged `main` once per day during active development. For freeze-window conflicts: resolve by taking the Wave 4 version of the file and re-applying the other PR's semantic edits in async form on top.
+
+#### F. Time estimate
+
+- **Low (10 days):** all Spike gate items passed with margin, lazy-load count was <20, driver is asyncpg on first try, adapter base class conversion is mechanical, BDD step files convert without surprises, mass-test-rewrite AST script works on first run. Senior async-SQLAlchemy team of 2-3 engineers working in parallel.
+- **Expected (14 days):** 3 days Wave 4a pilot + 3 days repositories/UoW/`_impl` sweep + 3 days supporting core/services/adapters cascade + 3 days tests mass-rewrite + harness conversion + factory shim + 2 days integration/staging/`make quality` stabilization.
+- **High (21 days):** Wave 4a pilot surfaces a lazy-load bomb not caught by Spike 1, `background_sync_service` conversion hits a scope surprise, driver fallback from asyncpg to psycopg3 happens mid-wave, mass-test-rewrite produces 40+ false-fail tests requiring manual triage, staging pool tuning iteration doubles the time.
+
+#### G. Entry / exit criteria
+
+**Entry:**
+- Pre-Wave-0 spike gate PASSED (Spike 1 green, ≤2 soft-spike failures).
+- `spike-decision.md` committed with all 9 open decisions resolved.
+- Wave 3 merged to `main` and stable in staging ≥3 business days.
+- `v1.99.0` git tag applied (pre-Wave-3-merge Flask-era rollback).
+- `v2.0.0-rc.0` git tag applied (Wave-3-merged FastAPI+sync-SQLAlchemy reference).
+- `baseline-sync.json` + `baseline-sync-mcp.json` committed under `tests/performance/baselines/`.
+- `tox -e driver-compat` environment exists and runs.
+- Agent F pre-Wave-0 hard-gate items all landed (F1.1.1-F1.1.4, F1.5.1, F1.7.1, F2.4.1, F2.3.1, F2.5.1, F6.2.1, F6.2.5, F6.2.6, F8.2.1).
+- Main is green (`make quality` + `./run_all_tests.sh`).
+- Team: 2-3 senior async-SQLAlchemy engineers available for the 2-3 week wave window.
+- Wave 4 freeze announcement sent 48h before Wave 4a PR opens.
+
+**Exit:**
+- All 25 Wave-4 acceptance criteria pass.
+- `tox -e unit`, `tox -e integration`, `tox -e bdd`, `tox -e e2e`, `tox -e admin` all green.
+- `tox -e driver-compat` green. `make quality` green.
+- Agent D M1-M9 mitigations all landed — AST guard confirms every `_raw`/`_impl` call is `await`-prefixed, M5 wire-datetime test passes, M9 OpenAPI snapshot matches.
+- Benchmark parity: Wave 4 staging admin routes run within **±5% p95 latency** of `baseline-sync.json` under moderate-concurrency load (full-spec benchmark comparison is Wave 5, but Wave 4 exit requires a rough parity sanity check).
+- `/health/db` and `/health/schedulers` endpoints return healthy for 24h staging soak.
+- `/health/pool` exposes AsyncEngine pool stats (size, checked_in, checked_out, overflow).
+- Staging deploy completes with zero 500s on hot admin routes for 24h.
+- `git grep -l "scoped_session" src/` returns zero hits.
+- Wave 4a pilot merged first; Wave 4b-f follow in sequence and are confirmed green individually before the Wave 4 PR marks ready.
+- v2.0.0-rc.2 tagged (Wave 4 stable), staging canary running for 48h.
+- Wave 5 entry criterion "Wave 4 merged and stable ≥3 business days" timer starts.
+
+---
+
+### Wave 5 — Async cleanup + v2.0.0 release (~3,000-5,000 LOC)
+
+#### A. Detailed acceptance criteria
+
+1. Any residual sync `get_db_session()` call sites not migrated in Wave 4 are deleted or converted. `git grep -l "with get_db_session()" src/` returns zero hits outside the explicit allowlist.
+2. The sync `SessionLocal` class / sync `sessionmaker` (if still present as a deprecation shim from Wave 4) is **deleted entirely** from `src/core/database/database_session.py`. No dual sync/async machinery remains.
+3. The sync `IntegrationEnv.__enter__` / `__exit__` shim (if Wave 4 kept it as a `asyncio.run`-wrapped compatibility layer) is **deleted**. All test callers use `async with env:`.
+4. The factory-boy sync wrapper (if Wave 4 kept a sync-compatible fallback) is deleted. `tests/factories/_async_shim.py` is the only factory driver.
+5. `psycopg2-binary` **removed entirely** from `pyproject.toml` runtime deps. Optional: keep as a deploy-extra per Audit 06 Decision 2 overrule (`run_all_services.py::check_database_health` calls it pre-uvicorn). This decision locked at Wave 5 entry.
+6. `types-psycopg2` removed from both dev-deps slots in `pyproject.toml` (Agent A §2.2 flagged two duplicate entries at lines 74 and 101).
+7. All remaining FIXME comments tagged as async-landmines (e.g., `# FIXME(async-pivot): ...`) are resolved and the comments removed. `git grep -n "FIXME(async" src/ tests/` returns zero hits.
+8. **Async-vs-sync benchmark** runs on the representative admin routes from `baseline-sync.json`. Results emitted to `tests/performance/results/wave-5-async.json` and compared against `tests/performance/baselines/baseline-sync.json`.
+9. **Latency profile:** at medium concurrency (50 req/s), async is net-neutral to ~5% faster than the pre-migration sync baseline (Risk #10). At high concurrency (200+ req/s), async outperforms sync by >20% OR sync saturates while async does not. At low concurrency (1 req/s), async is within ±10% of sync. **If a regression >5% at medium concurrency is found:** first tune `pool_size`, second add `selectinload` eager-loading at the hot path, last resort is Wave-5-scoped rollback.
+10. `/health/pool` endpoint exposes SQLAlchemy AsyncEngine pool statistics: `pool_size`, `checked_in`, `checked_out`, `overflow`. Prometheus scraper config verified (Agent F F4.1.1 / F4.1.3 / F4.1.4).
+11. `/health/schedulers` endpoint returns alive-tick timestamps for `delivery_webhook_scheduler` and `media_buy_status_scheduler`; both timestamps must be within 30 seconds of "now" on a healthy instance.
+12. **Startup log assertion:** schedulers emit `"delivery_webhook_scheduler alive"` and `"media_buy_status_scheduler alive"` log lines on their first post-startup tick (within 60s of uvicorn boot). A test in `tests/integration/test_scheduler_startup.py` asserts this.
+13. **Risk #5 consequence audit:** `created_at` / `updated_at` post-commit access sites audited one final time — any code reading these fields after commit without an explicit `await session.refresh(obj)` is either fixed or explicitly marked with `# NOQA: expire_on_commit=False` justification. M6 structural guard enforces.
+14. `.duplication-baseline` ratcheted back to the Wave 4-entry baseline or lower (Agent F F7.4.2). Async conversion typically introduces a short-term duplication bump from "same pattern applied across every repository"; Wave 5 cleanup extracts the shared helpers and restores the ratchet.
+15. `CHANGELOG.md` v2.0.0 section finalized with complete breaking-changes list: (a) `psycopg2-binary` → `asyncpg` driver swap; (b) `expire_on_commit=False` default; (c) async handler signatures; (d) async repository method signatures; (e) async test harness (`IntegrationEnv`); (f) new env vars (`DB_POOL_SIZE`, `DB_POOL_MAX_OVERFLOW`, `SESSION_SECRET`); (g) new structural guards; (h) session cookie rename (`session` → `adcp_session`) — forced re-login.
+16. `pyproject.toml` version bumped to `2.0.0` (Agent F F8.4.2).
+17. `v2.0.0` git tag applied on the post-Wave-5 merge commit. Tag is GPG-signed.
+18. Auto-memory `flask_to_fastapi_migration_v2.md` updated to reflect the post-v2.0.0 state (Agent F F7.6.1).
+19. Production deploy plan approved (2 reviewers + 1 release manager sign-off).
+20. Production deploy completes. Monitoring shows no regression over the first 24h post-deploy.
+
+#### B. File-level checklist
+
+**CREATE:**
+- `tests/performance/results/wave-5-async.json` — benchmark results artifact
+- `tests/integration/test_scheduler_startup.py` (~80 LOC — asserts alive-tick log lines within 60s of boot)
+
+**MODIFY:**
+- `pyproject.toml` — version bump to `2.0.0`; **remove** `psycopg2-binary` entirely (or move to `[project.optional-dependencies]` per Audit 06 Decision 2 if kept as pre-uvicorn bootstrap); remove `types-psycopg2` from both slots
+- `CHANGELOG.md` — finalize v2.0.0 entry with all 8 breaking-change items
+- `.duplication-baseline` — ratcheted to Wave-4-entry level or lower (Agent F F7.4.2)
+- `~/.claude/projects/.../memory/flask_to_fastapi_migration_v2.md` — auto-memory update (Agent F F7.6.1)
+- `src/core/database/database_session.py` — delete sync `SessionLocal`, delete sync `sessionmaker`, delete any remaining sync context-manager shim
+- `tests/harness/_base.py` — delete sync `__enter__`/`__exit__` shim if kept from Wave 4
+- All 11 factory files — remove sync-compat paths if any
+- Any `src/` file with a remaining `FIXME(async-pivot)` comment — resolve the comment and delete it
+- `docs/` — async debugging guide (`async-debugging.md`) + async cookbook (`async-cookbook.md`) finalized (Agent F F5.3.1 / F5.3.2)
+
+**DELETE:**
+- `src/core/database/database_session.py::SessionLocal` (sync class) — if still present from Wave 4
+- Sync `sessionmaker(...)` call in `database_session.py`
+- Sync `tests/harness/_base.py::IntegrationEnv.__enter__` / `__exit__`
+- `pyproject.toml` `psycopg2-binary>=2.9.9` line — fully removed from runtime deps
+- `pyproject.toml` `types-psycopg2>=2.9.21.*` lines (both occurrences per Agent A §2.2)
+
+#### C. Risk assessment
+
+| Risk | Likelihood | Impact | Mitigation |
+|---|---|---|---|
+| Benchmark comparison reveals >5% p95 regression at medium concurrency | Low (after Wave 4 entry sanity check) | High — threatens v2.0.0 release date | Tune `pool_size` first, then add `selectinload` at hot paths. If still regressing, the root cause is almost certainly N+1 query explosion; run a query-count profile and fix at the repository layer. Last resort is a Wave 4+5 revert. |
+| Wave 4 left residual sync code paths that Wave 5 cleanup discovers | Medium | Low — cleanup is the point of this wave | Fix-forward. The biggest risk is that a sync path in a low-traffic code path is missed entirely and detonates in production weeks later. Mitigation: structural guards from Wave 4 catch async/sync mismatches. |
+| `psycopg2-binary` removal from `pyproject.toml` breaks a one-off script in `scripts/` that was not audited in Wave 4 | Low | Low — scripts are tooling, not runtime | Grep `import psycopg2` across `scripts/` before the removal commit. Audit 06 Decision 2 already identified `run_all_services.py::check_database_health` as a legit caller — it stays. |
+| Production deploy surfaces a `MissingGreenlet` in a rarely-hit code path (e.g., monthly GAM sync admin route) | Low | High — on-call pager | Staging soak for 5 business days before the v2.0.0 tag; staging runs include at least one monthly-GAM-sync rehearsal. Runbook `docs/async-debugging.md` gives on-call the lazy-load cookbook. |
+| CHANGELOG entry misses a breaking change that external consumers hit on upgrade | Medium | Medium | PR template checklist cross-references the 8 enumerated breaking-change categories. Release manager sign-off gates the v2.0.0 tag. |
+| Deprecation shims left from Wave 4 are not deleted because nobody remembers they exist | Medium | Low | `test_architecture_no_sync_database_session.py` (new, landed in Wave 5) AST-scans `src/` and fails if `class SessionLocal` or sync `sessionmaker(` is still present. |
+| Auto-memory `flask_to_fastapi_migration_v2.md` update is skipped | High (cultural) | Low — affects fresh-session onboarding | Agent F F7.6.1 makes this a ship-gating checklist item. Release PR description references the auto-memory update explicitly. |
+| `v2.0.0` tag applied on a commit that doesn't have the release-please conventional-commit history needed for the auto-changelog | Low | Medium | Wave 4 and Wave 5 merge commits use conventional-commit prefixes. Release-please dry-run executed pre-tag to verify the changelog draft matches the hand-finalized CHANGELOG. |
+
+#### D. Rollback procedure
+
+Wave 5 is mostly **cleanup** on top of Wave 4's substantive async conversion. Rollback complexity is low relative to Wave 4, but the window is narrow because v2.0.0 ships in Wave 5.
+
+**Wave 5 single-commit revert (pre-v2.0.0 tag):**
+```bash
+git checkout main
+git revert -m 1 <wave-5-merge-sha>
+git push origin main
+# Restores sync deprecation shims, restores psycopg2-binary as a runtime dep
+```
+
+**Post-v2.0.0-tag rollback (rare, emergency):**
+If v2.0.0 is tagged and deployed, and a production-blocking regression is found, the rollback is to redeploy `v1.99.0` (Flask-era last-known-good) or `v2.0.0-rc.2` (Wave 4 stable). v2.0.0 is NOT untagged — the tag is immutable. A new `v2.0.1` is cut from a revert commit on `main`.
+
+**Database:** no migrations to roll back in Wave 5.
+**Environment variables:** `DB_POOL_SIZE`, `DB_POOL_MAX_OVERFLOW` can stay set (sync engine ignores them). `SESSION_SECRET` stays.
+**Rollback window:** Wave 5 single-commit revert is safe for ~14 days after merge. Post-v2.0.0-tag rollback is emergency-only and follows the v2.0.1 patch process.
+
+#### E. Merge-conflict resolution
+
+**Freeze scope:** `pyproject.toml`, `CHANGELOG.md`, `src/core/database/database_session.py`, `tests/harness/_base.py`, `.duplication-baseline`.
+
+**Rebase strategy:** Wave 5 is small and short-lived. Rebases onto main are mechanical. Version-bump conflicts resolve by taking Wave 5's version.
+
+#### F. Time estimate
+
+- **Low (3 days):** Wave 4 left no residual sync code; benchmark passes on first run; CHANGELOG writes itself. Single engineer.
+- **Expected (5 days):** 1 day grep-and-fix residual sync paths + psycopg2 removal; 1 day benchmark run + analysis + pool tuning; 1 day CHANGELOG finalization + release-please reconciliation + auto-memory update; 1 day staging canary + production deploy prep; 1 day production deploy + 24h monitoring soak.
+- **High (10 days):** benchmark reveals a regression requiring 2-3 days root-cause, CHANGELOG back-and-forth, production deploy slips to a maintenance window.
+
+#### G. Entry / exit criteria
+
+**Entry:**
+- Wave 4 merged to `main` and stable in staging ≥3 business days (sustained, not just "green once").
+- Wave 4 exit criteria all met including the sanity-check benchmark at ±5% parity.
+- `/health/pool`, `/health/schedulers`, `/health/db` endpoints all reporting healthy.
+- No `MissingGreenlet` / `InvalidRequestError` patterns in 3 days of staging logs.
+- Release manager committed to a v2.0.0 ship date.
+
+**Exit:**
+- All 20 Wave-5 acceptance criteria pass.
+- Full benchmark report shows async net-neutral to ~5% improvement at medium concurrency; regression <5% or fixed before ship.
+- `git grep -l "psycopg2" src/` returns zero hits (or only the explicit allowlist — deploy scripts per Audit 06 Decision 2).
+- `git grep -n "FIXME(async" src/ tests/` returns zero hits.
+- `.duplication-baseline` ratcheted to Wave 4-entry level or lower.
+- CHANGELOG v2.0.0 finalized and reviewed by release manager.
+- `pyproject.toml` version is `2.0.0`.
+- `v2.0.0` git tag applied (GPG-signed).
+- Staging canary passed 48h clean.
+- Production deploy completes.
+- 24h post-deploy monitoring clean: p95 latency within ±5% of pre-deploy, error rate flat, no new `MissingGreenlet` patterns, schedulers alive-ticking.
+- Auto-memory `flask_to_fastapi_migration_v2.md` updated to reflect post-v2.0.0 state.
+- `.claude/notes/flask-to-fastapi/` folder flagged for archival per `CLAUDE.md §"Branch and folder cleanup intent"` (~2 releases after v2.0.0 ships).
+- Migration branch `feat/v2.0.0-flask-to-fastapi` merged to `main` and deleted.
+- v2.0.1 patch-release process documented as the rollback path.
 
 ---
 
