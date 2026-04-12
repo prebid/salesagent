@@ -3,23 +3,22 @@
 **Status:** SOURCE OF TRUTH for "am I ready to ship Wave N?"
 **Target release:** salesagent v2.0.0
 **Feature branch:** `feat/v2.0.0-flask-to-fastapi`
-**Last updated:** 2026-04-11 (pivoted to full async; propagation wave applied)
+**Last updated:** 2026-04-12 (async pivot reversed — v2.0 ships sync)
 
-> **BLOCKER 4 PIVOTED TO FULL ASYNC (2026-04-11)**
+> **ASYNC PIVOT REVERSED (2026-04-12)**
 >
-> User directive: go fully async in v2.0 (deep-audit Option A), absorbing the
-> previously-deferred async SQLAlchemy migration. The "sync def admin handlers"
-> resolution is superseded; §2 Blocker 4 describes the pivoted target state.
+> v2.0 ships with **sync `def` admin handlers** and sync SQLAlchemy. The April 11
+> async pivot (Option A) was reversed after cost-benefit analysis showed marginal
+> benefit at current scale. Async SQLAlchemy is deferred to v2.1.
 >
-> **Canonical references for the pivoted plan:**
-> - [`async-pivot-checkpoint.md`](async-pivot-checkpoint.md) — full new plan
-> - [`async-audit/`](async-audit/) — six derivative audit reports on the
->   absorbed-async v2.0 scope (Agent A-F)
-> - `CLAUDE.md` §"Critical Invariants" — 6 invariants and 9 open decisions
+> **Sections in this file that still contain async language:**
+> - §1.2 Decisions 1, 3, 7, 9 — describe async-era work; tagged MOOT or DEFERRED
+> - §2 Blocker 4 — describes async conversion; entire section is DEFERRED TO v2.1
+> - §4 Wave 4 and Wave 5 — async conversion scope; DEFERRED TO v2.1
+> - §3.5 items tagged `[DEFERRED v2.1]` — async-only findings
 >
-> §1.2 ("Architectural decisions"), §2 ("Blocker 4"), and §4 ("Wave 0 deliverables")
-> in this file have been rewritten to reflect the pivot. §4 Wave 4 and Wave 5
-> sections enumerate the async conversion scope.
+> **For implementation, read `execution-plan.md` (sync, 7 phases).** This checklist
+> is for verification tracking.
 
 ## How to use this file
 
@@ -155,7 +154,7 @@ Full detail in `flask-to-fastapi-deep-audit.md` §1.
   - [ ] `src/app.py::adcp_error_handler` is Accept-aware — if `request.url.path.startswith("/admin")` AND `"text/html" in accept`, render `error.html` via `src/admin/templating.templates`
   - [ ] `templates/error.html` (or `src/admin/templates/error.html` after Wave 3 move) exists, extends `base.html`, renders error message + back link
   - [ ] `tests/integration/test_admin_error_page.py` exists — forces `AdCPValidationError` from inside an admin route, asserts HTML response (not JSON), asserts body contains the error message
-- [ ] **Blocker 4: Async event-loop session interleaving — PIVOTED 2026-04-11 to full async SQLAlchemy (Option A absorbed into v2.0 Waves 4-5)**
+- [ ] **Blocker 4: ~~Async event-loop session interleaving~~ DEFERRED TO v2.1 (async pivot reversed 2026-04-12). v2.0 uses sync `def` handlers — scoped_session thread-local identity works correctly in FastAPI's threadpool. The entire Blocker 4 checklist below is v2.1 scope.**
   - [ ] Pre-Wave-0 lazy-loading audit spike completed and approved (Risk #1 in `async-pivot-checkpoint.md` §4) — enumerates every `relationship()` access site and classifies as safe / eager-loadable / requires-rewrite
   - [ ] `src/core/database/database_session.py` converted: `create_engine` → `create_async_engine`, `scoped_session(sessionmaker(...))` → `async_sessionmaker(_engine, class_=AsyncSession, expire_on_commit=False)`
   - [ ] `get_db_session()` is an `@asynccontextmanager` yielding `AsyncSession`
@@ -351,17 +350,17 @@ Full detail in `flask-to-fastapi-execution-details.md` Part 1.
 - [ ] `tests/unit/admin/test_oauth_callback_routes_exact_names.py` — Blocker 6 GREENFIELD enhancement: byte-pins OAuth callback route names AND paths together. Changing `/admin/auth/google/callback` name or path fails the test.
 - [ ] `tests/unit/admin/test_trailing_slash_tolerance.py` — Blocker 2 guard
 - [ ] `tests/unit/test_architecture_no_flask_imports.py` — empty allowlist check, ratchets per wave
-- [ ] `tests/unit/test_architecture_admin_routes_async.py` — Blocker 4 guard (pivoted 2026-04-11). Asserts every admin router handler is `async def`. Replaces the wrong-direction `test_architecture_admin_sync_db_no_async.py` from the original plan.
-- [ ] `tests/unit/test_architecture_admin_async_db_access.py` — Blocker 4 sibling guard. Asserts admin DB access uses `async with get_db_session()` + `await session.execute(...)`, not sync `with` or `run_in_threadpool(_sync_fetch)` wrappers for DB work.
+- [ ] `tests/unit/test_architecture_handlers_use_sync_def.py` — v2.0 sync invariant guard (async pivot reversed 2026-04-12). Asserts every admin router handler is sync `def`, NOT `async def`. Replaces the wrong-direction `test_architecture_admin_routes_async.py`.
+- [ ] `tests/unit/test_architecture_no_async_db_access.py` — v2.0 sync sibling guard. Asserts admin DB access uses sync `with get_db_session()`, NOT `async with` or `AsyncSession`.
 - [ ] `tests/unit/test_architecture_handlers_use_annotated_depends.py` — Agent E idiom upgrade. AST-scans `src/admin/routers/*.py`; every `@router.<method>(...)` handler parameter must use `Annotated[T, ...]` form, not `x = Query(...)` default-value syntax.
 - [ ] `tests/unit/test_architecture_templates_receive_dtos_not_orm.py` — Agent E idiom upgrade. Asserts every `render(request, "tpl", context)` call passes only primitives, Pydantic BaseModel instances, or the request object — never ORM model instances. Prevents lazy-load Risk #1 realization.
-- [ ] `tests/unit/test_architecture_no_sync_session_usage.py` — Agent E idiom upgrade. Asserts no `Session(...)` or `sessionmaker(...)` imports outside `src/core/database/engine.py`. Only `AsyncSession` and `async_sessionmaker` allowed post-pivot.
+- [ ] ~~`tests/unit/test_architecture_no_sync_session_usage.py`~~ **[DEFERRED v2.1]** — was Agent E idiom upgrade for async. v2.0 USES sync `Session` and `sessionmaker` — this guard would fail against the intended v2.0 state.
 - [ ] `tests/unit/test_architecture_no_module_level_engine.py` — Agent E idiom upgrade. Asserts no `create_async_engine` or `create_engine` at module scope — must be inside a function (lifespan factory). Prevents pytest-asyncio event-loop leak (Risk Interaction B).
 - [ ] `tests/unit/test_architecture_no_direct_env_access.py` — Agent E idiom upgrade. Asserts no `os.environ.get` or `os.environ[` in `src/admin/` or `src/core/` except `src/core/settings.py` (the only file that reads env directly via pydantic-settings).
 - [ ] `tests/unit/test_architecture_uses_structlog.py` — Agent E idiom upgrade. Asserts new `src/admin/` and `src/core/` files use `from src.core.logging import get_logger`, not `logging.getLogger(`. Allowlisted for existing files during migration.
 - [ ] `tests/unit/test_architecture_repository_eager_loads.py` — Agent E idiom upgrade. Asserts every repository method whose DTO has nested-attribute returns has an `.options(selectinload(...))` call matching the nested relationships.
 - [ ] `tests/unit/test_architecture_middleware_order.py` — Agent E idiom upgrade. Asserts the exact middleware registration order in `src/app.py` matches the documented runtime order (e.g., Approximated BEFORE CSRF per Blocker 5). Prevents reshuffling.
-- [ ] `tests/unit/test_architecture_tests_use_async_client.py` — Agent E idiom upgrade. Scans `tests/integration/` and `tests/admin/` for `TestClient(app)` imports; asserts `httpx.AsyncClient(transport=ASGITransport(app=app))` is used instead. Allowlisted during migration.
+- [ ] ~~`tests/unit/test_architecture_tests_use_async_client.py`~~ **[DEFERRED v2.1]** — was Agent E idiom upgrade for async. v2.0 uses Starlette `TestClient` (sync) for admin tests.
 - [ ] `tests/unit/test_architecture_exception_handlers_complete.py` — Agent E idiom upgrade. Scans `src/app.py` for `@app.exception_handler` decorators; asserts all 6 are registered (AdCPError, HTTPException, RequestValidationError, AdminRedirect, AdminAccessDenied, Exception).
 - [ ] `tests/unit/test_architecture_csrf_exempt_covers_adcp.py` — first-order audit action #8a
 - [ ] `tests/unit/test_architecture_approximated_middleware_path_gated.py` — first-order audit action #8b (also satisfies near-blocker #1)
@@ -738,7 +737,9 @@ The Flask removal also removes Flask's internal WSGI proxy-header stack (`Custom
 - [ ] Staging canary runs 48h without incident
 - [ ] Wave 3 merges to `main`; Waves 4-5 continue the async DB layer absorption
 
-### Wave 4 — Async database layer (~7,000-10,000 LOC, pivoted 2026-04-11)
+### Wave 4 — ~~Async database layer~~ DEFERRED TO v2.1 (async pivot reversed 2026-04-12)
+
+> **This entire wave is v2.1 scope.** v2.0 ships with sync handlers and sync SQLAlchemy. Do not implement anything in this section for v2.0. The async-audit reports in `async-audit/` contain the research for when this work begins in v2.1.
 
 > **Knowledge sources for this wave:**
 > - `async-pivot-checkpoint.md` §3 — full target state (corrected 2026-04-12: lifespan-scoped engine, autoflush=False, connect_args)
@@ -823,7 +824,9 @@ In addition to the code conversion work:
 - [ ] `/health/db` and `/health/schedulers` endpoints return healthy
 - [ ] Staging deploy completes with zero 500s on hot admin routes for 24h
 
-### Wave 5 — Async cleanup + v2.0.0 release (~3,000-5,000 LOC)
+### Wave 5 — ~~Async cleanup + v2.0.0 release~~ DEFERRED TO v2.1 (async pivot reversed 2026-04-12)
+
+> **This entire wave is v2.1 scope.** v2.0.0 release happens at the end of Phase 3 (Flask removal). See `execution-plan.md`.
 
 > **Knowledge sources for this wave:**
 > - `async-audit/agent-e-ideal-state-gaps.md` — remaining idiom upgrades deferred to v2.1
