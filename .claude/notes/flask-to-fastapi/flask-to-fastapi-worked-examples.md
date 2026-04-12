@@ -4,6 +4,8 @@ Good. I have everything I need. Now I'll produce the five worked examples as a s
 
 # Flask → FastAPI Migration: Five Hard-Case Worked Examples
 
+> **SYNC HANDLERS IN v2.0 (async pivot reversed 2026-04-12).** This document was written during the async pivot and shows `async def` handlers with `SessionDep`, `AsyncSession`, and `await` throughout. **For v2.0 implementation, adapt to sync:** use `def` (not `async def`), `with get_db_session() as session:` (not `async with`), and Starlette `TestClient` (not httpx `AsyncClient`). The route logic, template references, form handling, and OAuth flows described here are still correct — only the sync/async wrapper changes. See `execution-plan.md` Phase 0 for the canonical sync handler pattern.
+
 Appendix to §13 of `/Users/quantum/Documents/ComputedChaos/salesagent/.claude/notes/flask-to-fastapi-migration.md`. These five examples cover what `accounts.py` doesn't: OAuth redirect flows, dynamic per-tenant client registration, binary multipart uploads, Server-Sent Events, and the 300-LOC multi-branch product form. All Flask sources have been read from disk and cited by file:line.
 
 Conventions used below (established in §11 of the main doc):
