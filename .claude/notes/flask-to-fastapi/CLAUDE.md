@@ -88,6 +88,14 @@ After the 9 decisions were resolved, a second audit round focused specifically o
 |---|---|
 | `async-audit/database-deep-audit.md` | **Before starting Spike 1 or any Wave 4 code.** 3 critical blockers (statement_timeout crash under asyncpg, CreativeRepository.commit() atomicity break, 20+ uow.session MissingGreenlet sites), 8 high-severity issues (Product @property lazy-load trap, 5 backref= invisible attributes, 3 missing ondelete cascades, deploy connection budget overflow, 45+ server_default stale columns, no engine.dispose() in shutdown, no application_name on engines, N+1 in products admin). Key recommendation: **keep Alembic env.py sync with psycopg2** (eliminates Spike 6 risk). Full prioritized action list with wave assignments and effort estimates. |
 
+### Frontend deep-audit (2026-04-11)
+
+After the database audit, a third audit round focused on the frontend surfaces impacted by Flask removal. 6 parallel Opus subagents audited: Jinja templates + url_for, JavaScript + fetch endpoints, OAuth + session + auth flows, static assets + CSS, error pages + flash + admin UX, and route parity + handler migration.
+
+| Report | When to read |
+|---|---|
+| `async-audit/frontend-deep-audit.md` | **Before touching any template, JS file, or admin route handler.** 7 critical blockers (OIDC callback path wrong in docs, base.html cascade, 302→307 redirect default, CSRF added where none existed, tojson filter missing, AJAX Accept false-positive, duplicate adapter route). 10 high-severity issues. Key numbers: 197 Flask routes, 74 templates, 366 flash() calls, ~147 script_root refs, ~115 fetch() calls, 338 redirect() calls. CSRF recommendation: SameSite=Lax + Origin validation (0.5 day) instead of adding tokens to all 80+ fetch calls (2-3 days). |
+
 ### Open decisions blocking Wave 4 (from Agent A §7)
 
 The 9 questions Agent A identified. **Decisions 1, 7, and 9 were resolved via ultrathink deep-think analysis on 2026-04-11** (3 parallel Opus subagents, each producing 1st/2nd/3rd-order derivative analysis). Decisions 2, 3, 5, 8 were resolved earlier by Audit 06 (see meta-audit round). Decisions 4 and 6 are mechanical Wave 4 work, not blockers. **Ledger closed.**
