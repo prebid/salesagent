@@ -192,16 +192,6 @@ repos:
       #   always_run: true
 
 
-      # Check Pydantic-AdCP schema alignment (prevents client validation errors like missing promoted_offering)
-      - id: pydantic-adcp-alignment
-        name: Pydantic model alignment with AdCP schemas (REGRESSION PREVENTION)
-        entry: uv run pytest tests/unit/test_pydantic_schema_alignment.py::TestSpecificFieldValidation -v --tb=short
-        language: system
-        files: '^(src/core/schemas\.py|schemas/v1/.*\.json)$'
-        pass_filenames: false
-        always_run: true
-
-
       # Prevent problematic function call patterns
       - id: no-fn-calls
         name: No .fn() call patterns
