@@ -162,7 +162,7 @@ Full detail in `flask-to-fastapi-deep-audit.md` §1.
   - [ ] `tests/unit/test_architecture_admin_async_db_access.py` exists and is green — AST-scans admin routers and asserts DB call-sites use `async with get_db_session()` + `await session.execute(...)` rather than sync `with` or `run_in_threadpool(_sync_fetch)`
   - [ ] The stale `tests/unit/test_architecture_admin_sync_db_no_async.py` is NOT created (wrong direction under the pivot)
   - [ ] Foundation module examples in `flask-to-fastapi-foundation-modules.md` updated to `async def` + async DB patterns
-  - [ ] Worked examples in `flask-to-fastapi-worked-examples.md` updated to `async def` + async DB patterns (OAuth / SSE / favicon upload examples preserve their async outer signatures but drop `run_in_threadpool` wrappers around DB helper calls)
+  - [ ] Worked examples in `flask-to-fastapi-worked-examples.md` updated to `async def` + async DB patterns (OAuth / favicon upload examples preserve their async outer signatures but drop `run_in_threadpool` wrappers around DB helper calls; ~~SSE example~~ **STALE — D8 DELETE: SSE worked example is moot, replace with JSON poll `/activity` example**)
   - [ ] Main overview §13 `accounts.py` examples updated to `async def`
   - [ ] Connection pool `pool_size` bumped to match or exceed pre-migration sync threadpool capacity (Risk #6)
   - [ ] `created_at` / `updated_at` post-commit access audited (Risk #5 — `expire_on_commit=False` consequence)
@@ -374,7 +374,7 @@ Full detail in `flask-to-fastapi-execution-details.md` Part 1.
 
 **Dependency changes:**
 
-- [ ] `pyproject.toml` adds `sse-starlette>=2.2.0`, `pydantic-settings>=2.7.0`, `itsdangerous>=2.2.0`
+- [ ] `pyproject.toml` adds ~~`sse-starlette>=2.2.0`,~~ **STALE — D8 DELETE: `sse-starlette` never added** `pydantic-settings>=2.7.0`, `itsdangerous>=2.2.0`
 
 **Playwright smoke coverage (staging):**
 
@@ -523,7 +523,9 @@ Full detail in `flask-to-fastapi-execution-details.md` Part 1.
 - [ ] PR description includes blueprint-by-blueprint diff summary
 - [ ] 3 reviewers assigned per area (HTML UI / JSON API / adapters)
 
-### Wave 3 — Activity stream SSE + cleanup cutover (~2,500 LOC)
+### Wave 3 — ~~Activity stream SSE +~~ Cache migration + Flask cleanup cutover (~2,500 LOC)
+
+> **⚠️ STALE heading corrected 2026-04-11 (Decision 8 DELETE).** The SSE port was removed from Wave 3 scope. SSE route is deleted in Wave 4. Wave 3 now focuses on cache migration (Decision 6 SimpleAppCache) and Flask removal.
 
 **Entry criteria:**
 
@@ -531,18 +533,18 @@ Full detail in `flask-to-fastapi-execution-details.md` Part 1.
 - [ ] Flask catch-all receives zero traffic in staging for 48h
 - [ ] Datadog/dashboard audit confirms no external consumer references Flask-era endpoints
 - [ ] `v1.99.0` git tag created and container image archived in registry (rollback fallback)
-- [ ] SSE spike completed — disconnect detection validated behind Fly.io + nginx
+- [ ] ~~SSE spike completed — disconnect detection validated behind Fly.io + nginx~~ **STALE — D8 DELETE: no SSE spike needed; route deleted in Wave 4**
 
-**Activity stream SSE port:**
-
-- [ ] `src/admin/routers/activity_stream.py` (~400 LOC) exists using `sse_starlette.EventSourceResponse`
-- [ ] `GET /admin/tenant/{tenant_id}/activity-stream` opens SSE, emits events within 500ms of tenant activity logged
-- [ ] Client disconnect detection works — server stops producing events within 2s of client close (verified by test + manual staging check)
-- [ ] `MAX_CONNECTIONS_PER_TENANT` backstop enforced: 11th concurrent connection returns 429
-- [ ] `X-Accel-Buffering: no` header set on SSE responses
-- [ ] `tests/integration/test_activity_stream_sse.py` green
-- [ ] `tests/integration/test_activity_stream_disconnect.py` green
-- [ ] `tests/integration/test_activity_stream_backpressure.py` green
+> **~~Activity stream SSE port:~~** **STALE — D8 DELETE (2026-04-11): entire SSE port block below is void. The `/tenant/{id}/events` SSE route, generator, rate-limit state, HEAD probe, and `sse_starlette` dependency are deleted in Wave 4, not ported in Wave 3. The surviving `/activity` JSON poll route and `/activities` REST route convert mechanically to async in Wave 4. See Decision 8 in §1.2 and CLAUDE.md.**
+>
+> ~~- [ ] `src/admin/routers/activity_stream.py` (~400 LOC) exists using `sse_starlette.EventSourceResponse`~~
+> ~~- [ ] `GET /admin/tenant/{tenant_id}/activity-stream` opens SSE~~
+> ~~- [ ] Client disconnect detection works~~
+> ~~- [ ] `MAX_CONNECTIONS_PER_TENANT` backstop enforced~~
+> ~~- [ ] `X-Accel-Buffering: no` header set on SSE responses~~
+> ~~- [ ] `tests/integration/test_activity_stream_sse.py` green~~
+> ~~- [ ] `tests/integration/test_activity_stream_disconnect.py` green~~
+> ~~- [ ] `tests/integration/test_activity_stream_backpressure.py` green~~
 
 **Dependency removals from `pyproject.toml`:**
 
@@ -615,7 +617,7 @@ Full detail in `flask-to-fastapi-execution-details.md` Part 1.
 - [ ] Docker image size delta measured — target ≥ 60 MB reduction vs Wave 2
 - [ ] Playwright full regression suite green against staging v2.0.0 build
 - [ ] Production deploy plan approved
-- [ ] Production smoke test plan drafted: deploy → login → create tenant → create product → submit creative → SSE activity stream visible → logout
+- [ ] Production smoke test plan drafted: deploy → login → create tenant → create product → submit creative → ~~SSE activity stream visible~~ **JSON poll `/activity` returns recent events (D8 DELETE)** → logout
 
 **Proxy-header smoke tests (Wave 3 pre-deploy — CRITICAL):**
 
@@ -761,7 +763,7 @@ Full detail in `flask-to-fastapi-execution-details.md` §D under each wave.
 - [ ] **Wave 0**: any failure of `make quality` post-merge; any templates regression found in Wave 1 entry check
 - [ ] **Wave 1**: OAuth login broken in staging/prod; session cookie causes auth loop; CSRF middleware blocks POST form flows; middleware ordering causes 403s on external-domain POSTs
 - [ ] **Wave 2**: any migrated admin route returns 500 against production traffic; Datadog dashboard loss; category-2 error shape regression caught by external consumer; coverage parity check fails
-- [ ] **Wave 3**: uvicorn `--proxy-headers` fails to produce correct `https` scheme in production; SSE disconnect detection fails in production; dependency lockfile resolution produces incompatible tree
+- [ ] **Wave 3**: uvicorn `--proxy-headers` fails to produce correct `https` scheme in production; ~~SSE disconnect detection fails in production~~ **STALE — D8 DELETE**; dependency lockfile resolution produces incompatible tree
 
 ### Wave 0 rollback procedure
 
@@ -872,7 +874,7 @@ These items are **intentionally NOT in scope for v2.0**. They are referenced her
 ### v2.2 scope (requires additional design)
 
 - [ ] **Multi-worker scheduler lease design** — today's webhook and media-buy-status schedulers are single-worker singletons. Multi-worker requires Postgres advisory lock OR separate scheduler container. Detail: `flask-to-fastapi-deep-audit.md` §3.1.
-- [ ] **SSE per-tenant rate limit moved to Redis** — today's `connection_counts` dict is per-process; multi-worker effective limit becomes `10 × workers`. Redis-backed replacement is a multi-worker prerequisite. Detail: `flask-to-fastapi-deep-audit.md` §3.2.
+- [ ] ~~**SSE per-tenant rate limit moved to Redis**~~ **STALE — D8 DELETE: SSE route and `connection_counts` deleted in Wave 4. No Redis migration needed.**
 - [ ] **`Apx-Incoming-Host` IP allowlist** — security hardening for the Approximated external-domain middleware. No client-side spoofing today because Fly.io terminates externally, but explicit allowlist is defensive. Detail: `flask-to-fastapi-deep-audit.md` §7 Y8.
 
 ---
@@ -902,7 +904,7 @@ All six companion files live under `.claude/notes/flask-to-fastapi/`:
    - Part 2 — 28-assumption verification recipes
    - Part 3 — structural guard AST patterns, integration test templates, Playwright e2e test plan, benchmark harness, `scripts/check_coverage_parity.py` automation
 3. **`flask-to-fastapi-foundation-modules.md`** (2,507 lines) — full code for 11 foundation modules with tests and gotchas
-4. **`flask-to-fastapi-worked-examples.md`** (2,790 lines) — 5 real Flask-blueprint → FastAPI-router translations (OAuth, OIDC, file upload, SSE, products form)
+4. **`flask-to-fastapi-worked-examples.md`** (2,790 lines) — 5 real Flask-blueprint → FastAPI-router translations (OAuth, OIDC, file upload, ~~SSE~~ **[D8: SSE example moot — see JSON poll pattern]**, products form)
 5. **`flask-to-fastapi-adcp-safety.md`** (412 lines) — first-order AdCP boundary audit, 8 action items, verdict CLEAR
 6. **`flask-to-fastapi-deep-audit.md`** (787 lines) — deep 2nd/3rd-order audit, 6 BLOCKERS, 20 RISKS, 40+ OPPORTUNITIES
 
