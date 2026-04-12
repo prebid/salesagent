@@ -34,7 +34,7 @@ These were surfaced by the 2nd/3rd-order audit. Every one of them has shipped-br
 
 5. **Middleware ordering: Approximated BEFORE CSRF.** Counterintuitive but correct. If CSRF fires first, an external-domain POST user fails CSRF validation (403) before the Approximated redirect can fire (should be 307). Also switch the redirect from 302 → 307 to preserve the POST body. See `flask-to-fastapi-deep-audit.md` §1 (blocker 5).
 
-6. **OAuth redirect URI byte-immutability.** The paths `/admin/auth/google/callback`, `/admin/auth/oidc/{tenant_id}/callback`, and `/auth/gam/callback` are registered in Google Cloud Console and per-tenant OIDC provider configs. Any path change — including trailing slash, case, or prefix drift — yields `redirect_uri_mismatch` and login is dead. See `flask-to-fastapi-deep-audit.md` §1 (blocker 6).
+6. **OAuth redirect URI byte-immutability.** The paths `/admin/auth/google/callback`, `/admin/auth/oidc/callback` (**NOT** `/admin/auth/oidc/{tenant_id}/callback` — tenant context is in the session, not the URL; corrected per FE-3 audit 2026-04-11), and `/admin/auth/gam/callback` (**NOT** `/auth/gam/callback` — the `/admin` prefix is part of the registered URI; corrected per FE-3 audit 2026-04-11) are registered in Google Cloud Console and per-tenant OIDC provider configs. Any path change — including trailing slash, case, or prefix drift — yields `redirect_uri_mismatch` and login is dead. See `flask-to-fastapi-deep-audit.md` §1 (blocker 6).
 
 ---
 

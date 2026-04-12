@@ -225,11 +225,13 @@ All `src/core/tools/*.py` `_impl` functions become `async def`. Some already are
 
 ### Driver change
 
+> **⚠️ CORRECTED 2026-04-11 (Decisions 1/2/9):** `psycopg2-binary` is **RETAINED** alongside `asyncpg`, NOT removed. Three sync paths require it: Decision 1 Path B sync session factory, Decision 2 pre-fork orchestrator health check, Decision 9 sync-bridge. `types-psycopg2` also RETAINED. Removal deferred to v2.1+.
+
 `pyproject.toml`:
-- REMOVE `psycopg2-binary>=2.9.9`
-- ADD `asyncpg>=0.30.0`
-  - **Fallback:** `psycopg[binary,pool]>=3.2.0` if Spike 2 (driver compat) fails. Agent B risk matrix recommends this fallback explicitly — psycopg3 async is also first-class and avoids asyncpg-specific footguns (prepared-statement-cache conflicts with pgbouncer transaction-mode pooling, JSONB codec differences, LISTEN/NOTIFY API drift).
-- REMOVE `types-psycopg2>=2.9.21.20251012`
+- **KEEP** `psycopg2-binary>=2.9.9` (retained per D1/D2/D9)
+- **ADD** `asyncpg>=0.30.0` (alongside, not replacing)
+  - **Fallback:** `psycopg[binary,pool]>=3.2.0` if Spike 2 (driver compat) fails.
+- **KEEP** `types-psycopg2>=2.9.21.20251012` (retained per D1/D2/D9)
 - (Keep `sqlalchemy>=2.0.0`)
 
 `DATABASE_URL` env var translation:
@@ -237,9 +239,12 @@ All `src/core/tools/*.py` `_impl` functions become `async def`. Some already are
 
 ### Alembic migrations
 
-`alembic/env.py` needs async adapter:
+> **⚠️ CORRECTED 2026-04-11 (Database deep-audit DB-4):** Keep `alembic/env.py` **sync with psycopg2**. Do NOT rewrite to async. Alembic gains nothing from running async — migrations are serial, single-connection operations. All 161 existing migrations use sync patterns (`op.*`, `connection.execute()`, `sa.inspect()`) that work under the `run_sync` greenlet bridge, but rewriting env.py adds risk for zero benefit. psycopg2 is already retained for Decisions 1/2/9. **This eliminates Spike 6 scope** — the spike becomes "add `render_item` hook for JSONType + advisory lock for multi-container safety" (~0.5 day) instead of "full async env.py rewrite + validation" (~1 day).
+
+The async adapter pattern below is preserved for reference ONLY — do NOT implement:
 
 ```python
+# STALE — kept for reference. Use sync env.py with psycopg2 per DB-4.
 import asyncio
 from sqlalchemy.ext.asyncio import create_async_engine
 
