@@ -140,18 +140,30 @@
 
 #### 1.4 `src/core/database/db_config.py:DatabaseConnection` — raw psycopg2.connect
 
-> **⚠️ CORRECTED 2026-04-11 — REVERSED.** Action F1.4.1 (delete `DatabaseConnection`) is **superseded by Audit 06 Decision 2 OVERRULE.** The `DatabaseConnection` class STAYS. The callers list in this finding was **incomplete** — it missed `scripts/deploy/run_all_services.py:84,135` calling `get_db_connection()` as **pre-uvicorn health checks**. Those checks run BEFORE the asyncio event loop is created (entrypoint script gates uvicorn startup on DB reachability), so `asyncio.run(asyncpg.connect(...))` is **structurally wrong** — it would create-and-tear-down an event loop just to do a single SELECT, then uvicorn would create a fresh loop, and any module-level state initialized during the throwaway loop becomes invalid (asyncpg connection pools are loop-bound). The simplest correct shape is "keep `DatabaseConnection` as the raw-psycopg2 pre-uvicorn path." See Audit 06 Decision 2 OVERRULE for the full reasoning trail.
+> **⚠️ CORRECTED 2026-04-11 — REVERSED, then REFINED.** Action F1.4.1 (delete `DatabaseConnection`) is **superseded by Audit 06 Decision 2 OVERRULE, refined by Decision 2 deep-think (2026-04-11)**. The `DatabaseConnection` class STAYS, but the **rationale Audit 06 used is technically wrong** and needs correcting:
+>
+> **Audit 06's stated reason (loop collision) is FALSE.** The deep-think analysis traced execution: `run_all_services.py` is PID 1; at line 231 it forks uvicorn into a child subprocess via `subprocess.Popen([sys.executable, "scripts/run_server.py"])`. Parent and child have **independent Python interpreters**, so there is no shared asyncio event loop to collide with. Calling `asyncio.run(asyncpg.connect(...).fetchval("SELECT 1"))` in the parent is **structurally safe** — the parent's event loop ends when `asyncio.run()` returns, and the child's uvicorn loop is created in a fresh interpreter. There is no "dangling loop reference" failure mode.
+>
+> **The REAL reason `DatabaseConnection` stays is FORK SAFETY.** Using SQLAlchemy `get_sync_db_session()` (Decision 1's Path B factory) in the parent process would eagerly initialize a SQLAlchemy engine with ~10 pooled psycopg connections. Then `Popen` forks the parent — those open PG socket FDs may inherit into the child via `Popen`'s default `close_fds` behavior (mitigated on Python 3.7+, but the engine's identity-map and pool state in `_engine` module global is still process-local), and even when close_fds works, the parent itself **continues to hold the open PG sockets** for the entire container lifetime (parent runs `while True: time.sleep(1)` at line 403), wasting connection slots from the PG `max_connections=100` budget. Raw `psycopg2.connect()` followed by `.close()` before `Popen` is fork-safe because no socket survives the close.
+>
+> See `CLAUDE.md` Decision 2 (refined ledger entry, 2026-04-11) for the full trail. New Risk #34 also surfaced: `init_db()` at `run_all_services.py:175` opens a SQLAlchemy engine in the parent before `Popen`, same fork-safety bug — must be fixed in Wave 4 either by `init_db()` calling `await reset_engine()` in `finally`, OR by running init via `subprocess.run([sys.executable, "-m", "scripts.setup.init_database"])`.
 
 **Current state (critical finding — not covered by any other agent):**
 
 `src/core/database/db_config.py:105-172` defines a `DatabaseConnection` class and `get_db_connection()` helper that do raw `psycopg2.connect(...)` with `psycopg2.extras.DictCursor`. This class is **separate** from the SQLAlchemy engine in `database_session.py` — it exists for bootstrap/health checks that run before the engine is available or from contexts where SQLAlchemy is overkill.
 
-**Callers of `get_db_connection()` (CORRECTED 2026-04-11):**
-- `scripts/deploy/run_all_services.py:84,135` — **container startup health check, pre-uvicorn (cannot use async)** — Audit 06 added these
-- `scripts/setup/init_database.py` — initial DB bootstrap
-- `scripts/setup/init_database_ci.py:22` — CI setup
+**Callers of `get_db_connection()` (CORRECTED 2026-04-11 — refined by Decision 2 deep-think):**
+- `scripts/deploy/run_all_services.py:84` — `check_database_health()` — runs in PID 1 sync orchestrator BEFORE `Popen` of uvicorn
+- `scripts/deploy/run_all_services.py:135` — `check_schema_issues()` — same context, non-blocking warning path
+- `examples/upstream_quickstart.py:137` — `configure_tenant_for_mcp()` — **NEW** caller surfaced by Decision 2 deep-think (was NOT in original Audit 06 ledger)
+- ~~`scripts/setup/init_database.py`~~ **NOT a caller** — uses SQLAlchemy `get_db_session()`, was misattributed
+- ~~`scripts/setup/init_database_ci.py:22`~~ **NOT a caller** — uses SQLAlchemy `get_db_session()`, was misattributed
 
-The original Agent F report listed only `:65, 133` in `run_all_services.py`. The actual line numbers as of 2026-04-11 are `:84, 135` (file was updated). Both calls are pre-uvicorn — the entrypoint script needs the DB to be reachable BEFORE it execs uvicorn. Spawning an event loop just for the check would leave a dangling loop reference that would later conflict with uvicorn's loop creation.
+The original Agent F report listed only `:65, 133` in `run_all_services.py`. The actual line numbers as of 2026-04-11 are `:84, 135` (file was updated).
+
+**Decision 2 deep-think 2026-04-11 corrected the rationale:** the loop-collision story is **technically false**. `run_all_services.py` is PID 1 — it forks uvicorn into a child subprocess via `subprocess.Popen([sys.executable, "scripts/run_server.py"])` at line 231. Parent and child have **independent Python interpreters**, so there is no shared event loop to collide with. Audit 06's "spawning an event loop would conflict with uvicorn's eventual loop" reasoning is wrong because uvicorn's loop lives in the child interpreter, completely independent of any loop the parent might briefly create.
+
+**The actual reason `DatabaseConnection` stays:** **fork safety.** Using SQLAlchemy `get_sync_db_session()` in the parent process would eagerly initialize an engine with 10 pooled connections that get duplicated into the uvicorn child via `Popen`'s default file-descriptor inheritance — two processes holding the same PG socket = canonical SQLAlchemy fork-safety bug. Raw psycopg2 connect-query-close is fork-safe because the connection is fully closed (cursor flushed, FD released) before the `Popen` fork.
 
 **Change required (CORRECTED 2026-04-11):**
 

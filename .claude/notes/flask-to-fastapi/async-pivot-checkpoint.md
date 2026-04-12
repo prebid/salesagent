@@ -361,6 +361,36 @@ result = await run_in_threadpool(adapter.create_media_buy, request, packages, ..
 
 **Wave 3 flask-caching correction (bundled with Decision 9):** the "zero callers" claim was WRONG. 3 consumer sites exist at `inventory.py:874, 1133, background_sync_service.py:472`. The last is also the `from flask import current_app` ImportError blocker. Wave 3 replaces `flask-caching` with `src/admin/cache.py::SimpleAppCache` (cachetools.TTLCache wrapper on `app.state.inventory_cache`) BEFORE deletion. Deleting flask-caching outright would crash inventory pages + break background sync.
 
+### Pre-fork orchestrator sync-DB path (Decision 2 deep-think 2026-04-11)
+
+`scripts/deploy/run_all_services.py` is **PID 1** in the container. It runs a sync Python orchestrator that:
+1. Validates env vars (line ~343)
+2. Health-checks the DB via raw psycopg2: `get_db_connection()` at `:84` (`check_database_health`)
+3. Runs migrations via `subprocess.run([sys.executable, "scripts/ops/migrate.py"], ...)` at `:207`
+4. Schema-checks DB via raw psycopg2: `get_db_connection()` at `:135` (`check_schema_issues`)
+5. Calls `init_db()` at `:175` — **⚠️ Risk #34, see §4 below**
+6. Forks uvicorn into a CHILD subprocess via `subprocess.Popen([sys.executable, "scripts/run_server.py"])` at `:231` (run inside `threading.Thread(target=run_mcp_server, daemon=True).start()` at `:361`)
+7. Parent loops on `time.sleep(1)` forever, monitoring stdout
+
+**Critical: uvicorn's asyncio event loop lives in the CHILD interpreter, NOT the parent.** Audit 06's "loop collision" rationale for keeping `DatabaseConnection` was technically false — there is no shared loop to collide with. The deep-think analysis traced this via the actual `Popen` call at `run_all_services.py:231` and the `scripts/run_server.py:47` `uvicorn.run("src.app:app", ...)` invocation.
+
+**The REAL reason `DatabaseConnection` (raw psycopg2) stays:** **fork safety.**
+- The parent process MUST NOT initialize the **async SQLAlchemy engine** (Decision 1 main path) — if it did, asyncpg connection pool state would duplicate into the child fork via FD inheritance, corrupting two processes sharing the same PG socket.
+- The parent process MUST NOT initialize the **Path B sync SQLAlchemy engine** (Decision 1 sync factory) — same problem with psycopg2 pooled connections.
+- The parent process MUST NOT initialize the **sync-bridge engine** (Decision 9) — same problem.
+- The parent process MAY open **transient raw psycopg2 connections** that are fully closed (FD released) before `Popen`. `DatabaseConnection.connect()` + `.close()` is the sanctioned shape for this.
+
+**Therefore `src/core/database/db_config.py::DatabaseConnection` is KEPT for v2.0** as the one fork-safe pre-uvicorn DB path. Allowlisted in two structural guards:
+- `tests/unit/test_architecture_no_runtime_psycopg2.py` — AST-walks every `src/**/*.py` for `import psycopg2`/`from psycopg2`, allowlist of 3 files (`db_config.py`, `database_session.py` IF it explicitly imports psycopg2 — verify during implementation, may not be needed since SQLAlchemy auto-detects from URL string, `background_sync_db.py`)
+- `tests/unit/test_architecture_get_db_connection_callers_allowlist.py` — AST-walks every `src/**/*.py` and `scripts/**/*.py` for `Call` nodes invoking `get_db_connection`, allowlist of 1 file (`scripts/deploy/run_all_services.py`). Catches the failure mode where someone adds `DatabaseConnection` inside the runtime process.
+
+**Wave 4 scope additions** (bundled with the structural guard PR):
+- **Delete `scripts/deploy/entrypoint_admin.sh`** — dead shell code, unreferenced by Dockerfile/compose/fly.toml, still shell-imports psycopg2 in a subshell, calls non-existent `migrate.py`, imports `src.admin.server` (Wave 3 deletion target).
+- **Migrate `examples/upstream_quickstart.py:137`** to `get_db_session()` — example is standalone async-capable. Leaves `DatabaseConnection` with exactly 2 callers in `run_all_services.py`.
+- **Harden `DatabaseConnection.connect()`**: add `connect_timeout=10` (env-overridable via `DATABASE_CONNECT_TIMEOUT`) + `options="-c statement_timeout=5000"`. Prevents hanging DB from bricking container startup.
+
+**Adjacent fork-safety concern (Risk #34, see §4):** `run_all_services.py:175` calls `src.core.database.database.init_db()` which under async pivot opens the SQLAlchemy async engine in the parent process. This is the **same bug class** as Decision 2 but at a different code path. Mitigation: either `init_db()` calls `await reset_engine()` in `finally`, OR `run_all_services.py:175` runs init via `subprocess.run([sys.executable, "-m", "scripts.setup.init_database"])` like migrations already do at `:207`. **Strongly prefer the subprocess pattern** — matches the existing migration pattern, no in-process state leak risk.
+
 ## 4. 2nd and 3rd order risks — the fresh session MUST investigate these
 
 **(#1 is the biggest unknown — do this audit FIRST before committing to v2.0 scope.)**
@@ -506,6 +536,20 @@ Still applies (deep audit §3.1). Async doesn't fix this. Still v2.0 single-work
 **Validated by:** Spike 5.5 (pre-Wave-0, 0.5 day soft blocker). Fallback: Option A (asyncio task + single async session, suboptimal but viable).
 
 **Sunset target v2.1+** — phase-per-session async refactor at `foundation-modules.md §11.0.6 §G`.
+
+### Risk #34 — `init_db()` opens engine in pre-fork orchestrator parent (added 2026-04-11, surfaced by Decision 2 deep-think)
+
+**Severity: HIGH (latent fork-safety bug under async pivot).** `scripts/deploy/run_all_services.py:175` imports `from src.core.database.database import init_db` and calls `init_db()` BEFORE `:231` `subprocess.Popen([sys.executable, "scripts/run_server.py"])` forks uvicorn into a child process. Under sync SQLAlchemy this was fine (psycopg2 connections in the parent's pool got forked but were not actively used in the child, eventually timed out). **Under async SQLAlchemy + asyncpg, the parent eagerly initializes the async engine with ~10 pooled asyncpg connections** that then get duplicated into the child's interpreter via `Popen`'s file-descriptor inheritance. Two processes holding the same PG socket = canonical SQLAlchemy fork-safety bug. Even when `Popen`'s default `close_fds=True` saves the FD inheritance, the parent itself **continues to hold the open PG sockets** for the entire container lifetime (`while True: time.sleep(1)` at `:403`), wasting connection slots from the PG `max_connections=100` budget.
+
+**Detection:** Decision 2 deep-think 2026-04-11 (Opus subagent traced the `Popen` chain at `run_all_services.py:231` → `scripts/run_server.py:47` `uvicorn.run("src.app:app", ...)`).
+
+**Mitigation:** two options, prefer (b):
+- (a) `init_db()` calls `await reset_engine()` in a `finally` block, ensuring the engine is disposed before return. Risk: any code path between `init_db()` return and `Popen` that accidentally re-touches the engine re-creates it.
+- (b) **`run_all_services.py:175` runs init via `subprocess.run([sys.executable, "-m", "scripts.setup.init_database"])`** like migrations already do at `:207`. Init runs in a fresh child process, fully isolated from PID 1, terminates cleanly, no in-process state leak. Matches the existing migration pattern.
+
+**Validated by:** Spike 5.5 additional check (verify `pg_stat_activity` shows zero parent-PID-1 connections after `init_database()` returns and before `threading.Thread(target=run_mcp_server).start()`).
+
+**Sunset:** when `run_all_services.py` is replaced with a proper process supervisor (s6-overlay/supervisord) in v2.2+, the entire orchestrator-Python-process role disappears.
 
 ## 5. Revised v2.0 scope (my rough estimate)
 
