@@ -4998,6 +4998,372 @@ def test_no_dependency_override_leak() -> None:
 
 ---
 
+## 11.14 Adapter Path B wrap pattern (Decision 1, 2026-04-11)
+
+> **Added 2026-04-11 under the Decision 1 deep-think resolution.** Adapters stay sync under v2.0. The 18 adapter call sites in `src/core/tools/*.py` + 1 in `src/admin/blueprints/operations.py:252` wrap their sync adapter methods in `await run_in_threadpool(...)`. This section is the canonical reference for the wrap pattern plus the dual-session-factory machinery that supports it.
+
+### A. Why adapters stay sync
+
+The full-async alternative requires porting `googleads==49.0.0` off `suds-py3` (hard-sync SOAP with no async variant) and rewriting 4 `requests`-based adapters (`xandr.py`, `kevel.py`, `triton_digital.py`, `broadstreet/adapter.py`) — ~1500 LOC of churn for zero AdCP-visible benefit. The "full async" adapter method body would end up as:
+
+```python
+async def create_media_buy(self, request, packages, ...):
+    return await run_in_threadpool(self._sync_impl, request, packages, ...)
+```
+
+— which just moves the `run_in_threadpool` wrap from outside the adapter (Path B) to inside each adapter method (Path A), gaining only cosmetic uniformity at the cost of converting 40+ adapter methods. **Path B is simpler, smaller, and has a cleaner rollforward path** if some future release wants to migrate individual adapters to native async.
+
+### B. Dual session factory in `database_session.py`
+
+Under Path B, `src/core/database/database_session.py` exports BOTH factories side-by-side:
+
+```python
+# src/core/database/database_session.py (Wave 4 target state)
+"""Database session factories — async primary, sync secondary.
+
+Under the Decision 1 Path B resolution (2026-04-11), the sync factory
+below coexists with the async factory for the lifetime of v2.0.0.
+Adapter code running inside run_in_threadpool worker threads uses
+`get_sync_db_session()`; every other code path (handlers, _impl
+functions, schedulers, repositories) uses `get_db_session()`.
+
+Sunset target for the sync factory: v2.1+ when adapters go native async.
+"""
+from __future__ import annotations
+
+import os
+from contextlib import asynccontextmanager, contextmanager
+from typing import AsyncIterator, Iterator
+
+from sqlalchemy import create_engine, event
+from sqlalchemy.engine import URL
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import Session, sessionmaker
+
+
+# ---------------------------------------------------------------------
+# URL helpers
+# ---------------------------------------------------------------------
+
+def _build_async_url(raw_url: str) -> str:
+    """Rewrite `postgresql://` → `postgresql+asyncpg://` for the async engine."""
+    if raw_url.startswith("postgresql+asyncpg://"):
+        return raw_url
+    if raw_url.startswith("postgresql://"):
+        return "postgresql+asyncpg://" + raw_url[len("postgresql://"):]
+    raise ValueError(f"DATABASE_URL must start with postgresql:// or postgresql+asyncpg://; got: {raw_url[:20]}...")
+
+
+def _build_sync_url(raw_url: str) -> str:
+    """Strip `+asyncpg` for the sync psycopg2 engine."""
+    if raw_url.startswith("postgresql+asyncpg://"):
+        return "postgresql://" + raw_url[len("postgresql+asyncpg://"):]
+    return raw_url  # already plain postgresql://
+
+
+# ---------------------------------------------------------------------
+# Async engine — used by handlers, _impl, repositories, schedulers
+# ---------------------------------------------------------------------
+
+_database_url = os.environ["DATABASE_URL"]
+
+_async_engine = create_async_engine(
+    _build_async_url(_database_url),
+    pool_size=int(os.environ.get("DB_POOL_SIZE", "15")),
+    max_overflow=int(os.environ.get("DB_POOL_MAX_OVERFLOW", "25")),
+    pool_pre_ping=True,
+    pool_recycle=3600,
+    echo=False,
+    # asyncpg-specific: ensure JSONB codec is registered before first query
+    connect_args={"server_settings": {"application_name": "adcp-salesagent"}},
+)
+
+_async_sessionmaker = async_sessionmaker(
+    _async_engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+    autoflush=False,
+)
+
+
+@asynccontextmanager
+async def get_db_session() -> AsyncIterator[AsyncSession]:
+    """Async session for handlers, _impl, schedulers, repositories.
+
+    Commits on clean exit, rolls back on exception, closes on finally.
+    Per the Decision 7 refactor, every caller owns session lifetime via
+    `async with get_db_session()` — no ambient singleton sessions.
+    """
+    async with _async_sessionmaker() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
+
+# ---------------------------------------------------------------------
+# Sync engine — used by adapter code (Path B) + AuditLogger internal
+# ---------------------------------------------------------------------
+
+_sync_engine = create_engine(
+    _build_sync_url(_database_url),
+    pool_size=5,
+    max_overflow=10,
+    pool_pre_ping=True,
+    pool_recycle=3600,
+    echo=False,
+    connect_args={"application_name": "adcp-salesagent-sync"},
+)
+
+
+@event.listens_for(_sync_engine, "connect")
+def _set_sync_statement_timeout(dbapi_conn, connection_record):
+    """30-second statement timeout for sync path."""
+    with dbapi_conn.cursor() as cur:
+        cur.execute("SET statement_timeout = '30s'")
+
+
+_sync_sessionmaker = sessionmaker(
+    _sync_engine,
+    class_=Session,
+    expire_on_commit=True,
+    autoflush=True,
+)
+
+
+@contextmanager
+def get_sync_db_session() -> Iterator[Session]:
+    """Sync session for adapter code inside run_in_threadpool workers.
+
+    **Do NOT call from async request handlers, _impl functions, or
+    schedulers.** Those live on the event loop and must use the async
+    `get_db_session()`. The sync factory is scoped to:
+
+    1. `src/adapters/*.py` — sync SQLAlchemy inside adapter method bodies
+    2. `src/core/audit_logger.py::AuditLogger._log_operation_sync` —
+       internal sync method called from adapter threads
+    3. Unit tests that exercise adapters directly
+
+    Structural guard: `tests/unit/test_architecture_no_sync_session_in_async_context.py`
+    forbids `get_sync_db_session()` imports from `src/core/tools/`,
+    `src/admin/routers/`, `src/core/helpers/`, `src/services/delivery_*.py`,
+    `src/services/media_buy_*.py`. Allowlist: `src/adapters/`,
+    `src/core/audit_logger.py`.
+
+    This sync factory is SEPARATE from `src/services/background_sync_db.py`
+    (Decision 9 sync-bridge), which has its own engine with different pool
+    sizing + 600s statement timeout for multi-hour GAM syncs. The two sync
+    engines coexist; each serves a different consumer.
+    """
+    session = _sync_sessionmaker()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+```
+
+### C. The wrap pattern — 18 call sites
+
+Every adapter method call inside an `async def` body must be wrapped in `await run_in_threadpool(...)`. The wrap pattern:
+
+```python
+from starlette.concurrency import run_in_threadpool
+
+async def _create_media_buy_impl(
+    req: CreateMediaBuyRequest,
+    identity: ResolvedIdentity,
+    session: AsyncSession,
+) -> CreateMediaBuyResult:
+    ...
+    adapter = get_adapter(principal, dry_run=dry_run, tenant=tenant)
+
+    # Path B wrap — adapter is sync, _impl is async.
+    # The worker thread borrowed from uvicorn's anyio pool runs the
+    # sync adapter method, opens its own sync session via
+    # get_sync_db_session() (if the adapter does DB work), and
+    # returns the result to the event loop.
+    response = await run_in_threadpool(
+        adapter.create_media_buy,
+        req,
+        packages,
+        start_time,
+        end_time,
+        package_pricing_info,
+    )
+    ...
+```
+
+**The 18 known call sites** (verified by the Decision 1 Opus subagent, 2026-04-11):
+
+| # | File:line | Method | Notes |
+|---|---|---|---|
+| 1 | `src/core/tools/media_buy_create.py:429` | `adapter.create_media_buy(...)` | The hot path |
+| 2 | `src/core/tools/media_buy_create.py:3283` | `adapter.add_creative_assets(...)` | Inside loop |
+| 3 | `src/core/tools/media_buy_create.py:3386` | `adapter.add_creative_assets(...)` | Second loop |
+| 4 | `src/core/tools/media_buy_update.py:400` | `adapter.update_media_buy(...)` | Pause/resume |
+| 5 | `src/core/tools/media_buy_update.py:460` | `adapter.update_media_buy(...)` | Budget update |
+| 6 | `src/core/tools/media_buy_update.py:532` | `adapter.update_media_buy(...)` | Full update |
+| 7 | `src/core/tools/media_buy_delivery.py:268` | `adapter.get_media_buy_delivery(...)` | Per-media-buy |
+| 8 | `src/core/tools/performance.py:89` | `adapter.update_media_buy_performance_index(...)` | Hot path |
+| 9 | `src/core/tools/media_buy_create.py:??` | `adapter.orders_manager.approve_order(...)` | GAM sub-manager |
+| 10 | `src/core/tools/media_buy_create.py:??` | `adapter.creatives_manager.add_creative_assets(...)` | GAM sub-manager |
+| 11-17 | `src/core/tools/media_buy_*.py`, `src/core/tools/creative*.py` | Remaining DR/DL/signals sites | Verify in Spike 4.5 |
+| 18 | `src/admin/blueprints/operations.py:252` | `adapter.get_media_buy_delivery(...)` | Admin direct-call site |
+
+Spike 4.5 grep-verifies the complete list and produces the exact count in `spike-decision.md`.
+
+### D. `functools.partial` when kwargs don't round-trip
+
+`starlette.concurrency.run_in_threadpool` under newer `anyio` versions uses `anyio.to_thread.run_sync` which accepts `*args` but **NOT** `**kwargs`. If an adapter call needs keyword arguments, wrap with `functools.partial`:
+
+```python
+from functools import partial
+from starlette.concurrency import run_in_threadpool
+
+response = await run_in_threadpool(
+    partial(
+        adapter.update_media_buy,
+        media_buy_id=media_buy_id,
+        updates=updates,
+        effective_from=effective_from,
+    )
+)
+```
+
+Alternatively, refactor the adapter method to take positional args. For the 18 current sites, a quick grep confirms all are callable positionally.
+
+### E. AuditLogger split — sync internal, async public
+
+`src/core/audit_logger.py::AuditLogger.log_operation` currently opens its own `with get_db_session() as db:` and writes an `AuditLog` row. Under Path B this method becomes dual-natured:
+
+```python
+# src/core/audit_logger.py (Wave 4 target state)
+class AuditLogger:
+    def _log_operation_sync(
+        self,
+        *,
+        operation: str,
+        tenant_id: str,
+        principal_id: str,
+        success: bool,
+        details: dict,
+        ...
+    ) -> None:
+        """Sync internal method — called by adapter code running inside
+        run_in_threadpool worker threads.
+
+        Opens its own sync session via get_sync_db_session(). Cannot be
+        called from async context — the worker thread has no event loop.
+        """
+        from src.core.database.database_session import get_sync_db_session
+
+        with get_sync_db_session() as db:
+            log = AuditLog(
+                operation=operation,
+                tenant_id=tenant_id,
+                principal_id=principal_id,
+                success=success,
+                details=details,
+                ...
+            )
+            db.add(log)
+            # commit handled by get_sync_db_session() finally block
+
+    async def log_operation(
+        self,
+        *,
+        operation: str,
+        tenant_id: str,
+        principal_id: str,
+        success: bool,
+        details: dict,
+        ...
+    ) -> None:
+        """Async public wrapper — called by _impl functions.
+
+        Delegates to the sync internal method via run_in_threadpool so
+        the async caller doesn't block the event loop on the audit write.
+        """
+        from starlette.concurrency import run_in_threadpool
+        from functools import partial
+
+        await run_in_threadpool(
+            partial(
+                self._log_operation_sync,
+                operation=operation,
+                tenant_id=tenant_id,
+                principal_id=principal_id,
+                success=success,
+                details=details,
+                ...
+            )
+        )
+```
+
+**Caller migration:**
+- ~30 `_impl` call sites update to `await audit_logger.log_operation(...)` — async path.
+- Adapter call sites update to `self.audit_logger._log_operation_sync(...)` (the underscore prefix signals intentional private-method access from the privileged sync path).
+
+### F. Threadpool tune
+
+Anyio's default thread limiter is 40 workers. Adapter burst load can saturate this under concurrent admin traffic. Bump to 80 (env-overridable) at lifespan startup:
+
+```python
+# src/app.py::lifespan (Wave 4 addition)
+from contextlib import asynccontextmanager
+import anyio
+import os
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Tune anyio thread limiter for Path B adapter burst capacity.
+    # Default 40 is too low for concurrent admin traffic that calls
+    # multiple adapter methods per request. Decision 1 analysis
+    # recommends 80; env-override via ADCP_THREADPOOL_SIZE.
+    anyio.to_thread.current_default_thread_limiter().total_tokens = int(
+        os.environ.get("ADCP_THREADPOOL_SIZE", "80")
+    )
+    ...
+    yield
+    ...
+```
+
+Monitoring: the `/health/pool` endpoint (Wave 5 acceptance) exposes the current thread limiter's `borrowed_tokens` and `total_tokens` alongside the async and sync engine pool stats.
+
+### G. Structural guard against drift
+
+`tests/unit/test_architecture_adapter_calls_wrapped_in_threadpool.py` — full content in §3 of the Decision 1 analysis. AST-walks `src/core/tools/`, `src/admin/blueprints/`, `src/admin/routers/`, `src/core/helpers/` for method calls matching `adapter.METHOD(...)`, `self.adapter.METHOD(...)`, `adapter.submanager.METHOD(...)` inside `async def` bodies. Each such call must be the first argument to a `run_in_threadpool(...)` call expression.
+
+**Allowlist:** `src/services/background_sync_service.py` (Decision 9 sync-bridge thread — adapter calls already in sync context, no wrap needed). `src/services/` other services (`delivery_webhook_scheduler.py`, `media_buy_status_scheduler.py`) do not call adapters directly; grep-verified.
+
+**Ratcheting:** the guard's allowlist starts empty after Wave 4b lands. New violations fail the build immediately.
+
+### H. Return-type gotcha — don't return ORM instances from adapter methods
+
+Adapters running inside `run_in_threadpool` worker threads hold sync `Session` instances. If an adapter method returns an ORM instance (not a Pydantic DTO), the calling `_impl` in async context inherits a detached ORM object. Accessing lazy-loaded relationships on that object triggers `MissingGreenlet` from the async side.
+
+**Rule:** adapters return Pydantic models, dicts, or primitive types. Never raw SQLAlchemy ORM instances. Enforced by:
+
+- `src/adapters/base.py` abstract method return annotations (all declare Pydantic types)
+- `tests/unit/test_architecture_adapter_return_types.py` (new guard in Wave 4) — AST-walks `src/adapters/*.py` for method return annotations and fails on raw ORM types
+
+### I. Gotchas
+
+- **`mock_ad_server.py` uses `time.sleep()` for latency simulation.** Under Path B this still works — the sleep happens inside the worker thread, not on the event loop, so it doesn't block other requests. No conversion to `asyncio.sleep()` needed. The Decision 7 refactor of `mock_ad_server.py::complete_after_delay` IS still required (that's a `threading.Thread` background task, not a wrapped adapter call — the thread becomes `asyncio.create_task`).
+- **Kwargs in `run_in_threadpool`.** Use `functools.partial` wrapper (see §D) or refactor the adapter method to take positional args.
+- **Sync-vs-async engine pool math.** 15+25 (async) + 5+10 (sync adapter) + 2+3 (sync-bridge from Decision 9) = 60 peak connections. PG default `max_connections=100` has headroom. Production deploys that raise `max_connections` should document the new async/sync split.
+- **Threadpool capacity vs concurrent requests.** 80 workers is sized for ~80 concurrent adapter-invoking requests. Admin UI traffic typically ≤10 concurrent; MCP tool call concurrent load can spike higher. Monitor `anyio.to_thread.current_default_thread_limiter().borrowed_tokens` via `/health/pool` and raise `ADCP_THREADPOOL_SIZE` if it saturates.
+- **`application_name` in `pg_stat_activity`.** The async engine connections show `application_name='adcp-salesagent'`; Path B sync connections show `application_name='adcp-salesagent-sync'`; Decision 9 sync-bridge connections show `application_name='adcp-salesagent-sync-bridge'`. Three distinct labels make debugging stale connections easy.
+- **v2.1+ sunset path.** If `googleads` releases an async variant and the 4 `requests`-based adapters are ported to `httpx.AsyncClient`, each adapter converts individually to `async def`, the wrap at the `_impl` caller becomes `await adapter.method(...)` instead of `await run_in_threadpool(adapter.method, ...)`, and eventually the sync factory in `database_session.py` + psycopg2 dep + libpq can all be deleted. Structural guard allowlist adjusts as each adapter completes.
+
+---
+
 ## Cross-cutting concerns
 
 ### Middleware ordering (final answer)
