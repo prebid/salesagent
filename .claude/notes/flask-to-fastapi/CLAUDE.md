@@ -80,6 +80,14 @@ After the async pivot, six parallel opus agents (agents A-F) produced deep-audit
 | `async-audit/agent-e-ideal-state-gaps.md` | 2,849 | Before writing foundation code. Current plan graded B+; 14 idiom upgrades (SessionDep DI pattern, DTO boundary, lifespan-scoped engine, structlog, no-UoW repository pattern). Minimum apply set: E1/E2/E3/E5/E6/E8. |
 | `async-audit/agent-f-nonsurface-inventory.md` | 1,782 | Before Dockerfile, CI, pre-commit, or deployment script changes. 105 non-code action items across 27 categories. **Hard blocker:** 3 sync-psycopg2 deployment paths in `scripts/deploy/entrypoint_admin.sh:9`, `scripts/deploy/run_all_services.py::check_database_health/check_schema_issues`, and `src/core/database/db_config.py::DatabaseConnection`. Also PG version skew (CI=15, local=17), missing `[tool.pytest.ini_options]` section, `DATABASE_URL` sslmode→ssl rewriter. |
 
+### Database deep-audit (2026-04-11)
+
+After the 9 decisions were resolved, a second audit round focused specifically on the database layer. 6 parallel Opus subagents (ultrathink, 2nd/3rd/4th-order derivative analysis) audited: ORM models + relationships, session lifecycle + connection pool, repository pattern + queries, Alembic migrations, test DB infrastructure, and data integrity + performance. Total: ~8,000+ lines of production code + ~4,000+ lines of test infrastructure read.
+
+| Report | When to read |
+|---|---|
+| `async-audit/database-deep-audit.md` | **Before starting Spike 1 or any Wave 4 code.** 3 critical blockers (statement_timeout crash under asyncpg, CreativeRepository.commit() atomicity break, 20+ uow.session MissingGreenlet sites), 8 high-severity issues (Product @property lazy-load trap, 5 backref= invisible attributes, 3 missing ondelete cascades, deploy connection budget overflow, 45+ server_default stale columns, no engine.dispose() in shutdown, no application_name on engines, N+1 in products admin). Key recommendation: **keep Alembic env.py sync with psycopg2** (eliminates Spike 6 risk). Full prioritized action list with wave assignments and effort estimates. |
+
 ### Open decisions blocking Wave 4 (from Agent A §7)
 
 The 9 questions Agent A identified. **Decisions 1, 7, and 9 were resolved via ultrathink deep-think analysis on 2026-04-11** (3 parallel Opus subagents, each producing 1st/2nd/3rd-order derivative analysis). Decisions 2, 3, 5, 8 were resolved earlier by Audit 06 (see meta-audit round). Decisions 4 and 6 are mechanical Wave 4 work, not blockers. **Ledger closed.**
