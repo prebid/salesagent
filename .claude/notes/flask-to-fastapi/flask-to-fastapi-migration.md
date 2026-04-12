@@ -45,7 +45,7 @@ Flask contributes:
 
 **Why this is worth doing:**
 - Eliminates ~11,000 LOC of boilerplate by using declarative FastAPI patterns
-- Removes ~80 MB from Docker image (Flask + flask-caching + flask-socketio + waitress + a2wsgi)
+- Removes ~75 MB from Docker image (Flask + flask-socketio + waitress + a2wsgi). **Note (Decision 9, 2026-04-11):** `flask-caching` is replaced rather than deleted — see §11.7 correction. `psycopg2-binary` + `libpq5` are retained (Docker savings adjust from ~80 MB to ~75 MB) for the Decision 1 sync-session factory, Decision 2 pre-uvicorn health checks, and Decision 9 sync-bridge supporting `background_sync_service.py`. Their full removal is a v2.1+ sunset item.
 - Unifies auth/session/middleware across all transports (MCP/A2A/REST/admin share one stack)
 - Eliminates the WSGI↔ASGI bridge overhead
 - Eliminates the scoped_session interleaving latent bug in `src/routes/api_v1.py` as a side effect of the full-async conversion (see async-pivot-checkpoint.md §4 Risk #15)
@@ -249,7 +249,7 @@ All in `src/admin/blueprints/` unless noted. ~232 routes total.
 
 ### 3.3 Flask extensions in actual use
 
-- **`flask-caching>=2.3.0`** — `src/admin/app.py:200-208` attaches `Cache(app)`. **Audit confirmed ZERO callers of `app.cache` / `current_app.cache` in any blueprint.** Deletable.
+- **`flask-caching>=2.3.0`** — `src/admin/app.py:200-208` attaches `Cache(app)`. **Audit correction 2026-04-11 (Decision 9):** contrary to the previous "zero callers" claim, 3 active consumer sites exist: `src/admin/blueprints/inventory.py:874` (inventory tree TTL cache), `src/admin/blueprints/inventory.py:1133` (inventory list TTL cache), `src/services/background_sync_service.py:472` (post-sync invalidation — also the Wave 3 `from flask import current_app` ImportError blocker). **Replacement required, not deletion:** Wave 3 ships `src/admin/cache.py::SimpleAppCache` (~40 LOC `cachetools.TTLCache` wrapper on `app.state.inventory_cache` + `get_app_cache()` helper for background-thread access) before `flask-caching` is removed from `pyproject.toml`. See §11.7 and execution-details Wave 3 acceptance criteria 5 / 5.1-5.4.
 - **`authlib.integrations.flask_client.OAuth`** — real. `src/admin/blueprints/auth.py` registers Google client; `oidc.py` rebuilds per-tenant OIDC clients per-request.
 - **`werkzeug.middleware.proxy_fix.ProxyFix`** — `src/admin/app.py:11, 187`. Handles `X-Forwarded-*`.
 - **`flask-socketio>=5.5.1`** — declared in pyproject.toml but **ZERO imports in `src/`**. Completely unused. Plus transitive `python-socketio`, `simple-websocket`.
@@ -832,7 +832,7 @@ The v2.0 codebase must read as if Flask never existed. Only Option B lands that 
 | `@bp.before_request` | `APIRouter(dependencies=[Depends(...)])` or middleware |
 | `@bp.errorhandler(404)` | **No equivalent.** App-level `@app.exception_handler(...)` or try/except |
 | `@require_auth` + `session["user"]` + `g.user` | `user: AdminUserDep` |
-| `current_app.cache.get(...)` | Module-level singleton OR delete (zero callers) |
+| `current_app.cache.get(...)` | `request.app.state.inventory_cache.get(...)` (FastAPI handler path) OR `get_app_cache().get(...)` (background thread path via `src/admin/cache.py::SimpleAppCache`). **Not zero callers** — 3 consumer sites per Decision 9 audit correction. |
 | `session["key"] = value` | `request.session["key"] = value` |
 
 **Rough effort estimate:** 232 routes × 5-15 min each = **20-60 hours raw translation** before tests, reviews, auth edge cases. Template strategy is a minor lever compared to this.
@@ -1331,9 +1331,17 @@ Jinja global `{{ csrf_token }}` reads from `request.state.csrf_token`. Templates
 
 **Testing:** dep override isn't possible (middleware, not Dep). `IntegrationEnv.get_admin_client()` fetches `/admin/` first, extracts CSRF cookie, includes in subsequent POSTs automatically.
 
-### 11.7 Caching — DELETE `flask-caching` entirely
+### 11.7 Caching — REPLACE `flask-caching` with `SimpleAppCache`, then delete (corrected 2026-04-11)
 
-Audit confirmed **zero callers**. `Cache(app)` at `src/admin/app.py:208` is dead initialization. Drop the dep.
+**Audit correction (Decision 9, 2026-04-11):** the original "zero callers" claim was factually wrong. Grep verified 3 active consumer sites: `src/admin/blueprints/inventory.py:874` and `:1133` (5-minute TTL cache for inventory tree and list endpoints), plus `src/services/background_sync_service.py:472` (post-sync cache invalidation; also the Wave 3 `from flask import current_app` ImportError blocker). Deleting flask-caching outright would make the admin UI inventory pages ~60× slower and crash background sync.
+
+**Wave 3 replacement recipe:** `src/admin/cache.py::SimpleAppCache` is a ~40 LOC wrapper around `cachetools.TTLCache` with a thread-safe API matching Flask's `get`/`set`/`delete` contract. Installed into `app.state.inventory_cache` via the FastAPI lifespan context. Background-thread access (from `background_sync_service.py`) goes through a `src/admin/cache.py::get_app_cache()` module-global helper seeded by `install_app_cache()` at lifespan startup. `cachetools` is already a transitive dep — no new deps added.
+
+The 3 consumer sites migrate:
+- `inventory.py:874, 1133` — `getattr(current_app, "cache", None)` becomes `request.app.state.inventory_cache`.
+- `background_sync_service.py:472` — `from flask import current_app` + `current_app.cache.delete(...)` becomes `from src.admin.cache import get_app_cache` + `get_app_cache().delete(...)`. The `from flask import current_app` line is DELETED in the same commit. This closes the Wave 3 ImportError blocker.
+
+`flask-caching` is dropped from `pyproject.toml` AFTER the replacement is in place and all 3 consumer sites are verified on the new cache. `scripts/deploy/entrypoint_admin.sh:28-30`'s debug print of the flask-caching version is deleted as part of Agent F cleanup.
 
 ### 11.8 Proxy headers — uvicorn `--proxy-headers`
 
@@ -1964,7 +1972,7 @@ Eight waves imply safety via backward-compat seams — exactly what the user rej
 
 **REMOVED:**
 - `flask>=3.1.3`
-- `flask-caching>=2.3.0` (zero callers)
+- `flask-caching>=2.3.0` (3 consumer sites — replaced by `src/admin/cache.py::SimpleAppCache` in Wave 3; see §11.7 correction)
 - `flask-socketio>=5.5.1` (declared but unused)
 - `python-socketio>=5.13.0` (transitive of flask-socketio)
 - `simple-websocket>=1.1.0` (transitive of flask-socketio)

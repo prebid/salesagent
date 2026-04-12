@@ -661,7 +661,7 @@ Each is a separate file with its own AST parsing. Consolidation opportunity: one
 - `a2wsgi` — only used by `src/app.py:33,299` for mounting Flask
 - `werkzeug` — only used by `src/admin/app.py:11` for `ProxyFix`
 - `waitress` — only used by `src/admin/server.py` (orphan standalone server)
-- `flask-caching` — only used by `src/admin/app.py:200-208` for `Cache(app)`, zero consumer reads of `app.cache`
+- `flask-caching` — `src/admin/app.py:200-208` attaches `Cache(app)`. **Audit correction 2026-04-11 (Decision 9):** 3 consumer sites exist (not zero): `src/admin/blueprints/inventory.py:874`, `:1133`, `src/services/background_sync_service.py:472`. Wave 3 REPLACES with `src/admin/cache.py::SimpleAppCache` before deletion. The Wave 3 `from flask import current_app` ImportError blocker at line 472 is closed by the same migration. See `migration.md` §11.7 revised text and execution-details Wave 3 acceptance criteria 5/5.1-5.4.
 - `flask-socketio` — zero imports in `src/` (verified via grep)
 - `python-socketio` — transitive of flask-socketio
 - `simple-websocket` — transitive of flask-socketio

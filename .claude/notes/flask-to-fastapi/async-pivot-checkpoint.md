@@ -286,6 +286,81 @@ All integration tests need `@pytest.mark.asyncio` (or the equivalent anyio marke
 
 Already in an async context. Just update the scheduler bodies' DB calls to `async with get_db_session()`. No structural change to the lifespan composition.
 
+### Adapters (Decision 1 Path B, 2026-04-11 resolution)
+
+**Adapters stay sync under v2.0.** `src/adapters/base.py::AdServerAdapter` is UNCHANGED — methods remain sync `def`. Full async would require porting `googleads==49.0.0` off `suds-py3` (hard-sync SOAP, no async variant) and rewriting 4 `requests`-based adapters (~1500 LOC) for zero AdCP-visible benefit. Path B wraps adapter calls at the `_impl` boundary instead.
+
+**Dual session factory.** `src/core/database/database_session.py` exports BOTH:
+- `get_db_session()` — async, yields `AsyncSession`. Used by admin handlers, `_impl` functions, `_raw` wrappers, schedulers.
+- `get_sync_db_session()` — sync, yields sync `Session`. Used by adapter code running inside `run_in_threadpool` worker threads, plus `AuditLogger._log_operation_sync` (internal). Pool sizing: `pool_size=5, max_overflow=10, pool_pre_ping=True, pool_recycle=3600`, statement_timeout=30s.
+
+**Wrap pattern** at the 18 `_impl` adapter call sites:
+```python
+from starlette.concurrency import run_in_threadpool
+# Adapter is sync; _impl is async; the wrap is at the boundary.
+result = await run_in_threadpool(adapter.create_media_buy, request, packages, ...)
+```
+
+**`AuditLogger` split:**
+- `_log_operation_sync(...)` — sync internal, uses `get_sync_db_session()`. Called by adapters from inside worker threads.
+- `async def log_operation(...)` — async public wrapper, calls `await run_in_threadpool(self._log_operation_sync, ...)`. Called by `_impl` functions.
+- 30 `_impl` call sites update to `await audit_logger.log_operation(...)`; adapter call sites use `self.audit_logger._log_operation_sync(...)`.
+
+**Threadpool tune:** `anyio.to_thread.current_default_thread_limiter().total_tokens = 80` at lifespan startup (default 40 is too low for burst adapter load). Env-override via `ADCP_THREADPOOL_SIZE`.
+
+**Structural guard:** `tests/unit/test_architecture_adapter_calls_wrapped_in_threadpool.py` — AST-walks `src/core/tools/`, `src/admin/blueprints/`, `src/admin/routers/`, `src/core/helpers/` for adapter method calls inside `async def` bodies. Each must be the first argument to a `run_in_threadpool(...)` call. `src/services/background_sync_service.py` is allowlisted (already in sync-bridge thread).
+
+### ContextManager refactor (Decision 7, 2026-04-11 resolution)
+
+**`src/core/context_manager.py` loses the class.** `ContextManager(DatabaseManager)` caches `self._session` on a process-wide singleton. Under `async_sessionmaker` on the single event-loop thread, every concurrent task shares the cached session → transaction interleaving. **`async_sessionmaker` does NOT fix this** because the singleton sits above the session factory. This is the scoped_session bug in singleton form and must be fixed explicitly by a refactor.
+
+**Refactor shape:**
+- Delete `class ContextManager`, delete `_context_manager_instance`, delete `get_context_manager()`, delete no-op `set_tool_state`
+- Convert 12 public methods to module-level `async def` functions taking `session: AsyncSession` as first positional parameter
+- Delete `DatabaseManager` entirely (only ContextManager subclassed it; 2 test-only subclasses in `test_session_json_validation.py` also deleted)
+- `_send_push_notifications` fork at lines 727-755 collapses to a single `await service.send_notification(...)`
+
+**7 production callers migrate:** `main.py:164-166` (delete dead variable), `mcp_context_wrapper.py` (delete module-load `_wrapper = MCPContextWrapper()`, open `session_scope()` via `_wrap_async_tool`), `media_buy_create.py` (3 calls), `media_buy_update.py` (**17 calls** — largest), `_workflow.py` (2 calls), `mock_ad_server.py` (2 sites, including `threading.Thread complete_after_delay` → `asyncio.create_task(_complete_after_delay)` with `async with session_scope()`), `operations.py` (1 site, admin conversion).
+
+**Error-path gotcha:** raising an exception after `await update_workflow_step(session, step_id, status="failed", ...)` inside an outer `async with session_scope()` rolls back the error-status write too. Fix: use a SEPARATE `async with session_scope() as error_session:` inside the `except` block for error logging. Documented in §11.0.6 Gotchas.
+
+**Structural guard:** `tests/unit/test_architecture_no_singleton_session.py` — 3 AST-scanning methods: (a) no session-typed class attributes outside `src/core/database/`, (b) no `_X_instance = None` + `get_X()` singleton-getter patterns, (c) no module-level `X = SomeManager()` instantiations.
+
+**Validated by:** pre-Wave-0 Spike 4.5 (0.5-1 day, soft blocker). Fail action: refactor becomes dedicated Wave 4a sub-phase PR, not a gate failure.
+
+### Background sync sync-bridge (Decision 9, 2026-04-11 resolution)
+
+**New module: `src/services/background_sync_db.py` (~200 LOC).** Runs the multi-hour GAM inventory sync jobs via a SEPARATE sync psycopg2 engine, kept distinct from the dual engines in `database_session.py`. The service keeps its current `threading.Thread` shape; converting to `asyncio.create_task` would pin async-pool connections for hours, triggering `pool_recycle=3600` mid-session and Fly.io TCP keepalive expiry.
+
+**Separate engine:**
+- `application_name='adcp-salesagent-sync-bridge'` (distinguishable in `pg_stat_activity`)
+- `pool_size=2, max_overflow=3, pool_pre_ping=True, pool_recycle=3600`
+- `statement_timeout=600s` (10-minute budget for long GAM writes)
+- Thread-safe lazy-init via `threading.Lock`
+- `atexit` hook registered at engine construction time (NOT module load — lazy)
+- `dispose_sync_bridge()` function for lifespan shutdown integration
+
+**Total sync/async engine math:**
+- Async engine (request path): `pool_size=15, max_overflow=25` = 40 peak connections
+- Sync engine in `database_session.py` (Path B adapters + audit): `pool_size=5, max_overflow=10` = 15 peak
+- Sync-bridge engine in `background_sync_db.py`: `pool_size=2, max_overflow=3` = 5 peak
+- **Total: 60 peak connections** (within default `max_connections=100` with headroom)
+
+**Shutdown ordering** in `src/core/main.py::lifespan_context.__aexit__`:
+1. `await request_shutdown()` — signal background_sync threads via `_shutdown_event`
+2. `await wait_for_shutdown(30.0)` — wait up to 30s for threads to drain
+3. `dispose_sync_bridge()` — dispose sync-bridge engine
+4. `await engine.dispose()` — dispose async engine
+5. `engine.dispose()` on the Path-B sync session factory
+
+**Scope guard:** `tests/unit/test_architecture_sync_bridge_scope.py` — ratcheting frozenset allowlist containing ONLY `src/services/background_sync_service.py`. Any PR adding a new importer requires explicit CLAUDE.md exception. 4 test methods enforce allowlist non-growth, file-exists check, importer-still-uses check, and "if allowlist empty then module must be deleted" sunset check.
+
+**Sunset target v2.1+.** When the phase-per-session async refactor lands (per `foundation-modules.md` §11.0.6 §G), the sync-bridge gets deleted alongside `psycopg2-binary` + `libpq-dev` + `libpq5`. Tracking issue: `salesagent-sync-bridge-sunset`.
+
+**Validated by:** pre-Wave-0 Spike 5.5 (0.5 day, soft blocker). 4 test cases: (a) engine lifecycle, (b) MVCC bidirectional visibility, (c) 5 concurrent async requests + 1 sync thread no deadlock, (d) post-dispose connection leaks ≤1. Fail action: revert to Option A (asyncio task + single async session per sync), suboptimal but viable.
+
+**Wave 3 flask-caching correction (bundled with Decision 9):** the "zero callers" claim was WRONG. 3 consumer sites exist at `inventory.py:874, 1133, background_sync_service.py:472`. The last is also the `from flask import current_app` ImportError blocker. Wave 3 replaces `flask-caching` with `src/admin/cache.py::SimpleAppCache` (cachetools.TTLCache wrapper on `app.state.inventory_cache`) BEFORE deletion. Deleting flask-caching outright would crash inventory pages + break background sync.
+
 ## 4. 2nd and 3rd order risks — the fresh session MUST investigate these
 
 **(#1 is the biggest unknown — do this audit FIRST before committing to v2.0 scope.)**
@@ -403,6 +478,34 @@ Still applies (deep audit §3.1). Async doesn't fix this. Still v2.0 single-work
 `src/routes/api_v1.py` routes are already `async def` but call sync `_impl` functions. This has the scoped_session interleaving bug but hasn't bitten production. Full async fixes this as a side effect — the bug is gone once `_impl` functions become async.
 
 **This is a WIN, not a risk.** It's the biggest reason the user's pivot makes sense.
+
+### Risk #20 — ContextManager singleton session cache (added 2026-04-11, resolved by Decision 7)
+
+**Severity: HIGH (bug by construction, not by accident).** `src/core/context_manager.py::ContextManager` inherits from `DatabaseManager` and caches `self._session` on a process-wide singleton via `_context_manager_instance`. Under sync SQLAlchemy, `scoped_session` with default scopefunc keys on `threading.get_ident()` — each worker thread gets its own session, and the singleton's `self._session` was "effectively thread-local" via a cached-first-wins accident. **Under `async_sessionmaker` on the event-loop thread, every concurrent task returns the same `threading.get_ident()` value → every task gets the SAME cached session → transaction interleaving.** The `async_sessionmaker` swap does NOT fix this because the singleton sits above the session factory.
+
+**Detection:** Audit 06 deep-think 2026-04-11, confirmed by the Decision 7 Opus subagent grep-verifying 7 production callers and finding the module-load side effect at `mcp_context_wrapper.py:345`.
+
+**Mitigation:** Decision 7 refactor (stateless module functions taking `session: AsyncSession`, delete `DatabaseManager`). See §3 "ContextManager refactor" for the full shape.
+
+**Validated by:** Spike 4.5 (pre-Wave-0, 0.5-1 day soft blocker).
+
+### Risk #7.5 — Background sync service long session (added 2026-04-11, resolved by Decision 9)
+
+**Severity: HIGH (hours-long session incompatible with async pool).** `src/services/background_sync_service.py::_run_sync_thread` spawns `threading.Thread(daemon=True)` workers that open `get_db_session()` and hold it across multi-hour wall-clock GAM inventory syncs. Under `async_sessionmaker`:
+- `pool_recycle=3600` rotates connections after 1 hour → open session hits `DisconnectionError`
+- asyncpg idle time blows through Fly.io TCP keepalives → random mid-job failures
+- Identity map grows unbounded over hours → memory pressure
+- Converting to `asyncio.create_task` instead of `threading.Thread` doesn't help — the task's session still pins the pool for hours
+
+**Also:** line 472 imports `from flask import current_app` for cache invalidation. This fails with `ImportError` the moment Flask is removed in Wave 3. **Wave 3 blocker.**
+
+**Detection:** Decision 9 Opus subagent 2026-04-11, grep-verified the 9 `get_db_session()` sites + the Flask import + the 3-site flask-caching consumer list.
+
+**Mitigation:** Decision 9 sync-bridge (Option B): new `src/services/background_sync_db.py` module with separate sync psycopg2 engine. Service stays sync. Wave 3 flask-caching replacement via `SimpleAppCache`. See §3 "Background sync sync-bridge" for the full shape.
+
+**Validated by:** Spike 5.5 (pre-Wave-0, 0.5 day soft blocker). Fallback: Option A (asyncio task + single async session, suboptimal but viable).
+
+**Sunset target v2.1+** — phase-per-session async refactor at `foundation-modules.md §11.0.6 §G`.
 
 ## 5. Revised v2.0 scope (my rough estimate)
 
