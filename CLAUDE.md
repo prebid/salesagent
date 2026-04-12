@@ -30,7 +30,7 @@ This guide helps you work effectively with the Prebid Sales Agent codebase maint
 
 ### Common Task Patterns
 - **Adding a new AdCP tool**: Extend library schema → Add `_impl()` function → Add MCP wrapper → Add A2A raw function → Add tests
-- **Fixing a route issue**: Check for conflicts with `grep -r "@.*route.*your/path"` → Use `url_for()` in Python, `scriptRoot` in JavaScript
+- **Fixing a route issue**: Check for conflicts with `grep -r "@router\.\(get\|post\|put\|delete\|patch\)" src/admin/` → Use `url_for()` in Python and templates
 - **Modifying schemas**: Verify against AdCP spec → Update Pydantic model → Run `pytest tests/unit/test_adcp_contract.py`
 - **Database changes**: Use SQLAlchemy 2.0 `select()` → Use `JSONType` for JSON → Create migration with `alembic revision`
 
@@ -77,7 +77,7 @@ formats = filter_by_format_ids(formats, req.input_format_ids, "input_format_ids"
 ### What to Avoid
 - ❌ Don't use `session.query()` (use `select()` + `scalars()`)
 - ❌ Don't duplicate library schemas (extend with inheritance)
-- ❌ Don't hardcode URLs in JavaScript (use `scriptRoot`)
+- ❌ Don't hardcode URLs in JavaScript or templates (use `url_for()`)
 - ❌ Don't bypass pre-commit hooks without good reason
 - ❌ Don't skip tests to make CI pass (fix the underlying issue)
 - ❌ Don't leave duplicated logic — extract shared helpers (DRY invariant above)
@@ -122,6 +122,9 @@ AST-scanning tests enforce architecture invariants on every `make quality` run. 
 | Workflow tenant isolation | WorkflowRepository queries join DBContext for tenant scoping | `test_architecture_workflow_tenant_isolation.py` |
 | No split mock assertions | Tests use `assert_called_once_with()`, not `assert_called_once()` + `call_args` | `test_architecture_weak_mock_assertions.py` |
 | Single migration head | Alembic migration graph has exactly one head | `test_architecture_single_migration_head.py` |
+| BDD obligation sync | BDD feature files stay in sync with obligation docs | `test_architecture_bdd_obligation_sync.py` |
+| BDD no direct call_impl | BDD steps don't call _impl directly | `test_architecture_bdd_no_direct_call_impl.py` |
+| Test marker coverage | Test files have entity markers matching filename patterns | `test_architecture_test_marker_coverage.py` |
 
 **Rules for guards:**
 - Allowlists can only shrink — never add new violations, fix them instead
@@ -151,12 +154,14 @@ class Product(LibraryProduct):
 - Run `pytest tests/unit/test_adcp_contract.py` before commit
 - **Enforced by:** `test_architecture_schema_inheritance.py`
 
-### 2. Flask: Prevent Route Conflicts
-**Pre-commit hook detects duplicate routes** - Run manually: `uv run python .pre-commit-hooks/check_route_conflicts.py`
+### 2. FastAPI: Prevent Route Conflicts
+**Route ordering matters in FastAPI/Starlette** — later routes can shadow earlier ones, and ambiguous routes raise exceptions.
 
 When adding routes:
-- Search existing: `grep -r "@.*route.*your/path"`
-- Deprecate properly with early return, not comments
+- Every route must have an explicit `name=` parameter for `url_for()` resolution
+- Search existing: `grep -r "@router\.\(get\|post\|put\|delete\|patch\)" src/admin/`
+- Use `APIRouter(redirect_slashes=True, include_in_schema=False)` for all admin routers
+- Note: The pre-commit hook `check_route_conflicts.py` currently inspects Flask routes and will be rewritten for FastAPI during Phase 3 of the migration
 
 ### 3. Database: Repository Pattern + ORM-First
 **No SQLite support** - Production uses PostgreSQL exclusively.
@@ -264,16 +269,23 @@ async def create_media_buy_raw(...) -> CreateMediaBuyResponse:
 
 **Enforced by:** `test_transport_agnostic_impl.py`, `test_impl_resolved_identity.py`, `test_no_toolerror_in_impl.py`, `test_architecture_boundary_completeness.py`
 
-### 6. JavaScript: Use request.script_root
-**All JS must support reverse proxy deployments:**
+### 6. JavaScript & Templates: URL Construction
+**All URLs must support reverse proxy deployments.** The codebase is transitioning URL patterns as part of the v2.0 migration.
 
+**DEPRECATED (existing code, being removed in v2.0):**
 ```javascript
-const scriptRoot = '{{ request.script_root }}' || '';  // e.g., '/admin' or ''
+const scriptRoot = '{{ request.script_root }}' || '';
 const apiUrl = scriptRoot + '/api/endpoint';
-fetch(apiUrl, { credentials: 'same-origin' });
 ```
 
-Never hardcode `/api/endpoint` - breaks with nginx prefix.
+**PREFERRED (new code must use this):**
+```html
+<!-- In Jinja templates: use url_for with named routes -->
+<a href="{{ url_for('admin_accounts_list', tenant_id=tenant.id) }}">Accounts</a>
+<script src="{{ url_for('static', path='js/app.js') }}"></script>
+```
+
+During the v2.0 migration, all `script_root` usage will be replaced with `url_for()`. **New code should use `url_for()` exclusively.** Never hardcode `/admin/...` or `/api/...` paths.
 
 ### 7. Schema Validation: Environment-Based
 - **Production**: `ENVIRONMENT=production` → `extra="ignore"` (forward compatible)

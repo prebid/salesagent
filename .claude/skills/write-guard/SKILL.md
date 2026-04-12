@@ -28,7 +28,7 @@ head -80 tests/unit/test_architecture_no_raw_select.py
 State in ONE sentence what the guard prevents. Examples:
 - `no-flask-imports`: No `from flask import` outside a shrinking allowlist
 - `admin-routes-named`: Every `@router.*` decorator in `src/admin/routers/` has `name=`
-- `admin-routes-async`: Every handler in `src/admin/routers/` is `async def`
+- `admin-routes-sync`: Every handler in `src/admin/routers/` is sync `def` (not `async def`)
 
 ### Step 3: Write the guard test
 

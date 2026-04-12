@@ -59,7 +59,7 @@ These were surfaced by the 2nd/3rd-order audit. Every one of them has shipped-br
 | File | When to read | Detail level |
 |---|---|---|
 | `CLAUDE.md` (this file) | First, always | Entry point / map |
-| **`execution-plan.md`** | **START HERE for implementation** | **13 phases in strict order, standalone briefings** |
+| **`execution-plan.md`** | **START HERE for implementation** | **7 phases in strict order, standalone briefings** |
 | `implementation-checklist.md` | Tick boxes AFTER completing work | Verification tracking, 55 audit findings |
 | `async-pivot-checkpoint.md` | Before touching async/DB code | Target state (corrected 2026-04-12) |
 | `flask-to-fastapi-migration.md` | Context pass (reference only) | Overview |

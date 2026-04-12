@@ -19,15 +19,15 @@ Run `bd show $ARGUMENTS` to get the full task description, acceptance criteria, 
 ### Step 2: Read the AdCP Specification (Spec-First)
 If the task touches schemas, data models, targeting, protocol behavior, tool inputs/outputs, or buyer-facing fields — **read the spec before exploring the codebase**. The spec defines what's correct; the code is our current (possibly wrong) implementation of it.
 
-**Source of truth**: Local adcp repo at `/Users/konst/projects/adcp`. Read the relevant schema and doc files directly — do NOT rely on training data or assumptions about the spec. Online repo is adcontextprotocol/adcp.
+**Source of truth**: Local adcp repo at `/Users/quantum/projects/adcp`. Read the relevant schema and doc files directly — do NOT rely on training data or assumptions about the spec. Online repo is adcontextprotocol/adcp.
 
 Key locations:
-- **JSON schemas**: `/Users/konst/projects/adcp/static/schemas/source/`
+- **JSON schemas**: `/Users/quantum/projects/adcp/static/schemas/source/`
   - Core types: `core/targeting.json`, `core/package.json`, `core/product.json`, `core/media-buy.json`, `core/frequency-cap.json`, etc.
   - Enums: `enums/` (pricing models, statuses, etc.)
   - Media buy operations: `media-buy/` (create/update requests/responses, package-request)
   - Signals: `signals/`
-- **Protocol docs**: `/Users/konst/projects/adcp/docs/` (protocols, media-buy lifecycle, reference)
+- **Protocol docs**: `/Users/quantum/projects/adcp/docs/` (protocols, media-buy lifecycle, reference)
 - **Python types**: The `adcp` Python library may be ahead of the JSON schema (v3 structured geo types exist in Python but not yet in the JSON schema). When they diverge, note the discrepancy in the research artifact.
 
 What to extract from the spec:

@@ -1,7 +1,3 @@
-I have enough context. Now I can produce the detailed elaboration. Given the 3000-4000 word target and that I need to be code-heavy, I'll produce the output directly as my final assistant message (per the task instructions: "Return findings directly as your final assistant message — the parent agent reads your text output, not files you create.").
-
----
-
 # §11 Foundation Modules — Detailed Elaboration
 
 > **SYNC HANDLERS IN v2.0 (async pivot reversed 2026-04-12).** This document was written during the async pivot and contains `async def`, `SessionDep`, `AsyncSession`, and `await` patterns throughout. **For v2.0 implementation, use the sync handler pattern from `execution-plan.md` Phase 0.** Admin handlers are sync `def` with `with get_db_session() as session:`. The module designs (templating.py, flash.py, sessions.py, csrf.py, etc.) are still valid — just make all dependency functions sync `def` instead of `async def`, and use sync `Session` instead of `AsyncSession`. The async versions are preserved for v2.1.

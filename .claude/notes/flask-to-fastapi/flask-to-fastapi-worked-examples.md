@@ -1,7 +1,3 @@
-Good. I have everything I need. Now I'll produce the five worked examples as a single markdown document. This is the deliverable the user asked for — I'll output it directly as my assistant message (no file writes, per the plan-mode restriction and the user's request for direct output).
-
----
-
 # Flask → FastAPI Migration: Five Hard-Case Worked Examples
 
 > **SYNC HANDLERS IN v2.0 (async pivot reversed 2026-04-12).** This document was written during the async pivot and shows `async def` handlers with `SessionDep`, `AsyncSession`, and `await` throughout. **For v2.0 implementation, adapt to sync:** use `def` (not `async def`), `with get_db_session() as session:` (not `async with`), and Starlette `TestClient` (not httpx `AsyncClient`). The route logic, template references, form handling, and OAuth flows described here are still correct — only the sync/async wrapper changes. See `execution-plan.md` Phase 0 for the canonical sync handler pattern.

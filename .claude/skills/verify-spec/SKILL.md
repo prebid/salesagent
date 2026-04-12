@@ -44,16 +44,16 @@ to make tests pass, we must confirm the tests expect the RIGHT behavior.
 
 1. **`adcontextprotocol/adcp`** — The protocol spec. JSON schemas at
    `dist/schemas/3.0.0-beta.3/core/`, OpenAPI at `static/openapi/`.
-   Local clone: `/Users/konst/projects/adcp` (commit-pinned).
+   Local clone: `/Users/quantum/projects/adcp` (commit-pinned).
    GitHub: `https://github.com/adcontextprotocol/adcp`
 
 2. **`adcontextprotocol/adcp-client-python`** — The Python implementation.
    Pydantic models at `adcp/types/generated_poc/`.
-   Local clone: `/Users/konst/projects/adcp-client-python` (upstream remote).
+   Local clone: `/Users/quantum/projects/adcp-client-python` (upstream remote).
    GitHub: `https://github.com/adcontextprotocol/adcp-client-python`
 
 3. **`adcp-req`** (derivative, NOT authoritative) — Requirements artifacts at
-   `/Users/konst/projects/adcp-req/docs/requirements/`. Useful as an INDEX
+   `/Users/quantum/projects/adcp-req/docs/requirements/`. Useful as an INDEX
    with source links back to (1) and (2). Follow those links to confirm
    faster than researching from scratch. Never treat adcp-req as the
    source of truth itself.

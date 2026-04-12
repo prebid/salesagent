@@ -38,7 +38,7 @@ Task is clear and well-defined. Skip to implementation.
 **Doc-First Rule**: For external libraries, check docs before relying on training data.
 
 Available documentation sources:
-- **Ref MCP**: Search library docs (FastMCP, SQLAlchemy, Flask, Pydantic, etc.)
+- **Ref MCP**: Search library docs (FastMCP, SQLAlchemy, FastAPI/Starlette, Pydantic, etc.)
 - **DeepWiki MCP**: Ask questions about GitHub repositories
 - **CLAUDE.md**: Project patterns and architecture
 - **`/docs` directory**: Detailed project documentation

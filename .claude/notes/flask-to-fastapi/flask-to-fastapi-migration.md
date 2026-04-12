@@ -5,6 +5,12 @@
 **Release target:** salesagent v2.0.0 (major version, breaking changes allowed)
 **Related plan file:** `/Users/quantum/.claude/plans/squishy-meandering-marshmallow.md`
 
+> **ASYNC PIVOT REVERSED (2026-04-12) — v2.0 uses SYNC admin handlers.**
+> This file was written before the async reversion and has NOT been fully updated.
+> v2.0 ships with sync `def` admin handlers; async SQLAlchemy is deferred to v2.1.
+> Decision 6 in this file (line ~65, "Full async SQLAlchemy absorbed into v2.0") is
+> superseded. The authoritative implementation guide is `execution-plan.md`.
+
 > **How to use this document:** This is a self-contained research and design reference. A reader can start at the top with zero prior knowledge of the salesagent codebase and understand the full scope, trade-offs, assumptions, and decisions behind the Flask → FastAPI migration. All findings come from multiple rounds of codebase exploration (three Opus Explore subagents) and design (seven Opus Plan subagents in total) run on 2026-04-11, plus web research of current FastAPI patterns as of April 2026.
 
 ## Companion Documents
@@ -63,7 +69,7 @@ Flask contributes:
 4. **URL prefix stays `/admin/`** (bookmarks, docs, runbooks all reference it; zero benefit to moving to root).
 5. **`SESSION_SECRET` env var hard-required, `KeyError` at startup, no `secrets.token_hex()` fallback.** The old dev-mode fallback was a security smell anyway.
 6. **Full async SQLAlchemy absorbed into v2.0** (Option A from deep audit §1.4; pivoted 2026-04-11). v2.0 admin handlers are `async def` end-to-end with `AsyncSession` + `async_sessionmaker`; driver moves from `psycopg2-binary` to `asyncpg`. `run_in_threadpool` is reserved for genuinely blocking non-DB work (file I/O, CPU-bound calls, sync third-party libraries). See `async-pivot-checkpoint.md` (new target state in §3) and §18 (v2.0 Wave 4-5 execution).
-7. **CSRF: roll-your-own Double Submit Cookie (~100 LOC, `src/admin/csrf.py`).** No external dep risk, bespoke to our form-post admin UI. See §11.6.
+7. **CSRF: roll-your-own Double Submit Cookie (~100 LOC, `src/admin/csrf.py`).** **[SUPERSEDED 2026-04-11]** CSRF strategy changed to Option A — SameSite=Lax + CSRFOriginMiddleware (~70 LOC). See CLAUDE.md blocker 5. ~~No external dep risk, bespoke to our form-post admin UI. See §11.6.~~
 8. **Error-shape split** (refined post AdCP safety audit):
    - **Category 1** (internal admin UI AJAX endpoints called by our own JavaScript — e.g. `change_account_status`, `src/admin/blueprints/api.py` dashboard AJAX, `src/admin/blueprints/format_search.py` format picker, **and `src/adapters/gam_reporting_api.py`** which is admin-session-authed) → native FastAPI `{"detail": "..."}`. We update our own JS in the same PR.
    - **Category 2** (external non-AdCP JSON APIs: **`tenant_management_api` and `sync_api` only** — both use non-AdCP auth headers like `X-Tenant-Management-API-Key` and `X-API-Key` for external provisioning/sync tooling) → preserved legacy `{"success": false, "error": "..."}` via a scoped exception handler (~30 LOC, path-prefix match against `/api/v1/tenant-management`, `/api/v1/sync`, `/api/sync`). None of these are part of the AdCP spec; preserving the shape is a backward-compat concession to non-AdCP internal tooling, NOT an AdCP spec requirement.

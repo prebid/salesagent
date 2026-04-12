@@ -4,6 +4,11 @@
 **Status:** Pre-implementation audit
 **Purpose:** Verify that the v2.0.0 Flask → FastAPI migration plan does NOT impact the AdCP protocol surface and does NOT make assumptions that would require updates from external AdCP consumers
 
+> **ASYNC PIVOT REVERSED (2026-04-12) — v2.0 uses SYNC admin handlers.**
+> This file predates the async reversion. Any references to async admin handlers
+> or `AsyncSession` are v2.1 scope. v2.0 ships with sync `def` handlers.
+> The authoritative implementation guide is `execution-plan.md`.
+
 > **Companion to:** [flask-to-fastapi-migration.md](flask-to-fastapi-migration.md). Read that first for the migration plan itself. This file is the audit findings produced by three parallel Opus Explore subagents on 2026-04-11.
 
 ---

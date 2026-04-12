@@ -4,6 +4,12 @@
 **Status:** Pre-implementation audit — plan revisions required before Wave 0 begins
 **Supersedes:** `flask-to-fastapi-adcp-safety.md` §4 (first-order audit) with deeper analysis
 
+> **ASYNC PIVOT REVERSED (2026-04-12) — v2.0 uses SYNC admin handlers.**
+> This file predates the async reversion. Blocker 4 resolution (async `def` handlers +
+> `AsyncSession`) is now MOOT for v2.0 — admin handlers use sync `def` with `scoped_session`.
+> Async SQLAlchemy is deferred to v2.1. The authoritative implementation guide is
+> `execution-plan.md`.
+
 > **Companion to:** [flask-to-fastapi-migration.md](flask-to-fastapi-migration.md) (main overview) and [flask-to-fastapi-adcp-safety.md](flask-to-fastapi-adcp-safety.md) (first-order AdCP boundary audit). This file captures the 2nd-order, 3rd-order, and derivative-thinking findings produced by two parallel Opus plan subagents on 2026-04-11. It identifies **six previously unseen blockers, twenty new risks, and forty-plus cleanup opportunities** that must be reflected in the migration plan before Wave 0 begins.
 
 ---

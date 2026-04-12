@@ -4,6 +4,12 @@ Plan mode is active and I do not have Write access. I will deliver the full deep
 
 # Flask → FastAPI Migration: Deep Elaboration of §14, §16, §21
 
+> **ASYNC PIVOT REVERSED (2026-04-12) — v2.0 uses SYNC admin handlers.**
+> This file predates the async reversion and contains ~68 async pattern references
+> (`async def`, `AsyncSession`, `asyncpg`, etc.) that are v2.1 scope, not v2.0.
+> v2.0 ships with sync `def` admin handlers; async SQLAlchemy is deferred to v2.1.
+> The authoritative implementation guide is `execution-plan.md`.
+
 This document elaborates three sections of `/Users/quantum/Documents/ComputedChaos/salesagent/.claude/notes/flask-to-fastapi/flask-to-fastapi-migration.md`: the 5-6 wave migration strategy (§14, expanded from 4 to 5-6 waves by the 2026-04-11 async pivot that absorbed async SQLAlchemy into v2.0 as Waves 4-5 — see `async-pivot-checkpoint.md`), the 28 assumptions (§16), and the verification strategy (§21). All file paths are absolute. Line numbers reference the current HEAD of the repository.
 
 ---

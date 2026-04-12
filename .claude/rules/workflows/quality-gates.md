@@ -70,8 +70,8 @@ Coverage is collected per-suite and combined automatically:
 - **PLR0913** (args > 5): Use dataclass/config object for parameters
 - **PLR0915** (statements > 50): Extract helper functions
 
-### Pre-commit Hooks (11 active)
-The project has 11 pre-commit hooks that catch:
+### Pre-commit Hooks
+The project has 25+ pre-commit hooks that catch:
 - Route conflicts
 - SQLAlchemy 1.x patterns
 - Star imports

@@ -1,5 +1,7 @@
 # Frontend Deep-Audit Report (2026-04-11)
 
+> **ASYNC DEFERRED TO v2.1 (2026-04-12).** v2.0 uses sync admin handlers. This report contains research for the future v2.1 async SQLAlchemy migration. Do not implement async patterns described here during v2.0. The authoritative implementation guide is `execution-plan.md`.
+
 > **Produced by:** 6 parallel Opus subagents with ultrathink, 2nd/3rd/4th-order derivative analysis
 > **Scope:** Jinja templates + url_for, JavaScript + fetch endpoints, OAuth + session + auth flows, static assets + CSS, error pages + flash + admin UX, route parity + handler migration
 > **Context:** Flask→FastAPI v2.0 migration removes Flask entirely from `src/admin/`
