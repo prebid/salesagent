@@ -1,7 +1,10 @@
 ---
 name: async-convert
-lifecycle: migration
+lifecycle: deferred-v2.1
 description: >
+  DEFERRED TO v2.1 — async SQLAlchemy conversion is not in v2.0 scope.
+  v2.0 uses sync admin handlers. This skill is preserved for v2.1 async migration.
+original_description: >
   Convert a sync Python module to async SQLAlchemy. Applies mechanical transforms,
   checks for lazy-load risks, session.merge, inspect(), and bulk_*_mappings.
   Runs module tests after conversion.

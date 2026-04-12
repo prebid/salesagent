@@ -1,14 +1,17 @@
 # Flask → FastAPI v2.0.0 Migration — Mission Briefing
 
-> ⚠️ **BLOCKER 4 HAS PIVOTED (2026-04-11) — READ `async-pivot-checkpoint.md` FIRST**
+> **ASYNC PIVOT REVERSED (2026-04-12) — v2.0 uses SYNC admin handlers.**
 >
-> User directive: go fully async in v2.0 (Option A from deep audit §1.4), absorbing the previously-deferred async SQLAlchemy migration. The "sync def admin handlers" resolution is **superseded**. Every reference in the plan files to "sync def", "admin handlers default to def", "defer async to v2.1", or `run_in_threadpool` for DB work is now STALE.
+> The April 11 async pivot (Option A) has been reversed after cost-benefit analysis showed
+> async SQLAlchemy provides marginal benefit for this project's traffic profile (5-20 concurrent
+> admin users). v2.0 ships with sync `def` admin handlers (Option C from deep audit §1.4).
+> Async SQLAlchemy is deferred to v2.1 when measured production load justifies it.
 >
-> Fresh sessions: read `async-pivot-checkpoint.md` in this folder before touching any other plan content or implementing any part of Blocker #4.
+> The `async-pivot-checkpoint.md` and `async-audit/` reports are preserved as v2.1 roadmap material.
 
-**Mission:** Migrate `src/admin/` (Flask blueprints + Jinja templates + session auth) to FastAPI with **fully async SQLAlchemy end-to-end**, without breaking the AdCP MCP/REST surface, OAuth callbacks, or the ~147 template refs that depend on `request.script_root`.
+**Mission:** Migrate `src/admin/` (Flask blueprints + Jinja templates + session auth) to FastAPI with **sync `def` admin handlers**, without breaking the AdCP MCP/REST surface, OAuth callbacks, or the ~147 template refs that depend on `request.script_root`. Async SQLAlchemy is deferred to v2.1.
 
-**Branch:** `feat/v2.0.0-flask-to-fastapi` — expanded to 5-6 waves (Flask removal + admin rewrite + full async SQLAlchemy), one PR per wave, merged to main. Pre-Wave-0 lazy-loading spike required.
+**Branch:** `feat/v2.0.0-flask-to-fastapi` — Flask removal + admin rewrite using sync handlers, one PR per wave, merged to main.
 
 ---
 
@@ -30,7 +33,7 @@ These were surfaced by the 2nd/3rd-order audit. Every one of them has shipped-br
 
 3. **`@app.exception_handler(AdCPError)` HTML regression.** Admin user clicks a button, the handler returns a JSON blob to the browser, user sees raw JSON. **Fix:** Accept-aware handler — render `templates/error.html` when `Accept: text/html` and path starts with `/admin/`; JSON otherwise. This is intentionally different from the JSON-only handler currently at `src/app.py:82-88`. See `flask-to-fastapi-deep-audit.md` §1 (blocker 3).
 
-4. **⚠️ PIVOTED to Option A (full async SQLAlchemy in v2.0).** The original Blocker #4 resolution was sync `def` admin handlers (Option C) because the event-loop `scoped_session` bug would otherwise cause transaction interleaving. That resolution is **superseded**. User chose to absorb async SQLAlchemy into v2.0: `create_async_engine`, `async_sessionmaker`, `AsyncSession`, async repositories, async UoW, driver change `psycopg2-binary` → `asyncpg`. Admin handlers become `async def` end-to-end matching the rest of the codebase. The scoped_session bug is eliminated entirely (no more thread-identity scoping). **See `async-pivot-checkpoint.md` in this folder for the new plan. The `flask-to-fastapi-deep-audit.md` §1.4 Option C text is stale.**
+4. **Admin handlers default to sync `def`, NOT `async def` (scoped_session event-loop bug).** FastAPI runs sync `def` handlers in a threadpool, which is safe with `scoped_session` (thread-local identity). `async def` handlers share the event loop's single thread, causing transaction interleaving via `scoped_session`. **Fix:** All admin route handlers use sync `def`. Async SQLAlchemy (`AsyncSession`, `asyncpg`) is deferred to v2.1 when measured production load justifies the migration cost. See `flask-to-fastapi-deep-audit.md` §1.4 (Option C). The `async-pivot-checkpoint.md` and `async-audit/` reports are preserved as v2.1 roadmap material.
 
 5. **Middleware ordering: Approximated BEFORE CSRF.** Counterintuitive but correct. If CSRF fires first, an external-domain POST user fails CSRF validation (403) before the Approximated redirect can fire (should be 307). Also switch the redirect from 302 → 307 to preserve the POST body. **CSRF strategy decided (2026-04-11): Option A — `SameSite=Lax` session cookie + `CSRFOriginMiddleware` (~70 LOC pure-ASGI Origin header validation).** NOT double-submit cookie — that would require changing ~80 fetch calls + ~47 forms for zero practical security gain. Key insight: the planned `SameSite=None` in production was solely for EventSource (SSE); Decision 8 deletes SSE, so `SameSite=Lax` is correct in all environments. `HttpOnly=True` also restored (SSE was the only reason for `False`). Zero JavaScript changes, zero template changes, zero form changes. See `flask-to-fastapi-deep-audit.md` §1 (blocker 5).
 

@@ -1,5 +1,7 @@
 # Agent A — Async Conversion Scope Audit
 
+> **ASYNC DEFERRED TO v2.1 (2026-04-12).** v2.0 uses sync admin handlers. This report contains research for the future v2.1 async SQLAlchemy migration. Do not implement async patterns described here during v2.0.
+
 **Date:** 2026-04-11
 **Author:** Agent A (Opus scoping subagent, post-pivot)
 **Context:** Pre-Wave-0 audit for the Flask→FastAPI v2.0 pivot that absorbs full async SQLAlchemy. See `../async-pivot-checkpoint.md` for the pivot directive.

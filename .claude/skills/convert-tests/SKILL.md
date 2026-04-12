@@ -1,7 +1,10 @@
 ---
 name: convert-tests
-lifecycle: migration
+lifecycle: deferred-v2.1
 description: >
+  DEFERRED TO v2.1 — async test conversion is not in v2.0 scope.
+  v2.0 uses sync test patterns. This skill is preserved for v2.1 async migration.
+original_description: >
   Convert sync test files to async for the SQLAlchemy async migration (Phase 4c).
   Applies mechanical transforms, converts TestClient to AsyncClient, converts
   factory session binding, and runs converted tests.

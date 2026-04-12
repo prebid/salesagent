@@ -9,7 +9,7 @@
 - **Migration branch:** `feat/v2.0.0-flask-to-fastapi` (all migration work commits here)
 
 Six critical invariants that are easy to forget and destructive to miss:
-1. Admin handlers are **`async def` end-to-end** with full async SQLAlchemy (`async_sessionmaker` + `AsyncSession` + `asyncpg`). The scoped_session bug is eliminated entirely — there is no more thread-identity scoping to race on. `run_in_threadpool` is used ONLY for file I/O, CPU-bound work, and sync third-party libraries (e.g., adapters via Decision 1 Path B) — NEVER for DB access.
+1. Admin handlers use **sync `def`** with sync SQLAlchemy (`scoped_session` + `Session`). This is safe because FastAPI runs sync handlers in a threadpool where thread-local session scoping works correctly. `run_in_threadpool` wrapping is NOT needed for admin handlers — FastAPI handles it automatically. MCP and A2A handlers remain `async def`. Full async SQLAlchemy is deferred to v2.1.
 2. Middleware order: **Approximated runs BEFORE CSRF** (not after — counterintuitive but correct)
 3. Templates use `{{ url_for('name', **params) }}` exclusively — for admin routes AND static assets. No prefix variables. Every admin route has `name="admin_..."`; static mount is `name="static"`. Starlette's `include_router(prefix=...)` does not set `scope["root_path"]`, so `url_for` is the only correct URL generator.
 4. `APIRouter(redirect_slashes=True, include_in_schema=False)` for all admin routers

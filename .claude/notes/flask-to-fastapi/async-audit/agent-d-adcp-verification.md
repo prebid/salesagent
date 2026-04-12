@@ -1,5 +1,7 @@
 # Agent D — AdCP Wire-Format Verification for Full-Async v2.0.0 Pivot
 
+> **ASYNC DEFERRED TO v2.1 (2026-04-12).** v2.0 uses sync admin handlers. This report contains research for the future v2.1 async SQLAlchemy migration. Do not implement async patterns described here during v2.0.
+
 **Date:** 2026-04-11
 **Agent:** D (AdCP wire-format verifier)
 **Scope:** Hard verification that the Flask → FastAPI v2.0 migration + full async SQLAlchemy absorption does NOT change AdCP wire format (headers, bodies, status codes, schemas, URLs, tool signatures, webhook payloads, or discovery URLs)

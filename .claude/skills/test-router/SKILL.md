@@ -1,8 +1,8 @@
 ---
 name: test-router
 description: >
-  Write integration tests for a ported FastAPI router. Uses httpx.AsyncClient
-  (not TestClient), factory-boy for data, compares against golden fixtures,
+  Write integration tests for a ported FastAPI router. Uses Starlette TestClient
+  (sync), factory-boy for data, compares against golden fixtures,
   and tests success + error paths for every route.
 args: <router-name>
 ---
@@ -32,24 +32,19 @@ Create `tests/admin/test_router_{name}.py` with this structure:
 ```python
 """Integration tests for admin {name} router."""
 import pytest
-from httpx import ASGITransport, AsyncClient
+from starlette.testclient import TestClient
 
 from src.app import app  # or however the app is imported in existing tests
+from src.core.database.database_session import get_db_session
 
 
 @pytest.fixture
-async def client(async_db):
-    """Async test client with session override."""
-    async def _override():
-        yield async_db  # Must be async generator, NOT lambda
-
-    app.dependency_overrides[get_session] = _override
-    async with AsyncClient(
-        transport=ASGITransport(app=app),
-        base_url="http://test",
-    ) as ac:
-        yield ac
-    app.dependency_overrides.pop(get_session, None)  # .pop(), NOT .clear()
+def client(integration_db):
+    """Sync test client with session override."""
+    app.dependency_overrides[get_db_session] = lambda: integration_db
+    with TestClient(app) as tc:
+        yield tc
+    app.dependency_overrides.pop(get_db_session, None)  # .pop(), NOT .clear()
 ```
 
 ### Step 3: Write test cases for every route
@@ -67,13 +62,13 @@ For each route in the router, write AT MINIMUM:
 ### Step 4: Test data via factories ONLY
 
 ```python
-# CORRECT: factory-boy
-tenant = await TenantFactory.create_async(session=async_db)
-account = await AccountFactory.create_async(session=async_db, tenant_id=tenant.tenant_id)
+# CORRECT: factory-boy (sync)
+tenant = TenantFactory.create()
+account = AccountFactory.create(tenant_id=tenant.tenant_id)
 
 # WRONG: inline session.add
 tenant = Tenant(tenant_id="test", ...)  # NEVER do this
-async_db.add(tenant)                     # NEVER do this in test bodies
+session.add(tenant)                      # NEVER do this in test bodies
 ```
 
 ### Step 5: Run and validate
@@ -95,15 +90,15 @@ Report any mismatches as potential regressions.
 
 ## Hard rules
 
-1. Use `httpx.AsyncClient(transport=ASGITransport(app=app))` — NEVER `TestClient(app)` (event loop conflict)
+1. Use `from starlette.testclient import TestClient` — sync client for sync handlers (no event loop conflict)
 2. Use factory-boy for ALL test data — NEVER `session.add()` in test bodies
-3. Dependency override must be `async def` generator that `yield`s — NOT `lambda: session`
+3. Dependency override for sync deps: `app.dependency_overrides[get_db_session] = lambda: session` (plain lambda is fine)
 4. Override teardown: `.pop(dep, None)` — NOT `.clear()`
 5. Test EVERY route — not just the happy path. Auth failure and not-found are mandatory.
-6. `async def test_*` with `@pytest.mark.asyncio` (or `asyncio_mode = auto`)
+6. `def test_*` — plain sync test functions, NO `@pytest.mark.asyncio`, NO `async def`
 
 ## See Also
 
 - `/capture-fixtures` — capture golden fixtures BEFORE porting (run first)
 - `/port-blueprint` — port the Flask blueprint to FastAPI
-- `/convert-tests` — convert existing sync tests to async (Phase 4c)
+- `/convert-tests` — DEFERRED TO v2.1 (v2.0 uses sync test patterns)

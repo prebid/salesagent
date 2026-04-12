@@ -1,24 +1,10 @@
 # ⚠️ BLOCKER 4 RESOLUTION HAS PIVOTED — READ THIS FIRST
 
+> **ASYNC DEFERRED TO v2.1 (2026-04-12).** The async pivot described in this document has been reversed. v2.0 ships with sync admin handlers (the original Option C from the deep audit). This document is preserved as the v2.1 async migration roadmap. Do NOT implement any content from this file during v2.0 — it will be the starting point for v2.1.
+
 **Date:** 2026-04-11
 **Author:** Claude + user directive
 **Status:** Checkpoint before context compaction
-
-```
-╔══════════════════════════════════════════════════════════════════════╗
-║                                                                      ║
-║  STOP. The plan files contain STALE sync-def language that is no    ║
-║  longer the intended resolution. DO NOT implement it.                ║
-║                                                                      ║
-║  Deep-audit Blocker #4 resolution: Option C (sync def) → Option A    ║
-║  (full async SQLAlchemy absorbed into v2.0).                         ║
-║                                                                      ║
-║  Every "sync def" prescription in the plan files is superseded by   ║
-║  this checkpoint. Fresh sessions: read this file, then launch opus  ║
-║  subagents to propagate the pivot across all plan files.             ║
-║                                                                      ║
-╚══════════════════════════════════════════════════════════════════════╝
-```
 
 ## 1. The pivot
 

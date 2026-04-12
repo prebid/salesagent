@@ -1,5 +1,7 @@
 # Database Deep-Audit Report (2026-04-11)
 
+> **ASYNC DEFERRED TO v2.1 (2026-04-12).** v2.0 uses sync admin handlers. This report contains research for the future v2.1 async SQLAlchemy migration. Do not implement async patterns described here during v2.0.
+
 > **Produced by:** 6 parallel Opus subagents with ultrathink, 2nd/3rd/4th-order derivative analysis
 > **Scope:** ORM models + relationships, session lifecycle + pool, repository pattern + queries, Alembic migrations, test DB infrastructure, data integrity + performance
 > **Context:** Flask→FastAPI v2.0 migration with absorbed async SQLAlchemy (asyncpg driver, AsyncSession, 3 coexisting engines per Decisions 1/2/9)

@@ -1,5 +1,7 @@
 # Non-Code Surface Inventory — Full Async SQLAlchemy Pivot
 
+> **ASYNC DEFERRED TO v2.1 (2026-04-12).** v2.0 uses sync admin handlers. This report contains research for the future v2.1 async SQLAlchemy migration. Do not implement async patterns described here during v2.0.
+
 **Date:** 2026-04-11
 **Agent:** F (non-code surface)
 **Scope:** everything outside application code — dev tooling, CI, Docker, observability, ops, migration runtime, dep graph cascades, platform compatibility, docs, onboarding, structural guards (as tooling, not patterns), and deployment wiring

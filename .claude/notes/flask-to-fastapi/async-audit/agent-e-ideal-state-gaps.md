@@ -1,5 +1,7 @@
 # Agent E — Ideal-State Gap Audit (2026 FastAPI-Native Design Review)
 
+> **ASYNC DEFERRED TO v2.1 (2026-04-12).** v2.0 uses sync admin handlers. This report contains research for the future v2.1 async SQLAlchemy migration. Do not implement async patterns described here during v2.0.
+
 **Date:** 2026-04-11
 **Author:** Claude (Opus 4.6, 1M context)
 **Role:** Idioms purist. Compare current plan vs. what a greenfield 2026 FastAPI team would write from scratch.

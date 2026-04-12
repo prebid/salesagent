@@ -1,5 +1,7 @@
 # Comprehensive Testing Strategy (2026-04-11)
 
+> **ASYNC DEFERRED TO v2.1 (2026-04-12).** v2.0 uses sync admin handlers. This report contains research for the future v2.1 async SQLAlchemy migration. Do not implement async patterns described here during v2.0.
+
 > **Produced by:** 6 parallel Opus subagents with ultrathink, 2nd/3rd/4th-order derivative analysis
 > **Scope:** Unit tests + structural guards, integration test infrastructure, E2E + admin UI, performance + benchmarks, BDD + behavioral, migration safety + rollback
 > **Context:** Flask→FastAPI v2.0 migration with absorbed async SQLAlchemy, 6 waves (0-5), 10 spikes
