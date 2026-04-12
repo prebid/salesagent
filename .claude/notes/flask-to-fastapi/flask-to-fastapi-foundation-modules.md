@@ -4438,31 +4438,42 @@ async def async_client(async_app: "FastAPI") -> AsyncIterator[AsyncClient]:
 
 ### D. Factory-boy async shim
 
-factory-boy has no native async support. The existing sync factories under `tests/factories/` use `sqlalchemy_session_persistence = "commit"`, which calls `session.commit()` from inside `_create()`. Under an async session, that is illegal — `commit()` is a coroutine and the factory's `_create()` is sync.
+factory-boy has no native async support. The existing sync factories under `tests/factories/` use `sqlalchemy_session_persistence = "commit"`, which calls `session.commit()` from inside `_save()`. Under an async session, that is illegal — `commit()` is a coroutine and the factory's `_save()` is sync.
 
-The shim flips `sqlalchemy_session_persistence` to `None`, so `_create()` only calls `session.add(instance)` and leaves the commit/flush to the test's surrounding fixture. Under savepoint-rollback isolation, the test never wants the factory to commit anyway — the factory write must travel through the outer transaction so teardown can roll it back.
+The shim flips `sqlalchemy_session_persistence` to `None`, so `_save()` only calls `session.add(instance)` and leaves the commit/flush to the test's surrounding fixture. Under savepoint-rollback isolation, the test never wants the factory to commit anyway — the factory write must travel through the outer transaction so teardown can roll it back.
+
+> **Decision 3 deep-think 2026-04-11 (refined from Audit 06):** the original recipe had 3 bugs: (a) overrode `_create` instead of `_save`, which breaks `AccountFactory`'s existing `_create` override at `tests/factories/account.py:28-30`; (b) used `session.sync_session.add(instance)` redundantly — `AsyncSession.add()` is a sync method (verified at `sqlalchemy/ext/asyncio/session.py:1111-1143`) that proxies directly to `sync_session.add()`; (c) called `session.sync_session.flush()` which **raises `MissingGreenlet` under asyncpg** — any sync DB I/O on an AsyncSession-owned connection must go through `greenlet_spawn(...)`. No current factory needs DB-materialized PKs across SubFactory boundaries (all 15 ORM factories generate cross-referenced keys Python-side via `Sequence`), so flush is NOT called by the shim. Validated by pre-Wave-0 **Spike 4.25**.
+
+**Key facts this recipe relies on:**
+- `AsyncSession.add()` is a **sync** method that proxies directly to `self.sync_session.add()` (see `sqlalchemy/ext/asyncio/session.py:1111-1143`). No special handling is required for adds.
+- `AsyncSession.flush()` is `async def` and goes through `greenlet_spawn`. **Calling `session.sync_session.flush()` from sync code raises `MissingGreenlet` under asyncpg** — do NOT do that. If a test body needs PK materialization across SubFactory boundaries, call `await async_db.flush()` explicitly in the test body.
+- Factory-boy's `_save` (at `factory/alchemy.py:119`) is the one method that calls `session.add` and the commit/flush branches. Overriding `_save` (not `_create`) preserves factory-boy's MRO chain for factories that have their own `_create` override (e.g., `AccountFactory` at `tests/factories/account.py:28-30`).
+- No current ORM factory uses `post_generation`, `sqlalchemy_get_or_create`, or `RelatedFactoryList`. One factory uses `RelatedFactory` (`TenantFactory.currency_usd` at `core.py:50`); it works because factory-boy runs `RelatedFactory` AFTER `_save` returns, and the related factory's `add()` goes through the same session.
 
 ```python
 # tests/factories/_async_shim.py
 """Async shim for factory-boy ORM factories.
 
-Wraps `SQLAlchemyModelFactory` so it can be used with an async session:
+Wraps `SQLAlchemyModelFactory` so it can be used with an `AsyncSession`:
 
-1. `sqlalchemy_session_persistence = None` — never commit from inside
-   _create(). The fixture owns the transaction boundary.
-2. `_create()` still calls `session.add(instance)` — which is sync,
-   because `AsyncSession.add` is just a pass-through to the sync
-   `sync_session.add`.
-3. Server defaults / PKs are not materialized until the fixture or
-   test body `await session.flush()`. Factories that depend on the
-   PK of another factory (e.g. MediaBuy depends on Principal.id)
-   must trigger a flush via `session.sync_session.flush()` — which
-   is safe only because AsyncSession's underlying sync_session is
-   reachable.
+1. `sqlalchemy_session_persistence = None` — never commit/flush from
+   inside `_save()`. The fixture owns the transaction boundary.
+2. `_save()` is overridden (not `_create()`) so subclasses that
+   override `_create()` — notably `AccountFactory` — continue to work
+   unchanged. factory-boy's `_create()` calls `_save()` in its default
+   path, so replacing `_save()` gives us the right hook.
+3. `session.add(instance)` is safe because `AsyncSession.add()` is a
+   sync method that proxies to `sync_session.add()`. No greenlet spawn
+   needed.
+4. We do NOT call `session.flush()`. All current factories generate
+   their cross-referenced keys in Python (via `Sequence`). If a future
+   factory needs DB-materialized PKs, the test body must explicitly
+   call `await async_db.flush()` before the dependent factory runs.
 
-This preserves Pattern #8 (factory-boy ORM-first) — tests still
-write `TenantFactory(tenant_id="t1")` and get back an ORM instance.
-They do NOT need to know about async.
+Usage is identical to `SQLAlchemyModelFactory`. Tests still write
+`TenantFactory(tenant_id="t1")` and get back an ORM instance. The
+only difference is that `_meta.sqlalchemy_session` now holds an
+`AsyncSession` instead of a sync `Session`.
 """
 from __future__ import annotations
 
@@ -4473,11 +4484,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 
 class AsyncSQLAlchemyModelFactory(SQLAlchemyModelFactory):
-    """factory-boy base class that works with AsyncSession.
+    """factory-boy base class for use with `AsyncSession`.
 
-    Usage is IDENTICAL to `SQLAlchemyModelFactory`. The only difference
-    is that `_meta.sqlalchemy_session` holds an `AsyncSession`, and
-    creates go through the underlying sync_session.
+    All ORM factories in `tests/factories/` inherit from this class
+    starting in Wave 4c. Behavior is the same as `SQLAlchemyModelFactory`
+    except:
+    - `sqlalchemy_session_persistence` is pinned to `None`
+    - `_save()` calls only `session.add(instance)` (no flush, no commit)
+    - `_meta.sqlalchemy_session` must be an `AsyncSession`
     """
 
     class Meta:
@@ -4486,43 +4500,74 @@ class AsyncSQLAlchemyModelFactory(SQLAlchemyModelFactory):
         sqlalchemy_session_persistence = None
 
     @classmethod
-    def _create(
+    def _save(
         cls,
         model_class: type,
-        *args: Any,
-        **kwargs: Any,
+        session: AsyncSession,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
     ) -> Any:
-        """Instantiate the model and add it to the underlying sync_session.
+        """Instantiate the model and add it to the async session.
 
-        `AsyncSession.sync_session` exposes the internal `Session` that
-        actually holds the identity map. `.add()` is sync-safe. The
-        sync flush is also safe here because we are NOT crossing
-        a network boundary — identity-map population is local memory.
+        Overrides `SQLAlchemyModelFactory._save`. Factory-boy's default
+        `_create()` calls `_save()` — by overriding `_save()` instead
+        of `_create()` we keep subclass overrides of `_create()` working
+        (e.g., AccountFactory at tests/factories/account.py:28-30).
+
+        `session.add()` is sync even on `AsyncSession` — it proxies to
+        `sync_session.add()` without a greenlet spawn. We deliberately
+        do NOT call `flush()` or `commit()`: both are async on
+        `AsyncSession`, and the fixture owns the transaction boundary.
         """
-        session: AsyncSession | None = cls._meta.sqlalchemy_session
         if session is None:
             raise RuntimeError(
                 f"{cls.__name__}._meta.sqlalchemy_session is unbound. "
                 "Did you forget the `bind_factories` fixture?"
             )
+        if not isinstance(session, AsyncSession):
+            raise TypeError(
+                f"{cls.__name__} expects an AsyncSession, got "
+                f"{type(session).__name__}. Mixing sync and async sessions "
+                "is not supported — see foundation-modules §11.13.1 H "
+                "(file-level one-path invariant)."
+            )
 
         instance = model_class(*args, **kwargs)
-        session.sync_session.add(instance)
-        session.sync_session.flush()  # materialize PKs so dependent factories see them
+        session.add(instance)  # sync — proxies to sync_session.add
         return instance
 ```
+
+**Escape hatch for DB-materialized PKs:** if a future factory uses a SubFactory that depends on a database-generated auto-increment PK, the shim cannot materialize it. The test body must call `await async_db.flush()` between factory invocations:
+
+```python
+@pytest.mark.asyncio
+async def test_auto_increment_chain(async_integration_db, async_db):
+    parent = ParentFactory()  # parent.id is None (auto-increment)
+    await async_db.flush()    # <-- materializes parent.id
+    child = ChildFactory(parent_id=parent.id)  # safe now
+```
+
+None of the current 15 ORM factories require this escape hatch (all cross-referenced keys are `Sequence`-generated Python-side). Documented for future use.
 
 And the per-test `bind_factories` fixture:
 
 ```python
-# tests/conftest.py (continuation of the async fragment)
+# tests/integration/conftest.py (async fragment)
+from collections.abc import AsyncIterator
+
+import pytest_asyncio
+from sqlalchemy.ext.asyncio import AsyncSession
+
+
 @pytest_asyncio.fixture(scope="function")
 async def bind_factories(async_db: AsyncSession) -> AsyncIterator[None]:
     """Point every ORM factory at `async_db` for the duration of the test.
 
-    Inverse of `tests/harness/_base.py::IntegrationEnv.__enter__` — we
-    do this directly in a fixture instead of a harness context manager
-    because async tests do not use the harness (yet).
+    Inverse of `tests/harness/_base.py::IntegrationEnv.__enter__`. Async
+    integration tests do NOT use the harness — they use raw fixtures —
+    so we bind directly. The guard against double-binding protects against
+    a test accidentally nesting an `IntegrationEnv` inside an async test
+    (which is forbidden by the file-level hybrid-boundary guard anyway).
     """
     from tests.factories import ALL_FACTORIES
 
@@ -4530,7 +4575,8 @@ async def bind_factories(async_db: AsyncSession) -> AsyncIterator[None]:
         if f._meta.sqlalchemy_session is not None:
             raise RuntimeError(
                 f"{f.__name__}._meta.sqlalchemy_session is already bound — "
-                "nested `bind_factories` fixtures are not supported."
+                "nested fixtures or hybrid sync/async test body "
+                "(see foundation-modules §11.13.1 H)."
             )
         f._meta.sqlalchemy_session = async_db
 
@@ -4541,7 +4587,17 @@ async def bind_factories(async_db: AsyncSession) -> AsyncIterator[None]:
             f._meta.sqlalchemy_session = None
 ```
 
-During Waves 4a-4b every factory class still inherits from the sync `SQLAlchemyModelFactory`. Wave 4c flips `tests/factories/*.py` to inherit from `AsyncSQLAlchemyModelFactory` and updates `ALL_FACTORIES` in `tests/factories/__init__.py`. The flip is one-file-per-commit to isolate breakage.
+**Wave 4b-4c ordering constraint (hard cliff, Decision 3 deep-think):** the moment `tests/factories/core.py::TenantFactory` flips its base class from `SQLAlchemyModelFactory` to `AsyncSQLAlchemyModelFactory`, every sync integration test that imports it breaks. Therefore:
+
+1. **Wave 4b:** convert ALL 166 consuming integration tests to async (`async def`, `@pytest.mark.asyncio`, `async_integration_db` fixture, `bind_factories` fixture). Factories still inherit from sync `SQLAlchemyModelFactory`. During this wave the shim file exists but is unused.
+2. **Wave 4c:** flip factories to `AsyncSQLAlchemyModelFactory` one file at a time, commit-per-file, verifying `tests/factories/test_*_factory.py` contract tests pass at each step.
+
+Enforced by a pre-PR gate: the Wave 4c PR must contain ONLY factory-file edits. Gate check: `git diff --name-only origin/main...HEAD | grep -v "^tests/factories/" | wc -l` must be 0 (or within a small allowlist for `_async_shim.py` and `ALL_FACTORIES` edits).
+
+**Three structural guards:**
+- `tests/unit/test_architecture_factory_inherits_async_base.py` — AST-walks `tests/factories/*.py`, asserts every ORM factory class inherits from `AsyncSQLAlchemyModelFactory` not `SQLAlchemyModelFactory`. Active from Wave 4c onward.
+- `tests/unit/test_architecture_factory_no_post_generation.py` — forbids `@post_generation` decorator usage in `tests/factories/`. The shim does not guarantee correct semantics for post_generation hooks that try to `await` inside them.
+- `tests/unit/test_architecture_factory_in_all_factories.py` — asserts every `AsyncSQLAlchemyModelFactory` subclass is in `ALL_FACTORIES`. Unbound factories fail with `RuntimeError` at runtime; this guard catches it at CI time.
 
 ### E. `tests/integration/conftest.py` — schema create + composite fixture
 
@@ -5361,6 +5417,238 @@ Adapters running inside `run_in_threadpool` worker threads hold sync `Session` i
 - **Threadpool capacity vs concurrent requests.** 80 workers is sized for ~80 concurrent adapter-invoking requests. Admin UI traffic typically ≤10 concurrent; MCP tool call concurrent load can spike higher. Monitor `anyio.to_thread.current_default_thread_limiter().borrowed_tokens` via `/health/pool` and raise `ADCP_THREADPOOL_SIZE` if it saturates.
 - **`application_name` in `pg_stat_activity`.** The async engine connections show `application_name='adcp-salesagent'`; Path B sync connections show `application_name='adcp-salesagent-sync'`; Decision 9 sync-bridge connections show `application_name='adcp-salesagent-sync-bridge'`. Three distinct labels make debugging stale connections easy.
 - **v2.1+ sunset path.** If `googleads` releases an async variant and the 4 `requests`-based adapters are ported to `httpx.AsyncClient`, each adapter converts individually to `async def`, the wrap at the `_impl` caller becomes `await adapter.method(...)` instead of `await run_in_threadpool(adapter.method, ...)`, and eventually the sync factory in `database_session.py` + psycopg2 dep + libpq can all be deleted. Structural guard allowlist adjusts as each adapter completes.
+
+---
+
+## §11.15 SimpleAppCache — flask-caching replacement (Decision 6, 2026-04-11)
+
+Replaces `flask-caching` (`SimpleCache` backend) with a thread-safe, async-safe in-process cache backed by `cachetools.TTLCache`. Ships in **Wave 3** as a prep module, with consumer sites migrating in the same PR, followed by `flask-caching` removal from `pyproject.toml`.
+
+> **Decision 6 deep-think 2026-04-11:** the replacement is ~90 LOC (not the 40 LOC estimated by Agent A). 5 traps identified: (1) both inventory sites cache `jsonify(...)` Response objects (Flask-ism, breaks under FastAPI — must cache dicts and reconstruct `JSONResponse` on hit); (2) `cachetools.TTLCache` is NOT thread-safe without explicit locking; (3) `cache_key` + `cache_time_key` pair writes are non-atomic (fold into single 2-tuple entry); (4) background_sync_service.py:472 runs in a `threading.Thread` with no Flask app context (latently broken even in Flask — `try/except` silently eats the error); (5) lifespan startup race window (cache must exist before the first HTTP request can arrive).
+
+```python
+# src/admin/cache.py
+"""In-process inventory cache for admin routes and background-sync threads.
+
+Replaces flask-caching's SimpleCache with a thread-safe, async-safe wrapper
+over cachetools.TTLCache. Single per-process instance; v2.0 is hard-constrained
+to single-worker uvicorn so this is semantically identical to the Flask version.
+
+Access paths:
+  - FastAPI admin handlers:  request.app.state.inventory_cache
+  - Background threading.Thread workers: get_app_cache()
+"""
+from __future__ import annotations
+
+import logging
+import os
+import threading
+from typing import Any, Protocol
+
+from cachetools import TTLCache
+from fastapi import FastAPI
+
+logger = logging.getLogger(__name__)
+
+_DEFAULT_MAXSIZE = 1024
+_DEFAULT_TTL_SECONDS = 300
+
+
+class CacheBackend(Protocol):
+    """Minimal backend interface — v2.2 Redis swap conforms to this."""
+
+    def get(self, key: str, default: Any = None) -> Any: ...
+    def set(self, key: str, value: Any) -> None: ...
+    def delete(self, key: str) -> bool: ...
+
+
+class SimpleAppCache:
+    """Thread-safe TTL cache with a dict-like get/set/delete API.
+
+    Invariants:
+      - All access guarded by threading.RLock. Safe under concurrent access
+        from the asyncio event loop thread AND anyio threadpool workers
+        (Decision 1 Path B) AND background_sync_service threading.Thread
+        workers (Decision 9). RLock (not Lock) so nested helpers can
+        safely re-enter.
+      - Single uniform TTL per cache instance. Per-key TTL intentionally
+        NOT supported — the 3 consumer sites all use 300s.
+      - LRU-evicted when maxsize exceeded. Eviction is acceptable because
+        every cached entry is reconstructible from the database.
+      - .get() on missing/expired key returns default, never raises.
+      - .delete() on missing key returns False, never raises (idempotent).
+    """
+
+    def __init__(self, maxsize: int = _DEFAULT_MAXSIZE, ttl: int = _DEFAULT_TTL_SECONDS) -> None:
+        self._cache: TTLCache[str, Any] = TTLCache(maxsize=maxsize, ttl=ttl)
+        self._lock = threading.RLock()
+        self._maxsize = maxsize
+        self._ttl = ttl
+
+    def get(self, key: str, default: Any = None) -> Any:
+        with self._lock:
+            try:
+                return self._cache[key]
+            except KeyError:
+                return default
+
+    def set(self, key: str, value: Any) -> None:
+        with self._lock:
+            self._cache[key] = value
+
+    def delete(self, key: str) -> bool:
+        with self._lock:
+            try:
+                del self._cache[key]
+                return True
+            except KeyError:
+                return False
+
+    def clear(self) -> None:
+        """Test-only helper; not called from production code."""
+        with self._lock:
+            self._cache.clear()
+
+    @property
+    def stats(self) -> dict[str, int]:
+        with self._lock:
+            return {"size": len(self._cache), "maxsize": self._maxsize, "ttl": self._ttl}
+
+
+class _NullAppCache:
+    """No-op fallback returned by get_app_cache() when install_app_cache()
+    has not yet run (lifespan startup race window). All operations succeed
+    silently.
+
+    This mirrors the latent-broken behavior of the pre-migration Flask code
+    where background_sync_service.py:479's try/except silently ate
+    invalidation failures.
+    """
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return default
+
+    def set(self, key: str, value: Any) -> None:
+        return None
+
+    def delete(self, key: str) -> bool:
+        return False
+
+
+_APP_CACHE: SimpleAppCache | _NullAppCache = _NullAppCache()
+_INSTALL_LOCK = threading.Lock()
+
+
+def install_app_cache(app: FastAPI) -> SimpleAppCache:
+    """Create the process-wide SimpleAppCache and attach it to the app.
+
+    MUST be called from the FastAPI lifespan startup block BEFORE yield.
+    Safe to call multiple times (idempotent).
+    """
+    global _APP_CACHE
+    with _INSTALL_LOCK:
+        if isinstance(_APP_CACHE, SimpleAppCache):
+            return _APP_CACHE
+        maxsize = int(os.environ.get("ADCP_INVENTORY_CACHE_MAXSIZE", _DEFAULT_MAXSIZE))
+        ttl = int(os.environ.get("ADCP_INVENTORY_CACHE_TTL", _DEFAULT_TTL_SECONDS))
+        cache = SimpleAppCache(maxsize=maxsize, ttl=ttl)
+        _APP_CACHE = cache
+        app.state.inventory_cache = cache
+        logger.info(
+            "SimpleAppCache installed (maxsize=%d, ttl=%ds) at app.state.inventory_cache",
+            maxsize,
+            ttl,
+        )
+        return cache
+
+
+def get_app_cache() -> SimpleAppCache | _NullAppCache:
+    """Return the process-wide cache. Safe to call from any thread.
+
+    Returns a _NullAppCache stub if install_app_cache() has not yet run
+    (lifespan startup race window). Callers MUST NOT check the type —
+    treat the return value as opaque and rely on the get/set/delete contract.
+    """
+    return _APP_CACHE
+
+
+def _reset_app_cache_for_tests() -> None:
+    """Test-only: reset the module global between tests. NOT for production."""
+    global _APP_CACHE
+    with _INSTALL_LOCK:
+        _APP_CACHE = _NullAppCache()
+```
+
+**Lifespan integration** (in `src/app.py`):
+
+```python
+@asynccontextmanager
+async def app_lifespan(app: FastAPI):
+    from src.admin.cache import install_app_cache
+    install_app_cache(app)  # MUST run before yield — background threads may start immediately
+    _install_admin_mounts()
+    logger.info("FastAPI application starting up")
+    yield
+    logger.info("FastAPI application shutting down")
+```
+
+**Consumer migration pattern** (both inventory sites):
+
+```python
+# BEFORE (Flask):
+cached_result = cache.get(cache_key)
+cached_time = cache.get(cache_time_key)
+# ... later:
+cache.set(cache_key, jsonify({...}), timeout=300)
+cache.set(cache_time_key, time.time(), timeout=300)
+
+# AFTER (FastAPI — fold cache_key + cache_time_key into single 2-tuple):
+cache = request.app.state.inventory_cache
+cached_entry = cache.get(cache_key)
+if cached_entry is not None:
+    payload_dict, cached_time = cached_entry
+    # ... staleness check against last_sync.completed_at ...
+    return JSONResponse(payload_dict)
+# ... build payload_dict from DB ...
+cache.set(cache_key, (payload_dict, time.time()))
+return JSONResponse(payload_dict)
+```
+
+**Background sync invalidation:**
+
+```python
+# BEFORE (Flask — latently broken, try/except silently eats RuntimeError):
+from flask import current_app
+try:
+    current_app.cache.delete(f"inventory_tree:v2:{tenant_id}")
+except Exception:
+    pass
+
+# AFTER:
+from src.admin.cache import get_app_cache
+get_app_cache().delete(f"inventory_tree:v2:{tenant_id}")
+# _NullAppCache stub absorbs the call if lifespan hasn't installed yet.
+```
+
+**Strict 12-step migration order:**
+1. Land `src/admin/cache.py` module (new file, ~90 LOC).
+2. Land `tests/unit/admin/test_simple_app_cache.py` (13 unit tests).
+3. Wire `install_app_cache(app)` into `app_lifespan` in `src/app.py` BEFORE `yield`.
+4. Land `tests/unit/test_architecture_no_flask_caching_imports.py` allowlisting current sites.
+5. Port `inventory.py:874` consumer to `request.app.state.inventory_cache`, caching dict not Response.
+6. Port `inventory.py:1133` consumer, same pattern.
+7. Port `background_sync_service.py:472` consumer to `get_app_cache()`. **Same commit deletes `from flask import current_app` in that file** — closes Wave 3 ImportError blocker.
+8. Tighten `test_architecture_no_flask_caching_imports.py` allowlist to empty.
+9. Delete `flask_caching` init block from `src/admin/app.py:199-208`.
+10. Remove `flask-caching>=2.3.0` from `pyproject.toml`; `uv lock`.
+11. Delete `scripts/deploy/entrypoint_admin.sh:28-30` flask-caching debug probe.
+12. Land integration test `tests/integration/test_inventory_cache_behavior.py` (3 test cases minimum).
+
+Steps 1-4 CAN ship in a prep PR before Wave 3. Steps 5-12 bundle into Wave 3.
+
+**Two structural guards:**
+- `tests/unit/test_architecture_no_flask_caching_imports.py` — AST walker asserting no file under `src/` contains `import flask_caching` or `from flask_caching import *`. Allowlist parameter starts populated during steps 1-7 and empties at step 8.
+- `tests/unit/test_architecture_inventory_cache_uses_module_helpers.py` — asserts that any file calling `current_app.cache` is forbidden, and any file under `src/services/` accessing the inventory cache MUST go through `get_app_cache()` (not `request.app.state.inventory_cache`).
 
 ---
 
