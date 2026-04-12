@@ -746,7 +746,7 @@ Four library options evaluated:
 ### 6.6 Other modern patterns
 
 - **`pydantic-settings>=2.7.0`** — `BaseSettings` for typed config
-- **`sse-starlette>=2.2.0`** — `EventSourceResponse` for SSE
+- ~~**`sse-starlette>=2.2.0`** — `EventSourceResponse` for SSE~~ **STALE — Decision 8 DELETE: SSE route is orphan code (templates poll, not EventSource). `sse_starlette` NOT needed.**
 - **`python-multipart>=0.0.22`** — activates on first `Form(...)` or `UploadFile` handler
 - **Pure ASGI middleware preferred over `BaseHTTPMiddleware`** — Starlette #1729 has a known bug where `BaseHTTPMiddleware` doesn't propagate ContextVars correctly
 
@@ -1378,9 +1378,14 @@ class ApproximatedExternalDomainMiddleware:
 
 **Guard test:** `tests/unit/test_architecture_approximated_middleware_path_gated.py` — structural test asserting short-circuit on any path not starting with `/admin`. MUST land in Wave 1 alongside the middleware port.
 
-### 11.10 SSE via `sse-starlette.EventSourceResponse`
+### 11.10 ~~SSE via `sse-starlette.EventSourceResponse`~~ **STALE — Decision 8 DELETE (2026-04-11)**
+
+> **Do NOT implement this section.** Decision 8 deep-think analysis verified the SSE `/events` route is **orphan code** — `templates/tenant_dashboard.html:972` literally says `// Use simple polling instead of EventSource for reliability`, zero `new EventSource(` exists in templates, and the only `/events` caller is one integration smoke test probe. The SSE route is **DELETED in Wave 4** (not migrated). The `sse_starlette` dependency is NOT added. The two surviving routes (`/activity` JSON poll + `/activities` REST) convert mechanically to `async def` + `async with get_db_session()`. See `CLAUDE.md` Decision 8 and `async-pivot-checkpoint.md` §3 "SSE / long-lived connections" for the full deletion scope.
+
+The recipe below is preserved for historical reference only:
 
 ```python
+# STALE — Decision 8 DELETE. Do NOT copy-paste.
 from sse_starlette.sse import EventSourceResponse
 
 @router.get("/tenant/{tenant_id}/activity/stream", name="activity_stream_events")
@@ -1979,11 +1984,11 @@ Eight waves imply safety via backward-compat seams — exactly what the user rej
 - `waitress>=3.0.0`
 - `a2wsgi>=1.10.0`
 - `types-waitress` (dev)
-- `psycopg2-binary>=2.9.9` — replaced by `asyncpg` under the full-async pivot (2026-04-11)
-- `types-psycopg2>=2.9.21.20251012` (dev) — no longer needed after driver swap
+- ~~`psycopg2-binary>=2.9.9`~~ **STALE — RETAINED per Decisions 1 (Path B sync factory), 2 (pre-fork orchestrator), 9 (sync-bridge). `asyncpg` added ALONGSIDE, not replacing. Removal deferred to v2.1+.**
+- ~~`types-psycopg2>=2.9.21.20251012`~~ **STALE — RETAINED per above.** Both stay in both dev-dep blocks.
 
 **ADDED:**
-- `sse-starlette>=2.2.0` (promoted from transitive)
+- ~~`sse-starlette>=2.2.0`~~ **STALE — Decision 8 DELETE: SSE route is orphan code, dependency NOT added.**
 - `pydantic-settings>=2.7.0` (typed config)
 - `itsdangerous>=2.2.0` (explicit pin; Starlette transitive; now also used by roll-your-own CSRF)
 - `asyncpg>=0.30.0` — async Postgres driver (full-async pivot, 2026-04-11). Fallback: `psycopg[binary,pool]>=3.2.0` if Spike 2 (driver compat) fails — see `CLAUDE.md` pre-Wave-0 spike sequence and Agent B risk matrix.

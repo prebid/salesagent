@@ -569,6 +569,32 @@ Still applies (deep audit §3.1). Async doesn't fix this. Still v2.0 single-work
 
 **Sunset:** when `run_all_services.py` is replaced with a proper process supervisor (s6-overlay/supervisord) in v2.2+, the entire orchestrator-Python-process role disappears.
 
+### Risk #35 — Wave 4c factory-base-class hard cliff (added 2026-04-11, Decision 3 deep-think)
+
+**Severity: HIGH (166 tests break simultaneously).** When factory base classes flip from `SQLAlchemyModelFactory` to `AsyncSQLAlchemyModelFactory` in Wave 4c, ALL 166 consuming sync integration tests break simultaneously in a single commit — no incremental rollback possible. If any test remains sync, it gets an `AsyncSession` it cannot use.
+
+**Detection:** pre-PR diff-scope gate asserting Wave 4c contains ONLY edits under `tests/factories/`.
+
+**Mitigation:** strict ordering — all 166 tests flip to async in Wave 4b BEFORE factory base classes flip in Wave 4c. Structural guard `test_architecture_factory_inherits_async_base.py` prevents sync base class usage after Wave 4c.
+
+**Validated by:** Spike 4.25 (factory async-shim validation, 0.5 day soft blocker).
+
+### Risk #40 — dynamic_pricing_service.py ambiguous type iteration (added 2026-04-11, Decision 5 deep-think)
+
+**Severity: MEDIUM (potential `MissingGreenlet` if ORM instances passed).** `src/services/dynamic_pricing_service.py:230,282` iterates `product.pricing_options` with a type hint that says `Product` — ambiguous between `src.core.schemas.Product` (Pydantic) and `src.core.database.models.Product` (ORM). If callers pass ORM instances under async + `lazy="raise"`, the iteration crashes with `MissingGreenlet`.
+
+**Detection:** Spike 1's blanket `lazy="raise"` sweep covers this automatically. Additionally, a targeted type-audit of the function's callers should clarify whether Pydantic or ORM instances are passed.
+
+**Mitigation:** verify whether the parameter is already an eagerly-loaded list or a Pydantic DTO; add explicit type annotation if ambiguous.
+
+### Risk #41 — Response-object caching foot-gun (added 2026-04-11, Decision 6 deep-think)
+
+**Severity: HIGH (cache hit returns Flask Response to FastAPI, crashes at runtime).** Both inventory cache sites (`inventory.py:874`, `:1133`) cache `jsonify(...)` which returns a Flask `Response` object. Under FastAPI, a cached Flask Response cannot be served — the framework expects a dict, Pydantic model, or `JSONResponse`. A naive port that preserves the cached object type will WORK on cache-miss (fresh DB query) but CRASH on cache-hit (stale Flask Response served to FastAPI).
+
+**Detection:** integration test that hits the inventory endpoint twice (second request is a cache hit).
+
+**Mitigation:** Wave 3 consumer migration rewrites both sites to cache the payload dict and reconstruct `JSONResponse(dict)` on hit. Documented in `foundation-modules.md` §11.15 consumer migration pattern.
+
 ## 5. Revised v2.0 scope (my rough estimate)
 
 **Original v2.0:** ~18,000 LOC (Flask removal + admin FastAPI rewrite + cleanup)
