@@ -1206,10 +1206,10 @@ Doing this gives Wave 4 a fast smoke test for "does the DB layer import cleanly?
 | F1.1.3 | Verify asyncpg wheels for target platforms | Deps | MUST-0 | — | 30m | Yes |
 | F1.1.4 | Clean duplicate dev deps in pyproject.toml | Deps | MUST-0 | — | 10m | No |
 | F1.1.5 | uv lock --upgrade-package asyncpg | Deps | SHOULD-4 | F7.1.1 | 5m | No |
-| F1.2.1 | Remove libpq-dev/libpq5 from Dockerfile | Build | SHOULD-4 | — | 15m | No |
+| F1.2.1 | ~~Remove libpq-dev/libpq5 from Dockerfile~~ **REVERSED — RETAINED per D1/D2/D9** | Build | ~~SHOULD-4~~ N/A | — | 0 | No |
 | F1.2.2 | Add --no-compile to uv sync in Docker | Build | CAN | — | 5m | No |
 | F1.3.1 | Verify mypy passes after types-psycopg2 removal | Build | MUST-0 | F1.1.1 | 15m | Yes |
-| F1.4.1 | Rewrite/delete DatabaseConnection class | Code+Deploy | MUST-0 | — | 2h | Yes |
+| F1.4.1 | ~~Rewrite/delete DatabaseConnection class~~ **REVERSED — KEPT per D2 (fork safety)** | Code+Deploy | ~~MUST-0~~ N/A | — | 0 | No |
 | F1.4.2 | Audit scripts/setup/*.py for sync DB | Deploy | MUST-4 | F1.4.1 | 1h | Yes |
 | F1.5.1 | Add DATABASE_URL rewriter (sslmode→ssl) | Code | MUST-0 | — | 1h | Yes |
 | F1.5.2 | Keep compose files using sslmode=disable | Docker | MUST-0 | F1.5.1 | 0m | No |
@@ -1261,7 +1261,7 @@ Doing this gives Wave 4 a fast smoke test for "does the DB layer import cleanly?
 | F2.6.4 | Timing instrumentation | CI | CAN | — | 30m | No |
 | F2.7.1 | Verify scripts/run-test.sh under asyncpg | Tests | MUST-0 | F1.5.1 | 15m | No |
 | F2.7.2 | Auto-set small pool for single-test runs | Tests | SHOULD-4 | — | 15m | No |
-| F3.1.1 | Remove libpq from Dockerfile | Docker | MUST-4 | F1.1.1 | 10m | No |
+| F3.1.1 | ~~Remove libpq from Dockerfile~~ **REVERSED — RETAINED per D1/D2/D9** | Docker | ~~MUST-4~~ N/A | F1.1.1 | 0 | No |
 | F3.1.2 | Verify Dockerfile healthcheck | Docker | SHOULD-4 | — | 10m | No |
 | F3.1.3 | Add /health/db endpoint variant | Docker | SHOULD-4 | F4.1.1 | 1h | No |
 | F3.1.4 | ENTRYPOINT unchanged verification | Docker | CAN | — | 5m | No |

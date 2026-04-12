@@ -479,12 +479,14 @@ Deep audit did not catch `scripts/deploy/run_all_services.py` as a sync-DB path 
 3. **`scripts/deploy/run_all_services.py:128-164`** (`check_schema_issues()`) calls `get_db_connection()` → `psycopg2.connect(...)` for a schema audit. Same issue.
 4. **`src/core/database/db_config.py:105-172`** `DatabaseConnection` class is a sync-psycopg2 wrapper independent from SQLAlchemy. Used only by the three call sites above.
 
-**Mitigation plan (Option D, recommended):**
-- Delete `DatabaseConnection` class and `get_db_connection()` helper
-- Replace with a 5-line `asyncio.run(asyncpg.connect(...).fetchval(...))` utility in `scripts/deploy/run_all_services.py`
-- Delete `entrypoint_admin.sh` in Wave 3 cleanup (it references `flask_caching` which is also going away, and is not wired up in the current `Dockerfile` entrypoint — orphan)
+> **⚠️ STALE — Decision 2 OVERRULE + REFINEMENT (2026-04-11):** Option D below is **superseded**. `DatabaseConnection` is KEPT (not deleted) because `psycopg2-binary` is RETAINED per Decisions 1, 2, 9. The real rationale is **fork safety** (not loop collision): `run_all_services.py` is PID 1 and forks uvicorn into a child subprocess via `subprocess.Popen` — using SQLAlchemy `get_sync_db_session()` in the parent would duplicate pooled connections into the child. Raw psycopg2 connect-query-close is the only fork-safe shape. `entrypoint_admin.sh` is dead code and is DELETED. See CLAUDE.md Decision 2 for the canonical resolution.
 
-**Why this matters:** deep audit Blocker #4 focused on SQLAlchemy scoped_session. This is a parallel sync-DB path that deep audit did not surface because it's in deployment scripts, not application code. All three paths must be rewritten or deleted in Wave 4 alongside the `pyproject.toml` driver swap, or the container will fail `docker build` / startup probes.
+**Mitigation plan (Option D, recommended) — STALE, see banner above:**
+- ~~Delete `DatabaseConnection` class and `get_db_connection()` helper~~ **KEEP per D2**
+- ~~Replace with a 5-line `asyncio.run(asyncpg.connect(...).fetchval(...))` utility~~ **Not needed — psycopg2 STAYS**
+- Delete `entrypoint_admin.sh` in Wave 3 cleanup — **CONFIRMED per D2 deep-think** (dead code, not in Dockerfile)
+
+**Why this matters:** deep audit Blocker #4 focused on SQLAlchemy scoped_session. This is a parallel sync-DB path that deep audit did not surface because it's in deployment scripts, not application code. **Under the refined D2 resolution, `psycopg2-binary` is RETAINED for three sync paths (D1 Path B sync factory, D2 pre-fork health check, D9 sync-bridge), so the container startup probe does NOT break.** The original premise ("when psycopg2-binary is removed") no longer applies.
 
 **Wave assignment:** Wave 4 (same PR as the `psycopg2-binary` removal).
 

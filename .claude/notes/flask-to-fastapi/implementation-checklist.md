@@ -818,9 +818,9 @@ Single-commit revert; largest revert commit. Flask catch-all re-activates.
 - [ ] Error rate comparison vs pre-migration baseline (Datadog / logs)
 - [ ] Admin UI latency p50 comparison vs pre-migration baseline
 - [ ] Admin UI latency p99 comparison vs pre-migration baseline
-- [ ] Docker image size delta reported to team (expected ~60-80 MB reduction)
+- [ ] Docker image size delta reported to team (expected ~60-75 MB reduction — psycopg2 + libpq retained per D1/D2/D9)
 - [ ] No 5xx spike in first 24h post-deploy
-- [ ] SSE activity stream connection count stable (no leaks)
+- [ ] ~~SSE activity stream connection count stable~~ **STALE — D8 DELETE: no SSE post-migration. Monitor JSON poll `/activity` response time instead.**
 - [ ] `SESSION_SECRET` cookie size observed < 3.5 KB across all real users
 - [x] ~~v2.1 async SQLAlchemy migration scoping kickoff scheduled~~ — Async SQLAlchemy already merged as Wave 4-5 of v2.0 (pivoted 2026-04-11 — no separate v2.1 kickoff needed)
 - [ ] v2.1 nginx removal scoping kickoff scheduled

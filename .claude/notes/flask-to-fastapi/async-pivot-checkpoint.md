@@ -595,6 +595,38 @@ Still applies (deep audit §3.1). Async doesn't fix this. Still v2.0 single-work
 
 **Mitigation:** Wave 3 consumer migration rewrites both sites to cache the payload dict and reconstruct `JSONResponse(dict)` on hit. Documented in `foundation-modules.md` §11.15 consumer migration pattern.
 
+### Risk #36 — AccountFactory._create override MRO breakage (Decision 3 deep-think, MEDIUM)
+
+`tests/factories/account.py:28-30` overrides `_create` to pop a `tenant` kwarg before calling `super()._create`. If the async shim ALSO overrides `_create`, AccountFactory's override chains to the shim's override instead of factory-boy's default, silently skipping the tenant-kwarg processing. **Mitigated by:** the corrected recipe overrides `_save` instead of `_create`, preserving factory-boy's MRO chain. Validated by Spike 4.25 test case (c).
+
+### Risk #37 — factory_session module-global state under xdist parallelism (Decision 3, LOW)
+
+`_meta.sqlalchemy_session` is set on the factory class (module-global). Each xdist worker is a separate process (safe), but if `pytest-parallelism` or `--dist loadscope --parallel` is enabled, tests within the same process run concurrently sharing module state — factory binding would race. **Mitigated by:** current config uses `loadfile` (serial within process). Document the constraint in the recipe gotchas.
+
+### Risk #38 — TenantFactory.currency_usd RelatedFactory identity-map pollution (Decision 3, LOW)
+
+`TenantFactory` uses `RelatedFactory(CurrencyLimitFactory, ...)` which runs AFTER `_save` returns. Under the async shim with `autoflush=False`, the related row exists in the identity map but is NOT flushed. If the test body queries `Tenant.currency_limits` relationship before an explicit `await async_db.flush()`, no results are returned. **Mitigated by:** documenting that tests must `await async_db.flush()` before querying relationships that depend on RelatedFactory writes. Validated by Spike 4.25 test case (b).
+
+### Risk #39 — `get_or_create`/`get_or_404` sync signatures in database_session.py (agent-b #20 renumbered, LOW)
+
+`database_session.py:342-388` has sync helper functions. Under async, callers break with `TypeError` on `.scalars()`. **Note:** this risk was originally numbered #20 in agent-b's risk register (a numbering collision with checkpoint's #20 = ContextManager singleton). Renumbered to #39 to avoid confusion. Mechanical async conversion, ~0.25 day. Validated by CI test suite.
+
+### Risk #42 — Site 2 inventory_list has no cache invalidation (Decision 6 deep-think, LOW — pre-existing)
+
+The `inventory_list` endpoint cache at `inventory.py:1133` has NO invalidation path — data can be stale up to 5 minutes after a GAM sync. Background sync invalidation at `background_sync_service.py:477` deletes only `inventory_tree:v2:{tenant_id}`, NOT `inventory_list:*`. **Pre-existing gap** (same behavior in Flask). Accept as-is for v2.0; add invalidation in v2.1.
+
+### Risk #43 — install_app_cache lifespan startup race window (Decision 6, MEDIUM)
+
+If `install_app_cache(app)` runs inside the lifespan AFTER `yield`, the cache is not available during request handling. If a background thread starts before lifespan completes setup, `get_app_cache()` returns `_NullAppCache` (silent no-op). **Mitigated by:** `install_app_cache` executes BEFORE `yield` in the lifespan function; `_NullAppCache` fallback prevents crashes. Validated by integration test verifying cache is populated on first inventory hit.
+
+### Risk #44 — api_mode=False on /activity JSON poll route (Decision 8 deep-think, LOW — pre-existing bug)
+
+JS `fetch` to `/tenant/{id}/activity` gets HTML 302 redirect on auth failure instead of JSON 401. Template's `if (response.status === 401)` branch never fires. **Pre-existing bug.** Fix `api_mode=False → True` during Wave 4 SSE deletion PR. Validated by test asserting unauthenticated fetch receives 401 JSON.
+
+### Risk #45 — format_activity_from_audit_log fragile column-only assumption (Decision 8, MEDIUM)
+
+`format_activity_from_audit_log` in `activity_stream.py` accesses only AuditLog columns today (safe under `lazy="raise"`). But if a future refactor adds relationship access (e.g., `audit_log.tenant.name`), it becomes a MissingGreenlet crash site. **Mitigated by:** adding to the Spike 1 eager-load audit list. Add a code comment documenting the column-only constraint.
+
 ## 5. Revised v2.0 scope (my rough estimate)
 
 **Original v2.0:** ~18,000 LOC (Flask removal + admin FastAPI rewrite + cleanup)

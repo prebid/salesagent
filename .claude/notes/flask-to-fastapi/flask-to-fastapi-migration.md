@@ -249,7 +249,7 @@ All in `src/admin/blueprints/` unless noted. ~232 routes total.
 
 ### 3.3 Flask extensions in actual use
 
-- **`flask-caching>=2.3.0`** — `src/admin/app.py:200-208` attaches `Cache(app)`. **Audit correction 2026-04-11 (Decision 9):** contrary to the previous "zero callers" claim, 3 active consumer sites exist: `src/admin/blueprints/inventory.py:874` (inventory tree TTL cache), `src/admin/blueprints/inventory.py:1133` (inventory list TTL cache), `src/services/background_sync_service.py:472` (post-sync invalidation — also the Wave 3 `from flask import current_app` ImportError blocker). **Replacement required, not deletion:** Wave 3 ships `src/admin/cache.py::SimpleAppCache` (~40 LOC `cachetools.TTLCache` wrapper on `app.state.inventory_cache` + `get_app_cache()` helper for background-thread access) before `flask-caching` is removed from `pyproject.toml`. See §11.7 and execution-details Wave 3 acceptance criteria 5 / 5.1-5.4.
+- **`flask-caching>=2.3.0`** — `src/admin/app.py:200-208` attaches `Cache(app)`. **Audit correction 2026-04-11 (Decision 9):** contrary to the previous "zero callers" claim, 3 active consumer sites exist: `src/admin/blueprints/inventory.py:874` (inventory tree TTL cache), `src/admin/blueprints/inventory.py:1133` (inventory list TTL cache), `src/services/background_sync_service.py:472` (post-sync invalidation — also the Wave 3 `from flask import current_app` ImportError blocker). **Replacement required, not deletion:** Wave 3 ships `src/admin/cache.py::SimpleAppCache` (**~90 LOC** per Decision 6 deep-think, corrected from ~40: `cachetools.TTLCache(maxsize=1024, ttl=300)` + `threading.RLock` + `_NullAppCache` fallback + `CacheBackend` Protocol + `install_app_cache(app)` lifespan hook + `get_app_cache()` module global for background-thread access). Both inventory sites rewritten to cache dicts not Flask Response objects. See `foundation-modules.md` §11.15 for full reference implementation and execution-details Wave 3 criteria 5.1-5.9.
 - **`authlib.integrations.flask_client.OAuth`** — real. `src/admin/blueprints/auth.py` registers Google client; `oidc.py` rebuilds per-tenant OIDC clients per-request.
 - **`werkzeug.middleware.proxy_fix.ProxyFix`** — `src/admin/app.py:11, 187`. Handles `X-Forwarded-*`.
 - **`flask-socketio>=5.5.1`** — declared in pyproject.toml but **ZERO imports in `src/`**. Completely unused. Plus transitive `python-socketio`, `simple-websocket`.
@@ -1335,7 +1335,7 @@ Jinja global `{{ csrf_token }}` reads from `request.state.csrf_token`. Templates
 
 **Audit correction (Decision 9, 2026-04-11):** the original "zero callers" claim was factually wrong. Grep verified 3 active consumer sites: `src/admin/blueprints/inventory.py:874` and `:1133` (5-minute TTL cache for inventory tree and list endpoints), plus `src/services/background_sync_service.py:472` (post-sync cache invalidation; also the Wave 3 `from flask import current_app` ImportError blocker). Deleting flask-caching outright would make the admin UI inventory pages ~60× slower and crash background sync.
 
-**Wave 3 replacement recipe:** `src/admin/cache.py::SimpleAppCache` is a ~40 LOC wrapper around `cachetools.TTLCache` with a thread-safe API matching Flask's `get`/`set`/`delete` contract. Installed into `app.state.inventory_cache` via the FastAPI lifespan context. Background-thread access (from `background_sync_service.py`) goes through a `src/admin/cache.py::get_app_cache()` module-global helper seeded by `install_app_cache()` at lifespan startup. `cachetools` is already a transitive dep — no new deps added.
+**Wave 3 replacement recipe (corrected per Decision 6 deep-think 2026-04-11):** `src/admin/cache.py::SimpleAppCache` is **~90 LOC** (not ~40 — includes `_NullAppCache` fallback, `CacheBackend` Protocol, `threading.RLock`, env-overridable `maxsize`/`ttl`). Thread-safe API matching Flask's `get`/`set`/`delete` contract. Installed into `app.state.inventory_cache` via the FastAPI lifespan context BEFORE `yield`. Background-thread access goes through `get_app_cache()` module-global. **Key correction:** both inventory sites cache `jsonify(...)` Flask Response objects — migration MUST cache dicts and reconstruct `JSONResponse` on hit. `cache_key` + `cache_time_key` pair folded into single 2-tuple `(payload_dict, timestamp)`. Full reference implementation in `foundation-modules.md` §11.15.
 
 The 3 consumer sites migrate:
 - `inventory.py:874, 1133` — `getattr(current_app, "cache", None)` becomes `request.app.state.inventory_cache`.
@@ -2056,7 +2056,7 @@ Eight waves imply safety via backward-compat seams — exactly what the user rej
 25. **`tenant_management_api`, `sync_api`, `gam_reporting_api` are thin wrappers.** Manual read-through in Wave 2.
 26. **`get_rest_client()` pattern extends cleanly to `get_admin_client()`.**
 27. **3 `try/except ImportError` blocks in Flask factory are vestigial.** Unconditional imports work.
-28. **Docker image shrinks ~80 MB** after Flask removals.
+28. **Docker image shrinks ~75 MB** after Flask removals (corrected from ~80 MB — `psycopg2-binary` + `libpq5` retained per D1/D2/D9).
 
 ---
 
@@ -2181,7 +2181,7 @@ The async pivot touches 27+ categories of non-code surface (per `async-audit/age
 
 ### Operators
 
-- Docker image shrinks ~80 MB
+- Docker image shrinks ~75 MB (corrected — psycopg2 + libpq retained per D1/D2/D9)
 - `uvicorn --proxy-headers --forwarded-allow-ips='*'` required in production
 - `SESSION_SECRET` env var hard-required
 - No more `[SESSION_DEBUG]` log lines

@@ -1634,9 +1634,13 @@ class TestFaviconUpload:
 
 ---
 
-## Example 4.4 — Server-Sent Events activity stream
+## Example 4.4 — ~~Server-Sent Events activity stream~~ **STALE — Decision 8 DELETE (2026-04-11)**
 
-Target file: `src/admin/blueprints/activity_stream.py` (390 LOC, 3 routes). We port `/tenant/<tid>/events`.
+> **Do NOT implement this example.** Decision 8 deep-think analysis verified the SSE `/events` route is **orphan code** — `templates/tenant_dashboard.html:972` says `// Use simple polling instead of EventSource for reliability`, zero `new EventSource(` exists in templates, and the only `/events` caller is one integration smoke test probe. The SSE route is **DELETED in Wave 4** (not migrated). The `sse_starlette` dependency is NOT added. See CLAUDE.md Decision 8 and `async-pivot-checkpoint.md` §3 "SSE / long-lived connections" for the deletion scope. The two surviving routes (`/activity` JSON poll + `/activities` REST) convert mechanically to `async def` + `async with get_db_session()` and are NOT covered by a worked example because the conversion is trivial.
+
+The example below is preserved for historical reference only:
+
+Target file: `src/admin/blueprints/activity_stream.py` (390 LOC, 3 routes). ~~We port `/tenant/<tid>/events`.~~ **STALE — route is deleted, not ported.**
 
 ### 4.4.1 Flask source (read from disk)
 

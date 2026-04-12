@@ -1192,7 +1192,7 @@ Grouped by verification strategy. HIGH confidence assumptions get single-line pl
 - **Failure symptom:** unconditional import in the new code path crashes on some platform.
 - **Fallback:** keep the try/except in the new `app_factory.py` but log at WARNING if the import fails.
 
-**28. Docker image shrinks ~80 MB.**
+**28. Docker image shrinks ~75 MB** (corrected from ~80 MB — psycopg2 + libpq retained per D1/D2/D9).
 - **How:** `docker images adcp-salesagent:v2.0.0` vs `docker images adcp-salesagent:v1.99.0`. Compare `Size` column.
 - **When:** Wave 3 exit.
 - **Failure symptom:** shrinkage <40MB.

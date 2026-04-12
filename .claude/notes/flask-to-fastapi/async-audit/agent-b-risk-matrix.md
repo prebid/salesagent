@@ -41,7 +41,7 @@ I have enough grounding. Now let me produce the risk analysis report. The body o
 | 17 | `TypeDecorator.process_result_value` assumes psycopg2 JSONB pre-decoding — asyncpg codec path differs | **H** | Yes, `tox -e driver-compat` JSONType round-trip test | 1 day | Yes — add JSON codec registration on asyncpg connect |
 | 18 | `@event.listens_for(_engine, "connect")` — sync event listener executing `cursor.execute("SET statement_timeout=...")` doesn't fire on async engine | **H** | Yes, integration test observing `statement_timeout` via `SHOW` | 0.5 day | Yes — use asyncpg `setup` callback |
 | 19 | `DatabaseManager` class (`src/core/database/database_session.py:287-338`) with sync `__enter__`/`__exit__` — any caller breaks | **M** | Yes, grep + mypy | 0.5 day | N/A |
-| 20 | `get_or_create`, `get_or_404` convenience helpers (lines 342-388) — sync signatures | **L** | Yes, grep | 0.25 day | N/A |
+| ~~20~~ **→39** | `get_or_create`, `get_or_404` convenience helpers (lines 342-388) — sync signatures. **Renumbered to #39** (checkpoint §4 #20 = ContextManager singleton, different risk) | **L** | Yes, grep | 0.25 day | N/A |
 | 21 | Cross-schema `execute_with_retry` helper — sync wrapper around `get_db_session()` | **M** | Yes, grep + CI test | 0.5 day | Partial |
 | 22 | `_pydantic_json_serializer` passed as `json_serializer=` to `create_engine()` — engine-level hook may not fire for asyncpg | **H** | Yes, integration test writing Pydantic models to JSONB | 0.5 day | Yes — register asyncpg JSON codec directly |
 | 23 | `check_database_health` circuit breaker uses module-level mutable state — `_is_healthy` races between tasks | **M** | Hard — concurrency race, only shows under load | 0.5 day (add `asyncio.Lock`) | N/A |
@@ -2114,7 +2114,9 @@ Hard-coded: deletion is the only resolution. If Decision 7 is reversed (Spike 4.
 
 ---
 
-### Risk #20 — `get_or_create`, `get_or_404` helpers
+### Risk #20 → **renumbered to #39** — `get_or_create`, `get_or_404` helpers
+
+> **⚠️ Numbering conflict (2026-04-11):** checkpoint §4 assigns #20 to "ContextManager singleton session cache" (severity HIGH, resolved by Decision 7). Agent-b's original #20 (this entry, severity LOW, mechanical conversion) is renumbered to **#39** to avoid confusion. See checkpoint §4 Risk #39 for the canonical entry.
 
 Minor. Both functions take `session` as first arg, so conversion is mechanical: `async def get_or_404(session: AsyncSession, ...)` and `session.scalars(stmt).first()` → `(await session.execute(stmt)).scalars().first()`.
 
@@ -2333,7 +2335,9 @@ This also aligns with the repository pattern: audit is a repository method, not 
 
 ---
 
-### Risk #29 — SSE / long-lived handler pins connections
+### Risk #29 — SSE / long-lived handler pins connections — **RESOLVED by Decision 8 DELETE (2026-04-11)**
+
+> **The SSE route is deleted in Wave 4.** Post-deletion, the codebase has zero long-lived connection handlers, reducing this risk to "no surface area." Structural guard `test_architecture_no_sse_handlers.py` prevents re-introduction.
 
 See Interaction F above.
 
