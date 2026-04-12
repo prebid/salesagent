@@ -4217,6 +4217,787 @@ async def test_list_accounts(client, session):
 
 ---
 
+## 11.13.1 Integration tests — `async_engine → async_db → async_app → async_client` fixture chain
+
+> **Added 2026-04-11 under the Agent E idiom upgrade.** This is the operational recipe for integration-test fixtures under async SQLAlchemy. The existing §11.13 introduces `AsyncClient + ASGITransport` at a high level; this subsection is the concrete chain that Wave 4 engineers sit down and paste.
+
+### A. Goals of the integration harness
+
+1. **Event-loop safety.** Function-scoped engine per test — an engine constructed under test A's event loop must NOT be reused by test B, because asyncpg's connection pool is tied to the event loop that created it (the pytest-asyncio "event loop is closed" footgun; Agent B Interaction B).
+2. **Fast test isolation via transaction rollback.** Each test runs inside a single outer transaction on one connection, and the test client's `session.commit()` calls become savepoint releases on that transaction. Test teardown rolls the outer transaction back — the database starts and ends each test in the same state, without `TRUNCATE` or `DROP TABLE`.
+3. **One schema create per xdist worker.** `Base.metadata.create_all` is session-scoped per worker, not per test, because DDL is not transaction-safe.
+4. **Factory-boy works unchanged from the test body's point of view.** The factory session is rebound to the per-test `AsyncSession` via a shim.
+5. **`dependency_overrides` is the only injection mechanism.** No `monkeypatch.setattr("module.get_db_session", ...)` — that path is dead in the new world.
+6. **Coexistence during Waves 4a-5.** The existing sync `integration_db` fixture and the new `async_integration_db` fixture live in the same repo, in the same conftest files, for the duration of the migration. Each test file picks one or the other; mixing in a single file is prohibited by a new structural guard.
+
+### B. `tests/conftest.py` — the new async fragment
+
+```python
+# tests/conftest.py (async fragment — append to existing sync conftest)
+"""Async fixtures for Wave 4+ integration tests.
+
+This fragment coexists with the sync fixtures during Waves 4a-5. A test
+file picks EITHER the sync `integration_db` / `IntegrationEnv` harness
+OR the async `async_integration_db` / `async_client` harness — never
+both in the same file. Enforced by
+`test_architecture_wave4_hybrid_test_boundary.py`.
+"""
+from __future__ import annotations
+
+import os
+from collections.abc import AsyncIterator
+
+import pytest
+import pytest_asyncio
+from httpx import AsyncClient
+from httpx._transports.asgi import ASGITransport
+from sqlalchemy.ext.asyncio import (
+    AsyncConnection,
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+)
+
+from src.core.database.deps import get_session
+from src.core.database.engine import make_engine
+
+
+# Fixture 1: async_engine — per-TEST engine, not per-session or per-module.
+@pytest_asyncio.fixture(scope="function")
+async def async_engine() -> AsyncIterator[AsyncEngine]:
+    """Fresh AsyncEngine for each test.
+
+    Function-scoped on purpose. A module- or session-scoped engine
+    binds its asyncpg pool to the event loop of whichever test
+    imported it first; subsequent tests on fresh loops see
+    `RuntimeError: Event loop is closed` on connection acquisition.
+
+    Function scope costs ~10ms of engine construction per test, which
+    is cheap in absolute terms and pays for itself the first time
+    you save a 30-minute debugging session of "why is this one test
+    passing alone but failing in the full suite".
+    """
+    database_url = os.environ["DATABASE_URL"]
+    engine = make_engine(
+        database_url,
+        # Lower pool sizes under xdist — each worker is one process,
+        # and each function-scoped engine builds its own pool on top
+        # of Postgres max_connections=100. With 8 workers, per-worker
+        # pool of 5 + overflow 5 stays safely under the ceiling.
+        pool_size=5,
+        max_overflow=5,
+    )
+    try:
+        yield engine
+    finally:
+        await engine.dispose()
+
+
+# Fixture 2: async_connection_and_txn — open a connection + outer txn.
+@pytest_asyncio.fixture(scope="function")
+async def async_connection_and_txn(
+    async_engine: AsyncEngine,
+) -> AsyncIterator[tuple[AsyncConnection, "AsyncTransaction"]]:
+    """One connection per test with an outer transaction we roll back.
+
+    Every handler-issued commit becomes a savepoint release inside
+    this outer transaction. When the test ends, `outer_txn.rollback()`
+    discards everything the test wrote.
+    """
+    async with async_engine.connect() as connection:
+        outer_txn = await connection.begin()
+        try:
+            yield connection, outer_txn
+        finally:
+            if outer_txn.is_active:
+                await outer_txn.rollback()
+
+
+# Fixture 3: async_sessionmaker_fixture — sessionmaker with savepoint mode.
+@pytest_asyncio.fixture(scope="function")
+async def async_sessionmaker_fixture(
+    async_engine: AsyncEngine,
+    async_connection_and_txn: tuple[AsyncConnection, "AsyncTransaction"],
+) -> async_sessionmaker[AsyncSession]:
+    """Sessionmaker bound to the open outer transaction.
+
+    The key parameter is `join_transaction_mode="create_savepoint"`.
+    When the test's handler code calls `session.commit()`, SQLAlchemy
+    does NOT commit the outer transaction — it releases a savepoint
+    instead. When we roll back the outer transaction in the teardown,
+    all of the handler's committed writes are discarded.
+
+    This is the async-world equivalent of the sync conftest's
+    `nested_transaction` pattern.
+    """
+    connection, _outer_txn = async_connection_and_txn
+    return async_sessionmaker(
+        bind=connection,
+        class_=AsyncSession,
+        expire_on_commit=False,
+        autoflush=False,
+        autobegin=True,
+        join_transaction_mode="create_savepoint",
+    )
+
+
+# Fixture 4: async_db — the AsyncSession factories + test bodies use.
+@pytest_asyncio.fixture(scope="function")
+async def async_db(
+    async_sessionmaker_fixture: async_sessionmaker[AsyncSession],
+) -> AsyncIterator[AsyncSession]:
+    """The one AsyncSession shared by the test body AND all handler requests.
+
+    Both the test body's factory calls and the handler's `SessionDep`
+    resolve to THIS session — that is what makes the data written by
+    factories visible to the code under test without a manual commit.
+    """
+    async with async_sessionmaker_fixture() as session:
+        yield session
+
+
+# Fixture 5: async_app — install dependency_overrides, clear on teardown.
+@pytest_asyncio.fixture(scope="function")
+async def async_app(async_db: AsyncSession) -> AsyncIterator["FastAPI"]:
+    """The app with `get_session` overridden to yield the fixture session.
+
+    CRITICAL: `.pop(get_session, None)` in finally, NOT `.clear()`.
+    `.clear()` wipes every override in the app, which can destroy
+    overrides installed by a higher-level fixture. `.pop` is surgical
+    and additive-safe.
+    """
+    from src.app import app
+
+    async def _override() -> AsyncIterator[AsyncSession]:
+        yield async_db
+
+    app.dependency_overrides[get_session] = _override
+    try:
+        yield app
+    finally:
+        app.dependency_overrides.pop(get_session, None)
+
+
+# Fixture 6: async_client — httpx.AsyncClient(transport=ASGITransport(...))
+@pytest_asyncio.fixture(scope="function")
+async def async_client(async_app: "FastAPI") -> AsyncIterator[AsyncClient]:
+    """ASGI-transport test client. Runs in the test's own event loop.
+
+    NOT `starlette.testclient.TestClient(app)` — TestClient spawns a
+    new event loop in a thread and fights `app.state.db_engine` set
+    by the async lifespan. `AsyncClient + ASGITransport` runs the app
+    directly in the current event loop and sees `app.state` correctly.
+    """
+    async with AsyncClient(
+        transport=ASGITransport(app=async_app),
+        base_url="http://testserver",
+    ) as client:
+        yield client
+```
+
+### C. Fixture dependency graph
+
+```
+                 ┌──────────────────────┐
+                 │ async_engine         │  function-scoped, per-test
+                 │ (pool 5 + overflow 5)│  disposes at teardown
+                 └──────────┬───────────┘
+                            │
+                            ▼
+                 ┌──────────────────────┐
+                 │ async_connection_    │  opens ONE connection
+                 │   and_txn            │  begins outer txn
+                 └──────────┬───────────┘  rollback on teardown
+                            │
+                            ▼
+                 ┌──────────────────────┐
+                 │ async_sessionmaker_  │  bound to that connection
+                 │   fixture            │  join_transaction_mode=
+                 └──────────┬───────────┘   "create_savepoint"
+                            │
+                            ▼
+                 ┌──────────────────────┐
+                 │ async_db             │  AsyncSession
+                 │                      │  handler.commit() = SAVEPOINT
+                 └──────────┬───────────┘
+                            │
+                    ┌───────┴───────┐
+                    ▼               ▼
+         ┌──────────────────┐ ┌────────────────────┐
+         │ bind_factories   │ │ async_app          │
+         │ (rebinds         │ │ (overrides         │
+         │  factory-boy     │ │  get_session → db) │
+         │  _meta.session)  │ └─────────┬──────────┘
+         └──────────────────┘           │
+                                        ▼
+                             ┌──────────────────────┐
+                             │ async_client         │
+                             │ (httpx + ASGI)       │
+                             └──────────────────────┘
+```
+
+### D. Factory-boy async shim
+
+factory-boy has no native async support. The existing sync factories under `tests/factories/` use `sqlalchemy_session_persistence = "commit"`, which calls `session.commit()` from inside `_create()`. Under an async session, that is illegal — `commit()` is a coroutine and the factory's `_create()` is sync.
+
+The shim flips `sqlalchemy_session_persistence` to `None`, so `_create()` only calls `session.add(instance)` and leaves the commit/flush to the test's surrounding fixture. Under savepoint-rollback isolation, the test never wants the factory to commit anyway — the factory write must travel through the outer transaction so teardown can roll it back.
+
+```python
+# tests/factories/_async_shim.py
+"""Async shim for factory-boy ORM factories.
+
+Wraps `SQLAlchemyModelFactory` so it can be used with an async session:
+
+1. `sqlalchemy_session_persistence = None` — never commit from inside
+   _create(). The fixture owns the transaction boundary.
+2. `_create()` still calls `session.add(instance)` — which is sync,
+   because `AsyncSession.add` is just a pass-through to the sync
+   `sync_session.add`.
+3. Server defaults / PKs are not materialized until the fixture or
+   test body `await session.flush()`. Factories that depend on the
+   PK of another factory (e.g. MediaBuy depends on Principal.id)
+   must trigger a flush via `session.sync_session.flush()` — which
+   is safe only because AsyncSession's underlying sync_session is
+   reachable.
+
+This preserves Pattern #8 (factory-boy ORM-first) — tests still
+write `TenantFactory(tenant_id="t1")` and get back an ORM instance.
+They do NOT need to know about async.
+"""
+from __future__ import annotations
+
+from typing import Any
+
+from factory.alchemy import SQLAlchemyModelFactory
+from sqlalchemy.ext.asyncio import AsyncSession
+
+
+class AsyncSQLAlchemyModelFactory(SQLAlchemyModelFactory):
+    """factory-boy base class that works with AsyncSession.
+
+    Usage is IDENTICAL to `SQLAlchemyModelFactory`. The only difference
+    is that `_meta.sqlalchemy_session` holds an `AsyncSession`, and
+    creates go through the underlying sync_session.
+    """
+
+    class Meta:
+        abstract = True
+        sqlalchemy_session = None
+        sqlalchemy_session_persistence = None
+
+    @classmethod
+    def _create(
+        cls,
+        model_class: type,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        """Instantiate the model and add it to the underlying sync_session.
+
+        `AsyncSession.sync_session` exposes the internal `Session` that
+        actually holds the identity map. `.add()` is sync-safe. The
+        sync flush is also safe here because we are NOT crossing
+        a network boundary — identity-map population is local memory.
+        """
+        session: AsyncSession | None = cls._meta.sqlalchemy_session
+        if session is None:
+            raise RuntimeError(
+                f"{cls.__name__}._meta.sqlalchemy_session is unbound. "
+                "Did you forget the `bind_factories` fixture?"
+            )
+
+        instance = model_class(*args, **kwargs)
+        session.sync_session.add(instance)
+        session.sync_session.flush()  # materialize PKs so dependent factories see them
+        return instance
+```
+
+And the per-test `bind_factories` fixture:
+
+```python
+# tests/conftest.py (continuation of the async fragment)
+@pytest_asyncio.fixture(scope="function")
+async def bind_factories(async_db: AsyncSession) -> AsyncIterator[None]:
+    """Point every ORM factory at `async_db` for the duration of the test.
+
+    Inverse of `tests/harness/_base.py::IntegrationEnv.__enter__` — we
+    do this directly in a fixture instead of a harness context manager
+    because async tests do not use the harness (yet).
+    """
+    from tests.factories import ALL_FACTORIES
+
+    for f in ALL_FACTORIES:
+        if f._meta.sqlalchemy_session is not None:
+            raise RuntimeError(
+                f"{f.__name__}._meta.sqlalchemy_session is already bound — "
+                "nested `bind_factories` fixtures are not supported."
+            )
+        f._meta.sqlalchemy_session = async_db
+
+    try:
+        yield
+    finally:
+        for f in ALL_FACTORIES:
+            f._meta.sqlalchemy_session = None
+```
+
+During Waves 4a-4b every factory class still inherits from the sync `SQLAlchemyModelFactory`. Wave 4c flips `tests/factories/*.py` to inherit from `AsyncSQLAlchemyModelFactory` and updates `ALL_FACTORIES` in `tests/factories/__init__.py`. The flip is one-file-per-commit to isolate breakage.
+
+### E. `tests/integration/conftest.py` — schema create + composite fixture
+
+```python
+# tests/integration/conftest.py (async fragment — append to existing sync conftest)
+"""Integration-test-specific async fixtures."""
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+
+import pytest_asyncio
+from sqlalchemy.ext.asyncio import AsyncSession
+
+
+@pytest_asyncio.fixture(scope="session")
+async def integration_schema() -> AsyncIterator[None]:
+    """Create the schema exactly once per xdist worker.
+
+    We run `Base.metadata.create_all` via a temporary engine — NOT the
+    per-test `async_engine` fixture. DDL is not savepoint-safe, so it
+    MUST happen outside the per-test outer transaction. This fixture
+    runs once at worker startup.
+    """
+    import os
+
+    from src.core.database.engine import make_engine
+    from src.core.database.models import Base
+
+    engine = make_engine(os.environ["DATABASE_URL"])
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        yield
+    finally:
+        # Intentionally do NOT drop tables at worker teardown:
+        # agent-db.sh tears down the whole container, which is faster.
+        await engine.dispose()
+
+
+@pytest_asyncio.fixture(scope="function")
+async def async_integration_db(
+    integration_schema: None,
+    async_db: AsyncSession,
+    bind_factories: None,
+) -> AsyncSession:
+    """The canonical fixture for new Wave 4+ integration tests.
+
+    Transitively pulls:
+    * schema creation (session-scoped, once per worker)
+    * per-test engine / connection / outer txn / session
+    * factory-boy session binding
+
+    Test body signature:
+
+        @pytest.mark.asyncio
+        async def test_x(async_integration_db, async_client):
+            tenant = TenantFactory(tenant_id="t1")
+            r = await async_client.get("/admin/tenant/t1/accounts")
+            assert r.status_code == 200
+    """
+    return async_db
+```
+
+### F. Example test using the full chain
+
+```python
+# tests/integration/test_accounts_list.py
+import pytest
+from tests.factories import TenantFactory, PrincipalFactory, AccountFactory
+
+
+@pytest.mark.asyncio
+@pytest.mark.requires_db
+async def test_list_accounts_filters_by_status(
+    async_integration_db,
+    async_client,
+):
+    """Accounts list filters by status query param."""
+    tenant = TenantFactory(tenant_id="t1", name="Test Tenant")
+    PrincipalFactory(tenant=tenant, principal_id="p1")
+    AccountFactory(tenant=tenant, account_id="a1", status="pending_approval")
+    AccountFactory(tenant=tenant, account_id="a2", status="active")
+
+    # async_integration_db committed factory writes as savepoint releases;
+    # they are visible to the handler because async_client's SessionDep
+    # resolves to the SAME async_db fixture session.
+
+    r = await async_client.get(
+        "/admin/tenant/t1/accounts",
+        params={"status": "active"},
+        cookies={"adcp_session": _signed({"user": "alice@example.com"})},
+    )
+    assert r.status_code == 200
+    assert "a2" in r.text
+    assert "a1" not in r.text
+
+    # No teardown boilerplate — async_engine's outer_txn rolls back
+    # and the fixture's `finally` blocks unbind factories and clear
+    # dependency_overrides.
+```
+
+### G. xdist coordination
+
+Each xdist worker gets its own Postgres container via the agent-db skill (`.claude/skills/agent-db/agent-db.sh up`), which allocates a unique port per worktree. The per-worker `DATABASE_URL` is written to `.test-stack.env` and exported before `tox -p` runs. The `async_engine` fixture reads that env var at fixture time — each worker talks to its own container, so there is no cross-worker contention on Postgres's `max_connections=100`.
+
+Pool sizing per worker: `pool_size=5, max_overflow=5 = 10 connections peak per worker`. With 8 workers that is 80 peak connections — comfortably under 100 with headroom.
+
+### H. Coexistence with sync fixtures during Waves 4a-5
+
+| Aspect | Sync path (current) | Async path (new) |
+|---|---|---|
+| DB fixture | `integration_db` | `async_integration_db` |
+| Test client | `TestClient(app)` via `IntegrationEnv.get_rest_client()` | `async_client` (httpx + ASGI) |
+| Test marker | `@pytest.mark.requires_db` | `@pytest.mark.requires_db` + `@pytest.mark.asyncio` |
+| Harness | `IntegrationEnv` subclasses | **no harness — raw fixtures** |
+| Factory base | `SQLAlchemyModelFactory` | `AsyncSQLAlchemyModelFactory` |
+| Session binding | `IntegrationEnv.__enter__` | `bind_factories` fixture |
+
+**File-level invariant:** each test file uses ONE path, not both. A single test file that mixes `with DeliveryPollEnv(...)` and `async_client` will deadlock on session binding — two competing `_meta.sqlalchemy_session` values at the same time. Enforced by new guard `test_architecture_wave4_hybrid_test_boundary.py`.
+
+### I. Gotchas
+
+- **`join_transaction_mode="create_savepoint"` is SQLAlchemy 2.0+ only.** Pin `sqlalchemy>=2.0.36`.
+- **The `async_db` session and the handler's `SessionDep` MUST be the same object.** The override in `async_app` returns `async_db` from the test fixture scope — not a new session from `async_sessionmaker_fixture()` opened in the override. Two sessions on the outer transaction have their writes isolated from each other.
+- **Per-test engine is expensive in absolute wall-clock terms.** ~10ms per test × 3000 tests = 30 seconds across a full run. Not enough to matter — do not session-scope the engine.
+- **`Base.metadata.create_all` does not create the `alembic_version` table.** Tests do not run migrations; they create the schema from models. Tests that rely on alembic-specific state belong under `tests/e2e/`.
+- **Factory commits via `sync_session.flush()` materialize PKs but DO NOT SEND to Postgres until the outer transaction's next savepoint.** For tests that verify "INSERT hit the database", wrap the assertion in `await async_db.flush()` before the assertion.
+- **`dependency_overrides.clear()` is a sledgehammer.** The `async_app` fixture uses `.pop(get_session, None)` instead, to avoid stomping on overrides that another fixture installed higher up the chain.
+- **`async_client.get(...)` does NOT auto-follow redirects.** httpx's default is `follow_redirects=False`. For tests that expect a 302/307 from `redirect_slashes=True`, assert the 307 directly, or pass `follow_redirects=True` to the client call.
+- **The fixture does NOT install the non-request `session_scope()` ContextVar.** Integration tests that exercise a scheduler or background worker should additionally call `set_sessionmaker(async_sessionmaker_fixture)` inside the test body, inside a `try/finally` that calls `reset_sessionmaker`.
+
+---
+
+## 11.13.2 Unit tests — `mock_async_session` + `dependency_overrides` cheat-sheet
+
+> **Added 2026-04-11 under the Agent E idiom upgrade.** Integration tests use a real `AsyncSession` against agent-db Postgres (§11.13.1). Unit tests mock everything. This section defines the unit fixture surface and catalogs every `dependency_overrides` key that new unit tests commonly need.
+
+### A. Why a separate unit path
+
+The integration path is expensive: ~10ms engine construction per test, connection open + outer txn + savepoint machinery, schema create once per xdist worker, and a real Postgres container running alongside pytest. Unit tests should not pay any of that cost.
+
+The unit path swaps out:
+
+* `async_engine` → nothing (no engine at all)
+* `async_db` → `mock_async_session` (a `MagicMock(spec=AsyncSession)`)
+* `async_app` → `unit_app` (same app, different override)
+* `async_client` → `unit_client` (still httpx + ASGI, but backed by the mock)
+* `bind_factories` → nothing (factories are an integration concern)
+
+### B. `tests/unit/conftest.py` — mock-session fixtures
+
+```python
+# tests/unit/conftest.py (async-fragment, append to existing sync conftest)
+"""Async unit-test fixtures.
+
+Every fixture here hands the test a MOCKED session — never a real one.
+If your test needs a real session, it is an integration test and should
+live under `tests/integration/` with the fixtures from §11.13.1.
+"""
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+import pytest_asyncio
+from httpx import AsyncClient
+from httpx._transports.asgi import ASGITransport
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.core.database.deps import get_session
+
+
+@pytest.fixture
+def mock_async_session() -> MagicMock:
+    """A MagicMock configured to behave like `AsyncSession`.
+
+    `spec=AsyncSession` gives attribute validation — typos like
+    `mock.excute(...)` raise `AttributeError` instead of silently
+    creating a new child mock.
+
+    Async methods are replaced with `AsyncMock` explicitly. `spec=`
+    alone does NOT do this — it makes attribute access match the
+    spec's shape, but accessing `mock.commit` under spec=AsyncSession
+    returns a plain `MagicMock`, not an `AsyncMock`. Calling
+    `await mock.commit()` on a plain MagicMock raises
+    `TypeError: object MagicMock can't be used in 'await' expression`.
+
+    `.add()` stays a regular MagicMock because `AsyncSession.add()`
+    IS sync — it just calls through to `sync_session.add()`.
+    """
+    mock = MagicMock(spec=AsyncSession)
+    mock.execute = AsyncMock()
+    mock.scalars = AsyncMock()
+    mock.commit = AsyncMock()
+    mock.rollback = AsyncMock()
+    mock.flush = AsyncMock()
+    mock.close = AsyncMock()
+    mock.refresh = AsyncMock()
+    mock.merge = AsyncMock()
+    mock.delete = AsyncMock()
+    mock.add = MagicMock()  # sync — leave as MagicMock
+    return mock
+
+
+@pytest_asyncio.fixture
+async def unit_app(mock_async_session: MagicMock) -> AsyncIterator["FastAPI"]:
+    """The app, with `get_session` returning `mock_async_session`.
+
+    CRITICAL: `.pop(get_session, None)` in finally, NOT `.clear()`.
+    """
+    from src.app import app
+
+    async def _override() -> AsyncIterator[MagicMock]:
+        yield mock_async_session
+
+    app.dependency_overrides[get_session] = _override
+    try:
+        yield app
+    finally:
+        app.dependency_overrides.pop(get_session, None)
+
+
+@pytest_asyncio.fixture
+async def unit_client(unit_app: "FastAPI") -> AsyncIterator[AsyncClient]:
+    """Unit-test HTTP client. Same shape as async_client but mocked.
+
+    Tests can assert on both request/response shape AND on the mocked
+    session's call history:
+
+        @pytest.mark.asyncio
+        async def test_create_account_flushes(unit_client, mock_async_session):
+            r = await unit_client.post("/api/v1/accounts", json={...})
+            assert r.status_code == 201
+            mock_async_session.flush.assert_awaited_once()
+    """
+    async with AsyncClient(
+        transport=ASGITransport(app=unit_app),
+        base_url="http://testserver",
+    ) as client:
+        yield client
+```
+
+### C. Example unit test
+
+```python
+# tests/unit/test_accounts_unit.py
+import pytest
+from unittest.mock import AsyncMock
+
+
+@pytest.mark.asyncio
+async def test_create_account_route_calls_impl(
+    unit_client,
+    mock_async_session,
+    monkeypatch,
+):
+    """The create-account route delegates to `_create_account_impl`."""
+    fake_result = {"account_id": "a1", "status": "pending_approval"}
+    fake_impl = AsyncMock(return_value=fake_result)
+    monkeypatch.setattr(
+        "src.routes.api_v1._create_account_impl",
+        fake_impl,
+    )
+
+    r = await unit_client.post(
+        "/api/v1/accounts",
+        json={"account_id": "a1", "operator": "gam", "brand": {"domain": "x.com"}},
+    )
+    assert r.status_code == 201
+    assert r.json()["account_id"] == "a1"
+    fake_impl.assert_awaited_once()
+    # Session was threaded through:
+    passed_session = fake_impl.await_args.kwargs["session"]
+    assert passed_session is mock_async_session
+```
+
+### D. `dependency_overrides` cheat-sheet
+
+Every override below is a real dep used somewhere in the admin or REST surface. All overrides MUST be cleaned up in a `finally` block — see section F.
+
+| Dep | Override shape | Used by | Notes |
+|---|---|---|---|
+| `get_session` | `async def _over(): yield mock_async_session` | every admin + REST handler | **Must be an async generator**, not a plain return. FastAPI checks the signature. |
+| `get_account_repo` and siblings (§11.0.4 dep factories) | `async def _over(): return Mock(spec=AccountRepository)` | admin account handlers | Regular coroutine, not generator — the factory returns a value, not yields. |
+| `_require_auth_dep` | `def _over(): return ResolvedIdentity(...)` or `lambda: fixed_identity` | every MCP + A2A + REST route that auths | Sync lambda works — FastAPI wraps it. |
+| `_resolve_auth_dep` | same shape as `_require_auth_dep` | same | Two deps exist because "require auth" 401s on missing and "resolve auth" returns `None` — tests usually override both to the same fake identity. |
+| `get_admin_user` | `def _over(): return AdminUser(email="alice@example.com", role="tenant_admin")` | every admin router | Defined in `src/admin/deps/auth.py` (§11.4). |
+| `require_super_admin` | `def _over(): return AdminUser(email="root@example.com", role="super_admin")` | super-admin-only admin routes | Same module. |
+| `get_current_tenant` | `async def _over(): return TenantDTO(tenant_id="t1", ...)` | `/tenant/{tenant_id}/*` admin routes | In a unit test the DTO is a Pydantic instance, not an ORM model. |
+| `get_csrf_token` | `def _over(): return "test-csrf-token"` | form-submit admin routes | Tests that submit forms set both this override AND the `csrftoken` cookie. |
+| `get_settings` | `def _over(): return Settings(...)` | every handler that touches `SettingsDep` (§11.0.2) | Construct a real `Settings` with the test env values, not a mock. |
+| `get_adapter` | `def _over(): return FakeAdapter()` | every handler that touches the adapter layer | `FakeAdapter` is `tests/factories/adapter.py::FakeAdapter`. |
+| `get_http_client` | `def _over(): return httpx.AsyncClient(transport=respx.mock)` | webhook-sending handlers | Use `respx` to stub the outbound HTTP. |
+
+### E. Mock-layer choice guide
+
+When writing a unit test, choose the mock layer that matches what you are testing:
+
+| What you are testing | Mock at | Example |
+|---|---|---|
+| A FastAPI route's integration with the request layer | `_impl` function itself via `monkeypatch.setattr` | test_create_account_route_calls_impl (above) |
+| An `_impl` function's logic | Every repository used by `_impl`, not the session | `mock_accounts = Mock(spec=AccountRepository); monkeypatch.setattr(...)` |
+| A repository method's query shape | `session.execute` on `mock_async_session`, with a configured return value | `mock_async_session.execute.return_value.scalars.return_value.all.return_value = [fake_account]` |
+| A Pydantic validator | Nothing — just call the model constructor | Pure unit test, no async fixtures needed |
+| A template rendering function | Nothing — call `render(request, template, ctx)` with a fake `Request` | May need `async_client` for the request object |
+
+**Rule of thumb: one mock layer per test.** A test that mocks both `_create_account_impl` AND `mock_async_session.execute` is testing nothing real — the mocks are lying to each other.
+
+### F. The cleanup invariant
+
+`src.app.app` is a **module-level FastAPI instance**. Every fixture that writes to `app.dependency_overrides` is mutating shared state. If the write is not undone in a `finally` block, the next test to import `src.app.app` inherits the override — even across test files.
+
+Three patterns prevent this:
+
+**Pattern 1 — Fixture-scoped, pop on teardown:**
+
+```python
+@pytest_asyncio.fixture
+async def unit_app(mock_async_session):
+    from src.app import app
+    async def _override(): yield mock_async_session
+    app.dependency_overrides[get_session] = _override
+    try:
+        yield app
+    finally:
+        app.dependency_overrides.pop(get_session, None)
+```
+
+**Pattern 2 — Test-scoped, explicit try/finally in the body:**
+
+```python
+@pytest.mark.asyncio
+async def test_manual_override(unit_client):
+    from src.app import app
+    app.dependency_overrides[some_dep] = _fake_dep
+    try:
+        r = await unit_client.get(...)
+        assert r.status_code == 200
+    finally:
+        app.dependency_overrides.pop(some_dep, None)
+```
+
+**Pattern 3 — Session-wide autouse cleanup (safety net):**
+
+```python
+@pytest.fixture(autouse=True)
+def _clear_overrides_on_teardown():
+    """Clear any dep overrides that leaked from a forgotten finally.
+
+    This is a SAFETY NET, not a substitute for per-fixture cleanup.
+    """
+    yield
+    from src.app import app
+    app.dependency_overrides.clear()
+```
+
+Pattern 3 goes in `tests/unit/conftest.py` and `tests/integration/conftest.py` as a safety net. It does NOT replace per-fixture `finally` — a test relying only on pattern 3 will fail when its fixture's own overrides collide with another fixture's overrides before the safety net fires.
+
+### G. Structural guard — `test_architecture_no_override_leak.py`
+
+```python
+# tests/unit/test_architecture_no_override_leak.py
+"""Guard: every test that writes to dependency_overrides cleans up.
+
+AST scan rule:
+  For every assignment of the form
+    `<x>.dependency_overrides[<key>] = <value>`
+
+  The enclosing function must contain a `finally` block that includes
+  either:
+    * `<x>.dependency_overrides.pop(<key>, ...)`
+    * `<x>.dependency_overrides.clear()`
+
+Allowlist:
+  * tests/conftest.py (defines the fixtures)
+  * tests/unit/conftest.py
+  * tests/integration/conftest.py
+  * tests/harness/_base.py (legacy; FIXME shrinks over time)
+"""
+from __future__ import annotations
+
+import ast
+import pathlib
+
+ALLOWLIST: frozenset[str] = frozenset({
+    "tests/conftest.py",
+    "tests/unit/conftest.py",
+    "tests/integration/conftest.py",
+    "tests/harness/_base.py",
+})
+
+
+def _function_writes_override(func) -> list:
+    writes = []
+    for node in ast.walk(func):
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Subscript)
+            and isinstance(node.targets[0].value, ast.Attribute)
+            and node.targets[0].value.attr == "dependency_overrides"
+        ):
+            writes.append(node)
+    return writes
+
+
+def _function_has_cleanup(func) -> bool:
+    for node in ast.walk(func):
+        if isinstance(node, ast.Try) and node.finalbody:
+            for finally_stmt in node.finalbody:
+                for sub in ast.walk(finally_stmt):
+                    if (
+                        isinstance(sub, ast.Call)
+                        and isinstance(sub.func, ast.Attribute)
+                        and sub.func.attr in {"pop", "clear"}
+                        and isinstance(sub.func.value, ast.Attribute)
+                        and sub.func.value.attr == "dependency_overrides"
+                    ):
+                        return True
+    return False
+
+
+def test_no_dependency_override_leak() -> None:
+    violations: list[str] = []
+    for path in pathlib.Path("tests").rglob("test_*.py"):
+        rel = str(path).replace("\\", "/")
+        if rel in ALLOWLIST:
+            continue
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if _function_writes_override(node) and not _function_has_cleanup(node):
+                    violations.append(
+                        f"{path}:{node.lineno} `{node.name}` writes "
+                        f"dependency_overrides without a finally-block cleanup"
+                    )
+    assert not violations, (
+        "Dependency override leaks detected:\n  "
+        + "\n  ".join(violations)
+        + "\n\nWrap the override in try/finally or move it into a fixture."
+    )
+```
+
+### H. Gotchas
+
+- **`mock_async_session.execute` returns an `AsyncMock()` by default, which resolves to another `AsyncMock`.** If your test asserts `result.scalars().all()`, you must chain-configure: `mock.execute.return_value.scalars.return_value.all.return_value = [...]`.
+- **`mock_async_session.add` is a `MagicMock`, NOT an `AsyncMock`.** `AsyncSession.add()` is sync — match the real API.
+- **Don't `await` `mock.add.assert_called_once_with(...)`.** The assertion method is sync.
+- **Pattern 3's autouse cleanup CAN mask Pattern 1/2 bugs.** If your test's own `finally` is missing but the autouse cleanup saves it, you never notice — until a future test wires a dep override at module-import time (which autouse does not touch) and the masked bug surfaces there. The structural guard (section G) is the real defense.
+- **Unit tests should not import `tests.conftest.async_integration_db`.** If a unit test needs a real session, it is an integration test. The file-level boundary guard catches cross-contamination.
+- **FastAPI caches deps per-request, not per-test.** If a single test makes multiple requests through `unit_client`, each request re-invokes `_override()`. For async generator overrides, the generator is re-created per request.
+- **Unit-test `unit_client` does NOT run the app's lifespan.** `app.state.db_engine` is never set. That is fine because `mock_async_session` replaces the entire session flow, but any handler that reaches into `request.app.state.db_engine` directly will get `AttributeError` — a signal to refactor the handler to use the dep, not to install a fake on `app.state`.
+
+---
+
 ## Cross-cutting concerns
 
 ### Middleware ordering (final answer)
