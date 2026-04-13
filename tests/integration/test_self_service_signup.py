@@ -412,71 +412,52 @@ class TestSelfServiceSignupFlow:
                 mock_access.assert_called_once_with("newuser@example.com")
 
     @pytest.mark.requires_db
-    def test_stale_signup_flow_with_existing_tenants_bypasses_onboarding(self, client, integration_db):
+    def test_stale_signup_flow_with_existing_tenants_bypasses_onboarding(self, client, integration_db, factory_session):
         """Stale signup_flow flag with existing tenants must not bypass tenant lookup.
 
         A user who previously started signup (setting signup_flow=True) but abandoned it,
         then returns to log in, should NOT be redirected to onboarding if they already
         have access to existing tenants. The stale flag should be cleared.
         """
-        from tests.factories import ALL_FACTORIES, TenantFactory, UserFactory
+        from tests.factories import TenantFactory, UserFactory
 
         # Create real tenant + user so get_user_tenant_access finds total_access > 0
-        with get_db_session() as db_session:
-            for f in ALL_FACTORIES:
-                f._meta.sqlalchemy_session = db_session
-            try:
-                tenant = TenantFactory(tenant_id="stale-signup-test", subdomain="stalesignup", name="Existing Tenant")
-                UserFactory(
-                    tenant=tenant,
-                    user_id="stale-signup-user",
-                    email="returning@example.com",
-                    name="Returning User",
-                )
-            finally:
-                for f in ALL_FACTORIES:
-                    f._meta.sqlalchemy_session = None
+        tenant = TenantFactory(tenant_id="stale-signup-test", subdomain="stalesignup", name="Existing Tenant")
+        UserFactory(
+            tenant=tenant,
+            user_id="stale-signup-user",
+            email="returning@example.com",
+            name="Returning User",
+        )
 
-        try:
-            app, mock_google = _create_test_app_with_mocked_oauth(email="returning@example.com", name="Returning User")
+        app, mock_google = _create_test_app_with_mocked_oauth(email="returning@example.com", name="Returning User")
 
-            with (
-                patch.object(app, "oauth", create=True) as mock_oauth,
-                patch("src.admin.blueprints.auth.get_super_admin_domain", return_value="superadmin.internal"),
-                patch("src.admin.blueprints.auth.is_super_admin", return_value=False),
-                patch.dict(os.environ, {"ADCP_MULTI_TENANT": "true"}),
-            ):
-                mock_oauth.google = mock_google
+        with (
+            patch.object(app, "oauth", create=True) as mock_oauth,
+            patch("src.admin.blueprints.auth.get_super_admin_domain", return_value="superadmin.internal"),
+            patch("src.admin.blueprints.auth.is_super_admin", return_value=False),
+            patch.dict(os.environ, {"ADCP_MULTI_TENANT": "true"}),
+        ):
+            mock_oauth.google = mock_google
 
-                with app.test_client() as test_client:
-                    with test_client.session_transaction() as sess:
-                        sess["signup_flow"] = True
-                        sess["signup_step"] = "oauth"
+            with app.test_client() as test_client:
+                with test_client.session_transaction() as sess:
+                    sess["signup_flow"] = True
+                    sess["signup_step"] = "oauth"
 
-                    response = test_client.get("/auth/google/callback", follow_redirects=False)
+                response = test_client.get("/auth/google/callback", follow_redirects=False)
 
-                    # Should redirect to tenant selector, NOT onboarding
-                    assert response.status_code == 302
-                    assert "/auth/select-tenant" in response.headers["Location"]
+                # Should redirect to tenant selector, NOT onboarding
+                assert response.status_code == 302
+                assert "/auth/select-tenant" in response.headers["Location"]
 
-                    # Stale signup_flow flag should be cleared
-                    with test_client.session_transaction() as sess:
-                        assert "signup_flow" not in sess
-                        assert "signup_step" not in sess
-                        # User info should still be set
-                        assert sess.get("user") == "returning@example.com"
-                        assert sess.get("user_name") == "Returning User"
-
-        finally:
-            # Cleanup: delete User before Tenant (FK constraint)
-            with get_db_session() as db_session:
-                user = db_session.scalars(select(User).filter_by(tenant_id="stale-signup-test")).first()
-                if user:
-                    db_session.delete(user)
-                tenant = db_session.scalars(select(Tenant).filter_by(tenant_id="stale-signup-test")).first()
-                if tenant:
-                    db_session.delete(tenant)
-                db_session.commit()
+                # Stale signup_flow flag should be cleared
+                with test_client.session_transaction() as sess:
+                    assert "signup_flow" not in sess
+                    assert "signup_step" not in sess
+                    # User info should still be set
+                    assert sess.get("user") == "returning@example.com"
+                    assert sess.get("user_name") == "Returning User"
 
     def test_session_cleanup_after_provisioning(self, integration_db, client):
         """Test that signup session flags are cleared after provisioning."""
@@ -530,3 +511,22 @@ def client():
     app = create_app({"TESTING": True, "SECRET_KEY": "test_key"})
     with app.test_client() as test_client:
         yield test_client
+
+
+@pytest.fixture
+def factory_session(integration_db):
+    """Bind factory-boy sessions for tests that create ORM data outside the harness."""
+    from sqlalchemy.orm import Session as SASession
+
+    from src.core.database.database_session import get_engine
+    from tests.factories import ALL_FACTORIES
+
+    session = SASession(bind=get_engine())
+    for f in ALL_FACTORIES:
+        f._meta.sqlalchemy_session = session
+    try:
+        yield session
+    finally:
+        for f in ALL_FACTORIES:
+            f._meta.sqlalchemy_session = None
+        session.close()
