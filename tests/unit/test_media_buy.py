@@ -4214,7 +4214,7 @@ class TestGetMediaBuysImplAuth:
             testing_context=None,
         )
 
-        with pytest.raises(AdCPValidationError, match="(?i)account_id.*not.*supported"):
+        with pytest.raises(AdCPValidationError, match="(?i)account.*not.*supported"):
             _get_media_buys_impl(req, identity=identity)
 
     def test_account_id_unsupported_recovery_is_correctable(self):

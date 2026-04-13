@@ -54,6 +54,8 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc006_sync_creatives",
     "tests.bdd.steps.domain.uc011_accounts",
     "tests.bdd.steps.domain.admin_accounts",
+    "tests.bdd.steps.domain.uc_get_products_inventory",
+    "tests.bdd.steps.domain.compat_normalization",
 ]
 
 # ---------------------------------------------------------------------------
@@ -428,27 +430,24 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
-        # FIXME(GH-1184): billing policy and approval mode are not DB-backed.
-        # supported_billing / account_approval_mode only exist on ResolvedIdentity
-        # (harness-injected). Production resolve_identity() never sets them →
-        # billing rejection and pending_approval are not exercisable via any real
-        # transport. These tests must xfail until GH-1184 moves these fields to
-        # tenant DB configuration.
-        _GH1184_TAGS = {
-            "T-UC-011-ext-c-rejected",
-            "T-UC-011-ext-c-mixed",
-            "T-UC-011-ext-d-pending-url",
-            "T-UC-011-ext-d-pending-message",
-            "T-UC-011-atomic-all-failed",
+        # FIXME(#1184): UC-011 MCP — billing policy and approval mode not populated
+        # from DB. The real MCP auth chain resolves identity from DB which doesn't
+        # carry supported_billing or account_approval_mode. These are tenant-level
+        # configs that need a DB migration to persist.
+        _UC011_MCP_IDENTITY_XFAIL: set[str] = {
+            "T-UC-011-ext-c-rejected",  # billing rejection
+            "T-UC-011-ext-c-mixed",  # per-account billing rejection
+            "T-UC-011-ext-d-pending-url",  # approval mode pending
+            "T-UC-011-ext-d-pending-message",  # approval mode pending
+            "T-UC-011-atomic-all-failed",  # all-failed (uses billing rejection)
         }
-        if marker_names & _GH1184_TAGS:
+        if is_mcp and (marker_names & _UC011_MCP_IDENTITY_XFAIL):
             item.add_marker(
                 pytest.mark.xfail(
-                    reason="GH-1184: billing policy / approval mode not DB-backed — harness-only identity fields",
-                    strict=False,
+                    reason="MCP: billing/approval config not in DB — needs #1184",
+                    strict=True,
                 )
             )
-
         # FIXME(salesagent-9d5): UC-006 REST — account resolution through CreativeSyncEnv
         # REST route for sync_creatives exists but account kwarg may not be
         # forwarded at the route level (SyncCreativesBody doesn't have account field)
@@ -1476,6 +1475,8 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
         return "UC-011"
     if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
         return "ADMIN"
+    if "inventory_profile" in marker_names:
+        return "UC-GET-PRODUCTS"
     if any(t.startswith("T-COMPAT") for t in marker_names):
         return "COMPAT"
     return None
@@ -1732,5 +1733,12 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 yield
         else:
             pytest.xfail(f"UC-004 harness not yet wired for type: {harness_type}")
+    elif uc == "UC-GET-PRODUCTS":
+        request.getfixturevalue("integration_db")
+        from tests.harness.product import ProductEnv
+
+        with ProductEnv() as env:
+            ctx["env"] = env
+            yield
     else:
         pytest.xfail(f"No harness wired for {uc}")

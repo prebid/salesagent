@@ -114,14 +114,14 @@ def normalize_request_params(
             translations.append("account_id → account")
         del result["account_id"]
 
-    # campaign_ref → buyer_campaign_ref
+    # --- Tool-scoped translations ---
+
+    # campaign_ref → buyer_campaign_ref (create_media_buy only)
     if "campaign_ref" in result:
-        if "buyer_campaign_ref" not in result:
+        if tool_name == "create_media_buy" and "buyer_campaign_ref" not in result:
             result["buyer_campaign_ref"] = result["campaign_ref"]
             translations.append("campaign_ref → buyer_campaign_ref")
         del result["campaign_ref"]
-
-    # --- Tool-scoped translations ---
 
     # brand_manifest → brand (get_products, create_media_buy only)
     if "brand_manifest" in result:
@@ -178,3 +178,117 @@ def strip_unknown_params(
         return params, []
     cleaned = {k: v for k, v in params.items() if k in known_params}
     return cleaned, sorted(unknown)
+
+
+def deep_strip_to_schema(
+    value: Any,
+    schema: dict[str, Any],
+    defs: dict[str, Any] | None = None,
+) -> Any:
+    """Recursively strip fields not declared in a JSON Schema.
+
+    Walks the value alongside its JSON Schema and removes unknown properties
+    at every nesting level where additionalProperties is false. This lets
+    TypeAdapter accept the cleaned arguments, deferring real validation to
+    our Pydantic models (which use extra='ignore' in production).
+
+    Args:
+        value: The argument value (dict, list, or primitive).
+        schema: JSON Schema for this value (from tool.parameters or a nested property).
+        defs: The $defs dict from the root schema (for resolving $ref).
+
+    Returns:
+        Cleaned value with unknown properties removed at strict levels.
+    """
+    if defs is None:
+        defs = schema.get("$defs", {})
+
+    return _strip_node(value, schema, defs)
+
+
+def _resolve_ref(schema: dict[str, Any], defs: dict[str, Any]) -> dict[str, Any]:
+    """Resolve a $ref pointer to its definition."""
+    ref = schema.get("$ref", "")
+    # Handle #/$defs/Name format
+    parts = ref.rsplit("/", 1)
+    if len(parts) == 2:
+        def_name = parts[1]
+        if def_name in defs:
+            return defs[def_name]
+    return schema
+
+
+def _strip_node(value: Any, schema: dict[str, Any], defs: dict[str, Any]) -> Any:
+    """Recursive worker for deep_strip_to_schema."""
+    # Follow $ref
+    if "$ref" in schema:
+        schema = _resolve_ref(schema, defs)
+
+    # anyOf / oneOf: strip against each variant, pick best match
+    for union_key in ("anyOf", "oneOf"):
+        if union_key in schema:
+            variants = schema[union_key]
+            # Filter out null-type variants (e.g., {"type": "null"} in Optional fields)
+            real_variants = [v for v in variants if v.get("type") != "null"]
+            if not real_variants:
+                return value
+            # Strip against each variant, pick the one whose declared properties
+            # match the most input keys. This avoids variants with
+            # additionalProperties: true inflating the score via unknown fields.
+            best_result = value
+            best_score = -1
+            for variant in real_variants:
+                try:
+                    resolved = variant
+                    if "$ref" in resolved:
+                        resolved = _resolve_ref(resolved, defs)
+                    candidate = _strip_node(value, variant, defs)
+                    # Score by how many input keys match declared properties
+                    declared = set(resolved.get("properties", {}).keys())
+                    score = len(declared & value.keys()) if isinstance(value, dict) else 0
+                    if score > best_score:
+                        best_score = score
+                        best_result = candidate
+                except Exception:
+                    continue
+            return best_result
+
+    # allOf: value must satisfy ALL schemas. Merge declared properties from
+    # all members and strip against the union of known fields.
+    if "allOf" in schema:
+        merged_props: dict[str, Any] = {}
+        allows_additional = True
+        for member in schema["allOf"]:
+            resolved = member
+            if "$ref" in resolved:
+                resolved = _resolve_ref(resolved, defs)
+            merged_props.update(resolved.get("properties", {}))
+            if resolved.get("additionalProperties") is False:
+                allows_additional = False
+        merged_schema = {
+            "type": "object",
+            "properties": merged_props,
+            "additionalProperties": allows_additional,
+        }
+        return _strip_node(value, merged_schema, defs)
+
+    # Object: strip unknown properties, recurse into known ones
+    if isinstance(value, dict):
+        props = schema.get("properties", {})
+        allows_additional = schema.get("additionalProperties", True)
+        result = {}
+        for k, v in value.items():
+            if k in props:
+                result[k] = _strip_node(v, props[k], defs)
+            elif allows_additional:
+                result[k] = v
+            # else: field is unknown and additionalProperties is false — strip it
+        return result
+
+    # Array: recurse into items
+    if isinstance(value, list) and "items" in schema:
+        items_schema = schema["items"]
+        return [_strip_node(item, items_schema, defs) for item in value]
+
+    # Primitives (str, int, float, bool, None): pass through
+    return value

@@ -21,7 +21,6 @@ with real database products.
 from __future__ import annotations
 
 from decimal import Decimal
-from unittest.mock import MagicMock, patch
 
 import pytest
 from adcp.types.generated_poc.core.property_id import PropertyId
@@ -125,69 +124,8 @@ class TestExtractPropertyIds:
         assert result == set()
 
 
-class TestCreateGetProductsRequestWithPropertyList:
-    """Test that create_get_products_request forwards property_list.
-
-    Schema helper tests — call src.core.schema_helpers directly.
-    """
-
-    def test_property_list_forwarded(self):
-        from adcp.types import PropertyListReference
-
-        from src.core.schema_helpers import create_get_products_request
-
-        ref = PropertyListReference(
-            agent_url="https://example.com",
-            list_id="list_1",
-            auth_token="token_123",
-        )
-        req = create_get_products_request(
-            brief="test",
-            property_list=ref,
-        )
-        assert req.property_list is not None
-        assert req.property_list.list_id == "list_1"
-
-    def test_property_list_none_by_default(self):
-        from src.core.schema_helpers import create_get_products_request
-
-        req = create_get_products_request(brief="test")
-        assert req.property_list is None
-
-
-class TestCapabilitiesPropertyListFiltering:
-    """Test that capabilities reports property_list_filtering=True."""
-
-    def test_capabilities_reports_property_list_filtering(self):
-        from src.core.resolved_identity import ResolvedIdentity
-        from src.core.tools.capabilities import _get_adcp_capabilities_impl
-
-        identity = ResolvedIdentity(
-            principal_id="test_principal",
-            tenant_id="test_tenant",
-            tenant={
-                "tenant_id": "test_tenant",
-                "name": "Test Tenant",
-                "subdomain": "test",
-            },
-        )
-
-        mock_repo = MagicMock()
-        mock_repo.list_publisher_partners.return_value = []
-        mock_uow = MagicMock()
-        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
-        mock_uow.__exit__ = MagicMock(return_value=False)
-        mock_uow.tenant_config = mock_repo
-
-        with (
-            patch("src.core.tools.capabilities.get_principal_object", return_value=None),
-            patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow),
-        ):
-            response = _get_adcp_capabilities_impl(None, identity)
-
-        features = response.media_buy.features
-        assert features.property_list_filtering is True
-
+# TestCreateGetProductsRequestWithPropertyList and TestCapabilitiesPropertyListFiltering
+# are pure unit tests (no DB) — canonical versions live in tests/unit/test_product_property_list_filtering.py
 
 # ---------------------------------------------------------------------------
 # Integration tests — verify property list filtering through _get_products_impl

@@ -94,7 +94,7 @@ When a test fails, you must NOT say any of the following and continue:
 | Quick suite (no e2e/admin) | `./run_all_tests.sh quick` | Nothing (needs DATABASE_URL) |
 | Entity-scoped | `make test-entity ENTITY=delivery` | Nothing (across all non-BDD suites) |
 
-**Port conflicts are impossible** — both `test-stack.sh` and `agent-db.sh` scan for free ports in 50000-60000.
+**Port conflicts are minimized** — port allocation checks match Docker's actual bind address, and ranges avoid the OS ephemeral port range. `test-stack.sh` and `agent-db.sh` scan 50000-60000; E2E conftest scans 20000-30000.
 
 **When in doubt, use `./run_all_tests.sh`.** It starts Docker, runs all suites, saves JSON results, and tears down.
 

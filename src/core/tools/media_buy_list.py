@@ -94,8 +94,8 @@ def _get_media_buys_impl(
     if identity is None:
         raise AdCPAuthenticationError("Identity is required")
 
-    if req.account_id is not None:
-        raise AdCPValidationError("account_id filtering is not yet supported", recovery="correctable")
+    if req.account is not None or req.account_id is not None:
+        raise AdCPValidationError("account filtering is not yet supported", recovery="correctable")
 
     testing_ctx = identity.testing_context
     principal_id = identity.principal_id
@@ -222,7 +222,7 @@ async def get_media_buys(
     buyer_refs: list[str] | None = None,
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
     include_snapshot: bool = False,
-    account_id: str | None = None,
+    account: dict | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
 ):
@@ -235,7 +235,7 @@ async def get_media_buys(
         buyer_refs: Array of buyer reference IDs to retrieve (optional)
         status_filter: Filter by status - single status or array of MediaBuyStatus values (optional)
         include_snapshot: When true, include near-real-time delivery stats per package (default: false)
-        account_id: Filter to a specific account (optional)
+        account: Account reference per AdCP 3.x (optional). Legacy account_id is normalized by middleware.
         context: Application level context object (optional)
         ctx: FastMCP context (automatically provided)
 
@@ -247,7 +247,7 @@ async def get_media_buys(
             media_buy_ids=media_buy_ids,
             buyer_refs=buyer_refs,
             status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
-            account_id=account_id,
+            account=account,
             context=cast(ContextObject | None, context),
         )
         # Read identity pre-resolved by MCPAuthMiddleware
@@ -263,7 +263,7 @@ def get_media_buys_raw(
     buyer_refs: list[str] | None = None,
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
     include_snapshot: bool = False,
-    account_id: str | None = None,
+    account: dict | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
@@ -275,7 +275,7 @@ def get_media_buys_raw(
         buyer_refs: Array of buyer reference IDs to retrieve (optional)
         status_filter: Filter by status - single status or array of MediaBuyStatus values (optional)
         include_snapshot: When true, include near-real-time delivery stats per package (default: false)
-        account_id: Filter to a specific account (optional)
+        account: Account reference per AdCP 3.x (optional). Legacy account_id is normalized by middleware.
         context: Application level context (optional)
         ctx: Context for authentication (used if identity not pre-resolved)
         identity: Pre-resolved identity (preferred over ctx)
@@ -292,7 +292,7 @@ def get_media_buys_raw(
         media_buy_ids=media_buy_ids,
         buyer_refs=buyer_refs,
         status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
-        account_id=account_id,
+        account=account,
         context=cast(ContextObject | None, context),
     )
     return _get_media_buys_impl(req, identity=identity, include_snapshot=include_snapshot)

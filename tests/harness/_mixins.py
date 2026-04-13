@@ -423,6 +423,10 @@ class ProductMixin:
         """
         self._commit_factory_data()  # type: ignore[attr-defined]
 
+        # Pop identity — injected by call_via for transport dispatch
+        # but not a GetProductsRequest field.
+        identity = extra.pop("identity", None) or self.identity  # type: ignore[attr-defined]
+
         if brand is None:
             brand = {"domain": "test.com"}
 
@@ -434,4 +438,4 @@ class ProductMixin:
             context=context,
             **extra,
         )
-        return await _get_products_impl(req, self.identity)  # type: ignore[attr-defined]
+        return await _get_products_impl(req, identity)

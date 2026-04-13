@@ -510,7 +510,7 @@ def test_something():
 | Entity-scoped | `make test-entity ENTITY=delivery` | Nothing (runs across unit+integration+e2e+admin) |
 | Manual Docker lifecycle | `make test-stack-up` → `source .test-stack.env && tox -p` → `make test-stack-down` | Full Docker stack (stays up between runs) |
 
-**Port conflicts are not possible.** Both `test-stack.sh` and `agent-db.sh` scan for free ports in the 50000-60000 range. Multiple instances can run simultaneously.
+**Port conflicts are minimized.** Port allocation checks match Docker's actual bind address, and ranges avoid the OS ephemeral port range. `test-stack.sh` and `agent-db.sh` scan 50000-60000; E2E conftest scans 20000-30000. Multiple instances can run simultaneously.
 
 **When in doubt, use `./run_all_tests.sh`.** It handles everything: Docker up, all suites, Docker down, JSON reports saved.
 

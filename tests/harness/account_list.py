@@ -65,24 +65,12 @@ class AccountListEnv(IntegrationEnv):
         return _list_accounts_impl(**kwargs)
 
     def call_a2a(self, **kwargs: Any) -> ListAccountsResponse:
-        """Call list_accounts_raw (A2A wrapper) with real DB."""
-        from src.core.tools.accounts import list_accounts_raw
-
-        self._commit_factory_data()
-        kwargs.setdefault("identity", self.identity)
-        return list_accounts_raw(**kwargs)
+        """Call list_accounts via real AdCPRequestHandler — full A2A pipeline."""
+        return self._run_a2a_handler("list_accounts", ListAccountsResponse, **kwargs)
 
     def call_mcp(self, **kwargs: Any) -> ListAccountsResponse:
-        """Call list_accounts MCP wrapper with mock Context."""
-        from src.core.tools.accounts import list_accounts
-
-        # MCP wrapper takes flat kwargs, not req=. Unpack request if provided.
-        req = kwargs.pop("req", None)
-        if req is not None:
-            flat = req.model_dump(mode="json", exclude_none=True)
-            flat.update(kwargs)
-            kwargs = flat
-        return self._run_mcp_wrapper(list_accounts, ListAccountsResponse, **kwargs)
+        """Call list_accounts via Client(mcp) — full pipeline dispatch."""
+        return self._run_mcp_client("list_accounts", ListAccountsResponse, **kwargs)
 
     REST_ENDPOINT = "/api/v1/accounts"
 
