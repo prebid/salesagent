@@ -813,7 +813,9 @@ class BaseTestEnv:
                 from src.core.database.database_session import _pydantic_json_serializer
 
                 self._e2e_engine = create_engine(
-                    self._database_url, echo=False, json_serializer=_pydantic_json_serializer,
+                    self._database_url,
+                    echo=False,
+                    json_serializer=_pydantic_json_serializer,
                 )
                 engine = self._e2e_engine
             else:

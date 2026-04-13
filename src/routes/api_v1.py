@@ -370,7 +370,7 @@ async def get_media_buys(body: GetMediaBuysBody, identity: ResolvedIdentity = re
             buyer_refs=body.buyer_refs,
             status_filter=body.status_filter,
             include_snapshot=body.include_snapshot,
-            account_id=body.account_id,
+            account={"account_id": body.account_id},
             context=cast(ContextObject | None, body.context),
             identity=identity,
         )
