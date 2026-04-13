@@ -9,7 +9,7 @@ on:
 
 env:
   PYTHON_VERSION: '3.12'
-  UV_VERSION: '0.9.6'
+  UV_VERSION: '0.11.6'
 
 jobs:
   security-audit:
