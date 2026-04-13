@@ -5,6 +5,8 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import uuid4
 
+from adcp.types.generated_poc.core.account import CreditLimit, GovernanceAgent, Setup
+from adcp.types.generated_poc.core.brand_ref import BrandReference
 from sqlalchemy import (
     DECIMAL,
     BigInteger,
@@ -122,6 +124,7 @@ class Tenant(Base, JSONValidatorMixin):
     products = relationship("Product", back_populates="tenant", cascade="all, delete-orphan")
     principals = relationship("Principal", back_populates="tenant", cascade="all, delete-orphan")
     users = relationship("User", back_populates="tenant", cascade="all, delete-orphan")
+    accounts = relationship("Account", back_populates="tenant", cascade="all, delete-orphan")
     media_buys = relationship("MediaBuy", back_populates="tenant", cascade="all, delete-orphan", overlaps="media_buys")
     # tasks table removed - replaced by workflow_steps
     audit_logs = relationship("AuditLog", back_populates="tenant", cascade="all, delete-orphan")
@@ -365,60 +368,14 @@ class Product(Base, JSONValidatorMixin):
         If no properties/property_ids/property_tags are set, defaults to "all" variant
         (all properties from this publisher).
         """
+        from src.core.helpers.publisher_property_helpers import ensure_selection_type
+
         if self.inventory_profile_id and self.inventory_profile:
-            return self.inventory_profile.publisher_properties
+            return ensure_selection_type(self.inventory_profile.publisher_properties)
 
         # Convert product's authorization to AdCP publisher_properties format
         if self.properties:
-            # Legacy: Full Property objects - convert to discriminated union format
-            # AdCP 2.13.0+ requires selection_type discriminator
-            import re
-
-            property_id_pattern = re.compile(r"^[a-z0-9_]+$")
-            property_tag_pattern = re.compile(r"^[a-z0-9_]+$")
-
-            converted = []
-            for prop in self.properties:
-                if isinstance(prop, dict):
-                    # Check if already has selection_type (already converted)
-                    if "selection_type" in prop:
-                        converted.append(prop)
-                    else:
-                        # Convert legacy format to new discriminated union format
-                        publisher_domain = prop.get("publisher_domain", "unknown")
-                        prop_ids = prop.get("property_ids", [])
-                        prop_tags = prop.get("property_tags", [])
-
-                        # Filter to only valid property IDs (must match ^[a-z0-9_]+$)
-                        valid_ids = [pid for pid in prop_ids if property_id_pattern.match(str(pid))]
-                        # Filter to only valid property tags (must match ^[a-z0-9_]+$)
-                        valid_tags = [tag for tag in prop_tags if property_tag_pattern.match(str(tag))]
-
-                        if valid_ids:
-                            # Convert to by_id variant
-                            converted.append(
-                                {
-                                    "publisher_domain": publisher_domain,
-                                    "property_ids": valid_ids,
-                                    "selection_type": "by_id",
-                                }
-                            )
-                        elif valid_tags:
-                            # Convert to by_tag variant
-                            converted.append(
-                                {
-                                    "publisher_domain": publisher_domain,
-                                    "property_tags": valid_tags,
-                                    "selection_type": "by_tag",
-                                }
-                            )
-                        else:
-                            # Convert to all variant (default - when legacy IDs/tags are invalid)
-                            converted.append({"publisher_domain": publisher_domain, "selection_type": "all"})
-                else:
-                    # Unknown format, skip
-                    pass
-            return converted if converted else None
+            return ensure_selection_type(self.properties)
         elif self.property_ids:
             # AdCP 2.0.0 by_id variant
             # Get publisher_domain from tenant (use subdomain or virtual_host)
@@ -828,6 +785,104 @@ class CreativeAssignment(Base):
     )
 
 
+class Account(Base):
+    """Billing account per AdCP spec (core/account.json).
+
+    Represents the relationship between a buyer and seller, determining
+    rate cards, payment terms, and billing entity.
+    """
+
+    __tablename__ = "accounts"
+
+    tenant_id: Mapped[str] = mapped_column(
+        String(50), ForeignKey("tenants.tenant_id", ondelete="CASCADE"), primary_key=True
+    )
+    account_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    # Required fields (AdCP spec)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False)
+
+    # Optional fields (AdCP spec)
+    advertiser: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    billing_proxy: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    operator: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    billing: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    rate_card: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    payment_terms: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    account_scope: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    brand: Mapped[BrandReference | None] = mapped_column(JSONType(model=BrandReference), nullable=True)
+    credit_limit: Mapped[CreditLimit | None] = mapped_column(JSONType(model=CreditLimit), nullable=True)
+    setup: Mapped[Setup | None] = mapped_column(JSONType(model=Setup), nullable=True)
+    governance_agents: Mapped[list[GovernanceAgent] | None] = mapped_column(
+        JSONType(model=GovernanceAgent, is_list=True), nullable=True
+    )
+    sandbox: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
+    ext: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+
+    # Internal fields (not in AdCP spec)
+    principal_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    platform_mappings: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    # Relationships
+    tenant = relationship("Tenant", back_populates="accounts")
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'pending_approval', 'rejected', 'payment_required', 'suspended', 'closed')",
+            name="ck_accounts_status",
+        ),
+        CheckConstraint(
+            "billing IS NULL OR billing IN ('operator', 'agent')",
+            name="ck_accounts_billing",
+        ),
+        CheckConstraint(
+            "payment_terms IS NULL OR payment_terms IN ('net_15', 'net_30', 'net_45', 'net_60', 'net_90', 'prepay')",
+            name="ck_accounts_payment_terms",
+        ),
+        CheckConstraint(
+            "account_scope IS NULL OR account_scope IN ('operator', 'brand', 'operator_brand', 'agent')",
+            name="ck_accounts_account_scope",
+        ),
+        Index("idx_accounts_tenant", "tenant_id"),
+        Index("idx_accounts_status", "status"),
+        Index("idx_accounts_operator", "operator"),
+    )
+
+
+class AgentAccountAccess(Base):
+    """Junction table linking principals (agents) to accounts they can access.
+
+    Enables multi-agent visibility scoping: different agents see different accounts.
+    """
+
+    __tablename__ = "agent_account_access"
+
+    tenant_id: Mapped[str] = mapped_column(String(50), nullable=False, primary_key=True)
+    principal_id: Mapped[str] = mapped_column(String(50), nullable=False, primary_key=True)
+    account_id: Mapped[str] = mapped_column(String(100), nullable=False, primary_key=True)
+    granted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "principal_id"],
+            ["principals.tenant_id", "principals.principal_id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "account_id"],
+            ["accounts.tenant_id", "accounts.account_id"],
+            ondelete="CASCADE",
+        ),
+        Index("idx_agent_account_access_account", "tenant_id", "account_id"),
+    )
+
+
 class MediaBuy(Base):
     __tablename__ = "media_buys"
 
@@ -857,6 +912,7 @@ class MediaBuy(Base):
     raw_request: Mapped[dict] = mapped_column(JSONType, nullable=False)
     strategy_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    account_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     # Relationships
     tenant = relationship("Tenant", back_populates="media_buys", overlaps="media_buys")
@@ -868,6 +924,13 @@ class MediaBuy(Base):
     )
     strategy = relationship("Strategy", back_populates="media_buys")
     packages = relationship("MediaPackage", back_populates="media_buy", cascade="all, delete-orphan")
+    account = relationship(
+        "Account",
+        foreign_keys=[tenant_id, account_id],
+        primaryjoin="and_(MediaBuy.tenant_id==Account.tenant_id, MediaBuy.account_id==Account.account_id)",
+        overlaps="media_buys,principal,tenant",
+        viewonly=True,
+    )
     # Removed tasks and context relationships - using ObjectWorkflowMapping instead
 
     __table_args__ = (
@@ -881,6 +944,11 @@ class MediaBuy(Base):
             ["strategies.strategy_id"],
             ondelete="SET NULL",
         ),
+        ForeignKeyConstraint(
+            ["tenant_id", "account_id"],
+            ["accounts.tenant_id", "accounts.account_id"],
+            ondelete="SET NULL",
+        ),
         UniqueConstraint(
             "tenant_id",
             "principal_id",
@@ -890,6 +958,7 @@ class MediaBuy(Base):
         Index("idx_media_buys_tenant", "tenant_id"),
         Index("idx_media_buys_status", "status"),
         Index("idx_media_buys_strategy", "strategy_id"),
+        Index("idx_media_buys_account", "account_id"),
     )
 
 

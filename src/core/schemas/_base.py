@@ -10,7 +10,13 @@ if TYPE_CHECKING:
     from src.core.schemas.creative import Creative, CreativeApproval
 
 from adcp import Error
+from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import CreateMediaBuyRequest as LibraryCreateMediaBuyRequest
+from adcp.types import (
+    DeliveryStatus,  # noqa: F401 — used by Snapshot below
+    PriceGuidance,  # Replaces local PriceGuidance class
+    PricingModel,  # Replaces local PricingModel enum (lowercase members: .cpm, .cpc, etc.)
+)
 
 # Import main request/response types from stable API
 from adcp.types import Format as LibraryFormat
@@ -21,10 +27,11 @@ from adcp.types import (
 # Import types from stable API (per adcp 2.7.0+)
 from adcp.types import FormatId as LibraryFormatId
 from adcp.types import PackageRequest as LibraryPackageRequest
-from adcp.types import (
-    PriceGuidance,  # Replaces local PriceGuidance class
-    PricingModel,  # Replaces local PricingModel enum (lowercase members: .cpm, .cpc, etc.)
-)
+
+# Import types from stable API (per adcp 2.9.0+ - all types now in stable)
+# Note: AffectedPackage was removed in 2.9.0, use Package instead
+from adcp.types import PackageUpdate as LibraryPackageUpdate
+from adcp.types import UpdateMediaBuyRequest as LibraryUpdateMediaBuyRequest
 from adcp.types.aliases import (
     CreateMediaBuyErrorResponse as AdCPCreateMediaBuyError,
 )
@@ -41,13 +48,6 @@ from adcp.types.aliases import (
 from adcp.types.base import AdCPBaseModel as LibraryAdCPBaseModel
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
-
-# Import types from stable API (per adcp 2.9.0+ - all types now in stable)
-# Note: AffectedPackage was removed in 2.9.0, use Package instead
-from adcp.types.generated_poc.media_buy.package_update import PackageUpdate1 as LibraryPackageUpdate1
-from adcp.types.generated_poc.media_buy.update_media_buy_request import (
-    UpdateMediaBuyRequest1 as LibraryUpdateMediaBuyRequest1,
-)
 
 from src.core.config import get_pydantic_extra_mode
 
@@ -75,10 +75,10 @@ from adcp.types import (
 # AdCP creative types for schema definitions
 from adcp.types import CreativePolicy as LibraryCreativePolicy
 from adcp.types import FrequencyCap as LibraryFrequencyCap
+from adcp.types import GetSignalsRequest as LibraryGetSignalsRequest
 from adcp.types import GetSignalsResponse as LibraryGetSignalsResponse
 from adcp.types import Measurement as LibraryMeasurement
 from adcp.types import PlatformDeployment as LibraryPlatformDeployment
-from adcp.types import Pricing as LibraryPricing
 from adcp.types import Property as LibraryProperty
 from adcp.types import Signal as LibrarySignal
 from adcp.types import SignalFilters as LibrarySignalFilters
@@ -735,11 +735,12 @@ def get_format_by_id(format_id: str, tenant_id: str | None = None) -> Format | N
     Returns:
         Format object or None if not found
     """
+    from src.core.exceptions import AdCPNotFoundError
     from src.core.format_resolver import get_format
 
     try:
         return get_format(format_id, tenant_id=tenant_id)
-    except ValueError:
+    except (ValueError, AdCPNotFoundError):
         return None
 
 
@@ -1193,29 +1194,6 @@ class FormatId(LibraryFormatId):
         return self.duration_ms
 
 
-def _upgrade_legacy_format_ids(values: dict) -> dict:
-    """Convert dict format_ids entries to FormatId objects (AdCP v2.4 compliance).
-
-    Shared validator logic used by PackageRequest, ProductFilters, and
-    ListCreativeFormatsRequest.  Each class delegates its
-    ``@model_validator(mode="before")`` to this function.
-    """
-    if not isinstance(values, dict):
-        return values
-
-    format_ids = values.get("format_ids")
-    if format_ids and isinstance(format_ids, list):
-        upgraded = []
-        for fmt_id in format_ids:
-            if isinstance(fmt_id, dict) and "agent_url" in fmt_id and "id" in fmt_id:
-                upgraded.append(FormatId(**fmt_id))
-            else:
-                upgraded.append(fmt_id)
-        values["format_ids"] = upgraded
-
-    return values
-
-
 # --- Brand Manifest Models (AdCP v1.8.0) ---
 
 
@@ -1292,6 +1270,27 @@ class BrandManifestRef(SalesAgentBaseModel):
 # --- Package Schemas (Extend adcp library for proper request/response separation) ---
 
 
+def _upgrade_legacy_format_ids(values: dict) -> dict:
+    """Convert dict format_ids to FormatId objects (AdCP v2.4 compliance).
+
+    Shared validator used by PackageRequest, ProductFilters, and ListCreativeFormatsRequest.
+    """
+    if not isinstance(values, dict):
+        return values
+
+    format_ids = values.get("format_ids")
+    if format_ids and isinstance(format_ids, list):
+        upgraded = []
+        for fmt_id in format_ids:
+            if isinstance(fmt_id, dict) and "agent_url" in fmt_id and "id" in fmt_id:
+                upgraded.append(FormatId(**fmt_id))
+            else:
+                upgraded.append(fmt_id)
+        values["format_ids"] = upgraded
+
+    return values
+
+
 class PackageRequest(LibraryPackageRequest):
     """Package request schema (for CreateMediaBuyRequest).
 
@@ -1365,7 +1364,6 @@ class PackageRequest(LibraryPackageRequest):
     @model_validator(mode="before")
     @classmethod
     def upgrade_legacy_format_ids(cls, values: dict) -> dict:
-        """Convert dict format_ids to FormatId objects (AdCP v2.4 compliance)."""
         return _upgrade_legacy_format_ids(values)
 
 
@@ -1435,6 +1433,10 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    # adcp 3.9 makes account required. Our impl resolves identity at the transport
+    # layer (ResolvedIdentity), not from the request payload, so account is optional here.
+    account: LibraryAccountReference | None = None  # type: ignore[assignment]
 
     # Override packages to use our PackageRequest (which overrides targeting_overlay
     # to Targeting instead of library TargetingOverlay, enabling the legacy normalizer).
@@ -1587,32 +1589,31 @@ class UpdatePackageRequest(SalesAgentBaseModel):
 
 
 # AdCP-compliant supporting models for update-media-buy-request
-class AdCPPackageUpdate(LibraryPackageUpdate1):
+class AdCPPackageUpdate(LibraryPackageUpdate):
     """Package-specific update extending library type.
 
     Inherits all fields from library (budget, paused, targeting_overlay,
-    creative_assignments, creatives, bid_price, ext, impressions, pacing).
+    creative_assignments, creatives, bid_price, ext, impressions, pacing,
+    package_id).
 
     Adds creative_ids — spec-mandated field missing from library codegen.
     TODO(adcp-library): Remove creative_ids once upstream codegen adds it.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
-    # Override package_id to be optional (library variant1 has it required for oneOf)
-    package_id: str | None = None  # type: ignore[assignment]
     # Spec field missing from library codegen (adcp#208)
     creative_ids: list[str] | None = None
 
 
-class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest1):
+class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
     """Update media buy request extending library type.
 
     Inherits all AdCP fields from library (paused, start_time, end_time,
     packages, push_notification_config, context, reporting_webhook, ext).
+    In adcp 3.9 all fields are optional (consolidated from oneOf variants).
 
     Overrides:
-    - media_buy_id: optional (library variant1 requires it; oneOf handled at app level)
-    - start_time/end_time: accept raw datetime/str (backward compat with A2A path)
+    - start_time: accept Literal["asap"] (backward compat with A2A path)
     - packages: use our AdCPPackageUpdate (adds creative_ids)
     - budget: campaign-level budget (not in library — convenience field)
     - today: internal testing field
@@ -1623,12 +1624,9 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest1):
     - cancellation_reason: reason for cancellation
     - new_packages: mid-flight package additions
     - invoice_recipient: override billing entity for this buy
-    - idempotency_key: client-supplied deduplication key
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
-    # Override media_buy_id to be optional (library variant1 has it required for oneOf)
-    media_buy_id: str | None = None  # type: ignore[assignment]
     # Override datetime fields to accept raw strings (A2A path sends ISO strings)
     start_time: datetime | Literal["asap"] | None = None  # type: ignore[assignment]
     end_time: datetime | None = None
@@ -1648,10 +1646,7 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest1):
         description="Override who receives the invoice for this buy (business-entity.json). "
         "When provided, the seller invoices this entity instead of the account's default billing_entity.",
     )
-    idempotency_key: str | None = Field(
-        None,
-        description="Client-supplied idempotency key to deduplicate concurrent update requests.",
-    )
+    # idempotency_key: now provided by adcp library base class (since 3.10)
     # Internal testing field
     today: date | None = Field(None, exclude=True, description="For testing/simulation only - not part of AdCP spec")
 
@@ -1954,27 +1949,16 @@ class SignalDeployment(LibraryPlatformDeployment):
     )
 
 
-class SignalPricing(LibraryPricing):
-    """Extends library Pricing for signal-specific pricing.
-
-    Library provides: cpm, currency. This subclass preserves the library
-    schema while allowing future internal field additions.
-    """
-
-    model_config = ConfigDict(extra=get_pydantic_extra_mode())
-
-
 class Signal(LibrarySignal):
     """Extends library Signal with internal fields and local deployment/pricing types.
 
     Library provides: signal_agent_segment_id, name, description, signal_type,
-    data_provider, coverage_percentage, deployments, pricing — all inherited
-    from AdCP spec.
+    data_provider, coverage_percentage, deployments, pricing_options — all
+    inherited from AdCP spec.
 
     Local overrides:
     - signal_type: Literal instead of enum (string serialization in model_dump)
     - deployments: local SignalDeployment (has scope, decisioning_platform_segment_id)
-    - pricing: local SignalPricing (same structure, different base)
     - Internal fields with Field(exclude=True): tenant_id, created_at, updated_at, metadata
     """
 
@@ -1983,7 +1967,6 @@ class Signal(LibrarySignal):
     # Override types that differ from library
     signal_type: Literal["marketplace", "custom", "owned"] = Field(..., description="Type of signal")  # type: ignore[assignment]
     deployments: list[SignalDeployment] = Field(..., description="Array of platform deployments")  # type: ignore[assignment]
-    pricing: SignalPricing = Field(..., description="Pricing information")
 
     # Internal fields (not in AdCP spec, excluded from serialization)
     tenant_id: str | None = Field(None, description="Internal: Tenant ID for multi-tenancy", exclude=True)
@@ -1995,6 +1978,18 @@ class Signal(LibrarySignal):
     # Note: signal_id is now a library field in adcp 3.6.0 (SignalId | None)
     # The old @property signal_id that mapped to signal_agent_segment_id is removed
     # to avoid conflict with the new library field.
+
+    @property
+    def pricing(self) -> Any | None:
+        """Backward compat: return the inner model of the first pricing option.
+
+        DEPRECATED: Use pricing_options instead.
+        Provides .cpm, .currency etc. from the first pricing option's root model.
+        Returns None if pricing_options is empty.
+        """
+        if self.pricing_options:
+            return self.pricing_options[0].root
+        return None
 
     @property
     def type(self) -> str:
@@ -2036,14 +2031,8 @@ class SignalFilters(LibrarySignalFilters):
     pass  # All fields inherited from library
 
 
-# GetSignalsRequest — library 3.6.0 exports a UnionType (GetSignalsRequest1 | GetSignalsRequest2).
-# GS1: signal_spec required, signal_ids optional (discovery by text).
-# GS2: signal_ids required, signal_spec optional (lookup by ID).
-# We alias to GS1 (text-based discovery) which is our primary use case.
-# This gives us a concrete BaseModel class for construction, model_fields, and mypy.
-from adcp.types.generated_poc.signals.get_signals_request import (  # noqa: E402, F401
-    GetSignalsRequest1 as GetSignalsRequest,
-)
+# Re-export the library type; callers use .signal_spec, .filters, .max_results directly.
+GetSignalsRequest = LibraryGetSignalsRequest
 
 
 class GetSignalsResponse(NestedModelSerializerMixin, LibraryGetSignalsResponse):
@@ -2287,11 +2276,7 @@ class ListAuthorizedPropertiesResponse(NestedModelSerializerMixin, SalesAgentBas
 
 
 # --- Get Media Buys Types ---
-# These types match the adcp 3.6.0 spec for get_media_buys.
-# When the project migrates to adcp >=3.6.0, these can be replaced with library imports.
-
-
-from src.core.schemas.delivery import DeliveryStatus  # noqa: E402
+# DeliveryStatus: imported from adcp library at top of file (all 6 values).
 
 
 class SnapshotUnavailableReason(str, Enum):
@@ -2382,8 +2367,8 @@ class GetMediaBuysRequest(SalesAgentBaseModel):
     media_buy_ids: list[str] | None = Field(default=None, description="Specific media buy IDs to retrieve")
     buyer_refs: list[str] | None = Field(default=None, description="Buyer references to filter by")
     status_filter: Any | None = Field(default=None, description="Filter by status (MediaBuyStatus or list)")
-    include_snapshot: bool = Field(default=False, description="Include near-real-time delivery snapshot per package")
-    account_id: str | None = Field(default=None, description="Account to filter to")
+    account_id: str | None = Field(default=None, description="Account to filter to (legacy, prefer account)")
+    account: LibraryAccountReference | None = Field(default=None, description="Account reference (AdCP 3.x)")
     context: ContextObject | None = Field(default=None, description="Application-level context")
 
 

@@ -43,54 +43,45 @@ class A2ADispatcher:
 
 
 class RestDispatcher:
-    """Dispatch via FastAPI TestClient → route → _raw() → _impl()."""
+    """Dispatch via FastAPI TestClient → route → _raw() → _impl().
+
+    Identity flows through kwargs to env._run_rest_request(), which pops it
+    and configures the FastAPI auth dep override per-request.
+
+    Unlike other dispatchers, REST includes HTTP metadata in the envelope
+    (status_code, content_type) since tests may assert on these.
+    """
 
     def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
         try:
-            client = env.get_rest_client()
-            body = env.build_rest_body(**kwargs)
             endpoint = env.REST_ENDPOINT  # type: ignore[attr-defined]
-            response = client.post(endpoint, json=body)
+            response = env._run_rest_request(endpoint, **kwargs)
+
+            envelope = {
+                "transport": "rest",
+                "status_code": response.status_code,
+                "content_type": response.headers.get("content-type", ""),
+            }
 
             if response.status_code >= 400:
                 error = env.parse_rest_error(response.status_code, response.json())
-                return TransportResult(
-                    error=error,
-                    envelope={
-                        "transport": "rest",
-                        "status_code": response.status_code,
-                        "content_type": response.headers.get("content-type", ""),
-                    },
-                    raw_response=response,
-                )
+                return TransportResult(error=error, envelope=envelope, raw_response=response)
 
             payload = env.parse_rest_response(response.json())
-            return TransportResult(
-                payload=payload,
-                envelope={
-                    "transport": "rest",
-                    "status_code": response.status_code,
-                    "content_type": response.headers.get("content-type", ""),
-                },
-                raw_response=response,
-            )
+            return TransportResult(payload=payload, envelope=envelope, raw_response=response)
         except Exception as exc:
             return TransportResult(error=exc)
 
 
 class McpDispatcher:
-    """Dispatch via mock Context → async MCP wrapper → _impl().
+    """Dispatch via Client(mcp) — full FastMCP pipeline.
 
-    The MCP wrapper is async, so this dispatcher uses asyncio.run()
-    to bridge from the sync dispatch() interface. The env.call_mcp()
-    method handles Context mocking and ToolResult extraction.
+    Identity flows through kwargs to env.call_mcp() → _run_mcp_client(),
+    which pops it and dispatches via FastMCP in-memory transport.
     """
 
     def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
         try:
-            # MCP wrappers get identity from ctx.get_state(), not kwargs.
-            # Remove identity from kwargs to avoid passing it as a wrapper param.
-            kwargs.pop("identity", None)
             payload = env.call_mcp(**kwargs)
         except Exception as exc:
             return TransportResult(error=exc)

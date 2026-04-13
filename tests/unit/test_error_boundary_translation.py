@@ -41,12 +41,12 @@ class TestExtractErrorInfoAdCPError:
         assert recovery == "correctable"
 
     def test_adcp_auth_error_extracts_code_and_message(self):
-        """AdCPAuthenticationError → ('AUTHENTICATION_ERROR', 'bad token', 'terminal')."""
+        """AdCPAuthenticationError → ('AUTH_TOKEN_INVALID', 'bad token', 'terminal')."""
         from src.core.tool_error_logging import extract_error_info
 
         exc = AdCPAuthenticationError("bad token")
         code, message, recovery = extract_error_info(exc)
-        assert code == "AUTHENTICATION_ERROR"
+        assert code == "AUTH_TOKEN_INVALID"
         assert message == "bad token"
         assert recovery == "terminal"
 
@@ -233,7 +233,7 @@ class TestMCPBoundaryAdCPErrorTranslation:
         assert exc_info.value.args[2] == "transient"
 
     def test_adcp_auth_becomes_tool_error(self):
-        """AdCPAuthenticationError from tool → ToolError with AUTHENTICATION_ERROR code."""
+        """AdCPAuthenticationError from tool → ToolError with AUTH_TOKEN_INVALID code."""
         from fastmcp.exceptions import ToolError
 
         from src.core.tool_error_logging import with_error_logging
@@ -246,8 +246,8 @@ class TestMCPBoundaryAdCPErrorTranslation:
         with pytest.raises(ToolError) as exc_info:
             wrapped()
 
-        assert "AUTHENTICATION_ERROR" in str(exc_info.value) or (
-            exc_info.value.args and exc_info.value.args[0] == "AUTHENTICATION_ERROR"
+        assert "AUTH_TOKEN_INVALID" in str(exc_info.value) or (
+            exc_info.value.args and exc_info.value.args[0] == "AUTH_TOKEN_INVALID"
         )
         assert exc_info.value.args[2] == "terminal"
 
@@ -354,7 +354,7 @@ class TestA2ABoundaryAdCPErrorTranslation:
             error = exc_info.value.error
             assert error.code == -32602
             assert "invalid param" in error.message
-            assert error.data == {"recovery": "correctable"}
+            assert error.data == {"recovery": "correctable", "error_code": "VALIDATION_ERROR"}
 
     @pytest.mark.asyncio
     async def test_adcp_auth_becomes_invalid_request(self):
@@ -375,7 +375,7 @@ class TestA2ABoundaryAdCPErrorTranslation:
             error = exc_info.value.error
             assert error.code == -32600
             assert "bad token" in error.message
-            assert error.data == {"recovery": "terminal"}
+            assert error.data == {"recovery": "terminal", "error_code": "AUTH_TOKEN_INVALID"}
 
     @pytest.mark.asyncio
     async def test_adcp_adapter_becomes_internal_error(self):
@@ -396,7 +396,7 @@ class TestA2ABoundaryAdCPErrorTranslation:
             error = exc_info.value.error
             assert error.code == -32603
             assert "GAM down" in error.message
-            assert error.data == {"recovery": "transient"}
+            assert error.data == {"recovery": "transient", "error_code": "ADAPTER_ERROR"}
 
     @pytest.mark.asyncio
     async def test_server_error_still_passes_through(self):
@@ -459,7 +459,7 @@ class TestRESTBoundaryAdCPErrorTranslation:
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 401
             body = response.json()
-            assert body["error_code"] == "AUTHENTICATION_ERROR"
+            assert body["error_code"] == "AUTH_TOKEN_INVALID"
             assert body["recovery"] == "terminal"
 
     def test_adcp_not_found_from_impl_returns_404(self):
@@ -666,7 +666,7 @@ class TestCustomRecoveryOverrideA2ABoundary:
                 await handler._handle_explicit_skill("get_products", {}, "token")
 
             error = exc_info.value.error
-            assert error.data == {"recovery": "transient"}  # Custom, not "terminal"
+            assert error.data == {"recovery": "transient", "error_code": "NOT_FOUND"}  # Custom, not "terminal"
 
 
 class TestCustomRecoveryOverrideRESTBoundary:
@@ -719,7 +719,7 @@ class TestRecoveryRoundtrip:
         cases = [
             (AdCPError, "internal", "INTERNAL_ERROR", "terminal"),
             (AdCPValidationError, "bad", "VALIDATION_ERROR", "correctable"),
-            (AdCPAuthenticationError, "unauth", "AUTHENTICATION_ERROR", "terminal"),
+            (AdCPAuthenticationError, "unauth", "AUTH_TOKEN_INVALID", "terminal"),
             (AdCPAuthorizationError, "forbidden", "AUTHORIZATION_ERROR", "terminal"),
             (AdCPNotFoundError, "missing", "NOT_FOUND", "terminal"),
             (AdCPConflictError, "dup", "CONFLICT", "correctable"),
@@ -809,8 +809,11 @@ class TestRecoveryRoundtrip:
                 assert error.code == expected_jsonrpc_code, (
                     f"{exc_class.__name__}: JSON-RPC code {error.code}, expected {expected_jsonrpc_code}"
                 )
-                assert error.data == {"recovery": expected_recovery}, (
-                    f"{exc_class.__name__}: data={error.data}, expected recovery={expected_recovery!r}"
+                assert error.data["recovery"] == expected_recovery, (
+                    f"{exc_class.__name__}: recovery={error.data.get('recovery')!r}, expected {expected_recovery!r}"
+                )
+                assert error.data["error_code"] == exc_class.error_code, (
+                    f"{exc_class.__name__}: error_code={error.data.get('error_code')!r}, expected {exc_class.error_code!r}"
                 )
 
     def test_rest_roundtrip_all_subclasses(self):
@@ -835,7 +838,7 @@ class TestRecoveryRoundtrip:
         cases = [
             (AdCPError, "internal", 500, "INTERNAL_ERROR", "terminal"),
             (AdCPValidationError, "bad", 400, "VALIDATION_ERROR", "correctable"),
-            (AdCPAuthenticationError, "unauth", 401, "AUTHENTICATION_ERROR", "terminal"),
+            (AdCPAuthenticationError, "unauth", 401, "AUTH_TOKEN_INVALID", "terminal"),
             (AdCPAuthorizationError, "forbidden", 403, "AUTHORIZATION_ERROR", "terminal"),
             (AdCPNotFoundError, "missing", 404, "NOT_FOUND", "terminal"),
             (AdCPConflictError, "dup", 409, "CONFLICT", "correctable"),

@@ -13,27 +13,18 @@ from pathlib import Path
 
 import pytest
 
-# The script lives in the pi-agentic-coding plugin (extracted from this repo)
-_PLUGIN_PATH = Path(__file__).resolve().parents[2] / ".claude" / "scripts" / "inspect_bdd_steps.py"
-_PLUGIN_INSTALLED_PATH = (
-    Path.home()
-    / "projects"
-    / "pi-agentic-coding"
-    / "plugins"
-    / "qa-bdd"
-    / "skills"
-    / "inspect-steps"
-    / "scripts"
-    / "inspect_bdd_steps.py"
-)
-SCRIPT_PATH = _PLUGIN_PATH if _PLUGIN_PATH.exists() else _PLUGIN_INSTALLED_PATH
+# The script lives at .claude/scripts/inspect_bdd_steps.py — load it dynamically
+SCRIPT_PATH = Path(__file__).resolve().parents[2] / ".claude" / "scripts" / "inspect_bdd_steps.py"
 
 
 @pytest.fixture(autouse=True)
 def _load_inspect_module():
     """Dynamically import the inspection script as a module."""
     if not SCRIPT_PATH.exists():
-        pytest.skip("inspect_bdd_steps.py not available (lives in pi-agentic-coding plugin)")
+        pytest.fail(
+            f"inspect_bdd_steps.py not found at {SCRIPT_PATH}. "
+            "Create .claude/scripts/inspect_bdd_steps.py with extract_bdd_steps() function."
+        )
     spec = importlib.util.spec_from_file_location("inspect_bdd_steps", SCRIPT_PATH)
     module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
     sys.modules["inspect_bdd_steps"] = module

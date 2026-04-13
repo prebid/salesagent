@@ -118,10 +118,10 @@ def docker_services_e2e(request):
 
         # Use environment variable ports if set, otherwise allocate dynamic ports
         # All services run on a single port (unified FastAPI process)
-        mcp_port = int(os.getenv("ADCP_SALES_PORT")) if os.getenv("ADCP_SALES_PORT") else find_free_port(10000, 20000)
+        mcp_port = int(os.getenv("ADCP_SALES_PORT")) if os.getenv("ADCP_SALES_PORT") else find_free_port(20000, 25000)
         a2a_port = mcp_port  # A2A is on same port as MCP (unified FastAPI process)
         admin_port = mcp_port  # Admin is on same port as MCP (unified FastAPI process)
-        postgres_port = int(os.getenv("POSTGRES_PORT")) if os.getenv("POSTGRES_PORT") else find_free_port(40000, 50000)
+        postgres_port = int(os.getenv("POSTGRES_PORT")) if os.getenv("POSTGRES_PORT") else find_free_port(25000, 30000)
 
         print(f"Using ports: Server={mcp_port} (MCP+A2A+Admin), Postgres={postgres_port}")
 

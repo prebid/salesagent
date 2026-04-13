@@ -1037,7 +1037,7 @@ class TestProvenanceEnforcement:
                     _make_creative_asset(
                         creative_id="c_with_prov",
                         name="With Provenance",
-                        provenance={"digital_source_type": "digital_creation", "ai_tool": "DALL-E"},
+                        provenance={"digital_source_type": "digital_creation", "ai_tool": {"name": "DALL-E"}},
                     )
                 ],
             )

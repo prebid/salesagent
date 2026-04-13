@@ -241,7 +241,10 @@ def convert_pricing_option_to_adcp(
             "fixed_price": float(rate),
         }
         # Flat rate may have optional parameters (DOOH venue packages, SOV, etc.)
+        # adcp 3.10: Parameters requires type="dooh" discriminator
         if parameters:
+            if isinstance(parameters, dict) and "type" not in parameters:
+                parameters = {**parameters, "type": "dooh"}
             result_fields["parameters"] = parameters
         return FlatRatePricingOption(**result_fields)
 

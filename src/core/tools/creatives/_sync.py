@@ -473,7 +473,7 @@ def _sync_creatives_impl(
         message += f", {len(creatives_needing_approval)} require approval"
 
     # Build AdCP-compliant response (per official spec)
-    return SyncCreativesResponse(  # type: ignore[call-arg]  # RootModel auto-wrapping accepts variant kwargs
+    return SyncCreativesResponse(
         creatives=results,
         dry_run=dry_run,
         context=context,

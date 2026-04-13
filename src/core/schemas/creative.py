@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import Any, Literal
 
+from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import (
     CreativeStatus,
 )
@@ -34,23 +35,19 @@ from adcp.types import (
 from adcp.types import (
     SyncCreativesRequest as LibrarySyncCreativesRequest,
 )
-from adcp.types import (
-    SyncCreativesResponse as LibrarySyncCreativesResponse,
-)
 from adcp.types.generated_poc.core.pagination_response import PaginationResponse as LibraryResponsePagination
-from adcp.types.generated_poc.enums.creative_action import CreativeAction
-from adcp.types.generated_poc.media_buy.list_creatives_response import (
+from adcp.types.generated_poc.core.provenance import AiTool
+from adcp.types.generated_poc.creative.list_creatives_response import (
     Creative as LibraryCreative,
 )
-from adcp.types.generated_poc.media_buy.sync_creatives_response import (
+from adcp.types.generated_poc.creative.sync_creatives_response import (
     SyncCreativesResponse1 as LibrarySyncCreativesSuccess,
 )
-from adcp.types.generated_poc.media_buy.sync_creatives_response import (
-    SyncCreativesResponse2 as LibrarySyncCreativesError,
-)
+from adcp.types.generated_poc.enums.creative_action import CreativeAction
 from pydantic import (
     ConfigDict,
     Field,
+    field_validator,
     model_validator,
 )
 
@@ -96,9 +93,18 @@ class Provenance(SalesAgentBaseModel):
     digital_source_type: DigitalSourceType = Field(
         ..., description="IPTC Digital Source Type indicating how the content was created"
     )
-    ai_tool: str | None = Field(
-        default=None, description="Name/identifier of the AI tool used to create or modify the content"
+    ai_tool: AiTool | None = Field(
+        default=None, description="AI tool used to create or modify the content (adcp 3.9 AiTool model)"
     )
+
+    @field_validator("ai_tool", mode="before")
+    @classmethod
+    def _coerce_ai_tool(cls, v: Any) -> Any:
+        """Accept a plain string for backward compatibility, wrapping it as AiTool(name=v)."""
+        if isinstance(v, str):
+            return AiTool(name=v)
+        return v
+
     human_oversight: bool | None = Field(
         default=None, description="Whether a human reviewed/approved the AI-generated content"
     )
@@ -324,6 +330,10 @@ class SyncCreativesRequest(LibrarySyncCreativesRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
+    # adcp 3.9 makes account required. Our impl resolves identity at the transport
+    # layer (ResolvedIdentity), not from the request payload, so account is optional here.
+    account: LibraryAccountReference | None = None  # type: ignore[assignment]
+
     creatives: list[Creative] = Field(
         ..., min_length=1, max_length=100, description="Array of creative assets to sync (create or update)"
     )  # type: ignore[assignment]
@@ -440,60 +450,19 @@ class AssignmentResult(SalesAgentBaseModel):
     )
 
 
-class SyncCreativesResponse(LibrarySyncCreativesResponse):
-    """Extends library SyncCreativesResponse RootModel with flat attribute access.
+class SyncCreativesResponse(LibrarySyncCreativesSuccess):
+    """Extends library SyncCreativesResponse success variant.
 
-    Library uses RootModel[SuccessVariant | ErrorVariant] discriminated union.
-    This proxy subclass provides @property accessors for backward-compatible
-    flat attribute access (self.creatives, self.dry_run, self.errors, self.context)
-    while preserving isinstance compatibility with the library type.
+    adcp 3.9: SyncCreativesResponse is now a union TypeAlias (not RootModel).
+    Since the error variant is never constructed (ToolError handles failures),
+    we subclass the success variant directly. Fields (creatives, dry_run,
+    context, ext, sandbox) are inherited.
 
-    Construction auto-wraps: SyncCreativesResponse(creatives=[...]) works without
-    explicitly creating the variant. Field(exclude=True) on nested SyncCreativeResult
-    is handled natively by Pydantic serialization.
-
-    Design decision (salesagent-g3c): KEEP proxy pattern over union type alias.
-    The error variant is never constructed (ToolError handles operation failures),
-    so the union pattern would add ~30 consumer-site changes for no functional
-    benefit. The only cost is one type:ignore[call-arg] at construction.
+    Design decision (salesagent-g3c): error variant never constructed.
     """
-
-    @property
-    def creatives(self) -> list:
-        """Access creatives from success variant (empty list for error variant)."""
-        if isinstance(self.root, LibrarySyncCreativesSuccess):
-            return self.root.creatives
-        return []
-
-    @property
-    def dry_run(self) -> bool | None:
-        """Access dry_run from success variant."""
-        if isinstance(self.root, LibrarySyncCreativesSuccess):
-            return self.root.dry_run
-        return None
-
-    @property
-    def errors(self) -> list | None:
-        """Access errors from error variant (None for success variant)."""
-        if isinstance(self.root, LibrarySyncCreativesError):
-            return self.root.errors
-        return None
-
-    @property
-    def context(self):
-        """Access context from whichever variant is active."""
-        return self.root.context
-
-    def model_dump(self, **kwargs) -> dict[str, Any]:
-        """Override to default exclude_none=True per AdCP convention."""
-        kwargs.setdefault("exclude_none", True)
-        return super().model_dump(**kwargs)
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""
-        if isinstance(self.root, LibrarySyncCreativesError):
-            return f"Creative sync failed with {len(self.root.errors)} error(s)."
-
         # Count actions from creatives list
         created = sum(1 for c in self.creatives if c.action == CreativeAction.created)
         updated = sum(1 for c in self.creatives if c.action == CreativeAction.updated)
@@ -620,7 +589,7 @@ class ListCreativesResponse(NestedModelSerializerMixin, LibraryListCreativesResp
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
     # Override with local subtypes (each extends its library counterpart)
-    query_summary: QuerySummary = Field(..., description="Summary of the query that was executed")
+    query_summary: QuerySummary = Field(..., description="Summary of the query that was executed")  # type: ignore[assignment]
     pagination: Pagination = Field(..., description="Pagination information for navigating results")
     creatives: list[Creative] = Field(..., description="Array of creative assets")  # type: ignore[assignment]
 

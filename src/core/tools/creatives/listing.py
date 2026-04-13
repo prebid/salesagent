@@ -8,8 +8,10 @@ from typing import Any, cast
 from adcp import CreativeFilters
 from adcp.types.generated_poc.core.context import ContextObject
 from adcp.types.generated_poc.core.pagination_request import PaginationRequest
-from adcp.types.generated_poc.media_buy.list_creatives_request import (
-    FieldModel,
+from adcp.types.generated_poc.creative.list_creatives_request import (
+    Field1 as FieldModel,
+)
+from adcp.types.generated_poc.creative.list_creatives_request import (
     Sort,
 )
 from fastmcp.server.context import Context
@@ -87,8 +89,8 @@ def _list_creatives_impl(
         ListCreativesResponse with filtered creative assets and pagination info
     """
     from adcp.types import CreativeFilters as LibraryCreativeFilters
-    from adcp.types import Sort as LibrarySort
     from adcp.types.generated_poc.core.pagination_request import PaginationRequest as LibraryPagination
+    from adcp.types.generated_poc.creative.list_creatives_request import Sort as LibrarySort
 
     from src.core.schemas import ListCreativesRequest
 
@@ -121,8 +123,9 @@ def _list_creatives_impl(
     filters_dict: dict[str, Any] = {}
     if status:
         filters_dict["statuses"] = [status]
-    if format:
-        filters_dict["formats"] = [format]
+    # Note: flat 'format' param is handled by DB query directly (line ~213),
+    # not via CreativeFilters. adcp 3.10 format_ids requires FormatId objects
+    # which need agent_url — structured filters.format_ids handles this properly.
     if tags:
         filters_dict["tags"] = tags
     if created_after_dt:
@@ -175,9 +178,7 @@ def _list_creatives_impl(
             pagination=structured_pagination,
             sort=structured_sort,
             fields=fields,
-            include_performance=include_performance,
             include_assignments=include_assignments,
-            include_sub_assets=include_sub_assets,
             context=context,
         )
     except ValidationError as e:
@@ -319,8 +320,8 @@ def _list_creatives_impl(
             filters_applied.append(f"buyer_refs={','.join(req.filters.buyer_refs)}")
         if req.filters.statuses:
             filters_applied.append(f"statuses={','.join(str(s) for s in req.filters.statuses)}")
-        if req.filters.formats:
-            filters_applied.append(f"formats={','.join(req.filters.formats)}")
+        if req.filters.format_ids:
+            filters_applied.append(f"format_ids={','.join(str(f) for f in req.filters.format_ids)}")
         if req.filters.tags:
             filters_applied.append(f"tags={','.join(req.filters.tags)}")
         if req.filters.created_after:

@@ -34,6 +34,9 @@ class ResolvedIdentity(BaseModel, frozen=True):
     auth_token: str | None = None
     protocol: Literal["mcp", "a2a", "rest"] = "mcp"
     testing_context: AdCPTestContext | None = None
+    account_id: str | None = None  # Resolved account ID (from AccountReference at transport boundary)
+    supported_billing: list[str] | None = None  # BR-RULE-059: seller billing policy
+    account_approval_mode: str | None = None  # BR-RULE-060: auto | credit_review | legal_review
 
     @property
     def is_authenticated(self) -> bool:

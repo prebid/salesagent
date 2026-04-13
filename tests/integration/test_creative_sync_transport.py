@@ -47,17 +47,13 @@ class TestSyncCreativeCreateTransport:
         with CreativeSyncEnv() as env:
             env.setup_default_data()
 
-            result = env.call_via(
-                transport,
-                creatives=[
-                    {
-                        "creative_id": "c_transport_test",
-                        "name": "Transport Test Creative",
-                        "format_id": {"id": "display_300x250", "agent_url": "https://example.com/agent"},
-                        "media_url": "https://example.com/image.png",
-                    }
-                ],
+            from tests.factories.creative_asset import CreativeAssetFactory
+
+            creative = CreativeAssetFactory(
+                creative_id="c_transport_test",
+                name="Transport Test Creative",
             )
+            result = env.call_via(transport, creatives=[creative])
 
         assert result.is_success, f"Expected success but got error: {result.error}"
         assert_envelope(result, transport)
@@ -93,18 +89,13 @@ class TestSyncCreativeCreateTransport:
         with CreativeSyncEnv() as env:
             env.setup_default_data()
 
-            result = env.call_via(
-                transport,
-                creatives=[
-                    {
-                        "creative_id": "c_dry_run",
-                        "name": "Dry Run Creative",
-                        "format_id": {"id": "display_300x250", "agent_url": "https://example.com/agent"},
-                        "media_url": "https://example.com/image.png",
-                    }
-                ],
-                dry_run=True,
+            from tests.factories.creative_asset import CreativeAssetFactory
+
+            creative = CreativeAssetFactory(
+                creative_id="c_dry_run",
+                name="Dry Run Creative",
             )
+            result = env.call_via(transport, creatives=[creative], dry_run=True)
 
         assert result.is_success
         assert_envelope(result, transport)
@@ -502,17 +493,16 @@ class TestGenerativeBuildPromptInputs:
             env.setup_default_data()
             fmt = env.setup_generative_build()
 
-            result = env.call_via(
-                transport,
-                creatives=[
-                    {
-                        "creative_id": "c_gen_05",
-                        "name": "Inputs Test",
-                        "format_id": fmt,
-                        "inputs": [{"name": "q4_brief", "context_description": "Design for Q4 campaign"}],
-                    }
-                ],
+            from tests.factories.creative_asset import CreativeAssetFactory
+
+            creative = CreativeAssetFactory(
+                creative_id="c_gen_05",
+                name="Inputs Test",
+                format_id=fmt,
+                assets={},
+                inputs=[{"name": "q4_brief", "context_description": "Design for Q4 campaign"}],
             )
+            result = env.call_via(transport, creatives=[creative])
 
             assert result.is_success
             assert_envelope(result, transport)
@@ -536,16 +526,15 @@ class TestGenerativeBuildNameFallback:
             env.setup_default_data()
             fmt = env.setup_generative_build()
 
-            result = env.call_via(
-                transport,
-                creatives=[
-                    {
-                        "creative_id": "c_gen_06",
-                        "name": "Holiday Sale Banner",
-                        "format_id": fmt,
-                    }
-                ],
+            from tests.factories.creative_asset import CreativeAssetFactory
+
+            creative = CreativeAssetFactory(
+                creative_id="c_gen_06",
+                name="Holiday Sale Banner",
+                format_id=fmt,
+                assets={},
             )
+            result = env.call_via(transport, creatives=[creative])
 
             assert result.is_success
             assert_envelope(result, transport)
@@ -589,16 +578,15 @@ class TestGenerativeBuildUpdatePreserve:
             build_calls_after_create = registry.build_creative.call_count
 
             # Second sync: UPDATE with no prompt assets
-            result2 = env.call_via(
-                transport,
-                creatives=[
-                    {
-                        "creative_id": "c_gen_07",
-                        "name": "Preserve Test Updated Name",
-                        "format_id": fmt,
-                    }
-                ],
+            from tests.factories.creative_asset import CreativeAssetFactory
+
+            creative2 = CreativeAssetFactory(
+                creative_id="c_gen_07",
+                name="Preserve Test Updated Name",
+                format_id=fmt,
+                assets={},
             )
+            result2 = env.call_via(transport, creatives=[creative2])
 
             assert result2.is_success
             assert_envelope(result2, transport)
@@ -1001,7 +989,14 @@ class TestMissingFormatFails:
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
     def test_no_format_action_failed(self, integration_db, transport):
-        """Creative without format_id → action=failed."""
+        """Creative without format_id is rejected.
+
+        On impl/a2a: reaches _impl which returns action=failed (missing format).
+        On MCP: TypeAdapter rejects because CreativeAsset requires format_id.
+        Both paths correctly reject the creative.
+        """
+        from tests.harness.assertions import assert_rejected
+
         with CreativeSyncEnv() as env:
             env.setup_default_data()
 
@@ -1017,11 +1012,15 @@ class TestMissingFormatFails:
                 validation_mode="lenient",
             )
 
-        assert result.is_success
-        assert_envelope(result, transport)
-        creative_result = result.payload.creatives[0]
-        assert creative_result.action == CreativeAction.failed
-        assert creative_result.errors
+        if result.is_error:
+            # MCP: TypeAdapter rejected missing format_id — correct behavior
+            assert_rejected(result, field="format_id", reason="Field required")
+        else:
+            # impl/a2a/rest: _impl handled it, returned action=failed
+            assert_envelope(result, transport)
+            creative_result = result.payload.creatives[0]
+            assert creative_result.action == CreativeAction.failed
+            assert creative_result.errors
 
 
 @pytest.mark.requires_db
@@ -1053,7 +1052,10 @@ class TestStaticPreviewFailed:
             registry = env.mock["registry"].return_value
             registry.preview_creative = AsyncMock(return_value={})
 
-            # Creative with no url — only assets without a url field
+            # Creative with format_id but no assets — tests the "no previews" path.
+            # Uses dict because the test exercises the dict→CreativeAsset coercion
+            # in _impl (which defaults assets={}). On MCP, TypeAdapter rejects the
+            # missing assets field — that's also correct (schema-level rejection).
             result = env.call_via(
                 transport,
                 creatives=[
@@ -1066,11 +1068,19 @@ class TestStaticPreviewFailed:
                 validation_mode="lenient",
             )
 
-        assert result.is_success
-        assert_envelope(result, transport)
-        creative_result = result.payload.creatives[0]
-        assert creative_result.action == CreativeAction.failed
-        assert any("no previews" in e.lower() or "no media_url" in e.lower() for e in (creative_result.errors or []))
+        if result.is_error:
+            # MCP: TypeAdapter rejects missing assets field — correct schema rejection
+            from tests.harness.assertions import assert_rejected
+
+            assert_rejected(result, field="assets", reason="Field required")
+        else:
+            # impl/a2a/rest: _impl handles it, returns action=failed
+            assert_envelope(result, transport)
+            creative_result = result.payload.creatives[0]
+            assert creative_result.action == CreativeAction.failed
+            assert any(
+                "no previews" in e.lower() or "no media_url" in e.lower() for e in (creative_result.errors or [])
+            )
 
 
 @pytest.mark.requires_db
@@ -1183,7 +1193,9 @@ class TestAIReviewTrigger:
         mock_executor.submit.return_value = MockMaker()  # mock future
 
         with CreativeSyncEnv() as env:
-            env.setup_default_data()
+            tenant, _principal = env.setup_default_data()
+            # Update DB tenant so real auth chain sees ai-powered mode.
+            tenant.approval_mode = "ai-powered"
             env.identity_for(transport).tenant["approval_mode"] = "ai-powered"
 
             with (
@@ -1227,7 +1239,10 @@ class TestAIPoweredApprovalDeferredNotification:
         mock_executor.submit.return_value = MockMaker()
 
         with CreativeSyncEnv() as env:
-            env.setup_default_data()
+            tenant, _principal = env.setup_default_data()
+            # Update DB tenant so real auth chain sees ai-powered mode.
+            tenant.approval_mode = "ai-powered"
+            tenant.slack_webhook_url = "https://hooks.slack.com/test"
             identity = env.identity_for(transport)
             identity.tenant["approval_mode"] = "ai-powered"
             identity.tenant["slack_webhook_url"] = "https://hooks.slack.com/test"
@@ -1282,7 +1297,7 @@ class TestAsyncLifecycleSubmitted:
     )
     def test_queued_sync_returns_submitted(self, integration_db):
         """Queued sync operation returns SyncCreativesSubmitted with context."""
-        from adcp.types.generated_poc.media_buy.sync_creatives_async_response_submitted import (
+        from adcp.types.generated_poc.creative.sync_creatives_async_response_submitted import (
             SyncCreativesSubmitted,
         )
 
@@ -1319,7 +1334,7 @@ class TestAsyncLifecycleWorking:
     )
     def test_in_progress_returns_working_with_progress(self, integration_db):
         """Status check on in-progress async op returns SyncCreativesWorking."""
-        from adcp.types.generated_poc.media_buy.sync_creatives_async_response_working import (
+        from adcp.types.generated_poc.creative.sync_creatives_async_response_working import (
             SyncCreativesWorking,
         )
 
@@ -1369,7 +1384,7 @@ class TestAsyncLifecycleInputRequired:
     )
     def test_approval_needed_returns_input_required(self, integration_db):
         """Async op needing approval returns SyncCreativesInputRequired."""
-        from adcp.types.generated_poc.media_buy.sync_creatives_async_response_input_required import (
+        from adcp.types.generated_poc.creative.sync_creatives_async_response_input_required import (
             Reason,
             SyncCreativesInputRequired,
         )

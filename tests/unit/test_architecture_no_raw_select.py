@@ -73,7 +73,7 @@ ORM_MODEL_NAMES = _discover_orm_model_names()
 # FIXME(salesagent-xw7): migrate each of these to repository calls
 ALLOWLIST: set[tuple[str, str]] = {
     # ── Adapters ──
-    ("src/adapters/gam/managers/orders.py", "create_line_items"),
+    # create_line_items removed — uses pre-loaded template param (salesagent-zj9)
     ("src/adapters/gam/managers/sync.py", "_get_recent_sync"),
     ("src/adapters/gam/managers/sync.py", "get_sync_history"),
     ("src/adapters/gam/managers/sync.py", "get_sync_stats"),
@@ -81,7 +81,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/adapters/gam/managers/sync.py", "needs_sync"),
     ("src/adapters/gam/managers/targeting.py", "_load_axe_keys"),
     ("src/adapters/gam/managers/targeting.py", "_load_custom_targeting_key_ids"),
-    ("src/adapters/gam/managers/targeting.py", "sync_custom_targeting_keys"),
+    # sync_custom_targeting_keys removed — uses AdapterConfigRepository (salesagent-zj9)
     ("src/adapters/gam/managers/workflow.py", "create_manual_order_workflow_step"),
     ("src/adapters/gam_reporting_api.py", "get_ad_unit_breakdown"),
     ("src/adapters/gam_reporting_api.py", "get_advertiser_summary"),
@@ -290,7 +290,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/core/database/queries.py", "get_creative_with_latest_review"),
     ("src/core/database/queries.py", "get_creatives_needing_human_review"),
     ("src/core/database/queries.py", "get_recent_reviews"),
-    ("src/core/helpers/adapter_helpers.py", "get_adapter"),
+    # adapter_helpers.py removed — now uses AdapterConfigRepository (salesagent-zj9)
     ("src/core/strategy.py", "_load_state"),
     ("src/core/strategy.py", "_upsert_state"),
     ("src/core/tenant_status.py", "get_tenant_status"),
@@ -314,7 +314,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/auth_config_service.py", "is_oidc_config_valid"),
     ("src/services/auth_config_service.py", "mark_oidc_verified"),
     ("src/services/auth_config_service.py", "save_oidc_config"),
-    ("src/services/background_approval_service.py", "_run_approval_polling_thread"),
+    # _run_approval_polling_thread removed — uses AdapterConfigRepository (salesagent-zj9)
     ("src/services/background_sync_service.py", "_mark_sync_complete"),
     ("src/services/background_sync_service.py", "_mark_sync_failed"),
     ("src/services/background_sync_service.py", "_run_sync_thread"),
@@ -328,7 +328,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/dynamic_products.py", "generate_variants_from_signals"),
     ("src/services/format_metrics_service.py", "_process_and_store_metrics"),
     ("src/services/format_metrics_service.py", "aggregate_all_tenants"),
-    ("src/services/gam_inventory_service.py", "_update_adapter_config_targeting_keys"),
+    # _update_adapter_config_targeting_keys removed — uses AdapterConfigRepository (salesagent-zj9)
     ("src/services/gam_inventory_service.py", "_upsert_inventory_item"),
     ("src/services/gam_inventory_service.py", "create_inventory_endpoints"),
     ("src/services/gam_inventory_service.py", "fetch_custom_targeting_values"),
@@ -351,7 +351,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/media_buy_status_scheduler.py", "_are_creatives_approved"),
     ("src/services/order_approval_service.py", "_mark_approval_complete"),
     ("src/services/order_approval_service.py", "_mark_approval_failed"),
-    ("src/services/order_approval_service.py", "_run_approval_thread"),
+    # _run_approval_thread removed — uses AdapterConfigRepository (salesagent-zj9)
     ("src/services/order_approval_service.py", "_send_approval_webhook"),
     ("src/services/order_approval_service.py", "_update_approval_progress"),
     ("src/services/order_approval_service.py", "get_approval_status"),

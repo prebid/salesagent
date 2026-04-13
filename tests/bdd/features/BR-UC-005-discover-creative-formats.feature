@@ -1,4 +1,4 @@
-# Generated from adcp-req @ 3b4c503bac3a4878809197ceefb212e4fc0e746d on 2026-03-11T13:05:19Z
+# Generated from adcp-req @ 8a219ece2b54628c33f1075d386b73082a0f4832 on 2026-03-20T12:00:24Z
 # DO NOT EDIT -- re-run: python scripts/compile_bdd.py
 
 Feature: BR-UC-005 Discover Creative Formats
@@ -20,7 +20,7 @@ Feature: BR-UC-005 Discover Creative Formats
     And at least one creative agent is registered with format definitions
 
 
-  @T-UC-005-main-rest @main-flow @rest @post-s1 @post-s2
+  @T-UC-005-main-rest @UC-005-MAIN-REST-01 @main-flow @rest @post-s1 @post-s2
   Scenario: Discover full format catalog via REST
     Given the creative agent registry has formats across multiple categories
     When the Buyer Agent sends a list_creative_formats task via A2A with no filters
@@ -32,7 +32,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # POST-S1: Complete catalog returned
     # POST-S2: Asset requirements included per format
 
-  @T-UC-005-main-mcp @main-flow @mcp @post-s1 @post-s2
+  @T-UC-005-main-mcp @UC-005-MAIN-MCP-01 @main-flow @mcp @post-s1 @post-s2
   Scenario: Discover full format catalog via MCP
     Given the creative agent registry has formats across multiple categories
     When the Buyer Agent calls list_creative_formats MCP tool with no filters
@@ -44,7 +44,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # POST-S1: Complete catalog returned
     # POST-S2: Asset requirements included per format
 
-  @T-UC-005-main-filtered @main-flow @rest @post-s3
+  @T-UC-005-main-filtered @UC-005-MAIN-MCP-05 @main-flow @rest @post-s3
   Scenario: Discover filtered format catalog via REST
     Given the creative agent registry has formats of types "display" and "video"
     When the Buyer Agent sends a list_creative_formats task via A2A with type filter "display"
@@ -52,7 +52,7 @@ Feature: BR-UC-005 Discover Creative Formats
     And no video formats should be present in the results
     # POST-S3: Only matching formats returned when filters applied
 
-  @T-UC-005-main-referrals @main-flow @post-s4
+  @T-UC-005-main-referrals @UC-005-MAIN-MCP-13 @main-flow @post-s4
   Scenario: Creative agent referrals included in response
     Given the seller has additional creative agents beyond the default
     When the Buyer Agent requests the format catalog
@@ -60,7 +60,7 @@ Feature: BR-UC-005 Discover Creative Formats
     And each referral should include the agent URL and supported capabilities
     # POST-S4: Creative agent referrals present when available
 
-  @T-UC-005-inv-031-1-holds @invariant @BR-RULE-031
+  @T-UC-005-inv-031-1-holds @UC-005-MAIN-MCP-16 @invariant @BR-RULE-031
   Scenario: BR-RULE-031 INV-1 holds - Multiple filters combine as AND
     Given the registry has format "display-banner" of type "display" with asset type "image"
     And the registry has format "video-banner" of type "display" with asset type "video"
@@ -69,14 +69,14 @@ Feature: BR-UC-005 Discover Creative Formats
     Then only "video-banner" should be returned
     # BR-RULE-031 INV-1: both filters must match (type=display AND asset=video)
 
-  @T-UC-005-inv-031-1-violated @invariant @BR-RULE-031
+  @T-UC-005-inv-031-1-violated @UC-005-MAIN-MCP-16 @invariant @BR-RULE-031
   Scenario: BR-RULE-031 INV-1 violated - AND combination excludes partial matches
     Given the registry has format "pre-roll" of type "video" with asset type "video"
     When the Buyer Agent requests formats with type "display" and asset_types ["video"]
     Then no formats should be returned
     # BR-RULE-031 INV-1: type=display excludes video-type format despite matching asset_types
 
-  @T-UC-005-inv-031-2-holds @invariant @BR-RULE-031
+  @T-UC-005-inv-031-2-holds @UC-005-MAIN-MCP-04 @invariant @BR-RULE-031
   Scenario: BR-RULE-031 INV-2 holds - Results sorted by type then name
     Given the registry has formats:
     | name            | type    |
@@ -93,7 +93,7 @@ Feature: BR-UC-005 Discover Creative Formats
     | Pre-Roll        | video   |
     # BR-RULE-031 INV-2: sorted by type value then name
 
-  @T-UC-005-inv-049-1-holds @invariant @BR-RULE-049
+  @T-UC-005-inv-049-1-holds @UC-005-MAIN-MCP-05 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-1 holds - Type filter matches exact category
     Given the registry has formats: "leaderboard" (display), "pre-roll" (video), "podcast-ad" (audio)
     When the Buyer Agent requests formats with type filter "display"
@@ -101,7 +101,7 @@ Feature: BR-UC-005 Discover Creative Formats
     And the returned format type should be "display"
     # BR-RULE-049 INV-1: type filter -> only formats with exactly matching FormatCategory
 
-  @T-UC-005-inv-049-1-violated @invariant @BR-RULE-049
+  @T-UC-005-inv-049-1-violated @UC-005-MAIN-MCP-05 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-1 violated - Type filter excludes non-matching formats
     Given the registry has formats: "leaderboard" (display), "pre-roll" (video)
     When the Buyer Agent requests formats with type filter "audio"
@@ -109,7 +109,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # BR-RULE-049 INV-1: non-matching FormatCategory excluded
     # --- INV-2: format_ids id match with silent exclusion ---
 
-  @T-UC-005-inv-049-2-holds @invariant @BR-RULE-049
+  @T-UC-005-inv-049-2-holds @UC-005-MAIN-MCP-06 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-2 holds - Format IDs filter matches on id field
     Given the registry has format "leaderboard" with format_id id "fmt-001"
     And the registry has format "pre-roll" with format_id id "fmt-002"
@@ -117,7 +117,7 @@ Feature: BR-UC-005 Discover Creative Formats
     Then only "leaderboard" should be returned
     # BR-RULE-049 INV-2: format_ids matches on id field only
 
-  @T-UC-005-inv-049-2-violated @invariant @BR-RULE-049
+  @T-UC-005-inv-049-2-violated @UC-005-MAIN-MCP-06 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-2 violated - Non-matching format IDs silently excluded
     Given the registry has format "leaderboard" with format_id id "fmt-001"
     When the Buyer Agent requests formats with format_ids filter ["fmt-999", "fmt-001"]
@@ -126,7 +126,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # BR-RULE-049 INV-2: non-matching IDs silently excluded
     # --- INV-3: asset_types OR semantics ---
 
-  @T-UC-005-inv-049-3-holds @invariant @BR-RULE-049
+  @T-UC-005-inv-049-3-holds @UC-005-MAIN-MCP-07 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-3 holds - Asset types filter with OR semantics
     Given the registry has format "banner" with assets of type "image"
     And the registry has format "video-ad" with assets of type "video"
@@ -135,14 +135,14 @@ Feature: BR-UC-005 Discover Creative Formats
     Then "banner", "video-ad", and "rich-media" should all be returned
     # BR-RULE-049 INV-3: at least one matching asset type -> format included (OR semantics)
 
-  @T-UC-005-inv-049-3-violated @invariant @BR-RULE-049
+  @T-UC-005-inv-049-3-violated @UC-005-MAIN-MCP-07 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-3 violated - No matching asset type excludes format
     Given the registry has format "text-only" with assets of type "text"
     When the Buyer Agent requests formats with asset_types filter ["video"]
     Then "text-only" should not be returned
     # BR-RULE-049 INV-3: no matching asset type -> format excluded
 
-  @T-UC-005-inv-049-3-group @invariant @BR-RULE-049
+  @T-UC-005-inv-049-3-group @UC-005-MAIN-MCP-07 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-3 edge - Group assets checked in addition to individual assets
     Given the registry has format "rich-media" with a repeatable asset group containing "image" and "text"
     When the Buyer Agent requests formats with asset_types filter ["text"]
@@ -150,7 +150,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # BR-RULE-049 INV-3: both individual and group assets checked
     # --- INV-4: dimension ANY render match ---
 
-  @T-UC-005-inv-049-4-holds @invariant @BR-RULE-049
+  @T-UC-005-inv-049-4-holds @UC-005-MAIN-MCP-08 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-4 holds - Dimension filter matches any render
     Given the registry has format "companion-ad" with renders:
     | width | height |
@@ -160,7 +160,7 @@ Feature: BR-UC-005 Discover Creative Formats
     Then "companion-ad" should be returned
     # BR-RULE-049 INV-4: ANY render satisfies constraint (728 >= 700)
 
-  @T-UC-005-inv-049-4-violated @invariant @BR-RULE-049
+  @T-UC-005-inv-049-4-violated @UC-005-MAIN-MCP-09 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-4 violated - No render fits dimension filter
     Given the registry has format "small-banner" with renders:
     | width | height |
@@ -170,7 +170,7 @@ Feature: BR-UC-005 Discover Creative Formats
     Then "small-banner" should not be returned
     # BR-RULE-049 INV-4: no render satisfies min_width 700
 
-  @T-UC-005-inv-049-4-nodim @invariant @BR-RULE-049
+  @T-UC-005-inv-049-4-nodim @UC-005-MAIN-MCP-09 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-4 edge - Formats without dimensions excluded by dimension filter
     Given the registry has format "audio-spot" with no render dimensions
     When the Buyer Agent requests formats with min_width 100
@@ -178,7 +178,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # BR-RULE-049 INV-4: formats without dimension info excluded
     # --- INV-5: is_responsive=true ---
 
-  @T-UC-005-inv-049-5-holds @invariant @BR-RULE-049
+  @T-UC-005-inv-049-5-holds @UC-005-MAIN-MCP-10 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-5 holds - Responsive filter returns only responsive formats
     Given the registry has format "responsive-banner" with responsive render dimensions
     And the registry has format "fixed-banner" with non-responsive render dimensions
@@ -187,7 +187,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # BR-RULE-049 INV-5: is_responsive=true -> only formats with responsive render dimension
     # --- INV-6: is_responsive=false ---
 
-  @T-UC-005-inv-049-6-holds @invariant @BR-RULE-049
+  @T-UC-005-inv-049-6-holds @UC-005-MAIN-MCP-10 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-6 holds - Non-responsive filter returns only non-responsive formats
     Given the registry has format "responsive-banner" with responsive render dimensions
     And the registry has format "fixed-banner" with non-responsive render dimensions
@@ -196,7 +196,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # BR-RULE-049 INV-6: is_responsive=false -> only formats with no responsive dimensions
     # --- INV-7: name_search case-insensitive substring ---
 
-  @T-UC-005-inv-049-7-holds @invariant @BR-RULE-049
+  @T-UC-005-inv-049-7-holds @UC-005-MAIN-MCP-11 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-7 holds - Name search case-insensitive substring match
     Given the registry has format named "Premium Leaderboard"
     And the registry has format named "Standard Banner"
@@ -204,7 +204,7 @@ Feature: BR-UC-005 Discover Creative Formats
     Then only "Premium Leaderboard" should be returned
     # BR-RULE-049 INV-7: case-insensitive substring match
 
-  @T-UC-005-inv-049-7-violated @invariant @BR-RULE-049
+  @T-UC-005-inv-049-7-violated @UC-005-MAIN-MCP-11 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-7 violated - Name search no match excluded
     Given the registry has format named "Standard Banner"
     When the Buyer Agent requests formats with name_search "video"
@@ -212,7 +212,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # BR-RULE-049 INV-7: no substring match -> excluded
     # --- INV-8: disclosure_positions AND-match (NEW) ---
 
-  @T-UC-005-inv-049-8-holds @invariant @BR-RULE-049
+  @T-UC-005-inv-049-8-holds @UC-005-MAIN-MCP-18 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-8 holds - Disclosure positions AND-match filter
     Given the registry has format "video-ad" with supported_disclosure_positions ["prominent", "footer", "overlay"]
     And the registry has format "audio-ad" with supported_disclosure_positions ["prominent", "audio"]
@@ -220,14 +220,14 @@ Feature: BR-UC-005 Discover Creative Formats
     Then only "video-ad" should be returned
     # BR-RULE-049 INV-8: ALL requested positions must be supported (AND semantics)
 
-  @T-UC-005-inv-049-8-violated @invariant @BR-RULE-049
+  @T-UC-005-inv-049-8-violated @UC-005-MAIN-MCP-18 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-8 violated - Disclosure positions partial match excluded
     Given the registry has format "audio-ad" with supported_disclosure_positions ["prominent", "audio"]
     When the Buyer Agent requests formats with disclosure_positions filter ["prominent", "footer"]
     Then "audio-ad" should not be returned
     # BR-RULE-049 INV-8: format only supports "prominent" not "footer" -> excluded
 
-  @T-UC-005-inv-049-8-nofield @invariant @BR-RULE-049
+  @T-UC-005-inv-049-8-nofield @UC-005-MAIN-MCP-18 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-8 edge - Format without disclosure positions excluded
     Given the registry has format "basic-banner" with no supported_disclosure_positions field
     When the Buyer Agent requests formats with disclosure_positions filter ["prominent"]
@@ -235,7 +235,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # BR-RULE-049 INV-8: formats without supported_disclosure_positions excluded
     # --- INV-9: output_format_ids OR-match (NEW) ---
 
-  @T-UC-005-inv-049-9-holds @invariant @BR-RULE-049
+  @T-UC-005-inv-049-9-holds @UC-005-MAIN-MCP-19 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-9 holds - Output format IDs OR-match filter
     Given the registry has format "universal-builder" with output_format_ids:
     | agent_url                                    | id             |
@@ -248,7 +248,7 @@ Feature: BR-UC-005 Discover Creative Formats
     Then only "universal-builder" should be returned
     # BR-RULE-049 INV-9: ANY requested ID matches -> format included (OR semantics)
 
-  @T-UC-005-inv-049-9-violated @invariant @BR-RULE-049
+  @T-UC-005-inv-049-9-violated @UC-005-MAIN-MCP-19 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-9 violated - Output format IDs no match excluded
     Given the registry has format "audio-builder" with output_format_ids:
     | agent_url                                    | id        |
@@ -257,7 +257,7 @@ Feature: BR-UC-005 Discover Creative Formats
     Then "audio-builder" should not be returned
     # BR-RULE-049 INV-9: no matching output ID -> excluded
 
-  @T-UC-005-inv-049-9-nofield @invariant @BR-RULE-049
+  @T-UC-005-inv-049-9-nofield @UC-005-MAIN-MCP-19 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-9 edge - Format without output_format_ids excluded
     Given the registry has format "simple-banner" with no output_format_ids field
     When the Buyer Agent requests formats with output_format_ids filter [{"agent_url": "https://creatives.adcontextprotocol.org", "id": "display_static"}]
@@ -265,7 +265,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # BR-RULE-049 INV-9: formats without output_format_ids excluded
     # --- INV-10: input_format_ids OR-match (NEW) ---
 
-  @T-UC-005-inv-049-10-holds @invariant @BR-RULE-049
+  @T-UC-005-inv-049-10-holds @UC-005-MAIN-MCP-20 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-10 holds - Input format IDs OR-match filter
     Given the registry has format "resizer" with input_format_ids:
     | agent_url                                    | id             |
@@ -278,7 +278,7 @@ Feature: BR-UC-005 Discover Creative Formats
     Then only "resizer" should be returned
     # BR-RULE-049 INV-10: ANY requested ID matches -> format included (OR semantics)
 
-  @T-UC-005-inv-049-10-violated @invariant @BR-RULE-049
+  @T-UC-005-inv-049-10-violated @UC-005-MAIN-MCP-20 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-10 violated - Input format IDs no match excluded
     Given the registry has format "transcoder" with input_format_ids:
     | agent_url                                    | id           |
@@ -287,14 +287,14 @@ Feature: BR-UC-005 Discover Creative Formats
     Then "transcoder" should not be returned
     # BR-RULE-049 INV-10: no matching input ID -> excluded
 
-  @T-UC-005-inv-049-10-nofield @invariant @BR-RULE-049
+  @T-UC-005-inv-049-10-nofield @UC-005-MAIN-MCP-20 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-10 edge - Format without input_format_ids excluded
     Given the registry has format "basic-display" with no input_format_ids field
     When the Buyer Agent requests formats with input_format_ids filter [{"agent_url": "https://creatives.adcontextprotocol.org", "id": "display_static"}]
     Then "basic-display" should not be returned
     # BR-RULE-049 INV-10: formats without input_format_ids excluded (works from raw assets)
 
-  @T-UC-005-empty-catalog @edge-case
+  @T-UC-005-empty-catalog @UC-005-MAIN-MCP-01 @edge-case
   Scenario: Empty catalog when no agents have formats
     Given no creative agents have any registered formats
     When the Buyer Agent requests the format catalog
@@ -302,18 +302,18 @@ Feature: BR-UC-005 Discover Creative Formats
     And no error should be raised
     # Edge case: PRE-B1 boundary — no formats available
 
-  @T-UC-005-dim-boundary @boundary @BR-RULE-049
+  @T-UC-005-dim-boundary @UC-005-MAIN-MCP-08 @boundary @BR-RULE-049
   Scenario: Dimension boundary - inclusive range at threshold
     Given the registry has format "exact-fit" with render width 728 and height 90
     When the Buyer Agent requests formats with min_width 728 and max_width 728
     Then "exact-fit" should be returned
     # BR-RULE-049 INV-4: dimension range is inclusive (width == min_width == max_width)
 
-  @T-UC-005-ext-a-rest @extension @ext-a @error @rest @post-f1 @post-f2 @post-f3
+  @T-UC-005-ext-a-rest @UC-005-EXT-A-01 @extension @ext-a @error @rest @post-f1 @post-f2 @post-f3
   Scenario: No tenant context - REST
     Given the Buyer has no authentication credentials
     And no hostname-based tenant resolution is possible
-    When the Buyer Agent sends a list_creative_formats task via A2A
+    When the Buyer Agent sends a list_creative_formats task
     Then the operation should fail
     And the error code should be "TENANT_REQUIRED"
     And the error message should indicate tenant context could not be determined
@@ -323,7 +323,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # POST-F2: Error explains tenant context is missing
     # POST-F3: Suggestion advises providing auth or tenant identification
 
-  @T-UC-005-ext-a-mcp @extension @ext-a @error @mcp @post-f1 @post-f2 @post-f3
+  @T-UC-005-ext-a-mcp @UC-005-EXT-A-02 @extension @ext-a @error @mcp @post-f1 @post-f2 @post-f3
   Scenario: No tenant context - MCP
     Given no tenant can be resolved from the request context
     When the Buyer Agent calls list_creative_formats MCP tool
@@ -337,7 +337,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # POST-F3: Suggestion advises providing auth or tenant identification
     # --- ext-b: Invalid Request Parameters ---
 
-  @T-UC-005-ext-b-rest @extension @ext-b @error @rest @post-f1 @post-f2 @post-f3
+  @T-UC-005-ext-b-rest @UC-005-EXT-B-01 @extension @ext-b @error @rest @post-f1 @post-f2 @post-f3
   Scenario: Invalid request parameters - REST
     Given the Buyer has tenant context
     When the Buyer Agent sends a list_creative_formats task via A2A with type "not_a_category"
@@ -350,7 +350,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # POST-F2: Error explains which parameters are invalid and why
     # POST-F3: Suggestion provides valid values or format guidance
 
-  @T-UC-005-ext-b-mcp @extension @ext-b @error @mcp @post-f1 @post-f2 @post-f3
+  @T-UC-005-ext-b-mcp @UC-005-EXT-B-01 @extension @ext-b @error @mcp @post-f1 @post-f2 @post-f3
   Scenario: Invalid request parameters - MCP
     Given the Buyer has tenant context via MCP session
     When the Buyer Agent calls list_creative_formats MCP tool with type "not_a_category"
@@ -364,7 +364,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # POST-F3: Suggestion provides valid values or format guidance
     # --- ext-b: Disclosure Positions Validation Errors (NEW) ---
 
-  @T-UC-005-ext-b-disclosure-invalid @extension @ext-b @error @post-f1 @post-f2 @post-f3
+  @T-UC-005-ext-b-disclosure-invalid @UC-005-EXT-B-10 @extension @ext-b @error @post-f1 @post-f2 @post-f3
   Scenario: Invalid disclosure position value
     Given the Buyer has tenant context
     When the Buyer Agent requests formats with disclosure_positions filter ["sidebar"]
@@ -377,7 +377,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # POST-F2: Error explains invalid value
     # POST-F3: Suggestion lists valid enum values
 
-  @T-UC-005-ext-b-disclosure-empty @extension @ext-b @error @post-f1 @post-f2 @post-f3
+  @T-UC-005-ext-b-disclosure-empty @UC-005-EXT-B-11 @extension @ext-b @error @post-f1 @post-f2 @post-f3
   Scenario: Empty disclosure positions array
     Given the Buyer has tenant context
     When the Buyer Agent requests formats with disclosure_positions filter []
@@ -390,7 +390,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # POST-F2: Error explains minItems violation
     # POST-F3: Suggestion for recovery
 
-  @T-UC-005-ext-b-disclosure-dupes @extension @ext-b @error @post-f1 @post-f2 @post-f3
+  @T-UC-005-ext-b-disclosure-dupes @UC-005-EXT-B-12 @extension @ext-b @error @post-f1 @post-f2 @post-f3
   Scenario: Duplicate disclosure positions
     Given the Buyer has tenant context
     When the Buyer Agent requests formats with disclosure_positions filter ["prominent", "prominent"]
@@ -404,7 +404,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # POST-F3: Suggestion for recovery
     # --- ext-b: Output Format IDs Validation Errors (NEW) ---
 
-  @T-UC-005-ext-b-output-empty @extension @ext-b @error @post-f1 @post-f2 @post-f3
+  @T-UC-005-ext-b-output-empty @UC-005-EXT-B-13 @extension @ext-b @error @post-f1 @post-f2 @post-f3
   Scenario: Empty output format IDs array
     Given the Buyer has tenant context
     When the Buyer Agent requests formats with output_format_ids filter []
@@ -417,7 +417,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # POST-F2: Error explains minItems violation
     # POST-F3: Suggestion for recovery
 
-  @T-UC-005-ext-b-output-invalid @extension @ext-b @error @post-f1 @post-f2 @post-f3
+  @T-UC-005-ext-b-output-invalid @UC-005-EXT-B-14 @extension @ext-b @error @post-f1 @post-f2 @post-f3
   Scenario: Invalid output format ID structure - missing agent_url
     Given the Buyer has tenant context
     When the Buyer Agent requests formats with output_format_ids filter [{"id": "display_static"}]
@@ -430,7 +430,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # POST-F2: Error explains invalid structure
     # POST-F3: Suggestion for correct FormatId structure
 
-  @T-UC-005-ext-b-output-noid @extension @ext-b @error @post-f1 @post-f2 @post-f3
+  @T-UC-005-ext-b-output-noid @UC-005-EXT-B-14 @extension @ext-b @error @post-f1 @post-f2 @post-f3
   Scenario: Invalid output format ID structure - missing id
     Given the Buyer has tenant context
     When the Buyer Agent requests formats with output_format_ids filter [{"agent_url": "https://example.com"}]
@@ -444,7 +444,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # POST-F3: Suggestion for correct FormatId structure
     # --- ext-b: Input Format IDs Validation Errors (NEW) ---
 
-  @T-UC-005-ext-b-input-empty @extension @ext-b @error @post-f1 @post-f2 @post-f3
+  @T-UC-005-ext-b-input-empty @UC-005-EXT-B-15 @extension @ext-b @error @post-f1 @post-f2 @post-f3
   Scenario: Empty input format IDs array
     Given the Buyer has tenant context
     When the Buyer Agent requests formats with input_format_ids filter []
@@ -457,7 +457,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # POST-F2: Error explains minItems violation
     # POST-F3: Suggestion for recovery
 
-  @T-UC-005-ext-b-input-invalid @extension @ext-b @error @post-f1 @post-f2 @post-f3
+  @T-UC-005-ext-b-input-invalid @UC-005-EXT-B-16 @extension @ext-b @error @post-f1 @post-f2 @post-f3
   Scenario: Invalid input format ID structure - missing agent_url
     Given the Buyer has tenant context
     When the Buyer Agent requests formats with input_format_ids filter [{"id": "display_static"}]
@@ -470,7 +470,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # POST-F2: Error explains invalid structure
     # POST-F3: Suggestion for correct FormatId structure
 
-  @T-UC-005-ext-b-input-noid @extension @ext-b @error @post-f1 @post-f2 @post-f3
+  @T-UC-005-ext-b-input-noid @UC-005-EXT-B-16 @extension @ext-b @error @post-f1 @post-f2 @post-f3
   Scenario: Invalid input format ID structure - missing id
     Given the Buyer has tenant context
     When the Buyer Agent requests formats with input_format_ids filter [{"agent_url": "https://example.com"}]
@@ -483,7 +483,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # POST-F2: Error explains invalid structure
     # POST-F3: Suggestion for correct FormatId structure
 
-  @T-UC-005-partition-type-filter @partition @format_type_filter
+  @T-UC-005-partition-type-filter @UC-005-MAIN-MCP-05 @partition @format_type_filter
   Scenario Outline: Format type filter partition - <partition>
     Given a seller with formats of various types
     When the Buyer Agent requests creative formats with type filter "<partition>"
@@ -500,7 +500,7 @@ Feature: BR-UC-005 Discover Creative Formats
       | partition     | expected |
       | invalid_type  | invalid  |
 
-  @T-UC-005-partition-format-ids @partition @format_ids_filter
+  @T-UC-005-partition-format-ids @UC-005-MAIN-MCP-06 @partition @format_ids_filter
   Scenario Outline: Format IDs filter partition - <partition>
     Given a seller with known format IDs in the catalog
     When the Buyer Agent requests creative formats with format_ids "<partition>"
@@ -513,7 +513,7 @@ Feature: BR-UC-005 Discover Creative Formats
       | no_match        | valid    |
       | omitted         | valid    |
 
-  @T-UC-005-partition-asset-types @partition @asset_types_filter
+  @T-UC-005-partition-asset-types @UC-005-MAIN-MCP-07 @partition @asset_types_filter
   Scenario Outline: Asset types filter partition - <partition>
     Given a seller with formats containing various asset types
     When the Buyer Agent requests creative formats with asset_types "<partition>"
@@ -531,7 +531,7 @@ Feature: BR-UC-005 Discover Creative Formats
       | unknown_asset_type          | invalid  |
       | removed_promoted_offerings  | invalid  |
 
-  @T-UC-005-partition-dimension @partition @dimension_filter
+  @T-UC-005-partition-dimension @UC-005-MAIN-MCP-08 @partition @dimension_filter
   Scenario Outline: Dimension filter partition - <partition>
     Given a seller with formats of various render dimensions
     When the Buyer Agent requests creative formats with dimension filter "<partition>"
@@ -549,7 +549,7 @@ Feature: BR-UC-005 Discover Creative Formats
       | no_render_match     | valid    |
       | no_dimension_info   | valid    |
 
-  @T-UC-005-partition-responsive @partition @is_responsive_filter
+  @T-UC-005-partition-responsive @UC-005-MAIN-MCP-10 @partition @is_responsive_filter
   Scenario Outline: Responsive filter partition - <partition>
     Given a seller with both responsive and fixed-dimension formats
     When the Buyer Agent requests creative formats with is_responsive "<partition>"
@@ -561,7 +561,7 @@ Feature: BR-UC-005 Discover Creative Formats
       | responsive_false  | valid    |
       | omitted           | valid    |
 
-  @T-UC-005-partition-name-search @partition @name_search_filter
+  @T-UC-005-partition-name-search @UC-005-MAIN-MCP-11 @partition @name_search_filter
   Scenario Outline: Name search filter partition - <partition>
     Given a seller with formats named "Standard Banner", "Video Interstitial", "Native Card"
     When the Buyer Agent requests creative formats with name_search "<partition>"
@@ -578,7 +578,7 @@ Feature: BR-UC-005 Discover Creative Formats
       | partition         | expected |
       | no_match          | valid    |
 
-  @T-UC-005-partition-wcag @partition @wcag_level
+  @T-UC-005-partition-wcag @UC-005-MAIN-MCP-12 @partition @wcag_level
   Scenario Outline: WCAG level filter partition - <partition>
     Given a seller with formats at various accessibility conformance levels
     When the Buyer Agent requests creative formats with wcag_level "<partition>"
@@ -595,7 +595,7 @@ Feature: BR-UC-005 Discover Creative Formats
       | partition      | expected |
       | unknown_value  | invalid  |
 
-  @T-UC-005-partition-disclosure @partition @disclosure_positions
+  @T-UC-005-partition-disclosure @UC-005-MAIN-MCP-18 @partition @disclosure_positions
   Scenario Outline: Disclosure positions filter partition - <partition>
     Given a seller with formats supporting various disclosure positions
     When the Buyer Agent requests creative formats with disclosure_positions "<partition>"
@@ -615,7 +615,7 @@ Feature: BR-UC-005 Discover Creative Formats
       | empty_array          | invalid  |
       | duplicate_positions  | invalid  |
 
-  @T-UC-005-partition-output-fmtids @partition @output_format_ids
+  @T-UC-005-partition-output-fmtids @UC-005-MAIN-MCP-19 @partition @output_format_ids
   Scenario Outline: Output format IDs filter partition - <partition>
     Given a seller with formats that produce various output formats
     When the Buyer Agent requests creative formats with output_format_ids "<partition>"
@@ -635,7 +635,7 @@ Feature: BR-UC-005 Discover Creative Formats
       | invalid_format_id_missing_agent_url | invalid  |
       | invalid_format_id_missing_id        | invalid  |
 
-  @T-UC-005-partition-input-fmtids @partition @input_format_ids
+  @T-UC-005-partition-input-fmtids @UC-005-MAIN-MCP-20 @partition @input_format_ids
   Scenario Outline: Input format IDs filter partition - <partition>
     Given a seller with formats that accept various input formats
     When the Buyer Agent requests creative formats with input_format_ids "<partition>"
@@ -655,7 +655,7 @@ Feature: BR-UC-005 Discover Creative Formats
       | invalid_format_id_missing_agent_url | invalid  |
       | invalid_format_id_missing_id        | invalid  |
 
-  @T-UC-005-boundary-type-filter @boundary @format_type_filter
+  @T-UC-005-boundary-type-filter @UC-005-MAIN-MCP-05 @boundary @format_type_filter
   Scenario Outline: Format type filter boundary - <boundary_point>
     Given a seller with formats of various types
     When the Buyer Agent requests creative formats at type boundary "<boundary_point>"
@@ -668,7 +668,7 @@ Feature: BR-UC-005 Discover Creative Formats
       | omitted (no filter)         | valid    |
       | invalid type (rejected)     | invalid  |
 
-  @T-UC-005-boundary-format-ids @boundary @format_ids_filter
+  @T-UC-005-boundary-format-ids @UC-005-MAIN-MCP-06 @boundary @format_ids_filter
   Scenario Outline: Format IDs filter boundary - <boundary_point>
     Given a seller with known format IDs in the catalog
     When the Buyer Agent requests creative formats at format_ids boundary "<boundary_point>"
@@ -681,7 +681,7 @@ Feature: BR-UC-005 Discover Creative Formats
       | no IDs match (empty result)         | valid    |
       | omitted (no filter)                 | valid    |
 
-  @T-UC-005-boundary-asset-types @boundary @asset_types_filter
+  @T-UC-005-boundary-asset-types @UC-005-MAIN-MCP-07 @boundary @asset_types_filter
   Scenario Outline: Asset types filter boundary - <boundary_point>
     Given a seller with formats containing various asset types
     When the Buyer Agent requests creative formats at asset_types boundary "<boundary_point>"
@@ -698,7 +698,7 @@ Feature: BR-UC-005 Discover Creative Formats
       | Unknown string not in enum                        | invalid  |
       | promoted_offerings (removed from enum)            | invalid  |
 
-  @T-UC-005-boundary-dimension @boundary @dimension_filter
+  @T-UC-005-boundary-dimension @UC-005-MAIN-MCP-08 @boundary @dimension_filter
   Scenario Outline: Dimension filter boundary - <boundary_point>
     Given a seller with formats of various render dimensions
     When the Buyer Agent requests creative formats at dimension boundary "<boundary_point>"
@@ -712,7 +712,7 @@ Feature: BR-UC-005 Discover Creative Formats
       | omitted (no dimension filter)     | valid    |
       | no render matches constraints     | valid    |
 
-  @T-UC-005-boundary-responsive @boundary @is_responsive_filter
+  @T-UC-005-boundary-responsive @UC-005-MAIN-MCP-10 @boundary @is_responsive_filter
   Scenario Outline: Responsive filter boundary - <boundary_point>
     Given a seller with both responsive and fixed-dimension formats
     When the Buyer Agent requests creative formats at responsive boundary "<boundary_point>"
@@ -724,7 +724,7 @@ Feature: BR-UC-005 Discover Creative Formats
       | is_responsive = false     | valid    |
       | is_responsive omitted     | valid    |
 
-  @T-UC-005-boundary-name-search @boundary @name_search_filter
+  @T-UC-005-boundary-name-search @UC-005-MAIN-MCP-11 @boundary @name_search_filter
   Scenario Outline: Name search filter boundary - <boundary_point>
     Given a seller with formats named "Standard Banner", "Video Interstitial", "Native Card"
     When the Buyer Agent requests creative formats at name_search boundary "<boundary_point>"
@@ -738,7 +738,7 @@ Feature: BR-UC-005 Discover Creative Formats
       | omitted (no filter)         | valid    |
       | no match (empty result)     | valid    |
 
-  @T-UC-005-boundary-wcag @boundary @wcag_level
+  @T-UC-005-boundary-wcag @UC-005-MAIN-MCP-12 @boundary @wcag_level
   Scenario Outline: WCAG level filter boundary - <boundary_point>
     Given a seller with formats at various accessibility conformance levels
     When the Buyer Agent requests creative formats at wcag_level boundary "<boundary_point>"
@@ -751,7 +751,7 @@ Feature: BR-UC-005 Discover Creative Formats
       | Not provided (no filter)                         | valid    |
       | Unknown string not in enum                       | invalid  |
 
-  @T-UC-005-boundary-disclosure @boundary @disclosure_positions
+  @T-UC-005-boundary-disclosure @UC-005-MAIN-MCP-18 @boundary @disclosure_positions
   Scenario Outline: Disclosure positions filter boundary - <boundary_point>
     Given a seller with formats supporting various disclosure positions
     When the Buyer Agent requests creative formats at disclosure boundary "<boundary_point>"
@@ -767,7 +767,7 @@ Feature: BR-UC-005 Discover Creative Formats
       | unknown position string 'sidebar'                       | invalid  |
       | duplicate positions ['prominent','prominent']           | invalid  |
 
-  @T-UC-005-boundary-output-fmtids @boundary @output_format_ids
+  @T-UC-005-boundary-output-fmtids @UC-005-MAIN-MCP-19 @boundary @output_format_ids
   Scenario Outline: Output format IDs filter boundary - <boundary_point>
     Given a seller with formats that produce various output formats
     When the Buyer Agent requests creative formats at output_format_ids boundary "<boundary_point>"
@@ -784,7 +784,7 @@ Feature: BR-UC-005 Discover Creative Formats
       | FormatId missing agent_url                       | invalid  |
       | FormatId missing id                              | invalid  |
 
-  @T-UC-005-boundary-input-fmtids @boundary @input_format_ids
+  @T-UC-005-boundary-input-fmtids @UC-005-MAIN-MCP-20 @boundary @input_format_ids
   Scenario Outline: Input format IDs filter boundary - <boundary_point>
     Given a seller with formats that accept various input formats
     When the Buyer Agent requests creative formats at input_format_ids boundary "<boundary_point>"
@@ -801,7 +801,7 @@ Feature: BR-UC-005 Discover Creative Formats
       | FormatId missing agent_url                       | invalid  |
       | FormatId missing id                              | invalid  |
 
-  @T-UC-005-partition-agent-type @partition @creative_agent_format_type
+  @T-UC-005-partition-agent-type @UC-005-MAIN-MCP-21 @partition @creative_agent_format_type
   Scenario Outline: Creative agent format type partition - <partition>
     Given a seller with creative agent formats of various types
     When the Buyer Agent queries creative agent formats with type "<partition>"
@@ -819,7 +819,7 @@ Feature: BR-UC-005 Discover Creative Formats
       | partition      | expected |
       | unknown_value  | invalid  |
 
-  @T-UC-005-partition-agent-asset @partition @creative_agent_asset_type
+  @T-UC-005-partition-agent-asset @UC-005-MAIN-MCP-22 @partition @creative_agent_asset_type
   Scenario Outline: Creative agent asset type partition - <partition>
     Given a seller with creative agent formats containing various asset types
     When the Buyer Agent queries creative agent formats with asset_types "<partition>"
@@ -841,7 +841,7 @@ Feature: BR-UC-005 Discover Creative Formats
       | unknown_value  | invalid  |
       | empty_array    | invalid  |
 
-  @T-UC-005-boundary-agent-type @boundary @creative_agent_format_type
+  @T-UC-005-boundary-agent-type @UC-005-MAIN-MCP-21 @boundary @creative_agent_format_type
   Scenario Outline: Creative agent format type boundary - <boundary_point>
     Given a seller with creative agent formats of various types
     When the Buyer Agent queries creative agent formats at type boundary "<boundary_point>"
@@ -854,7 +854,7 @@ Feature: BR-UC-005 Discover Creative Formats
       | Not provided (no filter)                                        | valid    |
       | native (valid in media-buy variant but not in creative agent)   | invalid  |
 
-  @T-UC-005-boundary-agent-asset @boundary @creative_agent_asset_type
+  @T-UC-005-boundary-agent-asset @UC-005-MAIN-MCP-22 @boundary @creative_agent_asset_type
   Scenario Outline: Creative agent asset type boundary - <boundary_point>
     Given a seller with creative agent formats containing various asset types
     When the Buyer Agent queries creative agent formats at asset_types boundary "<boundary_point>"
@@ -868,7 +868,7 @@ Feature: BR-UC-005 Discover Creative Formats
       | vast (valid in media-buy variant but not in creative agent)     | invalid  |
       | Empty array                                                     | invalid  |
 
-  @T-UC-005-sandbox-happy @invariant @br-rule-209 @sandbox
+  @T-UC-005-sandbox-happy @UC-005-MAIN-MCP-23 @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account receives simulated creative formats with sandbox flag
     Given the request targets a sandbox account
     When the Buyer Agent sends a list_creative_formats request
@@ -880,7 +880,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # BR-RULE-209 INV-2: real ad platform calls suppressed
     # BR-RULE-209 INV-4: response includes sandbox: true
 
-  @T-UC-005-sandbox-production @invariant @br-rule-209 @sandbox
+  @T-UC-005-sandbox-production @UC-005-MAIN-MCP-23 @invariant @br-rule-209 @sandbox
   Scenario: Production account creative formats response does not include sandbox flag
     Given the request targets a production account
     When the Buyer Agent sends a list_creative_formats request
@@ -889,7 +889,7 @@ Feature: BR-UC-005 Discover Creative Formats
     And the response should not include a sandbox field
     # BR-RULE-209 INV-5: production account -> sandbox absent
 
-  @T-UC-005-sandbox-validation @invariant @br-rule-209 @sandbox
+  @T-UC-005-sandbox-validation @UC-005-MAIN-MCP-23 @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account with invalid filter returns real validation error
     Given the request targets a sandbox account
     When the Buyer Agent sends a list_creative_formats request with invalid dimension filters

@@ -19,14 +19,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from adcp.types import CreativeAction
-from adcp.types.generated_poc.media_buy.sync_creatives_async_response_input_required import (
+from adcp.types.generated_poc.creative.sync_creatives_async_response_input_required import (
     Reason,
     SyncCreativesInputRequired,
 )
-from adcp.types.generated_poc.media_buy.sync_creatives_async_response_submitted import (
+from adcp.types.generated_poc.creative.sync_creatives_async_response_submitted import (
     SyncCreativesSubmitted,
 )
-from adcp.types.generated_poc.media_buy.sync_creatives_async_response_working import (
+from adcp.types.generated_poc.creative.sync_creatives_async_response_working import (
     SyncCreativesWorking,
 )
 from sqlalchemy import select

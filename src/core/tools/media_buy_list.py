@@ -78,12 +78,15 @@ from src.core.validation_helpers import format_validation_error
 def _get_media_buys_impl(
     req: GetMediaBuysRequest,
     identity: ResolvedIdentity | None = None,
+    include_snapshot: bool = False,
 ) -> GetMediaBuysResponse:
     """Get media buys with status, creative approval state, and optional delivery snapshots.
 
     Args:
         req: Validated GetMediaBuysRequest with all protocol fields
         identity: ResolvedIdentity with principal/tenant info (transport-agnostic)
+        include_snapshot: When True, include near-real-time delivery stats per package.
+            This is an internal flag controlled by transport wrappers, not by the request object.
 
     Returns:
         GetMediaBuysResponse with matching media buys
@@ -91,8 +94,8 @@ def _get_media_buys_impl(
     if identity is None:
         raise AdCPAuthenticationError("Identity is required")
 
-    if req.account_id is not None:
-        raise AdCPValidationError("account_id filtering is not yet supported", recovery="correctable")
+    if req.account is not None or req.account_id is not None:
+        raise AdCPValidationError("account filtering is not yet supported", recovery="correctable")
 
     testing_ctx = identity.testing_context
     principal_id = identity.principal_id
@@ -133,7 +136,7 @@ def _get_media_buys_impl(
     snapshot_data: dict[str, dict[str, Snapshot | None]] = {}  # media_buy_id -> package_id -> Snapshot
     unavailable_reason: SnapshotUnavailableReason | None = None
 
-    if req.include_snapshot:
+    if include_snapshot:
         adapter = get_adapter(
             principal,
             dry_run=testing_ctx.dry_run if testing_ctx else False,
@@ -171,7 +174,7 @@ def _get_media_buys_impl(
             # Get snapshot for this package
             snapshot = buy_snapshots.get(pkg_id)
             snapshot_unavailable = None
-            if req.include_snapshot and snapshot is None:
+            if include_snapshot and snapshot is None:
                 snapshot_unavailable = unavailable_reason or SnapshotUnavailableReason.SNAPSHOT_TEMPORARILY_UNAVAILABLE
 
             response_packages.append(
@@ -186,7 +189,7 @@ def _get_media_buys_impl(
                     paused=pkg_config.get("paused"),
                     creative_approvals=approvals if approvals else None,
                     snapshot=snapshot,
-                    snapshot_unavailable_reason=snapshot_unavailable if req.include_snapshot else None,
+                    snapshot_unavailable_reason=snapshot_unavailable if include_snapshot else None,
                 )
             )
 
@@ -218,7 +221,7 @@ async def get_media_buys(
     buyer_refs: list[str] | None = None,
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
     include_snapshot: bool = False,
-    account_id: str | None = None,
+    account: dict | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
 ):
@@ -231,7 +234,7 @@ async def get_media_buys(
         buyer_refs: Array of buyer reference IDs to retrieve (optional)
         status_filter: Filter by status - single status or array of MediaBuyStatus values (optional)
         include_snapshot: When true, include near-real-time delivery stats per package (default: false)
-        account_id: Filter to a specific account (optional)
+        account: Account reference per AdCP 3.x (optional). Legacy account_id is normalized by middleware.
         context: Application level context object (optional)
         ctx: FastMCP context (automatically provided)
 
@@ -243,13 +246,12 @@ async def get_media_buys(
             media_buy_ids=media_buy_ids,
             buyer_refs=buyer_refs,
             status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
-            include_snapshot=include_snapshot,
-            account_id=account_id,
+            account=account,
             context=cast(ContextObject | None, context),
         )
         # Read identity pre-resolved by MCPAuthMiddleware
         identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
-        response = _get_media_buys_impl(req, identity=identity)
+        response = _get_media_buys_impl(req, identity=identity, include_snapshot=include_snapshot)
         return ToolResult(content=str(response), structured_content=response)
     except ValidationError as e:
         raise ToolError(format_validation_error(e, context="get_media_buys request"))
@@ -260,7 +262,7 @@ def get_media_buys_raw(
     buyer_refs: list[str] | None = None,
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
     include_snapshot: bool = False,
-    account_id: str | None = None,
+    account: dict | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
@@ -272,7 +274,7 @@ def get_media_buys_raw(
         buyer_refs: Array of buyer reference IDs to retrieve (optional)
         status_filter: Filter by status - single status or array of MediaBuyStatus values (optional)
         include_snapshot: When true, include near-real-time delivery stats per package (default: false)
-        account_id: Filter to a specific account (optional)
+        account: Account reference per AdCP 3.x (optional). Legacy account_id is normalized by middleware.
         context: Application level context (optional)
         ctx: Context for authentication (used if identity not pre-resolved)
         identity: Pre-resolved identity (preferred over ctx)
@@ -289,11 +291,10 @@ def get_media_buys_raw(
         media_buy_ids=media_buy_ids,
         buyer_refs=buyer_refs,
         status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
-        include_snapshot=include_snapshot,
-        account_id=account_id,
+        account=account,
         context=cast(ContextObject | None, context),
     )
-    return _get_media_buys_impl(req, identity=identity)
+    return _get_media_buys_impl(req, identity=identity, include_snapshot=include_snapshot)
 
 
 # --- Helper functions ---

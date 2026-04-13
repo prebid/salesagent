@@ -117,7 +117,7 @@
                     <h5 class="mb-0">Ad Unit Hierarchy</h5>
                 </div>
                 <div class="card-body" style="max-height: 600px; overflow-y: auto;">
-                    <div id="adUnitTree" class="tree-view">
+                    <div id="adUnitTree" class="inventory-tree-container">
                         <div class="text-muted">Loading ad unit tree...</div>
                     </div>
                 </div>
@@ -179,43 +179,24 @@
     </div>
 </div>
 
+{% include 'partials/hierarchical_tree_styles.html' %}
+
 <style>
-.tree-view {
-    font-family: monospace;
+/* Hide checkboxes — this page uses click-to-select, not multi-select */
+#adUnitTree .tree-checkbox {
+    display: none;
 }
 
-.tree-node {
-    margin-left: 20px;
+/* Make tree node labels clickable for detail panel selection */
+#adUnitTree .tree-node-label {
     cursor: pointer;
-    user-select: none;
 }
 
-.tree-node:hover {
-    background-color: #f0f0f0;
-}
-
-.tree-node.selected {
+/* Selected node highlight */
+#adUnitTree .tree-node-header.selected {
     background-color: #e3f2fd;
+    border-left: 3px solid #1976d2;
 }
-
-.tree-toggle {
-    display: inline-block;
-    width: 20px;
-    text-align: center;
-}
-
-.node-icon {
-    margin-right: 5px;
-}
-
-.node-status {
-    font-size: 0.8em;
-    margin-left: 10px;
-}
-
-.node-status.active { color: #28a745; }
-.node-status.inactive { color: #6c757d; }
-.node-status.archived { color: #dc3545; }
 
 .inventory-size {
     display: inline-block;
@@ -238,10 +219,15 @@
 }
 </style>
 
+{% include 'partials/hierarchical_tree_scripts.html' %}
+
 <script>
+const scriptRoot = '{{ request.script_root }}' || '';
 const tenantId = '{{ tenant.tenant_id }}';
+const treeApiUrl = `${scriptRoot}/api/tenant/${tenantId}/inventory/tree`;
 let selectedInventory = null;
 let inventoryTree = null;
+const inventoryCache = new Map();
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {
@@ -252,7 +238,7 @@ document.addEventListener('DOMContentLoaded', function() {
         document.getElementById('inventoryType').value = typeParam;
     }
 
-    loadInventoryStatus();
+    loadTreeAndStats();
 
     // If type is specified, do initial search
     if (typeParam) {
@@ -260,59 +246,99 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-function loadInventoryStatus() {
-    fetch(`{{ script_name }}/api/tenant/${tenantId}/inventory/tree`, {
-        credentials: 'same-origin'
-    })
+function loadTreeAndStats() {
+    const container = document.getElementById('adUnitTree');
+    container.innerHTML = '<div class="tree-loading"><div class="spinner-border spinner-border-sm" role="status" style="margin-right: 0.5rem;"></div>Loading...</div>';
+
+    fetch(treeApiUrl, { credentials: 'same-origin' })
         .then(response => response.json())
         .then(data => {
-            const syncStatus = document.getElementById('syncStatus');
-            const stats = document.getElementById('inventoryStats');
+            inventoryTree = data;
+            updateSyncStatus(data);
+            updateStats(data);
 
-            if (data.last_sync) {
-                const lastSync = new Date(data.last_sync);
-                const now = new Date();
-                const diffMs = now - lastSync;
-                const diffMins = Math.floor(diffMs / (1000 * 60));
-                const diffHours = Math.floor(diffMins / 60);
-                const diffDays = Math.floor(diffHours / 24);
-
-                let timeAgo;
-                if (diffDays > 0) {
-                    timeAgo = `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
-                } else if (diffHours > 0) {
-                    timeAgo = `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
-                } else if (diffMins > 0) {
-                    timeAgo = `${diffMins} minute${diffMins > 1 ? 's' : ''} ago`;
-                } else {
-                    timeAgo = 'just now';
-                }
-
-                syncStatus.innerHTML = `
-                    Last synced: ${lastSync.toLocaleString()}
-                    <span class="text-muted">(${timeAgo})</span>
-                    ${data.needs_refresh ? '<span class="badge bg-warning ms-2">Needs Refresh</span>' : ''}
-                `;
-            } else {
-                syncStatus.innerHTML = '<span class="text-warning">Never synced</span>';
+            if (!data.root_units || data.root_units.length === 0) {
+                container.innerHTML = '<div class="tree-empty">No ad units found. Try syncing inventory first.</div>';
+                return;
             }
 
-            stats.innerHTML = `
-                <div><strong>Ad Units:</strong> ${data.total_units || 0}</div>
-                <div><strong>Placements:</strong> ${data.placements || 0}</div>
-                <div><strong>Labels:</strong> ${data.labels || 0}</div>
-                <div><strong>Targeting Keys:</strong> ${data.custom_targeting_keys || 0}</div>
-                <div><strong>Audience Segments:</strong> ${data.audience_segments || 0}</div>
-            `;
+            // Render tree using shared partial's renderTree()
+            container.innerHTML = renderTree(data.root_units, new Set(), 0, false, inventoryCache);
 
-            inventoryTree = data;
-            renderAdUnitTree(data.root_units || []);
+            // Add click-to-select handlers on tree node labels
+            attachNodeClickHandlers();
         })
         .catch(error => {
-            console.error('Error loading inventory status:', error);
+            console.error('Error loading inventory:', error);
+            container.innerHTML = '<div class="tree-empty text-danger">Error loading tree: ' + error.message + '</div>';
             document.getElementById('syncStatus').innerHTML =
                 '<span class="text-danger">Error loading status</span>';
         });
+}
+
+function updateSyncStatus(data) {
+    const syncStatus = document.getElementById('syncStatus');
+
+    if (data.last_sync) {
+        const lastSync = new Date(data.last_sync);
+        const now = new Date();
+        const diffMs = now - lastSync;
+        const diffMins = Math.floor(diffMs / (1000 * 60));
+        const diffHours = Math.floor(diffMins / 60);
+        const diffDays = Math.floor(diffHours / 24);
+
+        let timeAgo;
+        if (diffDays > 0) {
+            timeAgo = `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
+        } else if (diffHours > 0) {
+            timeAgo = `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
+        } else if (diffMins > 0) {
+            timeAgo = `${diffMins} minute${diffMins > 1 ? 's' : ''} ago`;
+        } else {
+            timeAgo = 'just now';
+        }
+
+        syncStatus.innerHTML = `
+            Last synced: ${lastSync.toLocaleString()}
+            <span class="text-muted">(${timeAgo})</span>
+            ${data.needs_refresh ? '<span class="badge bg-warning ms-2">Needs Refresh</span>' : ''}
+        `;
+    } else {
+        syncStatus.innerHTML = '<span class="text-warning">Never synced</span>';
+    }
+}
+
+function updateStats(data) {
+    document.getElementById('inventoryStats').innerHTML = `
+        <div><strong>Ad Units:</strong> ${data.total_units || 0}</div>
+        <div><strong>Placements:</strong> ${data.placements || 0}</div>
+        <div><strong>Labels:</strong> ${data.labels || 0}</div>
+        <div><strong>Targeting Keys:</strong> ${data.custom_targeting_keys || 0}</div>
+        <div><strong>Audience Segments:</strong> ${data.audience_segments || 0}</div>
+    `;
+}
+
+function attachNodeClickHandlers() {
+    document.querySelectorAll('#adUnitTree .tree-node-label').forEach(label => {
+        label.addEventListener('click', function(e) {
+            // Don't interfere with toggle clicks
+            if (e.target.closest('.tree-toggle')) return;
+
+            e.preventDefault();
+            e.stopPropagation();
+
+            const nodeHeader = this.closest('.tree-node-header');
+            const node = this.closest('.tree-node');
+            const unitId = node.dataset.unitId;
+
+            // Update selection highlight
+            document.querySelectorAll('#adUnitTree .tree-node-header.selected').forEach(n => n.classList.remove('selected'));
+            nodeHeader.classList.add('selected');
+
+            // Show detail panel
+            selectNode(unitId);
+        });
+    });
 }
 
 function syncInventory() {
@@ -320,7 +346,7 @@ function syncInventory() {
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Syncing...';
 
-    fetch(`{{ script_name }}/api/tenant/${tenantId}/inventory/sync`, {
+    fetch(`${scriptRoot}/api/tenant/${tenantId}/inventory/sync`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: {
@@ -359,7 +385,7 @@ function syncInventory() {
 
 function pollInventorySyncStatus(syncId, btn) {
     const checkStatus = () => {
-        fetch(`{{ script_name }}/tenant/${tenantId}/gam/sync-status/${syncId}`)
+        fetch(`${scriptRoot}/tenant/${tenantId}/gam/sync-status/${syncId}`)
             .then(response => response.json())
             .then(data => {
                 if (data.status === 'completed') {
@@ -389,76 +415,8 @@ function pollInventorySyncStatus(syncId, btn) {
     checkStatus();
 }
 
-function renderAdUnitTree(units, container = null) {
-    if (!container) {
-        container = document.getElementById('adUnitTree');
-        container.innerHTML = '';
-    }
-
-    if (units.length === 0) {
-        container.innerHTML = '<p class="text-muted">No ad units found</p>';
-        return;
-    }
-
-    units.forEach(unit => {
-        const node = createTreeNode(unit);
-        container.appendChild(node);
-    });
-}
-
-function createTreeNode(unit) {
-    const div = document.createElement('div');
-    div.className = 'tree-node';
-    div.dataset.unitId = unit.id;
-
-    const hasChildren = unit.children && unit.children.length > 0;
-
-    div.innerHTML = `
-        <span class="tree-toggle" onclick="toggleNode(this, event)">
-            ${hasChildren ? '▼' : '&nbsp;'}
-        </span>
-        <span class="node-icon">📁</span>
-        <span class="node-name" onclick="selectNode('${unit.id}', event)">
-            ${unit.name}
-        </span>
-        <span class="node-status ${unit.status.toLowerCase()}">[${unit.status}]</span>
-    `;
-
-    if (hasChildren) {
-        const childContainer = document.createElement('div');
-        childContainer.className = 'tree-children';
-        childContainer.style.display = 'block';
-        renderAdUnitTree(unit.children, childContainer);
-        div.appendChild(childContainer);
-    }
-
-    return div;
-}
-
-function toggleNode(toggle, event) {
-    event.stopPropagation();
-    const node = toggle.parentElement;
-    const children = node.querySelector('.tree-children');
-
-    if (children) {
-        if (children.style.display === 'none') {
-            children.style.display = 'block';
-            toggle.textContent = '▼';
-        } else {
-            children.style.display = 'none';
-            toggle.textContent = '▶';
-        }
-    }
-}
-
-function selectNode(unitId, event) {
-    event.stopPropagation();
-
-    // Update selection
-    document.querySelectorAll('.tree-node').forEach(n => n.classList.remove('selected'));
-    event.target.closest('.tree-node').classList.add('selected');
-
-    // Find unit data
+function selectNode(unitId) {
+    // Find unit data from the tree
     const unit = findUnitById(inventoryTree.root_units, unitId);
     if (unit) {
         showInventoryDetail(unit, 'ad_unit');
@@ -548,7 +506,7 @@ function searchInventory() {
     if (type) params.append('type', type);
     if (status) params.append('status', status);
 
-    fetch(`{{ script_name }}/api/tenant/${tenantId}/inventory/search?${params}`, {
+    fetch(`${scriptRoot}/api/tenant/${tenantId}/inventory/search?${params}`, {
         credentials: 'same-origin'
     })
         .then(response => response.json())
@@ -602,14 +560,14 @@ async function assignToProduct() {
     try {
         // Load products and check for existing assignments
         const [productsResponse, ...assignmentResponses] = await Promise.all([
-            fetch(`{{ script_name }}/api/tenant/${tenantId}/products`).then(r => r.json()),
+            fetch(`${scriptRoot}/api/tenant/${tenantId}/products`).then(r => r.json()),
             // Fetch assignments for all products to find which one has this inventory
-            fetch(`{{ script_name }}/api/tenant/${tenantId}/products`).then(r => r.json())
+            fetch(`${scriptRoot}/api/tenant/${tenantId}/products`).then(r => r.json())
                 .then(data => {
                     // For each product, check if it has this inventory assigned
                     return Promise.all(
                         data.products.map(p =>
-                            fetch(`{{ script_name }}/tenant/${tenantId}/products/${p.product_id}/inventory`)
+                            fetch(`${scriptRoot}/tenant/${tenantId}/products/${p.product_id}/inventory`)
                                 .then(r => r.json())
                                 .then(inv => ({ product_id: p.product_id, inventory: inv.inventory || [] }))
                                 .catch(() => ({ product_id: p.product_id, inventory: [] }))
@@ -702,7 +660,7 @@ async function saveProductAssignment() {
 
         // Add new assignments
         for (const productId of toAdd) {
-            const response = await fetch(`{{ request.script_root }}/tenant/{{ tenant_id }}/products/${productId}/inventory`, {
+            const response = await fetch(`${scriptRoot}/tenant/{{ tenant_id }}/products/${productId}/inventory`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -721,7 +679,7 @@ async function saveProductAssignment() {
 
         // Remove old assignments
         for (const { productId, mappingId } of toRemove) {
-            const response = await fetch(`{{ request.script_root }}/tenant/{{ tenant_id }}/products/${productId}/inventory/${mappingId}`, {
+            const response = await fetch(`${scriptRoot}/tenant/{{ tenant_id }}/products/${productId}/inventory/${mappingId}`, {
                 method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' }
             });
@@ -781,7 +739,7 @@ function performSelectiveSync() {
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Syncing...';
 
-    fetch(`{{ script_name }}/api/tenant/${tenantId}/inventory/sync`, {
+    fetch(`${scriptRoot}/api/tenant/${tenantId}/inventory/sync`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },

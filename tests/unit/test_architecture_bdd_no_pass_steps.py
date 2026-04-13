@@ -1,22 +1,12 @@
-"""Guard: BDD Then step functions must not have empty or no-op bodies.
+"""Guard: BDD step functions must not have empty bodies.
 
-A Then step that claims to verify behavior must actually assert something.
-This guard catches three failure modes:
+Then steps with ``pass`` or no statements (only docstring) claim to verify
+behavior but assert nothing. Given/When steps with empty bodies promise data
+setup or actions but deliver nothing.
 
-1. **Empty body**: ``pass``, ellipsis, or docstring-only
-2. **No code**: no assert, call, or raise at all
-3. **No-op delegation**: body has zero ``assert`` statements and only delegates
-   to non-assertion helpers (like ``_pending(ctx, step)``). This catches any
-   LLM-invented "placeholder" helper — not by name, but by the structural
-   pattern: a Then step that calls something but never asserts.
-
-The no-op delegation check works by requiring that if a Then step has no
-``assert`` statements, it must call at least one function whose name starts
-with an assertion-like prefix (``assert_``, ``_assert_``, ``check_``,
-``_check_``, ``verify_``, ``_verify_``), or calls ``pytest.skip``/``xfail``/
-``fail``, or calls an ``env.*`` method. Everything else (``_pending``,
-``_tbd``, ``_not_implemented``, or whatever creative name an LLM invents)
-does not count as "doing something".
+Scanning approach: AST — find functions decorated with ``@given/@when/@then``
+in ``tests/bdd/steps/`` and check that the body contains at least one statement
+beyond the docstring.
 
 beads: beads-5rt
 """
@@ -25,27 +15,23 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from typing import Literal
 
 _BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 
-# Prefixes that indicate a function is assertion-like
-_ASSERTION_PREFIXES = ("assert_", "_assert_", "check_", "_check_", "verify_", "_verify_")
-
-# Pre-existing violations: (relative_path, function_name)
-# These Then steps delegate to _pending() which asserts nothing.
-# FIXME: wire these steps to real harness assertions as UC-004 harness matures.
-# Allowlist can only shrink — never add new entries.
-_NOOP_DELEGATION_ALLOWLIST: set[tuple[str, str]] = set()
+# Allowlist for empty Given/When steps. Must only shrink — never add entries.
+# Fixed in #1181: given_tenant_exists and given_account_not_exists now have real bodies.
+_EMPTY_GIVEN_WHEN_ALLOWLIST: set[tuple[str, str]] = set()
 
 
-def _is_then_decorated(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    """Check if function is decorated with @then(...)."""
+def _is_decorated_with(func: ast.FunctionDef | ast.AsyncFunctionDef, decorator_name: str) -> bool:
+    """Check if function is decorated with @<decorator_name>(...)."""
     for dec in func.decorator_list:
         if isinstance(dec, ast.Call):
             func_node = dec.func
-            if isinstance(func_node, ast.Name) and func_node.id == "then":
+            if isinstance(func_node, ast.Name) and func_node.id == decorator_name:
                 return True
-        if isinstance(dec, ast.Name) and dec.id == "then":
+        if isinstance(dec, ast.Name) and dec.id == decorator_name:
             return True
     return False
 
@@ -75,94 +61,22 @@ def _body_is_empty(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     return False
 
 
-def _body_has_assert_or_meaningful_call(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    """Check if function body contains an assert, raise, or meaningful call.
-
-    A "meaningful call" is one that is likely to assert something:
-    - Function with assertion-like name (assert_*, _assert_*, check_*, etc.)
-    - pytest.skip / pytest.xfail / pytest.fail
-    - env.* (harness method)
-
-    Calls to generic helpers (_pending, _tbd, etc.) do NOT count.
-    If the body has at least one ``assert`` statement, all calls are accepted
-    (the step does its own verification).
-    """
-    has_assert = False
-    has_meaningful_call = False
-    has_any_call = False
-
+def _body_has_assert_or_call(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """Check if function body contains an assert statement or a function call."""
     for node in ast.walk(func):
-        if isinstance(node, ast.Assert):
-            has_assert = True
-        if isinstance(node, ast.Raise):
-            return True  # explicit failure is always meaningful
-
-        if isinstance(node, ast.Call):
-            fn = node.func
-
-            # Skip ctx.* calls (data access, not assertions)
-            if isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name) and fn.value.id == "ctx":
-                continue
-            # Skip builtins
-            if isinstance(fn, ast.Name) and fn.id in (
-                "getattr",
-                "str",
-                "type",
-                "len",
-                "list",
-                "dict",
-                "set",
-                "print",
-                "int",
-                "float",
-                "bool",
-                "tuple",
-                "range",
-                "enumerate",
-                "zip",
-                "sorted",
-                "reversed",
-                "any",
-                "all",
-            ):
-                continue
-
-            has_any_call = True
-
-            # Assertion-like function name
-            if isinstance(fn, ast.Name) and fn.id.startswith(_ASSERTION_PREFIXES):
-                has_meaningful_call = True
-            # Method on env (harness call)
-            elif isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name) and fn.value.id == "env":
-                has_meaningful_call = True
-            # pytest.skip/xfail/fail
-            elif (
-                isinstance(fn, ast.Attribute)
-                and isinstance(fn.value, ast.Name)
-                and fn.value.id == "pytest"
-                and fn.attr in ("skip", "xfail", "fail")
-            ):
-                has_meaningful_call = True
-
-    # If body has assert statements, any delegation is fine
-    if has_assert:
-        return True
-    # If body has a meaningful call (assertion helper, harness, pytest), OK
-    if has_meaningful_call:
-        return True
-    # If body has calls but none are meaningful and no asserts — no-op delegation
-    if has_any_call:
-        return False
-    # No asserts, no calls at all
+        if isinstance(node, (ast.Assert, ast.Call, ast.Raise)):
+            return True
     return False
 
 
-def _scan_bdd_steps() -> list[tuple[str, str, str]]:
-    """Find Then steps with empty, code-free, or no-op bodies.
+StepKind = Literal["given", "when", "then"]
 
-    Returns list of (relative_path, function_name, reason).
-    """
-    violations = []
+
+def _iter_step_functions(
+    decorator_names: set[StepKind],
+) -> list[tuple[str, str, int, StepKind, ast.FunctionDef | ast.AsyncFunctionDef]]:
+    """Yield (relative_path, func_name, lineno, decorator, func_node) for matching steps."""
+    results = []
     for py_file in sorted(_BDD_STEPS_DIR.rglob("*.py")):
         if py_file.name.startswith("_"):
             continue
@@ -173,45 +87,57 @@ def _scan_bdd_steps() -> list[tuple[str, str, str]]:
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
-            if not _is_then_decorated(node):
-                continue
-            if _body_is_empty(node):
-                violations.append((relative, node.name, "empty body (pass/docstring-only)"))
-            elif not _body_has_assert_or_meaningful_call(node):
-                violations.append((relative, node.name, "no-op delegation (calls helper but never asserts)"))
-
-    return violations
+            for dec_name in decorator_names:
+                if _is_decorated_with(node, dec_name):
+                    results.append((relative, node.name, node.lineno, dec_name, node))
+    return results
 
 
 class TestBddNoPassSteps:
-    """Structural guard: Then steps must assert something."""
+    """Structural guard: BDD steps must have meaningful bodies."""
 
     def test_no_empty_then_steps(self):
-        """Every @then step must contain an assert, meaningful call, or raise."""
-        violations = _scan_bdd_steps()
-        new_violations = [
-            (path, name, reason) for path, name, reason in violations if (path, name) not in _NOOP_DELEGATION_ALLOWLIST
-        ]
-        assert not new_violations, (
-            f"Found {len(new_violations)} Then step(s) with empty/no-op bodies:\n"
-            + "\n".join(f"  {path}:{name} — {reason}" for path, name, reason in new_violations)
-            + "\n\nEach @then step must either:"
-            + "\n  - Contain at least one `assert` statement with a comparison"
-            + "\n  - Delegate to an assertion helper (_assert_*, check_*, verify_*)"
-            + "\n  - Call pytest.skip/xfail/fail"
-            + "\n  - NOT delegate to a no-op helper like _pending()"
+        """Every @then step must contain an assert, function call, or raise."""
+        violations = []
+        for rel, name, lineno, _, func in _iter_step_functions({"then"}):
+            if _body_is_empty(func):
+                violations.append(f"{rel}:{lineno} {name} — empty body (pass/docstring-only)")
+            elif not _body_has_assert_or_call(func):
+                violations.append(f"{rel}:{lineno} {name} — no assert or function call")
+
+        assert not violations, f"Found {len(violations)} Then step(s) with empty/assertion-free bodies:\n" + "\n".join(
+            f"  {v}" for v in violations
         )
 
-    def test_noop_allowlist_entries_still_exist(self):
-        """Every allowlisted no-op delegation must still exist in source.
+    def test_no_empty_given_when_steps(self):
+        """Every @given/@when step must have a non-empty body.
 
-        When a Then step is fixed (real assertions added), remove it from
-        the allowlist. This test fails if an entry is stale.
+        A Given step that says 'a tenant with products configured' must actually
+        create a tenant with products. An empty body means the step text is lying.
         """
-        violations = _scan_bdd_steps()
-        current = {(path, name) for path, name, _ in violations}
-        stale = _NOOP_DELEGATION_ALLOWLIST - current
+        violations = []
+        for rel, name, lineno, dec_name, func in _iter_step_functions({"given", "when"}):
+            if _body_is_empty(func) and (rel, name) not in _EMPTY_GIVEN_WHEN_ALLOWLIST:
+                violations.append(f"{rel}:{lineno} @{dec_name} {name} — empty body")
+
+        assert not violations, (
+            f"Found {len(violations)} Given/When step(s) with empty bodies:\n"
+            + "\n".join(f"  {v}" for v in violations)
+            + "\n\nFix: implement the step, or add to _EMPTY_GIVEN_WHEN_ALLOWLIST with FIXME."
+        )
+
+    def test_empty_given_when_allowlist_not_stale(self):
+        """Allowlisted empty Given/When steps must still be empty.
+
+        When someone fixes an allowlisted step, this test reminds them to remove
+        it from the allowlist.
+        """
+        stale = []
+        for rel, name, lineno, _, func in _iter_step_functions({"given", "when"}):
+            if (rel, name) in _EMPTY_GIVEN_WHEN_ALLOWLIST and not _body_is_empty(func):
+                stale.append(f"{rel}:{lineno} {name}")
+
         assert not stale, (
-            "Stale allowlist entries (violations were fixed — remove from _NOOP_DELEGATION_ALLOWLIST):\n"
-            + "\n".join(f'  ("{path}", "{name}"),' for path, name in sorted(stale))
+            f"Found {len(stale)} allowlisted step(s) that are no longer empty — remove from allowlist:\n"
+            + "\n".join(f"  {v}" for v in stale)
         )

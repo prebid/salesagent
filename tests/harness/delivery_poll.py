@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.core.schemas import AdapterGetMediaBuyDeliveryResponse
+from src.core.schemas import AdapterGetMediaBuyDeliveryResponse, GetMediaBuyDeliveryResponse
 from tests.harness._base import IntegrationEnv
 from tests.harness._mixins import DeliveryPollMixin
 
@@ -45,11 +45,10 @@ class DeliveryPollEnv(DeliveryPollMixin, IntegrationEnv):
         call_impl(...)             -- call _get_media_buy_delivery_impl with real DB
     """
 
-    REST_ENDPOINT = "/api/v1/media-buys/delivery"
-
     EXTERNAL_PATCHES = {
         "adapter": "src.core.tools.media_buy_delivery.get_adapter",
     }
+    REST_ENDPOINT = "/api/v1/media-buys/delivery"
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -58,40 +57,30 @@ class DeliveryPollEnv(DeliveryPollMixin, IntegrationEnv):
     def _configure_mocks(self) -> None:
         self._configure_adapter_mock()
 
-    # -- Override transport methods to forward reporting_dimensions --------
+    def call_a2a(self, **kwargs: Any) -> GetMediaBuyDeliveryResponse:
+        """Call get_media_buy_delivery via real AdCPRequestHandler — full A2A pipeline."""
+        return self._run_a2a_handler("get_media_buy_delivery", GetMediaBuyDeliveryResponse, **kwargs)
 
-    def call_a2a(self, **kwargs: Any) -> Any:
-        """Call get_media_buy_delivery_raw with reporting_dimensions support."""
-        from src.core.tools.media_buy_delivery import get_media_buy_delivery_raw
-
-        self._commit_factory_data()
-        identity = kwargs.pop("identity", None) or self.identity
-
-        fwd: dict[str, Any] = {"identity": identity}
-        for field in ("media_buy_ids", "buyer_refs", "start_date", "end_date", "status_filter", "reporting_dimensions"):
-            if kwargs.get(field) is not None:
-                fwd[field] = kwargs[field]
-
-        return get_media_buy_delivery_raw(**fwd)
-
-    def call_mcp(self, **kwargs: Any) -> Any:
-        """Call get_media_buy_delivery MCP wrapper with reporting_dimensions support."""
-        from src.core.schemas import GetMediaBuyDeliveryResponse
-        from src.core.tools.media_buy_delivery import get_media_buy_delivery
-
-        kwargs.pop("identity", None)
-
-        fwd: dict[str, Any] = {}
-        for field in ("media_buy_ids", "buyer_refs", "start_date", "end_date", "status_filter", "reporting_dimensions"):
-            if kwargs.get(field) is not None:
-                fwd[field] = kwargs[field]
-
-        return self._run_mcp_wrapper(get_media_buy_delivery, GetMediaBuyDeliveryResponse, **fwd)
+    def call_mcp(self, **kwargs: Any) -> GetMediaBuyDeliveryResponse:
+        """Call get_media_buy_delivery via Client(mcp) — full pipeline dispatch."""
+        return self._run_mcp_client("get_media_buy_delivery", GetMediaBuyDeliveryResponse, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
-        """Build REST body including reporting_dimensions."""
-        body: dict[str, Any] = {}
-        for field in ("media_buy_ids", "buyer_refs", "start_date", "end_date", "status_filter", "reporting_dimensions"):
-            if kwargs.get(field) is not None:
-                body[field] = kwargs[field]
-        return body
+        """Convert kwargs to GetMediaBuyDeliveryBody shape for REST POST."""
+        # Forward all request fields that the REST body accepts
+        _BODY_FIELDS = (
+            "media_buy_ids",
+            "buyer_refs",
+            "status_filter",
+            "start_date",
+            "end_date",
+            "reporting_dimensions",
+            "attribution_window",
+            "include_package_daily_breakdown",
+            "account",
+        )
+        return {k: kwargs[k] for k in _BODY_FIELDS if k in kwargs and kwargs[k] is not None}
+
+    def parse_rest_response(self, data: dict[str, Any]) -> GetMediaBuyDeliveryResponse:
+        """Parse REST JSON into GetMediaBuyDeliveryResponse."""
+        return GetMediaBuyDeliveryResponse(**data)

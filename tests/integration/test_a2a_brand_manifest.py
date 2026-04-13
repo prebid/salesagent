@@ -87,11 +87,12 @@ async def test_get_products_with_brand_domain(sample_tenant, sample_principal, s
 
 
 @pytest.mark.asyncio
-async def test_get_products_brand_manifest_without_brief_rejected(sample_tenant, sample_principal, sample_products):
-    """Test that brand_manifest without brief is rejected (brand_manifest is not brief or brand).
+async def test_get_products_brand_manifest_translated_to_brand(sample_tenant, sample_principal, sample_products):
+    """Test that brand_manifest is translated to brand via request normalization.
 
-    The handler raises AdCPValidationError which is translated to
-    InvalidParamsError at the A2A boundary via _adcp_to_a2a_error().
+    After the universal request normalization layer (salesagent-3ydk),
+    brand_manifest is translated to brand (BrandReference) before the
+    handler sees it. So brand_manifest with a valid URL now succeeds.
     """
     handler = AdCPRequestHandler()
     identity = _make_identity(sample_tenant, sample_principal)
@@ -106,16 +107,17 @@ async def test_get_products_brand_manifest_without_brief_rejected(sample_tenant,
         skill_name="get_products",
         parameters={
             "brand_manifest": {"name": "Nike", "url": "https://nike.com"},
-            # No brief, no brand
+            # No brief, no brand — but brand_manifest is translated to brand
         },
     )
     params = MessageSendParams(message=message)
 
-    # brand_manifest without brief or brand → AdCPValidationError → InvalidParamsError
-    with pytest.raises(ServerError) as exc_info:
-        await handler.on_message_send(params)
+    # brand_manifest is now translated to brand: {domain: "nike.com"}
+    result = await handler.on_message_send(params)
 
-    assert isinstance(exc_info.value.error, InvalidParamsError)
+    assert isinstance(result, Task)
+    assert result.artifacts is not None
+    assert len(result.artifacts) > 0
 
 
 @pytest.mark.asyncio

@@ -10,6 +10,7 @@ from flask import Flask, request
 from markupsafe import Markup
 from werkzeug.middleware.proxy_fix import ProxyFix as WerkzeugProxyFix
 
+from src.admin.blueprints.accounts import accounts_bp
 from src.admin.blueprints.activity_stream import activity_stream_bp
 from src.admin.blueprints.adapters import adapters_bp
 from src.admin.blueprints.api import api_bp
@@ -335,6 +336,7 @@ def create_app(config=None):
     app.register_blueprint(oidc_bp)  # OIDC/OAuth routes at /auth/oidc
     app.register_blueprint(tenant_management_settings_bp)  # Tenant management settings at /settings
     app.register_blueprint(tenants_bp, url_prefix="/tenant")
+    app.register_blueprint(accounts_bp, url_prefix="/tenant/<tenant_id>/accounts")
     app.register_blueprint(products_bp, url_prefix="/tenant/<tenant_id>/products")
     app.register_blueprint(principals_bp, url_prefix="/tenant/<tenant_id>")
     app.register_blueprint(users_bp)  # Already has url_prefix in blueprint
