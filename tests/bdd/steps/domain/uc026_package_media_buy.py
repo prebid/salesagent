@@ -1700,64 +1700,21 @@ def then_package_buyer_ref(ctx: dict, buyer_ref: str) -> None:
 @then(parsers.parse("the package should contain budget {budget:d}"))
 def then_package_budget(ctx: dict, budget: int) -> None:
     """Assert first package has the expected budget."""
-    import pytest
-    from sqlalchemy import select
-
-    from src.core.database.database_session import get_db_session
-    from src.core.database.models import MediaPackage
-
     packages = _get_packages(ctx)
     pkg = packages[0]
-    pkg_id = _pkg_field(pkg, "package_id")
-    assert pkg_id, "Package has no package_id — cannot verify budget"
     actual = _pkg_field(pkg, "budget")
-    if actual is None:
-        with get_db_session() as session:
-            db_pkg = session.scalars(select(MediaPackage).filter_by(package_id=pkg_id)).first()
-            if db_pkg and getattr(db_pkg, "budget", None) is not None:
-                db_budget = float(db_pkg.budget)
-                assert db_budget == float(budget), f"DB has budget {db_budget}, expected {budget}"
-                pytest.xfail(
-                    f"SPEC-PRODUCTION GAP: budget correctly persisted as {db_budget} in DB "
-                    f"but not echoed in response. FIXME(salesagent-9vgz.1)"
-                )
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: package budget is None in both response and DB — "
-            f"step claims 'contain budget {budget}'. FIXME(salesagent-9vgz.1)"
-        )
+    assert actual is not None, f"Package budget is None; expected {budget}"
     assert float(actual) == float(budget), f"Expected budget {budget}, got {actual}"
 
 
 @then(parsers.parse('the package should contain pricing_option_id "{pricing_option_id}"'))
 def then_package_pricing(ctx: dict, pricing_option_id: str) -> None:
     """Assert first package has the expected pricing_option_id."""
-    import pytest
-    from sqlalchemy import select
-
-    from src.core.database.database_session import get_db_session
-    from src.core.database.models import MediaPackage
-
     expected = _resolve_pricing_id(ctx, pricing_option_id)
     packages = _get_packages(ctx)
     pkg = packages[0]
-    pkg_id = _pkg_field(pkg, "package_id")
-    assert pkg_id, "Package has no package_id — cannot verify pricing_option_id"
     actual = _pkg_field(pkg, "pricing_option_id")
-    if actual is None:
-        with get_db_session() as session:
-            db_pkg = session.scalars(select(MediaPackage).filter_by(package_id=pkg_id)).first()
-            if db_pkg and getattr(db_pkg, "pricing_option_id", None) is not None:
-                assert db_pkg.pricing_option_id == expected, (
-                    f"DB has pricing_option_id '{db_pkg.pricing_option_id}', expected '{expected}'"
-                )
-                pytest.xfail(
-                    f"SPEC-PRODUCTION GAP: pricing_option_id correctly persisted as "
-                    f"'{db_pkg.pricing_option_id}' in DB but not echoed in response. "
-                    f"FIXME(salesagent-9vgz.1)"
-                )
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: pricing_option_id is None in both response and DB — FIXME(salesagent-9vgz.1)"
-        )
+    assert actual is not None, f"Package pricing_option_id is None; expected '{expected}'"
     assert actual == expected, f"Expected pricing_option_id '{expected}', got '{actual}'"
 
 
@@ -1802,29 +1759,9 @@ def then_package_default_formats(ctx: dict) -> None:
 @then("the package should contain paused as false")
 def then_package_not_paused(ctx: dict) -> None:
     """Assert package paused field is explicitly False."""
-    import pytest
-    from sqlalchemy import select
-
-    from src.core.database.database_session import get_db_session
-    from src.core.database.models import MediaPackage
-
     packages = _get_packages(ctx)
     pkg = packages[0]
-    pkg_id = _pkg_field(pkg, "package_id")
-    assert pkg_id, "Package has no package_id — cannot verify paused state"
     paused = _pkg_field(pkg, "paused")
-    if paused is None:
-        with get_db_session() as session:
-            db_pkg = session.scalars(select(MediaPackage).filter_by(package_id=pkg_id)).first()
-            if db_pkg:
-                db_paused = getattr(db_pkg, "paused", None)
-                if db_paused is not None:
-                    assert db_paused is False, f"DB has paused={db_paused!r}, expected False"
-                    pytest.xfail(
-                        "SPEC-PRODUCTION GAP: paused correctly persisted as False in DB "
-                        "but not echoed in response. FIXME(salesagent-9vgz.1)"
-                    )
-        pytest.xfail("SPEC-PRODUCTION GAP: paused is None in both response and DB. FIXME(salesagent-9vgz.1)")
     assert paused is False, f"Expected paused to be False, got {paused!r}"
 
 
@@ -2152,14 +2089,10 @@ def then_no_delivery(ctx: dict) -> None:
 @then("the package should deliver impressions")
 def then_should_deliver(ctx: dict) -> None:
     """Assert package should deliver (paused=false implies delivery)."""
-    import pytest
-
     packages = _get_packages(ctx)
     pkg = packages[0]
     paused = _pkg_field(pkg, "paused")
-    if paused is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: paused field absent — cannot verify delivery. FIXME(salesagent-9vgz.1)")
-    assert paused is False, f"Expected paused=false (delivery active), got paused={paused}"
+    assert paused is False, f"Expected paused=false (delivery active), got paused={paused!r}"
 
 
 @then("the package should resume delivering impressions")
@@ -2617,16 +2550,11 @@ def then_created_with_formats(ctx: dict, fmt_ids: str) -> None:
 @then(parsers.parse("the package should be created with paused={paused}"))
 def then_created_with_paused(ctx: dict, paused: str) -> None:
     """Assert package was created with specific paused value."""
-    import pytest
-
     pkgs = _assert_has_packages(ctx)
     expected = paused.lower() == "true"
     actual = _pkg_field(pkgs[0], "paused")
-    if actual is None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: paused not echoed in response. Expected paused={expected}. FIXME(salesagent-9vgz.1)"
-        )
-    assert actual == expected, f"Expected paused={expected}, got {actual}"
+    assert actual is not None, f"paused not echoed in response; expected {expected}"
+    assert actual == expected, f"Expected paused={expected}, got {actual!r}"
 
 
 @then("the package should be created with both catalogs")
