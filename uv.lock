@@ -88,7 +88,7 @@ wheels = [
 
 [[package]]
 name = "adcp-sales-agent"
-version = "1.6.0"
+version = "1.7.0"
 source = { virtual = "." }
 dependencies = [
     { name = "a2a-cli" },
@@ -201,7 +201,7 @@ requires-dist = [
     { name = "authlib", specifier = ">=1.6.7" },
     { name = "babel", specifier = ">=2.17.0" },
     { name = "beautifulsoup4", specifier = ">=4.12.0" },
-    { name = "cryptography", specifier = ">=46.0.6" },
+    { name = "cryptography", specifier = ">=46.0.7" },
     { name = "datamodel-code-generator", marker = "extra == 'dev'", specifier = ">=0.26.0" },
     { name = "factory-boy", marker = "extra == 'dev'", specifier = ">=3.3.0" },
     { name = "fastapi", specifier = ">=0.100.0" },
