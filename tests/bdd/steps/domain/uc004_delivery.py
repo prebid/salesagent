@@ -11,11 +11,15 @@ Steps store results in ctx:
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import re
+from datetime import datetime
 from typing import Any
 
 import httpx
+import pytest
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps.generic._dispatch import dispatch_request
@@ -1527,8 +1531,23 @@ def then_retry_3_times(ctx: dict) -> None:
 
 @then("retries should use exponential backoff (1s, 2s, 4s + jitter)")
 def then_exponential_backoff(ctx: dict) -> None:
-    """Assert exponential backoff pattern."""
-    _pending(ctx, "then_exponential_backoff")
+    """Assert exponential backoff pattern.
+
+    Production (webhook_delivery_service.py:477-478) computes delay per retry as
+    ``base_delay * 2^attempt + random.uniform(0, 1)``. For attempts 1 and 2 with
+    base_delay=1.0 and the mocked ``random.uniform`` returning 0.0, sleeps are
+    exactly 2.0s and 4.0s.
+    """
+    env = ctx["env"]
+    sleep_mock = env.mock["sleep"]
+    delays = [call.args[0] for call in sleep_mock.call_args_list if call.args]
+    assert len(delays) >= 2, f"Expected at least 2 sleep calls for backoff pattern, got {len(delays)}: {delays!r}"
+    assert delays[0] == pytest.approx(2.0, abs=1e-6), (
+        f"Expected first retry delay == 2.0s (2^1 + jitter=0), got {delays[0]!r}"
+    )
+    assert delays[1] == pytest.approx(4.0, abs=1e-6), (
+        f"Expected second retry delay == 4.0s (2^2 + jitter=0), got {delays[1]!r}"
+    )
 
 
 @then("the system should retry up to 3 times with exponential backoff")
@@ -1733,26 +1752,68 @@ def then_config_accepted(ctx: dict) -> None:
 
 @then(parsers.parse('the request should include header "{header}" with hex-encoded HMAC'))
 def then_hmac_header(ctx: dict, header: str) -> None:
-    """Assert HMAC header present."""
-    _pending(ctx, "then_hmac_header")
+    """Assert HMAC header is present and hex-encoded (SHA256 → 64 hex chars)."""
+    env = ctx["env"]
+    call = env.mock["post"].call_args
+    assert call is not None, "No webhook POST call recorded"
+    headers = call.kwargs.get("headers") or call[1].get("headers") or {}
+    sig = headers.get(header)
+    assert sig is not None, f"Expected header {header!r} in request, got headers={list(headers.keys())}"
+    assert re.fullmatch(r"[0-9a-f]{64}", sig), f"Expected {header!r} to be 64-char hex-encoded HMAC-SHA256, got {sig!r}"
 
 
 @then(parsers.parse('the request should include header "{header}" with ISO timestamp'))
 def then_timestamp_header(ctx: dict, header: str) -> None:
-    """Assert timestamp header present."""
-    _pending(ctx, "then_timestamp_header")
+    """Assert timestamp header is present and parses as ISO datetime."""
+    env = ctx["env"]
+    call = env.mock["post"].call_args
+    assert call is not None, "No webhook POST call recorded"
+    headers = call.kwargs.get("headers") or call[1].get("headers") or {}
+    ts = headers.get(header)
+    assert ts is not None, f"Expected header {header!r} in request, got headers={list(headers.keys())}"
+    parsed = datetime.fromisoformat(ts)
+    assert parsed is not None, f"Expected ISO-parseable timestamp in {header!r}, got {ts!r}"
 
 
 @then('the HMAC should be computed over "timestamp.payload" concatenation')
 def then_hmac_computation(ctx: dict) -> None:
-    """Assert HMAC computation method."""
-    _pending(ctx, "then_hmac_computation")
+    """Assert HMAC is computed over ``timestamp.payload`` with the ctx webhook_secret.
+
+    Production (webhook_delivery_service.py:319-324) builds the message as
+    ``f"{timestamp}.{json.dumps(payload, sort_keys=True, separators=(',', ':'))}"``
+    and signs with HMAC-SHA256.
+    """
+    env = ctx["env"]
+    call = env.mock["post"].call_args
+    assert call is not None, "No webhook POST call recorded"
+    headers = call.kwargs.get("headers") or call[1].get("headers") or {}
+    payload = call.kwargs.get("json") or call[1].get("json", {})
+    timestamp = headers.get("X-ADCP-Timestamp")
+    signature = headers.get("X-ADCP-Signature")
+    secret = ctx.get("webhook_secret")
+    assert timestamp and signature and secret, (
+        f"Missing required fields: timestamp={timestamp!r}, signature={signature!r}, secret_present={secret is not None}"
+    )
+    payload_str = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    message = f"{timestamp}.{payload_str}"
+    expected = hmac.new(secret.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).hexdigest()
+    assert signature == expected, (
+        f"HMAC mismatch. Expected signature over 'timestamp.payload'. got={signature!r}, recomputed={expected!r}"
+    )
 
 
 @then(parsers.parse('the request should include header "{header}" with the bearer token'))
 def then_bearer_header(ctx: dict, header: str) -> None:
-    """Assert bearer token header present."""
-    _pending(ctx, "then_bearer_header")
+    """Assert bearer token header equals ``Bearer {ctx['webhook_bearer_token']}``."""
+    env = ctx["env"]
+    call = env.mock["post"].call_args
+    assert call is not None, "No webhook POST call recorded"
+    headers = call.kwargs.get("headers") or call[1].get("headers") or {}
+    actual = headers.get(header)
+    token = ctx.get("webhook_bearer_token")
+    assert token is not None, "No webhook_bearer_token in ctx — a Given step must set it"
+    expected = f"Bearer {token}"
+    assert actual == expected, f"Expected {header}={expected!r}, got {actual!r}"
 
 
 # ── Response field presence assertions ─────────────────────────────
