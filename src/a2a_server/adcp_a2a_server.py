@@ -1384,6 +1384,10 @@ class AdCPRequestHandler(RequestHandler):
             # Same translation as MCP: ValueError → VALIDATION_ERROR
             logger.error(f"ValueError in skill handler {skill_name}: {e}")
             raise ServerError(InvalidParamsError(message=str(e)))
+        except PermissionError as e:
+            # Same translation as MCP: PermissionError → AUTHORIZATION_ERROR
+            logger.error(f"PermissionError in skill handler {skill_name}: {e}")
+            raise ServerError(InvalidRequestError(message=str(e)))
         except Exception as e:
             logger.error(f"Error in skill handler {skill_name}: {e}")
             raise ServerError(InternalError(message=f"Skill {skill_name} failed: {str(e)}"))

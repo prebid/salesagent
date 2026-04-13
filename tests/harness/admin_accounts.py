@@ -307,16 +307,20 @@ class AdminAccountEnv:
     # ── Internal ──────────────────────────────────────────────────────────
 
     def _ensure_tenant(self) -> None:
-        """Ensure the test tenant exists."""
+        """Ensure the default test tenant exists."""
+        self._ensure_tenant_for_id(self._tenant_id)
+
+    def _ensure_tenant_for_id(self, tenant_id: str) -> None:
+        """Ensure a tenant with the given ID exists in the database."""
         with get_db_session() as session:
             from sqlalchemy import select
 
-            existing = session.scalars(select(Tenant).where(Tenant.tenant_id == self._tenant_id)).first()
+            existing = session.scalars(select(Tenant).where(Tenant.tenant_id == tenant_id)).first()
             if not existing:
                 tenant = create_tenant_with_timestamps(
-                    tenant_id=self._tenant_id,
-                    name="BDD Admin Test Tenant",
-                    subdomain="bdd-admin",
+                    tenant_id=tenant_id,
+                    name=f"BDD Test Tenant {tenant_id}",
+                    subdomain=f"bdd-{tenant_id}".replace("_", "-"),
                     ad_server="mock",
                     is_active=True,
                 )

@@ -19,14 +19,9 @@ from typing import Literal
 
 _BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 
-# Pre-existing empty Given/When steps from #1170. These are legitimate no-ops:
-# - given_tenant_exists: harness creates tenant in __enter__
-# - given_account_not_exists: default state is "no account", nothing to set up
-# FIXME(salesagent-3ydk): shrink as these get real implementations
-_EMPTY_GIVEN_WHEN_ALLOWLIST: set[tuple[str, str]] = {
-    ("bdd/steps/domain/admin_accounts.py", "given_tenant_exists"),
-    ("bdd/steps/domain/uc002_create_media_buy.py", "given_account_not_exists"),
-}
+# Allowlist for empty Given/When steps. Must only shrink — never add entries.
+# Fixed in #1181: given_tenant_exists and given_account_not_exists now have real bodies.
+_EMPTY_GIVEN_WHEN_ALLOWLIST: set[tuple[str, str]] = set()
 
 
 def _is_decorated_with(func: ast.FunctionDef | ast.AsyncFunctionDef, decorator_name: str) -> bool:
