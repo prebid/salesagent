@@ -1425,9 +1425,20 @@ def then_period_end_today(ctx: dict) -> None:
 
 @then("the system should POST a delivery report to the configured webhook URL")
 def then_webhook_post(ctx: dict) -> None:
-    """Assert webhook POST was made."""
+    """Assert webhook POST was made to the configured URL with a non-empty payload."""
     env = ctx["env"]
-    assert env.mock["post"].called, "Expected webhook POST but none was made"
+    post_mock = env.mock["post"]
+    assert post_mock.called, "Expected webhook POST but none was made"
+    call = post_mock.call_args
+    # Configured URL lives in ctx["webhook_config"][<mb_id>]["url"]; all Given
+    # helpers in this file use the same value, so verify the first configured URL.
+    configs = ctx.get("webhook_config", {})
+    assert configs, "No webhook_config in ctx — a Given step must configure a webhook"
+    expected_url = next(iter(configs.values())).get("url")
+    actual_url = call.args[0] if call.args else (call.kwargs.get("url") or call[1].get("url"))
+    assert actual_url == expected_url, f"Expected POST to {expected_url!r}, got {actual_url!r}"
+    payload = call.kwargs.get("json") or call[1].get("json")
+    assert payload, f"Expected non-empty JSON payload in webhook POST, got {payload!r}"
 
 
 @then(parsers.parse('the payload should include delivery metrics for "{mb_id}"'))
@@ -1821,28 +1832,41 @@ def then_bearer_header(ctx: dict, header: str) -> None:
 
 @then('the response should contain "media_buy_deliveries" field')
 def then_has_deliveries_field(ctx: dict) -> None:
-    """Assert response has media_buy_deliveries field."""
+    """Assert response has media_buy_deliveries as a list."""
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
-    assert hasattr(resp, "media_buy_deliveries"), "Response missing media_buy_deliveries"
+    deliveries = getattr(resp, "media_buy_deliveries", None)
+    assert isinstance(deliveries, list), (
+        f"Expected media_buy_deliveries to be a list, got {type(deliveries).__name__}: {deliveries!r}"
+    )
 
 
 @then('the response should not contain "errors" field')
 def then_no_errors_field(ctx: dict) -> None:
-    """Assert response has no errors field."""
-    assert "error" not in ctx, f"Unexpected error: {ctx.get('error')}"
+    """Assert serialized response does not include 'errors' key."""
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    body = resp.model_dump() if hasattr(resp, "model_dump") else resp
+    assert "errors" not in body, f"Expected no 'errors' key in response, got {body.get('errors')!r}"
 
 
 @then('the response should contain "errors" field')
 def then_has_errors_field(ctx: dict) -> None:
-    """Assert response has errors."""
-    assert "error" in ctx, "Expected an error but none found"
+    """Assert serialized response includes 'errors' key."""
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    body = resp.model_dump() if hasattr(resp, "model_dump") else resp
+    assert "errors" in body, f"Expected 'errors' key in response, got keys={list(body.keys())}"
 
 
 @then('the response should not contain "media_buy_deliveries" field')
 def then_no_deliveries_field(ctx: dict) -> None:
-    """Assert response has no deliveries (error only)."""
-    assert "error" in ctx, "Expected error-only response"
+    """Assert serialized response does not include 'media_buy_deliveries' key, or is empty."""
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    body = resp.model_dump() if hasattr(resp, "model_dump") else resp
+    deliveries = body.get("media_buy_deliveries")
+    assert not deliveries, f"Expected 'media_buy_deliveries' absent or empty in error response, got {deliveries!r}"
 
 
 # ── Error ownership assertions ─────────────────────────────────────
@@ -2396,13 +2420,9 @@ def then_no_billing(ctx: dict) -> None:
     assert not called_methods, (
         f"Expected no billing calls but these adapter methods were called: {', '.join(called_methods)}"
     )
-    # If env supports real DB, verify no billing records exist
-    if env.use_real_db:
-        # FIXME(salesagent-3bv): Add direct DB query once BillingRecord model exists:
-        #   from sqlalchemy import select, func
-        #   count = session.scalar(select(func.count()).select_from(BillingRecord))
-        #   assert count == 0, f"Expected 0 billing records, found {count}"
-        pass
+    # FIXME(salesagent-3bv): Once a BillingRecord model exists, also verify
+    # ``env.use_real_db`` that no records were inserted. Today the adapter-mock
+    # check above plus the sandbox flag assertion are the only available proxies.
 
 
 # ═══════════════════════════════════════════════════════════════════════
