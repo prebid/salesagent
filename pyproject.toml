@@ -77,8 +77,8 @@ dev = [
     "types-waitress>=3.0.1.20250801",
 ]
 ui-tests = [
-    "playwright==1.48.0",
-    "pytest-playwright==0.6.1",
+    "playwright>=1.48.0",
+    "pytest-playwright>=0.7.0",
     "pytest-asyncio>=1.1.0",
     "allure-pytest==2.13.5",
 ]
