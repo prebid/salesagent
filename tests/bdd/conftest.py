@@ -979,6 +979,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-019-partition-approval",
             "T-UC-019-partition-approval-invalid",
             "T-UC-019-boundary-approval",
+            # Creative approval invariants — pass on impl/a2a/mcp/rest but
+            # e2e_rest fails with creative_assignments unique-constraint pollution
+            # from prior scenarios. Fixture isolation bug, not a feature gap.
             "T-UC-019-inv-152-1",
             "T-UC-019-inv-152-2",
             "T-UC-019-inv-152-3",
@@ -986,7 +989,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # Snapshot scenarios — adapter snapshot API not wired
             "T-UC-019-partition-snapshot",
             "T-UC-019-boundary-snapshot",
-            "T-UC-019-inv-153-1",
             "T-UC-019-inv-153-3",
             "T-UC-019-inv-153-4",
             "T-UC-019-inv-153-5",
@@ -1004,7 +1006,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-019-sandbox-production",
             "T-UC-019-sandbox-validation",
             # Principal partition/boundary — parametrized Given text varies
-            "T-UC-019-partition-principal",
             "T-UC-019-partition-principal-invalid",
             "T-UC-019-boundary-principal",
             # Extension errors — error code mismatches / not implemented
