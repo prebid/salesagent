@@ -1429,46 +1429,82 @@ def then_webhook_post(ctx: dict) -> None:
 @then(parsers.parse('the payload should include delivery metrics for "{mb_id}"'))
 def then_webhook_payload_has_metrics(ctx: dict, mb_id: str) -> None:
     """Assert webhook payload includes metrics for the media buy."""
-    _pending(ctx, "then_webhook_payload_has_metrics")
+    payload = _get_webhook_payload(ctx)
+    deliveries = payload.get("media_buy_deliveries")
+    assert deliveries and len(deliveries) >= 1, f"Expected media_buy_deliveries with >=1 entry, got {deliveries!r}"
+    real_id = _resolve_media_buy_id(ctx, mb_id)
+    delivery = deliveries[0]
+    assert delivery.get("media_buy_id") == real_id, (
+        f"Expected media_buy_id={real_id}, got {delivery.get('media_buy_id')!r}"
+    )
+    totals = delivery.get("totals")
+    assert isinstance(totals, dict) and "impressions" in totals and "spend" in totals, (
+        f"Expected totals with impressions and spend, got {totals!r}"
+    )
 
 
 @then("the payload should include the reporting_period")
 def then_webhook_payload_has_period(ctx: dict) -> None:
     """Assert webhook payload includes reporting period."""
-    _pending(ctx, "then_webhook_payload_has_period")
+    payload = _get_webhook_payload(ctx)
+    period = payload.get("reporting_period")
+    assert isinstance(period, dict), f"Expected reporting_period dict, got {period!r}"
+    assert "start" in period and "end" in period, f"Expected reporting_period with start and end keys, got {period!r}"
 
 
 @then(parsers.parse('the payload notification_type should be "{ntype}"'))
 def then_notification_type(ctx: dict, ntype: str) -> None:
     """Assert notification type."""
-    _pending(ctx, "then_notification_type")
+    payload = _get_webhook_payload(ctx)
+    actual = payload.get("notification_type")
+    assert actual == ntype, f"Expected notification_type={ntype!r}, got {actual!r}"
 
 
 @then(parsers.re(r"the payload (?P<next_expected>.+) include next_expected_at"))
 def then_next_expected(ctx: dict, next_expected: str) -> None:
     """Assert next_expected_at presence/absence."""
-    _pending(ctx, "then_next_expected")
+    payload = _get_webhook_payload(ctx)
+    has_field = "next_expected_at" in payload
+    phrase = next_expected.strip().lower()
+    should_have = "should" in phrase and "not" not in phrase
+    if should_have:
+        assert has_field, f"Expected next_expected_at in payload, keys: {list(payload.keys())}"
+    else:
+        assert not has_field, f"Expected next_expected_at absent from payload, got {payload.get('next_expected_at')!r}"
 
 
 @then("each report should have a higher sequence_number than the previous")
 def then_sequence_ascending(ctx: dict) -> None:
-    """Assert sequence numbers are ascending."""
-    reports = ctx.get("webhook_reports", [])
-    if len(reports) > 1:
-        for _i in range(1, len(reports)):
-            pass  # Sequence order verified by webhook harness
+    """Assert sequence numbers are strictly ascending across all webhook calls."""
+    env = ctx["env"]
+    calls = env.mock["post"].call_args_list
+    assert len(calls) >= 2, f"Expected >=2 webhook calls to compare sequences, got {len(calls)}"
+    seqs = [(call.kwargs.get("json") or call[1].get("json", {})).get("sequence_number") for call in calls]
+    for i in range(1, len(seqs)):
+        assert seqs[i] is not None and seqs[i - 1] is not None, (
+            f"sequence_number missing in call {i - 1} or {i}: {seqs!r}"
+        )
+        assert seqs[i] > seqs[i - 1], f"Expected strictly ascending sequence, got {seqs!r}"
 
 
 @then("the first sequence_number should be >= 1")
 def then_first_sequence(ctx: dict) -> None:
     """Assert first sequence number is at least 1."""
-    _pending(ctx, "then_first_sequence")
+    env = ctx["env"]
+    calls = env.mock["post"].call_args_list
+    assert calls, "Expected at least one webhook POST call"
+    first_payload = calls[0].kwargs.get("json") or calls[0][1].get("json", {})
+    seq = first_payload.get("sequence_number")
+    assert seq is not None and seq >= 1, f"Expected first sequence_number >= 1, got {seq!r}"
 
 
 @then('the payload should not include "aggregated_totals" field')
 def then_no_aggregated_in_payload(ctx: dict) -> None:
     """Assert webhook payload does not include aggregated totals."""
-    _pending(ctx, "then_no_aggregated_in_payload")
+    payload = _get_webhook_payload(ctx)
+    assert "aggregated_totals" not in payload, (
+        f"Expected aggregated_totals absent, got {payload.get('aggregated_totals')!r}"
+    )
 
 
 @then("the system should retry up to 3 times")
