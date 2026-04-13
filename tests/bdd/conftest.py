@@ -1274,18 +1274,18 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         for item in items:
             nodeid = item.nodeid
             is_redundant_transport = (
-                "[mcp]" in nodeid or "[mcp-" in nodeid
-                or "[a2a]" in nodeid or "[a2a-" in nodeid
-                or "[rest]" in nodeid or "[rest-" in nodeid
+                "[mcp]" in nodeid
+                or "[mcp-" in nodeid
+                or "[a2a]" in nodeid
+                or "[a2a-" in nodeid
+                or "[rest]" in nodeid
+                or "[rest-" in nodeid
             )
             if not is_redundant_transport:
                 remaining.append(item)
                 continue
             # Check if this item has a strict xfail marker
-            has_strict_xfail = any(
-                m.name == "xfail" and m.kwargs.get("strict", False)
-                for m in item.iter_markers()
-            )
+            has_strict_xfail = any(m.name == "xfail" and m.kwargs.get("strict", False) for m in item.iter_markers())
             if has_strict_xfail:
                 deselected.append(item)
             else:
