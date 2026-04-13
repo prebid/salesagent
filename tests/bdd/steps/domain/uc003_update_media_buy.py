@@ -1012,12 +1012,26 @@ def then_response_has_errors_array(ctx: dict) -> None:
 
 @then(parsers.parse('the response should NOT contain "{field_name}" field'))
 def then_response_not_contain_field(ctx: dict, field_name: str) -> None:
-    """Assert the error response does NOT contain a success-specific field.
+    """Assert the response does NOT contain a given field.
 
-    BR-RULE-018 INV-2: Error responses must not include success fields
-    (media_buy_id, buyer_ref, affected_packages, etc.). Checks both the
-    error response object and raw error to ensure the field is absent.
+    BR-RULE-018 INV-1/INV-2: Success responses must not contain error fields,
+    and error responses must not contain success-specific fields. Handles both
+    directions by checking ctx['response'] (success) first, then error_response/error.
     """
+    # Success-path response
+    response = ctx.get("response")
+    if response is not None:
+        if hasattr(response, "model_dump"):
+            data = response.model_dump(exclude_none=True)
+        elif isinstance(response, dict):
+            data = {k: v for k, v in response.items() if v is not None}
+        else:
+            data = {}
+        assert field_name not in data, (
+            f"Response should NOT contain '{field_name}' field (BR-RULE-018), but found: {data.get(field_name)!r}"
+        )
+        return
+    # Error-path response (BR-RULE-018 INV-2)
     error_resp = ctx.get("error_response")
     if error_resp is not None and hasattr(error_resp, "model_dump"):
         data = error_resp.model_dump(exclude_none=True)
@@ -1028,7 +1042,7 @@ def then_response_not_contain_field(ctx: dict, field_name: str) -> None:
         return
     # Fallback: check error object directly
     error = ctx.get("error")
-    assert error is not None, f"Cannot check absence of '{field_name}' — no error_response or error in ctx"
+    assert error is not None, f"Cannot check absence of '{field_name}' — no response, error_response, or error in ctx"
     field_val = getattr(error, field_name, None)
     assert field_val is None, (
         f"Error should NOT contain '{field_name}' field (BR-RULE-018 INV-2), but found: {field_val!r}"

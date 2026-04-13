@@ -576,9 +576,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
         # workflow_step_id is an internal field (exclude=True in schema).
         # impl/a2a return raw Python objects where the attribute is accessible
-        # via hasattr/getattr even with exclude=True. mcp/rest serialize via
-        # model_dump() which drops exclude=True fields — xfail only those.
-        if "T-UC-002-alt-manual" in marker_names and (is_mcp or is_rest):
+        # via hasattr/getattr even with exclude=True. mcp/rest/e2e_rest serialize
+        # via model_dump() which drops exclude=True fields — xfail only those.
+        if "T-UC-002-alt-manual" in marker_names and (is_mcp or is_rest or is_e2e_rest):
             item.add_marker(
                 pytest.mark.xfail(
                     reason="workflow_step_id is internal (exclude=True), dropped during serialization",
