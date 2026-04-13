@@ -10,6 +10,7 @@ Tests the complete signup journey:
 6. Success page and dashboard redirect
 """
 
+import logging
 import os
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
@@ -372,7 +373,7 @@ class TestSelfServiceSignupFlow:
                     db_session.commit()
 
     @pytest.mark.requires_db  # Uses database - skip in quick mode
-    def test_oauth_callback_redirects_to_onboarding_for_signup_flow(self, client, integration_db):
+    def test_oauth_callback_redirects_to_onboarding_for_signup_flow(self, integration_db):
         """Test that OAuth callback redirects to onboarding when signup_flow is active
         and the user has no existing tenants (legitimate new user)."""
         app, mock_google = _create_test_app_with_mocked_oauth()
@@ -412,7 +413,7 @@ class TestSelfServiceSignupFlow:
                 mock_access.assert_called_once_with("newuser@example.com")
 
     @pytest.mark.requires_db
-    def test_stale_signup_flow_with_existing_tenants_bypasses_onboarding(self, client, integration_db, factory_session):
+    def test_stale_signup_flow_with_existing_tenants_bypasses_onboarding(self, integration_db, factory_session, caplog):
         """Stale signup_flow flag with existing tenants must not bypass tenant lookup.
 
         A user who previously started signup (setting signup_flow=True) but abandoned it,
@@ -437,6 +438,7 @@ class TestSelfServiceSignupFlow:
             patch("src.admin.blueprints.auth.get_super_admin_domain", return_value="superadmin.internal"),
             patch("src.admin.blueprints.auth.is_super_admin", return_value=False),
             patch.dict(os.environ, {"ADCP_MULTI_TENANT": "true"}),
+            caplog.at_level(logging.INFO, logger="src.admin.blueprints.auth"),
         ):
             mock_oauth.google = mock_google
 
@@ -458,6 +460,8 @@ class TestSelfServiceSignupFlow:
                     # User info should still be set
                     assert sess.get("user") == "returning@example.com"
                     assert sess.get("user_name") == "Returning User"
+
+                assert "Cleared stale signup_flow" in caplog.text
 
     def test_session_cleanup_after_provisioning(self, integration_db, client):
         """Test that signup session flags are cleared after provisioning."""
@@ -515,11 +519,21 @@ def client():
 
 @pytest.fixture
 def factory_session(integration_db):
-    """Bind factory-boy sessions for tests that create ORM data outside the harness."""
+    """Bind factory-boy sessions for tests that create ORM data outside the harness.
+
+    Uses same pattern as IntegrationEnv.__enter__ but without the full harness,
+    since these tests exercise Flask OAuth views via test_client, not _impl functions.
+    """
     from sqlalchemy.orm import Session as SASession
 
     from src.core.database.database_session import get_engine
     from tests.factories import ALL_FACTORIES
+
+    for f in ALL_FACTORIES:
+        assert f._meta.sqlalchemy_session is None, (
+            f"Factory {getattr(f, '__name__', type(f).__name__)} session already bound — "
+            "nested IntegrationEnv contexts are not supported"
+        )
 
     session = SASession(bind=get_engine())
     for f in ALL_FACTORIES:
