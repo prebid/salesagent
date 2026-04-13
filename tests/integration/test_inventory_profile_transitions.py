@@ -17,6 +17,7 @@ from sqlalchemy import delete, select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import InventoryProfile, Product, Tenant
+from tests.helpers import assert_effective_properties_normalized
 
 
 @pytest.mark.integration
@@ -208,8 +209,10 @@ class TestInventoryProfileTransitions:
             assert product.effective_format_ids == profile_formats
             assert product.effective_format_ids != custom_formats
 
-            # Assert effective_properties returns profile data
-            assert product.effective_properties == profile_properties
+            # Assert effective_properties returns profile data + selection_type (non-destructive)
+            assert_effective_properties_normalized(
+                product.effective_properties, profile_properties, expected_selection_type="by_id"
+            )
             assert product.effective_properties != expected_effective_properties
 
             # Assert custom data still exists in database (not deleted)
@@ -253,7 +256,9 @@ class TestInventoryProfileTransitions:
             # Initially using profile
             assert product.inventory_profile_id == profile_a
             assert product.effective_format_ids == profile.format_ids
-            assert product.effective_properties == profile.publisher_properties
+            assert_effective_properties_normalized(
+                product.effective_properties, profile.publisher_properties, expected_selection_type="by_id"
+            )
 
             # Clear inventory_profile_id (set to None)
             product.inventory_profile_id = None
@@ -327,7 +332,9 @@ class TestInventoryProfileTransitions:
 
             # Assert effective_formats returns profile_a formats
             assert product.effective_format_ids == profile_a_obj.format_ids
-            assert product.effective_properties == profile_a_obj.publisher_properties
+            assert_effective_properties_normalized(
+                product.effective_properties, profile_a_obj.publisher_properties, expected_selection_type="by_id"
+            )
 
             # Verify we have the expected profile_a data
             profile_a_format_ids = [f["id"] for f in profile_a_obj.format_ids]
@@ -342,7 +349,9 @@ class TestInventoryProfileTransitions:
 
             # Assert effective_formats returns profile_b formats
             assert product.effective_format_ids == profile_b_obj.format_ids
-            assert product.effective_properties == profile_b_obj.publisher_properties
+            assert_effective_properties_normalized(
+                product.effective_properties, profile_b_obj.publisher_properties, expected_selection_type="by_id"
+            )
 
             # Verify we now have profile_b data
             profile_b_format_ids = [f["id"] for f in profile_b_obj.format_ids]

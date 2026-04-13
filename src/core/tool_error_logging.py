@@ -165,7 +165,10 @@ def _translate_to_tool_error(error: Exception) -> NoReturn:
         # The test harness unwrapper parses this back into a full AdCPError.
         import json
 
-        details_json = json.dumps(error.details) if error.details else None
+        try:
+            details_json = json.dumps(error.details) if error.details else None
+        except (TypeError, ValueError):
+            details_json = None
         raise ToolError(error.error_code, error.message, error.recovery, details_json) from error
     elif isinstance(error, ValueError):
         raise ToolError("VALIDATION_ERROR", str(error)) from error

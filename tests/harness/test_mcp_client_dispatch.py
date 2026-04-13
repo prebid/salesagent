@@ -14,15 +14,11 @@ import os
 from unittest.mock import patch
 
 from src.core.resolved_identity import ResolvedIdentity
+from tests.factories.principal import PrincipalFactory
 
 
 def _make_identity() -> ResolvedIdentity:
-    return ResolvedIdentity(
-        principal_id="test_principal",
-        tenant_id="test_tenant",
-        tenant={"tenant_id": "test_tenant", "name": "Test"},
-        protocol="mcp",
-    )
+    return PrincipalFactory.make_identity(protocol="mcp")
 
 
 class TestMcpClientDispatch:
