@@ -1593,31 +1593,65 @@ def then_webhook_marked_failed(ctx: dict) -> None:
 @then(parsers.parse('the circuit breaker should be in "{state}" state'))
 def then_circuit_breaker_state(ctx: dict, state: str) -> None:
     """Assert circuit breaker state."""
-    _pending(ctx, "then_circuit_breaker_state")
+    from src.services.webhook_delivery_service import CircuitState
+
+    breaker = ctx.get("circuit_breaker")
+    assert breaker is not None, "No circuit_breaker in ctx — a Given/When step must populate it"
+    expected = CircuitState(state.lower())
+    assert breaker.state == expected, f"Expected circuit breaker state={expected!r}, got {breaker.state!r}"
 
 
 @then("subsequent scheduled deliveries should be suppressed")
 def then_deliveries_suppressed(ctx: dict) -> None:
-    """Assert deliveries are suppressed."""
-    _pending(ctx, "then_deliveries_suppressed")
+    """Assert deliveries are suppressed (call_count unchanged after breaker opens)."""
+    env = ctx["env"]
+    baseline = ctx.get("calls_before_breaker_open")
+    assert baseline is not None, (
+        "No calls_before_breaker_open recorded — a When step must capture call_count before the breaker opens"
+    )
+    current = env.mock["post"].call_count
+    assert current == baseline, f"Expected deliveries suppressed (call_count unchanged at {baseline}), got {current}"
 
 
 @then(parsers.parse('the circuit breaker should transition to "{state}"'))
 def then_circuit_transition(ctx: dict, state: str) -> None:
-    """Assert circuit breaker transitions."""
-    _pending(ctx, "then_circuit_transition")
+    """Assert circuit breaker transitions to the expected state."""
+    from src.services.webhook_delivery_service import CircuitState
+
+    breaker = ctx.get("circuit_breaker")
+    assert breaker is not None, "No circuit_breaker in ctx"
+    expected = CircuitState(state.lower())
+    assert breaker.state == expected, f"Expected circuit transition to {expected!r}, got {breaker.state!r}"
 
 
 @then("the system should attempt a single probe delivery")
 def then_single_probe(ctx: dict) -> None:
-    """Assert a single probe delivery was attempted."""
-    _pending(ctx, "then_single_probe")
+    """Assert a single probe delivery was attempted (call_count delta == 1)."""
+    env = ctx["env"]
+    baseline = ctx.get("calls_before_half_open")
+    assert baseline is not None, (
+        "No calls_before_half_open recorded — a When step must capture call_count before HALF_OPEN"
+    )
+    current = env.mock["post"].call_count
+    delta = current - baseline
+    assert delta == 1, f"Expected exactly 1 probe delivery, got delta={delta} (baseline={baseline}, current={current})"
 
 
 @then("normal scheduled deliveries should resume")
 def then_deliveries_resume(ctx: dict) -> None:
-    """Assert deliveries resume."""
-    _pending(ctx, "then_deliveries_resume")
+    """Assert deliveries resume: state == CLOSED and call_count increased."""
+    from src.services.webhook_delivery_service import CircuitState
+
+    breaker = ctx.get("circuit_breaker")
+    assert breaker is not None, "No circuit_breaker in ctx"
+    assert breaker.state == CircuitState.CLOSED, (
+        f"Expected breaker CLOSED for deliveries to resume, got {breaker.state!r}"
+    )
+    env = ctx["env"]
+    baseline = ctx.get("calls_before_half_open") or ctx.get("calls_before_breaker_open")
+    assert baseline is not None, "No call_count baseline recorded in a prior When step"
+    current = env.mock["post"].call_count
+    assert current > baseline, f"Expected call_count to increase past baseline={baseline}, got {current}"
 
 
 @then("the delivery should be recorded as successful")
@@ -1650,8 +1684,13 @@ def then_delivery_successful(ctx: dict) -> None:
 
 @then("the circuit breaker state should remain healthy")
 def then_circuit_healthy(ctx: dict) -> None:
-    """Assert circuit breaker is healthy."""
-    _pending(ctx, "then_circuit_healthy")
+    """Assert circuit breaker is healthy: state == CLOSED and failure_count == 0."""
+    from src.services.webhook_delivery_service import CircuitState
+
+    breaker = ctx.get("circuit_breaker")
+    assert breaker is not None, "No circuit_breaker in ctx"
+    assert breaker.state == CircuitState.CLOSED, f"Expected circuit breaker CLOSED (healthy), got {breaker.state!r}"
+    assert breaker.failure_count == 0, f"Expected failure_count=0 (healthy), got {breaker.failure_count}"
 
 
 @then("the configuration should be rejected")
