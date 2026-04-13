@@ -28,8 +28,12 @@ def then_response_status(ctx: dict, status: str) -> None:
         assert actual == status, f"Expected status '{status}', got '{actual}'"
         return
 
-    # UC-005 fallback: presence of response with expected fields = completed
+    # UC-005 fallback: response has no status field, so "completed" means a
+    # populated Pydantic response model. Verify it serializes to a non-empty
+    # mapping rather than silently passing on any object.
     if status == "completed":
+        serialized = resp.model_dump()
+        assert serialized, f"Expected non-empty response for status 'completed', got {serialized!r}"
         return
 
     # UC-003 approval pathway: "submitted" means pending manual approval.

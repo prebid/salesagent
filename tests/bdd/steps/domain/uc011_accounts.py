@@ -1293,8 +1293,10 @@ def then_no_dry_run_field(ctx: dict) -> None:
         # Error variant: no response body — verify error exists
         assert ctx.get("error") is not None, "Neither response nor error found"
         return
-    dry_run = getattr(resp, "dry_run", None)
-    assert dry_run is None, f"Expected no dry_run, got {dry_run}"
+    serialized = resp.model_dump()
+    assert "dry_run" not in serialized, (
+        f"Expected 'dry_run' absent from serialized response, got {serialized.get('dry_run')!r}"
+    )
 
 
 @then("the response is the error variant of oneOf")

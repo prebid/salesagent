@@ -784,10 +784,14 @@ def then_response_has_media_buy_id(ctx: dict) -> None:
 
 @then("the response should contain buyer_ref")
 def then_response_has_buyer_ref(ctx: dict) -> None:
-    """Assert response contains a buyer_ref."""
+    """Assert response buyer_ref matches the existing media buy's buyer_ref."""
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
-    assert getattr(resp, "buyer_ref", None) is not None, "Expected buyer_ref in response"
+    existing = ctx.get("existing_media_buy")
+    assert existing is not None, "No existing_media_buy in ctx — cannot verify buyer_ref"
+    actual = getattr(resp, "buyer_ref", None)
+    expected = existing.buyer_ref
+    assert actual == expected, f"Expected buyer_ref '{expected}', got '{actual}'"
 
 
 @then(parsers.parse('the response should contain buyer_ref "{buyer_ref}"'))

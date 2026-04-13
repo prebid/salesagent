@@ -34,14 +34,14 @@ from tests.unit._bdd_guard_helpers import iter_then_functions
 
 _HASATTR_ALLOWLIST: set[str] = {
     # FIXME(salesagent-beq4): replace hasattr with value assertion
-    "bdd/steps/domain/uc003_update_media_buy.py:803 then_implementation_date_null",
-    "bdd/steps/domain/uc003_update_media_buy.py:813 then_implementation_date_not_null",
-    "bdd/steps/domain/uc003_update_media_buy.py:937 then_response_has_sandbox",
-    "bdd/steps/domain/uc011_accounts.py:1308 then_has_accounts_array",
-    "bdd/steps/domain/uc011_accounts.py:1327 then_response_is_success_variant",
-    "bdd/steps/domain/uc011_accounts.py:1585 then_webhook_registered",
-    "bdd/steps/domain/uc011_accounts.py:1682 then_push_sent",
-    "bdd/steps/domain/uc011_accounts.py:2023 then_only_agent_a_deactivated",
+    "bdd/steps/domain/uc003_update_media_buy.py:807 then_implementation_date_null",
+    "bdd/steps/domain/uc003_update_media_buy.py:817 then_implementation_date_not_null",
+    "bdd/steps/domain/uc003_update_media_buy.py:941 then_response_has_sandbox",
+    "bdd/steps/domain/uc011_accounts.py:1310 then_has_accounts_array",
+    "bdd/steps/domain/uc011_accounts.py:1329 then_response_is_success_variant",
+    "bdd/steps/domain/uc011_accounts.py:1587 then_webhook_registered",
+    "bdd/steps/domain/uc011_accounts.py:1684 then_push_sent",
+    "bdd/steps/domain/uc011_accounts.py:2025 then_only_agent_a_deactivated",
     "bdd/steps/domain/uc011_accounts.py:459 then_accounts_array_count",
     "bdd/steps/domain/uc011_accounts.py:591 then_empty_accounts",
     "bdd/steps/domain/uc011_accounts.py:662 then_accounts_from_first_page",
@@ -52,15 +52,14 @@ _HASATTR_ALLOWLIST: set[str] = {
 
 _GETATTR_EXISTENCE_ALLOWLIST: set[str] = {
     # FIXME(salesagent-beq4): replace getattr existence check with value comparison
-    "bdd/steps/domain/uc003_update_media_buy.py:786 then_response_has_buyer_ref",
     "bdd/steps/domain/uc019_query_media_buys.py:1284 then_package_details",
 }
 
 _COUNT_ONLY_ALLOWLIST: set[str] = {
     # FIXME(salesagent-beq4): replace count-only check with element-level assertion
     "bdd/steps/generic/then_error.py:174 then_error_invalid_params",
-    "bdd/steps/domain/uc003_update_media_buy.py:868 then_affected_packages_present",
-    "bdd/steps/domain/uc003_update_media_buy.py:902 then_affected_package_budget",
+    "bdd/steps/domain/uc003_update_media_buy.py:872 then_affected_packages_present",
+    "bdd/steps/domain/uc003_update_media_buy.py:906 then_affected_package_budget",
     "bdd/steps/domain/uc004_delivery.py:1186 then_has_metrics",
     "bdd/steps/domain/uc004_delivery.py:1205 then_has_packages",
     "bdd/steps/domain/uc004_delivery.py:1250 then_has_mb_status",
@@ -72,16 +71,16 @@ _COUNT_ONLY_ALLOWLIST: set[str] = {
     "bdd/steps/domain/uc004_delivery.py:2104 then_packages_exclude_field",
     "bdd/steps/domain/uc004_delivery.py:2123 then_geo_system",
     "bdd/steps/domain/uc011_accounts.py:1043 then_all_accounts_echo_brand",
-    "bdd/steps/domain/uc011_accounts.py:1308 then_has_accounts_array",
-    "bdd/steps/domain/uc011_accounts.py:1416 then_all_accounts_action",
-    "bdd/steps/domain/uc011_accounts.py:1432 then_failed_has_errors",
-    "bdd/steps/domain/uc011_accounts.py:1539 then_setup_has_url",
-    "bdd/steps/domain/uc011_accounts.py:1585 then_webhook_registered",
-    "bdd/steps/domain/uc011_accounts.py:1682 then_push_sent",
-    "bdd/steps/domain/uc011_accounts.py:1942 then_account_in_db",
-    "bdd/steps/domain/uc011_accounts.py:2023 then_only_agent_a_deactivated",
-    "bdd/steps/domain/uc011_accounts.py:2554 then_no_production_accounts",
-    "bdd/steps/domain/uc011_accounts.py:2669 then_governance_agents_stored",
+    "bdd/steps/domain/uc011_accounts.py:1310 then_has_accounts_array",
+    "bdd/steps/domain/uc011_accounts.py:1418 then_all_accounts_action",
+    "bdd/steps/domain/uc011_accounts.py:1434 then_failed_has_errors",
+    "bdd/steps/domain/uc011_accounts.py:1541 then_setup_has_url",
+    "bdd/steps/domain/uc011_accounts.py:1587 then_webhook_registered",
+    "bdd/steps/domain/uc011_accounts.py:1684 then_push_sent",
+    "bdd/steps/domain/uc011_accounts.py:1944 then_account_in_db",
+    "bdd/steps/domain/uc011_accounts.py:2025 then_only_agent_a_deactivated",
+    "bdd/steps/domain/uc011_accounts.py:2556 then_no_production_accounts",
+    "bdd/steps/domain/uc011_accounts.py:2671 then_governance_agents_stored",
     "bdd/steps/domain/uc011_accounts.py:469 then_accounts_have_fields",
     "bdd/steps/domain/uc011_accounts.py:490 then_accounts_are_agent_scoped",
     "bdd/steps/domain/uc011_accounts.py:534 then_only_status",
