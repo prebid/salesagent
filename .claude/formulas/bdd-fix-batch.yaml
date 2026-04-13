@@ -1,0 +1,243 @@
+name: bdd-fix-batch
+description: >
+  Fix a batch of BDD scenarios (max 5) through orient → write → inspect → commit.
+  Enhanced from bdd-step.yaml with forced .agent-index reads, antipattern
+  guards, and /inspect-steps feedback loop. The agent CANNOT skip orientation
+  or bypass inspection.
+
+variables:
+  BATCH_IDS:
+    description: "Space-separated beads task IDs for step batches (max 5)"
+    required: true
+
+labels:
+  - "mol:bdd-fix"
+
+setup:
+  - id: "baseline"
+    title: "Establish BDD baseline"
+    description: |
+      Run BDD tests BEFORE any changes. Record counts.
+
+      ```bash
+      scripts/run-test.sh tests/bdd/ --no-header -q 2>&1 | tail -5
+      ```
+
+      Record in epic notes: passed, xpassed, xfailed, failed.
+
+      ## Gate — HARD STOP on unexpected failures
+
+    acceptance: "Baseline recorded in epic notes."
+    labels: ["atom:baseline"]
+
+iterate:
+  over: "BATCH_IDS"
+  item_var: "BATCH_ID"
+  all_var: "ALL_BATCHES"
+  count_var: "N"
+  barrier_label: "atom:commit"
+  atoms:
+    # ── Atom 1: Orient — FORCED .agent-index reads ──────────────
+    - id: "orient-{BATCH_ID}"
+      title: "Orient: read infrastructure for {BATCH_ID}"
+      description: |
+        MANDATORY infrastructure reads before writing any code.
+
+        ## Step 1: Read .agent-index stubs (DO NOT SKIP)
+
+        Read ALL of these. They are pre-computed symbol indexes:
+        ```
+        .agent-index/factories.pyi
+        .agent-index/harness/base.pyi
+        .agent-index/harness/envs.pyi
+        .agent-index/harness/transport.pyi
+        .agent-index/errors.pyi
+        .agent-index/schemas/core.pyi
+        ```
+
+        After reading, note in bead {BATCH_ID}:
+        - Which env class does this UC use?
+        - Which factories exist for the entities needed?
+        - What call_impl() / call_via() signatures are available?
+
+        ## Step 2: Read the batch task
+
+        ```bash
+        bd show {BATCH_ID}
+        ```
+
+        Extract: scenario names, feature file, step file, UC.
+
+        ## Step 3: Read the feature file scenarios
+
+        For each scenario: find the Gherkin (Given/When/Then), the @T- tag,
+        what the Then step CLAIMS to verify.
+
+        ## Step 4: Read existing step definitions
+
+        Use ast-grep to inventory:
+        ```bash
+        ast-grep --pattern '@given($_)' <step_file>
+        ast-grep --pattern '@when($_)' <step_file>
+        ast-grep --pattern '@then($_)' <step_file>
+        ```
+
+        For each scenario, trace which steps exist and which are missing.
+
+        ## Step 5: Read conftest xfail tags
+
+        Find the xfail entry for each scenario. Note the reason.
+
+        ## Step 6: Run baseline for these scenarios
+
+        ```bash
+        scripts/run-test.sh tests/bdd/ -k "<scenario1> or <scenario2> ..." --no-header -q
+        ```
+
+        Record per-scenario: pass/xpass/xfail/fail.
+
+        ## Store in bead
+
+        ```bash
+        bd update {BATCH_ID} --append-notes "## Orient
+        Env: [class]  Factories: [list]
+        Per scenario:
+          [name]: tag=[tag] current=[outcome]
+            steps: [exist/missing list]
+            then_claims: [what Gherkin says to verify]
+            assertion_needed: [what code should check]"
+        bd label add {BATCH_ID} research:complete
+        ```
+
+      acceptance: "All .agent-index stubs read. All scenarios traced. Baseline recorded."
+      depends_on: ["baseline"]
+      labels: ["atom:orient"]
+
+    # ── Atom 2: Write — implement with antipattern guards ───────
+    - id: "write-{BATCH_ID}"
+      title: "Write step fixes for {BATCH_ID}"
+      description: |
+        Implement step definitions using the orient findings.
+
+        ## Precondition
+        Orient atom closed. `bd show {BATCH_ID}` has orient findings.
+
+        ## ANTIPATTERNS — if you catch yourself doing ANY of these, STOP:
+
+        1. **Mock hacks**: Need a mock not in .agent-index/harness/envs.pyi?
+           → The env doesn't support it. Mark INFRA_GAP, skip.
+
+        2. **Raw ORM**: `session.add(Model(...))` in step code.
+           → Use factories from .agent-index/factories.pyi.
+
+        3. **Vacuous assertions**: `assert x is not None`, `len(x) >= 0`,
+           `getattr(obj, "field", None) is None` where field doesn't exist.
+           → Assert SPECIFIC VALUES against seeded data.
+
+        4. **Inline xfail/skip**: `pytest.skip()` or `pytest.xfail()` in step.
+           → Let conftest handle it. Steps assert or fail.
+
+        5. **Direct DB**: `get_db_session()` in step code.
+           → Use ctx["env"] which manages the session.
+
+        6. **Hardcoded IDs**: `assert result.id == "mb-001"`.
+           → Resolve through ctx: `ctx["expected_id"]`.
+
+        7. **Bypass harness**: Calling production code directly.
+           → Use `env.call_impl()` or `env.call_via(transport)`.
+
+        8. **elif dispatch in Then**: Chain of conditions in one function.
+           → One function per step text, or parsers.parse().
+
+        ## Pattern
+
+        For each scenario:
+        1. Given steps: set up ctx using factories
+        2. When steps: call env.call_impl() / env.call_via()
+        3. Then steps: assert response fields == SPECIFIC values
+
+        ## After changes
+
+        ```bash
+        scripts/run-test.sh tests/bdd/ -k "<scenarios>" --no-header -q
+        ```
+
+        Expected: xfail→pass or xfail→different-xfail (hits real prod gap).
+        WRONG: pass→fail (revert immediately).
+
+      acceptance: "Steps written. Test run shows expected transitions. No antipatterns."
+      depends_on: ["orient-{BATCH_ID}"]
+      depends_on_prev_barrier: true
+      labels: ["atom:write-steps"]
+
+    # ── Atom 3: Inspect — feedback loop ─────────────────────────
+    - id: "inspect-{BATCH_ID}"
+      title: "Inspect step quality for {BATCH_ID}"
+      description: |
+        Run structural guards + manual assertion check. Fix before committing.
+
+        ## Run guards
+
+        ```bash
+        uv run pytest \
+          tests/unit/test_architecture_bdd_no_trivial_assertions.py \
+          tests/unit/test_architecture_bdd_assertion_strength.py \
+          tests/unit/test_architecture_bdd_no_pass_steps.py \
+          tests/unit/test_architecture_bdd_no_request_in_then.py \
+          -x -q
+        ```
+
+        If ANY fail: go back, fix, re-run. Do NOT close this atom with failures.
+
+        ## Manual check each Then step you wrote/modified
+
+        For each: does the assertion match what the Gherkin step text claims?
+        - "status should be X" → code asserts `== X` (not `is not None`)
+        - "should include field" → code checks field VALUE (not just existence)
+        - "should not include field" → verify it's not vacuously true
+          (field might not exist on the model at all)
+
+        ## Gate
+
+        Guards pass AND manual check clean. If issues: fix NOW, then close.
+
+      acceptance: "All BDD guards pass. No vacuous assertions."
+      depends_on: ["write-{BATCH_ID}"]
+      labels: ["atom:inspect", "atom:gate"]
+
+    # ── Atom 4: Commit ──────────────────────────────────────────
+    - id: "commit-{BATCH_ID}"
+      title: "Commit fixes for {BATCH_ID}"
+      description: |
+        ```bash
+        make quality
+        git add <step files> tests/bdd/conftest.py
+        git commit -m "fix: BDD step quality — [scenarios fixed]"
+        bd close {BATCH_ID}
+        ```
+
+      acceptance: "make quality passes. Committed. Task closed."
+      depends_on: ["inspect-{BATCH_ID}"]
+      labels: ["atom:commit"]
+
+finalize:
+  - id: verify-no-regression
+    title: "Verify zero regressions vs baseline"
+    description: |
+      Compare final BDD counts against baseline from setup atom.
+      passes >= baseline, failures = 0, xfails may decrease.
+
+    acceptance: "Zero regressions. Final counts recorded."
+    depends_on_all_barriers: true
+    labels: ["atom:verify-regression"]
+
+  - id: sync
+    title: "Sync beads"
+    description: |
+      ```bash
+      bd sync
+      ```
+
+    acceptance: "All batches closed. bd sync done."
+    depends_on: ["verify-no-regression"]
+    labels: ["atom:verify"]

@@ -36,6 +36,19 @@ dc() { docker-compose -f docker-compose.e2e.yml -p "${COMPOSE_PROJECT_NAME:-adcp
 cmd_up() {
     echo -e "${BLUE}Starting Docker test stack...${NC}"
 
+    # Prune orphaned test networks from crashed/abandoned stacks.
+    # Each network burns a /16 subnet from Docker's address pool (~30 total).
+    # Agent processes that die don't trigger the trap EXIT cleanup.
+    local pruned=0
+    for net in $(docker network ls --filter "name=adcp-test" -q 2>/dev/null); do
+        local containers
+        containers=$(docker network inspect "$net" --format '{{len .Containers}}' 2>/dev/null || echo 0)
+        if [ "${containers:-0}" -eq 0 ]; then
+            docker network rm "$net" 2>/dev/null && pruned=$((pruned + 1))
+        fi
+    done
+    [ "$pruned" -gt 0 ] && echo -e "${BLUE}Pruned $pruned orphaned test networks${NC}"
+
     read POSTGRES_PORT MCP_PORT CREATIVE_AGENT_PORT <<< $(find_ports)
     export COMPOSE_PROJECT_NAME="adcp-test-$$"
     dc down -v 2>/dev/null || true

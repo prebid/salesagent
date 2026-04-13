@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Generator
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -1257,6 +1258,45 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
             item.add_marker(pytest.mark.admin)
 
+    # ── Single-transport optimization for strict xfails ──────────────
+    # Scenarios that xfail(strict=True) on ALL transports waste 3/4 of
+    # their runtime running the same failure path on mcp/rest/a2a after
+    # impl already proved it xfails. Deselect redundant transports.
+    #
+    # How it works: after the loop above, every item has its xfail markers.
+    # We find items with strict xfail and deselect the non-impl variants.
+    # The impl variant still runs → catches when production catches up (xpass).
+    #
+    # Opt out: set BDD_ALL_TRANSPORTS=1 to run everything (for full runs).
+    if not os.environ.get("BDD_ALL_TRANSPORTS"):
+        deselected: list[pytest.Item] = []
+        remaining: list[pytest.Item] = []
+        for item in items:
+            nodeid = item.nodeid
+            is_redundant_transport = (
+                "[mcp]" in nodeid or "[mcp-" in nodeid
+                or "[a2a]" in nodeid or "[a2a-" in nodeid
+                or "[rest]" in nodeid or "[rest-" in nodeid
+            )
+            if not is_redundant_transport:
+                remaining.append(item)
+                continue
+            # Check if this item has a strict xfail marker
+            has_strict_xfail = any(
+                m.name == "xfail" and m.kwargs.get("strict", False)
+                for m in item.iter_markers()
+            )
+            if has_strict_xfail:
+                deselected.append(item)
+            else:
+                remaining.append(item)
+
+        if deselected:
+            items[:] = remaining
+            config = items[0].config if items else None
+            if config:
+                config.hook.pytest_deselected(items=deselected)
+
 
 # ---------------------------------------------------------------------------
 # Core fixtures
@@ -1333,6 +1373,21 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
 # Or set E2E_BASE_URL / E2E_AUTH_TOKEN / E2E_TENANT environment variables.
 
 
+def _load_test_stack_env() -> dict[str, str]:
+    """Read .test-stack.env if it exists. Returns dict of key=value pairs."""
+    env_file = Path(__file__).resolve().parents[2] / ".test-stack.env"
+    result: dict[str, str] = {}
+    if env_file.exists():
+        for line in env_file.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("export "):
+                line = line[7:]
+            if "=" in line and not line.startswith("#"):
+                key, _, value = line.partition("=")
+                result[key.strip()] = value.strip().strip('"')
+    return result
+
+
 @pytest.fixture(scope="session")
 def e2e_stack():
     """Detect whether Docker E2E stack is running. Return E2EConfig or None.
@@ -1340,26 +1395,41 @@ def e2e_stack():
     Unlike most E2E fixtures this does NOT skip — it returns None so that
     non-E2E transports can run without the stack. Callers that need the
     stack (e2e_* transports) should skip explicitly when this is None.
+
+    Resolution order for E2E_BASE_URL:
+    1. E2E_BASE_URL environment variable (set by run_all_tests.sh via tox pass_env)
+    2. .test-stack.env file in project root (written by test-stack.sh up)
+    3. Default localhost:8092 (last resort)
     """
     import httpx
 
     from tests.harness.transport import E2EConfig
 
-    base_url = os.environ.get("E2E_BASE_URL", "http://localhost:8092")
+    # Try env var first, then .test-stack.env file, then default
+    base_url = os.environ.get("E2E_BASE_URL")
+    postgres_url = os.environ.get("E2E_POSTGRES_URL")
+
+    if not base_url:
+        stack_env = _load_test_stack_env()
+        base_url = stack_env.get("E2E_BASE_URL")
+        if not postgres_url:
+            postgres_url = stack_env.get("E2E_POSTGRES_URL")
+
+    if not base_url:
+        base_url = "http://localhost:8092"
+
     try:
         resp = httpx.get(f"{base_url}/health", timeout=5)
         resp.raise_for_status()
     except Exception:
         return None
 
-    return E2EConfig(
-        base_url=base_url,
-        postgres_url=os.environ.get(
-            "E2E_POSTGRES_URL",
-            "postgresql://adcp_user:secure_password_change_me@localhost:"
-            f"{os.environ.get('POSTGRES_PORT', '5435')}/adcp",
-        ),
-    )
+    if not postgres_url:
+        postgres_url = (
+            f"postgresql://adcp_user:secure_password_change_me@localhost:{os.environ.get('POSTGRES_PORT', '5435')}/adcp"
+        )
+
+    return E2EConfig(base_url=base_url, postgres_url=postgres_url)
 
 
 @pytest.fixture()

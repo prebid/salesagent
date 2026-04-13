@@ -86,7 +86,35 @@ eval $(.claude/skills/agent-db/agent-db.sh up)
 This gives you `DATABASE_URL` pointing to your own Postgres instance.
 The `integration_db` pytest fixture handles per-test database creation.
 
-### Step 4: Verify docker-compose stack (optional but recommended)
+### Step 4: Start the E2E Docker stack (REQUIRED for BDD tasks)
+
+**If your task touches BDD steps (`tests/bdd/`)**, you MUST start the full
+Docker stack so the `e2e_rest` transport works:
+
+```bash
+./scripts/test-stack.sh up        # Starts Postgres + app + nginx on dynamic ports
+source .test-stack.env            # Exports E2E_BASE_URL, E2E_POSTGRES_URL, etc.
+```
+
+This writes `.test-stack.env` with the stack's ports. The BDD conftest reads
+this file as fallback, but **sourcing it is required for tox** since tox needs
+the env vars in the shell to pass them through `pass_env`.
+
+**Verify e2e_rest works:**
+```bash
+uv run pytest tests/bdd/ -k "test_auto[e2e_rest]" --no-header -q 2>&1 | tail -5
+```
+If you see "skipped" with "Docker E2E stack not running", the env vars are missing.
+
+**Tear down when done:**
+```bash
+./scripts/test-stack.sh down
+```
+
+Port conflicts are impossible — `test-stack.sh` scans for free ports in 50000-60000.
+Each worktree gets its own stack on its own ports.
+
+### Step 5 (optional): Verify docker-compose stack (for non-BDD tasks)
 
 Each worktree has its own `CONDUCTOR_PORT`, so you can run the full stack
 independently without conflicting with other worktrees:
@@ -97,9 +125,9 @@ curl -f http://localhost:$(grep CONDUCTOR_PORT .env | cut -d= -f2)/health
 docker compose down
 ```
 This verifies migrations, nginx, and the MCP server all work. For most
-tasks, the bare Postgres from Step 3 is sufficient for integration tests.
+non-BDD tasks, the bare Postgres from Step 3 is sufficient.
 
-### Step 5: Run the full test baseline BEFORE any code changes
+### Step 6: Run the full test baseline BEFORE any code changes
 ```bash
 make quality
 uv run pytest tests/integration/ -x -q
@@ -145,9 +173,16 @@ make quality
 ./run_all_tests.sh
 ```
 
-This starts Docker, runs all 5 suites (unit, integration, integration_v2,
-e2e, ui) via tox, and tears down. Do NOT substitute with individual pytest
+This starts Docker, runs all 5 suites (unit, integration, e2e, admin, bdd)
+via tox, and tears down. Do NOT substitute with individual pytest
 commands — `./run_all_tests.sh` is the single source of truth.
+
+**For BDD-only iteration** (between Gate 1 and Gate 2):
+```bash
+source .test-stack.env && tox -e bdd    # Stack must be up first
+```
+Check JSON results: `test-results/` or `.tox/bdd.json`. If you see 1000+
+skips, the E2E stack isn't connected — re-source `.test-stack.env`.
 
 JSON results are saved to `test-results/<ddmmyy_HHmm>/`. Use those to
 review results — background processes may crash and lose terminal output.

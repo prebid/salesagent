@@ -417,13 +417,104 @@ def migration_template():
     _drop_database(parsed, template_name)
 
 
+@pytest.fixture(scope="session")
+def seeded_template(migration_template):
+    """Session-scoped template with common seed data pre-committed.
+
+    Extends migration_template by adding: tenant, principal, currency limit,
+    property tag, publisher partner, authorized property, product, and pricing
+    option. These are the standard prerequisites for create_media_buy.
+
+    Per-test databases clone from THIS template, so harness setup_media_buy_data()
+    can skip factory creation when the seed data already exists.
+
+    Saves ~0.09s per test (harness init cost) × 5000+ BDD tests = ~450s.
+    """
+    import uuid
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session as SASession
+
+    from src.core.database.database_session import _pydantic_json_serializer
+
+    parsed = migration_template["parsed"]
+    base_template = migration_template["template_name"]
+    seed_name = f"seed_{uuid.uuid4().hex[:8]}"
+
+    # Clone migration template → seed template
+    conn = _pg_admin_conn(parsed)
+    cur = conn.cursor()
+    try:
+        cur.execute(f'CREATE DATABASE "{seed_name}" TEMPLATE "{base_template}"')
+    finally:
+        cur.close()
+        conn.close()
+
+    # Connect and seed common data
+    seed_url = _build_url(parsed, seed_name)
+    engine = create_engine(seed_url, echo=False, json_serializer=_pydantic_json_serializer)
+    session = SASession(bind=engine)
+
+    try:
+        from tests.factories import (
+            ALL_FACTORIES,
+            AuthorizedPropertyFactory,
+            PricingOptionFactory,
+            PrincipalFactory,
+            ProductFactory,
+            PropertyTagFactory,
+            PublisherPartnerFactory,
+            TenantFactory,
+        )
+
+        # Bind factories to seed session
+        for f in ALL_FACTORIES:
+            f._meta.sqlalchemy_session = session
+
+        # Standard seed data — uses BaseTestEnv defaults so harness detects them.
+        # TenantFactory auto-creates CurrencyLimit(USD) via RelatedFactory.
+        tenant = TenantFactory(tenant_id="test_tenant", subdomain="test-tenant")
+        PrincipalFactory(tenant=tenant, principal_id="test_principal")
+        PropertyTagFactory(tenant=tenant, tag_id="all_inventory", name="All Inventory")
+        PublisherPartnerFactory(tenant=tenant, publisher_domain="testpublisher.example.com")
+        AuthorizedPropertyFactory(tenant=tenant, publisher_domain="testpublisher.example.com")
+        product = ProductFactory(
+            tenant=tenant,
+            product_id="guaranteed_display",
+            property_tags=["all_inventory"],
+        )
+        PricingOptionFactory(
+            product=product,
+            pricing_model="cpm",
+            currency="USD",
+            is_fixed=True,
+        )
+        session.commit()
+    finally:
+        # Unbind factories and close session (required for TEMPLATE cloning)
+        for f in ALL_FACTORIES:
+            f._meta.sqlalchemy_session = None
+        session.close()
+        engine.dispose()
+
+    yield {
+        "parsed": parsed,
+        "template_name": seed_name,
+        "seed_tenant_id": "test_tenant",
+        "seed_principal_id": "test_principal",
+        "seed_product_id": "guaranteed_display",
+    }
+
+    _drop_database(parsed, seed_name)
+
+
 @pytest.fixture(scope="function")
 def integration_db(migration_template):
     """Provide an isolated PostgreSQL database for each integration test.
 
-    Clones the session-scoped Alembic template database (near-instant)
-    instead of running ``Base.metadata.create_all()`` or re-running
-    migrations per test. Schema matches production exactly.
+    Clones the session-scoped Alembic template database (near-instant,
+    migrations only, no seed data). For BDD tests, use ``bdd_integration_db``
+    which includes pre-seeded tenant/principal/product data.
 
     REQUIRES: PostgreSQL container running (via run_all_tests.sh ci or GitHub Actions)
     """
@@ -487,6 +578,74 @@ def integration_db(migration_template):
         os.environ.pop("DB_TYPE", None)
 
     # Drop the per-test database
+    _drop_database(parsed, unique_db_name)
+
+
+@pytest.fixture(scope="function")
+def bdd_integration_db(seeded_template):
+    """Provide an isolated PostgreSQL database with pre-seeded BDD test data.
+
+    Like ``integration_db`` but clones from the seeded template which includes
+    tenant, principal, product, and pricing option. BDD harness
+    ``setup_default_data()`` detects existing seed rows and skips factory
+    creation, saving ~0.08s per test.
+
+    Used by BDD conftest ``_setup_db()`` instead of ``integration_db``.
+    """
+    import uuid
+
+    parsed = seeded_template["parsed"]
+    template_name = seeded_template["template_name"]
+    unique_db_name = f"bdd_{uuid.uuid4().hex[:8]}"
+
+    original_url = os.environ.get("DATABASE_URL")
+    original_db_type = os.environ.get("DB_TYPE")
+
+    conn = _pg_admin_conn(parsed)
+    cur = conn.cursor()
+    try:
+        cur.execute(f'CREATE DATABASE "{unique_db_name}" TEMPLATE "{template_name}"')
+    finally:
+        cur.close()
+        conn.close()
+
+    test_url = _build_url(parsed, unique_db_name)
+    os.environ["DATABASE_URL"] = test_url
+    os.environ["DB_TYPE"] = "postgresql"
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import scoped_session, sessionmaker
+
+    from src.core.database.database_session import _pydantic_json_serializer, reset_engine
+
+    engine = create_engine(test_url, echo=False, json_serializer=_pydantic_json_serializer)
+    reset_engine()
+
+    import src.core.database.database_session as db_session_module
+
+    db_session_module._engine = engine
+    db_session_module._session_factory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    db_session_module._scoped_session = scoped_session(db_session_module._session_factory)
+
+    import src.core.context_manager
+
+    src.core.context_manager._context_manager_instance = None
+
+    yield unique_db_name
+
+    reset_engine()
+    src.core.context_manager._context_manager_instance = None
+    engine.dispose()
+
+    if original_url:
+        os.environ["DATABASE_URL"] = original_url
+    else:
+        os.environ.pop("DATABASE_URL", None)
+    if original_db_type:
+        os.environ["DB_TYPE"] = original_db_type
+    else:
+        os.environ.pop("DB_TYPE", None)
+
     _drop_database(parsed, unique_db_name)
 
 
