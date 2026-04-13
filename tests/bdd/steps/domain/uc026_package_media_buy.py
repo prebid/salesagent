@@ -1768,31 +1768,10 @@ def then_package_not_paused(ctx: dict) -> None:
 @then("the package should contain format_ids_to_provide listing formats needing creative assets")
 def then_package_formats_to_provide(ctx: dict) -> None:
     """Assert package has format_ids_to_provide listing formats that need creative assets."""
-    import pytest
-    from sqlalchemy import select
-
-    from src.core.database.database_session import get_db_session
-    from src.core.database.models import MediaPackage
-
     packages = _get_packages(ctx)
     pkg = packages[0]
-    pkg_id = _pkg_field(pkg, "package_id")
-    assert pkg_id, "Package has no package_id — cannot verify format_ids_to_provide"
     formats_to_provide = _pkg_field(pkg, "format_ids_to_provide")
-    if formats_to_provide is None:
-        with get_db_session() as session:
-            db_pkg = session.scalars(select(MediaPackage).filter_by(package_id=pkg_id)).first()
-            if db_pkg:
-                db_val = getattr(db_pkg, "format_ids_to_provide", None)
-                if db_val:
-                    pytest.xfail(
-                        f"SPEC-PRODUCTION GAP: format_ids_to_provide persisted in DB "
-                        f"({len(db_val)} items) but not echoed in response. "
-                        "FIXME(salesagent-9vgz.1)"
-                    )
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: format_ids_to_provide not present on package or in DB. FIXME(salesagent-9vgz.1)"
-        )
+    assert formats_to_provide is not None, "Package format_ids_to_provide is None"
     assert isinstance(formats_to_provide, list), (
         f"Expected format_ids_to_provide to be a list, got {type(formats_to_provide)}"
     )
@@ -2428,31 +2407,19 @@ def then_existing_returned(ctx: dict) -> None:
 @then(parsers.parse('the package should be created with pricing_option_id "{option_id}"'))
 def then_created_with_pricing(ctx: dict, option_id: str) -> None:
     """Assert package was created with specific pricing_option_id."""
-    import pytest
-
     pkgs = _assert_has_packages(ctx)
     expected = _resolve_pricing_id(ctx, option_id)
     actual = _pkg_field(pkgs[0], "pricing_option_id")
-    if actual is None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: pricing_option_id not echoed in response. "
-            f"Expected '{expected}'. FIXME(salesagent-9vgz.1)"
-        )
+    assert actual is not None, f"pricing_option_id not echoed in response; expected '{expected}'"
     assert actual == expected, f"Expected pricing_option_id '{expected}', got '{actual}'"
 
 
 @then(parsers.parse("the package should be created with bid_price {price} interpreted as ceiling"))
 def then_bid_ceiling(ctx: dict, price: str) -> None:
     """Assert package has bid_price set to the expected value (ceiling semantics)."""
-    import pytest
-
     pkgs = _assert_has_packages(ctx)
     actual_bid = _pkg_field(pkgs[0], "bid_price")
-    if actual_bid is None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: bid_price not echoed in response. "
-            f"Expected {price} (ceiling). FIXME(salesagent-9vgz.1)"
-        )
+    assert actual_bid is not None, f"bid_price not echoed in response; expected {price} (ceiling)"
     assert float(actual_bid) == float(price), f"Expected bid_price {price} (ceiling), got {actual_bid}"
     # Verify ceiling semantics by checking the product's pricing option
     _assert_pricing_option_max_bid(ctx, pkgs[0], expected_is_ceiling=True)
@@ -2461,14 +2428,9 @@ def then_bid_ceiling(ctx: dict, price: str) -> None:
 @then(parsers.parse("the package should be created with bid_price {price} interpreted as exact bid"))
 def then_bid_exact(ctx: dict, price: str) -> None:
     """Assert package has bid_price set to the expected value (exact semantics)."""
-    import pytest
-
     pkgs = _assert_has_packages(ctx)
     actual_bid = _pkg_field(pkgs[0], "bid_price")
-    if actual_bid is None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: bid_price not echoed in response. Expected {price} (exact). FIXME(salesagent-9vgz.1)"
-        )
+    assert actual_bid is not None, f"bid_price not echoed in response; expected {price} (exact)"
     assert float(actual_bid) == float(price), f"Expected bid_price {price} (exact), got {actual_bid}"
     # Verify exact semantics by checking the product's pricing option
     _assert_pricing_option_max_bid(ctx, pkgs[0], expected_is_ceiling=False)
@@ -2486,8 +2448,6 @@ def then_no_bid_price(ctx: dict) -> None:
 @then("pricing should be determined by pricing option defaults")
 def then_pricing_defaults(ctx: dict) -> None:
     """Assert pricing is determined by pricing option defaults (no bid_price override)."""
-    import pytest
-
     _assert_no_error(ctx)
     pkgs = _assert_has_packages(ctx)
     pkg = pkgs[0]
@@ -2496,11 +2456,7 @@ def then_pricing_defaults(ctx: dict) -> None:
     assert actual_bid is None, f"Expected no bid_price (pricing by defaults), got {actual_bid}"
     # The package should still have a pricing_option_id (defaults come from the option)
     po_id = _pkg_field(pkg, "pricing_option_id")
-    if po_id is None:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: pricing_option_id not echoed — cannot verify "
-            "pricing defaults source. FIXME(salesagent-9vgz.1)"
-        )
+    assert po_id is not None, "pricing_option_id not echoed — cannot verify pricing defaults source"
     assert isinstance(po_id, str) and len(po_id.strip()) > 0, (
         f"Expected non-empty pricing_option_id for default pricing, got {po_id!r}"
     )
