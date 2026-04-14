@@ -476,6 +476,34 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
+        # FIXME(salesagent-nmg9): E2E_REST — set_registry_formats has no sidecar mock
+        # path. Docker's real creative agent serves its own 49-format catalog, so
+        # scenarios that inject specific format fixtures via Given steps and assert
+        # on those names can't run against E2E. Remove when E2E gains catalog-injection.
+        _UC005_E2E_FIXTURE_INJECTION_TAGS: set[str] = {
+            "T-UC-005-inv-031-1-violated",
+            "T-UC-005-inv-031-2-holds",
+            "T-UC-005-inv-049-2-violated",
+            "T-UC-005-inv-049-3-holds",
+            "T-UC-005-inv-049-3-violated",
+            "T-UC-005-inv-049-3-group",
+            "T-UC-005-inv-049-4-holds",
+            "T-UC-005-inv-049-4-violated",
+            "T-UC-005-inv-049-4-nodim",
+            "T-UC-005-inv-049-9-violated",
+            "T-UC-005-inv-049-9-nofield",
+            "T-UC-005-inv-049-10-violated",
+            "T-UC-005-inv-049-10-nofield",
+            "T-UC-005-dim-boundary",
+        }
+        if is_e2e_rest and (marker_names & _UC005_E2E_FIXTURE_INJECTION_TAGS):
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="E2E: set_registry_formats has no sidecar mock — real creative agent catalog used",
+                    strict=False,
+                )
+            )
+
         # FIXME(salesagent-vov): UC-019 REST — REST endpoint returns Method Not Allowed
         # for get_media_buys, so all REST parametrizations fail.
         if is_rest and any(t.startswith("T-UC-019") for t in marker_names):
