@@ -4,9 +4,9 @@
 **Status:** Pre-implementation audit
 **Purpose:** Verify that the v2.0.0 Flask → FastAPI migration plan does NOT impact the AdCP protocol surface and does NOT make assumptions that would require updates from external AdCP consumers
 
-> **ASYNC PIVOT REVERSED (2026-04-12) — v2.0 uses SYNC admin handlers.**
+> **ASYNC PIVOT REVERSED (2026-04-12) — v2.0 uses SYNC admin handlers for Phases 0-3.**
 > This file predates the async reversion. Any references to async admin handlers
-> or `AsyncSession` are v2.1 scope. v2.0 ships with sync `def` handlers.
+> or `AsyncSession` are Phase 4+ scope. v2.0 ships with sync `def` handlers for Phases 0-3.
 > The authoritative implementation guide is `execution-plan.md`.
 
 > **Companion to:** [flask-to-fastapi-migration.md](flask-to-fastapi-migration.md). Read that first for the migration plan itself. This file is the audit findings produced by three parallel Opus Explore subagents on 2026-04-11.
@@ -472,7 +472,7 @@ The v2.0 migration preserves two non-obvious architectural facts that are load-b
 
 ### Summary: these are Wave-0 structural guards, NOT Wave-3 cleanup
 
-Both guards land in Wave 0 alongside the other migration guards. They cost ~40 lines of Python each and prevent a whole class of silent-failure refactors in v2.1+ work. Added to the plan via `flask-to-fastapi-migration.md` §4.8 "Apps loaded at runtime inventory" and `flask-to-fastapi-deep-audit.md` §3.7 + §3.8.
+Both guards land in Wave 0 alongside the other migration guards. They cost ~40 lines of Python each and prevent a whole class of silent-failure refactors in Phase 4+ work. Added to the plan via `flask-to-fastapi-migration.md` §4.8 "Apps loaded at runtime inventory" and `flask-to-fastapi-deep-audit.md` §3.7 + §3.8.
 
 ---
 

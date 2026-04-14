@@ -4,10 +4,10 @@ Plan mode is active and I do not have Write access. I will deliver the full deep
 
 # Flask → FastAPI Migration: Deep Elaboration of §14, §16, §21
 
-> **ASYNC PIVOT REVERSED (2026-04-12) — v2.0 uses SYNC admin handlers.**
-> This file predates the async reversion and contains ~68 async pattern references
-> (`async def`, `AsyncSession`, `asyncpg`, etc.) that are v2.1 scope, not v2.0.
-> v2.0 ships with sync `def` admin handlers; async SQLAlchemy is deferred to v2.1.
+> **SYNC-FIRST LAYERING (2026-04-14) — Phases 0-3 use SYNC admin handlers.**
+> This file predates the sync-first layering decision and contains ~68 async pattern references
+> (`async def`, `AsyncSession`, `asyncpg`, etc.) that are Phase 4+ scope, not Phases 0-3.
+> Phases 0-3 ship with sync `def` admin handlers; async SQLAlchemy is deferred to Phase 4+.
 > The authoritative implementation guide is `execution-plan.md`.
 
 This document elaborates three sections of `/Users/quantum/Documents/ComputedChaos/salesagent/.claude/notes/flask-to-fastapi/flask-to-fastapi-migration.md`: the 5-6 wave migration strategy (§14, expanded from 4 to 5-6 waves by the 2026-04-11 async pivot that absorbed async SQLAlchemy into v2.0 as Waves 4-5 — see `async-pivot-checkpoint.md`), the 28 assumptions (§16), and the verification strategy (§21). All file paths are absolute. Line numbers reference the current HEAD of the repository.
@@ -18,9 +18,9 @@ This document elaborates three sections of `/Users/quantum/Documents/ComputedCha
 
 ### Pre-Wave-0 — Spike sequence gate (5.5-7.5 days, hard gate)
 
-> **[DEFERRED TO v2.1]** The spike sequence below was designed for the async pivot. Under sync v2.0, these spikes are not needed. Preserved for v2.1 reference.
+> **[DEFERRED TO Phase 4+]** The spike sequence below was designed for the async pivot. Under sync Phases 0-3, these spikes are not needed. Preserved for Phase 4+ reference.
 
-This gate was added by the 2026-04-11 async pivot (`async-pivot-checkpoint.md`). Under the pivot, v2.0 absorbs full async SQLAlchemy as Waves 4-5. Before a single Wave 0 line of code is written, a 5.5-7.5 day spike sequence must execute on a throwaway branch `spike/async-pivot-gate` to prove the absorbed-async scope is tractable. The spike gate has one hard blocker (Spike 1) and eight soft blockers. If the hard blocker fails, the entire pivot reverts and v2.0 falls back to Option C (sync-def admin handlers) with async SQLAlchemy deferred to v2.1. The gate is governed by `async-audit/agent-b-risk-matrix.md` §4 and `async-audit/agent-a-scope-audit.md` §6; CLAUDE.md §"Mandatory pre-Wave-0 spike sequence" enumerates the **10-spike list** that every fresh session must honor. **Spikes 4.25, 4.5 and 5.5 were added on 2026-04-11 by the Decision 3 (factory-boy shim), Decision 7 (ContextManager refactor) and Decision 9 (background_sync sync-bridge) deep-think analyses — see CLAUDE.md §"Open decisions blocking Wave 4" resolutions for full context.**
+This gate was added by the 2026-04-11 async pivot (`async-pivot-checkpoint.md`). Under the pivot, v2.0 absorbs full async SQLAlchemy as Waves 4-5. Before a single Wave 0 line of code is written, a 5.5-7.5 day spike sequence must execute on a throwaway branch `spike/async-pivot-gate` to prove the absorbed-async scope is tractable. The spike gate has one hard blocker (Spike 1) and eight soft blockers. If the hard blocker fails, the entire pivot reverts and v2.0 falls back to Option C (sync-def admin handlers) with async SQLAlchemy deferred to Phase 4+. The gate is governed by `async-audit/agent-b-risk-matrix.md` §4 and `async-audit/agent-a-scope-audit.md` §6; CLAUDE.md §"Mandatory pre-Wave-0 spike sequence" enumerates the **10-spike list** that every fresh session must honor. **Spikes 4.25, 4.5 and 5.5 were added on 2026-04-11 by the Decision 3 (factory-boy shim), Decision 7 (ContextManager refactor) and Decision 9 (background_sync sync-bridge) deep-think analyses — see CLAUDE.md §"Open decisions blocking Wave 4" resolutions for full context.**
 
 #### A. Detailed acceptance criteria
 
@@ -73,7 +73,7 @@ This gate was added by the 2026-04-11 async pivot (`async-pivot-checkpoint.md`).
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
-| Spike 1 reveals 100+ lazy-load failures, killing the pivot and triggering a major replan (back to sync-def Option C, defer async to v2.1, 2-3 weeks of plan rewrite) | Medium | Critical — the entire absorbed-async v2.0 scope collapses | Accept the rework. The spike exists specifically to catch this before Wave 4 starts — catching it late in Wave 4 is an order of magnitude worse. The fallback plan (sync-def Option C from `flask-to-fastapi-deep-audit.md` §1.4) is pre-written and can be restored by reverting the async-pivot commits on `main`. |
+| Spike 1 reveals 100+ lazy-load failures, killing the pivot and triggering a major replan (back to sync-def Option C, defer async to Phase 4+, 2-3 weeks of plan rewrite) | Medium | Critical — the entire absorbed-async v2.0 scope collapses | Accept the rework. The spike exists specifically to catch this before Wave 4 starts — catching it late in Wave 4 is an order of magnitude worse. The fallback plan (sync-def Option C from `flask-to-fastapi-deep-audit.md` §1.4) is pre-written and can be restored by reverting the async-pivot commits on `main`. |
 | `asyncpg` has a JSONB codec incompatibility with `JSONType(model=X)` (Risk #17 in Agent B matrix) and the spike cannot work around it in 4 hours | Medium | High — driver pivots to `psycopg[binary,pool]>=3.2.0` | Spike 2 is the detection mechanism. Fallback is pre-authorized in `async-pivot-checkpoint.md` §3 "Driver change" — switch driver, no other plan changes required. Agent B §2 Risk #17 documents the asyncpg JSON codec registration recipe if the workaround is <4 hours. |
 | Spike 1 passes but developers skip the `lazy="raise"` annotation step, running integration tests against the default `lazy="select"` posture and getting false-green | Medium | High — Wave 4 detonates with lazy-load failures that should have been caught in Spike 1 | Spike 1 acceptance criterion #2 requires `lazy="raise"` on ALL 58-68 relationships; `spike-decision.md` must include a `git diff src/core/database/models.py | grep -c "lazy=\"raise\""` count that matches the relationship count. |
 | Spike branch diverges from `main` during the 5-7 day spike window, and the gate decision becomes stale by the time Wave 4 starts | Medium | Medium | Spike branch is capped at 7 days. If `main` changes materially (new `relationship()` definitions, new `_impl` functions, new repositories), the spike is rerun on a fresh branch forked from current `main`. The gate is "the spike passed as of commit `<sha>`", not a blanket clearance. |
@@ -98,13 +98,13 @@ git revert -m 1 <additional-pivot-commits>
 git push origin main
 ```
 
-The reverts restore the plan files to their pre-pivot state (sync-def Option C admin handlers, async SQLAlchemy deferred to v2.1). Agent F non-surface changes (Dockerfile, CI, pre-commit updates) that are defensible independent of async can be preserved by cherry-picking non-async parts; the judgment call is made in `spike-decision.md`.
+The reverts restore the plan files to their pre-pivot state (sync-def Option C admin handlers, async SQLAlchemy deferred to Phase 4+). Agent F non-surface changes (Dockerfile, CI, pre-commit updates) that are defensible independent of async can be preserved by cherry-picking non-async parts; the judgment call is made in `spike-decision.md`.
 
 **Post-gate-failure actions:**
 - v2.0 scope reverts to 4 waves (Wave 0-3 Flask removal + admin FastAPI rewrite)
-- v2.1 roadmap gains an "async SQLAlchemy migration" epic with the Agent A scope audit as its starting inventory
+- Phase 4+ roadmap gains an "async SQLAlchemy migration" epic with the Agent A scope audit as its starting inventory
 - The `pyproject.toml` `asyncpg` dep is removed (left only the legacy `psycopg2-binary`)
-- `baseline-sync.json` stays in the repo as future-v2.1 comparison oracle
+- `baseline-sync.json` stays in the repo as future Phase 4+ comparison oracle
 - `.claude/notes/flask-to-fastapi/CLAUDE.md` is updated to note the pivot was attempted and failed, with a reference to `spike-decision.md`
 
 **Database:** no migrations.
@@ -166,7 +166,7 @@ urgently needs a fix, ping @migration-squad and we'll coordinate.
 - Pivot-propagation commits reverted per §D above.
 - `async-pivot-checkpoint.md` marked superseded; `.claude/notes/flask-to-fastapi/CLAUDE.md` updated to reflect the revert.
 - v2.0 scope returns to 4-wave Flask-removal plan; Wave 0 opens under the sync-def Option C plan.
-- v2.1 epic opened for async SQLAlchemy absorption as a standalone migration.
+- Phase 4+ epic opened for async SQLAlchemy absorption as a standalone migration.
 
 **Wave 0 dependency:** Wave 0 (Flask foundation work) and pre-Wave-0 spikes can in principle overlap — Wave 0 is Flask-to-FastAPI foundation and does not touch the database layer. BUT: under the pivot, Wave 0's `src/admin/deps/auth.py` uses `async def` dep functions with `async with get_db_session()`, which assumes Wave 4 target-state DB patterns. If the spike gate fails, Wave 0's `deps/auth.py` must be rewritten to sync-def Option C signatures. **Decision: Wave 0 does NOT open until the spike gate lands, to avoid writing code that may need to be rewritten in-place within days.**
 
@@ -323,7 +323,7 @@ on url_for(...) sites and resolve by re-running:
 - `/Users/quantum/Documents/ComputedChaos/salesagent/src/admin/app_factory.py` — `build_admin_router()` now `include_router`s the 4 feature routers.
 - `/Users/quantum/Documents/ComputedChaos/salesagent/tests/unit/test_architecture_no_flask_imports.py` — **remove** `public.py/core.py/auth.py/oidc.py` from the allowlist (forbids re-introducing Flask in migrated files).
 - `/Users/quantum/Documents/ComputedChaos/salesagent/tests/integration/conftest.py` — `authenticated_admin_client` fixture swaps from Flask `test_client()` to `IntegrationEnv.get_admin_client()` for routes now served by FastAPI.
-- `/Users/quantum/Documents/ComputedChaos/salesagent/pyproject.toml` — add `sse-starlette>=2.2.0`, `pydantic-settings>=2.7.0`, `itsdangerous>=2.2.0` (Wave 1 adds, Wave 3 removes Flask deps).
+- `/Users/quantum/Documents/ComputedChaos/salesagent/pyproject.toml` — add `pydantic-settings>=2.7.0`, `itsdangerous>=2.2.0` (Wave 1 adds, Wave 3 removes Flask deps). **`sse-starlette` NOT added per Decision 8 DELETE.**
 
 **DELETE:** None in Wave 1. Flask blueprint files stay on disk; only the `register_blueprint` calls are commented out.
 
@@ -413,7 +413,7 @@ FastAPI router during the freeze.
 5. `src/admin/tenant_management_api.py`, `src/admin/sync_api.py`, `src/adapters/gam_reporting_api.py` deleted or gutted into FastAPI routers in `src/admin/routers/`. The 3 category-2 JSON API modules preserve their error shape via a compat exception handler, verified by new `test_category2_error_shape.py`.
 6. Dead code deleted: `src/services/gam_inventory_service.py::create_inventory_endpoints` (early return at line 1469).
 7. `src/adapters/google_ad_manager.py::register_ui_routes` and `src/adapters/mock_ad_server.py::register_ui_routes` deleted; their content re-homed into `src/admin/routers/adapters.py`.
-8. `test_architecture_no_flask_imports.py` allowlist is **empty** at the end of Wave 2 (Flask still imported by `src/admin/app.py` + `src/app.py` catch-all + `activity_stream.py` — those 3 files move to Wave 3).
+8. `test_architecture_no_flask_imports.py` allowlist has **3 entries** at the end of Wave 2 (`src/admin/app.py`, `src/app.py`, `src/admin/blueprints/activity_stream.py` — those 3 files move to Wave 3).
 9. Every new router has at least one integration test per route using `IntegrationEnv.get_admin_client()`.
 10. Coverage parity: each new router's line coverage ≥ (deleted blueprint coverage − 1 point), measured by `scripts/check_coverage_parity.py` (Part 3).
 11. `test_category1_native_error_shape.py` asserts `POST /admin/api/*` endpoints return `{"detail": "..."}` on 4xx (native FastAPI shape).
@@ -737,7 +737,7 @@ Tag v2.0.0-rc1 will land in staging 72h before production cut.
        - `reset_sync_bridge_for_tests()` function for test fixtures
        - `atexit` hook registered at engine construction time (NOT module load)
        - Thread-safe lazy-init guarded by `threading.Lock`
-       - Module docstring documenting the sunset policy (v2.1+ deletion target)
+       - Module docstring documenting the sunset policy (Phase 4+ deletion target)
     27.2. `src/services/background_sync_service.py` 9 `get_db_session()` imports rewritten to `get_sync_db_session()` from the new bridge module.
     27.3. Shutdown ordering in `src/core/main.py::lifespan_context.__aexit__`:
        1. `await request_shutdown()` — signal background_sync threads via `_shutdown_event`
@@ -753,7 +753,7 @@ Tag v2.0.0-rc1 will land in staging 72h before production cut.
 
 29. **Decision 3 (factory-boy Wave 4b/4c ordering gate):** all 166 consuming integration tests must be converted to async (Wave 4b) BEFORE factory base classes flip to `AsyncSQLAlchemyModelFactory` (Wave 4c). Enforced by pre-PR diff-scope gate: the Wave 4c PR must contain ONLY edits under `tests/factories/` (verified by `git diff --name-only origin/main...HEAD | grep -v "^tests/factories/" | wc -l` = 0, with small allowlist for `_async_shim.py` and `ALL_FACTORIES`). Three structural guards land in Wave 4c: `test_architecture_factory_inherits_async_base.py`, `test_architecture_factory_no_post_generation.py`, `test_architecture_factory_in_all_factories.py`.
 
-30. **Decision 4 (queries.py convert-and-prune):** delete 3 dead functions (`get_recent_reviews`, `get_creatives_needing_human_review`, `get_ai_accuracy_metrics`) from `src/core/database/queries.py` (~−158 LOC). Remove 3 corresponding allowlist entries in `tests/unit/test_architecture_no_raw_select.py:287,291,292`. Convert 3 live functions (`get_creative_reviews`, `get_ai_review_stats`, `get_creative_with_latest_review`) to `async def` using `(await session.execute(stmt)).scalars().first()/all()`. Convert 5 test functions + 1 helper in `tests/integration/test_creative_review_model.py` to `async def`/`async with`. No dual session factory needed (zero sync callers). Net: ~−100 LOC. Move to `CreativeRepository` deferred to v2.1.
+30. **Decision 4 (queries.py convert-and-prune):** delete 3 dead functions (`get_recent_reviews`, `get_creatives_needing_human_review`, `get_ai_accuracy_metrics`) from `src/core/database/queries.py` (~−158 LOC). Remove 3 corresponding allowlist entries in `tests/unit/test_architecture_no_raw_select.py:287,291,292`. Convert 3 live functions (`get_creative_reviews`, `get_ai_review_stats`, `get_creative_with_latest_review`) to `async def` using `(await session.execute(stmt)).scalars().first()/all()`. Convert 5 test functions + 1 helper in `tests/integration/test_creative_review_model.py` to `async def`/`async with`. No dual session factory needed (zero sync callers). Net: ~−100 LOC. Move to `CreativeRepository` deferred to Phase 4+.
 
 31. **Decision 5 (product_pricing.py DELETE):** delete `src/core/database/product_pricing.py` entirely (~81 LOC). Inline the pricing-option conversion at the single caller `src/admin/blueprints/products.py:18,479` as a local helper or `AdminPricingOptionView` Pydantic DTO. Delete the import at `products.py:18`. Verify `list_products` renders unchanged. `get_primary_pricing_option` (line 74) has zero callers — deleted with the file.
 
@@ -873,7 +873,7 @@ uv run alembic upgrade head
 - Any database migrations landed during Wave 4 that used Wave-4-era patterns (unlikely — migrations are driver-agnostic at the `op.*` level) may need manual intervention.
 - `tests/performance/baselines/baseline-sync.json` remains as the async-era comparison oracle; reverting doesn't invalidate it.
 - v1.99.0 container image remains the true last-known-good rollback (from Wave 3 exit criteria).
-- Spike gate decisions in `spike-decision.md` stay on record; a future v2.1 async attempt starts from that spike data.
+- Spike gate decisions in `spike-decision.md` stay on record; a future Phase 4+ async attempt starts from that spike data.
 
 **Database:** no migrations required by Wave 4 itself (the rewrite is all application-layer). Individual Wave 4 commits may include unrelated migrations that must be handled on their own.
 
@@ -950,7 +950,7 @@ uv run alembic upgrade head
 2. The sync `SessionLocal` class / sync `sessionmaker` (if still present as a deprecation shim from Wave 4) is **deleted entirely** from `src/core/database/database_session.py`. No dual sync/async machinery remains.
 3. The sync `IntegrationEnv.__enter__` / `__exit__` shim (if Wave 4 kept it as a `asyncio.run`-wrapped compatibility layer) is **deleted**. All test callers use `async with env:`.
 4. The factory-boy sync wrapper (if Wave 4 kept a sync-compatible fallback) is deleted. `tests/factories/_async_shim.py` is the only factory driver.
-5. `psycopg2-binary` **RETAINED** in `pyproject.toml` runtime deps per Decisions 1 (Path B sync factory), 2 (pre-fork orchestrator health check), and 9 (sync-bridge). Removal deferred to **v2.1+** when Path B adapters go async, sync-bridge sunsets, and `run_all_services.py` is replaced by a proper process supervisor. `types-psycopg2` also RETAINED. `libpq-dev` + `libpq5` RETAINED in Dockerfile.
+5. `psycopg2-binary` **RETAINED** in `pyproject.toml` runtime deps per Decisions 1 (Path B sync factory), 2 (pre-fork orchestrator health check), and 9 (sync-bridge). Removal deferred to **Phase 4+** when Path B adapters go async, sync-bridge sunsets, and `run_all_services.py` is replaced by a proper process supervisor. `types-psycopg2` also RETAINED. `libpq-dev` + `libpq5` RETAINED in Dockerfile.
 6. `types-psycopg2` removed from both dev-deps slots in `pyproject.toml` (Agent A §2.2 flagged two duplicate entries at lines 74 and 101).
 7. All remaining FIXME comments tagged as async-landmines (e.g., `# FIXME(async-pivot): ...`) are resolved and the comments removed. `git grep -n "FIXME(async" src/ tests/` returns zero hits.
 8. **Async-vs-sync benchmark** runs on the representative admin routes from `baseline-sync.json`. Results emitted to `tests/performance/results/wave-5-async.json` and compared against `tests/performance/baselines/baseline-sync.json`.
@@ -1074,7 +1074,7 @@ Grouped by verification strategy. HIGH confidence assumptions get single-line pl
 
 2. **`Annotated[T, Depends()]` is canonical idiom.** Verify: `rg 'Annotated\[' src/core/auth_context.py` shows current usage (line 256-257); no verification needed beyond reading. N/A fallback.
 
-3. **Full async SQLAlchemy in v2.0** (pivoted 2026-04-11). Verify: benchmark per Part 3.D compares async vs pre-migration sync baseline. When: Wave 2 baseline captured; Wave 4-5 comparison run. Failure: regression >10% on read-heavy hot endpoints (write-heavy regressions up to 15% acceptable). Fallback: tune `pool_size` (Risk #6) OR (last resort) hand-roll `selectinload` eager-loads on the worst offenders; if that's not enough, fall back to Option C and defer async to v2.1. Pre-Wave-0 lazy-loading audit spike (Risk #1) is the early-warning gate — if the audit reveals relationship-access scope is untenable, switch to Option C before starting Wave 0.
+3. **Full async SQLAlchemy in v2.0** (pivoted 2026-04-11). Verify: benchmark per Part 3.D compares async vs pre-migration sync baseline. When: Wave 2 baseline captured; Wave 4-5 comparison run. Failure: regression >10% on read-heavy hot endpoints (write-heavy regressions up to 15% acceptable). Fallback: tune `pool_size` (Risk #6) OR (last resort) hand-roll `selectinload` eager-loads on the worst offenders; if that's not enough, fall back to Option C and defer async. Pre-Wave-0 lazy-loading audit spike (Risk #1) is the early-warning gate — if the audit reveals relationship-access scope is untenable, switch to Option C before starting Wave 0.
 
 4. **Admin handlers `async def` + full async SQLAlchemy end-to-end** (pivoted 2026-04-11). Verify: AST guard `test_architecture_admin_routes_async.py` (renamed from the original `test_architecture_admin_async_signatures.py` for consistency with sibling guards) asserts every `src/admin/routers/*.py` handler is `async def`; sibling guard `test_architecture_admin_async_db_access.py` asserts DB access uses `async with get_db_session()` + `await db.execute(...)` rather than sync `with` or `run_in_threadpool(_sync_fetch)`. The stale `test_architecture_admin_sync_db_no_async.py` from the pre-pivot sync-def resolution is DELETED (wrong direction). When: Wave 1 entry (handler signature guard); Wave 4 entry (async DB access guard). Failure: sync handler or sync DB access found. Fallback: rewrite that handler.
 
@@ -1314,7 +1314,7 @@ def test_allowlist_shrinks_over_time():
     assert len(ALLOWLIST) <= CURRENT_MAX
 ```
 
-**How it ratchets:** each wave PR edits the `ALLOWLIST` set to remove migrated files. Wave 1 removes 4 entries. Wave 2 removes 25. Wave 3 removes the last 5 (`src/admin/app.py`, `src/app.py`, `src/admin/utils/helpers.py`, `src/admin/server.py`, `src/admin/blueprints/activity_stream.py`). After Wave 3, `ALLOWLIST = set()` and `test_no_flask_imports_outside_allowlist` enforces zero tolerance.
+**How it ratchets:** each wave PR edits the `ALLOWLIST` set to remove migrated files. Wave 1 removes 4 entries. Wave 2 removes 25 (including `src/admin/utils/helpers.py` and `src/admin/server.py` in Phase 2b). Wave 3 removes the last 3 (`src/admin/app.py`, `src/app.py`, `src/admin/blueprints/activity_stream.py`). After Wave 3, `ALLOWLIST = set()` and `test_no_flask_imports_outside_allowlist` enforces zero tolerance.
 
 #### `tests/unit/test_architecture_admin_routes_async.py`
 
@@ -1575,7 +1575,7 @@ def test_create_account_route(benchmark, integration_db):
 
 **Storage:** `pytest-benchmark --benchmark-json=test-results/wave-N/benchmark.json` committed to repo per wave. `scripts/compare_benchmarks.py` asserts wave N doesn't regress >20% from wave N-1. **Wave 2 captures the sync baseline; Wave 4 captures the post-async comparison.**
 
-**Failure fallback:** if async regresses significantly under the benchmark, first tune `pool_size` (Risk #6 in `async-pivot-checkpoint.md` §4). If that doesn't close the gap, apply `selectinload` eager-loading to the worst offenders. If THAT doesn't close the gap, invoke the last-resort fallback: revert to Option C (sync `def` admin handlers) and defer async to v2.1.
+**Failure fallback:** if async regresses significantly under the benchmark, first tune `pool_size` (Risk #6 in `async-pivot-checkpoint.md` §4). If that doesn't close the gap, apply `selectinload` eager-loading to the worst offenders. If THAT doesn't close the gap, invoke the last-resort fallback: revert to Option C (sync `def` admin handlers) and defer async conversion.
 
 ### E. Coverage parity automation
 

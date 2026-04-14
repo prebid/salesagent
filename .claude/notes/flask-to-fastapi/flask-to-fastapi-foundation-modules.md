@@ -1,8 +1,15 @@
 # §11 Foundation Modules — Detailed Elaboration
 
-> **SYNC HANDLERS IN v2.0 (async pivot reversed 2026-04-12).** This document was written during the async pivot and contains `async def`, `SessionDep`, `AsyncSession`, and `await` patterns throughout. **For v2.0 implementation, use the sync handler pattern from `execution-plan.md` Phase 0.** Admin handlers are sync `def` with `with get_db_session() as session:`. The module designs (templating.py, flash.py, sessions.py, csrf.py, etc.) are still valid — just make all dependency functions sync `def` instead of `async def`, and use sync `Session` instead of `AsyncSession`. The async versions are preserved for v2.1.
+> **v2.0 PHASE GUIDE (2026-04-12)**
+>
+> This file contains foundation module designs for the FULL v2.0 migration. Sections are tagged by phase:
+> - **[PHASE 0-3]** — Implement during Flask removal using **sync** patterns from `execution-plan.md`
+> - **[PHASE 4+]** — Implement during async conversion. These sections contain `async def`, `AsyncSession`, `SessionDep` patterns.
+> - **[PHASE 0 CANDIDATE]** — Can land early (framework-agnostic, no async dependency)
+>
+> **For Phase 0-3 implementation, always use `sync def` handlers with `with get_db_session() as session:` in handler bodies.**
 
-**Key v2.0 scope changes:** Sections 11.0 (engine.py) and 11.0.1 (deps.py/SessionDep) do NOT exist in v2.0 — the existing `database_session.py` provides all session infrastructure. Sections 11.0.4.D-H (dep factories, cross-repo composition) are replaced by direct repository instantiation inside `with get_db_session()` blocks. Section 11.7 (csrf.py) implements CSRFOriginMiddleware (Origin header validation), NOT Double Submit Cookie.
+**Key v2.0 scope changes:** Sections 11.0 (engine.py) and 11.0.1 (deps.py/SessionDep) do NOT exist in Phases 0-3 — the existing `database_session.py` provides all session infrastructure. Sections 11.0.4.D-H (dep factories, cross-repo composition) are replaced by direct repository instantiation inside `with get_db_session()` blocks. Section 11.7 (csrf.py) implements CSRFOriginMiddleware (Origin header validation), NOT Double Submit Cookie.
 
 Target file tree under `src/admin/`:
 ```
@@ -29,6 +36,8 @@ Everything below uses Python 3.12+ syntax. Under the full-async SQLAlchemy pivot
 ---
 
 ## 11.0 `src/core/database/engine.py` — Lifespan-scoped async engine (Agent E Category 1)
+
+> **[PHASE 4+]** This module is created in Phase 4c. Phases 0-3 use the existing `database_session.py` with sync patterns.
 
 > **Added 2026-04-11 under the Agent E idiom upgrade.** The engine is lifespan-scoped rather than module-global to prevent pytest-asyncio event-loop leak bugs (Agent B Risk Interaction B). Engine + sessionmaker live on `app.state.db_engine` / `app.state.db_sessionmaker` — never at module import time.
 
@@ -127,6 +136,8 @@ Integration test fixture that creates and disposes the engine per test; see §11
 
 ## 11.0.1 `src/core/database/deps.py` — SessionDep (Agent E Category 2)
 
+> **[PHASE 4a SYNC, then PHASE 4c ASYNC]** Phase 4a introduces sync `SessionDep = Annotated[Session, Depends(get_session)]`. Phase 4c re-aliases to `AsyncSession`. Phases 0-3 use `with get_db_session() as session:` in handler bodies.
+
 > **Added 2026-04-11 under the Agent E idiom upgrade.** The idiomatic FastAPI-native pattern: handlers receive `session: SessionDep` as a parameter. The DI layer owns session lifecycle. No `async with` in handler bodies.
 
 ### A. Implementation
@@ -204,6 +215,8 @@ async def test_get_session_rolls_back_on_exception(client):
 
 ## 11.0.2 `src/core/settings.py` — Pydantic Settings class (Agent E Category 15)
 
+> **[PHASE 0 CANDIDATE]** Framework-agnostic. Can land in Phase 0 or Phase 4a.
+
 > **Added 2026-04-11 under the Agent E idiom upgrade.** Every config value goes through a single `Settings` class loaded via `@lru_cache get_settings()`. No more `os.environ.get("FOO", "")` scattered throughout the codebase.
 
 ### A. Implementation
@@ -276,7 +289,9 @@ def get_settings() -> Settings:
 
 ## 11.0.3 `src/core/logging.py` — Structured logging via structlog (Agent E Category 16)
 
-> **Added 2026-04-11 under the Agent E idiom upgrade.** Async debugging is 3x harder without request-ID context-var propagation. Adding `structlog` in v2.0 (~250 LOC) avoids the much larger retrofit cost in v2.1 (~400 LOC touching every log line).
+> **[PHASE 4a]** Added alongside SessionDep. structlog provides async-debuggable request-scoped logging.
+
+> **Added 2026-04-11 under the Agent E idiom upgrade.** Async debugging is 3x harder without request-ID context-var propagation. Adding `structlog` in v2.0 (~250 LOC) avoids the much larger retrofit cost in Phase 4+ (~400 LOC touching every log line).
 
 ### A. Implementation
 
@@ -366,6 +381,8 @@ def get_logger(name: str) -> structlog.stdlib.BoundLogger:
 ---
 
 ## 11.0.4 `src/core/database/repositories/base.py` — Repository base + per-repository dep factories (Agent E Categories 2 + 3)
+
+> **[PHASE 4+]** Repository DI factories with `Depends(get_session)`. Phases 0-3 use the existing UoW pattern with sync sessions.
 
 > **Added 2026-04-11 under the Agent E idiom upgrade.** This is the operational recipe for the two biggest idiom upgrades in the Agent E audit: Category 2 (SessionDep DI, E1) and Category 3 (no-UoW repository pattern, E2+E3). §11.0.1 SessionDep tells you *how* the session enters the request; this section tells you *how* repositories compose on top of it and how `_impl` functions receive sessions from non-request callers.
 
@@ -828,6 +845,8 @@ This works and is technically equivalent, but it leaks `AsyncSession` into the h
 
 ## 11.0.5 DTO layer — Pydantic v2 wrappers over ORM models (Agent E Category 5)
 
+> **[PHASE 4a]** Pydantic DTOs at the handler/template boundary. Prevents lazy-load crashes under async.
+
 > **Added 2026-04-11 under the Agent E idiom upgrade.** The DTO boundary is the **architectural prevention** for Risk #1 (lazy-load realization in production). If templates receive DTOs, lazy loads become impossible by construction.
 
 ### A. File tree
@@ -905,6 +924,8 @@ class AccountCreateRequest(BaseModel):
 ---
 
 ## 11.0.6 `src/core/database/scope.py` — Non-request `session_scope()` helper (Agent E Category 2 / scheduler edition)
+
+> **[PHASE 4+]** Async session scope context manager. Phases 0-3 use sync `get_db_session()`.
 
 > **Added 2026-04-11 under the Agent E idiom upgrade.** §11.0.1 `SessionDep` solves "how does a request handler get a session". This section solves "how does a scheduler, background task, CLI script, or alembic migration get a session when there is no `Request` at all". It is the non-request analog and it shares the lifespan-scoped sessionmaker with §11.0.1, so both paths commit/rollback through identical code.
 
@@ -1353,6 +1374,8 @@ The order is load-bearing. If `mcp_lifespan` starts first, the scheduler tick fi
 
 ## 11.1 `src/admin/templating.py`
 
+> **[PHASE 0-3]** This module is part of Flask removal. Use sync patterns.
+
 ### A. Implementation
 
 ```python
@@ -1379,7 +1402,7 @@ and the custom Jinja filters declared at src/admin/app.py:154-155.
 Design rules (load-bearing):
 - Jinja `Undefined` (default, NOT StrictUndefined). Existing Flask templates
   reference attributes on `tenant` that may be None; flipping to strict would
-  break ~40 templates on cutover. Tracked for v2.1.
+  break ~40 templates on cutover. Tracked for Phase 4+.
 - The `request` object is always in the context. All per-request data
   (`session`, `csrf_token`, `url_for`) is reached THROUGH request in templates,
   which keeps `env.globals` free of request-scoped state (thread-safety).
@@ -1550,7 +1573,7 @@ Notes on what the sketch omitted:
 
 - **`session` in templates:** Templates should reach it via `{{ request.session.get('foo') }}`, not a top-level `session`. Flask's implicit `{{ session.foo }}` becomes `{{ request.session.foo }}`; codemod does this rewrite. Why not put session on globals? `env.globals` is process-wide; setting it per-request would be a data race under Uvicorn workers.
 - **`url_for`:** `request.url_for("route_name", **params)` is available on the Starlette `Request`. In templates: `{{ request.url_for('accounts_list_accounts', tenant_id=t) }}`. The Flask convention `url_for('accounts.list_accounts', ...)` becomes the flat `accounts_list_accounts` — this is a codemod transformation, not a runtime shim.
-- **`Undefined` vs `StrictUndefined`:** We keep default `Undefined` for v2.0.0. `StrictUndefined` would raise on every missing tenant attribute at render time; legacy templates have dozens. v2.1 ticket.
+- **`Undefined` vs `StrictUndefined`:** We keep default `Undefined` for v2.0.0. `StrictUndefined` would raise on every missing tenant attribute at render time; legacy templates have dozens. Phase 4+ ticket.
 - **Signature note:** FastAPI 0.109+ requires `request` as keyword arg in `TemplateResponse` — passing request in context is deprecated. The wrapper handles both.
 
 ### B. Tests
@@ -1650,6 +1673,8 @@ class TestRenderIntegratesWithTenantDep:
 ---
 
 ## 11.2 `src/admin/sessions.py`
+
+> **[PHASE 0-3]** This module is part of Flask removal. Use sync patterns.
 
 ### A. Implementation
 
@@ -1795,12 +1820,14 @@ class TestSessionMiddlewareKwargs:
 
 - **Nested dict mutation** (Starlette #1738): `request.session["nested"]["key"] = "x"` does NOT trigger `session.modified = True` in Starlette's `SessionMiddleware`. Only top-level key assignments trigger re-serialization. Code that mutates nested structures must explicitly reassign: `request.session["nested"] = {**request.session.get("nested", {}), "key": "x"}`. The `flash()` helper below takes care of this for its own bucket.
 - **4KB cap:** itsdangerous-signed cookies cannot exceed ~4KB (browser cookie limit). Don't store large structures. Flash messages are popped on read to keep size bounded.
-- **Secret rotation:** There's no key rotation support in Starlette's SessionMiddleware. Rotating `SESSION_SECRET` logs everyone out. Track as v2.1.
+- **Secret rotation:** There's no key rotation support in Starlette's SessionMiddleware. Rotating `SESSION_SECRET` logs everyone out. Track as later v2.0 phase.
 - **Starlette versions ≤ 0.37 had a bug** where `samesite=None` + `https_only=False` emitted invalid `SameSite=None` without `Secure`. Starlette 0.50 fixed this, but prod config always uses `https_only=True`.
 
 ---
 
 ## 11.3 `src/admin/flash.py`
+
+> **[PHASE 0-3]** This module is part of Flask removal. Use sync patterns.
 
 ### A. Implementation
 
@@ -1966,6 +1993,10 @@ class TestGetFlashedMessages:
 
 ## 11.4 `src/admin/deps/auth.py`
 
+> **[PHASE 0-3]** This module is part of Flask removal. Use sync patterns.
+>
+> **Phase note:** Code examples in this section show async patterns for Phase 4+ completeness. During Phases 0-3, use `def` instead of `async def` and `session.scalars(stmt)` instead of `(await session.execute(stmt)).scalars()`.
+
 ### A. Implementation
 
 ```python
@@ -2083,7 +2114,7 @@ async def is_super_admin(email: str) -> bool:
     NO session-level caching here (the Flask version cached in session,
     causing staleness after env var changes). Result is cheap: env checks
     are dict lookups; DB fallback only triggers if env is unset. For high
-    QPS, add a TTL lru_cache in v2.1.
+    QPS, add a TTL lru_cache in a later v2.0 phase.
     """
     if not email:
         return False
@@ -2571,6 +2602,8 @@ async def admin_redirect_handler(request: Request, exc: AdminRedirect) -> Redire
 
 ## 11.5 `src/admin/deps/audit.py`
 
+> **[PHASE 0-3]** This module is part of Flask removal. Use sync patterns.
+
 ### A. Implementation
 
 ```python
@@ -2727,6 +2760,8 @@ class TestAuditAction:
 
 ## 11.6 `src/admin/oauth.py`
 
+> **[PHASE 0-3]** This module is part of Flask removal. Use sync patterns.
+
 ### A. Implementation
 
 ```python
@@ -2859,7 +2894,7 @@ def invalidate_tenant_oidc_client(tenant_id: str) -> None:
 
     Under Gunicorn/Uvicorn workers, this only invalidates the CURRENT worker.
     Other workers will continue to use the stale client until they also
-    invalidate. Tracked: move cache to Redis in v2.1 for cross-worker invalidation.
+    invalidate. Tracked: move cache to Redis in a later v2.0 phase for cross-worker invalidation.
     """
     with _cache_lock:
         client = _tenant_client_cache.pop(tenant_id, None)
@@ -2980,7 +3015,7 @@ class TestTenantClientCache:
 
 ### D. Gotchas
 
-- **Cross-worker cache staleness:** Each Uvicorn worker has its own `_tenant_client_cache`. Invalidation only hits the worker that receives the invalidation request. For v2.0.0 with typically 2–4 workers, the worst case is a 5-second window of stale secrets after rotation. v2.1 moves to Redis-backed cache.
+- **Cross-worker cache staleness:** Each Uvicorn worker has its own `_tenant_client_cache`. Invalidation only hits the worker that receives the invalidation request. For v2.0.0 with typically 2–4 workers, the worst case is a 5-second window of stale secrets after rotation. A later v2.0 phase moves to Redis-backed cache.
 - **Session key collisions:** Authlib writes `_state_<name>_<nonce>` to `request.session`. This is safe unless a future codebase writes its own `_state_*` keys.
 - **`oauth._clients` is private:** We reach into it to pop stale registrations. If Authlib renames this attribute in a minor release, invalidation silently becomes a no-op. Pin `authlib==1.6.*`.
 - **Test isolation:** The `oauth` singleton persists across tests. The `clear_cache` autouse fixture + popping `_clients["google"]` is necessary for clean state.
@@ -2988,6 +3023,8 @@ class TestTenantClientCache:
 ---
 
 ## 11.7 `src/admin/csrf.py` — CSRFOriginMiddleware
+
+> **[PHASE 0-3]** This module is part of Flask removal. Use sync patterns.
 
 > **[SUPERSEDED 2026-04-11]** The Double Submit Cookie implementation below is the **rejected** approach.
 > v2.0 implements **CSRFOriginMiddleware** (~120 LOC, pure-ASGI Origin header validation).
@@ -3487,6 +3524,8 @@ class TestMiddlewareFlow:
 
 ## 11.8 `src/admin/middleware/external_domain.py`
 
+> **[PHASE 0-3]** This module is part of Flask removal. Use sync patterns.
+
 ### A. Implementation
 
 ```python
@@ -3536,7 +3575,7 @@ def _is_admin_path(path: str) -> bool:
     return path == "/admin" or path.startswith("/admin/")
 
 
-async def _respond_redirect(send: Any, url: str, status: int = 302) -> None:
+async def _respond_redirect(send: Any, url: str, status: int = 307) -> None:
     await send({
         "type": "http.response.start",
         "status": status,
@@ -3671,7 +3710,7 @@ class TestExternalDomainRedirect:
 - Imports `get_tenant_by_virtual_host`, `is_sales_agent_domain`, `get_tenant_url`.
 - Public API: `ExternalDomainRedirectMiddleware` class.
 - Runs BEFORE `UnifiedAuthMiddleware` (which means `UnifiedAuthMiddleware` never sees redirected requests).
-- Reads DB via `get_tenant_by_virtual_host`. This is one sync DB call per external-domain request. Cache in v2.1 via an LRU.
+- Reads DB via `get_tenant_by_virtual_host`. This is one sync DB call per external-domain request. Cache in a later v2.0 phase via an LRU.
 
 ### D. Gotchas
 
@@ -3682,6 +3721,8 @@ class TestExternalDomainRedirect:
 ---
 
 ## 11.9 `src/admin/middleware/fly_headers.py`
+
+> **[PHASE 0-3]** This module is part of Flask removal. Use sync patterns.
 
 ### A. Implementation
 
@@ -3813,6 +3854,8 @@ async def test_lifespan_passes_through():
 
 ## 11.10 `src/admin/app_factory.py`
 
+> **[PHASE 0-3]** This module is part of Flask removal. Use sync patterns.
+
 ### A. Implementation
 
 ```python
@@ -3833,6 +3876,7 @@ Caller pattern in src/app.py:
         app.add_exception_handler(exc_cls, handler)
     app.include_router(admin.router, prefix="/admin")
     app.mount("/static", StaticFiles(directory="src/admin/static"), name="static")
+    # NOTE: directory is "static" until Phase 3 git mv; becomes "src/admin/static" after Phase 3
 """
 from __future__ import annotations
 
@@ -3971,6 +4015,8 @@ class TestAppFactory:
 
 ## 11.9.5 `src/admin/middleware/request_id.py` — Request ID propagation (Agent E Category 8)
 
+> **[PHASE 0-3]** This module is part of Flask removal. Use sync patterns. The structlog integration (`bind_request_id`) is Phase 4a; during Phases 0-3, use stdlib `logging` with request_id passed as a log parameter.
+
 > **Added 2026-04-11 under the Agent E idiom upgrade.** Under async, contextvars propagate correctly across `await` boundaries. The combination `RequestIDMiddleware` + `structlog.contextvars.merge_contextvars` means every log line emitted during a request automatically carries the `request_id` — critical for debugging async-interleaved requests.
 
 ### A. Implementation
@@ -4034,6 +4080,8 @@ class RequestIDMiddleware:
 ---
 
 ## 11.11 `src/app.py` — Exception handlers (Agent E Category 6)
+
+> **[PHASE 0-3]** This module is part of Flask removal. Use sync patterns.
 
 > **Added 2026-04-11 under the Agent E idiom upgrade.** The plan covered `AdCPError` (Blocker 3) and `AdminRedirect` but missed four other handlers a 2026 FastAPI app needs: `HTTPException` (Accept-aware), `RequestValidationError`, `AdminAccessDenied`, and the catch-all `Exception`.
 
@@ -4137,6 +4185,10 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 ## 11.13 Test harness fixtures — async-native via httpx + ASGITransport (Agent E Category 14)
 
+> **[PHASE 4+]** Async test harness. Phases 0-3 use the existing sync `TestClient(app)` and `IntegrationEnv` harness.
+>
+> **Phase note:** Code examples in this section show async patterns for Phase 4+ completeness. During Phases 0-3, use `def` instead of `async def` and `session.scalars(stmt)` instead of `(await session.execute(stmt)).scalars()`.
+
 > **Added 2026-04-11 under the Agent E idiom upgrade.** Sync `TestClient(app)` spawns its own event loop in a thread and conflicts with async lifespan state stored on `app.state`. `httpx.AsyncClient(transport=ASGITransport(app=app))` runs in the test's own event loop and sees `app.state` correctly.
 
 ### A. Implementation
@@ -4232,6 +4284,10 @@ async def test_list_accounts(client, session):
 ---
 
 ## 11.13.1 Integration tests — `async_engine → async_db → async_app → async_client` fixture chain
+
+> **[PHASE 4+]** Async integration test fixture chain. Phases 0-3 use the existing sync `integration_db` fixture and `IntegrationEnv` harness.
+>
+> **Phase note:** Code examples in this section show async patterns for Phase 4+ completeness. During Phases 0-3, use `def` instead of `async def` and `session.scalars(stmt)` instead of `(await session.execute(stmt)).scalars()`.
 
 > **Added 2026-04-11 under the Agent E idiom upgrade.** This is the operational recipe for integration-test fixtures under async SQLAlchemy. The existing §11.13 introduces `AsyncClient + ASGITransport` at a high level; this subsection is the concrete chain that Wave 4 engineers sit down and paste.
 
@@ -4747,6 +4803,10 @@ Pool sizing per worker: `pool_size=5, max_overflow=5 = 10 connections peak per w
 
 ## 11.13.2 Unit tests — `mock_async_session` + `dependency_overrides` cheat-sheet
 
+> **[PHASE 4+]** Async unit test fixtures. Phases 0-3 use the existing sync mocking patterns with `patch('src.core.database.database_session.get_db_session')`.
+>
+> **Phase note:** Code examples in this section show async patterns for Phase 4+ completeness. During Phases 0-3, use `def` instead of `async def` and `session.scalars(stmt)` instead of `(await session.execute(stmt)).scalars()`.
+
 > **Added 2026-04-11 under the Agent E idiom upgrade.** Integration tests use a real `AsyncSession` against agent-db Postgres (§11.13.1). Unit tests mock everything. This section defines the unit fixture surface and catalogs every `dependency_overrides` key that new unit tests commonly need.
 
 ### A. Why a separate unit path
@@ -5070,6 +5130,10 @@ def test_no_dependency_override_leak() -> None:
 
 ## 11.14 Adapter Path B wrap pattern (Decision 1, 2026-04-11)
 
+> **[PHASE 4+]** Adapter `run_in_threadpool` wrapping and dual session factory. Phases 0-3 call adapters synchronously from sync handlers without wrapping.
+>
+> **Phase note:** Code examples in this section show async patterns for Phase 4+ completeness. During Phases 0-3, use `def` instead of `async def` and `session.scalars(stmt)` instead of `(await session.execute(stmt)).scalars()`.
+
 > **Added 2026-04-11 under the Decision 1 deep-think resolution.** Adapters stay sync under v2.0. The 18 adapter call sites in `src/core/tools/*.py` + 1 in `src/admin/blueprints/operations.py:252` wrap their sync adapter methods in `await run_in_threadpool(...)`. This section is the canonical reference for the wrap pattern plus the dual-session-factory machinery that supports it.
 
 ### A. Why adapters stay sync
@@ -5097,7 +5161,7 @@ Adapter code running inside run_in_threadpool worker threads uses
 `get_sync_db_session()`; every other code path (handlers, _impl
 functions, schedulers, repositories) uses `get_db_session()`.
 
-Sunset target for the sync factory: v2.1+ when adapters go native async.
+Sunset target for the sync factory: Phase 4+ when adapters go native async.
 """
 from __future__ import annotations
 
@@ -5430,11 +5494,13 @@ Adapters running inside `run_in_threadpool` worker threads hold sync `Session` i
 - **Sync-vs-async engine pool math.** 15+25 (async) + 5+10 (sync adapter) + 2+3 (sync-bridge from Decision 9) = 60 peak connections. PG default `max_connections=100` has headroom. Production deploys that raise `max_connections` should document the new async/sync split.
 - **Threadpool capacity vs concurrent requests.** 80 workers is sized for ~80 concurrent adapter-invoking requests. Admin UI traffic typically ≤10 concurrent; MCP tool call concurrent load can spike higher. Monitor `anyio.to_thread.current_default_thread_limiter().borrowed_tokens` via `/health/pool` and raise `ADCP_THREADPOOL_SIZE` if it saturates.
 - **`application_name` in `pg_stat_activity`.** The async engine connections show `application_name='adcp-salesagent'`; Path B sync connections show `application_name='adcp-salesagent-sync'`; Decision 9 sync-bridge connections show `application_name='adcp-salesagent-sync-bridge'`. Three distinct labels make debugging stale connections easy.
-- **v2.1+ sunset path.** If `googleads` releases an async variant and the 4 `requests`-based adapters are ported to `httpx.AsyncClient`, each adapter converts individually to `async def`, the wrap at the `_impl` caller becomes `await adapter.method(...)` instead of `await run_in_threadpool(adapter.method, ...)`, and eventually the sync factory in `database_session.py` + psycopg2 dep + libpq can all be deleted. Structural guard allowlist adjusts as each adapter completes.
+- **Phase 4+ sunset path.** If `googleads` releases an async variant and the 4 `requests`-based adapters are ported to `httpx.AsyncClient`, each adapter converts individually to `async def`, the wrap at the `_impl` caller becomes `await adapter.method(...)` instead of `await run_in_threadpool(adapter.method, ...)`, and eventually the sync factory in `database_session.py` + psycopg2 dep + libpq can all be deleted. Structural guard allowlist adjusts as each adapter completes.
 
 ---
 
 ## §11.15 SimpleAppCache — flask-caching replacement (Decision 6, 2026-04-11)
+
+> **[PHASE 0-3]** This module is part of Flask removal. Use sync patterns.
 
 Replaces `flask-caching` (`SimpleCache` backend) with a thread-safe, async-safe in-process cache backed by `cachetools.TTLCache`. Ships in **Wave 3** as a prep module, with consumer sites migrating in the same PR, followed by `flask-caching` removal from `pyproject.toml`.
 

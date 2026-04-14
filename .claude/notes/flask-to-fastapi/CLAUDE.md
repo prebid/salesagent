@@ -1,15 +1,15 @@
 # Flask → FastAPI v2.0.0 Migration — Mission Briefing
 
-> **ASYNC PIVOT REVERSED (2026-04-12) — v2.0 uses SYNC admin handlers.**
+> **v2.0 STRATEGIC LAYERING (2026-04-14) — Phases 0-3 use SYNC, Phase 4+ converts to ASYNC.**
 >
-> The April 11 async pivot (Option A) has been reversed after cost-benefit analysis showed
-> async SQLAlchemy provides marginal benefit for this project's traffic profile (5-20 concurrent
-> admin users). v2.0 ships with sync `def` admin handlers (Option C from deep audit §1.4).
-> Async SQLAlchemy is deferred to v2.1 when measured production load justifies it.
+> v2.0 includes the FULL migration: Flask removal (Phases 0-3, sync handlers) followed by
+> async conversion (Phase 4+). The April 11 async pivot was reversed for Phase 0-3 after
+> cost-benefit analysis — sync `def` admin handlers (Option C from deep audit §1.4) are correct
+> during Flask removal. Async SQLAlchemy is Phase 4+ within v2.0, sequenced after Flask is gone.
 >
-> The `async-pivot-checkpoint.md` and `async-audit/` reports are preserved as v2.1 roadmap material.
+> The `async-pivot-checkpoint.md` and `async-audit/` reports are the Phase 4+ implementation roadmap.
 
-**Mission:** Migrate `src/admin/` (Flask blueprints + Jinja templates + session auth) to FastAPI with **sync `def` admin handlers**, without breaking the AdCP MCP/REST surface, OAuth callbacks, or the ~147 template refs that depend on `request.script_root`. Async SQLAlchemy is deferred to v2.1.
+**Mission:** Migrate `src/admin/` (Flask blueprints + Jinja templates + session auth) to FastAPI with **sync `def` admin handlers** (Phases 0-3), then convert to full async (Phase 4+), without breaking the AdCP MCP/REST surface, OAuth callbacks, or the ~147 template refs that depend on `request.script_root`. Async SQLAlchemy is Phase 4+ within v2.0.
 
 **Branch:** `feat/v2.0.0-flask-to-fastapi` — Flask removal + admin rewrite using sync handlers, one PR per wave, merged to main.
 
@@ -33,7 +33,7 @@ These were surfaced by the 2nd/3rd-order audit. Every one of them has shipped-br
 
 3. **`@app.exception_handler(AdCPError)` HTML regression.** Admin user clicks a button, the handler returns a JSON blob to the browser, user sees raw JSON. **Fix:** Accept-aware handler — render `templates/error.html` when `Accept: text/html` and path starts with `/admin/`; JSON otherwise. This is intentionally different from the JSON-only handler currently at `src/app.py:82-88`. See `flask-to-fastapi-deep-audit.md` §1 (blocker 3).
 
-4. **Admin handlers default to sync `def`, NOT `async def` (scoped_session event-loop bug).** FastAPI runs sync `def` handlers in a threadpool, which is safe with `scoped_session` (thread-local identity). `async def` handlers share the event loop's single thread, causing transaction interleaving via `scoped_session`. **Fix:** All admin route handlers use sync `def`. Async SQLAlchemy (`AsyncSession`, `asyncpg`) is deferred to v2.1 when measured production load justifies the migration cost. See `flask-to-fastapi-deep-audit.md` §1.4 (Option C). The `async-pivot-checkpoint.md` and `async-audit/` reports are preserved as v2.1 roadmap material.
+4. **Admin handlers default to sync `def`, NOT `async def` (scoped_session event-loop bug).** FastAPI runs sync `def` handlers in a threadpool, which is safe with `scoped_session` (thread-local identity). `async def` handlers share the event loop's single thread, causing transaction interleaving via `scoped_session`. **Fix:** All admin route handlers use sync `def`. Async SQLAlchemy (`AsyncSession`, `asyncpg`) is Phase 4+ within v2.0 (after Flask removal in Phases 0-3). See `flask-to-fastapi-deep-audit.md` §1.4 (Option C). The `async-pivot-checkpoint.md` and `async-audit/` reports are the Phase 4+ implementation roadmap.
 
 5. **Middleware ordering: Approximated BEFORE CSRF.** Counterintuitive but correct. If CSRF fires first, an external-domain POST user fails CSRF validation (403) before the Approximated redirect can fire (should be 307). Also switch the redirect from 302 → 307 to preserve the POST body. **CSRF strategy decided (2026-04-11): Option A — `SameSite=Lax` session cookie + `CSRFOriginMiddleware` (~70 LOC pure-ASGI Origin header validation).** NOT double-submit cookie — that would require changing ~80 fetch calls + ~47 forms for zero practical security gain. Key insight: the planned `SameSite=None` in production was solely for EventSource (SSE); Decision 8 deletes SSE, so `SameSite=Lax` is correct in all environments. `HttpOnly=True` also restored (SSE was the only reason for `False`). Zero JavaScript changes, zero template changes, zero form changes. See `flask-to-fastapi-deep-audit.md` §1 (blocker 5).
 
@@ -111,7 +111,7 @@ After the database audit, a third audit round focused on the frontend surfaces i
 
 ### ~~Open decisions blocking Wave 4~~ Decision triage (async pivot reversed 2026-04-12)
 
-> **Wave 4 (async DB layer) is deferred to v2.1.** Of the 9 decisions below, 4 are MOOT under sync v2.0 (Decisions 1, 3, 7, 9), 4 are UNCHANGED (Decisions 2, 4, 5, 8), and 1 is REDUCED (Decision 6). The full text below is preserved for v2.1 reference.
+> **Wave 4 (async DB layer) is Phase 4+ within v2.0.** Of the 9 decisions below, 4 are PHASE 4+ (Decisions 1, 3, 7, 9 — activated after Flask removal), 4 are UNCHANGED (Decisions 2, 4, 5, 8), and 1 is REDUCED (Decision 6). The full text below is the Phase 4+ implementation plan.
 
 The 9 questions Agent A identified. **Decisions 1, 7, and 9 were resolved via ultrathink deep-think analysis on 2026-04-11** (3 parallel Opus subagents, each producing 1st/2nd/3rd-order derivative analysis). Decisions 2, 3, 5, 8 were resolved earlier by Audit 06 (see meta-audit round). Decisions 4 and 6 are mechanical Wave 4 work, not blockers. **Ledger closed.**
 
@@ -125,9 +125,9 @@ The 9 questions Agent A identified. **Decisions 1, 7, and 9 were resolved via ul
 8. **SSE session lifetime** — **RESOLVED (Decision 8 deep-think 2026-04-11): DELETE the SSE route entirely.** Audit 06 said "already correct, just async I/O upgrades" — correct about session-per-tick (verified: `get_recent_activities()` at `activity_stream.py:167` does open/close per call, ~5ms), but wrong about the scope. The `/tenant/{id}/events` SSE route at `activity_stream.py:226-364` is **orphan code** — `templates/tenant_dashboard.html:972` literally says `// Use simple polling instead of EventSource for reliability` and fetch-polls `/tenant/{id}/activity` (JSON) at 5s intervals (`:978`). Zero `new EventSource(` exists in `templates/` or `static/`. Only `/events` callers are `tests/integration/test_admin_ui_routes_comprehensive.py:367-370` (smoke probe) and `docs/development/troubleshooting.md:74`. Wave 4 deletes: SSE route + generator + rate-limit state (`MAX_CONNECTIONS_PER_TENANT`, `connection_counts`, `connection_timestamps`) + HEAD probe + smoke test + docs line + `sse_starlette` dependency in `migration.md:749`. Net: **−170 LOC, −3 unwritten test files, −1 pip dep (`sse_starlette`)**. Two surviving routes (`/activity` JSON poll + `/activities` REST) convert mechanically: `def → async def`, `with → async with get_db_session()`, `db_session.scalars(stmt).all() → (await db_session.execute(stmt)).scalars().all()`. Additionally fix `api_mode=False → api_mode=True` on the JSON poll route (pre-existing bug — JS `fetch` sees HTML 302 redirect on auth failure, never gets the 401 the template expects). Structural guard `tests/unit/test_architecture_no_sse_handlers.py` asserts zero `EventSourceResponse`/`StreamingResponse(mimetype="text/event-stream")` in `src/admin/routers/`. **2026-04-11 decision (supersedes Audit 06 SUBSTITUTE).**
 9. **`src/services/background_sync_service.py`** — **RESOLVED: Option B sync-bridge.** Service runs multi-hour GAM inventory sync jobs via `threading.Thread` workers, incompatible with async SQLAlchemy (asyncpg `pool_recycle=3600` rotates mid-session, identity map grows unbounded over hours, Fly.io TCP keepalives expire). **Fix:** new `src/services/background_sync_db.py` module with a separate sync psycopg2 engine and `get_sync_db_session()` factory. Background threads use the sync-bridge; async request path is untouched. `psycopg2-binary` + `types-psycopg2` + `libpq-dev` + `libpq5` all retained (partial reversal of Agent F F1.1.1/F1.2.1). Also fixes the Wave 3 `from flask import current_app` ImportError at line 472 (replaced with `SimpleAppCache` helper, see Decision 6). Scope guarded by `tests/unit/test_architecture_sync_bridge_scope.py` — a ratcheting allowlist containing ONLY `background_sync_service.py`. Validated by pre-Wave-0 **Spike 5.5** (0.5 day, soft blocker — fallback is Option A: asyncio task + single async session per sync, suboptimal but viable). Sunset target v2.1+ (phase-per-session async refactor). Docker image savings adjust from ~80MB to ~75MB (libpq stays). Other long-running services (`background_approval_service`, `order_approval_service`) have bounded durations <`pool_recycle=3600` and do NOT need the sync-bridge — they convert to async normally. **2026-04-11 decision.**
 
-### ~~Mandatory pre-Wave-0 spike sequence~~ DEFERRED TO v2.1
+### ~~Mandatory pre-Wave-0 spike sequence~~ DEFERRED TO PHASE 4+
 
-> **All 10 spikes are v2.1 scope** (async pivot reversed 2026-04-12). v2.0 requires no validation spikes — sync SQLAlchemy is the existing proven pattern. The spike sequence below is preserved as v2.1 planning material.
+> **All 10 spikes are Phase 4+ scope** (gating async conversion). Phases 0-3 require no validation spikes — sync SQLAlchemy is the existing proven pattern. The spike sequence below gates Phase 4 entry.
 
 Per Agent B §4 and Agent A §6, the 5.5-7.5 day spike sequence gates Wave 4-5 entry. **Expanded from 7 to 10 spikes on 2026-04-11** to add Spikes 4.25, 4.5 and 5.5 validating Decisions 3, 7 and 9 deep-think resolutions:
 
@@ -175,12 +175,12 @@ Plus orphan: `src/admin/server.py` (~103 LOC, standalone Flask runner via Waitre
 
 These are the places where "copy what the rest of the repo does" is **wrong**. Admin is different.
 
-- **Admin handlers use sync `def` with sync SQLAlchemy.** FastAPI auto-runs sync handlers in a threadpool where `scoped_session` thread-local identity works correctly. DB access uses `with get_db_session() as session:` inside the handler. No `SessionDep`, no `AsyncSession`, no `run_in_threadpool` for DB. Async SQLAlchemy is deferred to v2.1. See `execution-plan.md` Phase 0 for the canonical handler pattern.
+- **Phases 0-3: Admin handlers use sync `def` with sync SQLAlchemy.** FastAPI auto-runs sync handlers in a threadpool where `scoped_session` thread-local identity works correctly. DB access uses `with get_db_session() as session:` inside the handler. No `SessionDep`, no `AsyncSession`, no `run_in_threadpool` for DB. Phase 4a introduces sync `SessionDep`; Phase 4c converts to async. See `execution-plan.md` Phase 0 for the canonical handler pattern.
 - **Middleware order: Approximated BEFORE CSRF.** Counterintuitive relative to standard stacks where CSRF sits near the outside. Here, Approximated's external-domain redirect must fire before CSRF sees the form body. See blocker 5.
 - **Templates use `{{ url_for('name', **params) }}` exclusively** — for admin routes AND static assets. No prefix variables, no Jinja globals holding URL strings, no `script_root`, no `admin_prefix`, no `static_prefix`. Every admin route has `name="admin_<blueprint>_<endpoint>"`; the static mount is `name="static"`. This is the FastAPI canonical pattern from the official docs, verified in `Jinja2Templates._setup_env_defaults` at `starlette/templating.py:118-129` (auto-registers `url_for` as a Jinja global that calls `request.url_for(...)` via `@pass_context`). `NoMatchFound` at render time on a missing name is caught pre-merge by `test_templates_url_for_resolves.py`.
 - **`AdCPError` handler branches on `Accept`.** For admin HTML browser users, render `templates/error.html`. For JSON API callers, return JSON. Different from the plain JSON-only handler at `src/app.py:82-88` — do not copy that one.
-- **Admin handlers use `with get_db_session() as session:` for DB access.** No `SessionDep`, no `Depends(get_session)`, no `AsyncSession`. The handler owns the session lifecycle via the sync context manager. Repositories are instantiated inside the `with` block. This is the same pattern as the existing Flask blueprints, just in FastAPI syntax.
-- **`FLASK_SECRET_KEY` is dual-read alongside `SESSION_SECRET`** during v2.0 for dev ergonomics. It is hard-removed in v2.1. Do not rip it out in v2.0 — you will break every dev's local `.env`.
+- **Phases 0-3: Admin handlers use `with get_db_session() as session:` for DB access.** No `SessionDep`, no `Depends(get_session)`, no `AsyncSession`. The handler owns the session lifecycle via the sync context manager. Repositories are instantiated inside the `with` block. This is the same pattern as the existing Flask blueprints, just in FastAPI syntax. Phase 4a introduces `SessionDep = Annotated[Session, Depends(get_session)]` (still sync); Phase 4c re-aliases to `AsyncSession`.
+- **`FLASK_SECRET_KEY` is dual-read alongside `SESSION_SECRET`** during Phases 0-3 for dev ergonomics. It is hard-removed in Phase 5. Do not rip it out during Flask removal — you will break every dev's local `.env`.
 
 ---
 
@@ -201,19 +201,39 @@ Catalogued in `flask-to-fastapi-adcp-safety.md`; listed here so they are not los
 ## Branch and folder cleanup intent
 
 - **Branch:** `feat/v2.0.0-flask-to-fastapi`. All migration work lives here.
-- **Merge cadence:** one PR per phase, 7 phases: Phase 0, 1a, 1b, 2a, 2b, 3, 4 (see `execution-plan.md`). Sync handlers throughout. Async SQLAlchemy deferred to v2.1.
+- **Merge cadence:** one PR per phase. Phases 0, 1a, 1b, 2a, 2b, 3 (Flask removal, sync). Phases 4a-4e (FastAPI-native patterns + async). Phase 5 (cleanup + v2.0.0 final). See `execution-plan.md`.
 - **Post-migration cleanup:** `.claude/notes/flask-to-fastapi/` is a planning-phase artifact. After v2.0.0 ships and stabilizes (~2 releases later), archive or delete this folder. Anything worth keeping long-term gets promoted to `docs/` or `CLAUDE.md` at the repo root.
 
 ---
 
-## v2.1 deferred items (do NOT pull forward)
+## Phase 4+ items (do NOT mix into Phases 0-3)
 
-These are intentionally out of scope for v2.0.0. If you find yourself wanting to do them during the migration, stop and file an issue instead.
+These are intentionally sequenced AFTER Flask removal (Phases 0-3). They are part of v2.0 but belong in Phase 4+. If you find yourself wanting to do them during Flask removal, stop and file them as Phase 4+ work items.
 
-- **Async SQLAlchemy** — deferred to v2.1 (async pivot reversed 2026-04-12; see `async-pivot-checkpoint.md` for v2.1 roadmap)
-- Drop nginx (cannot happen until admin is fully on FastAPI and external-domain handling is battle-tested)
-- REST routes ratchet to `Annotated[...]` form
-- `Apx-Incoming-Host` IP allowlist (currently trusted on header alone)
-- `require_tenant_access` to check `is_active`
-- `/_internal/` auth hardening (currently network-gated only)
-- Hard-remove `FLASK_SECRET_KEY` dual-read
+- **Async SQLAlchemy** — Phase 4c-4e (see `async-pivot-checkpoint.md` for Phase 4+ roadmap)
+- **Sync `SessionDep` + DTO boundary + structlog** — Phase 4a (FastAPI-native patterns, still sync)
+- **Testing infrastructure (spikes, factory-boy async shim)** — Phase 4b
+- **REST routes ratchet to `Annotated[...]` form** — Phase 4a (part of SessionDep + Annotated consistency)
+- **`require_tenant_access` to check `is_active`** — Phase 4a (small fix, breaking change OK on v2.0 branch)
+- **Hard-remove `FLASK_SECRET_KEY` dual-read** — Phase 5 (final cleanup)
+- Drop nginx — post-v2.0 (needs battle-testing first)
+- `Apx-Incoming-Host` IP allowlist — post-v2.0 (ops concern)
+- `/_internal/` auth hardening — post-v2.0 (currently network-gated only)
+
+---
+
+## v2.0 Strategic Layering
+
+v2.0 is structured as 5 layers, each producing a working, testable system:
+
+| Layer | Phases | What changes | Gate |
+|---|---|---|---|
+| 1. Flask Removal | 0-3 | Port blueprints, template codemod, middleware, OAuth, delete Flask | `rg -w flask src/` = 0 |
+| 2. FastAPI-Native | 4a | Sync SessionDep, DTOs, structlog, pydantic-settings, UoW removal | All handlers use SessionDep |
+| 3. Testing | 4b | Spikes 1-4.25, dependency_overrides patterns, structural guards | <40 lazy-load failures |
+| 4. Async | 4c-4e | AsyncSession, asyncpg, async handlers/repos, adapter wrapping | All handlers async, perf parity |
+| 5. Cleanup | 5 | Delete sync artifacts, dead code, archive planning docs, tag v2.0.0 | Zero guard allowlist entries |
+
+**Key insight:** SessionDep does not require async. Layer 2 introduces `SessionDep = Annotated[Session, Depends(get_session)]` with sync `Session`. Layer 4 re-aliases it to `AsyncSession` — a 1-file change in `deps.py`. This separation dramatically reduces Layer 4's risk.
+
+**AdCP safety:** None of the 5 layers changes any AdCP surface. MCP tool signatures, A2A protocol, REST endpoints, webhook payloads, and OpenAPI schema are all unchanged throughout.

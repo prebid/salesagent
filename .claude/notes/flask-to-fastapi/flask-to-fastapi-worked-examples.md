@@ -1,6 +1,15 @@
 # Flask → FastAPI Migration: Five Hard-Case Worked Examples
 
-> **SYNC HANDLERS IN v2.0 (async pivot reversed 2026-04-12).** This document was written during the async pivot and shows `async def` handlers with `SessionDep`, `AsyncSession`, and `await` throughout. **For v2.0 implementation, adapt to sync:** use `def` (not `async def`), `with get_db_session() as session:` (not `async with`), and Starlette `TestClient` (not httpx `AsyncClient`). The route logic, template references, form handling, and OAuth flows described here are still correct — only the sync/async wrapper changes. See `execution-plan.md` Phase 0 for the canonical sync handler pattern.
+> **v2.0 PHASE GUIDE (2026-04-12)**
+>
+> These worked examples show the FULL v2.0 target (async). For Phase 0-3 implementation:
+> - Change all `async def` handlers to `def` (except OAuth callbacks which may need `async def` for Authlib)
+> - Change `async with get_db_session() as db:` to `with get_db_session() as db:`
+> - Change `(await db.execute(stmt)).scalars()` to `db.scalars(stmt)`
+> - Change `await` calls to direct calls for sync functions
+>
+> All admin SQLAlchemy is sync during Phases 0-3 (async pivot reversed 2026-04-12; async conversion is Phase 4+).
+> For authoritative Phase 0-3 patterns, see `execution-plan.md`.
 
 Appendix to §13 of `/Users/quantum/Documents/ComputedChaos/salesagent/.claude/notes/flask-to-fastapi-migration.md`. These five examples cover what `accounts.py` doesn't: OAuth redirect flows, dynamic per-tenant client registration, binary multipart uploads, Server-Sent Events, and the 300-LOC multi-branch product form. All Flask sources have been read from disk and cited by file:line.
 
@@ -10,7 +19,7 @@ Conventions used below (established in §11 of the main doc):
 - `flash(request, msg, category)` → native utility at `src/admin/flash.py`
 - `AdminRedirect` → typed exception handled by `src/app.py` → `RedirectResponse(303)`
 - `oauth` → module-level `authlib.integrations.starlette_client.OAuth` instance at `src/admin/oauth.py`
-- All admin SQLAlchemy is sync (async pivot reversed 2026-04-12): `with get_db_session() as session:` / `session.scalars(stmt).first()`. `run_in_threadpool` is used ONLY in the 3-4 OAuth callback handlers that must be `async def` for Authlib compatibility — and only for DB-touching helper functions called from those handlers. MCP and A2A handlers remain async. See `execution-plan.md` Phase 0 for the canonical handler pattern.
+- All admin SQLAlchemy is sync during Phases 0-3 (async pivot reversed 2026-04-12): `with get_db_session() as session:` / `session.scalars(stmt).first()`. `run_in_threadpool` is used ONLY in the 3-4 OAuth callback handlers that must be `async def` for Authlib compatibility — and only for DB-touching helper functions called from those handlers. MCP and A2A handlers remain async. See `execution-plan.md` Phase 0 for the canonical handler pattern. Async conversion is Phase 4+.
 - CSRF protection uses SameSite=Lax session cookie + CSRFOriginMiddleware (Origin header validation). No csrf_token form fields, no X-CSRF-Token headers, no JavaScript changes needed.
 
 ---
@@ -245,7 +254,7 @@ router = APIRouter(tags=["admin-auth"])
 # GET /login
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.get("/login", name="auth_login", response_class=HTMLResponse)
+@router.get("/login", name="admin_auth_login", response_class=HTMLResponse)
 async def login(
     request: Request,
     next: Annotated[str | None, Query()] = None,
@@ -275,17 +284,17 @@ async def login(
         oidc_configured, oidc_enabled = await _load_oidc_flags(tenant_context)
         if oidc_enabled and not test_mode and not just_logged_out:
             return RedirectResponse(
-                request.url_for("oidc_login", tenant_id=tenant_context),
+                request.url_for("admin_oidc_login", tenant_id=tenant_context),
                 status_code=303,
             )
         if oauth_configured and not test_mode and not just_logged_out:
             return RedirectResponse(
-                request.url_for("auth_tenant_google_auth", tenant_id=tenant_context),
+                request.url_for("admin_auth_tenant_google_auth", tenant_id=tenant_context),
                 status_code=303,
             )
 
     if oauth_configured and not test_mode and not just_logged_out:
-        return RedirectResponse(request.url_for("auth_google_auth"), status_code=303)
+        return RedirectResponse(request.url_for("admin_auth_google_auth"), status_code=303)
 
     return render(request, "login.html", {
         "test_mode": test_mode,
@@ -341,7 +350,7 @@ async def _load_oidc_flags(tenant_id: str) -> tuple[bool, bool]:
 # GET /auth/google
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.get("/auth/google", name="auth_google_auth")
+@router.get("/auth/google", name="admin_auth_google_auth")
 async def google_auth(request: Request) -> RedirectResponse:
     """Initiate Google OAuth flow.
 
@@ -352,7 +361,7 @@ async def google_auth(request: Request) -> RedirectResponse:
     """
     if "google" not in oauth._clients:
         flash(request, "OAuth not configured", "error")
-        return RedirectResponse(request.url_for("auth_login"), status_code=303)
+        return RedirectResponse(request.url_for("admin_auth_login"), status_code=303)
 
     # Preserve signup flow state across session.clear() (parity with Flask)
     signup_flow = request.session.get("signup_flow")
@@ -372,7 +381,7 @@ def _compute_google_redirect_uri(request: Request) -> str:
     env_uri = os.environ.get("GOOGLE_OAUTH_REDIRECT_URI")
     if env_uri:
         return env_uri
-    base_url = str(request.url_for("auth_google_callback"))
+    base_url = str(request.url_for("admin_auth_google_callback"))
     skip_nginx = os.environ.get("SKIP_NGINX", "").lower() == "true"
     production = os.environ.get("PRODUCTION", "").lower() == "true"
     if not skip_nginx and production and "/admin/" not in base_url:
@@ -384,7 +393,7 @@ def _compute_google_redirect_uri(request: Request) -> str:
 # GET /auth/google/callback
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.get("/auth/google/callback", name="auth_google_callback")
+@router.get("/auth/google/callback", name="admin_auth_google_callback")
 async def google_callback(request: Request) -> RedirectResponse:
     """Receive Google OAuth callback. Token exchange is async-native via
     authlib's starlette_client. Error paths preserve tenant context to avoid
@@ -394,7 +403,7 @@ async def google_callback(request: Request) -> RedirectResponse:
     if "google" not in oauth._clients:
         logger.error("OAuth not configured at callback time")
         flash(request, "OAuth not configured", "error")
-        return RedirectResponse(request.url_for("auth_login"), status_code=303)
+        return RedirectResponse(request.url_for("admin_auth_login"), status_code=303)
 
     try:
         token = await oauth.google.authorize_access_token(request)
@@ -427,14 +436,14 @@ async def google_callback(request: Request) -> RedirectResponse:
         flash(request, f"Welcome {user_info.get('name', email)}! (Super Admin)", "success")
         next_url = safe_next_url(
             request.session.pop("login_next_url", None),
-            fallback=str(request.url_for("core_index")),
+            fallback=str(request.url_for("admin_core_index")),
         )
         return RedirectResponse(next_url, status_code=303)
 
     # Signup flow branch (non-super-admin)
     if request.session.get("signup_flow"):
         flash(request, f"Welcome {user_info.get('name', email)}!", "success")
-        return RedirectResponse(request.url_for("public_signup_onboarding"), status_code=303)
+        return RedirectResponse(request.url_for("admin_public_signup_onboarding"), status_code=303)
 
     # Populate available tenants
     available_tenants = await _enumerate_tenants_for_user(email)
@@ -448,19 +457,19 @@ async def google_callback(request: Request) -> RedirectResponse:
         flash(request, f"Welcome {user_info.get('name', email)}!", "success")
         next_url = safe_next_url(
             request.session.pop("login_next_url", None),
-            fallback=str(request.url_for("tenants_dashboard", tenant_id=t["tenant_id"])),
+            fallback=str(request.url_for("admin_tenants_dashboard", tenant_id=t["tenant_id"])),
         )
         return RedirectResponse(next_url, status_code=303)
 
     flash(request, f"Welcome {user_info.get('name', email)}!", "success")
-    return RedirectResponse(request.url_for("auth_select_tenant"), status_code=303)
+    return RedirectResponse(request.url_for("admin_auth_select_tenant"), status_code=303)
 
 
 def _fallback_login_redirect(request: Request, tenant_context: str | None) -> RedirectResponse:
     if tenant_context:
-        url = request.url_for("auth_tenant_login", tenant_id=tenant_context).include_query_params(logged_out="1")
+        url = request.url_for("admin_auth_tenant_login", tenant_id=tenant_context).include_query_params(logged_out="1")
     else:
-        url = request.url_for("auth_login").include_query_params(logged_out="1")
+        url = request.url_for("admin_auth_login").include_query_params(logged_out="1")
     return RedirectResponse(url, status_code=303)
 
 
@@ -512,7 +521,7 @@ async def _enumerate_tenants_for_user(email: str) -> list[dict]:
 # GET /logout
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.get("/logout", name="auth_logout")
+@router.get("/logout", name="admin_auth_logout")
 async def logout(request: Request) -> RedirectResponse:
     tenant_id = request.session.get("tenant_id")
     idp_logout_url = await _lookup_idp_logout_url(tenant_id) if tenant_id else None
@@ -521,7 +530,7 @@ async def logout(request: Request) -> RedirectResponse:
         return RedirectResponse(idp_logout_url, status_code=303)
     flash(request, "You have been logged out", "info")
     return RedirectResponse(
-        request.url_for("auth_login").include_query_params(logged_out="1"),
+        request.url_for("admin_auth_login").include_query_params(logged_out="1"),
         status_code=303,
     )
 
@@ -538,14 +547,14 @@ async def _lookup_idp_logout_url(tenant_id: str) -> str | None:
 
 | Flask | FastAPI-native | Why |
 |---|---|---|
-| `@auth_bp.route("/login")` + `def login()` | `@router.get("/login", name="auth_login")` async def | Verb-explicit decorator; flat route name. |
+| `@auth_bp.route("/login")` + `def login()` | `@router.get("/login", name="admin_auth_login")` async def | Verb-explicit decorator; flat route name. (Phase 4+ target. Phase 0-3 uses `def` with sync SQLAlchemy.) |
 | `request.args.get("next")` | `next: Annotated[str | None, Query()] = None` | Declarative, typed, self-documenting OpenAPI. |
 | `session["login_next_url"] = next_url` | `request.session["login_next_url"] = ...` | Starlette `SessionMiddleware` exposes `request.session` (signed-cookie backend). |
-| `get_db_session()` called inline | `await _detect_tenant_from_host(request)` | `AsyncSession` is async-native; helper is `async def` with `async with get_db_session()`. |
+| `get_db_session()` called inline | `await _detect_tenant_from_host(request)` | `AsyncSession` is async-native; helper is `async def` with `async with get_db_session()`. (Phase 4+ target. Phase 0-3 uses sync `with get_db_session() as db:` / `db.scalars(stmt)`.) |
 | `current_app.oauth.google.authorize_redirect(uri)` | `oauth.google.authorize_redirect(request, uri)` (from `authlib.integrations.starlette_client`) | The starlette variant is `async` and uses `request.session` directly — no Flask `current_app` thread-local. |
 | Manual `current_app.session_interface.save_session(...)` at `auth.py:437` | _deleted_ | Starlette always writes the cookie on `http.response.start`; the Flask-specific bug doesn't exist. |
 | `session.modified = True` | _deleted_ | `request.session` is a `dict` subclass that marks itself dirty on every mutation. |
-| `url_for("auth.login")` | `request.url_for("auth_login")` | Flat name, no blueprint dot-separator. Returns a `URL` object with `.include_query_params()`. |
+| `url_for("auth.login")` | `request.url_for("admin_auth_login")` | Flat name, no blueprint dot-separator. Returns a `URL` object with `.include_query_params()`. |
 | `redirect(...)` (302 by Flask default) | `RedirectResponse(..., status_code=303)` | 303 is the POST-redirect-GET spec-correct code; matches §11.1 convention. |
 | `flash("msg", "error")` (Flask global) | `flash(request, "msg", "error")` (§11.3) | `request` parameter required; flash bucket lives on `request.session`. |
 | `render_template("login.html", ...)` | `render(request, "login.html", {...})` | Wrapper at `src/admin/templating.py` injects `support_email`, `sales_agent_domain`, and pre-registers a `_url_for` safe-lookup override on `templates.env.globals`. Templates use `{{ url_for('admin_auth_login') }}` for admin paths and `{{ url_for('static', path='/validation.css') }}` for static assets — **NO `script_root`/`admin_prefix`/`static_prefix` globals exist** (greenfield). Note: no `csrf_token` injection — CSRFOriginMiddleware uses Origin header validation, not tokens. |
@@ -906,24 +915,24 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth/oidc", tags=["admin-oidc"])
 
 
-@router.get("/login/{tenant_id}", name="oidc_login")
+@router.get("/login/{tenant_id}", name="admin_oidc_login")
 async def oidc_login(tenant_id: str, request: Request) -> RedirectResponse:
     """Initiate tenant-specific OIDC flow."""
     gate = await _check_tenant_oidc_available(tenant_id)
     if gate is not None:
         flash(request, gate, "error")
-        return RedirectResponse(request.url_for("auth_login"), status_code=303)
+        return RedirectResponse(request.url_for("admin_auth_login"), status_code=303)
 
     try:
         client = await get_tenant_oidc_client(tenant_id)
     except ValueError as exc:
         logger.warning("Invalid OIDC config for %s: %s", tenant_id, exc)
         flash(request, f"OIDC configuration error: {exc}", "error")
-        return RedirectResponse(request.url_for("auth_login"), status_code=303)
+        return RedirectResponse(request.url_for("admin_auth_login"), status_code=303)
 
     if client is None:
         flash(request, "SSO is not available for this tenant", "error")
-        return RedirectResponse(request.url_for("auth_login"), status_code=303)
+        return RedirectResponse(request.url_for("admin_auth_login"), status_code=303)
 
     request.session["oidc_login_tenant_id"] = tenant_id
 
@@ -961,7 +970,7 @@ async def _load_tenant_redirect_uri(tenant_id: str) -> str:
         return get_tenant_redirect_uri(tenant)
 
 
-@router.get("/callback", name="oidc_callback")
+@router.get("/callback", name="admin_oidc_callback")
 async def oidc_callback(request: Request) -> RedirectResponse | HTMLResponse:
     """Receive OIDC callback for both test and production flows."""
     is_test = bool(request.session.pop("oidc_test_flow", False))
@@ -971,12 +980,12 @@ async def oidc_callback(request: Request) -> RedirectResponse | HTMLResponse:
     )
     if not tenant_id:
         flash(request, "Invalid OAuth callback - no tenant context", "error")
-        return RedirectResponse(request.url_for("auth_login"), status_code=303)
+        return RedirectResponse(request.url_for("admin_auth_login"), status_code=303)
 
     client = await get_tenant_oidc_client(tenant_id)
     if client is None:
         flash(request, "OIDC not configured", "error")
-        return RedirectResponse(request.url_for("auth_login"), status_code=303)
+        return RedirectResponse(request.url_for("admin_auth_login"), status_code=303)
 
     try:
         token = await client.authorize_access_token(request)
@@ -985,20 +994,20 @@ async def oidc_callback(request: Request) -> RedirectResponse | HTMLResponse:
         flash(request, f"OAuth authentication failed: {err}", "error")
         if is_test:
             return RedirectResponse(
-                request.url_for("tenants_tenant_settings", tenant_id=tenant_id),
+                request.url_for("admin_tenants_tenant_settings", tenant_id=tenant_id),
                 status_code=303,
             )
-        return RedirectResponse(request.url_for("auth_login"), status_code=303)
+        return RedirectResponse(request.url_for("admin_auth_login"), status_code=303)
 
     user_info = extract_user_info(token)
     if not user_info or not user_info.get("email"):
         flash(request, "Could not get user email from OAuth provider", "error")
         if is_test:
             return RedirectResponse(
-                request.url_for("tenants_tenant_settings", tenant_id=tenant_id),
+                request.url_for("admin_tenants_tenant_settings", tenant_id=tenant_id),
                 status_code=303,
             )
-        return RedirectResponse(request.url_for("auth_login"), status_code=303)
+        return RedirectResponse(request.url_for("admin_auth_login"), status_code=303)
 
     email = user_info["email"]
 
@@ -1017,10 +1026,10 @@ async def oidc_callback(request: Request) -> RedirectResponse | HTMLResponse:
     )
     if result == "denied":
         flash(request, "Access denied. You don't have permission to access this tenant.", "error")
-        return RedirectResponse(request.url_for("auth_login"), status_code=303)
+        return RedirectResponse(request.url_for("admin_auth_login"), status_code=303)
     if result == "disabled":
         flash(request, "Your account has been disabled. Please contact your administrator.", "error")
-        return RedirectResponse(request.url_for("auth_login"), status_code=303)
+        return RedirectResponse(request.url_for("admin_auth_login"), status_code=303)
     assert isinstance(result, dict)
 
     request.session["user"] = result["email"]
@@ -1034,7 +1043,7 @@ async def oidc_callback(request: Request) -> RedirectResponse | HTMLResponse:
     if next_url:
         return RedirectResponse(next_url, status_code=303)
     return RedirectResponse(
-        request.url_for("tenants_dashboard", tenant_id=tenant_id),
+        request.url_for("admin_tenants_dashboard", tenant_id=tenant_id),
         status_code=303,
     )
 
@@ -1372,7 +1381,7 @@ def _ext_from(filename: str) -> str | None:
 
 @router.post(
     "/{tenant_id}/upload_favicon",
-    name="tenants_upload_favicon",
+    name="admin_tenants_upload_favicon",
     dependencies=[Depends(audit_action("upload_favicon"))],
 )
 async def upload_favicon(
@@ -1798,7 +1807,7 @@ async def release_sse_slot(tenant_id: str) -> None:
 
 # ─── Handler ────────────────────────────────────────────────────────────────
 
-@router.get("/{tenant_id}/events", name="activity_stream_events")
+@router.get("/{tenant_id}/events", name="admin_activity_stream_events")
 async def activity_events(
     tenant_id: str,
     request: Request,
@@ -1908,7 +1917,7 @@ async def activity_events(
 | `tenant_id` longer than 50 chars | 400 before generator starts |
 | OpenAPI doc generation | `EventSourceResponse` has no Pydantic schema; document via `responses={200: {"content": {"text/event-stream": {}}}}` on the decorator |
 
-**URL-for considerations:** `request.url_for("activity_stream_events", tenant_id=...)` returns a URL object. JavaScript `EventSource` MUST use the exact path; templates should emit `new EventSource("{{ url_for('activity_stream_events', tenant_id=tenant_id) }}")` (codemod converts `url_for` to `request.url_for` for the template wrapper in §12). No trailing slash — `/events` not `/events/`.
+**URL-for considerations:** `request.url_for("admin_activity_stream_events", tenant_id=...)` returns a URL object. JavaScript `EventSource` MUST use the exact path; templates should emit `new EventSource("{{ url_for('activity_stream_events', tenant_id=tenant_id) }}")` (codemod converts `url_for` to `request.url_for` for the template wrapper in §12). No trailing slash — `/events` not `/events/`.
 
 ### 4.4.5 Test pattern
 
@@ -2164,7 +2173,7 @@ router = APIRouter(prefix="/tenant/{tenant_id}/products", tags=["admin-products"
 
 @router.get(
     "/add",
-    name="products_add_product_form",
+    name="admin_products_add_product_form",
     response_class=HTMLResponse,
 )
 async def add_product_form(
@@ -2187,7 +2196,7 @@ async def add_product_form(
 
 @router.post(
     "/add",
-    name="products_add_product",
+    name="admin_products_add_product",
     dependencies=[Depends(audit_action("add_product"))],
 )
 async def add_product(
@@ -2334,7 +2343,7 @@ async def add_product(
 
     flash(request, f"Product '{product_name}' created successfully!", "success")
     return RedirectResponse(
-        request.url_for("products_list_products", tenant_id=tenant_id),
+        request.url_for("admin_products_list_products", tenant_id=tenant_id),
         status_code=303,
     )
 
@@ -2614,7 +2623,7 @@ def _validate_pricing_options(
 | `asyncio.run(registry.list_all_formats_with_errors(...))` inside sync handler | `await registry.list_all_formats_with_errors(...)` directly — service is `async def` under the full-async pivot | No more `asyncio.run` inside handler; no more threadpool hop for DB or registry calls. |
 | `request.form.getlist("selected_property_tags")` inside `property_mode` branch | All multi-selects declared at handler top; branching happens in service | Single source of truth for form fields. |
 | `datetime.now(UTC)` inline | Service layer handles timestamps; handler doesn't care | |
-| `flash(f"Product '{product.name}' created...", "success")` + redirect to list | Same, via `request.url_for("products_list_products", tenant_id=...)` | Flat name. |
+| `flash(f"Product '{product.name}' created...", "success")` + redirect to list | Same, via `request.url_for("admin_products_list_products", tenant_id=...)` | Flat name. |
 | `@log_admin_action("add_product")` decorator | `dependencies=[Depends(audit_action("add_product"))]` on POST decorator | Only the POST is audited; GET form views are not. |
 
 ### 4.5.4 Edge cases and error handling

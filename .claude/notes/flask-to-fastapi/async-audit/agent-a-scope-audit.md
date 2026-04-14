@@ -1,6 +1,6 @@
 # Agent A — Async Conversion Scope Audit
 
-> **ASYNC DEFERRED TO v2.1 (2026-04-12).** v2.0 uses sync admin handlers. This report contains research for the future v2.1 async SQLAlchemy migration. Do not implement async patterns described here during v2.0.
+> **ASYNC IS PHASE 4+ WITHIN v2.0 (2026-04-14).** Phases 0-3 use sync admin handlers. This report is the Phase 4+ implementation roadmap. Do not implement async patterns from this file during Phases 0-3 (Flask removal).
 
 **Date:** 2026-04-11
 **Author:** Agent A (Opus scoping subagent, post-pivot)

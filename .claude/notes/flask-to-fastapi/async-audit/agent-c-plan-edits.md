@@ -4,7 +4,7 @@ Now I have complete visibility. I'm ready to produce the report. Given the size,
 
 # Plan-File Update Proposal: Flask→FastAPI Blocker #4 Pivot (sync def → full async SQLAlchemy)
 
-> **ASYNC DEFERRED TO v2.1 (2026-04-12).** v2.0 uses sync admin handlers. This report contains research for the future v2.1 async SQLAlchemy migration. Do not implement async patterns described here during v2.0.
+> **ASYNC IS PHASE 4+ WITHIN v2.0 (2026-04-14).** Phases 0-3 use sync admin handlers. This report is the Phase 4+ implementation roadmap (the original 45 edits are the async target state). Do not implement async patterns from this file during Phases 0-3 (Flask removal).
 
 **Date:** 2026-04-11
 **Scope:** 8 plan files under `/Users/quantum/Documents/ComputedChaos/salesagent/.claude/notes/flask-to-fastapi/`

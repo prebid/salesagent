@@ -4,7 +4,7 @@ I have enough grounding. Now let me produce the risk analysis report. The body o
 
 # Risk Analysis Report: Full Async SQLAlchemy Absorbed into Flask→FastAPI v2.0.0
 
-> **ASYNC DEFERRED TO v2.1 (2026-04-12).** v2.0 uses sync admin handlers. This report contains research for the future v2.1 async SQLAlchemy migration. Do not implement async patterns described here during v2.0.
+> **ASYNC IS PHASE 4+ WITHIN v2.0 (2026-04-14).** Phases 0-3 use sync admin handlers. This report is the Phase 4+ implementation roadmap. Do not implement async patterns from this file during Phases 0-3 (Flask removal).
 
 **Date:** 2026-04-11
 **Agent:** Risk Analyst (Agent B in checkpoint workflow)

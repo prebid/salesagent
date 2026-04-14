@@ -169,7 +169,8 @@ The SSO requirement varies based on deployment mode:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ENCRYPTION_KEY` | auto-generated | Key for encrypting sensitive data in database |
-| `FLASK_SECRET_KEY` | dev key | Flask session secret (auto-generated in production) |
+| `SESSION_SECRET` | **required** (v2.0+) | Session signing secret for Starlette SessionMiddleware. Min 32 chars. Falls back to `FLASK_SECRET_KEY` during transition. Generate: `python -c "import secrets; print(secrets.token_hex(32))"` |
+| `FLASK_SECRET_KEY` | dev key | **(Deprecated v2.0)** Flask session secret. Use `SESSION_SECRET` instead. Dual-read during transition, removed in Phase 5. |
 | `WEBHOOK_SECRET` | - | Secret for verifying incoming webhooks |
 
 ---

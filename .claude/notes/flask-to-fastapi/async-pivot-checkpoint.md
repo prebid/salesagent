@@ -1,6 +1,6 @@
 # ⚠️ BLOCKER 4 RESOLUTION HAS PIVOTED — READ THIS FIRST
 
-> **ASYNC DEFERRED TO v2.1 (2026-04-12).** The async pivot described in this document has been reversed. v2.0 ships with sync admin handlers (the original Option C from the deep audit). This document is preserved as the v2.1 async migration roadmap. Do NOT implement any content from this file during v2.0 — it will be the starting point for v2.1.
+> **ASYNC DEFERRED TO PHASE 4+ WITHIN v2.0 (2026-04-12).** The async pivot described in this document has been reversed for Phases 0-3. v2.0 ships with sync admin handlers for Phases 0-3 (the original Option C from the deep audit). This document is preserved as the Phase 4+ async migration roadmap within v2.0. Do NOT implement any content from this file during Phases 0-3 — it will be the starting point for Phase 4+.
 
 **Date:** 2026-04-11
 **Author:** Claude + user directive
@@ -8,9 +8,9 @@
 
 ## 1. The pivot
 
-**User directive (2026-04-11):** go fully async in v2.0.0. No separate v2.1 follow-on for async SQLAlchemy — absorb it into v2.0 as additional waves. Verification that this does not impact the AdCP schema is a hard requirement; the user explicitly said "as long as we don't break adcp schema and can't see how we would."
+**User directive (2026-04-11):** go fully async in v2.0.0. No separate follow-on for async SQLAlchemy — absorb it into v2.0 as Phase 4+ within v2.0. Verification that this does not impact the AdCP schema is a hard requirement; the user explicitly said "as long as we don't break adcp schema and can't see how we would."
 
-**One-sentence rationale:** a greenfield FastAPI team in 2026 writes fully async code end-to-end; the sync `def` compromise from deep-audit Blocker #4 Option C was a scope-reduction hack, and going fully async (Option A) produces a cleaner end state, matches modern FastAPI idiom, fixes a pre-existing latent bug in `src/routes/api_v1.py` as a side effect, and eliminates the entire v2.1 async-migration follow-on from the roadmap.
+**One-sentence rationale:** a greenfield FastAPI team in 2026 writes fully async code end-to-end; the sync `def` compromise from deep-audit Blocker #4 Option C was a scope-reduction hack, and going fully async (Option A) produces a cleaner end state, matches modern FastAPI idiom, fixes a pre-existing latent bug in `src/routes/api_v1.py` as a side effect, and eliminates the entire async-migration follow-on from the roadmap.
 
 **AdCP boundary (verified — hard requirement from user):**
 - Schema / data shape: **unchanged** (sync vs async is code-style, not wire format)
@@ -40,7 +40,7 @@ Each line below is content that the fresh session's opus agents must rewrite fro
 - §13.3 `change_status` — should be `async def` (already is, leave it)
 - §16 assumption #4 — says "Admin handlers async def + run_in_threadpool" — should say "Admin handlers async def + async SQLAlchemy; run_in_threadpool only for truly blocking work"
 - §17 debatable surface #2 — says "Sync SQLAlchemy stays sync" — REVERSE: "Full async SQLAlchemy in v2.0"
-- §18 "Future Work: v2.1 Async SQLAlchemy" — DELETE this section; the work is now in v2.0
+- §18 "Future Work: Async SQLAlchemy" — DELETE this section; the work is now in Phase 4+ within v2.0
 
 ### `flask-to-fastapi-foundation-modules.md`
 
@@ -66,14 +66,14 @@ Each line below is content that the fresh session's opus agents must rewrite fro
 
 ### `flask-to-fastapi-deep-audit.md`
 
-- §1.4 Blocker 4 — **major rewrite**. Option A is chosen, not Option C. The Option C "sync def default" text is superseded. Option A becomes the primary resolution. The "why defer to v2.1" justification is deleted (not deferring).
+- §1.4 Blocker 4 — **major rewrite**. Option A is chosen, not Option C. The Option C "sync def default" text is superseded. Option A becomes the primary resolution. The "why defer" justification is deleted (not deferring — it's Phase 4+ within v2.0).
 - §3.7 MCP scheduler lifespan-composition — still valid but now with async DB access inside `lifespan_context`
 - §7 Summary Table B4 row — change from "sync def default" to "full async SQLAlchemy + async handlers"
 
 ### `flask-to-fastapi-adcp-safety.md`
 
 - §10.2 MCP scheduler invariant — still valid; mention that schedulers use async DB access now
-- Any mention of v2.1 async as deferred — REVERSE to "absorbed into v2.0"
+- Any mention of async as deferred — REVERSE to "absorbed into Phase 4+ within v2.0"
 
 ### `implementation-checklist.md`
 
@@ -81,14 +81,14 @@ Each line below is content that the fresh session's opus agents must rewrite fro
 - Section 2 Blocker 4 — every bullet about sync def is superseded
 - Section 4 Wave 0 — any sync def-related criterion
 - Section 4 Wave 2 — any deferred async
-- Section 8 v2.1 scope — async SQLAlchemy item moves out of v2.1 and into v2.0
+- Section 8 — async SQLAlchemy item moves into Phase 4+ within v2.0
 - Wave 0 structural guards — `test_architecture_admin_sync_db_no_async.py` is WRONG direction, delete it; the correct guard is `test_architecture_admin_routes_async.py` (asserts every admin handler IS async def)
 
 ### Folder `CLAUDE.md`
 
 - Critical Invariant #4 — rewrite (pivot marker added alongside)
 - Migration conventions "sync def" bullet — reverse
-- "v2.1 deferred items" — remove async SQLAlchemy from the list
+- "deferred items" — move async SQLAlchemy into Phase 4+ within v2.0
 
 ## 3. New target state
 
@@ -240,7 +240,7 @@ All `src/core/tools/*.py` `_impl` functions become `async def`. Some already are
 
 ### Driver change
 
-> **⚠️ CORRECTED 2026-04-11 (Decisions 1/2/9):** `psycopg2-binary` is **RETAINED** alongside `asyncpg`, NOT removed. Three sync paths require it: Decision 1 Path B sync session factory, Decision 2 pre-fork orchestrator health check, Decision 9 sync-bridge. `types-psycopg2` also RETAINED. Removal deferred to v2.1+.
+> **⚠️ CORRECTED 2026-04-11 (Decisions 1/2/9):** `psycopg2-binary` is **RETAINED** alongside `asyncpg`, NOT removed. Three sync paths require it: Decision 1 Path B sync session factory, Decision 2 pre-fork orchestrator health check, Decision 9 sync-bridge. `types-psycopg2` also RETAINED. Removal deferred to Phase 4+ within v2.0.
 
 `pyproject.toml`:
 - **KEEP** `psycopg2-binary>=2.9.9` (retained per D1/D2/D9)
@@ -375,7 +375,7 @@ result = await run_in_threadpool(adapter.create_media_buy, request, packages, ..
 
 **Scope guard:** `tests/unit/test_architecture_sync_bridge_scope.py` — ratcheting frozenset allowlist containing ONLY `src/services/background_sync_service.py`. Any PR adding a new importer requires explicit CLAUDE.md exception. 4 test methods enforce allowlist non-growth, file-exists check, importer-still-uses check, and "if allowlist empty then module must be deleted" sunset check.
 
-**Sunset target v2.1+.** When the phase-per-session async refactor lands (per `foundation-modules.md` §11.0.6 §G), the sync-bridge gets deleted alongside `psycopg2-binary` + `libpq-dev` + `libpq5`. Tracking issue: `salesagent-sync-bridge-sunset`.
+**Sunset target Phase 4+ within v2.0.** When the phase-per-session async refactor lands (per `foundation-modules.md` §11.0.6 §G), the sync-bridge gets deleted alongside `psycopg2-binary` + `libpq-dev` + `libpq5`. Tracking issue: `salesagent-sync-bridge-sunset`.
 
 **Validated by:** pre-Wave-0 Spike 5.5 (0.5 day, soft blocker). 4 test cases: (a) engine lifecycle, (b) MVCC bidirectional visibility, (c) 5 concurrent async requests + 1 sync thread no deadlock, (d) post-dispose connection leaks ≤1. Fail action: revert to Option A (asyncio task + single async session per sync), suboptimal but viable.
 
@@ -573,7 +573,7 @@ Still applies (deep audit §3.1). Async doesn't fix this. Still v2.0 single-work
 
 **Validated by:** Spike 5.5 (pre-Wave-0, 0.5 day soft blocker). Fallback: Option A (asyncio task + single async session, suboptimal but viable).
 
-**Sunset target v2.1+** — phase-per-session async refactor at `foundation-modules.md §11.0.6 §G`.
+**Sunset target Phase 4+ within v2.0** — phase-per-session async refactor at `foundation-modules.md §11.0.6 §G`.
 
 ### Risk #34 — `init_db()` opens engine in pre-fork orchestrator parent (added 2026-04-11, surfaced by Decision 2 deep-think)
 
@@ -633,7 +633,7 @@ Still applies (deep audit §3.1). Async doesn't fix this. Still v2.0 single-work
 
 ### Risk #42 — Site 2 inventory_list has no cache invalidation (Decision 6 deep-think, LOW — pre-existing)
 
-The `inventory_list` endpoint cache at `inventory.py:1133` has NO invalidation path — data can be stale up to 5 minutes after a GAM sync. Background sync invalidation at `background_sync_service.py:477` deletes only `inventory_tree:v2:{tenant_id}`, NOT `inventory_list:*`. **Pre-existing gap** (same behavior in Flask). Accept as-is for v2.0; add invalidation in v2.1.
+The `inventory_list` endpoint cache at `inventory.py:1133` has NO invalidation path — data can be stale up to 5 minutes after a GAM sync. Background sync invalidation at `background_sync_service.py:477` deletes only `inventory_tree:v2:{tenant_id}`, NOT `inventory_list:*`. **Pre-existing gap** (same behavior in Flask). Accept as-is for Phases 0-3; add invalidation in Phase 4+.
 
 ### Risk #43 — install_app_cache lifespan startup race window (Decision 6, MEDIUM)
 
@@ -666,9 +666,9 @@ Fresh session should:
 4. **Launch 3 parallel opus plan agents:**
    - **Agent A — Async scope audit:** produce a definitive inventory of every file, every function, every test that needs async conversion. Includes the lazy loading audit (Risk #1). Output: file-by-file action list with LOC estimates.
    - **Agent B — 2nd/3rd order deep dive:** for each of the 15 risks above, produce mitigation steps, verification tests, and fallback plans. Output: risk mitigation matrix with pre-Wave-0 spike items flagged.
-   - **Agent C — Plan file updates:** produce exact `old_string`/`new_string` edits for every stale "sync def" or "defer async to v2.1" reference across the 8 plan files. Output: list of Edit operations to apply.
+   - **Agent C — Plan file updates:** produce exact `old_string`/`new_string` edits for every stale "sync def" or "defer async" reference across the 8 plan files. Output: list of Edit operations to apply.
 5. **Apply the plan-file updates** (~50-100 surgical edits)
-6. **Run a pre-Wave-0 spike** on Risk #1 (lazy loading audit) before committing to the absorbed-async v2.0 scope. If the spike reveals the scope is too big, fall back to: v2.0 stays as planned (sync admin) + v2.1 does async separately.
+6. **Run a pre-Wave-0 spike** on Risk #1 (lazy loading audit) before committing to the absorbed-async v2.0 scope. If the spike reveals the scope is too big, fall back to: Phases 0-3 stay as planned (sync admin) + Phase 4+ does async separately.
 7. **Commit the plan updates** and **open Wave 0** with the new scope
 
 ## 7. What NOT to do in the next session
@@ -677,7 +677,7 @@ Fresh session should:
 - Don't implement `test_architecture_admin_sync_db_no_async.py`. That guard is the wrong direction.
 - Don't preserve `run_in_threadpool` wrappers in admin handler bodies for DB work. Once DB is async, they're dead code.
 - Don't keep deep-audit §1.4 Option C text verbatim — Option A is the chosen resolution.
-- Don't treat async SQLAlchemy as "v2.1 follow-on" — it's absorbed into v2.0.
+- Don't treat async SQLAlchemy as a separate release follow-on — it's Phase 4+ within v2.0.
 - Don't delete `run_in_threadpool` imports entirely — they're still needed for truly blocking work (file I/O, CPU-bound calls, third-party sync libraries).
 - Don't forget the pre-Wave-0 lazy loading spike. It's the single most important risk.
 - Don't ship v2.0 without benchmarking async-vs-sync performance on representative admin routes (Risk #10).

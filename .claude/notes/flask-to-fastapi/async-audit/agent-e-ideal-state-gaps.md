@@ -1,6 +1,6 @@
 # Agent E — Ideal-State Gap Audit (2026 FastAPI-Native Design Review)
 
-> **ASYNC DEFERRED TO v2.1 (2026-04-12).** v2.0 uses sync admin handlers. This report contains research for the future v2.1 async SQLAlchemy migration. Do not implement async patterns described here during v2.0.
+> **ASYNC IS PHASE 4+ WITHIN v2.0 (2026-04-14).** Phases 0-3 use sync admin handlers. This report is the Phase 4+ implementation roadmap — all 14 ideal-state gaps (E1-E14) are pulled into v2.0 layered as: E1/E7/E8/E9/E10 into Phase 4a (sync SessionDep + DTOs + structlog), E11/E12/E13/E14 into Phase 4b (testing), E2/E3/E4/E5/E6 completing in Phase 4c (async). Do not implement async patterns from this file during Phases 0-3.
 
 **Date:** 2026-04-11
 **Author:** Claude (Opus 4.6, 1M context)

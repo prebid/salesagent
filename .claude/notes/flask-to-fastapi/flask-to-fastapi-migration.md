@@ -5,9 +5,9 @@
 **Release target:** salesagent v2.0.0 (major version, breaking changes allowed)
 **Related plan file:** `/Users/quantum/.claude/plans/squishy-meandering-marshmallow.md`
 
-> **ASYNC PIVOT REVERSED (2026-04-12) — v2.0 uses SYNC admin handlers.**
+> **ASYNC PIVOT REVERSED (2026-04-12) — v2.0 uses SYNC admin handlers for Phases 0-3.**
 > This file was written before the async reversion and has NOT been fully updated.
-> v2.0 ships with sync `def` admin handlers; async SQLAlchemy is deferred to v2.1.
+> v2.0 ships with sync `def` admin handlers; async SQLAlchemy is deferred to Phase 4+ within v2.0.
 > Decision 6 in this file (line ~65, "Full async SQLAlchemy absorbed into v2.0") is
 > superseded. The authoritative implementation guide is `execution-plan.md`.
 
@@ -42,7 +42,7 @@ The salesagent repo currently runs its Flask-based admin UI **inside** FastAPI v
 
 Flask contributes:
 - **~21,340 LOC** across **30 blueprints** (~232 routes)
-- **72 Jinja2 templates** (`/templates/`) with 134 `url_for(...)` calls, 171 `session.*`/`request.script_root`/`g.*` references
+- **73 Jinja2 templates** (`/templates/`) with 134 `url_for(...)` calls, 171 `session.*`/`request.script_root`/`g.*` references
 - **5 direct and transitive dependencies**: `flask`, `flask-caching`, `flask-socketio`, `waitress`, `a2wsgi`
 - **~21 test files** coupled to Flask (17 integration + 3 admin + miscellaneous)
 - **Flask-specific idioms** throughout: `@require_auth` decorators, `flask.g` writes, `session` thread-local, `url_for('blueprint.endpoint')` namespacing, custom `ProxyFix`/`FlyHeaders` WSGI middlewares, `@app.before_request`/`after_request`/`context_processor` lifecycle hooks
@@ -51,7 +51,7 @@ Flask contributes:
 
 **Why this is worth doing:**
 - Eliminates ~11,000 LOC of boilerplate by using declarative FastAPI patterns
-- Removes ~75 MB from Docker image (Flask + flask-socketio + waitress + a2wsgi). **Note (Decision 9, 2026-04-11):** `flask-caching` is replaced rather than deleted — see §11.7 correction. `psycopg2-binary` + `libpq5` are retained (Docker savings adjust from ~80 MB to ~75 MB) for the Decision 1 sync-session factory, Decision 2 pre-uvicorn health checks, and Decision 9 sync-bridge supporting `background_sync_service.py`. Their full removal is a v2.1+ sunset item.
+- Removes ~75 MB from Docker image (Flask + flask-socketio + waitress + a2wsgi). **Note (Decision 9, 2026-04-11):** `flask-caching` is replaced rather than deleted — see §11.7 correction. `psycopg2-binary` + `libpq5` are retained (Docker savings adjust from ~80 MB to ~75 MB) for the Decision 1 sync-session factory, Decision 2 pre-uvicorn health checks, and Decision 9 sync-bridge supporting `background_sync_service.py`. Their full removal is a Phase 4+ sunset item.
 - Unifies auth/session/middleware across all transports (MCP/A2A/REST/admin share one stack)
 - Eliminates the WSGI↔ASGI bridge overhead
 - Eliminates the scoped_session interleaving latent bug in `src/routes/api_v1.py` as a side effect of the full-async conversion (see async-pivot-checkpoint.md §4 Risk #15)
@@ -68,7 +68,7 @@ Flask contributes:
 3. **Session cookie hard cutover:** one forced re-login at deploy is acceptable.
 4. **URL prefix stays `/admin/`** (bookmarks, docs, runbooks all reference it; zero benefit to moving to root).
 5. **`SESSION_SECRET` env var hard-required, `KeyError` at startup, no `secrets.token_hex()` fallback.** The old dev-mode fallback was a security smell anyway.
-6. **[REVERSED 2026-04-12] Sync SQLAlchemy for admin handlers in v2.0.** v2.0 admin handlers are sync `def` with `with get_db_session() as session:` using the existing `scoped_session` + `Session` infrastructure. Driver stays `psycopg2-binary`. Async SQLAlchemy (`AsyncSession`, `asyncpg`, `SessionDep`) deferred to v2.1 when measured production load justifies it. MCP and A2A handlers remain `async def` unchanged. See `execution-plan.md` for canonical sync patterns.
+6. **[REVERSED 2026-04-12] Sync SQLAlchemy for admin handlers in v2.0.** v2.0 admin handlers are sync `def` with `with get_db_session() as session:` using the existing `scoped_session` + `Session` infrastructure. Driver stays `psycopg2-binary`. Async SQLAlchemy (`AsyncSession`, `asyncpg`, `SessionDep`) deferred to Phase 4+ within v2.0 when measured production load justifies it. MCP and A2A handlers remain `async def` unchanged. See `execution-plan.md` for canonical sync patterns.
 7. **CSRF: roll-your-own Double Submit Cookie (~100 LOC, `src/admin/csrf.py`).** **[SUPERSEDED 2026-04-11]** CSRF strategy changed to Option A — SameSite=Lax + CSRFOriginMiddleware (~70 LOC). See CLAUDE.md blocker 5. ~~No external dep risk, bespoke to our form-post admin UI. See §11.6.~~
 8. **Error-shape split** (refined post AdCP safety audit):
    - **Category 1** (internal admin UI AJAX endpoints called by our own JavaScript — e.g. `change_account_status`, `src/admin/blueprints/api.py` dashboard AJAX, `src/admin/blueprints/format_search.py` format picker, **and `src/adapters/gam_reporting_api.py`** which is admin-session-authed) → native FastAPI `{"detail": "..."}`. We update our own JS in the same PR.
@@ -143,13 +143,13 @@ The first-order audit (§2.7) verified AdCP protocol safety. A subsequent **deep
 
 ### Plan defaults that change as a result
 
-- **[REVERSED 2026-04-12]** ~~Admin handlers are `async def` end-to-end with full async SQLAlchemy.~~ **v2.0 uses sync `def` handlers with `with get_db_session() as session:`.** Async SQLAlchemy deferred to v2.1. See `execution-plan.md` for canonical sync patterns.
+- **[REVERSED 2026-04-12]** ~~Admin handlers are `async def` end-to-end with full async SQLAlchemy.~~ **v2.0 uses sync `def` handlers with `with get_db_session() as session:`.** Async SQLAlchemy deferred to Phase 4+ within v2.0. See `execution-plan.md` for canonical sync patterns.
 - **Middleware order swaps Approximated and CSRF** — Approximated runs before CSRF, not after.
 - **Redirect code changes from 302 to 307** — preserves POST body on external-domain redirect.
 - **`render()` wrapper uses `url_for` exclusively** — no `admin_prefix`/`static_prefix`/`script_root` globals. Handlers pass any pre-resolved base URLs (for JS consumption) via per-render context vars named `js_*_base` (e.g. `js_workflows_base = str(request.url_for('admin_workflows_list_workflows', tenant_id=tenant_id))`). A `_url_for` safe-lookup override in `render()` catches `NoMatchFound` and logs the offending template filename before re-raising.
 - **`APIRouter` construction includes `redirect_slashes=True`** — matches Flask permissive default.
 - **Admin error handler renders `error.html`** — for HTML `Accept` on `/admin/*` paths.
-- **`FLASK_SECRET_KEY` transition becomes dual-read for v2.0** (supersedes user directive #5) — plan originally said hard-required rename, but `scripts/setup-dev.py`, `docker-compose.yml`, `tests/unit/test_setup_dev.py` (9 occurrences), and two docs files all reference the old name. Hard-removing breaks dev workflow and 9 tests. Dual-read `SESSION_SECRET or FLASK_SECRET_KEY` in v2.0, hard-remove in v2.1.
+- **`FLASK_SECRET_KEY` transition becomes dual-read for v2.0** (supersedes user directive #5) — plan originally said hard-required rename, but `scripts/setup-dev.py`, `docker-compose.yml`, `tests/unit/test_setup_dev.py` (9 occurrences), and two docs files all reference the old name. Hard-removing breaks dev workflow and 9 tests. Dual-read `SESSION_SECRET or FLASK_SECRET_KEY` in v2.0, hard-remove in Phase 5.
 
 ### Additional structural guards (9 total, up from the original plan's 2)
 
@@ -172,7 +172,7 @@ Plus two derivative guards:
 15. `test_architecture_a2a_routes_grafted.py` — NEW from §4.8 apps inventory. Asserts `/a2a`, `/.well-known/agent-card.json`, `/agent.json` appear as top-level `Route` objects in `app.routes` (NOT nested inside a `Mount`). Prevents a future refactor that "improves" A2A integration by mounting it as a sub-app and breaks middleware propagation + `_replace_routes()`.
 11. `test_architecture_harness_overrides_isolated.py` — prevent `app.dependency_overrides` leakage across test envs
 
-### Derivative opportunities enabled by the migration (deferred to v2.1)
+### Derivative opportunities enabled by the migration (deferred to Phase 4+ within v2.0)
 
 - **Drop nginx entirely** — the container runs nginx + uvicorn for historical reasons; Fly.io terminates TLS externally and uvicorn has proxy-header support. Dropping nginx saves ~30 MB image size, simplifies the Dockerfile, and removes one restart-loop failure mode. Not in v2.0 scope to keep the migration focused.
 - **Ratchet-migrate REST routes to `Annotated[T, Depends()]` pattern** — `src/routes/api_v1.py` currently uses old-style `= resolve_auth` defaults. Inconsistency with the new admin Annotated pattern breeds confusion. 14 route signatures.
@@ -1890,8 +1890,8 @@ Registered via `app.add_exception_handler(HTTPException, legacy_error_shape_hand
 The "written today" framing pushes toward fewer, bigger, atomic PRs. Eight waves presume backward-compat matters — it doesn't here. But one giant PR (~16,600-18,000 LOC per Agent A scope audit) is unreviewable. Five-to-six waves keep each PR at ~one week of work.
 
 **Wave 0-3** ship the Flask removal + admin FastAPI rewrite (originally the whole scope).
-**Wave 4-5** absorb the async SQLAlchemy migration that the original plan deferred to v2.1 (see §18 and `async-pivot-checkpoint.md`).
-**Mandatory pre-Wave-0 lazy-loading audit spike** — see checkpoint §4 Risk #1. If the spike's outcome demands deferring async, fall back to the original 4-wave plan and push async to v2.1.
+**Wave 4-5** absorb the async SQLAlchemy migration that the original plan deferred to Phase 4+ within v2.0 (see §18 and `async-pivot-checkpoint.md`).
+**Mandatory pre-Wave-0 lazy-loading audit spike** — see checkpoint §4 Risk #1. If the spike's outcome demands deferring async, fall back to the original 4-wave plan and push async to a later phase.
 
 **Flask catch-all stays live until Wave 3 as the migration safety net.**
 
@@ -1992,7 +1992,7 @@ Eight waves imply safety via backward-compat seams — exactly what the user rej
 - `waitress>=3.0.0`
 - `a2wsgi>=1.10.0`
 - `types-waitress` (dev)
-- ~~`psycopg2-binary>=2.9.9`~~ **STALE — RETAINED per Decisions 1 (Path B sync factory), 2 (pre-fork orchestrator), 9 (sync-bridge). `asyncpg` added ALONGSIDE, not replacing. Removal deferred to v2.1+.**
+- ~~`psycopg2-binary>=2.9.9`~~ **STALE — RETAINED per Decisions 1 (Path B sync factory), 2 (pre-fork orchestrator), 9 (sync-bridge). `asyncpg` added ALONGSIDE, not replacing. Removal deferred to Phase 4+ within v2.0.**
 - ~~`types-psycopg2>=2.9.21.20251012`~~ **STALE — RETAINED per above.** Both stay in both dev-dep blocks.
 
 **ADDED:**
@@ -2071,7 +2071,7 @@ Eight waves imply safety via backward-compat seams — exactly what the user rej
 ## 17. All 15 Debatable Surfaces (resolved + counterarguments)
 
 1. **Module layout: `src/admin/` (chosen) vs `src/web/admin/` vs `src/routes/admin/`** — `src/web/admin/` signals presentation layer; `src/routes/admin/` mirrors REST. Counter: both cause import churn for marginal gain. **Chosen: keep `src/admin/`, rewrite contents.**
-2. **Sync vs async SQLAlchemy** — async unlocks `async with` UoW natively. Counter: touches 100+ files, triples scope. **Pivoted 2026-04-11: full async absorbed into v2.0.** Rationale: a greenfield FastAPI 2026 team writes fully async code end-to-end; the sync+`run_in_threadpool` compromise was a scope-reduction hack; going fully async eliminates the v2.1 async follow-on entirely and fixes the pre-existing `src/routes/api_v1.py` scoped_session latent bug as a side effect. See `async-pivot-checkpoint.md` §§1-5 for the full rationale, 2nd/3rd order risks, and revised scope (~16,600-18,000 LOC per Agent A scope audit, 5-6 waves, pre-Wave-0 lazy-loading audit required).
+2. **Sync vs async SQLAlchemy** — async unlocks `async with` UoW natively. Counter: touches 100+ files, triples scope. **Pivoted 2026-04-11: full async absorbed into v2.0.** Rationale: a greenfield FastAPI 2026 team writes fully async code end-to-end; the sync+`run_in_threadpool` compromise was a scope-reduction hack; going fully async eliminates the async follow-on entirely and fixes the pre-existing `src/routes/api_v1.py` scoped_session latent bug as a side effect. See `async-pivot-checkpoint.md` §§1-5 for the full rationale, 2nd/3rd order risks, and revised scope (~16,600-18,000 LOC per Agent A scope audit, 5-6 waves, pre-Wave-0 lazy-loading audit required).
 3. ~~**CSRF library**~~ **RESOLVED → roll-your-own Double Submit Cookie (~100 LOC).** Zero external dep.
 4. **`SessionMiddleware` cookie vs Redis server-side** — Redis if payloads grow. Counter: payloads stay under 4KB. **Chosen: signed cookies.**
 5. **`BaseHTTPMiddleware` vs pure ASGI** — `BaseHTTPMiddleware` easier but Starlette #1729. **Chosen: pure ASGI.**
@@ -2090,7 +2090,7 @@ Eight waves imply safety via backward-compat seams — exactly what the user rej
 
 ## 18. Async SQLAlchemy in v2.0 Waves 4-5 (absorbed, not deferred)
 
-**Pivoted 2026-04-11** — what was originally a v2.1 follow-on is now absorbed into v2.0 as Waves 4-5. See `async-pivot-checkpoint.md` for the full target state, risk register, and revised scope estimate.
+**Pivoted 2026-04-11** — what was originally a separate follow-on is now absorbed into v2.0 as Phase 4+ (Waves 4-5). See `async-pivot-checkpoint.md` for the full target state, risk register, and revised scope estimate.
 
 **Scope (per checkpoint §3):**
 - Convert `create_engine` → `create_async_engine` in `src/core/database/database_session.py`
@@ -2106,7 +2106,7 @@ Eight waves imply safety via backward-compat seams — exactly what the user rej
 
 **Why absorbed, not separable:** the original "separable" argument assumed a sync `def` admin-handler seam with explicit `run_in_threadpool` calls. Under the pivot, that seam never exists — admin handlers go straight to async, and extracting sync UoW call-sites would be a second refactor on the same files. Absorbing the work means one migration, one branch, one release.
 
-**Pre-Wave-0 spike (MANDATORY):** run the lazy-loading audit (checkpoint §4 Risk #1) before committing to the Wave 4-5 scope. If the audit reveals the scope is untenable (hundreds of out-of-scope relationship accesses with no clean fix), fall back to Option C: v2.0 as originally planned with sync admin + v2.1 does async separately.
+**Pre-Wave-0 spike (MANDATORY):** run the lazy-loading audit (checkpoint §4 Risk #1) before committing to the Wave 4-5 scope. If the audit reveals the scope is untenable (hundreds of out-of-scope relationship accesses with no clean fix), fall back to Option C: Phases 0-3 as originally planned with sync admin + Phase 4+ does async separately.
 
 ---
 
@@ -2318,6 +2318,6 @@ Research and design was gathered during a single Claude Code session on 2026-04-
 
 **User decisions gathered via 2 rounds of AskUserQuestion:**
 - Template strategy (Option B), CSRF (roll-your-own), URL prefix (`/admin/`), secret handling (hard-required)
-- ~~Async DB (separate v2.1 PR)~~ **PIVOTED 2026-04-11: async DB absorbed into v2.0 Waves 4-5 per `async-pivot-checkpoint.md`.** Error-shape split (category 1 native / category 2 compat) — unchanged.
+- ~~Async DB (separate PR)~~ **PIVOTED 2026-04-11: async DB absorbed into v2.0 Phase 4+ (Waves 4-5) per `async-pivot-checkpoint.md`.** Error-shape split (category 1 native / category 2 compat) — unchanged.
 
 **This document is canonical for v2.0.0 Flask → FastAPI migration planning.** When a future session needs to revisit this work, start here, then consult the plan file at `/Users/quantum/.claude/plans/squishy-meandering-marshmallow.md` for the latest snapshot.

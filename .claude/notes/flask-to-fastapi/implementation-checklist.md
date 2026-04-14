@@ -3,19 +3,18 @@
 **Status:** SOURCE OF TRUTH for "am I ready to ship Wave N?"
 **Target release:** salesagent v2.0.0
 **Feature branch:** `feat/v2.0.0-flask-to-fastapi`
-**Last updated:** 2026-04-12 (async pivot reversed — v2.0 ships sync)
+**Last updated:** 2026-04-14 (v2.0 includes everything: sync-first Phases 0-3, async Phase 4+)
 
-> **ASYNC PIVOT REVERSED (2026-04-12)**
+> **SYNC-FIRST LAYERING (2026-04-14)**
 >
-> v2.0 ships with **sync `def` admin handlers** and sync SQLAlchemy. The April 11
-> async pivot (Option A) was reversed after cost-benefit analysis showed marginal
-> benefit at current scale. Async SQLAlchemy is deferred to v2.1.
+> v2.0 ships Phases 0-3 with **sync `def` admin handlers** and sync SQLAlchemy.
+> Async SQLAlchemy is Phase 4+ within v2.0 (not a separate v2.1 release).
 >
 > **Sections in this file that still contain async language:**
-> - §1.2 Decisions 1, 3, 7, 9 — describe async-era work; tagged MOOT or DEFERRED
-> - §2 Blocker 4 — describes async conversion; entire section is DEFERRED TO v2.1
-> - §4 Wave 4 and Wave 5 — async conversion scope; DEFERRED TO v2.1
-> - §3.5 items tagged `[DEFERRED v2.1]` — async-only findings
+> - §1.2 Decisions 1, 3, 7, 9 — describe async-era work; tagged `[Phase 4+]`
+> - §2 Blocker 4 — describes async conversion; entire section is DEFERRED TO Phase 4+
+> - §4 Wave 4 and Wave 5 — async conversion scope; DEFERRED TO Phase 4+
+> - §3.5 items tagged `[Phase 4+]` — async-only findings
 >
 > **For implementation, read `execution-plan.md` (sync, 7 phases).** This checklist
 > is for verification tracking.
@@ -54,7 +53,7 @@ Every item references the companion doc where full detail lives. Tick every box 
 - [ ] `SESSION_SECRET` env var is set in staging secret store
 - [ ] `SESSION_SECRET` env var is set in production secret store
 - [ ] `SESSION_SECRET` env var is set in test/CI secret store
-- [ ] **[DEFERRED v2.1]** `DATABASE_URL` env var format compatible with asyncpg driver rewrite (staging + prod + test): `postgresql://...` gets rewritten to `postgresql+asyncpg://...` at engine construction — verified — pivoted 2026-04-11
+- [ ] **[Phase 4+]** `DATABASE_URL` env var format compatible with asyncpg driver rewrite (staging + prod + test): `postgresql://...` gets rewritten to `postgresql+asyncpg://...` at engine construction — verified — pivoted 2026-04-11
 - [ ] `SESSION_SECRET` documented in `.env.example`
 - [ ] `SESSION_SECRET` documented in `docs/deployment/environment-variables.md`
 - [ ] OAuth redirect URIs currently registered in Google Cloud Console enumerated and documented in a migration runbook — at minimum:
@@ -70,18 +69,18 @@ Every item references the companion doc where full detail lives. Tick every box 
 - [ ] Rollback window documented for each wave (see Section 5)
 - [ ] Staging environment matches production topology:
   - [ ] Fly.io proxy header behavior verified (`X-Forwarded-*` present)
-  - [ ] nginx config unchanged during v2.0 (nginx removal deferred to v2.1)
+  - [ ] nginx config unchanged during Phases 0-3 (nginx removal deferred to Phase 4+)
   - [ ] `ADCP_TESTING=true` gating for `/_internal/reset-db-pool` confirmed
 - [ ] Pre-Wave-0 `main` branch passes `make quality` + `tox -e integration` + `tox -e bdd`
 - [ ] Pre-Wave-0 `main` has `a2wsgi` Flask mount still at `src/app.py:299-304` (safety net)
 - [ ] v1.99.0 git tag plan documented (last-known-good Flask-era release, tagged before Wave 3 merges)
 - [ ] **Pre-Wave-0 lazy-loading audit spike completed and approved (async pivot 2026-04-11)** — enumerates every `relationship()` definition in `src/core/database/models/` and classifies every access site as safe (in-scope), fixable (eager-load), or requires-rewrite. This audit gates the Wave 4-5 async absorption scope. If the audit reveals the scope is untenable, fall back to Option C (sync def admin) and defer async to v2.1. See `async-pivot-checkpoint.md` §4 Risk #1 for the full audit procedure.
-- [ ] **[DEFERRED v2.1]** **Pre-Wave-0 async driver compatibility spike completed (async pivot 2026-04-11)** — run the full test suite on a staging branch with `asyncpg` instead of `psycopg2-binary` to catch driver-compat surprises (JSONB codec, UUID/Interval types, LISTEN/NOTIFY API drift, COPY bulk imports). Estimated 1-2 days of debugging. See checkpoint §4 Risk #2.
-- [ ] **[DEFERRED v2.1]** **Pre-Wave-0 Spike 4.5 — ContextManager refactor smoke test (Decision 7, 2026-04-11)** — rewrite `src/core/context_manager.py` to stateless async module functions, delete `DatabaseManager` from `database_session.py`, convert the smallest caller (`src/core/tools/creatives/_workflow.py::_create_sync_workflow_steps`) end-to-end, update `tests/harness/media_buy_update.py::EXTERNAL_PATCHES`, delete 18 lines of singleton-reset hacks in `conftest_db.py` + `integration_db.py` + `test_gam_lifecycle.py`. Pass: LOC <400 AND files <15 AND test patches <50 AND error-path composition test passes. Soft blocker (fallback: dedicated Wave 4a sub-phase). See `async-pivot-checkpoint.md` §4 Risk #20 + `CLAUDE.md` Decision 7.
-- [ ] **[DEFERRED v2.1]** **Pre-Wave-0 Spike 5.5 — Two-engine coexistence (Decision 9, 2026-04-11)** — create MVP `src/services/background_sync_db.py` (~200 LOC separate sync psycopg2 engine) and run 4 test cases at `tests/driver_compat/test_sync_bridge_coexistence.py`: (a) lazy-init + dispose, (b) MVCC bidirectional visibility, (c) 5 concurrent async requests + 1 sync thread no deadlock, (d) post-dispose connection leaks <=1. Also validates the Wave 3 flask-caching correction (3 consumer sites at inventory.py:874, :1133, background_sync_service.py:472). Soft blocker (fallback: Option A asyncio task). See `async-pivot-checkpoint.md` §4 Risk #7.5 + `CLAUDE.md` Decision 9.
+- [ ] **[Phase 4+]** **Pre-Wave-0 async driver compatibility spike completed (async pivot 2026-04-11)** — run the full test suite on a staging branch with `asyncpg` instead of `psycopg2-binary` to catch driver-compat surprises (JSONB codec, UUID/Interval types, LISTEN/NOTIFY API drift, COPY bulk imports). Estimated 1-2 days of debugging. See checkpoint §4 Risk #2.
+- [ ] **[Phase 4+]** **Pre-Wave-0 Spike 4.5 — ContextManager refactor smoke test (Decision 7, 2026-04-11)** — rewrite `src/core/context_manager.py` to stateless async module functions, delete `DatabaseManager` from `database_session.py`, convert the smallest caller (`src/core/tools/creatives/_workflow.py::_create_sync_workflow_steps`) end-to-end, update `tests/harness/media_buy_update.py::EXTERNAL_PATCHES`, delete 18 lines of singleton-reset hacks in `conftest_db.py` + `integration_db.py` + `test_gam_lifecycle.py`. Pass: LOC <400 AND files <15 AND test patches <50 AND error-path composition test passes. Soft blocker (fallback: dedicated Wave 4a sub-phase). See `async-pivot-checkpoint.md` §4 Risk #20 + `CLAUDE.md` Decision 7.
+- [ ] **[Phase 4+]** **Pre-Wave-0 Spike 5.5 — Two-engine coexistence (Decision 9, 2026-04-11)** — create MVP `src/services/background_sync_db.py` (~200 LOC separate sync psycopg2 engine) and run 4 test cases at `tests/driver_compat/test_sync_bridge_coexistence.py`: (a) lazy-init + dispose, (b) MVCC bidirectional visibility, (c) 5 concurrent async requests + 1 sync thread no deadlock, (d) post-dispose connection leaks <=1. Also validates the Wave 3 flask-caching correction (3 consumer sites at inventory.py:874, :1133, background_sync_service.py:472). Soft blocker (fallback: Option A asyncio task). See `async-pivot-checkpoint.md` §4 Risk #7.5 + `CLAUDE.md` Decision 9.
 - [ ] **Agent F pre-Wave-0 hard gate items completed (non-code surface inventory, corrected 2026-04-11):**
-  - [ ] **`psycopg2-binary` RETAINED** — partial reversal of Agent F F1.1.1 per Decisions 1 (Path B sync factory), 2 (pre-uvicorn health checks), 9 (sync-bridge). **[DEFERRED v2.1 — asyncpg not in v2.0]** `asyncpg>=0.30.0,<0.32` added alongside (not replacing). `types-psycopg2` also retained. **Fallback:** `psycopg[binary,pool]>=3.2.0` if Spike 2 (driver compat) fails — see `CLAUDE.md` pre-Wave-0 spike sequence.
-  - [ ] **[DEFERRED v2.1 — not needed for sync admin tests]** `[tool.pytest.ini_options]` added to `pyproject.toml` with `asyncio_mode = "auto"` (F1.7.1, F8.2.1)
+  - [ ] **`psycopg2-binary` RETAINED** — partial reversal of Agent F F1.1.1 per Decisions 1 (Path B sync factory), 2 (pre-uvicorn health checks), 9 (sync-bridge). **[Phase 4+ — asyncpg not in Phases 0-3]** `asyncpg>=0.30.0,<0.32` added alongside (not replacing). `types-psycopg2` also retained. **Fallback:** `psycopg[binary,pool]>=3.2.0` if Spike 2 (driver compat) fails — see `CLAUDE.md` pre-Wave-0 spike sequence.
+  - [ ] **[Phase 4+ — not needed for sync admin tests]** `[tool.pytest.ini_options]` added to `pyproject.toml` with `asyncio_mode = "auto"` (F1.7.1, F8.2.1)
   - [ ] `DATABASE_URL` rewriter (`sslmode` → `ssl`) landed (F1.5.1)
   - [ ] **`DatabaseConnection` KEPT** (partial reversal of F1.4.1) per Audit 06 Decision 2 OVERRULE, REFINED 2026-04-11. **Real rationale: fork safety, NOT loop collision.** `run_all_services.py` is PID 1 sync orchestrator that forks uvicorn into a child subprocess via `subprocess.Popen` at `:231`, so parent/child have independent Python interpreters. Using SQLAlchemy `get_sync_db_session()` here would duplicate pooled asyncpg/psycopg connections into the child fork → PG socket corruption (canonical SQLAlchemy fork-safety bug). Raw `psycopg2.connect()` + close-before-fork is the only safe shape.
   - [ ] **Decision 2 corrected caller list (2026-04-11):** `scripts/deploy/run_all_services.py:84,135` + `examples/upstream_quickstart.py:137`. **NOT** `init_database.py`/`init_database_ci.py` — those use SQLAlchemy `get_db_session()`, were misattributed in original Audit 06 ledger and Agent F §1.4.
@@ -97,21 +96,21 @@ Every item references the companion doc where full detail lives. Tick every box 
   - [ ] Dead `test-migrations` pre-commit hook removed (F2.3.1)
   - [ ] 3 new structural guards added (F6.2.1, F6.2.5, F6.2.6)
   - [ ] New docs `async-debugging.md` + `async-cookbook.md` drafted (F5.3.1, F5.3.2)
-  - [ ] **[DEFERRED v2.1]** Full `asyncpg` wheel availability verified for glibc + macOS (F1.1.3)
+  - [ ] **[Phase 4+]** Full `asyncpg` wheel availability verified for glibc + macOS (F1.1.3)
   - [ ] Duplication baseline snapshotted at Wave 4 start (F7.4.1)
 
 ### 1.2 Architectural decisions recorded in the migration plan
 
-- [ ] **[REVERSED 2026-04-12]** **Admin handlers `async def` end-to-end with full async SQLAlchemy** — pivoted 2026-04-11 from Option C (sync def) to Option A (full async absorbed into v2.0 Waves 4-5) — per deep audit blocker #4 (rewritten); documented in `flask-to-fastapi-migration.md` §2.8, `async-pivot-checkpoint.md`, and full new scope in §18 of the migration doc. **v2.0 uses sync `def`. Async deferred to v2.1.**
+- [ ] **[REVERSED 2026-04-12 — Now Phase 4+ in v2.0]** **Admin handlers `async def` end-to-end with full async SQLAlchemy** — pivoted 2026-04-11 from Option C (sync def) to Option A (full async absorbed into v2.0 Waves 4-5) — per deep audit blocker #4 (rewritten); documented in `flask-to-fastapi-migration.md` §2.8, `async-pivot-checkpoint.md`, and full new scope in §18 of the migration doc. **v2.0 uses sync `def` in Phases 0-3. Async deferred to Phase 4+ within v2.0.**
 - [ ] **Middleware order: Approximated BEFORE CSRF** (corrected) — per deep audit blocker #5; documented in `flask-to-fastapi-migration.md` §2.8 and §10.2
 - [ ] **Redirect status code: 307** (not 302) — preserves POST body per RFC 7231
-- [ ] **`FLASK_SECRET_KEY` transition: dual-read during v2.0, hard-remove in v2.1** (supersedes original user directive #5) — documented in `flask-to-fastapi-deep-audit.md` §3.4
+- [ ] **`FLASK_SECRET_KEY` transition: dual-read during Phases 0-3, hard-remove in Phase 4+** (supersedes original user directive #5) — documented in `flask-to-fastapi-deep-audit.md` §3.4
 - [ ] **Error-shape split decided:** Category 1 native `{"detail": ...}`, Category 2 legacy `{"success": false, "error": ...}` via scoped handler — documented in `flask-to-fastapi-migration.md` §2 directive #8
-- [ ] **[DEFERRED v2.1]** **Decision 1 (adapter Path B, 2026-04-11):** adapter methods stay sync `def`; 18 call sites in `src/core/tools/*.py` + 1 in `src/admin/blueprints/operations.py:252` wrap in `await run_in_threadpool(...)`. `src/core/database/database_session.py` exports `get_sync_db_session()` alongside async `get_db_session()` (dual session factory). `AuditLogger.log_operation` splits into `_log_operation_sync` (internal) + async public wrapper. `anyio.to_thread.current_default_thread_limiter().total_tokens = 80` at lifespan startup. Structural guard `test_architecture_adapter_calls_wrapped_in_threadpool.py`. Full implementation reference: `flask-to-fastapi-foundation-modules.md` §11.14. Full target state: `async-pivot-checkpoint.md` §3 "Adapters (Decision 1 Path B)".
-- [ ] **[DEFERRED v2.1]** **Decision 7 (ContextManager refactor, 2026-04-11):** delete `ContextManager` class + `DatabaseManager` entirely. 12 public methods become stateless `async def` module functions taking `session: AsyncSession` as first parameter. 7 production callers migrate (incl. dead `main.py:166` + module-load side effect in `mcp_context_wrapper.py:345` + `mock_ad_server.py threading.Thread → asyncio.create_task`). ~50 test patches, 20 collapsible via `tests/harness/media_buy_update.py::EXTERNAL_PATCHES` update. Validated by Spike 4.5. Structural guard `test_architecture_no_singleton_session.py`. Error-path composition gotcha: use SEPARATE `async with session_scope()` for error-logging writes (outer scope rolls back on raise). Full target state: `async-pivot-checkpoint.md` §3 "ContextManager refactor".
-- [ ] **[DEFERRED v2.1]** **Decision 9 (background_sync sync-bridge, 2026-04-11):** new `src/services/background_sync_db.py` module with separate sync psycopg2 engine (pool 2+3, statement_timeout=600s, `application_name='adcp-salesagent-sync-bridge'`). Background threads stay sync. `psycopg2-binary` + `libpq5` + `libpq-dev` all retained in `pyproject.toml` + `Dockerfile` (partial reversal of Agent F F1.1.1/F1.2.1). Wave 3 flask-caching correction bundled: 3 consumer sites (inventory.py:874, :1133, background_sync_service.py:472), SimpleAppCache replacement required before deletion, closes `from flask import current_app` ImportError at line 472. Validated by Spike 5.5. Structural guard `test_architecture_sync_bridge_scope.py` with ratcheting allowlist. Sunset v2.1+. Full target state: `async-pivot-checkpoint.md` §3 "Background sync sync-bridge".
-- [ ] **[DEFERRED v2.1]** **Decision 3 (factory-boy async shim, refined 2026-04-11):** custom `AsyncSQLAlchemyModelFactory` overrides `_save` (not `_create`), `sqlalchemy_session_persistence = None`, `session.add(instance)` directly (no `sync_session.add`), NO `flush()` call. 3 bugs fixed from Audit 06 recipe. Wave 4b-4c hard cliff: all 166 integration tests must flip async BEFORE factory base classes flip. New Spike 4.25 (0.5 day, soft blocker). 3 structural guards: `test_architecture_factory_inherits_async_base.py`, `test_architecture_factory_no_post_generation.py`, `test_architecture_factory_in_all_factories.py`. Full recipe: `foundation-modules.md` §11.13.1 (D).
-- [ ] **Decision 4 (queries.py convert-and-prune, refined 2026-04-11):** 6 functions (not 7), zero production callers, 3 dead functions → delete + allowlist cleanup. 3 live functions → async conversion. Test file `test_creative_review_model.py` converts to async. Net: ~−100 LOC. Move to `CreativeRepository` deferred to v2.1 (Option 4B).
+- [ ] **[Phase 4+]** **Decision 1 (adapter Path B, 2026-04-11):** adapter methods stay sync `def`; 18 call sites in `src/core/tools/*.py` + 1 in `src/admin/blueprints/operations.py:252` wrap in `await run_in_threadpool(...)`. `src/core/database/database_session.py` exports `get_sync_db_session()` alongside async `get_db_session()` (dual session factory). `AuditLogger.log_operation` splits into `_log_operation_sync` (internal) + async public wrapper. `anyio.to_thread.current_default_thread_limiter().total_tokens = 80` at lifespan startup. Structural guard `test_architecture_adapter_calls_wrapped_in_threadpool.py`. Full implementation reference: `flask-to-fastapi-foundation-modules.md` §11.14. Full target state: `async-pivot-checkpoint.md` §3 "Adapters (Decision 1 Path B)".
+- [ ] **[Phase 4+]** **Decision 7 (ContextManager refactor, 2026-04-11):** delete `ContextManager` class + `DatabaseManager` entirely. 12 public methods become stateless `async def` module functions taking `session: AsyncSession` as first parameter. 7 production callers migrate (incl. dead `main.py:166` + module-load side effect in `mcp_context_wrapper.py:345` + `mock_ad_server.py threading.Thread → asyncio.create_task`). ~50 test patches, 20 collapsible via `tests/harness/media_buy_update.py::EXTERNAL_PATCHES` update. Validated by Spike 4.5. Structural guard `test_architecture_no_singleton_session.py`. Error-path composition gotcha: use SEPARATE `async with session_scope()` for error-logging writes (outer scope rolls back on raise). Full target state: `async-pivot-checkpoint.md` §3 "ContextManager refactor".
+- [ ] **[Phase 4+]** **Decision 9 (background_sync sync-bridge, 2026-04-11):** new `src/services/background_sync_db.py` module with separate sync psycopg2 engine (pool 2+3, statement_timeout=600s, `application_name='adcp-salesagent-sync-bridge'`). Background threads stay sync. `psycopg2-binary` + `libpq5` + `libpq-dev` all retained in `pyproject.toml` + `Dockerfile` (partial reversal of Agent F F1.1.1/F1.2.1). Wave 3 flask-caching correction bundled: 3 consumer sites (inventory.py:874, :1133, background_sync_service.py:472), SimpleAppCache replacement required before deletion, closes `from flask import current_app` ImportError at line 472. Validated by Spike 5.5. Structural guard `test_architecture_sync_bridge_scope.py` with ratcheting allowlist. Sunset v2.1+. Full target state: `async-pivot-checkpoint.md` §3 "Background sync sync-bridge".
+- [ ] **[Phase 4+]** **Decision 3 (factory-boy async shim, refined 2026-04-11):** custom `AsyncSQLAlchemyModelFactory` overrides `_save` (not `_create`), `sqlalchemy_session_persistence = None`, `session.add(instance)` directly (no `sync_session.add`), NO `flush()` call. 3 bugs fixed from Audit 06 recipe. Wave 4b-4c hard cliff: all 166 integration tests must flip async BEFORE factory base classes flip. New Spike 4.25 (0.5 day, soft blocker). 3 structural guards: `test_architecture_factory_inherits_async_base.py`, `test_architecture_factory_no_post_generation.py`, `test_architecture_factory_in_all_factories.py`. Full recipe: `foundation-modules.md` §11.13.1 (D).
+- [ ] **Decision 4 (queries.py convert-and-prune, refined 2026-04-11):** 6 functions (not 7), zero production callers, 3 dead functions → delete + allowlist cleanup. 3 live functions → async conversion. Test file `test_creative_review_model.py` converts to async. Net: ~−100 LOC. Move to `CreativeRepository` deferred to Phase 4+ within v2.0 (Option 4B).
 - [ ] **Decision 5 (database_schema.py + product_pricing.py DELETE, refined 2026-04-11):** `database_schema.py` confirmed orphan → delete Wave 5. `product_pricing.py` has 1 caller already eager-loading, inspect-guard defeated by unconditional log at line 43 → DELETE entirely in Wave 4, inline conversion at single caller as `AdminPricingOptionView` Pydantic DTO. Supersedes Audit 06 SUBSTITUTE (RuntimeError prescription was technically ineffective).
 - [ ] **Decision 6 (flask-caching → SimpleAppCache, refined 2026-04-11):** ~90 LOC module with `cachetools.TTLCache(maxsize=1024, ttl=300)` + `threading.RLock` + `_NullAppCache` fallback + `CacheBackend` Protocol. Both inventory sites rewritten to cache dicts not Flask Response objects. `cache_key`+`cache_time_key` folded into single 2-tuple entry. 12-step strict migration order in Wave 3 PR. 2 structural guards. Full recipe: `foundation-modules.md` §11.15.
 - [ ] **Decision 8 (SSE DELETE, 2026-04-11):** `/tenant/{id}/events` SSE route is orphan code — template says "use polling", zero EventSource consumers. DELETE route + generator + rate-limit state + HEAD probe in Wave 4. Fix `api_mode=False → True` on surviving `/activity` JSON poll route. −170 LOC, −1 pip dep (`sse_starlette`). Structural guard `test_architecture_no_sse_handlers.py`.
@@ -154,25 +153,25 @@ Full detail in `flask-to-fastapi-deep-audit.md` §1.
   - [ ] `src/app.py::adcp_error_handler` is Accept-aware — if `request.url.path.startswith("/admin")` AND `"text/html" in accept`, render `error.html` via `src/admin/templating.templates`
   - [ ] `templates/error.html` (or `src/admin/templates/error.html` after Wave 3 move) exists, extends `base.html`, renders error message + back link
   - [ ] `tests/integration/test_admin_error_page.py` exists — forces `AdCPValidationError` from inside an admin route, asserts HTML response (not JSON), asserts body contains the error message
-- [ ] **Blocker 4: ~~Async event-loop session interleaving~~ DEFERRED TO v2.1 (async pivot reversed 2026-04-12). v2.0 uses sync `def` handlers — scoped_session thread-local identity works correctly in FastAPI's threadpool. The entire Blocker 4 checklist below is v2.1 scope.**
+- [ ] **Blocker 4: ~~Async event-loop session interleaving~~ DEFERRED TO Phase 4+ (sync-first layering, 2026-04-12). v2.0 Phases 0-3 use sync `def` handlers — scoped_session thread-local identity works correctly in FastAPI's threadpool. The entire Blocker 4 checklist below is Phase 4+ scope.**
   - [ ] Pre-Wave-0 lazy-loading audit spike completed and approved (Risk #1 in `async-pivot-checkpoint.md` §4) — enumerates every `relationship()` access site and classifies as safe / eager-loadable / requires-rewrite
   - [ ] `src/core/database/database_session.py` converted: `create_engine` → `create_async_engine`, `scoped_session(sessionmaker(...))` → `async_sessionmaker(_engine, class_=AsyncSession, expire_on_commit=False)`
   - [ ] `get_db_session()` is an `@asynccontextmanager` yielding `AsyncSession`
-  - [ ] Driver addition: `asyncpg>=0.30.0,<0.32` added alongside (NOT replacing) `psycopg2-binary` + `types-psycopg2` in `pyproject.toml` — psycopg2 RETAINED per Decisions 1 (Path B sync adapter factory), 2 (pre-fork orchestrator health check), and 9 (sync-bridge for background sync). Removal deferred to v2.1+.
+  - [ ] Driver addition: `asyncpg>=0.30.0,<0.32` added alongside (NOT replacing) `psycopg2-binary` + `types-psycopg2` in `pyproject.toml` — psycopg2 RETAINED per Decisions 1 (Path B sync adapter factory), 2 (pre-fork orchestrator health check), and 9 (sync-bridge for background sync). Removal deferred to Phase 4+ within v2.0+.
   - [ ] ~~`alembic/env.py` uses async adapter~~ **ELIMINATED per DB-4: `env.py` stays sync with psycopg2** — see Section 1.1 Spike 6 correction above. `postgresql+asyncpg://` URL rewriting is applied ONLY at async engine construction in `database_session.py`, NOT in Alembic.
   - [ ] All repository classes use `async def` methods with `(await session.execute(select(...))).scalars().first()` pattern
   - [ ] All UoW classes implement `async def __aenter__` / `async def __aexit__` — OR deleted entirely under the Agent E idiom upgrade (FastAPI DI request-scoped session IS the unit of work; see `async-pivot-checkpoint.md` §3)
-  - [ ] **[DEFERRED v2.1]** All admin router handlers are `async def` with `async with get_db_session()` / `await` DB calls (or, preferred, `session: SessionDep` via `Depends(get_session)`)
+  - [ ] **[Phase 4+]** All admin router handlers are `async def` with `async with get_db_session()` / `await` DB calls (or, preferred, `session: SessionDep` via `Depends(get_session)`)
   - [ ] All `src/core/tools/*.py` `_impl` functions are `async def` (some already are)
   - [ ] `tests/harness/_base.py::IntegrationEnv` uses `async def __aenter__` / `async def __aexit__`
   - [ ] `factory_boy` adapter — one of the three options in `async-pivot-checkpoint.md` §3 chosen and implemented
   - [ ] All integration tests converted to `async def` + `@pytest.mark.asyncio` (or anyio equivalent)
   - [ ] `run_in_threadpool` used ONLY for file I/O, CPU-bound work, and sync third-party libraries — never for DB access
-  - [ ] **[DEFERRED v2.1]** `tests/unit/test_architecture_admin_routes_async.py` exists and is green — AST-scans `src/admin/routers/*.py` and asserts every `@router.<method>(...)` handler is `async def`
+  - [ ] **[Phase 4+]** `tests/unit/test_architecture_admin_routes_async.py` exists and is green — AST-scans `src/admin/routers/*.py` and asserts every `@router.<method>(...)` handler is `async def`
   - [ ] `tests/unit/test_architecture_admin_async_db_access.py` exists and is green — AST-scans admin routers and asserts DB call-sites use `async with get_db_session()` + `await session.execute(...)` rather than sync `with` or `run_in_threadpool(_sync_fetch)`
   - [ ] The stale `tests/unit/test_architecture_admin_sync_db_no_async.py` is NOT created (wrong direction under the pivot)
-  - [ ] **[DEFERRED v2.1]** Foundation module examples in `flask-to-fastapi-foundation-modules.md` updated to `async def` + async DB patterns
-  - [ ] **[DEFERRED v2.1]** Worked examples in `flask-to-fastapi-worked-examples.md` updated to `async def` + async DB patterns (OAuth / favicon upload examples preserve their async outer signatures but drop `run_in_threadpool` wrappers around DB helper calls; ~~SSE example~~ **STALE — D8 DELETE: SSE worked example is moot, replace with JSON poll `/activity` example**)
+  - [ ] **[Phase 4+]** Foundation module examples in `flask-to-fastapi-foundation-modules.md` updated to `async def` + async DB patterns
+  - [ ] **[Phase 4+]** Worked examples in `flask-to-fastapi-worked-examples.md` updated to `async def` + async DB patterns (OAuth / favicon upload examples preserve their async outer signatures but drop `run_in_threadpool` wrappers around DB helper calls; ~~SSE example~~ **STALE — D8 DELETE: SSE worked example is moot, replace with JSON poll `/activity` example**)
   - [ ] Main overview §13 `accounts.py` examples updated to `async def`
   - [ ] Connection pool `pool_size` bumped to match or exceed pre-migration sync threadpool capacity (Risk #6)
   - [ ] `created_at` / `updated_at` post-commit access audited (Risk #5 — `expire_on_commit=False` consequence)
@@ -225,39 +224,39 @@ Three rounds of parallel Opus subagent verification (14 agents total) audited th
 
 ### 3.5.1 Silent breaking bugs (pass all tests, break production)
 
-- [ ] **[DEFERRED v2.1]** **SB-1 [CRITICAL, Wave 4b]: Product `@property` methods trigger lazy loads on 3 relationships.** `src/core/database/models.py:341-489` — five `@property` methods (`effective_format_ids`, `effective_properties`, `effective_property_tags`, `effective_implementation_config`, `is_gam_tenant`) access `self.inventory_profile`, `self.tenant`, `self.adapter_config`. `ProductRepository.list_all()` eagerly loads `tenant` and `pricing_options` but NOT `inventory_profile`. Production paths raise `MissingGreenlet`. **Fix:** Add `selectinload(Product.inventory_profile)` to all Product repository methods whose callers access these properties. Add to Spike 1 acceptance criteria: every Product `@property` must be exercised against every repo method.
+- [ ] **[Phase 4+]** **SB-1 [CRITICAL, Wave 4b]: Product `@property` methods trigger lazy loads on 3 relationships.** `src/core/database/models.py:341-489` — five `@property` methods (`effective_format_ids`, `effective_properties`, `effective_property_tags`, `effective_implementation_config`, `is_gam_tenant`) access `self.inventory_profile`, `self.tenant`, `self.adapter_config`. `ProductRepository.list_all()` eagerly loads `tenant` and `pricing_options` but NOT `inventory_profile`. Production paths raise `MissingGreenlet`. **Fix:** Add `selectinload(Product.inventory_profile)` to all Product repository methods whose callers access these properties. Add to Spike 1 acceptance criteria: every Product `@property` must be exercised against every repo method.
 - [ ] **SB-2 [CRITICAL, Wave 2]: `request.form.getlist()` — 20+ call sites silently lose multi-value form data.** `src/admin/blueprints/products.py` has 12+ calls for `<select multiple>` fields (countries, channels, formats, principals, property_tags). FastAPI `Form()` returns only the LAST value, not a list. **Fix:** Use `List[str] = Form()` for multi-value fields. Add foundation-module pattern doc and structural guard `test_architecture_form_getlist_parity.py` in Wave 0.
 - [ ] **SB-3 [HIGH, Wave 0]: `session.*` and `g.*` template variables silently render as empty.** `templates/base.html:145` uses `{% if g.test_mode %}` (test mode banner); lines 155-183 read `session.role`, `session.authenticated`, `session.email`. Starlette does NOT auto-inject `g` or `session` into Jinja context. **Fix:** `render()` wrapper must pass `test_mode`, `user_role`, `user_email`, `user_authenticated`, `username` as explicit context variables. Add `test_template_context_completeness.py` guard asserting every variable used in `base.html` is present in `render()` context dict.
-- [ ] **[v2.0: document risk only. v2.1: mandatory fix.]** **SB-4 [HIGH, Wave 4a]: `onupdate=func.now()` columns permanently stale after UPDATE+commit.** Unlike `server_default` (INSERT-time, covered by Risk #5), `onupdate=func.now()` fires on UPDATE. With `expire_on_commit=False`, response returns OLD `updated_at`. Cannot be fixed with ORM-side `default=`. **Fix:** Set `obj.updated_at = func.now()` application-side before commit, or `await session.refresh(obj, ['updated_at'])` after commit. Add `test_onupdate_columns_refreshed.py` in Wave 4.
-- [ ] **[DEFERRED v2.1]** **SB-5 [HIGH, Wave 4b]: N+1 lazy load in `get_object_lifecycle` (`context_manager.py:430`).** Inside a loop, `mapping.workflow_step` triggers per-row lazy load → `MissingGreenlet` under async. **Fix:** Add `joinedload(ObjectWorkflowMapping.workflow_step)` to the query at line 414.
+- [ ] **[Phases 0-3: document risk only. Phase 4+: mandatory fix.]** **SB-4 [HIGH, Wave 4a]: `onupdate=func.now()` columns permanently stale after UPDATE+commit.** Unlike `server_default` (INSERT-time, covered by Risk #5), `onupdate=func.now()` fires on UPDATE. With `expire_on_commit=False`, response returns OLD `updated_at`. Cannot be fixed with ORM-side `default=`. **Fix:** Set `obj.updated_at = func.now()` application-side before commit, or `await session.refresh(obj, ['updated_at'])` after commit. Add `test_onupdate_columns_refreshed.py` in Wave 4.
+- [ ] **[Phase 4+]** **SB-5 [HIGH, Wave 4b]: N+1 lazy load in `get_object_lifecycle` (`context_manager.py:430`).** Inside a loop, `mapping.workflow_step` triggers per-row lazy load → `MissingGreenlet` under async. **Fix:** Add `joinedload(ObjectWorkflowMapping.workflow_step)` to the query at line 414.
 
 ### 3.5.2 Loud but scoped breaks (caught by tests)
 
-- [ ] **[DEFERRED v2.1]** **LB-1 [HIGH, Spike 2 + Wave 4a]: `asyncpg` bypasses `json_serializer` parameter.** `database_session.py:114,130` passes `json_serializer=_pydantic_json_serializer` to `create_engine`. asyncpg uses its own native JSONB codec that ignores this. Pydantic types fail with `TypeError` on JSONB write. **Fix:** Register custom asyncpg JSONB codec via `asyncpg.Connection.set_type_codec()` at engine-level `connect` event. Add `test_jsonb_roundtrip_asyncpg.py` to Spike 2 criteria.
-- [ ] **[DEFERRED v2.1]** **LB-2 [HIGH, Wave 4a]: `statement_timeout` event listener crashes under asyncpg.** `database_session.py:139-144` uses `dbapi_conn.cursor()` which doesn't exist on asyncpg connections. **Fix:** Replace with `connect_args={"server_settings": {"statement_timeout": "30000"}}` on async engine. Already corrected in `async-pivot-checkpoint.md` code block (2026-04-12).
-- [ ] **[DEFERRED v2.1]** **LB-3 [MEDIUM, Wave 4b]: `bulk_insert_mappings` / `bulk_update_mappings` removed in `AsyncSession`.** `gam_inventory_service.py:98,104,734,739`. **Fix:** Rewrite to Core `insert().values()` pattern. These are inside the sync-bridge scope (Decision 9), so they stay sync but must use `get_sync_db_session()`, not the async session.
+- [ ] **[Phase 4+]** **LB-1 [HIGH, Spike 2 + Wave 4a]: `asyncpg` bypasses `json_serializer` parameter.** `database_session.py:114,130` passes `json_serializer=_pydantic_json_serializer` to `create_engine`. asyncpg uses its own native JSONB codec that ignores this. Pydantic types fail with `TypeError` on JSONB write. **Fix:** Register custom asyncpg JSONB codec via `asyncpg.Connection.set_type_codec()` at engine-level `connect` event. Add `test_jsonb_roundtrip_asyncpg.py` to Spike 2 criteria.
+- [ ] **[Phase 4+]** **LB-2 [HIGH, Wave 4a]: `statement_timeout` event listener crashes under asyncpg.** `database_session.py:139-144` uses `dbapi_conn.cursor()` which doesn't exist on asyncpg connections. **Fix:** Replace with `connect_args={"server_settings": {"statement_timeout": "30000"}}` on async engine. Already corrected in `async-pivot-checkpoint.md` code block (2026-04-12).
+- [ ] **[Phase 4+]** **LB-3 [MEDIUM, Wave 4b]: `bulk_insert_mappings` / `bulk_update_mappings` removed in `AsyncSession`.** `gam_inventory_service.py:98,104,734,739`. **Fix:** Rewrite to Core `insert().values()` pattern. These are inside the sync-bridge scope (Decision 9), so they stay sync but must use `get_sync_db_session()`, not the async session.
 
 ### 3.5.3 Scope gaps (not previously in any wave — now added)
 
 - [ ] **SG-1 [CRITICAL, Wave 2c + Wave 3]: `gam_inventory_service.py` has 8 Flask routes NOT in any wave scope.** `src/services/gam_inventory_service.py:1484-1680` — `create_inventory_endpoints(app)` registers 8 `@app.route()` decorators directly on the Flask app (called from `src/admin/app.py:391`). These live in `src/services/`, not `src/admin/blueprints/`, so they are missed by the Wave 2 "22 blueprints" scope. **Fix:** Port to `src/admin/routers/inventory_api.py` in Wave 2c. Delete `create_inventory_endpoints()` in Wave 3.
 - [ ] **SG-2 [CRITICAL, Wave 3]: `atexit` handlers incompatible with async shutdown.** `src/services/webhook_delivery_service.py:185` and `src/services/delivery_simulator.py:45` register `atexit.register(self._shutdown)`. Under uvicorn, `atexit` fires AFTER the event loop is closed. **Fix:** Move to FastAPI lifespan post-yield block in Wave 3.
 - [ ] **SG-3 [HIGH, Wave 2c]: `register_ui_routes(app: Flask)` adapter interface not addressed.** `src/adapters/base.py:481`, `google_ad_manager.py:1694`, `mock_ad_server.py:1346` take a Flask `app` object. **Fix:** Change interface to accept `APIRouter` in Wave 2c; re-home content into `src/admin/routers/adapters.py`.
-- [ ] **[v2.0: document risk only. v2.1: mandatory fix.]** **SG-4 [HIGH, Wave 4]: GAM services have private `scoped_session` instances.** `gam_inventory_service.py` and `gam_orders_service.py` create their own module-level `scoped_session` bypassing `database_session.py`. **Fix:** Migrate to centralized `get_sync_db_session()` (Decision 9 sync-bridge) in Wave 4. Add structural guard `test_architecture_no_private_scoped_session.py`.
+- [ ] **[Phases 0-3: document risk only. Phase 4+: mandatory fix.]** **SG-4 [HIGH, Wave 4]: GAM services have private `scoped_session` instances.** `gam_inventory_service.py` and `gam_orders_service.py` create their own module-level `scoped_session` bypassing `database_session.py`. **Fix:** Migrate to centralized `get_sync_db_session()` (Decision 9 sync-bridge) in Wave 4. Add structural guard `test_architecture_no_private_scoped_session.py`.
 - [ ] **SG-5 [HIGH, Wave 1b]: `SameSite=None` → `Lax` may break OIDC `form_post` callbacks.** `src/admin/app.py:117` currently sets `SESSION_COOKIE_SAMESITE = "None"`. OIDC providers using `response_mode=form_post` send cross-origin POSTs — `SameSite=Lax` blocks the cookie. **Fix:** Investigate which OIDC providers use `form_post` vs `query`. If any use `form_post`, the CSRF strategy needs adjustment. Add `test_oidc_form_post_samesite.py` in Wave 1b.
 - [ ] **SG-6 [MEDIUM, Wave 2+3]: 7 files outside `src/admin/` import Flask.** `background_sync_service.py:472`, `gam_inventory_service.py` (8 sites), `gam_inventory_discovery.py:1074`, `gam_reporting_api.py:16,68`, `mock_ad_server.py:1349`, `google_ad_manager.py:25,1696`. **Fix:** Each must be migrated or removed per-wave. Track in `test_architecture_no_flask_imports.py` allowlist.
 
 ### 3.5.4 Async edge cases (from SQLAlchemy async specialist audit)
 
-- [ ] **[DEFERRED v2.1]** **AE-1 [CRITICAL, Spike 1]: Product `@property` lazy-load audit.** 5 properties across 3 relationships — see SB-1. Spike 1's `lazy="raise"` blanket must exercise these properties explicitly, not just run integration tests that happen to use eager-loading code paths.
-- [ ] **[DEFERRED v2.1]** **AE-2 [HIGH, Spike 2]: asyncpg JSONB codec incompatibility.** See LB-1. Add to Spike 2 pass criteria: Pydantic-typed JSONB roundtrip test.
-- [ ] **[DEFERRED v2.1]** **AE-3 [HIGH, Wave 4b]: `session.merge()` in `delivery.py:274` needs `await`.** Missing `await` returns a coroutine object, not the merged instance.
-- [ ] **[DEFERRED v2.1]** **AE-4 [MEDIUM, Wave 4b]: `inspect(product)` + lazy load in `product_pricing.py:38-43`.** Line 43 unconditionally accesses `product.pricing_options`. Under async → `MissingGreenlet`. File is deleted per Decision 5, so this is self-resolving.
+- [ ] **[Phase 4+]** **AE-1 [CRITICAL, Spike 1]: Product `@property` lazy-load audit.** 5 properties across 3 relationships — see SB-1. Spike 1's `lazy="raise"` blanket must exercise these properties explicitly, not just run integration tests that happen to use eager-loading code paths.
+- [ ] **[Phase 4+]** **AE-2 [HIGH, Spike 2]: asyncpg JSONB codec incompatibility.** See LB-1. Add to Spike 2 pass criteria: Pydantic-typed JSONB roundtrip test.
+- [ ] **[Phase 4+]** **AE-3 [HIGH, Wave 4b]: `session.merge()` in `delivery.py:274` needs `await`.** Missing `await` returns a coroutine object, not the merged instance.
+- [ ] **[Phase 4+]** **AE-4 [MEDIUM, Wave 4b]: `inspect(product)` + lazy load in `product_pricing.py:38-43`.** Line 43 unconditionally accesses `product.pricing_options`. Under async → `MissingGreenlet`. File is deleted per Decision 5, so this is self-resolving.
 
 ### 3.5.5 Testing infrastructure additions (6 components, ~2,125 LOC)
 
 - [ ] **TI-1 [Phase -1]: Response fingerprint system (~430 LOC).** Capture Flask response shapes as committed JSON fixtures before Wave 1; compare against FastAPI per-wave. Files: `tests/migration/fingerprint.py`, `tests/migration/conftest_fingerprint.py`, `tests/migration/test_response_fingerprints.py`, `tests/migration/fixtures/fingerprints/*.json`.
 - [ ] **TI-2 [Phase 1a-2c]: Dual-stack shadow test mode (~255 LOC).** During Waves 1-2 (both stacks coexist), shadow-test safe requests against both Flask and FastAPI, compare responses. Files: `tests/migration/dual_stack_client.py`, `tests/migration/conftest_dual_stack.py`.
-- [ ] **[DEFERRED v2.1]** **TI-3 [Phase 4a]: Async correctness test harness (~410 LOC).** Concurrent session isolation, MissingGreenlet provocation, event loop blocking detection, connection pool stress. Files: `tests/migration/test_async_correctness.py`, `tests/migration/blocking_detector.py`.
+- [ ] **[Phase 4+]** **TI-3 [Phase 4a]: Async correctness test harness (~410 LOC).** Concurrent session isolation, MissingGreenlet provocation, event loop blocking detection, connection pool stress. Files: `tests/migration/test_async_correctness.py`, `tests/migration/blocking_detector.py`.
 - [ ] **TI-4 [Phase -1]: Structural guard meta-tests (~400 LOC).** Each new guard gets a "known violation" fixture proving it catches errors. Companion coverage test prevents guard rot. File: `tests/unit/test_architecture_guard_meta.py`.
 - [ ] **TI-5 [Phase -1 through Phase 5]: Wave checkpoint tests (~300 LOC).** Per-wave invariant gates (route parity, import counts, schema match). File: `tests/migration/test_wave_checkpoints.py`.
 - [ ] **TI-6 [Phase 3+]: Production canary system (~330 LOC).** Post-deploy synthetic transactions, health check expansion (`/health/deep`), metric comparison, auto-rollback triggers. Files: `scripts/canary/production_canary.py`, `src/routes/health_deep.py`.
@@ -288,7 +287,7 @@ Full detail in `flask-to-fastapi-execution-details.md` Part 1.
 > **Knowledge sources for this wave:**
 > - `flask-to-fastapi-foundation-modules.md` §11.1-11.15 — all 11 foundation module implementations with code
 > - `flask-to-fastapi-migration.md` §11-12 — foundation module descriptions + template codemod details
-> - `async-pivot-checkpoint.md` §3 — target async state (code blocks corrected 2026-04-12) **[v2.1 reference only]**
+> - `async-pivot-checkpoint.md` §3 — target async state (code blocks corrected 2026-04-12) **[Phase 4+ reference only]**
 > - `async-audit/agent-e-ideal-state-gaps.md` — 14 FastAPI-idiom upgrades (minimum apply: E1/E2/E3/E5/E6/E8)
 > - `async-audit/frontend-deep-audit.md` — 7 critical blockers for templates/JS/OAuth
 > - `flask-to-fastapi-deep-audit.md` §1 — 6 blockers (Blockers 1,2 fixed in Wave 0)
@@ -356,13 +355,13 @@ Full detail in `flask-to-fastapi-execution-details.md` Part 1.
 - [ ] `tests/unit/test_architecture_no_async_db_access.py` — v2.0 sync sibling guard. Asserts admin DB access uses sync `with get_db_session()`, NOT `async with` or `AsyncSession`.
 - [ ] `tests/unit/test_architecture_handlers_use_annotated_depends.py` — Agent E idiom upgrade. AST-scans `src/admin/routers/*.py`; every `@router.<method>(...)` handler parameter must use `Annotated[T, ...]` form, not `x = Query(...)` default-value syntax.
 - [ ] `tests/unit/test_architecture_templates_receive_dtos_not_orm.py` — Agent E idiom upgrade. Asserts every `render(request, "tpl", context)` call passes only primitives, Pydantic BaseModel instances, or the request object — never ORM model instances. Prevents lazy-load Risk #1 realization.
-- [ ] ~~`tests/unit/test_architecture_no_sync_session_usage.py`~~ **[DEFERRED v2.1]** — was Agent E idiom upgrade for async. v2.0 USES sync `Session` and `sessionmaker` — this guard would fail against the intended v2.0 state.
+- [ ] ~~`tests/unit/test_architecture_no_sync_session_usage.py`~~ **[Phase 4+]** — was Agent E idiom upgrade for async. v2.0 USES sync `Session` and `sessionmaker` — this guard would fail against the intended v2.0 state.
 - [ ] `tests/unit/test_architecture_no_module_level_engine.py` — Agent E idiom upgrade. Asserts no `create_async_engine` or `create_engine` at module scope — must be inside a function (lifespan factory). Prevents pytest-asyncio event-loop leak (Risk Interaction B).
 - [ ] `tests/unit/test_architecture_no_direct_env_access.py` — Agent E idiom upgrade. Asserts no `os.environ.get` or `os.environ[` in `src/admin/` or `src/core/` except `src/core/settings.py` (the only file that reads env directly via pydantic-settings).
 - [ ] `tests/unit/test_architecture_uses_structlog.py` — Agent E idiom upgrade. Asserts new `src/admin/` and `src/core/` files use `from src.core.logging import get_logger`, not `logging.getLogger(`. Allowlisted for existing files during migration.
 - [ ] `tests/unit/test_architecture_repository_eager_loads.py` — Agent E idiom upgrade. Asserts every repository method whose DTO has nested-attribute returns has an `.options(selectinload(...))` call matching the nested relationships.
 - [ ] `tests/unit/test_architecture_middleware_order.py` — Agent E idiom upgrade. Asserts the exact middleware registration order in `src/app.py` matches the documented runtime order (e.g., Approximated BEFORE CSRF per Blocker 5). Prevents reshuffling.
-- [ ] ~~`tests/unit/test_architecture_tests_use_async_client.py`~~ **[DEFERRED v2.1]** — was Agent E idiom upgrade for async. v2.0 uses Starlette `TestClient` (sync) for admin tests.
+- [ ] ~~`tests/unit/test_architecture_tests_use_async_client.py`~~ **[Phase 4+]** — was Agent E idiom upgrade for async. v2.0 uses Starlette `TestClient` (sync) for admin tests.
 - [ ] `tests/unit/test_architecture_exception_handlers_complete.py` — Agent E idiom upgrade. Scans `src/app.py` for `@app.exception_handler` decorators; asserts all 6 are registered (AdCPError, HTTPException, RequestValidationError, AdminRedirect, AdminAccessDenied, Exception).
 - [ ] `tests/unit/test_architecture_csrf_exempt_covers_adcp.py` — first-order audit action #8a
 - [ ] `tests/unit/test_architecture_approximated_middleware_path_gated.py` — first-order audit action #8b (also satisfies near-blocker #1)
@@ -385,11 +384,11 @@ Full detail in `flask-to-fastapi-execution-details.md` Part 1.
 
 - [ ] Blocker 1 (script_root) — via codemod + `render()` wrapper + guard test
 - [ ] Blocker 2 (trailing slash) — via `APIRouter(redirect_slashes=True)` default in `build_admin_router()`
-- [ ] **[STALE -- see execution-plan.md]** ~~Blocker 4 (async session interleaving) — via full async SQLAlchemy pivot (Option A, 2026-04-11); Wave 0 adds the `test_architecture_admin_routes_async.py` guard + the lazy-loading audit spike. The full async conversion lands in Wave 4-5; the Wave 0 guard asserts the target-state handler signature is maintained from day one.~~ **v2.0 uses sync `def` handlers. Wave 0 adds `test_architecture_handlers_use_sync_def.py` instead. Blocker 4 is entirely deferred to v2.1.**
+- [ ] **[STALE -- see execution-plan.md]** ~~Blocker 4 (async session interleaving) — via full async SQLAlchemy pivot (Option A, 2026-04-11); Wave 0 adds the `test_architecture_admin_routes_async.py` guard + the lazy-loading audit spike. The full async conversion lands in Wave 4-5; the Wave 0 guard asserts the target-state handler signature is maintained from day one.~~ **v2.0 uses sync `def` handlers. Wave 0 adds `test_architecture_handlers_use_sync_def.py` instead. Blocker 4 is entirely deferred to Phase 4+ within v2.0.**
 
 **What Wave 0 does NOT do (preserves mergeability):**
 
-- [ ] `pyproject.toml` is unchanged
+- [ ] `pyproject.toml` adds `itsdangerous>=2.2.0` and `pydantic-settings>=2.7.0` as explicit deps (per execution-plan.md Phase 0)
 - [ ] `src/app.py` is unchanged (no middleware added, no router included)
 - [ ] No Flask files deleted
 - [ ] Flask catch-all still serving 100% of `/admin/*` traffic
@@ -735,13 +734,13 @@ The Flask removal also removes Flask's internal WSGI proxy-header stack (`Custom
 
 - [ ] All 15 Wave-3 acceptance criteria in execution-details §Wave 3.A pass
 - [ ] `rg -w flask .` from repo root returns zero hits
-- [ ] **[REVERSED 2026-04-12]** ~~`v2.0.0` git tag applied~~ ~~(MOVED TO Wave 5 under the async pivot 2026-04-11; Wave 3 merges but v2.0.0 tag waits until Waves 4-5 land)~~ **v2.0.0 tag applied at end of Phase 3 (Flask removal complete). No Waves 4-5 in v2.0.**
+- [ ] **[REVERSED 2026-04-12 — Now Phase 4+ in v2.0]** ~~`v2.0.0` git tag applied~~ ~~(MOVED TO Wave 5 under the async pivot 2026-04-11; Wave 3 merges but v2.0.0 tag waits until Waves 4-5 land)~~ **v2.0.0 tag applied at end of Phase 3 (Flask removal complete). Async work continues as Phase 4+ within v2.0.**
 - [ ] Staging canary runs 48h without incident
-- [ ] **[REVERSED 2026-04-12]** ~~Wave 3 merges to `main`; Waves 4-5 continue the async DB layer absorption~~ **Wave 3 merges to `main` and v2.0.0 is complete. Async deferred to v2.1.**
+- [ ] **[REVERSED 2026-04-12 — Now Phase 4+ in v2.0]** ~~Wave 3 merges to `main`; Waves 4-5 continue the async DB layer absorption~~ **Wave 3 merges to `main`. Async work continues as Phase 4+ within v2.0.**
 
-### Wave 4 — ~~Async database layer~~ DEFERRED TO v2.1 (async pivot reversed 2026-04-12)
+### Wave 4 — ~~Async database layer~~ DEFERRED TO Phase 4+ (sync-first layering, 2026-04-12)
 
-> **This entire wave is v2.1 scope.** v2.0 ships with sync handlers and sync SQLAlchemy. Do not implement anything in this section for v2.0. The async-audit reports in `async-audit/` contain the research for when this work begins in v2.1.
+> **This entire wave is Phase 4+ scope.** Phases 0-3 ship with sync handlers and sync SQLAlchemy. Do not implement anything in this section until Phase 3 is complete. The async-audit reports in `async-audit/` contain the research for when this work begins in Phase 4+.
 
 > **Knowledge sources for this wave:**
 > - `async-pivot-checkpoint.md` §3 — full target state (corrected 2026-04-12: lifespan-scoped engine, autoflush=False, connect_args)
@@ -826,12 +825,12 @@ In addition to the code conversion work:
 - [ ] `/health/db` and `/health/schedulers` endpoints return healthy
 - [ ] Staging deploy completes with zero 500s on hot admin routes for 24h
 
-### Wave 5 — ~~Async cleanup + v2.0.0 release~~ DEFERRED TO v2.1 (async pivot reversed 2026-04-12)
+### Wave 5 — ~~Async cleanup + v2.0.0 release~~ DEFERRED TO Phase 4+ (sync-first layering, 2026-04-12)
 
-> **This entire wave is v2.1 scope.** v2.0.0 release happens at the end of Phase 3 (Flask removal). See `execution-plan.md`.
+> **This entire wave is Phase 4+ scope.** v2.0.0 initial release happens at the end of Phase 3 (Flask removal). See `execution-plan.md`.
 
 > **Knowledge sources for this wave:**
-> - `async-audit/agent-e-ideal-state-gaps.md` — remaining idiom upgrades deferred to v2.1
+> - `async-audit/agent-e-ideal-state-gaps.md` — remaining idiom upgrades deferred to Phase 4+ within v2.0
 > - `async-audit/agent-f-nonsurface-inventory.md` — non-code action items (docs, CI, Dockerfile)
 > - `implementation-checklist.md` §6-7 — post-migration verification + planning artifact cleanup
 
@@ -843,7 +842,7 @@ In addition to the code conversion work:
 
 - [ ] Async vs pre-migration sync baseline benchmark run on representative admin routes (read-heavy `GET /admin/tenant/t1/products` + write-heavy `POST /admin/tenant/t1/accounts`)
 - [ ] Latency profile is net-neutral to ~5% improvement under moderate concurrency (Risk #10)
-- [ ] If regression: tune `pool_size` (Risk #6) first; `selectinload` eager-loading second; last resort fallback is to revert and defer async to v2.1
+- [ ] If regression: tune `pool_size` (Risk #6) first; `selectinload` eager-loading second; last resort fallback is to revert async conversion
 
 **Startup + observability:**
 
@@ -866,7 +865,7 @@ In addition to the code conversion work:
 
 **v2.0.0 release:**
 
-- [ ] **[STALE]** ~~`CHANGELOG.md` v2.0.0 entry includes async pivot breaking changes: `psycopg2-binary` → `asyncpg`, `expire_on_commit=False` default, async handler signatures, async repository methods, async test harness~~ **v2.0.0 CHANGELOG should NOT include async changes. Async is v2.1 scope. v2.0.0 CHANGELOG is written in Wave 3 release engineering (see above).**
+- [ ] **[STALE]** ~~`CHANGELOG.md` v2.0.0 entry includes async pivot breaking changes: `psycopg2-binary` → `asyncpg`, `expire_on_commit=False` default, async handler signatures, async repository methods, async test harness~~ **v2.0.0 initial CHANGELOG (Phase 3) should NOT include async changes. Async changes get their own CHANGELOG entries when Phase 4+ ships.**
 - [ ] `v2.0.0` git tag applied
 - [ ] Production deploy plan approved
 - [ ] Production deploy completes
@@ -929,7 +928,7 @@ Single-commit revert; largest revert commit. Flask catch-all re-activates.
 - [ ] `docker build .` — rebuild image
 - [ ] `grep -n "flask_admin_app\|admin_wsgi\|_install_admin_mounts" src/app.py` — verify Flask catch-all restored
 - [ ] **Fallback option** (if git revert is too risky): redeploy the archived `v1.99.0` container image from the registry, accept downtime
-- [ ] **[STALE -- async pivot reversed 2026-04-12]** ~~Rollback window is open until Wave 4 (the async SQLAlchemy conversion within v2.0) merges; after Wave 4, rollback becomes effectively impossible (driver has switched to asyncpg and async deps have spread through the codebase). Pivoted 2026-04-11 — async SQLAlchemy is no longer a separate v2.1 PR; it's absorbed as Wave 4-5 of v2.0.~~ **Rollback window closes when v2.0.0 ships (end of Phase 3). No Waves 4-5 in v2.0. Async deferred to v2.1.**
+- [ ] **[STALE -- sync-first layering 2026-04-14]** ~~Rollback window is open until Wave 4 (the async SQLAlchemy conversion within v2.0) merges; after Wave 4, rollback becomes effectively impossible (driver has switched to asyncpg and async deps have spread through the codebase). Pivoted 2026-04-11 — async SQLAlchemy is no longer a separate v2.1 PR; it's absorbed as Wave 4-5 of v2.0.~~ **Rollback window closes when Phase 3 ships. Phase 4+ (async) is a separate rollback domain.**
 
 ---
 
@@ -943,13 +942,13 @@ Single-commit revert; largest revert commit. Flask catch-all re-activates.
 - [ ] No 5xx spike in first 24h post-deploy
 - [ ] ~~SSE activity stream connection count stable~~ **STALE — D8 DELETE: no SSE post-migration. Monitor JSON poll `/activity` response time instead.**
 - [ ] `SESSION_SECRET` cookie size observed < 3.5 KB across all real users
-- [ ] **[REVERSED 2026-04-12]** ~~[x] v2.1 async SQLAlchemy migration scoping kickoff scheduled~~ — ~~Async SQLAlchemy already merged as Wave 4-5 of v2.0 (pivoted 2026-04-11 — no separate v2.1 kickoff needed)~~ **Async is NOT in v2.0. v2.1 kickoff still needed.**
-- [ ] v2.1 nginx removal scoping kickoff scheduled
-- [ ] v2.1 REST routes `Annotated[T, Depends()]` ratchet scoping kickoff scheduled
-- [ ] v2.1 `FLASK_SECRET_KEY` dual-read removal scoping kickoff scheduled
-- [ ] v2.1 `Apx-Incoming-Host` IP allowlist (security hardening) ticket filed
-- [ ] v2.1 `require_tenant_access` `is_active` pre-existing-bug fix confirmed (Wave 0 tenant dep already fixed it; v2.1 deletes the dead Flask helper)
-- [ ] v2.1 `/_internal/reset-db-pool` auth hardening ticket filed
+- [ ] **[REVERSED 2026-04-12 — Now Phase 4+ in v2.0]** ~~[x] v2.1 async SQLAlchemy migration scoping kickoff scheduled~~ — ~~Async SQLAlchemy already merged as Wave 4-5 of v2.0 (pivoted 2026-04-11 — no separate v2.1 kickoff needed)~~ **Async is Phase 4+ within v2.0. Scoping kickoff needed after Phase 3 ships.**
+- [ ] **Phase 4a** REST routes `Annotated[T, Depends()]` ratchet scoped (part of FastAPI-native patterns)
+- [ ] **Phase 4a** `require_tenant_access` `is_active` check scoped (breaking change OK on v2.0 branch)
+- [ ] **Phase 5** `FLASK_SECRET_KEY` dual-read removal scoped (final cleanup)
+- [ ] **post-v2.0** nginx removal scoping kickoff scheduled (requires battle-testing)
+- [ ] **post-v2.0** `Apx-Incoming-Host` IP allowlist (security hardening) ticket filed
+- [ ] **post-v2.0** `/_internal/reset-db-pool` auth hardening ticket filed
 - [ ] v2.2 multi-worker scheduler lease design ticket filed
 - [ ] All 6 companion notes files archived to `.claude/notes/archive/flask-to-fastapi/` OR retained as historical reference (see Section 7)
 - [ ] `feat/v2.0.0-flask-to-fastapi` branch deleted after successful merge + 1 week
@@ -976,18 +975,18 @@ Run this section only after v2.0.0 has been stable in production for ≥ 2 weeks
 
 ---
 
-## Section 8 — Known tech debt explicitly deferred to v2.1+
+## Section 8 — Known tech debt deferred beyond Phase 3
 
-These items are **intentionally NOT in scope for v2.0**. They are referenced here so nothing is forgotten. Full detail in `flask-to-fastapi-deep-audit.md` Section 7 table.
+These items are **intentionally NOT in scope for Phases 0-3**. They are referenced here so nothing is forgotten. Full detail in `flask-to-fastapi-deep-audit.md` Section 7 table.
 
-### v2.1 scope (follow-on PR after v2.0 stabilizes)
+### Phase 4+ scope (after Phase 3 Flask removal stabilizes)
 
-- [ ] **[REVERSED 2026-04-12]** ~~[x] **Async SQLAlchemy** **MOVED TO v2.0 Waves 4-5** (pivoted 2026-04-11)~~ — ~~convert `create_engine` → `create_async_engine`, `Session` → `AsyncSession`, all repositories to `async def`, ~100+ files affected. Detail: `async-pivot-checkpoint.md` §3 for target state; `flask-to-fastapi-migration.md` §18 (rewritten) for wave execution; deep audit §1.4 (rewritten) for Option A rationale.~~ **Async is NOT in v2.0. Remains v2.1 scope as originally planned before the April 11 pivot. v2.1 kickoff still needed.**
+- [ ] **[REVERSED 2026-04-12 — Now Phase 4+ in v2.0]** ~~[x] **Async SQLAlchemy** **MOVED TO v2.0 Waves 4-5** (pivoted 2026-04-11)~~ — ~~convert `create_engine` → `create_async_engine`, `Session` → `AsyncSession`, all repositories to `async def`, ~100+ files affected. Detail: `async-pivot-checkpoint.md` §3 for target state; `flask-to-fastapi-migration.md` §18 (rewritten) for wave execution; deep audit §1.4 (rewritten) for Option A rationale.~~ **Async is Phase 4+ within v2.0 (deferred from Phases 0-3). Scoping kickoff needed after Phase 3 ships.**
 - [ ] **Drop nginx entirely** — ~30 MB image savings; uvicorn `--proxy-headers` + tiny Starlette middleware covers all nginx responsibilities. Detail: `flask-to-fastapi-deep-audit.md` §4.1.
 - [ ] **Ratchet REST routes to `Annotated[T, Depends()]`** — 14 route signatures in `src/routes/api_v1.py` currently use `= resolve_auth` default-value style. Add guard `test_architecture_rest_uses_annotated.py`. Detail: `flask-to-fastapi-deep-audit.md` §4.2.
 - [ ] **Remove `FLASK_SECRET_KEY` dual-read** — remove fallback from `src/admin/sessions.py`, remove from `scripts/setup-dev.py`, `docker-compose.yml`, `docs/deployment/environment-variables.md`, `docs/development/troubleshooting.md`, update `tests/unit/test_setup_dev.py` (9 occurrences)
 - [ ] **`/_internal/reset-db-pool` auth hardening** — pre-existing weakness; endpoint is only env-var gated (`ADCP_TESTING=true`). Detail: `flask-to-fastapi-deep-audit.md` §7 R9.
-- [ ] **`require_tenant_access` `is_active` check** — pre-existing latent bug in Flask (Wave 0 `CurrentTenantDep` already filters `is_active=True`; v2.1 cleans up the dead Flask helper)
+- [ ] **`require_tenant_access` `is_active` check** — pre-existing latent bug in Flask (Wave 0 `CurrentTenantDep` already filters `is_active=True`; Phase 4+ cleans up the dead Flask helper)
 - [ ] **Structured logging (structlog / logfire) swap-in** — clean integration now that Flask is gone; `logfire` already in deps. Detail: `flask-to-fastapi-deep-audit.md` §4 opportunity list.
 
 ### v2.2 scope (requires additional design)

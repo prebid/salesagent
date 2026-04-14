@@ -1,6 +1,6 @@
 # Agent D — AdCP Wire-Format Verification for Full-Async v2.0.0 Pivot
 
-> **ASYNC DEFERRED TO v2.1 (2026-04-12).** v2.0 uses sync admin handlers. This report contains research for the future v2.1 async SQLAlchemy migration. Do not implement async patterns described here during v2.0.
+> **ASYNC IS PHASE 4+ WITHIN v2.0 (2026-04-14).** Phases 0-3 use sync admin handlers. This report is the Phase 4+ implementation roadmap — the 21 AdCP surfaces PASS verification and 9 mitigations (M1-M9) are the guardrails for async conversion. Do not implement async patterns from this file during Phases 0-3.
 
 **Date:** 2026-04-11
 **Agent:** D (AdCP wire-format verifier)
