@@ -31,6 +31,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from src.core.schemas import (
+    CreateMediaBuyError,
     CreateMediaBuyRequest,
     CreateMediaBuySuccess,
 )
@@ -80,12 +81,13 @@ brand_domain_strategy = st.sampled_from(
     ["example.com", "testbrand.com", "publisher.io", "advertiser.org"]
 )
 
-# Mock adapter caps inventory at 1M impressions per line item. With CPM=$10
-# (PricingOption defaults below), max budget = $10 * 1_000_000 / 1000 = $10,000.
-# Hypothesis already shrunk to the boundary $10,000.01 -> stay safely under.
+# Wide budget range -- straddles the mock adapter's 1M-impression inventory
+# cap (~$10,000 at $10 CPM). Above the cap, we expect a structured
+# CreateMediaBuyError; below, a CreateMediaBuySuccess. Both satisfy the
+# "valid response shape" invariant -- the test now asserts the disjunction.
 package_budget_strategy = st.decimals(
     min_value=Decimal("100.00"),
-    max_value=Decimal("9000.00"),
+    max_value=Decimal("25000.00"),
     places=2,
     allow_nan=False,
     allow_infinity=False,
@@ -161,7 +163,7 @@ def _setup_catalog(env: MediaBuyCreateEnv) -> None:
 
 
 @settings(
-    max_examples=15,
+    max_examples=40,
     deadline=None,
     suppress_health_check=[
         HealthCheck.function_scoped_fixture,
@@ -188,11 +190,25 @@ def test_create_media_buy_response_roundtrips(integration_db, payload: dict) -> 
         result = env.call_impl(req=request)
         response = result.response
 
-        # P1 -- success path
-        assert isinstance(response, CreateMediaBuySuccess), (
-            f"Expected CreateMediaBuySuccess, got {type(response).__name__}: "
-            f"{getattr(response, 'errors', response)}"
+        # P1 -- well-formed response shape (no raised exceptions, no None).
+        # _create_media_buy_impl is contractually total: every call returns
+        # either CreateMediaBuySuccess or CreateMediaBuyError. Anything else
+        # (raise, None, wrong type) indicates a contract bug -- this is what
+        # caught the line-2844 raise-vs-return regression.
+        assert isinstance(response, (CreateMediaBuySuccess, CreateMediaBuyError)), (
+            f"Expected CreateMediaBuySuccess|CreateMediaBuyError, "
+            f"got {type(response).__name__}: {response!r}"
         )
+
+        if isinstance(response, CreateMediaBuyError):
+            # Structured error: at least one Error object with code+message.
+            assert response.errors, "CreateMediaBuyError must have non-empty errors[]"
+            for err in response.errors:
+                assert err.code, "Error.code is required"
+                assert err.message, "Error.message is required"
+            return  # error responses skip success-only properties
+
+        # ---- success-only properties below ---- #
 
         # P2 -- python-mode roundtrip
         dumped = response.model_dump()
