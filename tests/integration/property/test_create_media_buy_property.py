@@ -1,22 +1,31 @@
-"""Property-based integration tests for create_media_buy.
+"""Property-based integration tests for _create_media_buy_impl.
 
-First Hypothesis test in the repo. Generates arbitrary valid
-CreateMediaBuyRequest payloads and exercises the full chain:
-Pydantic parse -> validators -> _create_media_buy_impl -> response model.
+Anchored to the codebase's architectural contract (CLAUDE.md Pattern #5,
+structural guard ``test_no_toolerror_in_impl.py``, and BR-UC-002 Gherkin):
 
-Properties asserted (per request):
-    P1. Success path: response is CreateMediaBuySuccess (not Error)
-    P2. Roundtrip: CreateMediaBuySuccess(**resp.model_dump()) == resp
-        (catches the apply_testing_hooks bug class -- nested model_dump
-         not propagating, extra fields breaking reconstruction)
-    P3. JSON-mode roundtrip survives json.dumps -> json.loads -> validate
-        (catches Decimal/datetime serialization drift)
-    P4. buyer_ref preserved end-to-end
+    _impl functions RAISE AdCPError subclasses on validation failures.
+    Transport wrappers catch and translate to transport-specific error
+    structures. _impl never returns an error envelope.
 
-Run::
+This wasn't our first cut. An earlier version of this test asserted the
+inverse -- that _impl returns ``CreateMediaBuyError`` in a result envelope
+-- and passed because the test author misread the contract. The property
+was wrong; the "bug" it "found" was phantom. The lesson:
 
-    eval $(.claude/skills/agent-db/agent-db.sh up)
-    uv run pytest tests/integration/property/ -x -v
+    Property tests codify the test author's claim about the contract.
+    If you misread the contract, your property is wrong and "all
+    passing" is false confidence. Always anchor properties to spec
+    (Gherkin, structural guards, documented patterns) -- not to the
+    code under test.
+
+The two properties below are split by input class (valid / invalid) so
+each assertion is sharp and specific:
+
+    P1 (valid inputs)  : impl returns CreateMediaBuySuccess; python- and
+                         JSON-mode roundtrips preserve equality; buyer_ref
+                         is preserved end-to-end.
+    P2 (invalid inputs): impl raises AdCPValidationError with structured
+                         details["error_code"] == "ADAPTER_VALIDATION_FAILED".
 """
 
 from __future__ import annotations
@@ -30,8 +39,8 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
+from src.core.exceptions import AdCPValidationError
 from src.core.schemas import (
-    CreateMediaBuyError,
     CreateMediaBuyRequest,
     CreateMediaBuySuccess,
 )
@@ -47,47 +56,47 @@ from tests.harness.media_buy_create import MediaBuyCreateEnv
 pytestmark = [pytest.mark.requires_db, pytest.mark.integration]
 
 
-# --------------------------------------------------------------------------- #
-# Strategies
-# --------------------------------------------------------------------------- #
-
-# Use a fixed catalog -- product_id and pricing_option_id are constants the
-# test catalog provides. The PricingOptionFactory defaults
-# (pricing_model="cpm", currency="USD", is_fixed=True) produce the canonical
-# pricing_option_id "cpm_usd_fixed" via the {model}_{currency}_{fixed} format.
 PRODUCT_ID = "prod_display"
 PRICING_OPTION_ID = "cpm_usd_fixed"
 
+# Mock adapter inventory cap: 1,000,000 impressions. At $10 CPM, that's
+# exactly $10,000 budget. Anything above that triggers the adapter's
+# PERCENTAGE_UNITS_BOUGHT_TOO_HIGH rejection path -- which raises
+# AdCPValidationError at media_buy_create.py:2844.
+_CPM_RATE = Decimal("10.00")
+_INVENTORY_CAP_DOLLARS = Decimal("10000.00")
 
-def _future_datetime_strategy() -> st.SearchStrategy[datetime]:
-    """Tz-aware datetimes between 1 hour and 30 days in the future.
 
-    Using a fresh ``datetime.now(UTC)`` per draw via st.builds keeps the
-    relative offset stable even if test run time drifts.
-    """
+def _future_datetime() -> st.SearchStrategy[datetime]:
     return st.builds(
-        lambda offset_seconds: datetime.now(UTC) + timedelta(seconds=offset_seconds),
+        lambda off: datetime.now(UTC) + timedelta(seconds=off),
         st.integers(min_value=3600, max_value=30 * 86400),
     )
 
 
-_buyer_ref_alphabet = st.characters(whitelist_categories=("Ll", "Lu", "Nd"))
-
 buyer_ref_strategy = st.text(
-    alphabet=_buyer_ref_alphabet, min_size=4, max_size=20
+    alphabet=st.characters(whitelist_categories=("Ll", "Lu", "Nd")),
+    min_size=4,
+    max_size=20,
 ).map(lambda s: f"buyer-{s}-{uuid.uuid4().hex[:8]}")
 
 brand_domain_strategy = st.sampled_from(
     ["example.com", "testbrand.com", "publisher.io", "advertiser.org"]
 )
 
-# Wide budget range -- straddles the mock adapter's 1M-impression inventory
-# cap (~$10,000 at $10 CPM). Above the cap, we expect a structured
-# CreateMediaBuyError; below, a CreateMediaBuySuccess. Both satisfy the
-# "valid response shape" invariant -- the test now asserts the disjunction.
-package_budget_strategy = st.decimals(
+# Strictly below the inventory cap -- these inputs MUST succeed.
+valid_budget_strategy = st.decimals(
     min_value=Decimal("100.00"),
-    max_value=Decimal("25000.00"),
+    max_value=Decimal("9000.00"),
+    places=2,
+    allow_nan=False,
+    allow_infinity=False,
+)
+
+# Strictly above the inventory cap -- these inputs MUST raise.
+overflow_budget_strategy = st.decimals(
+    min_value=Decimal("10000.01"),  # literal off-by-one boundary
+    max_value=Decimal("50000.00"),
     places=2,
     allow_nan=False,
     allow_infinity=False,
@@ -95,46 +104,26 @@ package_budget_strategy = st.decimals(
 
 
 @st.composite
-def create_media_buy_payload(draw: st.DrawFn) -> dict:
-    """Generate kwargs for a valid CreateMediaBuyRequest."""
-    start = draw(_future_datetime_strategy())
-    duration_days = draw(st.integers(min_value=1, max_value=60))
-    end = start + timedelta(days=duration_days)
-
-    # Single package per buy. Production enforces "each product_id may appear
-    # at most once per media buy", and our test catalog has one product. To
-    # enable multi-package property tests, seed N products and let the strategy
-    # pick distinct ones.
-    packages = [
-        {
-            "product_id": PRODUCT_ID,
-            "buyer_ref": f"pkg-{uuid.uuid4().hex[:8]}",
-            "budget": float(draw(package_budget_strategy)),
-            "pricing_option_id": PRICING_OPTION_ID,
-        }
-    ]
-
+def _payload_with(draw: st.DrawFn, budget_strategy) -> dict:
+    start = draw(_future_datetime())
+    end = start + timedelta(days=draw(st.integers(min_value=1, max_value=30)))
     return {
         "buyer_ref": draw(buyer_ref_strategy),
         "brand": {"domain": draw(brand_domain_strategy)},
         "start_time": start,
         "end_time": end,
-        "packages": packages,
+        "packages": [
+            {
+                "product_id": PRODUCT_ID,
+                "buyer_ref": f"pkg-{uuid.uuid4().hex[:8]}",
+                "budget": float(draw(budget_strategy)),
+                "pricing_option_id": PRICING_OPTION_ID,
+            }
+        ],
     }
 
 
-# --------------------------------------------------------------------------- #
-# Catalog setup
-# --------------------------------------------------------------------------- #
-
-
 def _setup_catalog(env: MediaBuyCreateEnv) -> None:
-    """Create the minimum tenant/principal/product/pricing-option catalog.
-
-    Done once per Hypothesis example. Cheap enough at this scale; if it
-    becomes a hot path, hoist into a module-scoped fixture and reset
-    media_buys table between examples instead.
-    """
     tenant = TenantFactory(tenant_id=env._tenant_id)
     PropertyTagFactory(tenant=tenant, tag_id="all_inventory", name="All Inventory")
     PrincipalFactory(
@@ -143,46 +132,46 @@ def _setup_catalog(env: MediaBuyCreateEnv) -> None:
         platform_mappings={"mock": {"advertiser_id": "mock_adv_1"}},
     )
     product = ProductFactory(
-        tenant=tenant,
-        product_id=PRODUCT_ID,
-        property_tags=["all_inventory"],
+        tenant=tenant, product_id=PRODUCT_ID, property_tags=["all_inventory"]
     )
     PricingOptionFactory(
         product=product,
         pricing_model="cpm",
         currency="USD",
         is_fixed=True,
-        rate=Decimal("10.00"),
+        rate=_CPM_RATE,
     )
     env.commit_catalog()
 
 
-# --------------------------------------------------------------------------- #
-# Properties
-# --------------------------------------------------------------------------- #
-
-
-@settings(
-    max_examples=40,
+_SETTINGS = settings(
+    max_examples=25,
     deadline=None,
     suppress_health_check=[
         HealthCheck.function_scoped_fixture,
         HealthCheck.too_slow,
     ],
 )
-@given(payload=create_media_buy_payload())
-def test_create_media_buy_response_roundtrips(integration_db, payload: dict) -> None:
-    """For any valid request payload, the success response satisfies P1-P4."""
-    # IDs use hyphens (DNS-safe). Underscores in tenant_id flow into
-    # subdomain -> publisher_domain construction, which enforces a
-    # ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]...)*$ regex.
+
+
+# --------------------------------------------------------------------------- #
+# P1: valid inputs -> CreateMediaBuySuccess with roundtrip properties
+# --------------------------------------------------------------------------- #
+
+
+@_SETTINGS
+@given(payload=_payload_with(valid_budget_strategy))
+def test_valid_payload_returns_success_with_roundtrip(
+    integration_db, payload: dict
+) -> None:
+    """Within adapter inventory cap, _impl returns CreateMediaBuySuccess
+    and the response satisfies python/JSON roundtrip equality plus
+    buyer_ref preservation."""
     tenant_id = f"prop-t-{uuid.uuid4().hex[:8]}"
     principal_id = f"prop-p-{uuid.uuid4().hex[:6]}"
 
     with MediaBuyCreateEnv(
-        tenant_id=tenant_id,
-        principal_id=principal_id,
-        dry_run=True,
+        tenant_id=tenant_id, principal_id=principal_id, dry_run=True
     ) as env:
         _setup_catalog(env)
 
@@ -190,43 +179,65 @@ def test_create_media_buy_response_roundtrips(integration_db, payload: dict) -> 
         result = env.call_impl(req=request)
         response = result.response
 
-        # P1 -- well-formed response shape (no raised exceptions, no None).
-        # _create_media_buy_impl is contractually total: every call returns
-        # either CreateMediaBuySuccess or CreateMediaBuyError. Anything else
-        # (raise, None, wrong type) indicates a contract bug -- this is what
-        # caught the line-2844 raise-vs-return regression.
-        assert isinstance(response, (CreateMediaBuySuccess, CreateMediaBuyError)), (
-            f"Expected CreateMediaBuySuccess|CreateMediaBuyError, "
-            f"got {type(response).__name__}: {response!r}"
+        assert isinstance(response, CreateMediaBuySuccess), (
+            f"Valid input should produce CreateMediaBuySuccess, got "
+            f"{type(response).__name__}: {response!r}"
         )
 
-        if isinstance(response, CreateMediaBuyError):
-            # Structured error: at least one Error object with code+message.
-            assert response.errors, "CreateMediaBuyError must have non-empty errors[]"
-            for err in response.errors:
-                assert err.code, "Error.code is required"
-                assert err.message, "Error.message is required"
-            return  # error responses skip success-only properties
-
-        # ---- success-only properties below ---- #
-
-        # P2 -- python-mode roundtrip
+        # Python-mode roundtrip
         dumped = response.model_dump()
-        reconstructed = CreateMediaBuySuccess(**dumped)
-        assert reconstructed.model_dump() == dumped, (
-            "Python-mode model_dump roundtrip diverged"
-        )
+        rebuilt = CreateMediaBuySuccess(**dumped)
+        assert rebuilt.model_dump() == dumped, "Python-mode roundtrip diverged"
 
-        # P3 -- JSON-mode roundtrip (Decimal/datetime serialization)
+        # JSON-mode roundtrip (Decimal/datetime serialization)
         json_dumped = response.model_dump(mode="json")
-        json_blob = json.dumps(json_dumped)
-        json_reloaded = CreateMediaBuySuccess(**json.loads(json_blob))
-        assert json_reloaded.model_dump(mode="json") == json_dumped, (
+        rebuilt_json = CreateMediaBuySuccess(**json.loads(json.dumps(json_dumped)))
+        assert rebuilt_json.model_dump(mode="json") == json_dumped, (
             "JSON-mode roundtrip diverged"
         )
 
-        # P4 -- buyer_ref preserved
+        # buyer_ref preserved end-to-end
         assert response.buyer_ref == payload["buyer_ref"], (
             f"buyer_ref drift: sent {payload['buyer_ref']!r}, "
             f"got {response.buyer_ref!r}"
+        )
+
+
+# --------------------------------------------------------------------------- #
+# P2: invalid inputs -> raises AdCPValidationError with structured details
+# --------------------------------------------------------------------------- #
+
+
+@_SETTINGS
+@given(payload=_payload_with(overflow_budget_strategy))
+def test_inventory_overflow_raises_validation_error(
+    integration_db, payload: dict
+) -> None:
+    """Above adapter inventory cap, _impl raises AdCPValidationError
+    carrying structured details["error_code"] == "ADAPTER_VALIDATION_FAILED"
+    (matching the convention at media_buy_create.py:2844 and the
+    enforcement pattern of test_no_toolerror_in_impl.py)."""
+    tenant_id = f"prop-t-{uuid.uuid4().hex[:8]}"
+    principal_id = f"prop-p-{uuid.uuid4().hex[:6]}"
+
+    with MediaBuyCreateEnv(
+        tenant_id=tenant_id, principal_id=principal_id, dry_run=True
+    ) as env:
+        _setup_catalog(env)
+
+        request = CreateMediaBuyRequest(**payload)
+        with pytest.raises(AdCPValidationError) as exc_info:
+            env.call_impl(req=request)
+
+        exc = exc_info.value
+        # Structured error code per the raise at line 2844.
+        assert getattr(exc, "details", None), (
+            f"AdCPValidationError must carry structured details; got {exc!r}"
+        )
+        assert exc.details.get("error_code") == "ADAPTER_VALIDATION_FAILED", (
+            f"Unexpected error_code in details: {exc.details!r}"
+        )
+        # Message carries the underlying reason from the adapter.
+        assert "PERCENTAGE_UNITS_BOUGHT_TOO_HIGH" in str(exc), (
+            f"Expected adapter-originated reason in message; got: {exc!s}"
         )

@@ -1,238 +1,286 @@
 # Property-Based Testing with Hypothesis
 
-> **Status**: Prototype on `tests/hypothesis` branch. ~1,200 generated test cases run in ~5.6s.
-> **Branch**: [`tests/hypothesis`](.) | **Tickets**: [`salesagent-81u4`](#bugs-found) (fixed), [`salesagent-j83p`](#bugs-found) (filed)
+> **Status**: RFC prototype on `tests/hypothesis`. 8 property functions,
+> ~1,210 generated cases per run, ~5.7s against a real Postgres container.
+> Framed as a suggestion to the developer group, not a merge request.
 
-## TL;DR for the developers' group
+## TL;DR
 
-We added property-based testing to the existing harness. Five test functions across three files generate ~1,040 cases per run and have already pinned two contract bugs in `_create_media_buy_impl` — one of them shrunk to the literal off-by-one boundary at **budget = $10,000.01**.
+Property-based testing (Hypothesis) slots into our existing harness
+cleanly. The prototype exercises five surfaces — boundary integration,
+schema roundtrip, metamorphic equivalence, cross-transport differential,
+and stateful tenant isolation — without changing production code.
 
-The pitch: example tests prove "the system works for the inputs we thought of." Property tests prove "the system upholds invariant X across the entire input space." The same harness, the same factories, the same assertions — but generated input.
+The **most important lesson** from building this prototype is
+methodological: **a property test is only as correct as the test author's
+reading of the contract.** Our first cut of the boundary test asserted
+that `_impl` *returns* a `CreateMediaBuyError` envelope on validation
+failure. That looked reasonable — the return type annotation says
+`-> CreateMediaBuyResult`, and one other site in the file uses the
+pattern. It passed. We even "fixed" an `_impl` site to match it.
 
-## Why this fits our codebase
+It was wrong. The actual contract — from the BDD Gherkin features, the
+transport wrappers, `tests/unit/test_no_toolerror_in_impl.py`, CLAUDE.md
+Pattern #5, and 83 `raise AdCPError` sites across `src/core/tools/` vs
+5 legacy outliers — is:
 
-We already have unusually rich invariants (not just "it works"). Walk through `tests/integration/test_get_products_filter_semantics.py` and you'll see explicit lattice subsets, partition disjointness, and sort stability — all asserted against hand-picked examples. We also have a heavy serialization surface: 22+ regression files named after escaped schema bugs (`test_create_media_buy_roundtrip.py`, `test_format_id_subscript_regression.py`, `test_null_field_exclusion.py`, ...). Both shapes are exactly what Hypothesis is for.
+> `_impl` functions **raise** `AdCPError` subclasses on validation
+> failure. Transport wrappers catch and translate to transport-specific
+> error structures.
 
-The harness made the integration story painless: `IntegrationEnv` already owns mock setup, factory session binding, identity, and transport dispatch. A Hypothesis strategy plugs in at the boundary (request payload) and everything downstream runs unchanged — real Postgres, real validators, real adapter, real response.
+The "bug" Hypothesis "found" was phantom — our property was the bug.
+The shrinker dutifully minimized the wrong assertion to a clean
+reproducer of the code doing exactly what it was supposed to do.
+
+This document captures the lesson and the recipe for doing it right.
+
+## How Hypothesis works (briefly)
+
+Three pieces:
+
+1. **Strategy** — a recipe for generating valid inputs of some shape
+   (`st.integers()`, `st.text()`, `@composite` for compound types).
+2. **Property** — an assertion that holds for *every* valid input,
+   written as a normal `pytest` test decorated with `@given(...)`.
+3. **Shrinker** — when an input fails the property, Hypothesis
+   automatically minimizes it to the smallest reproducer, prints it,
+   and replays the failing example first on the next run as a
+   regression check.
+
+Example:
+
+```python
+@given(amount=st.decimals(min_value=0.01, max_value=10_000_000.0),
+       currency=st.sampled_from(["USD", "EUR", "GBP", "JPY"]))
+def test_budget_shape_equivalence(amount, currency):
+    """All three input shapes must produce the same (amount, currency)."""
+    a1 = extract_budget_amount(amount, default_currency=currency)
+    a2 = extract_budget_amount({"total": amount, "currency": currency}, "ZZZ")
+    a3 = extract_budget_amount(Budget(total=amount, currency=currency), "ZZZ")
+    assert a1 == a2 == a3 == (amount, currency)
+```
+
+That single property replaces what would otherwise be ~5 hand-picked
+parametrize cases and explores boundaries we wouldn't think to write.
+
+## The methodological lesson
+
+Property tests codify the test author's claim about the contract.
+**If you misread the contract, your property is wrong — and "all
+examples pass" is false confidence.**
+
+This failure mode is worse than example-test omission because property
+tests feel rigorous (1,000 cases!) while actually asserting something
+incorrect. Example tests have the same failure mode, but the rigor
+signal is honest — no one says "my five examples prove correctness."
+
+### The recipe that survives this
+
+Anchor every property to a source that is **higher authority than the
+code under test**, in roughly this priority order:
+
+1. **Gherkin features** (`tests/bdd/features/`). If a scenario says
+   "the operation should fail / error_code should be X," the property
+   must match the same observable outcome. Transport mechanism
+   (raise vs return) is a translation detail; the outcome is the
+   contract.
+2. **Structural guards** (`tests/unit/test_architecture_*.py`,
+   `test_no_toolerror_in_impl.py`, etc.). They codify conventions
+   that apply repo-wide.
+3. **Documented patterns** (CLAUDE.md's 7 critical patterns, docs/
+   development/patterns-reference.md).
+4. **Transport wrappers** — the immediate consumer of `_impl` output.
+   Whatever they assume is the live contract.
+5. **Type annotations and docstrings** — useful hints, but not
+   authoritative on their own. Especially suspect on older code.
+6. **Same-file precedent** — weakest source. A single other site
+   doing something may be an outlier, not a pattern.
+
+Before writing a property, walk down the list. If priorities 1-4 are
+silent and you're inferring from 5-6, **stop and ask**. That's the
+signal that the contract isn't actually clear, and your property will
+encode a guess.
 
 ## What's in the prototype
 
-Five files under `tests/integration/property/`:
+Six files under `tests/integration/property/`:
 
 | File | Surface | Cost | Cases / run |
 |---|---|---|---|
-| `test_create_media_buy_property.py` | Boundary integration: real DB + adapter + serialization | ~3s | 40 |
-| `test_adapter_validation_returns_error.py` | Deterministic regression for the bug Hypothesis found | <100ms | 1 |
+| `test_create_media_buy_property.py` | Boundary integration: two properties (valid→success, overflow→raises) | ~3s | 2 × 25 |
 | `test_schema_roundtrip_property.py` | In-memory schema roundtrips (no DB) | <100ms | 6 × 100 |
 | `test_budget_metamorphic_property.py` | Metamorphic equivalence: input shape doesn't change result | <100ms | 4 × 100 |
-| `test_cross_transport_parity_property.py` | **Transport differential**: IMPL vs A2A must agree byte-for-byte | ~2s | 25 |
-| `test_tenant_isolation_sequence_property.py` | **Stateful**: 2-8 ops across 2 tenants, isolation holds after sequence | ~2s | 10 (up to 80 real creates) |
+| `test_cross_transport_parity_property.py` | Transport differential: IMPL vs A2A dict-identical on success | ~2s | 25 |
+| `test_tenant_isolation_sequence_property.py` | Stateful: 2-8 ops across 2 tenants, isolation holds after sequence | ~2s | 10 (up to 80 real creates) |
 
-Plus one supporting harness class: `tests/harness/media_buy_create.py` (`MediaBuyCreateEnv`) with three dispatch paths (`call_impl`, `call_a2a_as_dict`, `call_mcp_as_dict`).
+Plus one supporting harness class: `tests/harness/media_buy_create.py`
+(`MediaBuyCreateEnv`) with three dispatch paths (`call_impl`,
+`call_a2a_as_dict`, `call_mcp_as_dict`).
 
-## Bugs found
-
-### `salesagent-81u4` — `_create_media_buy_impl` raised validation errors instead of returning `CreateMediaBuyError`
-
-**Discovered by** `test_create_media_buy_property.py` on the very first run. Hypothesis shrunk the failing input to:
+### Surface 1: Boundary integration — contract-anchored
 
 ```python
-budget = 10000.01    # $10 CPM × 1,000,001 impressions
-                     # = exceeds mock adapter inventory cap by 1
+@given(payload=_payload_with(valid_budget_strategy))    # $100 .. $9,000
+def test_valid_payload_returns_success_with_roundtrip(integration_db, payload):
+    result = env.call_impl(req=CreateMediaBuyRequest(**payload))
+    assert isinstance(result.response, CreateMediaBuySuccess)
+    # python/JSON roundtrip equality, buyer_ref preservation
+
+@given(payload=_payload_with(overflow_budget_strategy))  # $10,000.01 ..  $50,000
+def test_inventory_overflow_raises_validation_error(integration_db, payload):
+    with pytest.raises(AdCPValidationError) as exc_info:
+        env.call_impl(req=CreateMediaBuyRequest(**payload))
+    assert exc_info.value.details["error_code"] == "ADAPTER_VALIDATION_FAILED"
 ```
 
-The function's contract says it returns `CreateMediaBuyResult(response: CreateMediaBuySuccess | CreateMediaBuyError, ...)`. At line 2844 (and three other sites — see ticket), it instead `raise`d `AdCPValidationError`. Callers expecting the contract crashed.
+Two properties split by input class, each with a sharp assertion
+anchored to the live contract (raise on validation failure). Catches
+contract drift in either direction.
 
-**Fix**: convert `raise AdCPValidationError(...)` → `return CreateMediaBuyResult(response=CreateMediaBuyError(errors=[Error(...)]), status=failed)`. One site landed in this PR; three remain (tracked in the ticket).
+### Surface 2: Schema roundtrips
 
-The fix is verified two ways:
-- Deterministic regression (`test_adapter_validation_returns_error.py`) — pins the exact `$10,000.01` case.
-- Generalized property — now asserts "response is `CreateMediaBuySuccess` *or* `CreateMediaBuyError` with structured errors[]". Hypothesis runs both sides of the boundary in 40 examples and never crashes.
+Universal property `Model.model_validate(m.model_dump()) == m` over
+`Budget`, `Error`, `CreateMediaBuySuccess`. 100 cases each, <1ms per
+case. Replaces ~20 parametrize blocks in the regression suite.
 
-### `salesagent-j83p` — MCP drops `testing_context` at the auth boundary
+Catches Pattern #4 violations, Decimal/datetime drift, field exclusion
+bugs.
 
-**Discovered by** `test_cross_transport_parity_property.py` on the very first run. When dispatching with `dry_run=True`, IMPL and A2A paths (which inject a `ResolvedIdentity` directly) correctly see `testing_ctx.dry_run=True` and skip the setup-validation check. MCP re-resolves identity from HTTP headers via `mcp_auth_middleware` — and the headers carry tenant+token but no mechanism exists for `testing_context`. So MCP hits setup validation that IMPL and A2A don't. 0/8 passing examples on first run.
+### Surface 3: Metamorphic equivalence
 
-This is a **real architectural parity bug**, not a test-setup issue. The v1 parity test deliberately excludes MCP until the ticket is resolved; adding it back will be the acceptance test for the fix.
+Three input shapes to `extract_budget_amount` (float, dict, Budget
+object) must produce identical `(amount, currency)`. Existing
+`test_budget_format_compatibility.py` asserts this for ~5 hand-picked
+values; Hypothesis generalizes to thousands.
 
-### Ancillary findings (not bugs, but visible couplings)
+Catches branch-specific divergence, float precision loss, default-currency
+fallback bugs.
 
-- `tenant_id` containing underscores produces `subdomain` containing underscores, which propagates to `publisher_domain` and trips a DNS regex at hydration time. No existing test asserts this coupling — Hypothesis exposed it. Worth either tightening `TenantFactory` defaults or relaxing the regex.
-- Mock adapter inventory cap (1,000,000 impressions) is undocumented and only visible by triggering it.
-- `package_id` is generated as `pkg_{product_id}_{random_hex}_{index}` per call. Non-deterministic; prevents diffing across runs; normalized out for parity testing. Arguably should be derived from request fields for audit-trail reproducibility.
-- **REST body model is lossy** — `CreateMediaBuyBody` at `src/routes/api_v1.py:73-83` is a strict subset of `CreateMediaBuyRequest`, missing `targeting_overlay`, `creatives`, `push_notification_config`, `context`, `ext`. REST silently drops them. Documented in the parity test docstring; REST is excluded from v1 parity for this reason.
+### Surface 4: Cross-transport differential
 
-## The surfaces explained
+Same payload through IMPL and A2A must produce dict-identical responses
+(modulo volatile keys: random ids, timestamps). Excludes MCP in v1
+because the MCP auth chain drops `testing_context` — architectural gap
+documented in the PR body.
 
-### 1. Boundary integration (`test_create_media_buy_property.py`)
+Catches wrapper bugs, serialization asymmetry, header-handling quirks,
+identity-translation differences.
 
-```python
-@given(payload=create_media_buy_payload())
-def test_create_media_buy_response_roundtrips(integration_db, payload):
-    with MediaBuyCreateEnv(...) as env:
-        _setup_catalog(env)
-        result = env.call_impl(req=CreateMediaBuyRequest(**payload))
+### Surface 5: Stateful tenant isolation
 
-        # Disjunction property -- the function is total.
-        assert isinstance(result.response, (CreateMediaBuySuccess, CreateMediaBuyError))
+Generates 2-8 random `create_media_buy` ops split across two tenants,
+asserts after the sequence: isolation (no leakage) and completeness
+(each view contains exactly its own creates).
 
-        if isinstance(result.response, CreateMediaBuyError):
-            assert result.response.errors
-            return
-
-        # Success-only invariants
-        assert _python_roundtrip_equal(result.response)
-        assert _json_roundtrip_equal(result.response)
-        assert result.response.buyer_ref == payload["buyer_ref"]
-```
-
-**What it catches**: contract violations (raise vs return), nested `model_dump` propagation, `apply_testing_hooks`-style response-shape drift, buyer_ref preservation across the entire pipeline. **Cost**: ~75ms per example with real Postgres.
-
-### 2. Schema roundtrips (`test_schema_roundtrip_property.py`)
-
-```python
-@INMEM
-@given(b=budget_strategy())
-def test_budget_python_roundtrip(b: Budget) -> None:
-    dumped = b.model_dump()
-    rebuilt = Budget.model_validate(dumped)
-    assert rebuilt.model_dump() == dumped
-```
-
-**Property (universal)**: `for any valid m: Model, Model.model_validate(m.model_dump()) == m`.
-
-**What it catches**: Pattern #4 violations, `Decimal`/`datetime` JSON drift, field-exclusion bugs, `extra="forbid"` tripping on legitimate roundtrip output. One property per model replaces ~10 hand-written example tests.
-
-**Cost**: <1ms per example. 600 cases run in ~50ms total.
-
-### 3. Metamorphic equivalence (`test_budget_metamorphic_property.py`)
-
-```python
-@given(amount=money_strategy, currency=currency_strategy)
-def test_budget_shape_equivalence(amount, currency):
-    """Three input shapes must produce identical output."""
-    amt_f, cur_f = extract_budget_amount(amount, default_currency=currency)
-    amt_d, cur_d = extract_budget_amount({"total": amount, "currency": currency}, default_currency="ZZZ")
-    amt_o, cur_o = extract_budget_amount(Budget(total=amount, currency=currency), default_currency="ZZZ")
-    assert amt_f == amt_d == amt_o == amount
-    assert cur_f == cur_d == cur_o == currency
-```
-
-**Property (metamorphic)**: an input transformation (which shape we use) is irrelevant to the output. The existing `test_budget_format_compatibility.py` asserts this for ~5 hand-picked values; Hypothesis generalizes to thousands of `(amount, currency)` pairs and adds boundary exploration (very small, very large, currency case sensitivity).
-
-**What it catches**: branch-specific divergence, float precision loss in dict→Budget conversion, default-currency fallback bugs.
-
-### 4. Cross-transport differential (`test_cross_transport_parity_property.py`)
-
-```python
-@given(payload=parity_payload())
-def test_impl_and_a2a_agree(integration_db, payload):
-    with MediaBuyCreateEnv(..., dry_run=True) as env:
-        _setup_catalog(env)
-        impl_req = CreateMediaBuyRequest(**payload)
-        a2a_req  = CreateMediaBuyRequest(**payload)
-
-        impl_dict = _normalize(env.call_impl(req=impl_req).model_dump(mode="json"))
-        a2a_dict  = _normalize(env.call_a2a_as_dict(req=a2a_req))
-
-        assert impl_dict == a2a_dict  # prints dict-diff on failure
-```
-
-**Property**: the same request through different transports must produce the same response, modulo volatile keys (random ids, timestamps).
-
-**What it catches**: wrapper-layer bugs, serialization asymmetry, header-handling quirks, identity-translation differences, protocol-envelope bugs. Found `salesagent-j83p` on its first run.
-
-### 5. Stateful tenant isolation (`test_tenant_isolation_sequence_property.py`)
-
-```python
-@given(ops=st.lists(st.tuples(st.sampled_from(["A","B"]), budget_strategy), min_size=2, max_size=8))
-def test_tenant_isolation_across_sequence(integration_db, ops):
-    with MediaBuyCreateEnv(...) as env:
-        _setup_tenant(tenant_a, principal_a)
-        _setup_tenant(tenant_b, principal_b)
-
-        for tenant_key, budget in ops:
-            env.call_impl(req=_make_request(...), identity=identity[tenant_key])
-
-        # after the sequence:
-        assert expected_a.isdisjoint(actual_b)   # isolation
-        assert expected_a == actual_a            # completeness
-```
-
-**Properties** (stateful, post-sequence):
-- *Isolation*: no media_buy from tenant A appears in tenant B's repository view.
-- *Completeness*: each tenant's view contains exactly its own creates.
-
-**What it catches**: missing tenant filters in repository queries, singleton/cache leakage between calls, ContextVar bleed, buyer_ref uniqueness-check race. Currently passing — asserting an invariant that isn't violated *is still valuable* because it prevents regressions.
+Catches repository tenant-filter bugs, singleton/cache leakage between
+calls, ContextVar bleed, uniqueness-check races.
 
 ## Suggested next penetration surfaces
 
-Concrete files we could add next, ranked by leverage:
+Ranked by leverage:
 
-### High-value, low-effort
+### Tier 1 — high value, low-to-medium effort
 
-1. **Forward-compat acceptance** at the HTTP boundary — recursive strategy adds arbitrary extra keys to a payload at random nesting depths, asserts response preserves all known fields. Replaces the 4 hand-enumerated parametrize blocks in `tests/harness/test_forward_compat_acceptance.py:137-296`.
+1. **`hypothesis-jsonschema` against AdCP JSON schemas.** Spec-faithful
+   generation for free; every spec revision updates the test surface
+   automatically. This is the highest-leverage investment because it
+   explicitly anchors strategies to the authoritative source
+   (the schema).
 
-2. **Filter-AND lattice** for `get_products` — generate filter pairs `(f1, f2)`, assert `result(f1 ∧ f2) ⊆ result(f1) ∩ result(f2)`. Generalizes the hand-picked examples in `test_get_products_filter_semantics.py:57-98`.
+2. **`RuleBasedStateMachine` for the media-buy lifecycle.** Rules:
+   `create → update → add_creative → cancel → list`. Invariants
+   checked at every transition: workflow state monotonicity, soft-
+   deleted creatives invisible in `list_creatives` but visible in
+   history, sum of package budgets after K updates equals latest total.
+   Catches sequencing bugs single-call properties can't find.
 
-3. **Aggregation = sum of parts** for delivery — generate `K` random `DeliveryMetrics`, assert `aggregate(list).<field> == sum(m.<field> for m in list)` for every numeric field. Currently asserted in 4 places with fixed fixtures (`test_delivery_poll_behavioral.py`, `test_delivery.py`, two BDD steps).
+3. **Negative-space properties.** Don't just assert "valid → success."
+   Assert "this class of bad input → this *specific* error code with
+   this *specific* error shape." The boundary test (surface 1) is an
+   early example — extend to all validation categories:
+   datetime-in-past, duplicate product_id, unsupported currency, etc.
 
-4. **Tenant isolation** — generate operations across two tenants, assert reads in tenant A never surface state from tenant B. Replaces N implicit assumptions.
+### Tier 2 — strategy-quality boosters
 
-### High-value, medium-effort
+4. **Push to the edges.** Replace `st.sampled_from(["USD","EUR"])`
+   with `st.text(min_size=3, max_size=3)`. Let Hypothesis explore the
+   full type-valid space; the shrinker minimizes on failure.
 
-5. **`RuleBasedStateMachine`** for media-buy lifecycle — rules: `create_media_buy`, `update_media_buy`, `add_creative`, `cancel`. Invariants: workflow state never regresses, soft-deleted creatives don't appear in `list_creatives` but do in history queries, sum of package budgets after K random updates equals the latest computed total. Catches *sequencing* bugs that single-call property tests miss entirely.
+5. **Adversarial primitives.** Full Unicode in strings (including RTL,
+   normalization-sensitive, control characters). DST-transition
+   timestamps, leap seconds, timezone boundaries. Very long sequences.
 
-6. **Multi-transport dispatch** — same property, parametrized over `[Transport.IMPL, Transport.MCP, Transport.A2A, Transport.REST]`. Pins behavior parity across all four wrappers.
+6. **Mutation-based generation.** Start from a recorded valid payload,
+   mutate minimally (drop a key, swap a type, inject an unknown
+   nested field). Catches "malformed proxy" bugs that pure-synthesis
+   strategies don't generate.
 
-### High-value, higher-effort
+### Tier 3 — architecturally significant
 
-7. **Stateful targeting overlay merge** — generate two `Targeting` objects, apply overlays in either order, assert commutativity (or document non-commutativity explicitly). Currently asserted nowhere.
+7. **Concurrency / race injection.** K parallel `create_media_buy`
+   calls with the same `buyer_ref`. Does the uniqueness check hold
+   under contention?
 
-8. **Polyfactory-driven AdCP request fuzz** — auto-generate strategies from the AdCP JSON schemas via `hypothesis-jsonschema`, fire through MCP/A2A. Effectively a structured fuzzer with semantic oracles.
+8. **Failure injection.** Adapter raises mid-call. DB times out
+   between workflow-step write and media-buy write. What partial
+   state is visible?
+
+9. **Differential against a previous version.** Pickle responses from
+   `main` for a fixed input set; on PR branches, assert parity for
+   the same inputs. Catches accidental behavior changes no one
+   explicitly tested.
 
 ## Cost & CI integration
 
-Strategy for fitting this into our existing pipeline:
+Hypothesis profiles (`hypothesis.settings.register_profile(...)`) allow
+the same test to run at different budgets per environment without code
+changes:
 
 | Suite | Profile | When |
 |---|---|---|
-| In-memory roundtrips | `max_examples=100` (default) | Every PR, in `tox -e unit` |
-| Integration boundary | `max_examples=20` (PR profile) | Every PR, in `tox -e integration` |
-| Integration boundary | `max_examples=200` (nightly profile) | Nightly, separate workflow |
-| Stateful machines | `max_examples=50` (nightly only) | Nightly |
-
-Hypothesis profiles (`hypothesis.settings.register_profile(...)`) let us swap budgets per environment without changing test code. The shrinker means a failing nightly run produces a pinned PR-profile reproducer.
+| In-memory roundtrips | `default` (100 examples) | Every PR, in `tox -e unit` |
+| Integration boundary | `fast` (10 examples) | Every PR, in `tox -e integration` |
+| Integration boundary | `thorough` (200 examples) | Nightly |
+| Stateful machines | `nightly` (50 examples) | Nightly only |
 
 ## When Hypothesis is the wrong tool
 
 Skip these cases:
 
-- **Structural guards** (`tests/unit/test_architecture_*.py`). They assert about *your code*, not your *data*. No input space to explore.
-- **Adapter call-capture tests** (`test_gam_*`). Mock SOAP returns; the input space is too constrained to be interesting.
-- **Mock-heavy behavioral tests**. The mocks pin the answer; there's nothing to explore.
-- **BDD scenarios themselves**. Scenario outlines already enumerate; the multi-transport matrix already multiplies. Hypothesis belongs *inside* step implementations, not in the Gherkin layer.
+- **Structural guards** (`tests/unit/test_architecture_*.py`). They
+  assert about *your code*, not your *data*. No input space to explore.
+- **Adapter call-capture tests** (`test_gam_*`). Mock SOAP returns; the
+  input space is too constrained to be interesting.
+- **Mock-heavy behavioral tests**. The mocks pin the answer; there's
+  nothing to explore.
+- **BDD scenarios themselves**. Scenario outlines already enumerate; the
+  multi-transport matrix already multiplies. Hypothesis belongs *inside*
+  step implementations, not in the Gherkin layer.
 
-## How to write a new property test
+## Recipe for writing a new property test
 
-1. **Pick an invariant** that's currently asserted with hand-picked examples. The clearest sources:
-   - "These three shapes must produce the same result" → metamorphic
-   - "This response model_dumps to a dict that reconstructs to the same model" → roundtrip
-   - "This filter operation is a subset of intersection of inputs" → algebraic
-   - "After K random operations, this aggregate property holds" → stateful
+1. **Identify the contract.** Walk the priority list above (Gherkin →
+   guards → patterns → wrappers → annotations → precedent). If you end
+   up on 5-6, stop and ask before proceeding.
 
-2. **Build a strategy** for the input. Start narrow (only what you need), expand later. Use `@composite` to thread random draws through complex shapes.
+2. **State the property as one sentence** *at the observable contract
+   level*, not at the implementation level. "For valid inputs, _impl
+   raises X on class Y and returns Z on class W" is a contract
+   statement. "`response.errors` has length > 0" is an implementation
+   statement.
 
-3. **Assert the property** against the generated input. If a `with` block is involved (like the harness), run setup once per example — the cost is what it is.
+3. **Build a strategy** for the input. Start narrow (only what you
+   need). Use `@composite` to thread random draws through compound
+   shapes.
 
-4. **Run with `--hypothesis-show-statistics`** to see example count and runtime distribution. Tune `max_examples` and `deadline` to fit your CI budget.
+4. **Assert sharply.** Not "success or error" (that's a type check);
+   assert the specific shape, code, and message the contract requires.
 
-5. **When it fails, read the falsifying example**. Hypothesis prints the minimal reproducer. Often the input alone tells you the bug.
+5. **Run with `--hypothesis-show-statistics`** to see example count and
+   runtime distribution. Tune `max_examples` and `deadline` to fit CI
+   budget.
 
-## References
-
-- File the prototype lives in: `tests/integration/property/`
-- Harness class added: `tests/harness/media_buy_create.py`
-- Bug fix: `src/core/tools/media_buy_create.py:2844-2862`
-- Bug ticket: `salesagent-81u4`
-- Hypothesis docs: <https://hypothesis.readthedocs.io>
+6. **When it fails, read the falsifying example first.** Hypothesis
+   prints the minimal reproducer. Then decide: is the *code* wrong, or
+   is my *property* wrong? Both are possible; the investigation must
+   go back to the contract source, not the code.
