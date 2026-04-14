@@ -906,7 +906,7 @@ def then_empty_deliveries(ctx: dict) -> None:
 
 @then("the delivery data should include impressions, spend, and clicks")
 def then_has_metrics(ctx: dict) -> None:
-    """Assert delivery data includes core metrics."""
+    """Assert delivery data includes all three core metrics with valid numeric values."""
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
@@ -914,13 +914,20 @@ def then_has_metrics(ctx: dict) -> None:
     d = deliveries[0]
     totals = getattr(d, "totals", None)
     assert totals is not None, "Delivery data missing totals"
-    assert hasattr(totals, "impressions"), "Totals missing impressions"
-    assert hasattr(totals, "spend"), "Totals missing spend"
+    assert totals.impressions is not None and totals.impressions >= 0, (
+        f"Expected impressions to be a non-negative number, got {totals.impressions!r}"
+    )
+    assert totals.spend is not None and totals.spend >= 0, (
+        f"Expected spend to be a non-negative number, got {totals.spend!r}"
+    )
+    assert totals.clicks is not None and totals.clicks >= 0, (
+        f"Expected clicks to be a non-negative number, got {totals.clicks!r}"
+    )
 
 
 @then("the delivery data should include package-level breakdowns")
 def then_has_packages(ctx: dict) -> None:
-    """Assert delivery data includes package-level breakdowns."""
+    """Assert delivery data includes package-level breakdowns with a valid package_id."""
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
@@ -929,6 +936,8 @@ def then_has_packages(ctx: dict) -> None:
     packages = getattr(d, "by_package", None)
     assert packages is not None, "Delivery data missing by_package"
     assert len(packages) > 0, "Package breakdown is empty"
+    first = packages[0]
+    assert getattr(first, "package_id", None), f"First package entry missing non-empty package_id: {first!r}"
 
 
 @then("the response should include the reporting period start and end dates")
@@ -942,8 +951,8 @@ def then_has_reporting_period(ctx: dict) -> None:
     assert resp is not None, "Expected a response"
     period = getattr(resp, "reporting_period", None)
     assert period is not None, "Response missing reporting_period"
-    assert hasattr(period, "start"), "Reporting period missing start"
-    assert hasattr(period, "end"), "Reporting period missing end"
+    assert period.start is not None, "Reporting period start is None"
+    assert period.end is not None, "Reporting period end is None"
 
 
 @then(parsers.parse('the response should include the media buy status "{status}"'))
@@ -960,11 +969,17 @@ def then_has_mb_status(ctx: dict, status: str) -> None:
 
 @then("the response should include aggregated totals across both media buys")
 def then_has_aggregated_totals(ctx: dict) -> None:
-    """Assert response includes aggregated totals."""
+    """Assert response includes aggregated totals with numeric impressions and spend."""
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     agg = getattr(resp, "aggregated_totals", None)
     assert agg is not None, "Response missing aggregated_totals"
+    assert agg.impressions is not None and agg.impressions >= 0, (
+        f"aggregated_totals.impressions should be a non-negative number, got {agg.impressions!r}"
+    )
+    assert agg.spend is not None and agg.spend >= 0, (
+        f"aggregated_totals.spend should be a non-negative number, got {agg.spend!r}"
+    )
 
 
 @then("the aggregated impressions should equal the sum of individual impressions")
@@ -995,14 +1010,21 @@ def then_aggregated_spend(ctx: dict) -> None:
 
 @then(parsers.parse('the response should not include an error for "{mb_id}"'))
 def then_no_error_for_mb(ctx: dict, mb_id: str) -> None:
-    """Assert no error was returned for a specific media buy ID."""
+    """Assert no error for a specific media buy — checks both global ctx and per-delivery errors."""
     assert "error" not in ctx, f"Expected no error for '{mb_id}' but got: {ctx.get('error')}"
+    resp = ctx.get("response")
+    if resp is not None:
+        deliveries = getattr(resp, "media_buy_deliveries", None) or []
+        for d in deliveries:
+            if getattr(d, "media_buy_id", None) == mb_id:
+                per_delivery_errors = getattr(d, "errors", None) or []
+                assert not per_delivery_errors, f"Delivery '{mb_id}' has errors: {per_delivery_errors}"
 
 
 @then(parsers.parse('no error should be returned for "{mb_id}"'))
 def then_no_error_for_mb_alt(ctx: dict, mb_id: str) -> None:
-    """Assert no error was returned for a specific media buy ID (alt phrasing)."""
-    assert "error" not in ctx, f"Expected no error for '{mb_id}' but got: {ctx.get('error')}"
+    """Assert no error for a specific media buy (alt phrasing)."""
+    then_no_error_for_mb(ctx, mb_id)
 
 
 @then(parsers.parse('the response should include only media buys with status "{status}"'))
@@ -1060,9 +1082,15 @@ def then_period_end_today(ctx: dict) -> None:
 
 @then("the system should POST a delivery report to the configured webhook URL")
 def then_webhook_post(ctx: dict) -> None:
-    """Assert webhook POST was made."""
+    """Assert webhook POST was made to the configured URL."""
     env = ctx["env"]
     assert env.mock["post"].called, "Expected webhook POST but none was made"
+    call_args = env.mock["post"].call_args
+    called_url = call_args[0][0] if call_args[0] else call_args[1].get("url", "")
+    configured_url = ctx.get("webhook_url", "https://example.com/webhook")
+    assert called_url == configured_url, (
+        f"Webhook POST went to wrong URL: expected {configured_url!r}, got {called_url!r}"
+    )
 
 
 @then(parsers.parse('the payload should include delivery metrics for "{mb_id}"'))
@@ -1151,24 +1179,33 @@ def then_retry_3_times(ctx: dict) -> None:
 
 @then("retries should use exponential backoff (1s, 2s, 4s + jitter)")
 def then_exponential_backoff(ctx: dict) -> None:
-    """Assert sleep durations are positive and strictly increasing (exponential backoff)."""
+    """Assert sleep durations follow exponential backoff schedule (1s, 2s, 4s ± jitter)."""
     sleep_calls = ctx["env"].mock["sleep"].call_args_list
     assert len(sleep_calls) >= 1, "Expected at least one sleep call for backoff"
     durations = [c[0][0] for c in sleep_calls]
-    assert all(d > 0 for d in durations), f"Expected positive sleep durations: {durations}"
+    # Each successive duration must be at least 1.5× the previous (exponential growth)
     for i in range(1, len(durations)):
-        assert durations[i] > durations[i - 1], f"Backoff durations should increase exponentially: {durations}"
+        assert durations[i] >= durations[i - 1] * 1.5, (
+            f"Backoff duration at index {i} ({durations[i]:.2f}s) is not exponentially larger "
+            f"than previous ({durations[i - 1]:.2f}s). Expected at least {durations[i - 1] * 1.5:.2f}s. "
+            f"Full schedule: {[f'{d:.2f}' for d in durations]}"
+        )
 
 
 @then("the system should retry up to 3 times with exponential backoff")
 def then_retry_with_backoff(ctx: dict) -> None:
-    """Assert at most 4 POST calls (1 original + 3 retries) with sleep between attempts."""
+    """Assert at most 4 POST calls (1 original + 3 retries) with exponential sleep growth."""
     env = ctx["env"]
     assert env.mock["post"].call_count <= 4, (
         f"Expected at most 4 calls (1 + 3 retries), got {env.mock['post'].call_count}"
     )
     sleep_calls = env.mock["sleep"].call_args_list
     assert len(sleep_calls) >= 1, "Expected at least one sleep call between retries"
+    durations = [c[0][0] for c in sleep_calls]
+    for i in range(1, len(durations)):
+        assert durations[i] >= durations[i - 1] * 1.5, (
+            f"Sleep durations are not growing exponentially: {[f'{d:.2f}' for d in durations]}"
+        )
 
 
 @then("the system should not retry the delivery")
@@ -1251,8 +1288,14 @@ def then_circuit_healthy(ctx: dict) -> None:
 
 @then("the configuration should be rejected")
 def then_config_rejected(ctx: dict) -> None:
-    """Assert configuration was rejected."""
+    """Assert configuration was rejected with a validation/rejection error message."""
     assert "error" in ctx, "Expected config rejection error"
+    error = ctx["error"]
+    msg = str(error).lower()
+    rejection_keywords = {"reject", "invalid", "validation", "minimum", "too short", "credential", "length", "required"}
+    assert any(kw in msg for kw in rejection_keywords), (
+        f"Expected a rejection/validation error message, but got: {error!r}. Expected one of: {rejection_keywords}"
+    )
 
 
 @then("the error should indicate minimum credential length is 32 characters")
@@ -1363,11 +1406,13 @@ def then_has_errors_field(ctx: dict) -> None:
 
 @then('the response should not contain "media_buy_deliveries" field')
 def then_no_deliveries_field(ctx: dict) -> None:
-    """Assert media_buy_deliveries is empty (error-only response)."""
+    """Assert media_buy_deliveries is absent or empty in the serialized response."""
     resp = ctx.get("response")
     if resp is not None:
-        media_buy_deliveries = getattr(resp, "media_buy_deliveries", None) or []
-        assert not media_buy_deliveries, f"Expected no media_buy_deliveries: {media_buy_deliveries}"
+        # Check serialized form — field should not be present or should be empty
+        dumped = resp.model_dump() if hasattr(resp, "model_dump") else {}
+        deliveries = dumped.get("media_buy_deliveries") or []
+        assert not deliveries, f"Expected 'media_buy_deliveries' to be absent or empty in response, got: {deliveries}"
     else:
         assert "error" in ctx, "Expected error-only response but got neither"
 
@@ -1377,11 +1422,19 @@ def then_no_deliveries_field(ctx: dict) -> None:
 
 @then(parsers.parse("the error should NOT reveal that the media buy exists"))
 def then_error_no_reveal(ctx: dict) -> None:
-    """Assert error does not leak existence information."""
+    """Assert error does not leak existence information via message content or ID echoing."""
     error = ctx.get("error")
     assert error is not None, "Expected an error"
     msg = str(error).lower()
-    assert "exists" not in msg, f"Error should not reveal existence: {error}"
+    leaking_phrases = ["exists", "belongs to", "owned by", "not authorized for", "access denied"]
+    for phrase in leaking_phrases:
+        assert phrase not in msg, f"Error leaks existence info via phrase {phrase!r}: {error}"
+    # The media_buy_id should not be echoed back in a way that confirms existence
+    mb_id = ctx.get("target_media_buy_id") or ctx.get("media_buy_id") or ""
+    if mb_id:
+        assert msg.count(mb_id.lower()) <= 1, (
+            f"Error repeatedly echoes media_buy_id {mb_id!r}, which may reveal existence: {error}"
+        )
 
 
 # ── Webhook skip assertions ─────────────────────────────────────────
@@ -1389,8 +1442,18 @@ def then_error_no_reveal(ctx: dict) -> None:
 
 @then(parsers.parse('the system should skip "{mb_id}" (no webhook to deliver to)'))
 def then_skip_no_webhook(ctx: dict, mb_id: str) -> None:
-    """Assert system skipped delivery for media buy without webhook."""
-    assert ctx.get("webhook_skipped") or "error" not in ctx
+    """Assert no webhook POST was made for this specific media buy (no webhook configured)."""
+    env = ctx["env"]
+    real_id = _resolve_media_buy_id(ctx, mb_id)
+    # No POST should have been made for this media buy
+    post_mock = env.mock["post"]
+    if post_mock.called:
+        for call in post_mock.call_args_list:
+            payload = call[1].get("json", {}) or {}
+            assert payload.get("media_buy_id") != real_id, (
+                f"Webhook POST was made for '{real_id}' but it should have been skipped "
+                f"(no webhook configured): {payload}"
+            )
 
 
 @then("no delivery attempt should be made")
@@ -1619,13 +1682,19 @@ def then_zero_metrics(ctx: dict, mb_id: str) -> None:
 
 @then("no real billing records should have been created")
 def then_no_billing(ctx: dict) -> None:
-    """Assert sandbox=True in response, preventing real billing records."""
+    """Assert sandbox mode — verify via response flag and absence of billing adapter calls."""
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     sandbox = getattr(resp, "sandbox", None)
     assert sandbox is True, (
         f"Expected sandbox=True in response indicating no real billing records were created, got sandbox={sandbox!r}"
     )
+    # Secondary: no adapter billing/charge methods should have been called
+    env = ctx["env"]
+    for mock_name in ("charge", "create_billing_record", "bill"):
+        mock = env.mock.get(mock_name)
+        if mock is not None:
+            assert not mock.called, f"Billing adapter method '{mock_name}' was called in sandbox mode"
 
 
 # ── Partition/boundary outcome assertions ─────────────────────────────

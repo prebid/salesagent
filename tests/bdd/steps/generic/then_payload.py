@@ -130,13 +130,17 @@ def then_format_assets(ctx: dict) -> None:
     formats_with_assets = [f for f in formats if hasattr(f, "assets") and f.assets]
     for f in formats_with_assets:
         for a in f.assets:
-            # Assets are typed (Assets, Assets5=video, etc.) — check the asset_id or type attribute
-            assert hasattr(a, "asset_id"), f"Asset in format '{_fmt_name(f)}' missing asset_id"
+            # Assets are typed (Assets, Assets5=video, etc.) — check the asset_id value, not just presence
+            asset_id = getattr(a, "asset_id", None)
+            assert asset_id is not None and str(asset_id), (
+                f"Asset in format '{_fmt_name(f)}' has empty/missing asset_id"
+            )
     # Check renders have dimensions
     formats_with_renders = [f for f in formats if hasattr(f, "renders") and f.renders]
     for f in formats_with_renders:
         for r in f.renders:
-            assert hasattr(r, "dimensions"), f"Render in format '{_fmt_name(f)}' missing dimensions"
+            dimensions = getattr(r, "dimensions", None)
+            assert dimensions is not None, f"Render in format '{_fmt_name(f)}' has None dimensions"
 
 
 # ── Sorting assertions ──────────────────────────────────────────────
