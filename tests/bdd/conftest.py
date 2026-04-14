@@ -305,9 +305,13 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         {"vast"},
         "creative agent format API restricts asset_types enum — vast not valid for creative agents",
     ),
-    # RESOLVED: T-UC-004-webhook-notification-type "delayed" — DB setup fix exposed
-    # that Then steps are pending (no-op). Test passes trivially; real notification_type
-    # assertion gap tracked separately.
+    # FIXME(salesagent-4ydt): BR-RULE-029 defines 4 notification types but production
+    # WebhookDeliveryService only emits {scheduled, final, adjusted}. No is_delayed flag.
+    (
+        "T-UC-004-webhook-notification-type",
+        {"delayed"},
+        "BR-RULE-029: production webhook service has no is_delayed flag — only scheduled/final/adjusted emitted",
+    ),
 ]
 
 
@@ -731,6 +735,21 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-004-daterange-equal": ("date range validation (start==end) not implemented", True),
             # Webhook delivery: not yet in production
             "T-UC-004-webhook-scheduled": ("webhook delivery not implemented", True),
+            # FIXME(salesagent-4ydt): BR-RULE-029 INV-1 requires strictly monotonic
+            # sequence numbers per media buy stream. Production retry path emits
+            # the same sequence_number on retry POSTs, producing [1,2,2,3,3,3] for
+            # three logical reports instead of a strictly increasing sequence.
+            "T-UC-004-webhook-sequence": (
+                "BR-RULE-029 INV-1: sequence_number reused across retry POSTs — strictly ascending not preserved",
+                True,
+            ),
+            # FIXME(salesagent-4ydt): BR-UC-004-ext-g requires OPEN->HALF_OPEN->probe
+            # before the breaker closes. Probe success races the HALF_OPEN assertion,
+            # leaving the breaker in CLOSED state by the time the Then step reads it.
+            "T-UC-004-webhook-circuit-halfopen": (
+                "BR-UC-004-ext-g: circuit breaker races past HALF_OPEN to CLOSED during probe",
+                True,
+            ),
             # Webhook retry off-by-one: range(max_retries) yields 3 total calls,
             # should be range(max_retries + 1) for 4 calls (1 initial + 3 retries per BR-RULE-029 / UC-004-EXT-G-01)
             "T-UC-004-webhook-retry-5xx": (

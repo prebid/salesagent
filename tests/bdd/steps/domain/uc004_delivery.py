@@ -1678,7 +1678,11 @@ def then_deliveries_resume(ctx: dict) -> None:
         f"Expected breaker CLOSED for deliveries to resume, got {breaker.state!r}"
     )
     env = ctx["env"]
-    baseline = ctx.get("calls_before_half_open") or ctx.get("calls_before_breaker_open")
+    baseline = (
+        ctx.get("calls_before_half_open")
+        or ctx.get("calls_before_breaker_open")
+        or ctx.get("calls_before_breaker_close")
+    )
     assert baseline is not None, "No call_count baseline recorded in a prior When step"
     current = env.mock["post"].call_count
     assert current > baseline, f"Expected call_count to increase past baseline={baseline}, got {current}"
