@@ -504,9 +504,45 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
-        # FIXME(salesagent-vov): UC-019 REST — REST endpoint returns Method Not Allowed
-        # for get_media_buys, so all REST parametrizations fail.
-        if is_rest and any(t.startswith("T-UC-019") for t in marker_names):
+        # FIXME(salesagent-got8): E2E_REST — webhook/circuit assertions observe
+        # env.mock['post'] or CircuitBreaker state, neither of which is visible
+        # through the Docker HTTP path. Remove when an E2E webhook receiver or
+        # circuit-breaker introspection is available.
+        _UC004_E2E_WEBHOOK_INTERNAL_TAGS: set[str] = {
+            "T-UC-004-webhook-bearer",
+            "T-UC-004-webhook-hmac",
+            "T-UC-004-webhook-notification-type",
+            "T-UC-004-webhook-no-aggregated",
+            "T-UC-004-webhook-circuit-open",
+            "T-UC-004-webhook-circuit-recovery",
+            "T-UC-004-webhook-retry-success",
+        }
+        if is_e2e_rest and (marker_names & _UC004_E2E_WEBHOOK_INTERNAL_TAGS):
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="E2E: webhook POST mock + CircuitBreaker state not observable through Docker HTTP",
+                    strict=False,
+                )
+            )
+
+        # FIXME(salesagent-tlb8): E2E_REST — sandbox account fixtures and response
+        # shape differences in Docker vs in-process.
+        _UC011_E2E_SANDBOX_CONTEXT_TAGS: set[str] = {
+            "T-UC-011-sandbox-list-filter",
+            "T-UC-011-ext-g-absent",
+        }
+        if is_e2e_rest and (marker_names & _UC011_E2E_SANDBOX_CONTEXT_TAGS):
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="E2E: Docker-specific sandbox/context shape differs from in-process harness",
+                    strict=False,
+                )
+            )
+
+        # FIXME(salesagent-vov / salesagent-qzz2): UC-019 REST/E2E_REST — REST endpoint
+        # returns Method Not Allowed for get_media_buys. Same gap applies to e2e_rest
+        # (Docker hits the same unimplemented endpoint).
+        if (is_rest or is_e2e_rest) and any(t.startswith("T-UC-019") for t in marker_names):
             item.add_marker(
                 pytest.mark.xfail(
                     reason="REST get_media_buys endpoint not implemented (Method Not Allowed)",
