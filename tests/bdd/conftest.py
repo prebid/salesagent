@@ -1753,10 +1753,10 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         else:
             pytest.xfail(f"UC-004 harness not yet wired for type: {harness_type}")
     elif uc == "UC-GET-PRODUCTS":
-        request.getfixturevalue("integration_db")
+        extra = _setup_db(request, ctx)
         from tests.harness.product import ProductEnv
 
-        with ProductEnv() as env:
+        with ProductEnv(**extra) as env:
             ctx["env"] = env
             yield
     else:
