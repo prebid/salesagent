@@ -14,12 +14,14 @@ from src.core.request_compat import normalize_request_params
 
 @given("a tenant with products configured")
 def given_tenant_with_products(ctx: dict) -> None:
-    """Create a tenant with at least one product and pricing option."""
-    from tests.factories import PricingOptionFactory, ProductFactory, TenantFactory
+    """Create a tenant with at least one product and pricing option.
 
-    tenant = TenantFactory(tenant_id="compat_tenant")
-    product = ProductFactory(tenant=tenant, product_id="compat_prod", name="Compat Product")
-    PricingOptionFactory(tenant_id=tenant.tenant_id, product_id=product.product_id)
+    Idempotent across transport parametrizations — delegates to the
+    harness env which scopes tenant_id per run (uuid suffix on E2E).
+    """
+    env = ctx["env"]
+    tenant, _principal = env.setup_default_data()
+    product, _pricing = env.setup_product_chain(tenant)
     ctx["tenant"] = tenant
     ctx["product"] = product
 
