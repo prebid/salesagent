@@ -2,6 +2,8 @@
 
 > **SYNC HANDLERS IN v2.0 (async pivot reversed 2026-04-12).** This document was written during the async pivot and contains `async def`, `SessionDep`, `AsyncSession`, and `await` patterns throughout. **For v2.0 implementation, use the sync handler pattern from `execution-plan.md` Phase 0.** Admin handlers are sync `def` with `with get_db_session() as session:`. The module designs (templating.py, flash.py, sessions.py, csrf.py, etc.) are still valid — just make all dependency functions sync `def` instead of `async def`, and use sync `Session` instead of `AsyncSession`. The async versions are preserved for v2.1.
 
+**Key v2.0 scope changes:** Sections 11.0 (engine.py) and 11.0.1 (deps.py/SessionDep) do NOT exist in v2.0 — the existing `database_session.py` provides all session infrastructure. Sections 11.0.4.D-H (dep factories, cross-repo composition) are replaced by direct repository instantiation inside `with get_db_session()` blocks. Section 11.7 (csrf.py) implements CSRFOriginMiddleware (Origin header validation), NOT Double Submit Cookie.
+
 Target file tree under `src/admin/`:
 ```
 src/admin/
@@ -1524,7 +1526,7 @@ def render(
         "request": request,
         "support_email": get_support_email(),
         "sales_agent_domain": get_sales_agent_domain() or "example.com",
-        "csrf_token": getattr(request.state, "csrf_token", ""),
+        # csrf_token NOT injected — CSRFOriginMiddleware uses Origin header validation, not tokens
         # `tenant` is injected on-demand by handlers via CurrentTenantDep, NOT
         # here — the old inject_context did a DB lookup on every single render
         # which was an N+1 magnet. Handlers own tenant loading now.
@@ -1704,19 +1706,17 @@ def _is_production() -> bool:
 def session_middleware_kwargs() -> dict[str, Any]:
     """Return kwargs to pass to `app.add_middleware(SessionMiddleware, **kw)`.
 
-    Production: SameSite=None + Secure (required for cross-subdomain OIDC
-    callbacks: the OAuth provider redirects to /admin/auth/callback from a
-    different origin, so the session cookie must be sent on a top-level
-    cross-site redirect).
-
-    Development: SameSite=Lax + not Secure (localhost has no TLS).
+    All environments: SameSite=Lax. Secure=True in production only.
+    SameSite=Lax is correct everywhere — SSE deletion (Decision 8) removed
+    the only reason for SameSite=None. HttpOnly=True is the Starlette
+    SessionMiddleware default and is intentional.
     """
     production = _is_production()
     kwargs: dict[str, Any] = {
         "secret_key": _require_session_secret(),
         "session_cookie": "adcp_session",
         "max_age": 14 * 24 * 3600,  # 14 days
-        "same_site": "none" if production else "lax",
+        "same_site": "lax",
         "https_only": production,
         "path": "/",
     }
@@ -1767,12 +1767,12 @@ class TestSessionMiddlewareKwargs:
         assert kw["https_only"] is False
         assert "domain" not in kw
 
-    def test_prod_mode_sets_samesite_none(self, monkeypatch):
+    def test_prod_mode_sets_samesite_lax(self, monkeypatch):
         monkeypatch.setenv("SESSION_SECRET", "x" * 64)
         monkeypatch.setenv("PRODUCTION", "true")
         monkeypatch.setenv("SALES_AGENT_DOMAIN", "sales-agent.example.com")
         kw = session_middleware_kwargs()
-        assert kw["same_site"] == "none"
+        assert kw["same_site"] == "lax"
         assert kw["https_only"] is True
         assert kw["domain"] == ".sales-agent.example.com"
 
@@ -2987,14 +2987,30 @@ class TestTenantClientCache:
 
 ---
 
-## 11.7 `src/admin/csrf.py`
+## 11.7 `src/admin/csrf.py` — CSRFOriginMiddleware
 
-### A. Implementation
+> **[SUPERSEDED 2026-04-11]** The Double Submit Cookie implementation below is the **rejected** approach.
+> v2.0 implements **CSRFOriginMiddleware** (~120 LOC, pure-ASGI Origin header validation).
+> See CLAUDE.md blocker 5: "NOT double-submit cookie — that would require changing ~80 fetch calls
+> + ~47 forms for zero practical security gain."
+>
+> **v2.0 CSRF strategy:** SameSite=Lax session cookie + Origin header validation.
+> Key design choices:
+> 1. **Origin header validation**, not token-based. Zero JavaScript changes, zero template changes, zero form changes.
+> 2. **Pure ASGI**, not BaseHTTPMiddleware (same rationale as other middleware).
+> 3. **No body reading** — Origin validation is purely header-based. No replay-receive complexity.
+> 4. **No separate cookie** — no `adcp_csrf` cookie, no `itsdangerous` dependency for CSRF.
+> 5. **Exempt paths:** `/mcp`, `/a2a`, `/api/v1/`, `/.well-known/`, `/agent.json`, `/_internal/`,
+>    `/admin/auth/callback`, `/admin/auth/oidc/callback`, `/admin/auth/gam/callback`.
+
+### A. Implementation (SUPERSEDED — preserved for reference only)
 
 ```python
-"""Pure-ASGI Double Submit Cookie CSRF middleware.
+"""SUPERSEDED by CSRFOriginMiddleware. See CLAUDE.md blocker 5.
+Original Double Submit Cookie implementation preserved for reference only.
+v2.0 uses SameSite=Lax + Origin header validation (~120 LOC) instead.
 
-DESIGN CHOICES (load-bearing):
+ORIGINAL DESIGN CHOICES (no longer applicable):
 
 1. Pure ASGI, NOT BaseHTTPMiddleware. BaseHTTPMiddleware runs in a separate
    task group (Starlette #1729) and its body reads break request.receive
@@ -3219,7 +3235,7 @@ def _is_exempt(path: str) -> bool:
 
 
 class CSRFMiddleware:
-    """Pure-ASGI Double Submit Cookie CSRF middleware."""
+    """SUPERSEDED by CSRFOriginMiddleware. See CLAUDE.md blocker 5."""
     def __init__(self, app: Any) -> None:
         self.app = app
 

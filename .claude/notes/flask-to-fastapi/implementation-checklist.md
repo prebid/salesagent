@@ -23,7 +23,7 @@
 ## How to use this file
 
 > **Implementation agents: START with [`execution-plan.md`](execution-plan.md), NOT this file.**
-> The execution plan has 13 phases in strict order, each a standalone briefing with
+> The execution plan has 7 phases in strict order (Phase 0, 1a, 1b, 2a, 2b, 3, 4), each a standalone briefing with
 > everything you need (goal, prereqs, knowledge sources, work items, exit gate).
 > This checklist is the **verification/tracking** document — tick boxes here AFTER
 > completing work defined in the execution plan.
@@ -137,7 +137,7 @@ Full detail in `flask-to-fastapi-deep-audit.md` §1.
     - [ ] Pass 1b: `{{ script_name }}/tenant/{{ tenant_id }}/settings` → `{{ url_for('admin_tenants_settings', tenant_id=tenant_id) }}` via `HARDCODED_PATH_TO_ROUTE` map
     - [ ] Pass 2: `{{ url_for('bp.endpoint', ...) }}` Flask-dotted → `{{ url_for('admin_bp_endpoint', ...) }}` via `FLASK_TO_FASTAPI_NAME` map
   - [ ] `scripts/generate_route_name_map.py` exists and produces `FLASK_TO_FASTAPI_NAME` and `HARDCODED_PATH_TO_ROUTE` from `src/admin/app.py::create_app().url_map.iter_rules()` introspection
-  - [ ] Codemod runs successfully against all 72 templates; stdout reports `"N templates processed, M rewrites applied"`
+  - [ ] Codemod runs successfully against all 73 templates; stdout reports `"N templates processed, M rewrites applied"`
   - [ ] Codemod is idempotent — re-running on post-codemod templates yields zero diff (`tests/unit/admin/test_codemod_idempotent.py` green)
   - [ ] Manual audit of `add_product_gam.html` for JS-literal edge cases (15 `url_for` calls in JS template literals) — verify the `JS_TEMPLATE_LITERAL_RE` pre-pass flags them for manual review
   - [ ] Manual audit of `base.html` (7 `{{ script_name }}` references — highest-fanout template)
@@ -182,7 +182,7 @@ Full detail in `flask-to-fastapi-deep-audit.md` §1.
     1. `CORSMiddleware`
     2. `SessionMiddleware`
     3. `ApproximatedExternalDomainMiddleware`  ← MOVED UP from below CSRF
-    4. `CSRFMiddleware`
+    4. `CSRFOriginMiddleware`
     5. `RestCompatMiddleware`
     6. `UnifiedAuthMiddleware`
   - [ ] `ApproximatedExternalDomainMiddleware` redirect status is **307** (not 302) to preserve POST body per RFC 7231 §6.4.7
@@ -211,7 +211,7 @@ Full detail in `flask-to-fastapi-adcp-safety.md` §7.
   - [ ] `src/admin/blueprints/operations.py` — same
   - [ ] **No `adcp.types.*` used as `response_model=`** on admin FastAPI routes
 - [ ] `include_in_schema=False` on `build_admin_router()` — one-line applied
-- [ ] `/_internal/` added to `CSRFMiddleware._EXEMPT_PATH_PREFIXES` in `src/admin/csrf.py`
+- [ ] `/_internal/` added to `CSRFOriginMiddleware._EXEMPT_PATH_PREFIXES` in `src/admin/csrf.py`
 - [ ] Three new structural guards exist and are green (from first-order audit):
   - [ ] `tests/unit/test_architecture_csrf_exempt_covers_adcp.py` — every non-GET route matching `/mcp`, `/a2a`, `/api/v1/`, `/a2a/` is covered by `_EXEMPT_PATH_PREFIXES`
   - [ ] `tests/unit/test_architecture_approximated_middleware_path_gated.py` — middleware short-circuits on any path not starting with `/admin`
@@ -308,7 +308,7 @@ Full detail in `flask-to-fastapi-execution-details.md` Part 1.
 - [ ] `src/admin/flash.py` (~70 LOC) — `flash(request, msg)` / `get_flashed_messages(request, with_categories=False)`
 - [ ] `src/admin/sessions.py` (~40 LOC) — `build_session_middleware_kwargs()` returning `secret_key` from `SESSION_SECRET` (with dual-read of `FLASK_SECRET_KEY` for v2.0), `session_cookie='adcp_session'`, `same_site='lax'`, `https_only=True` in production
 - [ ] `src/admin/oauth.py` (~60 LOC) — Authlib `starlette_client.OAuth` instance, Google client registered, `GOOGLE_CLIENT_NAME = "google"` constant, comment referencing OAuth URI immutability
-- [ ] `src/admin/csrf.py` (~100 LOC) — pure-ASGI `CSRFMiddleware`, header-only read (never `await receive()`), `_EXEMPT_PATH_PREFIXES` includes `/mcp`, `/a2a`, `/api/v1/`, `/_internal/`, `/admin/auth/callback`, `/admin/auth/oidc/`, plus `csrf_token(request)` Jinja helper
+- [ ] `src/admin/csrf.py` (~120 LOC) — `CSRFOriginMiddleware` (pure-ASGI Origin header validation, NOT Double Submit Cookie), `_EXEMPT_PATH_PREFIXES` includes `/mcp`, `/a2a`, `/api/v1/`, `/_internal/`, `/admin/auth/callback`, `/admin/auth/oidc/callback`, `/admin/auth/gam/callback`. Zero JS changes, zero template changes.
 - [ ] `src/admin/app_factory.py` (~80 LOC) — `build_admin_router()` returns `APIRouter(prefix="/admin", tags=["admin"], include_in_schema=False, redirect_slashes=True)`, empty in Wave 0
 - [ ] `src/admin/deps/__init__.py` (2 LOC)
 - [ ] `src/admin/deps/auth.py` (~260 LOC) — `CurrentUserDep`, `RequireAdminDep`, `RequireSuperAdminDep` as `Annotated[...]` aliases; **[CORRECTED 2026-04-12]** dep functions are `sync def` with `with get_db_session()` per execution-plan.md Phase 0 (not `async def` with `async with` as originally written during the async pivot)
@@ -320,6 +320,8 @@ Full detail in `flask-to-fastapi-execution-details.md` Part 1.
 - [ ] `src/admin/routers/__init__.py` (2 LOC)
 
 **Template codemod:**
+
+> **Template codemod execution moved to Phase 1a** (all 4 passes break Flask's `url_for` while Flask still serves traffic). Phase 0 creates the codemod script but does NOT run it.
 
 - [ ] `scripts/codemod_templates_greenfield.py` (~200 LOC) exists — two-pass regex rewrite
 - [ ] `scripts/generate_route_name_map.py` (~50 LOC) exists — imports `src.admin.app.create_app()` and produces `FLASK_TO_FASTAPI_NAME` + `HARDCODED_PATH_TO_ROUTE` maps from `url_map.iter_rules()` introspection
@@ -334,8 +336,8 @@ Full detail in `flask-to-fastapi-execution-details.md` Part 1.
   - [ ] `g.test_mode` → `test_mode` (drop `g.` prefix, codemod Pass 0)
   - [ ] JS template literals with `{{ script_name }}` inside backticks → flagged for manual review via `JS_TEMPLATE_LITERAL_RE` pre-pass
   - [ ] Bare `"/admin/..."` / `"/static/..."` string literals in quotes → flagged for manual review via `BARE_ADMIN_RE` post-pass
-- [ ] Codemod runs to exit code 0 against all 72 templates in `/templates/`
-- [ ] Codemod stdout reports `"72 templates processed, N transformations applied"`
+- [ ] Codemod runs to exit code 0 against all 73 templates in `/templates/`
+- [ ] Codemod stdout reports `"73 templates processed, N transformations applied"`
 - [ ] Codemod is idempotent: re-running on post-codemod templates yields zero diff
 - [ ] `git diff --stat templates/` shows changes in ≥ 40 files
 - [ ] `rg -n "url_for" templates/ | wc -l` ≥ 134 (did not drop references)
@@ -431,7 +433,7 @@ Full detail in `flask-to-fastapi-execution-details.md` Part 1.
 - [ ] 1. `CORSMiddleware` (already present)
 - [ ] 2. `SessionMiddleware` (new, from `src/admin/sessions.py`)
 - [ ] 3. `ApproximatedExternalDomainMiddleware` (new, BEFORE CSRF per Blocker 5)
-- [ ] 4. `CSRFMiddleware` (new)
+- [ ] 4. `CSRFOriginMiddleware` (new)
 - [ ] 5. `RestCompatMiddleware` (already present)
 - [ ] 6. `UnifiedAuthMiddleware` (already present)
 - [ ] `tests/integration/test_middleware_ordering.py` exists and is green — inspects `app.user_middleware` and asserts the sequence
@@ -539,7 +541,7 @@ Full detail in `flask-to-fastapi-execution-details.md` Part 1.
 
 **Flask files deleted:**
 
-- [ ] 21 blueprint files under `src/admin/blueprints/` (every file EXCEPT `activity_stream.py`)
+- [ ] 24 blueprint files under `src/admin/blueprints/` (26 total minus `__init__.py` minus `activity_stream.py`)
 - [ ] `src/admin/tenant_management_api.py`
 - [ ] `src/admin/sync_api.py`
 - [ ] `src/adapters/gam_reporting_api.py`

@@ -27,9 +27,9 @@
 
 ---
 
-## Phase 0 — Foundation modules + template codemod (~2,500 LOC, ~5-7 days)
+## Phase 0 — Foundation modules + codemod script (~2,500 LOC, ~5-7 days)
 
-**Goal:** Land all foundation modules, run template codemod, create structural guards. Flask still serves 100% of traffic. Pure addition — nothing changes behavior.
+**Goal:** Land all foundation modules, write template codemod script (do NOT execute it — execution moves to Phase 1a), create structural guards. Flask still serves 100% of traffic. Pure addition — nothing changes behavior.
 
 **Prerequisites:** `main` green (`make quality` + `tox -e integration` + `tox -e bdd`). Branch `feat/v2.0.0-flask-to-fastapi` exists.
 
@@ -75,13 +75,13 @@ Key rules:
 **Work items (in order):**
 
 1. Write structural guard tests FIRST (TDD): `test_templates_url_for_resolves.py`, `test_templates_no_hardcoded_admin_paths.py`, `test_architecture_admin_routes_named.py`, `test_codemod_idempotent.py`, `test_oauth_callback_routes_exact_names.py` (pins: `/admin/auth/google/callback`, `/admin/auth/oidc/callback`, `/admin/auth/gam/callback`), `test_trailing_slash_tolerance.py`, `test_architecture_no_flask_imports.py` (full allowlist), `test_architecture_handlers_use_sync_def.py` (AST guard: admin handlers must be `def`, NOT `async def` — this is the v2.0 sync invariant), `test_architecture_no_async_db_access.py` (no `async with get_db_session()` in admin code), `test_architecture_no_module_level_engine.py`, `test_architecture_no_direct_env_access.py`, `test_architecture_middleware_order.py`, `test_architecture_exception_handlers_complete.py`, `test_architecture_csrf_exempt_covers_adcp.py`, `test_architecture_approximated_middleware_path_gated.py`, `test_architecture_admin_routes_excluded_from_openapi.py`, `test_architecture_scheduler_lifespan_composition.py`, `test_architecture_a2a_routes_grafted.py`, `test_foundation_modules_import.py`, `test_template_context_completeness.py`, `test_architecture_form_getlist_parity.py` [§4 Wave 0, §3.5.1 SB-2/SB-3]. Every allowlist entry gets a `FIXME(salesagent-xxxx)` comment at its source location [§3.5.6 EP-5].
-2. Create foundation modules (ALL sync `def`): `templating.py` (~150 LOC — `render()` wrapper passes `test_mode`, `user_role`, `user_email`, `user_authenticated`, `username` as context; registers `tojson` filter with HTML-escaping), `flash.py` (~70), `sessions.py` (~40), `oauth.py` (~60), `csrf.py` (~100 — `CSRFOriginMiddleware`, SameSite=Lax strategy), `app_factory.py` (~80), `deps/auth.py` (~260, sync `def` dependency functions), `deps/tenant.py` (~90, sync), `deps/audit.py` (~110, sync), `middleware/external_domain.py` (~90, status 307), `middleware/fly_headers.py` (~40) [§4 Wave 0, §2 Blockers 1-2, §3.5.1 SB-3].
+2. Create foundation modules (ALL sync `def`): `templating.py` (~150 LOC — `render()` wrapper passes `test_mode`, `user_role`, `user_email`, `user_authenticated`, `username`, `support_email` (from `get_support_email()`), `sales_agent_domain` (from `get_sales_agent_domain()`) as context — matching Flask's `inject_context()` at `src/admin/app.py:298-330`; registers `tojson` filter with HTML-escaping; registers `from_json` and `markdown` custom Jinja2 filters from `src/admin/app.py:154-155`), `flash.py` (~70), `sessions.py` (~40 — SameSite=Lax in ALL environments per CSRF decision), `oauth.py` (~60), `csrf.py` (~120 — `CSRFOriginMiddleware`, Origin header validation, SameSite=Lax strategy, NOT Double Submit Cookie), `app_factory.py` (~80), `deps/auth.py` (~260, sync `def` dependency functions), `deps/tenant.py` (~90, sync), `deps/audit.py` (~110, sync — port `src/admin/utils/audit_decorator.py` Flask `g`/`request`/`session` usage to FastAPI Depends pattern), `middleware/external_domain.py` (~90, status 307), `middleware/fly_headers.py` (~40) [§4 Wave 0, §2 Blockers 1-2, §3.5.1 SB-3].
 3. Create `form_error_response()` shared helper for DRY form-validation re-rendering across 25 routers [§3.5.6 EP-3].
 4. Create feature flag routing toggle `ADCP_USE_FASTAPI_ADMIN` (~50 LOC) [§3.5.6 EP-1].
 5. Create `X-Served-By` header middleware (~20 LOC) [§3.5.6 EP-2].
 6. Write `scripts/generate_route_name_map.py` (~50 LOC) — introspects Flask `url_map` [§2-B1].
 7. Write `scripts/codemod_templates_greenfield.py` (~200 LOC) — Pass 0 (csrf, g.*, flash), Pass 1a (static), Pass 1b (hardcoded paths), Pass 2 (Flask-dotted names) [§2-B1].
-8. Run codemod against all 72 templates. Manual audit of `add_product_gam.html`, `base.html`, `tenant_dashboard.html` [§2-B1].
+8. **Write** `scripts/codemod_templates_greenfield.py` is complete but do **NOT run it** in Phase 0 — all 4 passes break Flask's `url_for` while Flask still serves traffic. Execution moves to Phase 1a. Manual audit of `add_product_gam.html`, `base.html`, `tenant_dashboard.html` deferred to Phase 1a [§2-B1].
 9. Document `request.form.getlist()` → `List[str] = Form()` migration pattern in worked examples [§3.5.7 CP-2].
 10. Write golden-fixture capture infrastructure: `tests/migration/fingerprint.py`, `tests/migration/conftest_fingerprint.py`, `tests/migration/test_response_fingerprints.py`, `tests/migration/fixtures/fingerprints/*.json` [§3.5.5 TI-1]. Uses Starlette `TestClient` (sync).
 11. Add harness extension: `IntegrationEnv.get_admin_client()` returning Starlette `TestClient` with `dependency_overrides` snapshot/restore [§4 Wave 0].
@@ -89,14 +89,15 @@ Key rules:
 13. Complete §1.1 prerequisites: `SESSION_SECRET` in `.env.example` and secret stores, OAuth URI docs, external consumer contract confirmation [§1.1].
 
 **Files to create:** Foundation modules under `src/admin/`, 2 scripts, 20+ test files, golden-fixture infrastructure.
-**Files to modify:** 72 templates (codemod), `tests/harness/_base.py`.
+**Files to modify:** `tests/harness/_base.py`, `pyproject.toml` (add `itsdangerous>=2.2.0`, `pydantic-settings>=2.7.0` as explicit deps — currently transitive via Flask/pydantic-ai).
+**Note:** Templates are NOT modified in Phase 0 — codemod execution is Phase 1a.
 
 **Exit gate:**
 ```bash
 make quality && tox -e integration && tox -e bdd && ./run_all_tests.sh  # all green
-python scripts/codemod_templates_greenfield.py --check templates/       # exit 0 (idempotent)
-rg -n "url_for" templates/ | wc -l                                      # >= 134
+python -c "import ast; ast.parse(open('scripts/codemod_templates_greenfield.py').read())"  # script parses
 ```
+Note: Codemod idempotency check and url_for count check move to Phase 1a exit gate (after codemod runs).
 
 **What NOT to do:** Do not modify `src/app.py` (no middleware, no router inclusion). Do not delete any Flask files. Flask serves 100% of `/admin/*` traffic. Do not use `async def` in any admin-facing handler or dependency. Do not add `asyncpg`, `async_sessionmaker`, or `SessionDep`. Do not implement anything from `async-audit/` reports — those are v2.1 scope.
 
@@ -104,7 +105,7 @@ rg -n "url_for" templates/ | wc -l                                      # >= 134
 
 ## Phase 1a — Middleware stack + public/core routers (~1,800 LOC, ~3-4 days)
 
-**Goal:** Wire middleware in correct order, port public + core routers. FastAPI serves these routes; Flask catch-all handles everything else.
+**Goal:** Wire middleware in correct order, port public + core routers, **run template codemod** (all 4 passes, atomically with FastAPI activation). FastAPI serves these routes; Flask catch-all handles everything else.
 
 **Prerequisites:** Phase 0 merged. `SESSION_SECRET` live in staging.
 
@@ -139,15 +140,18 @@ def dashboard(
 3. Port `src/admin/routers/core.py` (~600 LOC) — sync `def` handlers with `with get_db_session()` [§4 Wave 1].
 4. Wire middleware stack in `src/app.py`: CORS → Session → Approximated → CSRF → RestCompat → UnifiedAuth [§2-B5].
 5. Wire admin router via feature flag (`ADCP_USE_FASTAPI_ADMIN`) [§3.5.6 EP-1].
+5a. **Run template codemod** (`scripts/codemod_templates_greenfield.py`) against all 73 templates — all 4 passes (csrf/g.*/flash, static, hardcoded paths, Flask-dotted names). Must run atomically with items 4-5 (FastAPI router activation + feature flag flip). All 4 passes break Flask's `url_for`, so templates must be rewritten at the same moment FastAPI takes over serving them [§2-B1].
 6. Activate dual-stack shadow testing (TI-2, ~255 LOC) using `TestClient` [§3.5.5].
 7. Activate response fingerprint comparison [§3.5.5 TI-1].
 
 **Files to create:** `src/admin/routers/public.py`, `src/admin/routers/core.py`, `tests/migration/dual_stack_client.py`, test files.
-**Files to modify:** `src/app.py`.
+**Files to modify:** `src/app.py`, 73 templates (codemod — all 4 passes).
 
 **Exit gate:**
 ```bash
 make quality && tox -e integration && tox -e bdd  # green
+python scripts/codemod_templates_greenfield.py --check templates/  # exit 0 (idempotent)
+rg -n "url_for" templates/ | wc -l                                 # >= 134
 curl -s http://localhost:8000/admin/login          # served by FastAPI (check X-Served-By header)
 ```
 
@@ -191,10 +195,12 @@ Note: Authlib's Starlette OAuth client may require `async def` for `authorize_ac
 1. Write tests first: `test_admin_error_page.py` (Blocker 3), `test_oauth_redirect_uris_immutable.py` (Blocker 6 — pins `/admin/auth/google/callback`, `/admin/auth/oidc/callback`, `/admin/auth/gam/callback`), `test_oidc_form_post_samesite.py`. Tests use Starlette `TestClient` [§2 Blockers 3, 6; §3.5.3 SG-5].
 2. Port `src/admin/routers/auth.py` (~1,100 LOC) — Google OAuth via Authlib. Sync `def` handlers except where Authlib requires `async def` for token exchange [§4 Wave 1].
 3. Port `src/admin/routers/oidc.py` (~500 LOC) — same pattern [§4 Wave 1].
-4. Implement Accept-aware `AdCPError` handler; create `templates/error.html` [§2-B3].
+4. Implement Accept-aware `AdCPError` handler; modify existing `templates/error.html` (it already exists) [§2-B3].
+4a. Add `@app.exception_handler(RequestValidationError)` for admin routes — renders form with error messages instead of JSON 422.
+4b. Add `@app.exception_handler(HTTPException)` for admin routes — renders `templates/error.html` for 404/500 instead of JSON.
 5. If OIDC providers use `form_post`: adjust SameSite/CSRF for that callback path [§3.5.3 SG-5].
 6. Enable `adcp_session` cookie name [§1.2].
-7. Add `pyproject.toml` deps: `pydantic-settings>=2.7.0`, `itsdangerous>=2.2.0` [§4 Wave 1].
+7. Verify `pyproject.toml` deps `pydantic-settings>=2.7.0` and `itsdangerous>=2.2.0` were added in Phase 0 [§4 Wave 1].
 8. Send 48-hour customer communication for forced re-login [§3.5.6 EP-7].
 9. Write `test_stale_flask_cookie_returns_login.py` — old `session=` cookie returns login page, not 500 [§4 Wave 1].
 10. Rollback procedure tested in staging [§4 Wave 1].
@@ -310,14 +316,16 @@ def get_tenant_stats(
 6. Port 8 GAM inventory routes from `src/services/gam_inventory_service.py` to `src/admin/routers/inventory_api.py` — these are NOT blueprints and would be missed otherwise. Sync `def` with `with get_db_session()` [§3.5.3 SG-1].
 7. Change `register_ui_routes(app: Flask)` interface to accept `APIRouter`; re-home adapter routes into `src/admin/routers/adapters.py` [§3.5.3 SG-3].
 8. Migrate Flask imports in `src/services/` and `src/adapters/` files [§3.5.3 SG-6].
-9. Delete 21 blueprint files, legacy test files/fixtures [§4 Wave 2].
+9. Delete 24 blueprint files (26 total minus `__init__.py` minus `activity_stream.py`), legacy test files/fixtures, `src/admin/tests/` nested directory [§4 Wave 2].
 10. Shrink Flask imports allowlist to 3 entries [§4 Wave 2].
 11. Write `test_flask_catchall_unreached.py` [§4 Wave 2].
 12. Coverage parity check via `scripts/check_coverage_parity.py` [§4 Wave 2].
 13. Playwright staging flows: login, create account, create/delete product, logout [§4 Wave 2].
 
 **Files to create:** 14 HTML routers, 4 API routers, `inventory_api.py`, `adapters.py`, test files.
-**Files to delete:** 21+ blueprint files, legacy tests.
+**Files to delete:** 24 blueprint files, `src/admin/tests/` (7 files), legacy tests, `src/admin/auth_helpers.py`.
+
+**Test blast radius:** 25 files use Flask `test_client()`, 15 use `session_transaction()`. Two replacement patterns: (1) `dependency_overrides` for auth priming (80% of cases), (2) signed cookie injection via `itsdangerous` for session behavior tests. Port `src/admin/auth_helpers.py` `require_api_key_auth()` to FastAPI dependency. Remove Flask `request` import from `src/adapters/gam_inventory_discovery.py:1074`.
 
 **Exit gate:**
 ```bash

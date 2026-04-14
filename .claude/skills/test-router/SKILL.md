@@ -53,7 +53,9 @@ For each route in the router, write AT MINIMUM:
 
 | Test type | What to assert |
 |---|---|
-| **Happy path** | Status code matches golden fixture (200 for GET, 302 for POST-redirect-GET). Content-type matches. For HTML: key elements present. For JSON: key schema matches golden fixture. |
+| **Happy path** | Status code matches golden fixture (200 for GET, 303 for POST-redirect-GET). Content-type matches. For HTML: key elements present. For JSON: key schema matches golden fixture. |
+| **Route names** | Route names follow `admin_{blueprint}_{endpoint}` convention and `request.url_for()` resolves correctly. |
+| **Router config** | Router uses `redirect_slashes=True, include_in_schema=False`. |
 | **Auth failure** | Request without session → 401 or redirect to login |
 | **Not found** | Invalid tenant_id or entity ID → 404 |
 | **Form validation** (POST routes) | Missing required field → re-render form with error, NOT 500 |

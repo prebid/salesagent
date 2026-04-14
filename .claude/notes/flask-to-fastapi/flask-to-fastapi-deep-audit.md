@@ -213,7 +213,7 @@ SessionLocal = scoped_session(sessionmaker(bind=_engine))
 - **Option B: Every `async def` admin handler wraps sync DB calls in `run_in_threadpool(_sync_fetch)`.** Feasible but bug-prone — one forgotten wrap causes session interleaving. Not chosen.
 - **Option C: Default admin handlers to sync `def`.** FastAPI auto-offloads to threadpool workers; each worker thread has its own session identity so `scoped_session` isolates correctly. Matches today's Flask semantics. Minimal v2.0 scope. Does NOT fix the pre-existing REST latent bug (which is on `async def` handlers). Was the pre-pivot choice.
 
-**Resolution: Option A (chosen 2026-04-11).** The user directive absorbed async SQLAlchemy into v2.0 as Waves 4-5. Rationale:
+**Resolution: Option A (chosen 2026-04-11).** **[REVERSED 2026-04-12]** Full async deferred to v2.1. v2.0 ships sync `def` handlers with existing `scoped_session` (Option C). See `execution-plan.md`. Original rationale preserved below for v2.1 reference:
 
 1. **Greenfield 2026 FastAPI codebases write fully async code.** Sync `def` + threadpool is a scope-reduction hack, not the end state.
 2. **Fixes a pre-existing latent bug as a side effect.** `src/routes/api_v1.py` already has the scoped_session race on async tasks. Option A eliminates it; Option C leaves it intact.
@@ -260,7 +260,7 @@ SessionLocal = scoped_session(sessionmaker(bind=_engine))
 # outermost → innermost
 CORSMiddleware
 SessionMiddleware
-CSRFMiddleware                         # ← BEFORE approximated
+CSRFOriginMiddleware                         # ← BEFORE approximated
 ApproximatedExternalDomainMiddleware   # ← AFTER CSRF
 RestCompatMiddleware
 UnifiedAuthMiddleware
@@ -282,7 +282,7 @@ The entire external-domain onboarding flow is broken by the middleware order.
 CORSMiddleware
 SessionMiddleware
 ApproximatedExternalDomainMiddleware   # ← MOVED UP
-CSRFMiddleware
+CSRFOriginMiddleware
 RestCompatMiddleware
 UnifiedAuthMiddleware
 ```
@@ -351,7 +351,7 @@ Beyond the six blockers, several Flask-specific behaviors are implicit in the cu
 
 **Action:** the new `CurrentTenantDep` in FastAPI MUST filter `is_active=True` on the Tenant query. This is a behavior change vs Flask, but it's a bug fix, not a regression.
 
-### 2.2 `audit_decorator` is Flask-specific and needs async rewrite
+### 2.2 `audit_decorator` is Flask-specific and needs sync port to FastAPI Depends pattern (replacing Flask `g`/`request`/`session`)
 
 **File:** `src/admin/utils/audit_decorator.py`
 
@@ -596,7 +596,7 @@ Atomic cleanup in v2.1: remove the fallback, remove `FLASK_SECRET_KEY` from `set
 
 **Why this matters:**
 - A2A handlers sit at the top level of the FastAPI router tree, inside the same ASGI scope as everything else
-- FastAPI middleware (`UnifiedAuthMiddleware`, `RestCompatMiddleware`, `CORSMiddleware`, plus the future `SessionMiddleware`/`CSRFMiddleware`/`ApproximatedExternalDomainMiddleware` from Wave 1) all reach A2A handlers because they share the root scope
+- FastAPI middleware (`UnifiedAuthMiddleware`, `RestCompatMiddleware`, `CORSMiddleware`, plus the future `SessionMiddleware`/`CSRFOriginMiddleware`/`ApproximatedExternalDomainMiddleware` from Wave 1) all reach A2A handlers because they share the root scope
 - `scope["state"]["auth_context"]` propagates cleanly into A2A handlers
 - `_replace_routes()` at `src/app.py:192-215` walks `app.routes` to find the SDK's three static agent-card paths (`/.well-known/agent-card.json`, `/.well-known/agent.json`, `/agent.json`) and swaps them for dynamic `Route(path, dynamic_agent_card, methods=[...])` objects that read `Apx-Incoming-Host`/`Host` headers and emit tenant-aware agent cards. This swap depends on the A2A routes being visible at the top level of `app.routes`.
 
@@ -814,7 +814,7 @@ Sorted by severity:
 | B5 | 🚨 BLOCKER | Middleware order — Approximated must run BEFORE CSRF | `src/app.py` middleware stack | Wave 1 |
 | B6 | 🚨 BLOCKER | OAuth redirect URIs must be byte-identical to Google Cloud Console | `src/admin/routers/auth.py` | Wave 1 + staging smoke |
 | R1 | ⚠️ RISK | `require_tenant_access` doesn't check `tenant.is_active` (pre-existing) | `src/admin/utils/helpers.py:291-372` | Wave 2 |
-| R2 | ⚠️ RISK | `audit_decorator` needs full async rewrite | `src/admin/utils/audit_decorator.py` | Wave 0 foundation |
+| R2 | ⚠️ RISK | `audit_decorator` needs full sync port to FastAPI Depends pattern (replacing Flask `g`/`request`/`session`) | `src/admin/utils/audit_decorator.py` | Wave 0 foundation |
 | R3 | ⚠️ RISK | `inject_context` DB lookup per render — use repository | `src/admin/app.py:298-330` | Wave 0 |
 | R4 | ⚠️ RISK | Triple proxy middleware stack — must preserve via uvicorn flags | `src/admin/app.py:186-191` | Wave 1 |
 | R5 | ⚠️ RISK | `SESSION_COOKIE_HTTPONLY=False` — verify no JS reads cookie | `src/admin/app.py:114-131` | Wave 0 audit |

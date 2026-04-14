@@ -18,6 +18,8 @@ This document elaborates three sections of `/Users/quantum/Documents/ComputedCha
 
 ### Pre-Wave-0 — Spike sequence gate (5.5-7.5 days, hard gate)
 
+> **[DEFERRED TO v2.1]** The spike sequence below was designed for the async pivot. Under sync v2.0, these spikes are not needed. Preserved for v2.1 reference.
+
 This gate was added by the 2026-04-11 async pivot (`async-pivot-checkpoint.md`). Under the pivot, v2.0 absorbs full async SQLAlchemy as Waves 4-5. Before a single Wave 0 line of code is written, a 5.5-7.5 day spike sequence must execute on a throwaway branch `spike/async-pivot-gate` to prove the absorbed-async scope is tractable. The spike gate has one hard blocker (Spike 1) and eight soft blockers. If the hard blocker fails, the entire pivot reverts and v2.0 falls back to Option C (sync-def admin handlers) with async SQLAlchemy deferred to v2.1. The gate is governed by `async-audit/agent-b-risk-matrix.md` §4 and `async-audit/agent-a-scope-audit.md` §6; CLAUDE.md §"Mandatory pre-Wave-0 spike sequence" enumerates the **10-spike list** that every fresh session must honor. **Spikes 4.25, 4.5 and 5.5 were added on 2026-04-11 by the Decision 3 (factory-boy shim), Decision 7 (ContextManager refactor) and Decision 9 (background_sync sync-bridge) deep-think analyses — see CLAUDE.md §"Open decisions blocking Wave 4" resolutions for full context.**
 
 #### A. Detailed acceptance criteria
@@ -177,12 +179,12 @@ urgently needs a fix, ping @migration-squad and we'll coordinate.
 1. `/Users/quantum/Documents/ComputedChaos/salesagent/src/admin/templating.py` exists, exports `render(request, name, context)` and a module-level `templates: Jinja2Templates` singleton; `python -c "from src.admin.templating import render, templates"` succeeds.
 2. `/Users/quantum/Documents/ComputedChaos/salesagent/src/admin/flash.py` exposes `flash(request, message, category='info')` and `get_flashed_messages(request, with_categories=False)`; both are imported by `templating.py` and exposed as Jinja globals.
 3. `/Users/quantum/Documents/ComputedChaos/salesagent/src/admin/sessions.py` exports `build_session_middleware_kwargs() -> dict`, returning `secret_key` from `SESSION_SECRET`, `session_cookie='adcp_session'`, `same_site='lax'`, `https_only=True` in production.
-4. `/Users/quantum/Documents/ComputedChaos/salesagent/src/admin/csrf.py` exposes a pure-ASGI `CSRFMiddleware` class plus `csrf_token(request)` jinja helper; `python -c "from src.admin.csrf import CSRFMiddleware"` succeeds.
+4. `/Users/quantum/Documents/ComputedChaos/salesagent/src/admin/csrf.py` exposes a pure-ASGI `CSRFOriginMiddleware` class (Origin header validation, NOT Double Submit Cookie); `python -c "from src.admin.csrf import CSRFOriginMiddleware"` succeeds.
 5. `/Users/quantum/Documents/ComputedChaos/salesagent/src/admin/oauth.py` registers an `authlib.integrations.starlette_client.OAuth` instance named `oauth` with a Google client; module-level constant `GOOGLE_CLIENT_NAME = "google"`.
-6. `/Users/quantum/Documents/ComputedChaos/salesagent/src/admin/deps/auth.py` exports `CurrentUserDep`, `RequireAdminDep`, `RequireSuperAdminDep` as `Annotated[...]` aliases with module-level `async def` dep functions (full-async pivot 2026-04-11 — dep functions use `async with get_db_session()` and `await db.execute(...)`).
+6. `/Users/quantum/Documents/ComputedChaos/salesagent/src/admin/deps/auth.py` exports `CurrentUserDep`, `RequireAdminDep`, `RequireSuperAdminDep` as `Annotated[...]` aliases with module-level sync `def` dep functions (use `with get_db_session()` and `session.execute(...)`). **[REVERSED 2026-04-12 — v2.0 uses sync def, not async def]**
 7. `/Users/quantum/Documents/ComputedChaos/salesagent/src/admin/app_factory.py::build_admin_router()` returns an empty `APIRouter(prefix="/admin", tags=["admin"])` — importable, callable, returns a non-None router.
-8. `/Users/quantum/Documents/ComputedChaos/salesagent/scripts/codemod_templates.py` runs to completion against all 72 templates in `/Users/quantum/Documents/ComputedChaos/salesagent/templates/` with exit code 0; stdout reports a count line `"72 templates processed, N transformations applied"`.
-9. After the codemod runs, `git diff --stat templates/` shows changes in at least 40 files (every template with a `url_for` call); `grep -R "url_for(" templates/ | wc -l` output unchanged (the codemod rewrites the *argument* of `url_for`, not its name).
+8. `/Users/quantum/Documents/ComputedChaos/salesagent/scripts/codemod_templates_greenfield.py` exists and parses (`python -c "import ast; ast.parse(open('scripts/codemod_templates_greenfield.py').read())"` exit 0). **[MOVED TO PHASE 1a — codemod execution breaks Flask's url_for while Flask still serves traffic. Phase 0 creates the script; Phase 1a runs it atomically with FastAPI activation.]**
+9. ~~After the codemod runs, `git diff --stat templates/` shows changes in at least 40 files.~~ **[MOVED TO PHASE 1a — see item 8.]**
 10. `/Users/quantum/Documents/ComputedChaos/salesagent/tests/admin/test_templates_url_for_resolves.py` exists and **passes against an empty admin router** — it iterates every `url_for("name")` literal in templates and asserts the endpoint name follows the `bp_endpoint` flat-naming convention (regex `^[a-z_][a-z0-9_]*$`) without yet requiring the endpoint to resolve.
 11. `tests/harness/_base.py::IntegrationEnv` has a new method `get_admin_client()` that is a sibling of `get_rest_client()` at line 894, lazy-caches `self._admin_client`, and returns a `TestClient` with admin dep overrides.
 12. `python -c "from tests.harness import IntegrationEnv; env = IntegrationEnv(tenant_id='t1', principal_id='p1'); env.__enter__(); env.get_admin_client()"` succeeds (even though the router is empty, the TestClient construction must not error).
@@ -207,7 +209,7 @@ urgently needs a fix, ping @migration-squad and we'll coordinate.
 - `/Users/quantum/Documents/ComputedChaos/salesagent/src/admin/middleware/external_domain.py` (~90 LOC, pure-ASGI)
 - `/Users/quantum/Documents/ComputedChaos/salesagent/src/admin/middleware/fly_headers.py` (~40 LOC, pure-ASGI)
 - `/Users/quantum/Documents/ComputedChaos/salesagent/src/admin/routers/__init__.py` (2 LOC)
-- `/Users/quantum/Documents/ComputedChaos/salesagent/scripts/codemod_templates.py` (~80 LOC)
+- `/Users/quantum/Documents/ComputedChaos/salesagent/scripts/codemod_templates_greenfield.py` (~80 LOC)
 - `/Users/quantum/Documents/ComputedChaos/salesagent/tests/admin/test_templates_url_for_resolves.py` (~150 LOC)
 - `/Users/quantum/Documents/ComputedChaos/salesagent/tests/unit/test_architecture_no_flask_imports.py` (~100 LOC — empty allowlist check, will guard Wave 2+)
 - `/Users/quantum/Documents/ComputedChaos/salesagent/tests/unit/test_foundation_modules_import.py` (~50 LOC — smoke test that every foundation module imports cleanly)
@@ -240,7 +242,7 @@ git revert -m 1 <wave-0-merge-sha>
 git push origin main
 ```
 
-Database state: no migrations. No env var changes require backing out (SESSION_SECRET only needs to be set when Wave 1 lands). Rollback window: until Wave 1 merges. After Wave 1 merges, a Wave 0 revert is still safe as long as the revert preserves `src/admin/templating.py` (Wave 1 depends on it) — so rollback becomes a *partial* revert by that point: `git revert <sha> -- templates/ scripts/codemod_templates.py` only, leaving foundation modules in place.
+Database state: no migrations. No env var changes require backing out (SESSION_SECRET only needs to be set when Wave 1 lands). Rollback window: until Wave 1 merges. After Wave 1 merges, a Wave 0 revert is still safe as long as the revert preserves `src/admin/templating.py` (Wave 1 depends on it) — so rollback becomes a *partial* revert by that point: `git revert <sha> -- templates/ scripts/codemod_templates_greenfield.py` only, leaving foundation modules in place.
 
 #### E. Merge-conflict resolution
 
@@ -252,7 +254,7 @@ Database state: no migrations. No env var changes require backing out (SESSION_S
 to <date> 23:59 UTC. Avoid opening PRs that touch files under templates/.
 If you must, rebase onto main after the codemod lands; expect conflicts
 on url_for(...) sites and resolve by re-running:
-    python scripts/codemod_templates.py templates/your_file.html
+    python scripts/codemod_templates_greenfield.py templates/your_file.html
 ```
 
 **Rebase strategy:** for conflicting PRs, `git checkout main -- templates/<file.html>` to take the post-codemod version, then re-apply the PR's semantic edits on top. Because the codemod is idempotent, re-running it on a rebased branch produces no diff if already applied.
@@ -274,7 +276,7 @@ on url_for(...) sites and resolve by re-running:
 **Exit:**
 - All 15 Wave-0 acceptance criteria pass.
 - `rg -n "url_for" templates/ | wc -l` output ≥ 134 (§3.4 baseline) — codemod did not drop references.
-- `python scripts/codemod_templates.py --check templates/` returns exit code 0 (idempotent re-run).
+- `python scripts/codemod_templates_greenfield.py --check templates/` returns exit code 0 (idempotent re-run).
 - Coverage for `src/admin/**` not yet changed (foundation modules have smoke-test-only coverage; that's acceptable because nothing calls them yet).
 - `git log --oneline main..HEAD` shows a single squashed merge commit.
 
@@ -335,7 +337,7 @@ on url_for(...) sites and resolve by re-running:
 | Authlib `starlette_client.OAuth` has a silent API drift from `flask_client.OAuth` around `authorize_redirect` signatures | Medium | High — OAuth callback 500s | Spike a Playwright happy-path in staging **before** the Wave 1 PR is marked ready. Entry criterion #5 below. |
 | `request.url_for("bp_endpoint")` fails to resolve because `APIRouter(prefix="/admin")` nests another prefix | Medium | High — `NoMatchFound` at runtime | Assumption #19 verified via `test_url_for_nesting.py` that calls `request.url_for` on a router mounted the same way. |
 | Concurrent PRs rename routes in `/Users/quantum/Documents/ComputedChaos/salesagent/templates/base.html` (header nav) during Wave 1 branch | High | Medium — merge conflict hell | Declare `src/admin/routers/public.py|core.py|auth.py|oidc.py` freeze; template conflicts resolved by re-running codemod. |
-| CSRFMiddleware kills OAuth callback because Google POSTs the callback with no session cookie yet | Medium | Critical — OAuth broken | CSRF middleware exempts paths in a hardcoded list: `/admin/auth/callback`, `/admin/auth/oidc/callback/{tenant_id}`, `/api/v1/*`, `/a2a/*`, `/mcp/*`. Test asserts POST to exempt paths without CSRF returns the handler's response, not 403. |
+| CSRFMiddleware kills OAuth callback because Google POSTs the callback with no session cookie yet | Medium | Critical — OAuth broken | CSRF middleware exempts paths in a hardcoded list: `/admin/auth/callback`, `/admin/auth/oidc/callback`, `/api/v1/*`, `/a2a/*`, `/mcp/*`. Test asserts POST to exempt paths without CSRF returns the handler's response, not 403. |
 | Staging `SESSION_SECRET` leaks in logs or environment dumps | Low | Medium | Code review gate: grep PR for any `logger.info.*SESSION_SECRET` or `print.*SESSION_SECRET`. |
 | `SessionMiddleware` payload exceeds 3.5KB for super-admin sessions | Low | Medium — cookie silently truncated | Verification test (see Part 2 assumption #5). If fails, fallback to `starlette-session` Redis backend; not a release-blocker because super-admin is a tiny user set. |
 
@@ -1119,7 +1121,7 @@ Grouped by verification strategy. HIGH confidence assumptions get single-line pl
 - **Fallback:** manually tag scenarios with `@transport-rest-only`.
 
 **15. Codemod regex handles JS template literal `url_for`.**
-- **How:** `scripts/codemod_templates.py --dry-run templates/add_product_gam.html` prints 15 target transformations. Manual diff review.
+- **How:** `scripts/codemod_templates_greenfield.py --dry-run templates/add_product_gam.html` prints 15 target transformations. Manual diff review.
 - **When:** Wave 0, during codemod authoring.
 - **Failure symptom:** JS fetch URLs left as Flask route names; `add_product_gam.html` page broken post-migration.
 - **Fallback:** hand-edit the 4 tricky files from §12.5 after the codemod pass.
@@ -1162,7 +1164,7 @@ Grouped by verification strategy. HIGH confidence assumptions get single-line pl
 
 ### Group 3: LOW confidence (7 — full recipes)
 
-**22. `SessionMiddleware` + SameSite=None prod tabs work.**
+**22. `SessionMiddleware` + SameSite=Lax in all environments.** **[REVERSED — SameSite=Lax everywhere per CLAUDE.md blocker 5]**
 - **How:** Playwright test opens admin login in tab 1, opens admin dashboard in tab 2, asserts session cookie carries between tabs. Run against staging.
 - **When:** Wave 1 exit.
 - **Failure symptom:** second tab gets redirected to login.

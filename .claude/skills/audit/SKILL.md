@@ -2,16 +2,15 @@
 name: audit
 description: >
   Run a repeatable code review audit on migration changes. Inventories files by
-  architectural layer, reviews each layer against #1050/#1066 principles, and
-  files beads issues for findings. Re-run after remediation batches to track
-  progress.
+  architectural layer, reviews each layer against migration principles, and
+  writes findings to a report. Re-run after remediation batches to track progress.
 args: [audit-target]
 ---
 
 # Migration Audit
 
 Repeatable code review workflow for auditing migration changes. Produces
-structured review documents and beads issues for every finding.
+structured review documents for every finding.
 
 ## Args
 
@@ -20,60 +19,47 @@ structured review documents and beads issues for every finding.
 ```
 
 The audit target (optional, defaults to "full"):
-- **Branch**: `KonstantinMirin/adcp-v3-upgrade` — review all changes on branch
+- **Branch**: `feat/v2.0.0-flask-to-fastapi` — review all changes on branch
 - **Commit range**: `main..HEAD` — review commits in range
 - **"full"**: Audit entire codebase against architecture principles
 
 ## What It Produces
 
 1. **Change inventory** by architectural layer (schema, business, boundary, transport, adapter, database, test)
-2. **Layer-specific reviews** against #1050/#1066 checklists
+2. **Layer-specific reviews** against migration checklists
 3. **Consolidated report** in `docs/code-reviews/`
-4. **Beads issues** for every finding not already tracked
 
 ## Protocol
 
-### Step 1: Cook the molecule
+### Step 1: Identify scope
+
+Read `.claude/notes/flask-to-fastapi/execution-plan.md` to identify the current phase and which architectural layers are affected. If an audit target was given, scope to that target; otherwise audit all layers.
 
 ```bash
-python3 .claude/scripts/cook_formula.py \
-  --formula .claude/formulas/migration-audit.yaml \
-  --var "AUDIT_TARGET={all_args}" \
-  --epic-title "Audit: {all_args}"
+# Inventory changed files by layer
+git diff --name-only main...HEAD | sort
 ```
 
-If no target specified, use "full":
-```bash
-python3 .claude/scripts/cook_formula.py \
-  --formula .claude/formulas/migration-audit.yaml \
-  --var "AUDIT_TARGET=full" \
-  --epic-title "Audit: full codebase"
-```
+### Step 2: Review each layer
 
-**Dry run first** (recommended):
-```bash
-python3 .claude/scripts/cook_formula.py \
-  --formula .claude/formulas/migration-audit.yaml \
-  --var "AUDIT_TARGET={all_args}" \
-  --epic-title "Audit: {all_args}" \
-  --dry-run
-```
+Walk each architectural layer sequentially. For each file in the layer:
 
-### Step 2: Walk the molecule
+1. Read the file
+2. Check against the layer review checklist (see table below)
+3. Note any findings with file path, line number, and violation description
 
-```
-bd ready → bd show <atom-id> → execute → bd close <atom-id> → repeat
-```
+### Step 3: Write report
 
-Linear pipeline: inventory-changes → review-per-layer → consolidate → file-issues → commit-report.
+Write the consolidated audit report to `docs/code-reviews/` with:
+- Timestamp and audit scope
+- Per-layer findings table
+- Summary counts (pass / warn / fail)
 
-### Step 3: Done when report committed
-
-Audit report in `docs/code-reviews/`, beads issues filed for all findings.
+Commit the report with message: `docs: migration audit — <scope>`
 
 ## Layer Review Checklists
 
-Each layer has a specific checklist (see formula for full details):
+Each layer has a specific checklist:
 
 | Layer | Key Checks |
 |-------|-----------|
@@ -83,6 +69,7 @@ Each layer has a specific checklist (see formula for full details):
 | Transport | Shared _impl pattern, no business logic duplication |
 | Database | SQLAlchemy 2.0, JSONType, correct column types |
 | Adapter | No protocol code, proper error propagation |
+| Admin | Handlers use sync `def` (not `async def`) — except OAuth callbacks which must be `async def` for Authlib. `with get_db_session()` inside handler body. Named routes with `admin_` prefix. `url_for()` in templates, no hardcoded paths. |
 
 ## Re-Running After Remediation
 
@@ -98,5 +85,4 @@ Compare reports across runs to track progress.
 
 - `/surface` — Create entity test suites for coverage gaps found in audit
 - `/guard` — Structural guards enforce the principles audit checks for
-- `/remediate` — Fill test stubs to fix the issues audit finds
-- `/mol-execute` — Execute individual beads tasks for specific findings
+- `/phase-gate` — Validate phase exit criteria

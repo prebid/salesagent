@@ -44,7 +44,8 @@ These were surfaced by the 2nd/3rd-order audit. Every one of them has shipped-br
 ## Recommended reading order (fresh reader, ~2 hours)
 
 1. **This file** — you are here. Mission, blockers, map.
-2. **`flask-to-fastapi-migration.md` §1–§2.8** — overall context, Phase 1 vs Phase 2 framing, AdCP boundary verification, deep-audit summary. Skim the rest.
+2. **`execution-plan.md`** — START HERE for implementation. Canonical sync patterns and 7-phase definitions.
+3. **`flask-to-fastapi-migration.md` §1–§2.8** — overall context, Phase 1 vs Phase 2 framing, AdCP boundary verification, deep-audit summary. Skim the rest.
 3. **`flask-to-fastapi-deep-audit.md` §1–§2** — read the 6 blockers and the risk register in full detail. This is the single most important read after the overview.
 4. **`implementation-checklist.md`** — know what the per-wave acceptance criteria actually are. This is the "am I ready?" source of truth.
 5. **`flask-to-fastapi-adcp-safety.md`** — confirm the AdCP boundary is clear; note the 8 first-order action items.
@@ -200,7 +201,7 @@ Catalogued in `flask-to-fastapi-adcp-safety.md`; listed here so they are not los
 ## Branch and folder cleanup intent
 
 - **Branch:** `feat/v2.0.0-flask-to-fastapi`. All migration work lives here.
-- **Merge cadence:** one PR per phase, 4 phases total (Phase 0-3 Flask removal + admin FastAPI rewrite, sync handlers throughout). Async SQLAlchemy deferred to v2.1. See `execution-plan.md` for phase details.
+- **Merge cadence:** one PR per phase, 7 phases: Phase 0, 1a, 1b, 2a, 2b, 3, 4 (see `execution-plan.md`). Sync handlers throughout. Async SQLAlchemy deferred to v2.1.
 - **Post-migration cleanup:** `.claude/notes/flask-to-fastapi/` is a planning-phase artifact. After v2.0.0 ships and stabilizes (~2 releases later), archive or delete this folder. Anything worth keeping long-term gets promoted to `docs/` or `CLAUDE.md` at the repo root.
 
 ---

@@ -68,7 +68,7 @@ Flask contributes:
 3. **Session cookie hard cutover:** one forced re-login at deploy is acceptable.
 4. **URL prefix stays `/admin/`** (bookmarks, docs, runbooks all reference it; zero benefit to moving to root).
 5. **`SESSION_SECRET` env var hard-required, `KeyError` at startup, no `secrets.token_hex()` fallback.** The old dev-mode fallback was a security smell anyway.
-6. **Full async SQLAlchemy absorbed into v2.0** (Option A from deep audit §1.4; pivoted 2026-04-11). v2.0 admin handlers are `async def` end-to-end with `AsyncSession` + `async_sessionmaker`; driver moves from `psycopg2-binary` to `asyncpg`. `run_in_threadpool` is reserved for genuinely blocking non-DB work (file I/O, CPU-bound calls, sync third-party libraries). See `async-pivot-checkpoint.md` (new target state in §3) and §18 (v2.0 Wave 4-5 execution).
+6. **[REVERSED 2026-04-12] Sync SQLAlchemy for admin handlers in v2.0.** v2.0 admin handlers are sync `def` with `with get_db_session() as session:` using the existing `scoped_session` + `Session` infrastructure. Driver stays `psycopg2-binary`. Async SQLAlchemy (`AsyncSession`, `asyncpg`, `SessionDep`) deferred to v2.1 when measured production load justifies it. MCP and A2A handlers remain `async def` unchanged. See `execution-plan.md` for canonical sync patterns.
 7. **CSRF: roll-your-own Double Submit Cookie (~100 LOC, `src/admin/csrf.py`).** **[SUPERSEDED 2026-04-11]** CSRF strategy changed to Option A — SameSite=Lax + CSRFOriginMiddleware (~70 LOC). See CLAUDE.md blocker 5. ~~No external dep risk, bespoke to our form-post admin UI. See §11.6.~~
 8. **Error-shape split** (refined post AdCP safety audit):
    - **Category 1** (internal admin UI AJAX endpoints called by our own JavaScript — e.g. `change_account_status`, `src/admin/blueprints/api.py` dashboard AJAX, `src/admin/blueprints/format_search.py` format picker, **and `src/adapters/gam_reporting_api.py`** which is admin-session-authed) → native FastAPI `{"detail": "..."}`. We update our own JS in the same PR.
@@ -143,7 +143,7 @@ The first-order audit (§2.7) verified AdCP protocol safety. A subsequent **deep
 
 ### Plan defaults that change as a result
 
-- **Admin handlers are `async def` end-to-end with full async SQLAlchemy** (pivoted 2026-04-11 from the original sync-def flip). Every handler uses `async with get_db_session() as session:` and `await session.execute(...)` via repositories. `run_in_threadpool` is reserved for file I/O, CPU-bound, or sync-third-party operations only — never for DB access. See `async-pivot-checkpoint.md` §3 for target-state code.
+- **[REVERSED 2026-04-12]** ~~Admin handlers are `async def` end-to-end with full async SQLAlchemy.~~ **v2.0 uses sync `def` handlers with `with get_db_session() as session:`.** Async SQLAlchemy deferred to v2.1. See `execution-plan.md` for canonical sync patterns.
 - **Middleware order swaps Approximated and CSRF** — Approximated runs before CSRF, not after.
 - **Redirect code changes from 302 to 307** — preserves POST body on external-domain redirect.
 - **`render()` wrapper uses `url_for` exclusively** — no `admin_prefix`/`static_prefix`/`script_root` globals. Handlers pass any pre-resolved base URLs (for JS consumption) via per-render context vars named `js_*_base` (e.g. `js_workflows_base = str(request.url_for('admin_workflows_list_workflows', tenant_id=tenant_id))`). A `_url_for` safe-lookup override in `render()` catches `NoMatchFound` and logs the offending template filename before re-raising.
@@ -697,7 +697,7 @@ app.add_middleware(
     secret_key=os.environ["SESSION_SECRET"],
     session_cookie="adcp_session",
     max_age=14 * 24 * 3600,
-    same_site="none" if production else "lax",
+    same_site="lax",  # [REVERSED 2026-04-12] SameSite=Lax in all environments per CLAUDE.md blocker 5
     https_only=production,
     path="/",
 )
@@ -1084,7 +1084,7 @@ def session_middleware_kwargs() -> dict:
         "secret_key": os.environ["SESSION_SECRET"],   # HARD-REQUIRED
         "session_cookie": "adcp_session",
         "max_age": 14 * 24 * 3600,
-        "same_site": "none" if production else "lax",
+        "same_site": "lax",  # [REVERSED 2026-04-12] SameSite=Lax everywhere
         "https_only": production,
         "path": "/",
     }
@@ -1252,9 +1252,11 @@ def invalidate_tenant_oidc_client(tenant_id: str) -> None:
 
 OAuth state rides on `request.session` — same cookie as admin session.
 
-### 11.6 CSRF: roll-your-own Double Submit Cookie (`src/admin/csrf.py`, ~100 LOC)
+### 11.6 CSRF: ~~roll-your-own Double Submit Cookie~~ CSRFOriginMiddleware (`src/admin/csrf.py`, ~120 LOC)
 
-**Decision: bespoke, not a library.** Zero external dep risk, full control.
+> **[SUPERSEDED 2026-04-11]** The Double Submit Cookie approach below was rejected. v2.0 implements **CSRFOriginMiddleware** (~120 LOC, pure-ASGI Origin header validation). SameSite=Lax session cookie + Origin validation. Zero JavaScript changes, zero template changes, zero form changes. See `flask-to-fastapi-foundation-modules.md` section 11.7 for the correct implementation.
+
+**Original description (superseded):** ~~Decision: bespoke, not a library.~~ Zero external dep risk, full control.
 
 Mechanism:
 1. On safe-method requests (GET/HEAD/OPTIONS), middleware generates a token via `itsdangerous.URLSafeTimedSerializer`, sets it as `adcp_csrf` cookie (SameSite=Lax, Secure in prod, HttpOnly=False for JS XHR), stashes on `request.state.csrf_token`
@@ -2056,7 +2058,7 @@ Eight waves imply safety via backward-compat seams — exactly what the user rej
 
 ### LOW confidence (7) — audit before cutover
 
-22. **`SessionMiddleware` + SameSite=None prod tabs work.** Playwright test.
+22. **`SessionMiddleware` + SameSite=Lax in all environments.** **[REVERSED 2026-04-12]** SameSite=Lax everywhere per CLAUDE.md blocker 5. Playwright test.
 23. **No monitoring parses old `[SESSION_DEBUG]` log lines.** Grep deploy configs.
 24. **`test_mode` global injectable via small dep** without leaking test surface.
 25. **`tenant_management_api`, `sync_api`, `gam_reporting_api` are thin wrappers.** Manual read-through in Wave 2.

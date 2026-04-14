@@ -186,6 +186,8 @@ def test_no_admin_paths_in_openapi():
 
 **Verdict:** CLEAR, provided `CSRFMiddleware` is implemented with the exempt-prefix check BEFORE any `await receive()` call. The foundation modules companion file enforces this.
 
+**[UPDATE 2026-04-11]** Under the decided CSRF strategy (CSRFOriginMiddleware / Option A), there is NO body reading. The CSRFMiddleware-vs-RestCompatMiddleware body-read conflict described above is eliminated entirely. CSRFOriginMiddleware validates the Origin header only — zero interaction with the request body.
+
 ### SessionMiddleware side effects on AdCP paths
 
 **Verified from Starlette 0.50.0 `SessionMiddleware` source** (`starlette/middleware/sessions.py`):

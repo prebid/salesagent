@@ -10,8 +10,8 @@ Conventions used below (established in §11 of the main doc):
 - `flash(request, msg, category)` → native utility at `src/admin/flash.py`
 - `AdminRedirect` → typed exception handled by `src/app.py` → `RedirectResponse(303)`
 - `oauth` → module-level `authlib.integrations.starlette_client.OAuth` instance at `src/admin/oauth.py`
-- All SQLAlchemy is async (full-async pivot 2026-04-11): `async with get_db_session() as db:` / `await db.execute(...)` / `.scalars().first()`. `run_in_threadpool` is used only for genuinely blocking non-DB operations (file I/O, CPU-bound work, sync third-party libraries) — never for DB access. See `async-pivot-checkpoint.md` §3 for target-state patterns.
-- CSRF validated globally by `CSRFMiddleware` (§11.6); form templates include `<input name="csrf_token" value="{{ csrf_token }}">`
+- All admin SQLAlchemy is sync (async pivot reversed 2026-04-12): `with get_db_session() as session:` / `session.scalars(stmt).first()`. `run_in_threadpool` is used ONLY in the 3-4 OAuth callback handlers that must be `async def` for Authlib compatibility — and only for DB-touching helper functions called from those handlers. MCP and A2A handlers remain async. See `execution-plan.md` Phase 0 for the canonical handler pattern.
+- CSRF protection uses SameSite=Lax session cookie + CSRFOriginMiddleware (Origin header validation). No csrf_token form fields, no X-CSRF-Token headers, no JavaScript changes needed.
 
 ---
 
@@ -548,7 +548,7 @@ async def _lookup_idp_logout_url(tenant_id: str) -> str | None:
 | `url_for("auth.login")` | `request.url_for("auth_login")` | Flat name, no blueprint dot-separator. Returns a `URL` object with `.include_query_params()`. |
 | `redirect(...)` (302 by Flask default) | `RedirectResponse(..., status_code=303)` | 303 is the POST-redirect-GET spec-correct code; matches §11.1 convention. |
 | `flash("msg", "error")` (Flask global) | `flash(request, "msg", "error")` (§11.3) | `request` parameter required; flash bucket lives on `request.session`. |
-| `render_template("login.html", ...)` | `render(request, "login.html", {...})` | Wrapper at `src/admin/templating.py` injects `csrf_token`, `support_email`, `sales_agent_domain`, and pre-registers a `_url_for` safe-lookup override on `templates.env.globals`. Templates use `{{ url_for('admin_auth_login') }}` for admin paths and `{{ url_for('static', path='/validation.css') }}` for static assets — **NO `script_root`/`admin_prefix`/`static_prefix` globals exist** (greenfield). |
+| `render_template("login.html", ...)` | `render(request, "login.html", {...})` | Wrapper at `src/admin/templating.py` injects `support_email`, `sales_agent_domain`, and pre-registers a `_url_for` safe-lookup override on `templates.env.globals`. Templates use `{{ url_for('admin_auth_login') }}` for admin paths and `{{ url_for('static', path='/validation.css') }}` for static assets — **NO `script_root`/`admin_prefix`/`static_prefix` globals exist** (greenfield). Note: no `csrf_token` injection — CSRFOriginMiddleware uses Origin header validation, not tokens. |
 | `try: token = oauth.google.authorize_access_token(); except Exception` | `try: token = await oauth.google.authorize_access_token(request); except OAuthError` | Authlib's starlette_client raises `OAuthError` — catch the typed exception rather than bare `Exception`. |
 | `return make_response(redirect(...))` | `return RedirectResponse(..., status_code=303)` | No `make_response` needed; `RedirectResponse` IS the response. |
 
@@ -2640,7 +2640,7 @@ def _validate_pricing_options(
 | `max_signals="bar"` | `_parse_int_or_default` returns 5 (default) |
 | `is_dynamic=on`, `signals_agent_selection="specific"`, no agents selected | Validation error |
 | Unexpected SQLAlchemy exception during commit | Caught at handler level, logged, flash generic error |
-| CSRF token missing or invalid | `CSRFMiddleware` returns 403 before handler runs |
+| CSRF origin validation failed | `CSRFOriginMiddleware` returns 403 before handler runs (Origin header missing or not in allowed origins) |
 | Form field not in handler signature (e.g., `attacker=rce`) | FastAPI silently ignores extra form fields — they are never bound |
 
 **Pydantic v2 `ConfigDict(extra="forbid", strict=True)`** — we considered this for a `ProductForm` model but rejected it: forbidding extras would fail on any new field, and strict mode doesn't help for string-only form data. The explicit `Form()` param list is the source of truth; any field absent from the signature is simply unread.
@@ -2841,5 +2841,5 @@ Supporting files that each example depends on (already described in §11 of the 
 - `/Users/quantum/Documents/ComputedChaos/salesagent/src/admin/deps/auth.py` (new, §11.4) — `CurrentTenantDep`, `AdminUserDep`, `SuperAdminDep`
 - `/Users/quantum/Documents/ComputedChaos/salesagent/src/admin/templating.py` (new, §11.1) — `render()` wrapper
 - `/Users/quantum/Documents/ComputedChaos/salesagent/src/admin/flash.py` (new, §11.3) — native `flash()`
-- `/Users/quantum/Documents/ComputedChaos/salesagent/src/admin/csrf.py` (new, §11.6) — `CSRFMiddleware`
+- `/Users/quantum/Documents/ComputedChaos/salesagent/src/admin/csrf.py` (new, §11.7) — `CSRFOriginMiddleware` (Origin header validation)
 - `/Users/quantum/Documents/ComputedChaos/salesagent/tests/harness/_base.py` (line 894) — `IntegrationEnv.get_rest_client()` used by every test

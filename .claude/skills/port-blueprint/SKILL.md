@@ -3,7 +3,7 @@ name: port-blueprint
 lifecycle: migration
 description: >
   Port a Flask blueprint to a FastAPI router following all migration patterns.
-  Generates sync handlers with get_db_session(), repository Deps, named routes,
+  Generates sync handlers with get_db_session() in handler body, named routes,
   render() wrapper, form_error_response(), and List[str] = Form() for multi-value
   fields. Runs make quality as validation.
 args: <blueprint-name>
@@ -55,41 +55,45 @@ Create `src/admin/routers/{name}.py` applying ALL rules below:
 | form_error_response() | Validation errors use shared helper | DRY invariant / duplication hook |
 | Router config | `APIRouter(redirect_slashes=True, include_in_schema=False)` | `test_trailing_slash_tolerance.py` |
 | flash() | `from src.admin.flash import flash` (not Flask flash) | `test_architecture_no_flask_imports.py` |
-| url_for in redirects | `RedirectResponse(request.url_for("admin_{name}_{target}"), status_code=302)` | Note: 302 not 307 for POST-redirect-GET |
-
-**Repository Dep pattern (mandatory):**
-
-```python
-from typing import Annotated
-from fastapi import Depends
-from src.core.database.database_session import get_db_session
-
-def get_{name}_repo() -> {Name}Repository:
-    with get_db_session() as session:
-        return {Name}Repository(session)
-
-{Name}RepoDep = Annotated[{Name}Repository, Depends(get_{name}_repo)]
-```
+| url_for in redirects | `RedirectResponse(request.url_for("admin_{name}_{target}"), status_code=303)` | 303 is the POST-redirect-GET spec-correct code |
 
 **Handler template (sync `def` — NOT `async def`):**
+
+Repositories are instantiated INSIDE the handler's own `with get_db_session() as session:` block. No `Depends()` for DB sessions — handler owns the session lifecycle.
 
 ```python
 @router.get("/tenant/{tenant_id}/{name}", name="admin_{name}_list")
 def list_{name}(
     request: Request,
     tenant_id: str,
-    tenant: CurrentTenantDep,
-    repo: {Name}RepoDep,
+    tenant_context: dict = Depends(require_tenant_access),
     status: Annotated[str | None, Query()] = None,
-) -> HTMLResponse:
-    items = repo.list_all(tenant_id, status=status)
-    dtos = [{Name}DTO.from_orm(i) for i in items]
-    return render(request, "{name}_list.html", {"items": dtos, "tenant": tenant})
+):
+    with get_db_session() as session:
+        repo = {Name}Repository(session)
+        items = repo.list_all(tenant_context["tenant_id"], status=status)
+    return render(request, "{name}_list.html", {"items": items, "tenant_context": tenant_context})
+
+
+@router.post("/tenant/{tenant_id}/{name}/create", name="admin_{name}_create")
+def create_{name}(
+    request: Request,
+    tenant_id: str,
+    tenant_context: dict = Depends(require_tenant_access),
+    name_field: str = Form(...),
+):
+    with get_db_session() as session:
+        repo = {Name}Repository(session)
+        repo.create(tenant_context["tenant_id"], name=name_field)
+        session.commit()
+    flash(request, "{Name} created.", "success")
+    return RedirectResponse(request.url_for("admin_{name}_list", tenant_id=tenant_id), status_code=303)
 ```
 
 > **Critical invariant #1:** Admin handlers MUST use sync `def`, NOT `async def`.
 > SQLAlchemy's `scoped_session` has an event-loop bug with async handlers.
-> No `await` on repository calls. No `SessionDep`. Use `get_db_session()` directly.
+> No `await` on repository calls. No `SessionDep`. No `Depends()` for DB sessions.
+> Handler owns the session lifecycle via `with get_db_session() as session:`.
 
 ### Step 4: Validate
 
