@@ -279,6 +279,24 @@ class TestInventoryDataValidation:
         )
 
 
+@pytest.fixture
+def _bind_factories_for_sizes():
+    """Bind factory-boy sessions so GAMInventoryFactory can persist rows."""
+    from src.core.database.database_session import get_db_session
+    from tests.factories import ALL_FACTORIES
+
+    with get_db_session() as session:
+        saved = {}
+        for f in ALL_FACTORIES:
+            saved[f] = (f._meta.sqlalchemy_session, f._meta.sqlalchemy_session_persistence)
+            f._meta.sqlalchemy_session = session
+            f._meta.sqlalchemy_session_persistence = "commit"
+        yield session
+    for f, (orig_session, orig_persistence) in saved.items():
+        f._meta.sqlalchemy_session = orig_session
+        f._meta.sqlalchemy_session_persistence = orig_persistence
+
+
 @pytest.mark.requires_db
 class TestInventorySizesEndpoint:
     """Regression tests for GET /api/tenant/<id>/inventory/sizes.
@@ -292,31 +310,32 @@ class TestInventorySizesEndpoint:
     extractSizesFromInventory() to use this API.
     """
 
-    def _seed_inventory(self, tenant_id: str, inventory_id: str, sizes_metadata: list) -> None:
-        from src.core.database.database_session import get_db_session
-        from src.core.database.models import GAMInventory
+    def _seed_inventory(self, tenant, inventory_id: str, sizes_metadata: list) -> None:
+        from tests.factories import GAMInventoryFactory
 
-        with get_db_session() as db_session:
-            db_session.add(
-                GAMInventory(
-                    tenant_id=tenant_id,
-                    inventory_type="ad_unit",
-                    inventory_id=inventory_id,
-                    name=f"Unit {inventory_id}",
-                    path=["/test", inventory_id],
-                    status="ACTIVE",
-                    inventory_metadata={"sizes": sizes_metadata},
-                )
-            )
-            db_session.commit()
+        GAMInventoryFactory(
+            tenant=tenant,
+            inventory_id=inventory_id,
+            name=f"Unit {inventory_id}",
+            path=["/test", inventory_id],
+            inventory_metadata={"sizes": sizes_metadata},
+        )
+
+    def _load_tenant(self, tenant_id: str, session):
+        from sqlalchemy import select
+
+        from src.core.database.models import Tenant
+
+        return session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).one()
 
     def test_endpoint_handles_gam_dict_format_sizes(
-        self, authenticated_admin_session, test_tenant_with_data, integration_db
+        self, authenticated_admin_session, test_tenant_with_data, integration_db, _bind_factories_for_sizes
     ):
         """Dict-format sizes (how GAM sync writes them) must be returned as 'WxH' strings."""
         tenant_id = test_tenant_with_data["tenant_id"]
+        tenant = self._load_tenant(tenant_id, _bind_factories_for_sizes)
         self._seed_inventory(
-            tenant_id,
+            tenant,
             "gam_unit_1",
             [{"width": 300, "height": 250}, {"width": 728, "height": 90}],
         )
@@ -331,11 +350,12 @@ class TestInventorySizesEndpoint:
         assert data["count"] == 2
 
     def test_endpoint_handles_legacy_string_format_sizes(
-        self, authenticated_admin_session, test_tenant_with_data, integration_db
+        self, authenticated_admin_session, test_tenant_with_data, integration_db, _bind_factories_for_sizes
     ):
         """Pre-existing string-format sizes must continue to work (backward compat)."""
         tenant_id = test_tenant_with_data["tenant_id"]
-        self._seed_inventory(tenant_id, "legacy_unit", ["300x250", "970x250"])
+        tenant = self._load_tenant(tenant_id, _bind_factories_for_sizes)
+        self._seed_inventory(tenant, "legacy_unit", ["300x250", "970x250"])
 
         response = authenticated_admin_session.get(f"/api/tenant/{tenant_id}/inventory/sizes?ids=legacy_unit")
 
@@ -345,12 +365,13 @@ class TestInventorySizesEndpoint:
         assert data["count"] == 2
 
     def test_endpoint_merges_mixed_format_sizes(
-        self, authenticated_admin_session, test_tenant_with_data, integration_db
+        self, authenticated_admin_session, test_tenant_with_data, integration_db, _bind_factories_for_sizes
     ):
         """Dict and string sizes across units deduplicate and sort by (width, height)."""
         tenant_id = test_tenant_with_data["tenant_id"]
-        self._seed_inventory(tenant_id, "unit_dict", [{"width": 300, "height": 250}])
-        self._seed_inventory(tenant_id, "unit_str", ["300x250", "728x90"])
+        tenant = self._load_tenant(tenant_id, _bind_factories_for_sizes)
+        self._seed_inventory(tenant, "unit_dict", [{"width": 300, "height": 250}])
+        self._seed_inventory(tenant, "unit_str", ["300x250", "728x90"])
 
         response = authenticated_admin_session.get(f"/api/tenant/{tenant_id}/inventory/sizes?ids=unit_dict,unit_str")
 
