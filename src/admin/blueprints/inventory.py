@@ -1374,11 +1374,15 @@ def get_inventory_sizes(tenant_id):
                 if not isinstance(metadata, dict):
                     continue
 
-                # Get sizes from metadata (array of "WxH" strings)
+                # GAM sync writes sizes as dicts ({"width": W, "height": H} — see
+                # src/adapters/gam_inventory_discovery.py:54,70). Legacy rows may still
+                # hold "WxH" strings. Normalize both shapes to "WxH" here.
                 item_sizes = metadata.get("sizes", [])
                 if isinstance(item_sizes, list):
                     for size in item_sizes:
-                        if isinstance(size, str) and "x" in size:
+                        if isinstance(size, dict) and "width" in size and "height" in size:
+                            sizes.add(f"{size['width']}x{size['height']}")
+                        elif isinstance(size, str) and "x" in size:
                             sizes.add(size)
 
             # Sort sizes by width, then height

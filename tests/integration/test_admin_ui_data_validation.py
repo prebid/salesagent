@@ -279,6 +279,87 @@ class TestInventoryDataValidation:
         )
 
 
+@pytest.mark.requires_db
+class TestInventorySizesEndpoint:
+    """Regression tests for GET /api/tenant/<id>/inventory/sizes.
+
+    GAM sync writes sizes as dicts ({"width": 300, "height": 250}) — see
+    src/adapters/gam_inventory_discovery.py:54,70 and
+    src/services/gam_inventory_service.py:134. The endpoint previously only
+    accepted string-format sizes ("300x250") and silently dropped every dict,
+    returning {"sizes": [], "count": 0} for all GAM-synced inventory. This
+    broke size autodetection in add_product_gam.html after PR #1176 rewired
+    extractSizesFromInventory() to use this API.
+    """
+
+    def _seed_inventory(self, tenant_id: str, inventory_id: str, sizes_metadata: list) -> None:
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import GAMInventory
+
+        with get_db_session() as db_session:
+            db_session.add(
+                GAMInventory(
+                    tenant_id=tenant_id,
+                    inventory_type="ad_unit",
+                    inventory_id=inventory_id,
+                    name=f"Unit {inventory_id}",
+                    path=["/test", inventory_id],
+                    status="ACTIVE",
+                    inventory_metadata={"sizes": sizes_metadata},
+                )
+            )
+            db_session.commit()
+
+    def test_endpoint_handles_gam_dict_format_sizes(
+        self, authenticated_admin_session, test_tenant_with_data, integration_db
+    ):
+        """Dict-format sizes (how GAM sync writes them) must be returned as 'WxH' strings."""
+        tenant_id = test_tenant_with_data["tenant_id"]
+        self._seed_inventory(
+            tenant_id,
+            "gam_unit_1",
+            [{"width": 300, "height": 250}, {"width": 728, "height": 90}],
+        )
+
+        response = authenticated_admin_session.get(f"/api/tenant/{tenant_id}/inventory/sizes?ids=gam_unit_1")
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["sizes"] == ["300x250", "728x90"], (
+            f"Expected dict-format GAM sizes to be normalized to WxH strings, got: {data}"
+        )
+        assert data["count"] == 2
+
+    def test_endpoint_handles_legacy_string_format_sizes(
+        self, authenticated_admin_session, test_tenant_with_data, integration_db
+    ):
+        """Pre-existing string-format sizes must continue to work (backward compat)."""
+        tenant_id = test_tenant_with_data["tenant_id"]
+        self._seed_inventory(tenant_id, "legacy_unit", ["300x250", "970x250"])
+
+        response = authenticated_admin_session.get(f"/api/tenant/{tenant_id}/inventory/sizes?ids=legacy_unit")
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["sizes"] == ["300x250", "970x250"]
+        assert data["count"] == 2
+
+    def test_endpoint_merges_mixed_format_sizes(
+        self, authenticated_admin_session, test_tenant_with_data, integration_db
+    ):
+        """Dict and string sizes across units deduplicate and sort by (width, height)."""
+        tenant_id = test_tenant_with_data["tenant_id"]
+        self._seed_inventory(tenant_id, "unit_dict", [{"width": 300, "height": 250}])
+        self._seed_inventory(tenant_id, "unit_str", ["300x250", "728x90"])
+
+        response = authenticated_admin_session.get(f"/api/tenant/{tenant_id}/inventory/sizes?ids=unit_dict,unit_str")
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["sizes"] == ["300x250", "728x90"], f"Expected dedup + sort by (width, height), got: {data}"
+        assert data["count"] == 2
+
+
 class TestDashboardDataValidation:
     """Validate that dashboard shows correct metrics."""
 
