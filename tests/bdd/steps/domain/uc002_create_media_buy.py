@@ -131,16 +131,13 @@ def given_request_with_account(ctx: dict, account_id: str) -> None:
 
 @given("the account_id does not exist in the seller's account store")
 def given_account_id_not_found(ctx: dict) -> None:
-    """Verify the account_id from the request does not exist via production resolve_account."""
-    from src.core.exceptions import AdCPAccountNotFoundError
+    """Verify the requested account_id is absent from the tenant's account store.
 
-    env = ctx["env"]
-    try:
-        # TRANSPORT-BYPASS: Given step verifies precondition state, not request dispatch
-        env.call_impl(account_ref=ctx["account_ref"])
-        raise AssertionError("Expected account not found, but resolve_account succeeded")
-    except AdCPAccountNotFoundError:
-        pass  # Correct — account doesn't exist
+    Precondition check only — Given steps must not dispatch requests. Delegates
+    to given_account_not_exists which inspects AccountRepository directly for
+    both account_id and brand+operator lookup modes.
+    """
+    given_account_not_exists(ctx)
 
 
 @given("no account matches the brand + operator combination")
