@@ -2841,9 +2841,19 @@ async def _create_media_buy_impl(
                 ctx_manager.update_workflow_step(
                     step.step_id, status="failed", error_message="Adapter validation failed"
                 )
-            raise AdCPValidationError(
-                "; ".join(pre_creation_errors),
-                details={"error_code": "ADAPTER_VALIDATION_FAILED"},
+            return CreateMediaBuyResult(
+                response=CreateMediaBuyError(
+                    errors=[
+                        Error(
+                            code="validation_error",
+                            message=msg,
+                            details={"error_code": "ADAPTER_VALIDATION_FAILED"},
+                        )
+                        for msg in pre_creation_errors
+                    ],
+                    context=req.context,
+                ),
+                status=AdcpTaskStatus.failed.value,
             )
 
         # Dry-run mode: skip adapter call entirely, return simulated response
