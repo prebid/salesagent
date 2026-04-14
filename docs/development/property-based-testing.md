@@ -1,7 +1,7 @@
 # Property-Based Testing with Hypothesis
 
-> **Status**: Prototype on `tests/hypothesis` branch. ~1,040 generated test cases run in ~3.4s.
-> **Branch**: [`tests/hypothesis`](.) | **Tracking issue**: [`salesagent-81u4`](#bugs-found)
+> **Status**: Prototype on `tests/hypothesis` branch. ~1,200 generated test cases run in ~5.6s.
+> **Branch**: [`tests/hypothesis`](.) | **Tickets**: [`salesagent-81u4`](#bugs-found) (fixed), [`salesagent-j83p`](#bugs-found) (filed)
 
 ## TL;DR for the developers' group
 
@@ -17,16 +17,18 @@ The harness made the integration story painless: `IntegrationEnv` already owns m
 
 ## What's in the prototype
 
-Three files, all under `tests/integration/property/`:
+Five files under `tests/integration/property/`:
 
-| File | Surface | Cost | Examples / run |
+| File | Surface | Cost | Cases / run |
 |---|---|---|---|
-| `test_create_media_buy_property.py` | Boundary integration: real DB + adapter + serialization | ~3s for 40 examples | 40 |
+| `test_create_media_buy_property.py` | Boundary integration: real DB + adapter + serialization | ~3s | 40 |
 | `test_adapter_validation_returns_error.py` | Deterministic regression for the bug Hypothesis found | <100ms | 1 |
-| `test_schema_roundtrip_property.py` | In-memory schema roundtrips (no DB) | <100ms for 600 cases | 6 × 100 |
-| `test_budget_metamorphic_property.py` | Metamorphic equivalence: input shape doesn't change result | <100ms for 400 cases | 4 × 100 |
+| `test_schema_roundtrip_property.py` | In-memory schema roundtrips (no DB) | <100ms | 6 × 100 |
+| `test_budget_metamorphic_property.py` | Metamorphic equivalence: input shape doesn't change result | <100ms | 4 × 100 |
+| `test_cross_transport_parity_property.py` | **Transport differential**: IMPL vs A2A must agree byte-for-byte | ~2s | 25 |
+| `test_tenant_isolation_sequence_property.py` | **Stateful**: 2-8 ops across 2 tenants, isolation holds after sequence | ~2s | 10 (up to 80 real creates) |
 
-Plus one supporting harness class: `tests/harness/media_buy_create.py` (`MediaBuyCreateEnv`).
+Plus one supporting harness class: `tests/harness/media_buy_create.py` (`MediaBuyCreateEnv`) with three dispatch paths (`call_impl`, `call_a2a_as_dict`, `call_mcp_as_dict`).
 
 ## Bugs found
 
@@ -47,12 +49,20 @@ The fix is verified two ways:
 - Deterministic regression (`test_adapter_validation_returns_error.py`) — pins the exact `$10,000.01` case.
 - Generalized property — now asserts "response is `CreateMediaBuySuccess` *or* `CreateMediaBuyError` with structured errors[]". Hypothesis runs both sides of the boundary in 40 examples and never crashes.
 
+### `salesagent-j83p` — MCP drops `testing_context` at the auth boundary
+
+**Discovered by** `test_cross_transport_parity_property.py` on the very first run. When dispatching with `dry_run=True`, IMPL and A2A paths (which inject a `ResolvedIdentity` directly) correctly see `testing_ctx.dry_run=True` and skip the setup-validation check. MCP re-resolves identity from HTTP headers via `mcp_auth_middleware` — and the headers carry tenant+token but no mechanism exists for `testing_context`. So MCP hits setup validation that IMPL and A2A don't. 0/8 passing examples on first run.
+
+This is a **real architectural parity bug**, not a test-setup issue. The v1 parity test deliberately excludes MCP until the ticket is resolved; adding it back will be the acceptance test for the fix.
+
 ### Ancillary findings (not bugs, but visible couplings)
 
 - `tenant_id` containing underscores produces `subdomain` containing underscores, which propagates to `publisher_domain` and trips a DNS regex at hydration time. No existing test asserts this coupling — Hypothesis exposed it. Worth either tightening `TenantFactory` defaults or relaxing the regex.
 - Mock adapter inventory cap (1,000,000 impressions) is undocumented and only visible by triggering it.
+- `package_id` is generated as `pkg_{product_id}_{random_hex}_{index}` per call. Non-deterministic; prevents diffing across runs; normalized out for parity testing. Arguably should be derived from request fields for audit-trail reproducibility.
+- **REST body model is lossy** — `CreateMediaBuyBody` at `src/routes/api_v1.py:73-83` is a strict subset of `CreateMediaBuyRequest`, missing `targeting_overlay`, `creatives`, `push_notification_config`, `context`, `ext`. REST silently drops them. Documented in the parity test docstring; REST is excluded from v1 parity for this reason.
 
-## The three surfaces explained
+## The surfaces explained
 
 ### 1. Boundary integration (`test_create_media_buy_property.py`)
 
@@ -111,6 +121,49 @@ def test_budget_shape_equivalence(amount, currency):
 **Property (metamorphic)**: an input transformation (which shape we use) is irrelevant to the output. The existing `test_budget_format_compatibility.py` asserts this for ~5 hand-picked values; Hypothesis generalizes to thousands of `(amount, currency)` pairs and adds boundary exploration (very small, very large, currency case sensitivity).
 
 **What it catches**: branch-specific divergence, float precision loss in dict→Budget conversion, default-currency fallback bugs.
+
+### 4. Cross-transport differential (`test_cross_transport_parity_property.py`)
+
+```python
+@given(payload=parity_payload())
+def test_impl_and_a2a_agree(integration_db, payload):
+    with MediaBuyCreateEnv(..., dry_run=True) as env:
+        _setup_catalog(env)
+        impl_req = CreateMediaBuyRequest(**payload)
+        a2a_req  = CreateMediaBuyRequest(**payload)
+
+        impl_dict = _normalize(env.call_impl(req=impl_req).model_dump(mode="json"))
+        a2a_dict  = _normalize(env.call_a2a_as_dict(req=a2a_req))
+
+        assert impl_dict == a2a_dict  # prints dict-diff on failure
+```
+
+**Property**: the same request through different transports must produce the same response, modulo volatile keys (random ids, timestamps).
+
+**What it catches**: wrapper-layer bugs, serialization asymmetry, header-handling quirks, identity-translation differences, protocol-envelope bugs. Found `salesagent-j83p` on its first run.
+
+### 5. Stateful tenant isolation (`test_tenant_isolation_sequence_property.py`)
+
+```python
+@given(ops=st.lists(st.tuples(st.sampled_from(["A","B"]), budget_strategy), min_size=2, max_size=8))
+def test_tenant_isolation_across_sequence(integration_db, ops):
+    with MediaBuyCreateEnv(...) as env:
+        _setup_tenant(tenant_a, principal_a)
+        _setup_tenant(tenant_b, principal_b)
+
+        for tenant_key, budget in ops:
+            env.call_impl(req=_make_request(...), identity=identity[tenant_key])
+
+        # after the sequence:
+        assert expected_a.isdisjoint(actual_b)   # isolation
+        assert expected_a == actual_a            # completeness
+```
+
+**Properties** (stateful, post-sequence):
+- *Isolation*: no media_buy from tenant A appears in tenant B's repository view.
+- *Completeness*: each tenant's view contains exactly its own creates.
+
+**What it catches**: missing tenant filters in repository queries, singleton/cache leakage between calls, ContextVar bleed, buyer_ref uniqueness-check race. Currently passing — asserting an invariant that isn't violated *is still valuable* because it prevents regressions.
 
 ## Suggested next penetration surfaces
 
