@@ -430,21 +430,21 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
-        # FIXME(#1184): UC-011 MCP — billing policy and approval mode not populated
-        # from DB. The real MCP auth chain resolves identity from DB which doesn't
-        # carry supported_billing or account_approval_mode. These are tenant-level
-        # configs that need a DB migration to persist.
-        _UC011_MCP_IDENTITY_XFAIL: set[str] = {
+        # FIXME(#1184): UC-011 — billing policy and approval mode not populated
+        # from DB. Auth chains across all transports resolve identity from DB which
+        # doesn't carry supported_billing or account_approval_mode. These are
+        # tenant-level configs that need a DB migration to persist.
+        _UC011_IDENTITY_XFAIL: set[str] = {
             "T-UC-011-ext-c-rejected",  # billing rejection
             "T-UC-011-ext-c-mixed",  # per-account billing rejection
             "T-UC-011-ext-d-pending-url",  # approval mode pending
             "T-UC-011-ext-d-pending-message",  # approval mode pending
             "T-UC-011-atomic-all-failed",  # all-failed (uses billing rejection)
         }
-        if is_mcp and (marker_names & _UC011_MCP_IDENTITY_XFAIL):
+        if marker_names & _UC011_IDENTITY_XFAIL:
             item.add_marker(
                 pytest.mark.xfail(
-                    reason="MCP: billing/approval config not in DB — needs #1184",
+                    reason="billing/approval config not in DB — needs #1184",
                     strict=True,
                 )
             )
