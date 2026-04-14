@@ -19,7 +19,6 @@ from tests.factories import (
     InventoryProfileFactory,
     PricingOptionFactory,
     ProductFactory,
-    TenantFactory,
 )
 
 # ── Helpers ─────────────────────────────────────────────────────────
@@ -61,12 +60,13 @@ def _get_first_prop(ctx: dict) -> Any:
 
 @given("a tenant is configured for product discovery")
 def given_tenant(ctx: dict) -> None:
-    """Create a tenant with required config for get_products."""
-    tenant = TenantFactory(
-        tenant_id="test_tenant",
-        subdomain="test_tenant",
-        ad_server="mock",
-    )
+    """Create a tenant with required config for get_products.
+
+    Idempotent across transport parametrizations — delegates to the
+    harness env which scopes tenant_id per run (uuid suffix on E2E).
+    """
+    env = ctx["env"]
+    tenant, _principal = env.setup_default_data()
     ctx["tenant"] = tenant
 
 
