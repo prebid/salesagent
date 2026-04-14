@@ -7,6 +7,7 @@ implementation pattern from CLAUDE.md.
 import logging
 import time
 import uuid
+from typing import Any
 
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
@@ -195,6 +196,7 @@ async def _activate_signal_impl(
     campaign_id: str = None,
     media_buy_id: str = None,
     context: dict | None = None,  # payload-level context
+    ext: Any | None = None,  # AdCP ExtensionObject for custom fields
     identity: ResolvedIdentity | None = None,
 ) -> ActivateSignalResponse:
     """Shared implementation for activate_signal (used by both MCP and A2A).
@@ -297,6 +299,7 @@ async def activate_signal(
     campaign_id: str = None,
     media_buy_id: str = None,
     context: dict | None = None,  # payload-level context
+    ext: Any | None = None,  # AdCP ExtensionObject for custom fields
     ctx: Context | ToolContext | None = None,
 ):
     """Activate a signal for use in campaigns.
@@ -316,7 +319,7 @@ async def activate_signal(
     from src.core.transport_helpers import resolve_identity_from_context
 
     identity = resolve_identity_from_context(ctx)
-    response = await _activate_signal_impl(signal_agent_segment_id, campaign_id, media_buy_id, context, identity)
+    response = await _activate_signal_impl(signal_agent_segment_id, campaign_id, media_buy_id, context, ext, identity)
     return ToolResult(content=str(response), structured_content=response)
 
 
@@ -349,6 +352,7 @@ async def activate_signal_raw(
     campaign_id: str = None,
     media_buy_id: str = None,
     context: dict | None = None,  # payload-level context
+    ext: Any | None = None,  # AdCP ExtensionObject for custom fields
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ) -> ActivateSignalResponse:
@@ -371,4 +375,4 @@ async def activate_signal_raw(
         from src.core.transport_helpers import resolve_identity_from_context
 
         identity = resolve_identity_from_context(ctx)
-    return await _activate_signal_impl(signal_agent_segment_id, campaign_id, media_buy_id, context, identity)
+    return await _activate_signal_impl(signal_agent_segment_id, campaign_id, media_buy_id, context, ext, identity)

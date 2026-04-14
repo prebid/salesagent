@@ -6,7 +6,7 @@ implementation pattern from CLAUDE.md.
 
 import logging
 import time
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from adcp import FormatId
 from adcp.types import Format as AdcpFormat
@@ -452,6 +452,7 @@ async def list_creative_formats(
     min_height: int | None = None,
     max_height: int | None = None,
     context: ContextObject | None = None,  # Application level context per adcp spec
+    ext: Any | None = None,  # AdCP ExtensionObject for custom fields
     ctx: Context | ToolContext | None = None,
 ):
     """List all available creative formats (AdCP spec endpoint).
@@ -493,6 +494,7 @@ async def list_creative_formats(
             min_height=min_height,
             max_height=max_height,
             context=context,
+            ext=ext,
         )
     except ValidationError as e:
         raise AdCPValidationError(format_validation_error(e, context="list_creative_formats request")) from e

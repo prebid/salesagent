@@ -202,6 +202,7 @@ async def list_authorized_properties(
     property_tags: list[str] | None = None,
     webhook_url: str | None = None,
     context: ContextObject | None = None,
+    ext: Any | None = None,  # AdCP ExtensionObject for custom fields
     ctx: Context | ToolContext | None = None,
 ):
     """List all properties this agent is authorized to represent (AdCP spec endpoint).
@@ -223,6 +224,7 @@ async def list_authorized_properties(
         publisher_domains=publisher_domains,
         property_tags=property_tags,
         context=context,
+        ext=ext,
     )
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = _list_authorized_properties_impl(req, identity)

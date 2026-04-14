@@ -1141,6 +1141,7 @@ class UpdatePerformanceIndexRequest(SalesAgentBaseModel):
     context: ContextObject | None = Field(
         None, description="Application-level context provided by the client (echoed in responses)"
     )
+    ext: dict[str, Any] | None = Field(default=None, description="Extension object for custom fields")
 
 
 class UpdatePerformanceIndexResponse(SalesAgentBaseModel):
@@ -2099,6 +2100,7 @@ class ActivateSignalResponse(SalesAgentBaseModel):
     activation_details: dict[str, Any] | None = Field(None, description="Platform-specific activation details")
     errors: list[Error] | None = Field(None, description="Optional error reporting")
     context: ContextObject | None = Field(None, description="Application-level context echoed from the request")
+    ext: dict[str, Any] | None = Field(default=None, description="Extension object for custom fields")
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""
@@ -2370,6 +2372,7 @@ class GetMediaBuysRequest(SalesAgentBaseModel):
     account_id: str | None = Field(default=None, description="Account to filter to (legacy, prefer account)")
     account: LibraryAccountReference | None = Field(default=None, description="Account reference (AdCP 3.x)")
     context: ContextObject | None = Field(default=None, description="Application-level context")
+    ext: dict[str, Any] | None = Field(default=None, description="Extension object for custom fields")
 
 
 class GetMediaBuysResponse(NestedModelSerializerMixin, SalesAgentBaseModel):

@@ -35,6 +35,7 @@ def _sync_creatives_impl(
     validation_mode: str = "strict",
     push_notification_config: PushNotificationConfig | dict | None = None,
     context: ContextObject | dict | None = None,
+    ext: Any | None = None,  # AdCP ExtensionObject for custom fields
     identity: ResolvedIdentity | None = None,
 ) -> SyncCreativesResponse:
     """Sync creative assets to centralized library (AdCP v2.5 spec compliant endpoint).

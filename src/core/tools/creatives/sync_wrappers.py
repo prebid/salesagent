@@ -1,5 +1,7 @@
 """MCP and A2A wrapper functions for sync_creatives."""
 
+from typing import Any
+
 from adcp import PushNotificationConfig
 from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types.generated_poc.core.context import ContextObject
@@ -23,6 +25,7 @@ async def sync_creatives(
     validation_mode: ValidationMode | None = None,
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,  # Application level context per adcp spec
+    ext: Any | None = None,  # AdCP ExtensionObject for custom fields
     account: LibraryAccountReference | None = None,
     ctx: Context | ToolContext | None = None,
 ):
@@ -64,6 +67,7 @@ async def sync_creatives(
         validation_mode=validation_mode_str,
         push_notification_config=push_notification_config,
         context=context,
+        ext=ext,
         identity=identity,
     )
     return ToolResult(content=str(response), structured_content=response)
@@ -78,6 +82,7 @@ def sync_creatives_raw(
     validation_mode: str = "strict",
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,
+    ext: Any | None = None,  # AdCP ExtensionObject for custom fields
     account: LibraryAccountReference | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
@@ -120,5 +125,6 @@ def sync_creatives_raw(
         validation_mode=validation_mode,
         push_notification_config=push_notification_config,
         context=context,
+        ext=ext,
         identity=identity,
     )

@@ -180,6 +180,7 @@ async def list_accounts(
     pagination: PaginationRequest | None = None,
     sandbox: bool | None = None,
     context: ContextObject | None = None,
+    ext: Any | None = None,  # AdCP ExtensionObject for custom fields
     ctx: Context | ToolContext | None = None,
 ) -> Any:
     """List accounts accessible to the authenticated agent (MCP tool).
@@ -202,6 +203,7 @@ async def list_accounts(
         pagination=pagination,
         sandbox=sandbox,
         context=context,
+        ext=ext,
     )
 
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
@@ -653,6 +655,7 @@ async def sync_accounts(
     delete_missing: bool | None = None,
     dry_run: bool | None = None,
     context: ContextObject | None = None,
+    ext: Any | None = None,  # AdCP ExtensionObject for custom fields
     ctx: Context | ToolContext | None = None,
 ) -> Any:
     """Sync accounts by natural key (MCP tool).
@@ -675,6 +678,7 @@ async def sync_accounts(
         delete_missing=delete_missing,
         dry_run=dry_run,
         context=context,
+        ext=ext,
     )
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = await _sync_accounts_impl(req, identity)

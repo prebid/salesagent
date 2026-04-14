@@ -595,6 +595,7 @@ async def get_media_buy_delivery(
     include_package_daily_breakdown: bool | None = None,
     account: dict[str, Any] | None = None,
     context: ContextObject | None = None,
+    ext: Any | None = None,  # AdCP ExtensionObject for custom fields
     ctx: Context | ToolContext | None = None,
 ):
     """Get delivery data for media buys.
@@ -640,6 +641,7 @@ async def get_media_buy_delivery(
             attribution_window=attribution_window,
             include_package_daily_breakdown=include_package_daily_breakdown,
             context=cast(ContextObject | None, context),
+            ext=ext,
         )
 
         response = _get_media_buy_delivery_impl(req, identity)
@@ -660,6 +662,7 @@ def get_media_buy_delivery_raw(
     include_package_daily_breakdown: bool | None = None,
     account: dict[str, Any] | None = None,
     context: ContextObject | None = None,
+    ext: Any | None = None,  # AdCP ExtensionObject for custom fields
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ):
@@ -707,6 +710,7 @@ def get_media_buy_delivery_raw(
         attribution_window=attribution_window,
         include_package_daily_breakdown=include_package_daily_breakdown,
         context=cast(ContextObject | None, context),
+        ext=ext,
     )
 
     # Call the implementation

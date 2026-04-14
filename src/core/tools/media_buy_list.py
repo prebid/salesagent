@@ -223,6 +223,7 @@ async def get_media_buys(
     include_snapshot: bool = False,
     account: dict | None = None,
     context: ContextObject | None = None,
+    ext: Any | None = None,  # AdCP ExtensionObject for custom fields
     ctx: Context | ToolContext | None = None,
 ):
     """Get media buys with status, creative approval state, and optional delivery snapshots.
@@ -248,6 +249,7 @@ async def get_media_buys(
             status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
             account=account,
             context=cast(ContextObject | None, context),
+            ext=ext,
         )
         # Read identity pre-resolved by MCPAuthMiddleware
         identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
@@ -264,6 +266,7 @@ def get_media_buys_raw(
     include_snapshot: bool = False,
     account: dict | None = None,
     context: ContextObject | None = None,
+    ext: Any | None = None,  # AdCP ExtensionObject for custom fields
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ):
@@ -293,6 +296,7 @@ def get_media_buys_raw(
         status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
         account=account,
         context=cast(ContextObject | None, context),
+        ext=ext,
     )
     return _get_media_buys_impl(req, identity=identity, include_snapshot=include_snapshot)
 
