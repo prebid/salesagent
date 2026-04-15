@@ -262,6 +262,41 @@ class TestSyncAccountsDryRun:
             all_accounts = uow.accounts.list_all()
             assert len(all_accounts) == 0
 
+    @pytest.mark.asyncio
+    async def test_dry_run_credit_review_previews_pending_approval(self, integration_db):
+        """BR-RULE-062 + BR-RULE-060: dry_run must preview the status that would
+        result from a real create. With account_approval_mode='credit_review', a
+        real create returns status=pending_approval with setup — so the dry-run
+        preview must show the same, not 'active'.
+
+        Regression for salesagent-jcvn: _sync_accounts_impl hardcoded
+        status='active' in the dry_run branch, bypassing the approval-mode check
+        and silently lying to buyers about what would happen.
+        """
+        with AccountSyncEnv(tenant_id="dryrun_cr_t", principal_id="dryrun_cr_p") as env:
+            env.setup_default_data()
+            env.set_approval_mode("credit_review")
+
+            req = SyncAccountsRequest(
+                accounts=[
+                    {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"},
+                ],
+                dry_run=True,
+            )
+            response = await env.call_impl_async(req=req)
+
+        assert response.dry_run is True
+        assert len(response.accounts) == 1
+        result = response.accounts[0]
+        assert _action_value(result.action) == "created"
+        assert _status_value(result.status) == "pending_approval", (
+            "dry_run must preview the approval-mode-derived status, not hardcoded 'active'"
+        )
+        assert result.setup is not None, "dry_run must preview the setup object"
+        assert result.setup.message is not None
+        assert result.setup.url is not None
+        assert result.setup.expires_at is not None
+
 
 class TestSyncAccountsBillingPolicy:
     """BR-RULE-059: billing policy enforcement per-account."""

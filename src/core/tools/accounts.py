@@ -562,27 +562,30 @@ async def _sync_accounts_impl(
                 account_id = _generate_account_id()
                 account_name = _generate_account_name(brand_domain, operator, brand_id)
 
+                # BR-RULE-060: determine approval status from tenant config.
+                # account_approval_mode is a distinct field from creative approval_mode
+                # (BR-RULE-037) — do NOT fall back to approval_mode.
+                # Resolved BEFORE the dry_run branch so previews reflect what a real
+                # create would return (BR-RULE-062).
+                tenant = identity.tenant if identity else None
+                approval_mode = tenant.get("account_approval_mode") if tenant else None
+                setup = _build_setup_for_approval(approval_mode or "auto", tenant_id)
+                initial_status = "pending_approval" if setup else "active"
+
                 if dry_run:
                     results.append(
                         _build_sync_result(
                             brand=entry.brand,
                             operator=operator,
                             action="created",
-                            status="active",
+                            status=initial_status,
                             name=account_name,
                             billing=billing_val,
                             sandbox=sandbox,
+                            setup=setup,
                         )
                     )
                     continue
-
-                # BR-RULE-060: determine approval status from tenant config.
-                # account_approval_mode is a distinct field from creative approval_mode
-                # (BR-RULE-037) — do NOT fall back to approval_mode.
-                tenant = identity.tenant if identity else None
-                approval_mode = tenant.get("account_approval_mode") if tenant else None
-                setup = _build_setup_for_approval(approval_mode or "auto", tenant_id)
-                initial_status = "pending_approval" if setup else "active"
 
                 new_account = DBAccount(
                     tenant_id=tenant_id,
