@@ -870,11 +870,12 @@ def then_affected_packages_include(ctx: dict, package_id: str) -> None:
 
 @then("the response should contain affected_packages")
 def then_affected_packages_present(ctx: dict) -> None:
-    """Assert affected_packages is present, non-empty, and contains expected package_ids.
+    """Assert affected_packages contains the package(s) belonging to the media buy.
 
     Step text: "the response should contain affected_packages"
-    Contract: affected_packages MUST be a non-empty list containing the package(s)
-    belonging to the media buy being updated.
+    Contract: affected_packages MUST contain the package_id of the existing
+    package on the media buy being updated. Presence alone (len > 0) is not
+    enough — the specific package_id from ctx["existing_package"] must appear.
     """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response — no response in ctx"
@@ -887,38 +888,55 @@ def then_affected_packages_present(ctx: dict) -> None:
     assert isinstance(affected, list), (
         f"affected_packages should be a list, got {type(affected).__name__}: {affected!r}"
     )
-    assert len(affected) > 0, "affected_packages is empty — step text claims response should contain affected_packages"
-    # Verify affected_packages contains the expected package_ids from the media buy
     existing_pkg = ctx.get("existing_package")
-    if existing_pkg is not None:
-        expected_pkg_id = getattr(existing_pkg, "package_id", None)
-        if expected_pkg_id is not None:
-            actual_pkg_ids = [
-                getattr(p, "package_id", None) or (p.get("package_id") if isinstance(p, dict) else None)
-                for p in affected
-            ]
-            assert expected_pkg_id in actual_pkg_ids, (
-                f"Expected package '{expected_pkg_id}' in affected_packages, got {actual_pkg_ids}"
-            )
+    assert existing_pkg is not None, (
+        "Test harness did not register ctx['existing_package'] — cannot verify "
+        "affected_packages contents without knowing which package was updated"
+    )
+    expected_pkg_id = getattr(existing_pkg, "package_id", None)
+    assert expected_pkg_id is not None, f"existing_package has no package_id (type: {type(existing_pkg).__name__})"
+    actual_pkg_ids = {
+        getattr(p, "package_id", None) or (p.get("package_id") if isinstance(p, dict) else None) for p in affected
+    }
+    assert expected_pkg_id in actual_pkg_ids, (
+        f"Expected package '{expected_pkg_id}' in affected_packages, got {actual_pkg_ids}"
+    )
 
 
 @then(parsers.parse("the affected package should show the updated budget of {budget:d}"))
 def then_affected_package_budget(ctx: dict, budget: int) -> None:
-    """Assert the affected package shows the updated budget value.
+    """Assert the specific affected package shows the updated budget value.
 
     Step text: "the affected package should show the updated budget of {budget}"
-    Contract: affected_packages[0].budget MUST equal the requested budget.
-    If production doesn't echo budget, that's a SPEC-PRODUCTION GAP (xfail).
+    Contract: the AffectedPackage matching ctx["existing_package"].package_id
+    MUST echo the requested budget. If production doesn't echo budget, that's
+    a SPEC-PRODUCTION GAP (xfail the scenario).
     """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response — no response in ctx"
     # Guard: this step only makes sense on a success response
     assert "error" not in ctx, f"Response is an error ({ctx.get('error')}) — cannot check budget on error"
     affected = getattr(resp, "affected_packages", None) or []
-    assert len(affected) > 0, "No affected packages in response — step claims a package was affected"
-    pkg = affected[0]
-    pkg_id = getattr(pkg, "package_id", None) or (pkg.get("package_id") if isinstance(pkg, dict) else None)
-    assert pkg_id, "Affected package has no package_id — cannot identify which package was updated"
+    existing_pkg = ctx.get("existing_package")
+    assert existing_pkg is not None, (
+        "Test harness did not register ctx['existing_package'] — cannot identify which affected package to check"
+    )
+    expected_pkg_id = getattr(existing_pkg, "package_id", None)
+    assert expected_pkg_id is not None, f"existing_package has no package_id (type: {type(existing_pkg).__name__})"
+    # Locate the specific package we updated — not just "the first one".
+    pkg = next(
+        (
+            p
+            for p in affected
+            if (getattr(p, "package_id", None) or (p.get("package_id") if isinstance(p, dict) else None))
+            == expected_pkg_id
+        ),
+        None,
+    )
+    assert pkg is not None, (
+        f"Expected package '{expected_pkg_id}' in affected_packages, got "
+        f"{[getattr(p, 'package_id', None) or (p.get('package_id') if isinstance(p, dict) else None) for p in affected]}"
+    )
     actual_budget = getattr(pkg, "budget", None)
     if actual_budget is None and isinstance(pkg, dict):
         actual_budget = pkg.get("budget")
@@ -926,14 +944,15 @@ def then_affected_package_budget(ctx: dict, budget: int) -> None:
     # If production doesn't echo budget, the SCENARIO should be xfailed in conftest.py.
     # See salesagent-2c9b.
     assert actual_budget is not None, (
-        f"affected package '{pkg_id}' budget is None — step text claims 'updated budget of {budget}' unconditionally"
+        f"affected package '{expected_pkg_id}' budget is None — step text claims "
+        f"'updated budget of {budget}' unconditionally"
     )
     # actual_budget is not None — validate type and value
     assert isinstance(actual_budget, (int, float)), (
         f"Expected budget to be numeric, got {type(actual_budget).__name__}: {actual_budget!r}"
     )
     assert float(actual_budget) == float(budget), (
-        f"Expected budget {budget} on affected package '{pkg_id}', got {actual_budget}"
+        f"Expected budget {budget} on affected package '{expected_pkg_id}', got {actual_budget}"
     )
 
 
@@ -945,17 +964,20 @@ def then_response_has_sandbox(ctx: dict) -> None:
     Contract: sandbox MUST be present as a boolean on the response envelope.
     If production doesn't include it, that's a SPEC-PRODUCTION GAP (xfail).
     """
+    from pydantic import BaseModel
+
     resp = ctx.get("response")
     assert resp is not None, "Expected a response — no response in ctx"
     # Guard: this step only makes sense on a success response, not an error
     assert "error" not in ctx, f"Update errored ({ctx['error']}) — cannot check sandbox flag on an error response"
-    # Guard: response must be a real model object, not a raw dict or string
-    assert hasattr(resp, "model_dump") or hasattr(resp, "__dict__"), (
-        f"Response is not a model object (type: {type(resp).__name__}) — cannot inspect for sandbox flag"
+    # Guard: response must be a Pydantic model (not a raw dict/string) — the
+    # transport dispatch always yields a typed response on success.
+    assert isinstance(resp, BaseModel), (
+        f"Response is not a Pydantic model (type: {type(resp).__name__}) — cannot inspect for sandbox flag"
     )
     # sandbox may live on the response directly or on a wrapper envelope
     sandbox = getattr(resp, "sandbox", None)
-    if sandbox is None and hasattr(resp, "model_dump"):
+    if sandbox is None:
         dumped = resp.model_dump()
         sandbox = dumped.get("sandbox")
     # Step text claims "should include a sandbox flag" unconditionally — hard assert.

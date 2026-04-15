@@ -36,7 +36,6 @@ _HASATTR_ALLOWLIST: set[str] = {
     # FIXME(salesagent-beq4): replace hasattr with value assertion
     "bdd/steps/domain/uc003_update_media_buy.py:807 then_implementation_date_null",
     "bdd/steps/domain/uc003_update_media_buy.py:817 then_implementation_date_not_null",
-    "bdd/steps/domain/uc003_update_media_buy.py:941 then_response_has_sandbox",
     "bdd/steps/domain/uc011_accounts.py:1310 then_has_accounts_array",
     "bdd/steps/domain/uc011_accounts.py:1329 then_response_is_success_variant",
     "bdd/steps/domain/uc011_accounts.py:1587 then_webhook_registered",
@@ -59,8 +58,6 @@ _COUNT_ONLY_ALLOWLIST: set[str] = {
     # FIXME(salesagent-beq4): replace count-only check with element-level assertion
     "bdd/steps/domain/uc_get_products_inventory.py:156 then_has_products",
     "bdd/steps/generic/then_error.py:184 then_error_invalid_params",
-    "bdd/steps/domain/uc003_update_media_buy.py:872 then_affected_packages_present",
-    "bdd/steps/domain/uc003_update_media_buy.py:906 then_affected_package_budget",
     "bdd/steps/domain/uc004_delivery.py:1186 then_has_metrics",
     "bdd/steps/domain/uc004_delivery.py:1205 then_has_packages",
     "bdd/steps/domain/uc004_delivery.py:1250 then_has_mb_status",
