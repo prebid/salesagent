@@ -65,6 +65,14 @@ async def test_valid_get_products_response():
                             "min_spend_per_package": 1000.0,
                         }
                     ],
+                    "reporting_capabilities": {
+                        "available_reporting_frequencies": ["daily"],
+                        "expected_delay_minutes": 240,
+                        "timezone": "UTC",
+                        "supports_webhooks": False,
+                        "available_metrics": ["impressions", "spend", "clicks"],
+                        "date_range_support": "date_range",
+                    },
                 }
             ],
         }
