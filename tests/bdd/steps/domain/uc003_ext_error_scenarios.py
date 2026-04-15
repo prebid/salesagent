@@ -192,12 +192,12 @@ def given_tenant_no_currency_limit(ctx: dict, currency: str) -> None:
     assert tenant is not None, "No tenant in ctx"
     with db_session(ctx) as session:
         existing = session.scalars(
-            select(CurrencyLimit).filter_by(currency=currency, tenant_id=tenant.tenant_id)
+            select(CurrencyLimit).filter_by(currency_code=currency, tenant_id=tenant.tenant_id)
         ).first()
         if existing:
             session.execute(
                 delete(CurrencyLimit).where(
-                    CurrencyLimit.currency == currency,
+                    CurrencyLimit.currency_code == currency,
                     CurrencyLimit.tenant_id == tenant.tenant_id,
                 )
             )
@@ -218,7 +218,9 @@ def given_tenant_max_daily_spend(ctx: dict, amount: int) -> None:
     mb = ctx.get("existing_media_buy")
     currency = mb.currency if mb else "USD"
     with db_session(ctx) as session:
-        cl = session.scalars(select(CurrencyLimit).filter_by(currency=currency, tenant_id=tenant.tenant_id)).first()
+        cl = session.scalars(
+            select(CurrencyLimit).filter_by(currency_code=currency, tenant_id=tenant.tenant_id)
+        ).first()
         assert cl is not None, (
             f"No CurrencyLimit for {currency} in tenant {tenant.tenant_id} — cannot set max_daily_package_spend"
         )
