@@ -8,6 +8,8 @@
 > This file is preserved for institutional memory only. Its recommendations have been absorbed into the canonical docs above. Do NOT use this file as a primary reference for implementation decisions.
 
 > **ASYNC IS PHASE 4+ WITHIN v2.0 (2026-04-14).** Phases 0-3 use sync admin handlers. This report is the Phase 4+ implementation roadmap (the original 45 edits are the async target state). Do not implement async patterns from this file during Phases 0-3 (Flask removal).
+>
+> **[TERMINOLOGY: "Phase 4+" in this archived doc = Layer 5+ in the 2026-04-14 layering. The 8-layer model (L0-L7) supersedes the 4-phase model. See CLAUDE.md §Recommended Reading Order item 10 and §v2.0 Strategic Layering.]**
 
 **Date:** 2026-04-11
 **Scope:** 8 plan files under `/Users/quantum/Documents/ComputedChaos/salesagent/.claude/notes/flask-to-fastapi/`

@@ -391,7 +391,7 @@ def get_logger(name: str) -> structlog.stdlib.BoundLogger:
 - `configure_logging()` called from `combined_lifespan` at startup
 - Every `logging.getLogger(__name__)` in new code becomes `from src.core.logging import get_logger; logger = get_logger(__name__)`
 - Under async, **contextvars propagate correctly across `await` boundaries** — every log line emitted during a request automatically carries the `request_id` bound by `RequestIDMiddleware` (§11.9.5)
-- Structural guard `test_architecture_uses_structlog.py` enforces structlog usage (allowlisted for existing files during migration)
+- Structural guard `test_architecture_uses_structlog.py` enforces structlog usage (allowlisted for existing files during migration). Additionally, this guard blocks bare `print(...)` calls in `src/**/*.py` (allowlisted paths: `scripts/`, `alembic/versions/`, `src/core/cli/`). Production request-path code must emit via `structlog.get_logger()` so log correlation via contextvars works across async boundaries.
 
 ### D. Gotchas
 
@@ -940,6 +940,7 @@ class AccountCreateRequest(BaseModel):
 - **`strict=True`** prevents silent type coercion that might hide data model drift
 - **Eager-load contract:** DTOs with nested relationships MUST be returned only from repository methods that eager-loaded the relationships. Enforced by `test_architecture_repository_eager_loads.py`.
 - **AdCP boundary preservation:** admin DTOs live in `src/admin/dtos/`, SEPARATE from `src/core/schemas/` (AdCP library schemas). Changes to admin DTOs NEVER touch the AdCP wire format. CLAUDE.md Pattern #1 still applies to library schemas; admin DTOs are a different layer.
+- **Validator decorators:** Only `field_validator` and `model_validator` (Pydantic v2) are accepted. Any use of `@validator` (Pydantic v1) in `src/` is rejected. A structural guard `test_architecture_no_pydantic_v1_validators.py` (L4 addition) enforces this.
 
 ---
 
@@ -1487,6 +1488,16 @@ Uses the `write-guard` skill pattern: plant a fixture source containing `async_s
 
 ---
 
+## 11.0.8 `tests/unit/test_architecture_relationships_explicit_loading.py` — Structural guard (L5b+)
+
+### test_architecture_relationships_explicit_loading.py [L5b]
+
+AST-scan every call to `relationship(...)` (sqlalchemy.orm) in `src/` and assert that each call has a `lazy=` kwarg with value in {`"raise"`, `"selectin"`, `"joined"`, `"subquery"`, `"noload"`}. Reject `lazy="select"` (the default, which triggers implicit IO under async and raises `MissingGreenlet`). Allowlist file: `tests/unit/architecture/allowlists/relationships_explicit_loading.txt` — must be empty after L5b (Spike 1 seeds all 68 existing relationships with explicit strategies).
+
+Rationale: prevents post-migration drift back to lazy-by-default relationships that silently break under async context. Spike 1 is a one-shot audit; this guard is the durable invariant.
+
+---
+
 ## 11.1 `src/admin/templating.py`
 
 > **[L0-L2]** This module is part of Flask removal. Use sync patterns. It stays sync through L4 and auto-converts at L5 only to the extent its callers flip to `async def` (most functions here are framework-agnostic utilities and remain sync across all layers).
@@ -1801,10 +1812,12 @@ cookie (itsdangerous). ~4KB cap. On every request the cookie is deserialized
 into `request.session` (a dict subclass that tracks mutation) and re-serialized
 on response if `request.session` was touched.
 
-Cookie name intentionally CHANGES from Flask's `session` to `adcp_session` so
-that the v2.0.0 deploy forces a re-login — this prevents a Flask-signed
-cookie from being accepted by the new Starlette stack (different signing
-algorithm, different cookie key).
+Cookie name CHANGES from Flask's `session` to `adcp_session`. To avoid logging
+out every active admin session at deploy, SessionMiddleware dual-reads BOTH
+cookie names through the L1a–L2 bake window (legacy `session` cookie support
+drops at L2 exit). This is the canonical policy per CLAUDE.md §"Session cookie
+rename" and `implementation-checklist.md` L1a work items. The previous stance
+of "forced re-login at cutover" has been superseded.
 """
 from __future__ import annotations
 
@@ -2219,11 +2232,11 @@ async def is_super_admin(email: str) -> bool:
     3. TenantManagementConfig row `super_admin_emails` (db fallback)
     4. TenantManagementConfig row `super_admin_domains`
 
-    `async def` under the full-async pivot (2026-04-11). The DB fallback
-    opens its own short-lived `async with get_db_session()` — this is the
-    ONE helper where nested session opening is tolerated because the
-    caller chain (identity resolution in middleware) may precede request
-    scope and therefore has no `SessionDep` to thread through. All OTHER
+    [L0-L4: sync `def` with `with get_db_session()`; L5+: `async def` with
+    `async with get_db_session()`.] The DB fallback opens its own short-lived
+    session — this is the ONE helper where nested session opening is tolerated
+    because the caller chain (identity resolution in middleware) may precede
+    request scope and therefore has no `SessionDep` to thread through. All OTHER
     helpers MUST accept `SessionDep` rather than opening their own session.
 
     NO session-level caching here (the Flask version cached in session,
@@ -2351,9 +2364,10 @@ async def _load_tenant(tenant_id: str) -> dict[str, Any]:
     `TenantRepoDep` Dep pattern. New code MUST use the repository. This helper
     is flagged for removal in Wave 5.
 
-    Under the full-async pivot (2026-04-11), this helper is `async def` and
-    opens its own session inline. The idiomatic replacement is `TenantRepoDep`
-    + `async def get_current_tenant(..., tenants: TenantRepoDep, ...)`.
+    [L0-L4: sync `def` + `with get_db_session()`. L5+: `async def` +
+    `async with get_db_session()`.] This helper opens its own session inline.
+    The idiomatic replacement is `TenantRepoDep` + `get_current_tenant(...,
+    tenants: TenantRepoDep, ...)` (sync at L0-L4, async at L5+).
     """
     async with get_db_session() as db:
         tenant = (await db.execute(
@@ -2379,8 +2393,9 @@ async def _load_tenant(tenant_id: str) -> dict[str, Any]:
 async def _get_admin_user_or_none(request: Request) -> AdminUser | None:
     """Read the session and produce an AdminUser, or None if not authenticated.
 
-    `async def` under the full-async pivot (2026-04-11) because it `await`s
-    `is_super_admin`, which opens an async DB session for the env/DB fallback.
+    [L0-L4: sync `def`; L5+: `async def`.] At L5+ this is `async def` because
+    it awaits `is_super_admin`, which opens an async DB session for the env/DB
+    fallback. At L0-L4 it is sync `def` and `is_super_admin` is a sync call.
 
     Test-mode bypass: when ADCP_AUTH_TEST_MODE=true AND session contains a
     `test_user` key, construct an AdminUser with `is_test_user=True` and
@@ -2507,10 +2522,11 @@ async def get_current_tenant(
 ) -> dict[str, Any]:
     """Resolve the current tenant, enforcing access.
 
-    `async def` under the full-async pivot (2026-04-11): every helper below
-    is async. Note this is the transitional-wrapper shape that opens its own
-    session; the idiomatic Wave 4 replacement threads `TenantRepoDep` +
-    `UserRepoDep` through the signature so the DI layer owns session lifetime.
+    [L0-L4: sync `def`; L5+: `async def`.] This is the transitional-wrapper
+    shape that opens its own session; the idiomatic L4 replacement threads
+    `TenantRepoDep` + `UserRepoDep` through the signature so the DI layer owns
+    session lifetime. (SessionDep is introduced at L4 as sync, re-aliased to
+    `AsyncSession` at L5b.)
     See §11.0.4 (repository base) and §11.0.5 (session_scope).
 
     Super admins bypass access checks. Test users with matching test_tenant_id
@@ -2707,7 +2723,7 @@ async def admin_redirect_handler(request: Request, exc: AdminRedirect) -> Redire
 
 ### D. Gotchas
 
-- **Async DB (pivoted 2026-04-11):** `_load_tenant`, `_user_has_tenant_access`, and `_tenant_has_auth_setup_mode` are `async def` under the full-async pivot. All DB access uses `async with get_db_session() as db:` / `(await db.execute(select(...))).scalars().first()`. `run_in_threadpool` is reserved for file I/O, CPU-bound, or sync third-party libraries. Under the Agent E idiom upgrade (Category 2), new code should prefer `TenantRepoDep` via `Depends(get_tenant_repo)` over calling `_load_tenant` directly — the standalone helper is transitional and will be removed in Wave 5. See `async-pivot-checkpoint.md` §3 for the target-state patterns.
+- **DB layer (layered 2026-04-14):** [L0-L4: `_load_tenant`, `_user_has_tenant_access`, and `_tenant_has_auth_setup_mode` are sync `def`. All DB access uses `with get_db_session() as db:` / `db.execute(select(...)).scalars().first()`.] [L5+: same helpers flip to `async def` with `async with` / `await db.execute(...)`.] `run_in_threadpool` is reserved for file I/O, CPU-bound, or sync third-party libraries at every layer. Under the Agent E idiom upgrade (Category 2), new code should prefer `TenantRepoDep` via `Depends(get_tenant_repo)` over calling `_load_tenant` directly — the standalone helper is transitional and will be removed in L6. See `async-pivot-checkpoint.md` §3 for the L5+ target-state patterns.
 - **`request.session` raises AssertionError** if `SessionMiddleware` is not installed. The `try/except` in `_get_admin_user_or_none` catches this to make unit tests without middleware work (they get `None`).
 - **Session fixation:** On privilege elevation (login), Starlette's SessionMiddleware does NOT rotate the session cookie. Add a manual cookie-clear + re-set in the login handler. Tracked.
 - **Case-insensitive email comparison:** All email matching is lowercase. The database schema stores emails case-preserved but indexes on `lower(email)`. The dataclass enforces lowercase at construction.

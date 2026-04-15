@@ -89,8 +89,7 @@ Every item references the companion doc where full detail lives. Tick every box 
 - [ ] v1.99.0 git tag plan documented (last-known-good Flask-era release, tagged before Wave 3 merges)
 - [ ] **Pre-Wave-0 lazy-loading audit spike completed and approved (async pivot 2026-04-11)** — enumerates every `relationship()` definition in `src/core/database/models/` and classifies every access site as safe (in-scope), fixable (eager-load), or requires-rewrite. This audit gates the Wave 4-5 async absorption scope. If the audit reveals the scope is untenable, fall back to Option C (sync def admin) and defer async to v2.1. See `async-pivot-checkpoint.md` §4 Risk #1 for the full audit procedure.
 - [ ] **[L5+]** **Pre-Wave-0 async driver compatibility spike completed (async pivot 2026-04-11)** — run the full test suite on a staging branch with `asyncpg` instead of `psycopg2-binary` to catch driver-compat surprises (JSONB codec, UUID/Interval types, LISTEN/NOTIFY API drift, COPY bulk imports). Estimated 1-2 days of debugging. See checkpoint §4 Risk #2.
-- [ ] **[L5+]** **Pre-Wave-0 Spike 4.5 — ContextManager refactor smoke test (Decision 7, 2026-04-11)** — rewrite `src/core/context_manager.py` to stateless async module functions, delete `DatabaseManager` from `database_session.py`, convert the smallest caller (`src/core/tools/creatives/_workflow.py::_create_sync_workflow_steps`) end-to-end, update `tests/harness/media_buy_update.py::EXTERNAL_PATCHES`, delete 18 lines of singleton-reset hacks in `conftest_db.py` + `integration_db.py` + `test_gam_lifecycle.py`. Pass: LOC <400 AND files <15 AND test patches <50 AND error-path composition test passes. Soft blocker (fallback: dedicated Wave 4a sub-phase). See `async-pivot-checkpoint.md` §4 Risk #20 + `CLAUDE.md` Decision 7.
-- [ ] **[L5+]** **Pre-Wave-0 Spike 5.5 — Two-engine coexistence (Decision 9, 2026-04-11)** — create MVP `src/services/background_sync_db.py` (~200 LOC separate sync psycopg2 engine) and run 4 test cases at `tests/driver_compat/test_sync_bridge_coexistence.py`: (a) lazy-init + dispose, (b) MVCC bidirectional visibility, (c) 5 concurrent async requests + 1 sync thread no deadlock, (d) post-dispose connection leaks <=1. Also validates the Wave 3 flask-caching correction (3 consumer sites at inventory.py:874, :1133, background_sync_service.py:472). Soft blocker (fallback: Option A asyncio task). See `async-pivot-checkpoint.md` §4 Risk #7.5 + `CLAUDE.md` Decision 9.
+- [ ] **Spike 4.5 and Spike 5.5 are NOT pre-Wave-0 items.** Per CLAUDE.md canonical spike sequence (10 technical spikes + 1 decision gate): **Spike 4.5 runs at L4 entry** (ContextManager stateless refactor smoke test — validates Decision 7 before the L4 refactor PR lands); **Spike 5.5 runs at L5a entry** (two-engine coexistence — validates Decision 9 before async conversion starts). See L4 and L5a entry-criteria sections for full acceptance criteria. Verified by: neither spike gates §1.1 pre-Wave-0 entry; L4 entry-criteria lists Spike 4.5; L5a entry-criteria lists Spike 5.5.
 - [ ] **Agent F pre-Wave-0 hard gate items completed (non-code surface inventory, corrected 2026-04-11):**
   - [ ] **`psycopg2-binary` RETAINED** — partial reversal of Agent F F1.1.1 per Decisions 1 (Path B sync factory), 2 (pre-uvicorn health checks), 9 (sync-bridge). **[L5+ — asyncpg not in L0-L4]** `asyncpg>=0.30.0,<0.32` added alongside (not replacing). `types-psycopg2` also retained. **Fallback:** `psycopg[binary,pool]>=3.2.0` if Spike 2 (driver compat) fails — see `CLAUDE.md` pre-Wave-0 spike sequence.
   - [ ] **[L5+ — not needed for sync admin tests]** `[tool.pytest.ini_options]` added to `pyproject.toml` with `asyncio_mode = "auto"` (F1.7.1, F8.2.1)
@@ -130,7 +129,7 @@ Every item references the companion doc where full detail lives. Tick every box 
 - [ ] **Admin router OpenAPI: `include_in_schema=False`** — documented in `flask-to-fastapi-adcp-safety.md` §3
 - [ ] **`gam_reporting_api.py` reclassified Category 2 → Category 1** (session-cookie authed = admin-UI-only) — documented
 - [ ] **`tenant_management_api.py` route count fixed 19 → 6** in plan docs
-- [ ] **Session cookie name: `session` → `adcp_session`** — one forced re-login at cutover is acceptable (user decision #7)
+- [ ] **Session cookie name: `session` → `adcp_session`** — SessionMiddleware dual-reads BOTH cookie names through the L1a–L2 bake window to avoid a forced re-login at cutover (supersedes earlier user decision #7 of "one forced re-login acceptable"). Legacy `session` cookie support drops at L2 exit. See §L1a work items (`test_session_cookie_dual_read.py`) and CLAUDE.md §"Session cookie rename".
 - [ ] **Scheduler stays single-worker in v2.0** — documented as a hard constraint; multi-worker deferred to v2.2 (requires scheduler lease design)
 
 ---
@@ -180,7 +179,7 @@ Full detail in `flask-to-fastapi-deep-audit.md` §1.
   - [ ] `factory_boy` adapter — one of the three options in `async-pivot-checkpoint.md` §3 chosen and implemented
   - [ ] All integration tests converted to `async def` + `@pytest.mark.asyncio` (or anyio equivalent)
   - [ ] `run_in_threadpool` used ONLY for file I/O, CPU-bound work, and sync third-party libraries — never for DB access
-  - [ ] **[L5+]** `tests/unit/test_architecture_admin_routes_async.py` exists and is green — AST-scans `src/admin/routers/*.py` and asserts every `@router.<method>(...)` handler is `async def`
+  - [ ] **[L5+]** `tests/unit/test_architecture_admin_handlers_async.py` exists and is green — AST-scans `src/admin/routers/*.py` and asserts every `@router.<method>(...)` handler is `async def`
   - [ ] `tests/unit/test_architecture_admin_async_db_access.py` exists and is green — AST-scans admin routers and asserts DB call-sites use `async with get_db_session()` + `await session.execute(...)` rather than sync `with` or `run_in_threadpool(_sync_fetch)`
   - [ ] The stale `tests/unit/test_architecture_admin_sync_db_no_async.py` is NOT created (wrong direction under the pivot)
   - [ ] **[L5+]** Foundation module examples in `flask-to-fastapi-foundation-modules.md` updated to `async def` + async DB patterns
@@ -335,9 +334,9 @@ Every structural guard starts with one of three allowlist strategies:
 | `test_architecture_bdd_no_direct_call_impl.py` | Empty + bootstrap |
 | `test_architecture_test_marker_coverage.py` | Captured baseline → shrink |
 | **L0+ migration guards** | |
-| `test_architecture_handlers_use_sync_def.py` (sunset L5c) | Empty + bootstrap, sunset L5c |
-| `test_architecture_no_async_db_access.py` (sunset L5c) | Empty + bootstrap, sunset L5c |
-| `test_architecture_adapter_calls_wrapped_in_threadpool.py` (L5c+) | Empty + bootstrap |
+| `test_architecture_handlers_use_sync_def.py` (sunset L5b) | Empty + bootstrap, sunset L5b |
+| `test_architecture_no_async_db_access.py` (sunset L5b) | Empty + bootstrap, sunset L5b |
+| `test_architecture_adapter_calls_wrapped_in_threadpool.py` (L5d2+) | Empty + bootstrap |
 | `test_architecture_admin_route_names_unique.py` (L2) | Empty + bootstrap |
 | `test_architecture_admin_routes_named.py` (L2) | Empty + bootstrap |
 | `test_templates_url_for_resolves.py` (L2) | Empty + bootstrap |
@@ -345,12 +344,12 @@ Every structural guard starts with one of three allowlist strategies:
 | `test_architecture_csrf_exempt_covers_adcp.py` (L1) | Empty + bootstrap |
 | `test_architecture_no_runtime_psycopg2.py` (L1) | Captured allowlist (3 sites) → shrink |
 | `test_architecture_get_db_connection_callers_allowlist.py` | Captured allowlist (1 file) → shrink |
-| `test_architecture_no_sse_handlers.py` (L4, Decision 8) | Empty + bootstrap |
+| `test_architecture_no_sse_handlers.py` (activated L5a; enforced L5d4 per Decision 8) | Empty + bootstrap |
 | `test_architecture_no_singleton_session.py` (L4, Decision 7) | Empty + bootstrap |
 | `test_architecture_no_flask_caching_imports.py` (L3, Decision 6) | Empty + bootstrap |
 | `test_architecture_sync_bridge_scope.py` (L4, Decision 9) | Frozen allowlist (`background_sync_service.py`) |
 | `test_architecture_no_module_scope_create_app.py` (L2) | Empty + bootstrap |
-| `test_architecture_admin_handlers_async.py` (L5c+) | Empty + bootstrap |
+| `test_architecture_admin_handlers_async.py` (L5b+) | Captured full allowlist at L5b → monotonic drain through L5c–L5e → empty at L5e exit |
 | `test_architecture_middleware_order.py` (L0) | Empty + bootstrap |
 | `test_architecture_handlers_use_annotated.py` (L1/L2, §11.22) | Empty + bootstrap |
 | `test_architecture_dto_config.py` (L4, §11.23) | Empty + bootstrap |
@@ -380,6 +379,8 @@ Full detail in `flask-to-fastapi-execution-details.md` Part 1.
 - [ ] `src/app.py:299-304` still has `a2wsgi` Flask mount (safety net)
 - [ ] Migration overview §§11, 12, 13 signed off
 - [ ] `SESSION_SECRET` defined in `.env.example` and staging secret store
+- [ ] All Ownership & Bus-Factor Policy roles assigned in `.claude/notes/flask-to-fastapi/CLAUDE.md` — primary lead, backup lead, security reviewer, incident commander. All `[TO BE ASSIGNED]` placeholders replaced with named engineers. Verified by: `rg -n 'TO BE ASSIGNED' .claude/notes/flask-to-fastapi/CLAUDE.md` returns zero matches.
+- [ ] `[TBD]` placeholders in §6.5 on-call handoff table replaced with named engineers (or explicitly deferred to later layer entry with a filed follow-up issue). Verified by: `rg -n '\[TBD\]' .claude/notes/flask-to-fastapi/implementation-checklist.md` returns zero matches OR each remaining match has a follow-up issue linked in the L0 PR description.
 
 **Files created — all 11 foundation modules plus supporting infra:**
 
@@ -436,7 +437,7 @@ Full detail in `flask-to-fastapi-execution-details.md` Part 1.
 - [ ] `tests/unit/admin/test_trailing_slash_tolerance.py` — Blocker 2 guard
 - [ ] `tests/unit/test_architecture_no_flask_imports.py` — empty allowlist check, ratchets per wave
 - [ ] `tests/unit/test_architecture_no_module_scope_create_app.py` — Wave 3 / Layer 2 guard. AST-scans `tests/` for top-level statements that call `create_app()` (assignment or naked expression). Empty allowlist — activated AFTER the 5-site sweep (`tests/integration/conftest.py:18`, `tests/integration/test_template_url_validation.py:16`, `tests/integration/test_product_deletion.py:15`, plus 2 deleted whole-files) is complete and BEFORE `src/admin/app.py` is deleted. Prevents the pytest-collection cascade where one broken module poisons the entire collection step. Implementation drafted in `flask-to-fastapi-foundation-modules.md`.
-- [ ] `tests/unit/test_architecture_handlers_use_sync_def.py` — v2.0 sync invariant guard (async pivot reversed 2026-04-12). Asserts every admin router handler is sync `def`, NOT `async def`. Replaces the wrong-direction `test_architecture_admin_routes_async.py`.
+- [ ] `tests/unit/test_architecture_handlers_use_sync_def.py` — v2.0 sync invariant guard (async pivot reversed 2026-04-12). Asserts every admin router handler is sync `def`, NOT `async def`. Replaces the wrong-direction `test_architecture_admin_handlers_async.py`.
 - [ ] `tests/unit/test_architecture_no_async_db_access.py` — v2.0 sync sibling guard. Asserts admin DB access uses sync `with get_db_session()`, NOT `async with` or `AsyncSession`.
 - [ ] `tests/unit/test_architecture_handlers_use_annotated_depends.py` — Agent E idiom upgrade. AST-scans `src/admin/routers/*.py`; every `@router.<method>(...)` handler parameter must use `Annotated[T, ...]` form, not `x = Query(...)` default-value syntax.
 - [ ] `tests/unit/test_architecture_templates_receive_dtos_not_orm.py` — Agent E idiom upgrade. Asserts every `render(request, "tpl", context)` call passes only primitives, Pydantic BaseModel instances, or the request object — never ORM model instances. Prevents lazy-load Risk #1 realization.
@@ -459,6 +460,14 @@ Full detail in `flask-to-fastapi-execution-details.md` Part 1.
 - [ ] `tests/integration/test_schemas_discovery_external_contract.py` — contract test for `/schemas/adcp/v2.4/*` (first-order audit action #4)
 - [ ] **(total Wave 0 structural guards = 16)**
 
+**L0 derivative items (2026-04-15 sharpening):**
+
+- [ ] `.pre-commit-hooks/check_hardcoded_urls.py` is rewritten to reject Jinja `scriptRoot`/`script_root`/`script_name`/`admin_prefix`/`static_prefix` references and accept only `url_for()` output. Verified by: hook runs on a fixture template containing `scriptRoot` and exits non-zero; runs on a fixture template containing only `url_for()` calls and exits zero; hook is listed in `.pre-commit-config.yaml` and fires in `pre-commit run --all-files`.
+- [ ] Static JS URL strategy is decided and recorded in `docs/deployment/static-js-urls.md`. The file selects exactly one of: (a) inline JS into templates, (b) `window.AppURLs = { ... }` global set by `base.html`, (c) `data-*` attributes per call site; and applies that strategy to all 37 call sites across `static/js/tenant_settings.js` (30), `static/js/targeting_widget.js` (5), `static/js/format-template-picker.js` (2). Verified by: `docs/deployment/static-js-urls.md` exists; `rg -n 'scriptRoot|script_root' static/js/` returns zero.
+- [ ] `.duplication-baseline` is temporarily relaxed at L0 entry to accommodate L0-L2 parallel old/new code, and re-tightened at L2 exit. Verified by: `check_code_duplication.py` green at every L0-L2 commit; L2 exit diff restores the baseline to ≤ L0-entry pre-relaxation value.
+- [ ] `tests/unit/architecture/test_architecture_no_flask_imports.py` is authored at L0 with a FIXME-seeded allowlist (~40 files expected). Allowlist is tracked in `tests/unit/architecture/allowlists/no_flask_imports.txt` and shrinks to empty by L2 exit. Verified by: guard is present and green at L0; allowlist file exists with entries annotated `# FIXME(salesagent-xxxx)`; allowlist is empty at L2 exit.
+- [ ] BDD feature files and step definitions are swept for Flask references (bare `flask` imports, `url_for` with blueprint dot-syntax, `script_root`). Verified by: `rg -n 'from flask|import flask|script_root|url_for\([^)]*\.' tests/bdd/` returns zero unexpected hits at L0 exit.
+
 **Harness extension:**
 
 - [ ] `tests/harness/_base.py::IntegrationEnv.get_admin_client()` exists, added as sibling to `get_rest_client()` near line 914
@@ -469,7 +478,7 @@ Full detail in `flask-to-fastapi-execution-details.md` Part 1.
 
 - [ ] Blocker 1 (script_root) — via codemod + `render()` wrapper + guard test
 - [ ] Blocker 2 (trailing slash) — via `APIRouter(redirect_slashes=True)` default in `build_admin_router()`
-- [ ] Blocker 4 (async session interleaving) — L0-L4 use sync `def` handlers. L0 adds `test_architecture_handlers_use_sync_def.py` (supersedes prior "full async SQLAlchemy pivot Option A + `test_architecture_admin_routes_async.py`" plan — see async-pivot-checkpoint.md for history). Blocker 4 async session interleaving is a L5+ concern within v2.0.
+- [ ] Blocker 4 (async session interleaving) — L0-L4 use sync `def` handlers. L0 adds `test_architecture_handlers_use_sync_def.py` (supersedes prior "full async SQLAlchemy pivot Option A + `test_architecture_admin_handlers_async.py`" plan — see async-pivot-checkpoint.md for history). Blocker 4 async session interleaving is a L5+ concern within v2.0.
 
 **What Wave 0 does NOT do (preserves mergeability):**
 
@@ -539,6 +548,11 @@ Full detail in `flask-to-fastapi-execution-details.md` Part 1.
   - `https://<hostname>/admin/auth/gam/callback`
 - [ ] Hostnames are deployment-specific. Missing registrations cause smoke-test failures unrelated to the migration code. This step belongs in the per-environment deploy runbook, NOT in the migration PR itself.
 
+**L1b derivative items (2026-04-15 sharpening):**
+
+- [ ] OAuth kwargs audit: every kwarg passed to `oauth.register(...)` in the legacy Flask integration (`src/admin/blueprints/auth.py`, `src/admin/blueprints/oidc.py`) is enumerated in `docs/migration/oauth-kwargs-inventory.md`, and each kwarg is verified to land identically in the Starlette `authlib.integrations.starlette_client.OAuth` wrapper. At minimum the following kwargs are enumerated: `client_kwargs.scope`, `server_metadata_url`, `access_type`, `prompt`, `hd`, `authorize_params`. Verified by: `docs/migration/oauth-kwargs-inventory.md` exists; a byte-for-byte diff of legacy-vs-new `register(...)` calls is recorded in the doc; `tests/integration/test_oauth_kwarg_parity.py` asserts the live registered client configuration matches the documented inventory.
+- [ ] Mandatory security-reviewer sign-off on L1b PR (the OAuth cutover touches `src/admin/csrf.py`, `src/admin/sessions.py`, `src/admin/oauth.py`). Verified by: the L1b GitHub PR has an approving review from the named security-reviewer role per CLAUDE.md §Ownership; reviewer name and date are recorded in `docs/development/migration-handoffs.md`.
+
 **Foundation runtime verifications:**
 
 - [ ] `GET /admin/login` serves from FastAPI, not Flask (curl + integration test)
@@ -550,6 +564,12 @@ Full detail in `flask-to-fastapi-execution-details.md` Part 1.
 - [ ] Session cookie cutover announcement sent to users before deploy
 - [ ] Stale `session=...` cookie returns fresh login page (not an error); Playwright `login_with_stale_flask_cookie` test green
 - [ ] `test_templates_url_for_resolves.py` runs in `--strict` mode — every `url_for("name")` in templates referenced by Wave 1 routers resolves to an actual registered endpoint
+
+**L1a derivative items (2026-04-15 sharpening):**
+
+- [ ] Session cookie dual-read window: Starlette `SessionMiddleware` is configured to accept BOTH `session` (legacy Flask cookie name) and `adcp_session` (new). L1a writes only `adcp_session` but reads both through L2 bake. Verified by: `tests/integration/test_session_cookie_dual_read.py` green (request carrying only `session=...` is authenticated; request carrying only `adcp_session=...` is authenticated; request with both prefers `adcp_session`).
+- [ ] Customer-communication plan for forced re-login (if dual-read is abandoned) is documented in `docs/migration/v2.0-customer-comms.md`. Verified by: file exists; product-owner sign-off block recorded inside the file with date and role.
+- [ ] Feature-flag `ADCP_USE_FASTAPI_ADMIN`: name, default value (`false`), flip-commit SHA, and deletion-layer (L2 exit) are documented IN THIS CHECKLIST and in `src/core/config.py`. Verified by: `rg -n 'ADCP_USE_FASTAPI_ADMIN' src/core/config.py` returns ≥1 hit at L0 landing; flag deletion commit is part of the L2 PR diff.
 
 **Architecture guards update:**
 
@@ -738,7 +758,7 @@ Decision 8 eliminated the SSE port; the `/tenant/{id}/events` route and `sse_sta
 
 **Entry criteria:**
 
-- [ ] Wave 2 merged to `main` and stable in staging ≥ 5 business days
+- [ ] Wave 2 / L1c-L1d merged to `main` and stable in staging ≥ 5 business days (dual-prefix delivery for the 14 tenant-scoped blueprints was L1c-L1d work; L2 only verifies, does not own it). Verified by: `tests/integration/test_tenant_subdomain_routing.py` green in L1d CI; all 14 blueprints from §Wave 2 enumeration have matching `APIRouter(prefix="/tenant/{tenant_id}", ...)` registrations.
 - [ ] Flask catch-all receives zero traffic in staging for 48h
 - [ ] Datadog/dashboard audit confirms no external consumer references Flask-era endpoints
 - [ ] `v1.99.0` git tag created and container image archived in registry (rollback fallback)
@@ -859,13 +879,362 @@ The Flask removal also removes Flask's internal WSGI proxy-header stack (`Custom
 - [ ] Manual browser test: click "Log in" on staging, verify the browser arrives at a real Google OAuth consent page (not an error page). Complete the OAuth flow; verify the callback lands on `https://staging-tenant.scope3.com/admin/...` and the admin UI loads.
 - [ ] If `FlyHeadersMiddleware` was kept (assumption #21 deferred): verify Fly-specific header rewriting still works by checking `scope["headers"]` logs in staging for requests carrying `Apx-Incoming-Host`.
 
+**L2 derivative items (2026-04-15 sharpening):**
+
+- [ ] `FLASK_ENV: development` is removed from `docker-compose.yml:93`. Verified by: `rg -n -w 'FLASK_ENV' docker-compose.yml docker-compose.multi-tenant.yml docker-compose.e2e.yml` returns zero matches.
+- [ ] `flask-socketio` is removed from `pyproject.toml:31` after verifying no direct or transitive usage. Verified by: `rg -n -w 'flask_socketio|flask-socketio|socketio' src/ tests/` returns zero matches.
+- [ ] `a2wsgi` is removed from `pyproject.toml:9`; the mount lines at `src/app.py:33` and `:299-304` are deleted. Verified by: `rg -n -w 'a2wsgi|WSGIMiddleware' src/` returns zero matches.
+- [ ] `werkzeug` is removed from `pyproject.toml:50`. Verified by: `rg -n -w 'werkzeug' src/ tests/` returns zero matches.
+- [ ] `types-waitress` is removed from `.pre-commit-config.yaml` mypy `additional_dependencies`. Verified by: `rg -n -w 'types-waitress' .pre-commit-config.yaml` returns zero matches.
+- [ ] Ruff overrides for Flask are removed: `pyproject.toml:169` E402 Flask comment and `:191` `"admin_ui.py" = ["E402", "E722"]` entry are both deleted. Verified by: `rg -n -w 'admin_ui.py|FLASK' pyproject.toml` returns zero matches.
+- [ ] `mypy.ini:71 [mypy-flask.*]` stanza is removed. Verified by: `rg -n '\[mypy-flask' mypy.ini` returns zero matches.
+- [ ] `test_architecture_no_raw_select.py` allowlist entries for `src/admin/app.py::create_app` and `inject_context` are removed IN THE SAME COMMIT as the deletion of `src/admin/app.py`. Verified by: the pre-L2-PR allowlist file contains the two entries; the post-L2-PR allowlist file does not; both deletions share the same commit SHA (`git log -1 --name-only <sha>` shows both files modified together).
+- [ ] `uvicorn --proxy-headers` is confirmed enabled in `scripts/run_server.py` (or the equivalent entrypoint). Verified by: `rg -n 'proxy_headers|--proxy-headers' scripts/ src/` returns ≥1 hit in the uvicorn invocation.
+- [ ] `request.remote_addr` → `request.client.host` + X-Forwarded-For audit is complete. At minimum `src/admin/blueprints/core.py:355` (the audit-log capture site) is migrated. `FlyHeadersMiddleware` unpacks X-Forwarded-For so handlers see the end-user IP. Verified by: `tests/integration/test_fly_headers_client_ip.py` green (POST with `X-Forwarded-For: 1.2.3.4` is logged with `client_ip=1.2.3.4`, not the proxy's IP).
+- [ ] `TrustedHostMiddleware` allow-list matches `nginx-multi-tenant.conf` server_name patterns; wildcards cover `*.${SALES_AGENT_DOMAIN}`. Verified by: `tests/integration/test_trusted_host_wildcards.py` green (requests matching nginx server_name patterns are accepted; requests outside the pattern return 400).
+- [ ] `src/core/domain_config.py::get_session_cookie_domain` caller is migrated from Flask `app.secret_key` config to Starlette `SessionMiddleware` config. Verified by: `rg -n 'secret_key' src/core/domain_config.py` returns zero matches.
+- [ ] All `health*` endpoints are enumerated and their URL-stability status documented. At minimum `src/admin/blueprints/core.py:366` and `:378`, `src/routes/health.py:37`, `src/routes/api.py:26`, `src/admin/blueprints/schemas.py:150`, and `src/admin/tenant_management_api.py:40` are each labeled {retained, merged, deleted}. External-uptime check paths are confirmed stable. Verified by: `docs/migration/health-endpoints-inventory.md` exists with the full enumeration; any external-uptime check requiring a path change is updated before L2 merge.
+- [ ] `templates/error.html` recursive-render protection is in place: either (a) the exception handler renders a minimal `error_minimal.html` that does NOT extend `base.html`, OR (b) `base.html` `url_for` calls use a safe `_url_for` helper that catches `NoMatchFound`. Verified by: `tests/integration/test_error_handler_no_recursion.py` green (forcing a render-time `NoMatchFound` inside `error.html` yields a 500 with a minimal HTML body, not an infinite recursion or stack overflow).
+- [ ] CI `test.yml` integration-test timeout is bumped from `--timeout=60` to `--timeout=120` for the first 2 post-L2 runs (to capture cold threadpool warmup), then reverted. Verified by: two post-L2 CI runs complete without timeout-related failures; a follow-up commit reverts the timeout to 60 before L3 enters.
+- [ ] Structural guard `tests/unit/architecture/test_architecture_mcp_no_flask_transitive.py` is added — AST-walks imports reachable from `src/core/main.py` and asserts zero transitive Flask dependency. Verified by: guard green on current `main`; a contamination-fixture test (a deliberately Flask-importing module placed in the import graph) proves the guard fails on violations.
+- [ ] `.pre-commit-hooks/check_route_conflicts_fastapi.py` is rewritten (replacing the Flask-specific `check_route_conflicts.py`, which is deleted). Verified by: the rewritten hook fails on a fixture with two conflicting FastAPI routes; passes on current `src/admin/routers/`; the old hook file is absent from the tree.
+- [ ] Smoke tests under `tests/smoke/` are swept for `from src.admin.app import create_app` and converted. Verified by: `rg -n 'from src\.admin\.app' tests/smoke/` returns zero matches.
+- [ ] `scripts/deploy/fly-set-secrets.sh` references to `FLASK_SECRET_KEY` are inspected and resolved — either removed at L2 (if dual-read window closes here) or retained until L7 (if dual-read continues through L6). Verified by: `rg -n 'FLASK_SECRET_KEY' scripts/deploy/` is inspected; disposition is recorded in the L2 PR description.
+
 **Exit criteria:**
 
 - [ ] All 15 Wave-3 acceptance criteria in execution-details §Wave 3.A pass
 - [ ] `rg -w flask .` from repo root returns zero hits
-- [ ] `v2.0.0` tag applied at end of L2 (Flask removal complete); async work continues as L5+ within v2.0 (supersedes prior "tag waits until Waves 4-5 land" plan — see async-pivot-checkpoint.md for history).
+- [ ] `v2.0.0-rc1` pre-release tag applied at end of L2 (Flask removal complete, pre-release candidate); the **final `v2.0.0` tag is applied at L7 only**, after async conversion (L5) and native refinements (L6) ship. Async work continues as L5+ within v2.0 (supersedes prior "tag waits until Waves 4-5 land" plan — see async-pivot-checkpoint.md for history). Verified by: `git tag --list 'v2.0.0*'` at L2 exit shows only `v2.0.0-rc1`; at L7 exit shows both `v2.0.0-rc1` and `v2.0.0`.
 - [ ] Staging canary runs 48h without incident
 - [ ] Wave 3 / L2 merges to `main`; async work continues as L5+ within v2.0 (supersedes prior "Waves 4-5 continue the async DB layer absorption" plan — see async-pivot-checkpoint.md for history).
+
+### Section 4 cross-cutting rules (2026-04-15 sharpening)
+
+These rules apply to every layer's Entry and Exit subsections in §4, regardless of whether the layer is labelled by its legacy Wave header or its canonical L-name.
+
+- **Mandatory security-reviewer sign-off**: any PR touching `src/admin/csrf.py`, `src/admin/sessions.py`, `src/admin/oauth.py`, `src/admin/rate_limits.py`, or `src/admin/middleware/security_headers.py` requires sign-off by the named security-reviewer role (CLAUDE.md §Ownership) regardless of layer. Verified by: GitHub PR review approval recorded against the named role.
+- **Reviewer rotation**: no single reviewer approves more than 3 consecutive layer PRs. Verified by: `git log main --merges --pretty=format:'%H %s' --since=<L0-start>` cross-referenced against PR review records — 4th consecutive layer PR must show a different approver (exception: security reviewer on security-critical layers L1b, L2 security work).
+- **Discovered items slot**: every layer includes a "Discovered items" list in its work-items section. Layer exit is blocked unless the list is empty OR each item has a filed follow-up issue linked in the layer PR description. Verified by: PR description contains either "Discovered items: none" or a bulleted list with issue links.
+- **Rollback re-entry condition**: every layer rollback section specifies when the layer may be retried after a rollback. Verified by inspection of the rollback section; cross-referenced in §5 and §6.5 alert linkage.
+- **Alert-name linkage in rollback triggers**: every rollback trigger in §5 explicitly names the §6.5 alert that fires it (e.g., `MigrationHigh5xx`, `FlaskCatchallHit`). Verified by: `rg -n 'alert|PAGE|NOTIFY' §5-rollback-text` cross-references §6.5 alert table entries.
+
+### L3 — Test harness modernization (entry, work items, exit)
+
+**Engineer-day estimate:** 3–4 (per CLAUDE.md §v2.0 Timeline Summary).
+
+**L3 entry criteria:**
+
+- [ ] L2 signed off by primary lead per §6.2 (48h bake passed; zero `FlaskCatchallHit` alerts).
+- [ ] `main` is up to date and CI is green.
+- [ ] Role assignments current per CLAUDE.md §Ownership; no named-role holder on scheduled leave during this layer.
+- [ ] L2 48h bake completed: 5xx rate ≤ baseline + 0.1%; p99 latency within documented tolerance; zero `FlaskCatchallHit` alerts (see §6.5).
+
+**L3 work items:**
+
+- [ ] Idempotent codemod `scripts/codemod_flask_test_client.py` exists and converts `app.test_client()` / `test_request_context()` calls to FastAPI `TestClient`. Verified by: running the codemod twice produces zero diff on the second run.
+- [ ] Every test file enumerated in `docs/migration/test-client-inventory.md` (the pre-L3 baseline, 29+ files) is converted. Verified by: `rg -n 'app\.test_client\(\)|test_request_context\(\)' tests/ src/` returns zero matches.
+- [ ] `tests/harness/admin_accounts.py:135` is converted (no longer imports `create_app` from `src.admin.app`). Verified by: `rg -n 'from src\.admin\.app' tests/harness/admin_accounts.py` returns zero matches.
+- [ ] `tests/integration/test_tenant_management_api_integration.py` is unified (the `app` and `sync_app` fixtures merged into a single FastAPI app + `TestClient`). Verified by: the file contains exactly one app fixture (grep finds a single `@pytest.fixture` decorator on an `app`-returning function).
+- [ ] Discovered items list is empty OR each item has a filed follow-up issue linked in the L3 PR description.
+
+**L3 exit criteria:**
+
+- [ ] All work items green.
+- [ ] All structural guards for this layer green with allowlists ≤ L2 exit values (monotonic).
+- [ ] Layer-scope commit-lint green (no out-of-scope commits — see `foundation-modules.md` §11.27).
+- [ ] 7-step Test-Before-Implement audit bash script (CLAUDE.md §Test-Before-Implement Discipline) run against the L3 feature branch and green.
+- [ ] PR squash-merged; release-please changelog entry present.
+- [ ] L4 entry prerequisites documented as satisfied in `docs/development/migration-handoffs.md`.
+
+### L4 — FastAPI-native sync refinement (entry, work items, exit)
+
+**Engineer-day estimate:** 6–8.
+
+**L4 entry criteria:**
+
+- [ ] L3 signed off by primary lead per §6.2.
+- [ ] `main` is up to date and CI is green.
+- [ ] Role assignments current; no named-role holder on leave during this layer.
+- [ ] **Spike 4.5 — ContextManager stateless refactor smoke test** passed (Decision 7 validation, 0.5–1 day). Pass criteria: refactor LOC <400 AND files touched <15 AND test patches <50 AND error-path composition test proves outer `session_scope()` rollback does NOT wipe error-logging writes. Soft blocker: on fail, ContextManager refactor gets a dedicated L4 sub-phase PR. Verified by: `spike-4.5.md` committed in the repo with pass/fail table and measurement numbers.
+- [ ] Discovered items slot (empty at entry).
+
+**L4 work items:** (existing Wave 4 content below references these; see Wave 4 / L3+L4+L5a-L5e heading for detail)
+
+- [ ] `test_architecture_uses_structlog.py` guard extended: blocks `print()` in `src/**/*.py` (allowlist: `scripts/`, `alembic/versions/`, `src/core/cli/`). Verified by: guard green; `rg "^\s*print\(" src/ | rg -v "scripts/|alembic/versions/|core/cli/"` returns zero.
+- [ ] Structural guard `test_architecture_no_pydantic_v1_validators.py` added: forbids `from pydantic import validator` and `@validator(...)` usage in `src/`. Verified by: `rg "from pydantic import.*\bvalidator\b|@validator\(" src/` returns zero; guard green.
+
+**L4 bake window:**
+
+- [ ] Duration: 24h minimum post-deploy (L4 is internally visible — sync refinements only; no user-visible breaking changes).
+- [ ] Zero PAGE-severity alerts on `admin-migration-health` dashboard (see §6.5).
+- [ ] 5xx rate ≤ baseline + 0.1%.
+- [ ] p99 latency within documented tolerance vs pre-L4 sync baseline.
+- [ ] Auth success rate ≥ 99.5%.
+- [ ] Sign-off by incident commander recorded in `docs/development/migration-handoffs.md`.
+
+**L4 exit criteria:**
+
+- [ ] All work items green (atomic verification).
+- [ ] `baseline-sync.json` captured at L4 EXIT and committed to the repo — this is the Spike 3 deliverable and is the oracle for L5 async performance comparison. Verified by: `tests/migration/fixtures/baseline-sync.json` exists, contains latency numbers for 20 admin routes + 5 MCP tool calls; captured under the L4 production-shape config (including adapter `run_in_threadpool` wraps if Path-B is active).
+- [ ] All structural guards for this layer green with allowlists ≤ L3 exit values (monotonic).
+- [ ] Layer-scope commit-lint green.
+- [ ] 7-step Test-Before-Implement audit green.
+- [ ] PR squash-merged.
+- [ ] L5a entry prerequisites documented as satisfied.
+
+### L5a — Spike window + L5 go/no-go decision gate
+
+**Engineer-day estimate:** 5–7.
+
+**L5a entry criteria:**
+
+- [ ] L4 signed off by primary lead per §6.2.
+- [ ] `main` is up to date and CI is green.
+- [ ] `baseline-sync.json` present in the repo (captured at L4 EXIT).
+- [ ] Role assignments current.
+- [ ] **Spike 5.5 — Two-engine coexistence (Decision 9 validation)** scheduled for this window. Pass criteria: 4 test cases green at `tests/driver_compat/test_sync_bridge_coexistence.py` — (a) lazy-init + dispose, (b) MVCC bidirectional visibility, (c) 5 concurrent async requests + 1 sync thread no deadlock, (d) post-dispose connection leaks ≤1. Soft blocker: on fail, revert to Option A (asyncio task) — documented in `spike-decision.md`. Verified by: spike test file exists and runs as part of L5a gate.
+
+**L5a work items (10 technical spikes + 1 decision gate):**
+
+- [ ] Spike 1 (lazy-load audit, HARD gate); Spike 2 (driver compat, HARD gate); Spike 4 (test-harness 5-file conversion); Spike 4.25 (factory-boy async shim); Spike 5 (scheduler alive-tick); Spike 5.5 (two-engine coexistence, listed above); Spike 6 (Alembic async evaluation); Spike 7 (GAM adapter threadpool saturation) — see CLAUDE.md canonical spike table for per-spike pass criteria.
+- [ ] **Spike 8 — L5 go/no-go decision gate (HARD)**: `spike-decision.md` committed at L5a EXIT with pass/fail per technical spike, `baseline-sync.json` comparison (if any L5 experiments were run on the spike branch), resolved status of the 9 open decisions, and the final go/no-go call. Go condition: Spike 1 PASSES AND no more than 2 soft spikes fail. No-go: narrow L5 scope OR ship L0-L4 only and defer async to v2.1 (L0-L4 ships regardless).
+- [ ] Discovered items list is empty OR each item has a filed follow-up issue.
+
+**L5a exit criteria:**
+
+- [ ] `spike-decision.md` committed with go/no-go call.
+- [ ] All technical spike acceptance criteria green (or explicit fallback invoked for soft-spike failures).
+- [ ] Layer-scope commit-lint green.
+- [ ] 7-step audit green.
+- [ ] PR squash-merged.
+- [ ] If GO: L5b entry prerequisites documented. If NO-GO: v2.1 async scope ticket filed; L6 entry prerequisites re-derived under "ship L0-L4 only" path.
+
+### L5b — SessionDep alias flip + guard swap
+
+**Engineer-day estimate:** 1–2.
+
+**L5b entry criteria:**
+
+- [ ] L5a Spike 8 decision is GO.
+- [ ] `main` is up to date and CI is green.
+- [ ] Role assignments current; security reviewer available (async engine config is security-relevant).
+- [ ] Discovered items slot (empty at entry).
+
+**L5b work items:**
+
+- [ ] One-line `SessionDep` re-alias from `Annotated[Session, Depends(get_session)]` to `Annotated[AsyncSession, Depends(get_session)]` in `src/admin/deps/db.py` (or equivalent).
+- [ ] Lifespan-scoped async engine created in `database_lifespan(app)`; stored on `app.state.db_engine`.
+- [ ] Guard swap per §Wave 4 "L5b guard sunset + replacement" (moved from L5c per 2026-04-15 correction): delete sync-def guard and no-async-db guard; add async-handlers guard with FULL allowlist seeded.
+- [ ] Structural guard `test_architecture_relationships_explicit_loading.py` added; all 68 existing relationships have explicit `lazy=` strategies per Spike 1 outcome; allowlist empty. Verified by: guard green; `rg "relationship\(" src/core/database/models/ | rg -v "lazy=" ` returns zero.
+
+**L5b bake window:**
+
+- [ ] Duration: 48h minimum.
+- [ ] Zero PAGE-severity alerts.
+- [ ] 5xx rate ≤ baseline + 0.1% vs `baseline-sync.json`.
+- [ ] p99 latency within ±5% vs `baseline-sync.json`.
+- [ ] Zero `MissingGreenlet` errors in log aggregator.
+- [ ] Incident-commander sign-off recorded.
+
+**L5b exit criteria:**
+
+- [ ] All work items green.
+- [ ] Structural guards monotonic (async-handlers allowlist = full; all other allowlists ≤ L5a).
+- [ ] Layer-scope commit-lint green.
+- [ ] 7-step audit green.
+- [ ] PR squash-merged.
+- [ ] L5c entry prerequisites documented.
+
+### L5c — 3-router async pilot
+
+**Engineer-day estimate:** 3–5.
+
+**L5c entry criteria:**
+
+- [ ] L5b 48h bake completed green.
+- [ ] `main` is up to date and CI is green.
+- [ ] Role assignments current.
+- [ ] Discovered items slot (empty at entry).
+
+**L5c work items:** (detailed in existing §Wave 4 L5c block)
+
+**L5c bake window:**
+
+- [ ] Duration: 48h.
+- [ ] p99 latency on the 3 pilot routers within ±5% vs `baseline-sync.json`.
+- [ ] Zero `MissingGreenlet` on pilot routes.
+- [ ] DB pool saturation < 0.7 sustained.
+- [ ] Incident-commander sign-off recorded.
+
+**L5c exit criteria:**
+
+- [ ] All 3 pilot routers converted and green.
+- [ ] async-handlers allowlist shrunk by exactly 3 router names.
+- [ ] Layer-scope commit-lint green.
+- [ ] 7-step audit green.
+- [ ] PR squash-merged.
+- [ ] L5d1 entry prerequisites documented.
+
+### L5d1 — Sync-bridge for `background_sync_service.py`
+
+**Engineer-day estimate:** 2–3.
+
+**L5d1 entry criteria:**
+
+- [ ] L5c bake completed green.
+- [ ] `main` green.
+- [ ] Decision 9 validated (Spike 5.5 green at L5a).
+
+**L5d1 exit criteria:**
+
+- [ ] `src/services/background_sync_db.py` landed with separate sync psycopg2 engine.
+- [ ] `test_architecture_sync_bridge_scope.py` green with frozen allowlist (`background_sync_service.py` only).
+- [ ] Flask-caching-ImportError at line 472 closed (SimpleAppCache replacement).
+- [ ] Layer-scope commit-lint green; 7-step audit green.
+- [ ] PR squash-merged.
+
+### L5d2 — Adapter Path-B threadpool wrap
+
+**Engineer-day estimate:** 3–4.
+
+**L5d2 entry criteria:**
+
+- [ ] L5d1 merged green.
+- [ ] Spike 7 (GAM adapter threadpool saturation) reviewed.
+
+**L5d2 exit criteria:**
+
+- [ ] 18 adapter call sites in `src/core/tools/*.py` + 1 in `src/admin/blueprints/operations.py` (or its L2 replacement) wrapped in `await run_in_threadpool(...)`.
+- [ ] `test_architecture_adapter_calls_wrapped_in_threadpool.py` green with empty allowlist.
+- [ ] `anyio.to_thread.current_default_thread_limiter().total_tokens` set to `int(os.environ.get("ADCP_THREADPOOL_TOKENS", "80"))` (already at L0 per 2026-04-14 move).
+- [ ] Layer-scope commit-lint green; 7-step audit green.
+- [ ] PR squash-merged.
+
+### L5d3 — Bulk router + repository async conversion
+
+**Engineer-day estimate:** 8–12 (largest L5 sub-PR).
+
+**L5d3 entry criteria:**
+
+- [ ] L5d2 merged green.
+- [ ] `main` green; no scheduled leave during blackout window (CLAUDE.md §Time-off blackout).
+
+**L5d3 bake window:**
+
+- [ ] Duration: 48h.
+- [ ] async-handlers allowlist drained monotonically across sub-PRs (L5d3.1 → L5d3.4).
+- [ ] Zero `MissingGreenlet` at any point in the window.
+- [ ] p99 latency within ±5% vs `baseline-sync.json`.
+
+**L5d3 exit criteria:**
+
+- [ ] ~300 repository methods + ~2,400 LOC converted.
+- [ ] async-handlers allowlist shrunk to ≤ 5 entries (remaining for L5d5/L5e).
+- [ ] Layer-scope commit-lint green; 7-step audit green.
+- [ ] PR squash-merged.
+
+### L5d4 — SSE deletion (Decision 8)
+
+**Engineer-day estimate:** 1–2.
+
+**L5d4 entry criteria:** L5d3 merged green; `main` green.
+
+**L5d4 exit criteria:**
+
+- [ ] `/tenant/{id}/events` route + generator + rate-limit state + HEAD probe deleted.
+- [ ] `sse_starlette` removed from `pyproject.toml`.
+- [ ] `api_mode=False → True` fix on `/activity` JSON poll route landed.
+- [ ] `test_architecture_no_sse_handlers.py` green with empty allowlist.
+- [ ] Layer-scope commit-lint green; 7-step audit green.
+- [ ] PR squash-merged.
+
+### L5d5 — Async mop-up (`_impl`/`tools.py`/`main.py`)
+
+**Engineer-day estimate:** 2–4.
+
+**L5d5 entry criteria:** L5d3 merged green; L5d4 merged green (if both ready).
+
+**L5d5 exit criteria:**
+
+- [ ] All remaining `_raw`/`_impl` call sites in `src/routes/api_v1.py` + `src/core/tools/capabilities.py` have missing `await` keywords added per Agent D M1/M2.
+- [ ] `test_api_v1_routes_await_all_impls.py` green.
+- [ ] Layer-scope commit-lint green; 7-step audit green.
+- [ ] PR squash-merged.
+
+### L5e — Final async sweep
+
+**Engineer-day estimate:** 3–4.
+
+**L5e entry criteria:** L5d1–L5d5 all merged green; `main` green.
+
+**L5e bake window:**
+
+- [ ] Duration: 48h.
+- [ ] async-handlers allowlist empty at L5e exit.
+- [ ] p99 latency within ±5% vs `baseline-sync.json` (release gate).
+- [ ] DB pool saturation < 0.7 sustained.
+- [ ] Incident-commander sign-off recorded.
+
+**L5e exit criteria:**
+
+- [ ] `lazy="raise"` flipped permanently on all relationships in `src/core/database/models.py`.
+- [ ] `test_async_performance_parity.py` green vs `baseline-sync.json`.
+- [ ] async-handlers allowlist empty.
+- [ ] Layer-scope commit-lint green; 7-step audit green.
+- [ ] PR squash-merged.
+
+### L6 — Native refinements
+
+**Engineer-day estimate:** 3–4.
+
+**L6 entry criteria:** L5e bake completed green; `main` green; role assignments current.
+
+**L6 exit criteria:**
+
+- [ ] `src/admin/flash.py` deleted; `app.state` flash store in place.
+- [ ] `SimpleAppCache` migrated to `app.state` singleton.
+- [ ] Router subdir reorg complete.
+- [ ] `logfire` instrumentation landed (NOT `opentelemetry-sdk`).
+- [ ] Layer-scope commit-lint green; 7-step audit green.
+- [ ] PR squash-merged.
+- [ ] L7 entry prerequisites documented.
+
+### L7 — Polish and ship v2.0.0
+
+**Engineer-day estimate:** 3–5.
+
+**L7 entry criteria:**
+
+- [ ] L6 merged green; `main` green.
+- [ ] Role assignments current; no named-role holder on leave during blackout window.
+- [ ] All prior layer bake windows signed off in `docs/development/migration-handoffs.md`.
+
+**L7 work items (2026-04-15 sharpening):**
+
+- [ ] `docs/migration/migration-guide-v2.0.md` is written and covers breaking changes for downstream consumers of the admin UI and OAuth callbacks. Verified by: file exists; reviewed and signed off by the product owner (signoff recorded inline).
+- [ ] Post-deploy smoke verification: the login flow is walked end-to-end by 2 operators in production within 30 minutes of deploy. Verified by: signoff with operator names and timestamps recorded in `docs/development/migration-handoffs.md`.
+- [ ] Rollback rehearsal in staging is completed before L7 deploy. Verified by: rehearsal log in `docs/development/migration-handoffs.md` with date, participants, and outcome.
+- [ ] Stakeholder comms per the L1a customer-comms plan are sent. Verified by: send-receipt or message archive linked in `docs/development/migration-handoffs.md`.
+- [ ] Post-release monitoring owner and end-date are named. Verified by: the incident-commander role confirms ownership of the 48h watch; end-date is recorded in `docs/development/migration-handoffs.md`.
+- [ ] Formatter consolidation: `black` pre-commit hook removed; `ruff-format` hook (from `astral-sh/ruff-pre-commit`) added. `black` removed from `pyproject.toml` dev dependencies. Verified by: `rg -w "black" .pre-commit-config.yaml pyproject.toml` returns zero; `ruff format --check .` green across repo; single PR scope.
+
+**L7 bake window:**
+
+- [ ] Duration: 1 week (per CLAUDE.md §Calendar time).
+- [ ] Zero PAGE-severity alerts.
+- [ ] All `Captured→shrink` allowlists empty (meta-guard `test_architecture_allowlists_empty_at_L7` green).
+- [ ] mypy strict ratcheting green.
+- [ ] Incident-commander sign-off recorded.
+
+**L7 exit criteria:**
+
+- [ ] `v2.0.0` git tag applied (final release, after L5 async + L6 refinements shipped).
+- [ ] `docs/ARCHITECTURE.md` refreshed.
+- [ ] `FLASK_SECRET_KEY` dual-read hard-removed.
+- [ ] Layer-scope commit-lint green; 7-step audit green.
+- [ ] PR squash-merged; release-please changelog entry present with all breaking changes.
+- [ ] Post-release monitoring plan active.
 
 ### Wave 4 / L3+L4+L5a-L5e — Async database layer (test harness, sync refinement, async conversion)
 
@@ -895,12 +1264,12 @@ The Flask removal also removes Flask's internal WSGI proxy-header stack (`Custom
 - [ ] **Dropped from pilot:** `src/admin/routers/signals_agents.py` — has `POST /test` endpoint that makes outbound HTTP calls, forcing adapter async pattern validation simultaneously. Move to L5d (broader async rollout).
 - [ ] **Rationale:** diverse patterns (read-only GET, write-path CRUD, tenant-scoped CRUD) without the confound of outbound HTTP. If pilot succeeds, L5d1-5d5 scale.
 
-**L5c guard sunset + replacement** (same commit as pilot router async conversion):
+**L5b guard sunset + replacement** (same atomic commit as `SessionDep` alias flip to `AsyncSession`):
 
-- [ ] Delete `tests/unit/test_architecture_handlers_use_sync_def.py`
-- [ ] Delete `tests/unit/test_architecture_no_async_db_access.py`
-- [ ] Add `tests/unit/test_architecture_admin_handlers_async.py` (asserts every admin APIRoute handler is `async def`)
-- [ ] Rationale: sync-def guard becomes wrong the moment any pilot handler flips to async; atomic swap prevents a window where both guards fire contradictorily. Meta-test for the new guard uses the `write-guard` skill pattern. Full implementation in `flask-to-fastapi-foundation-modules.md` §11.16.
+- [ ] `tests/unit/test_architecture_handlers_use_sync_def.py` is deleted at L5b (not L5c). Verified by: `git log -1 --name-status <L5b-sha> | grep -E 'D.*handlers_use_sync_def'` returns the deletion; sync-def guard is absent from `main` at L5b exit.
+- [ ] `tests/unit/test_architecture_no_async_db_access.py` is deleted at L5b. Verified by: file absent post-L5b.
+- [ ] `tests/unit/test_architecture_admin_handlers_async.py` is added in the SAME L5b commit and asserts every admin APIRoute handler is `async def`. **Allowlist starts FULL at L5b** (every admin handler is on the allowlist because none have been converted yet — the alias flip is type-only), **drains monotonically through L5c → L5d1 → L5d2 → L5d3 → L5d4 → L5d5 → L5e**, and reaches EMPTY at L5e exit. Verified by: allowlist file exists at L5b with ~all admin handler names enumerated; meta-guard `test_structural_guard_allowlist_monotonic.py` green across L5c-L5e; allowlist file is empty at L5e exit.
+- [ ] Rationale: the sync-def guard becomes wrong at the moment `SessionDep` re-aliases to `AsyncSession` (L5b), not when the first pilot handler flips to async (L5c). Atomic swap at L5b prevents a window where the sync-def guard contradicts the `SessionDep` alias; the full-allowlist-then-drain pattern allows L5c pilot handlers to be the first to leave the allowlist as they convert. Meta-test for the new guard uses the `write-guard` skill pattern. Full implementation in `flask-to-fastapi-foundation-modules.md` §11.16.
 
 **L1 OAuth refresh token storage — audit outcome:**
 
@@ -1063,7 +1432,7 @@ Every stated v2.0 goal maps to a specific test that proves adherence. The matrix
 |---|------|-----------|-----------|---------|----------|------|------------|
 | 1 | Zero Flask imports in `src/` | `tests/unit/test_architecture_no_flask_imports.py` | AST scan | L0 | L0 (captured allowlist, shrinks) | — | — |
 | 2 | Admin handlers are sync `def` in L0-L4 | `tests/unit/test_architecture_handlers_use_sync_def.py` | AST scan | L0 | L0 | L5b (sunset at alias flip) | `test_architecture_admin_handlers_async.py` |
-| 3 | Admin handlers are `async def` from L5c | `tests/unit/test_architecture_admin_handlers_async.py` | AST scan | L5a | L5c (empty allowlist, enforced) | — | — |
+| 3 | Admin handlers are `async def` (sweep starts L5b alias flip, complete by L5e) | `tests/unit/test_architecture_admin_handlers_async.py` | AST scan | L5a | L5b (full allowlist seeded; drains L5c–L5e) | — | — |
 | 4 | No async DB access in L0-L4 | `tests/unit/test_architecture_no_async_db_access.py` | AST scan | L0 | L0 | L5b (sunset) | — |
 | 5 | All URL generation via `url_for` | `tests/unit/test_templates_no_hardcoded_admin_paths.py` + `tests/integration/test_templates_url_for_resolves.py` | AST scan + runtime | L0 | L1 | — | — |
 | 6 | Every admin route has `name=` | `tests/unit/test_architecture_admin_routes_named.py` | runtime introspection | L0 | L1 | — | — |
@@ -1097,7 +1466,7 @@ Every stated v2.0 goal maps to a specific test that proves adherence. The matrix
 | 34 | Module-scope `create_app()` forbidden in tests | `tests/unit/test_architecture_no_module_scope_create_app.py` | AST scan | L0 | L2 (empty allowlist after sweep) | — | — |
 | 35 | Lazy-load failures <40 (HARD GATE for L5) | `tests/integration/test_lazy_load_raise_audit.py` (Spike 1) | runtime count | L5a | L5a | L5a (gate only) | **Spike 1 prep:** convert 5 `backref=` pairs (at `models.py:727,1900,1935,1971,2010`) to explicit `back_populates` BEFORE running the `lazy="raise"` sweep — backref-synthesized reverse sides are invisible to the textual sweep and would silently retain `lazy="select"`. Structural guard `test_architecture_no_backref_only_relationships.py` asserts 0 `backref=` in `models.py` from L5a onward. Decision matrix (joinedload vs selectinload) lives in `foundation-modules.md §11.29`. |
 | 36 | Factory async shim handles 8 edge cases | `tests/unit/test_factory_async_shim.py` (Spike 4.25) | case matrix | L5a | L5a | — | — |
-| 37 | Adapter calls wrapped in `run_in_threadpool` (Path-B) | `tests/unit/test_architecture_adapter_calls_wrapped_in_threadpool.py` | AST scan | L5a | L5c | — | — |
+| 37 | Adapter calls wrapped in `run_in_threadpool` (Path-B) | `tests/unit/test_architecture_adapter_calls_wrapped_in_threadpool.py` | AST scan | L5a | L5d2 | — | — |
 | 38 | No singleton `ContextManager` (stateless module functions per Decision 7) | `tests/unit/test_architecture_no_singleton_session.py` | AST scan | L4 | L4 | — | — |
 | 39 | Sync-bridge scope = `background_sync_service.py` ONLY | `tests/unit/test_architecture_sync_bridge_scope.py` | AST scan (frozen allowlist) | L5a | L5a | — | — |
 | 40 | No SSE handlers (Decision 8 deletion) | `tests/unit/test_architecture_no_sse_handlers.py` | AST scan | L5a | L5d4 | — | — |
@@ -1248,7 +1617,7 @@ Single-commit revert; largest revert commit. Flask catch-all re-activates.
   1. `git checkout main`
   2. `git revert -m 1 <L5b-merge-sha> --no-edit`
   3. `grep -rn "from sqlalchemy.ext.asyncio import" src/admin/deps/db.py` — verify `SessionDep` reverted to `Annotated[Session, Depends(get_session)]`
-  4. Swap structural guards back: restore `test_architecture_handlers_use_sync_def.py`, remove `test_architecture_admin_routes_async.py`
+  4. Swap structural guards back: restore `test_architecture_handlers_use_sync_def.py`, remove `test_architecture_admin_handlers_async.py`
   5. `make quality && ./run_all_tests.sh` — verify green
   6. `git push origin main`
 - [ ] **Procedure (CASCADE if L5c/L5d/L5e partially or fully shipped):**
@@ -1397,8 +1766,8 @@ This is the authoritative table of every AST-scanning / layer-scoped / meta-guar
 |---|---|---|---|---|---|---|
 | *(all 27 pre-v2.0 guards from root `CLAUDE.md`)* | Active pre-v2.0 | Various | Per root CLAUDE.md | Mostly `Captured→shrink` or `Empty` | Varies | N/A |
 | `test_architecture_no_flask_imports` | New | L0 | `tests/unit/architecture/test_architecture_no_flask_imports.py` | Captured→shrink | L2 zero | N/A |
-| `test_architecture_handlers_use_sync_def` | New | L0 | `tests/unit/architecture/test_architecture_handlers_use_sync_def.py` | Empty (with small carve-out for OAuth `async def` callbacks, ~3-4 entries Frozen) | N/A | Inverts to `test_architecture_admin_handlers_async` at L5b |
-| `test_architecture_admin_handlers_async` | New | Written L5a / enforced L5b | `tests/unit/architecture/test_architecture_admin_handlers_async.py` | Empty | N/A | Swaps in when `test_architecture_handlers_use_sync_def` swaps out |
+| `test_architecture_handlers_use_sync_def` | New | L0 | `tests/unit/architecture/test_architecture_handlers_use_sync_def.py` | Empty (with small carve-out for OAuth `async def` callbacks, ~3-4 entries Frozen) | N/A | Inverts to `test_architecture_admin_handlers_async` at **L5b** (same PR as `SessionDep` alias flip to `AsyncSession`) |
+| `test_architecture_admin_handlers_async` | New | Written L5a / enforced L5b | `tests/unit/architecture/test_architecture_admin_handlers_async.py` | Captured full allowlist at L5b; drains monotonically through L5c–L5e; empty at L5e exit | N/A | Swaps in when `test_architecture_handlers_use_sync_def` swaps out |
 | `test_architecture_no_async_db_access` | New | L0 | `tests/unit/architecture/test_architecture_no_async_db_access.py` | Empty | N/A | Removed at L5b |
 | `test_architecture_middleware_order` | New | L0 | `tests/unit/architecture/test_architecture_middleware_order.py` | Empty | N/A | N/A |
 | `test_architecture_exception_handlers_complete` | New | L0 | `tests/unit/architecture/test_architecture_exception_handlers_complete.py` | Empty | N/A | N/A |

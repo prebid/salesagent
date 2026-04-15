@@ -355,7 +355,7 @@ def get_tenant_stats(
 **Work items (in order):**
 
 1. Write `test_category1_native_error_shape.py` and `test_category2_compat_error_shape.py` FIRST [§4 Wave 2 / L1c-L1d].
-2. Port HTML routers: `products.py` (audit `getlist` — 12+ sites), `tenants.py`, `gam.py`, `inventory.py`, `inventory_profiles.py`, `creatives.py` (webhook audit), `creative_agents.py`, `signals_agents.py`, `operations.py` (webhook audit), `policy.py`, `workflows.py`. All sync `def` [§4 Wave 2 / L1c-L1d].
+2. Port HTML routers: `products.py` (audit `getlist` — 12+ sites), `tenants.py`, `gam.py`, `inventory.py`, `inventory_profiles.py`, `creatives.py` (webhook audit), `creative_agents.py`, `signals_agents.py`, `operations.py` (webhook audit), `policy.py`, `workflows.py`. All sync `def` [§4 Wave 2 / L1c-L1d]. **Each tenant-scoped HTML router MUST be registered with BOTH `/admin/*` AND `/tenant/{tenant_id}/*` prefixes** (dual-prefix routing) so that the existing `/tenant/<tenant_id>/*` URLs Flask serves via the catch-all continue to resolve once the catch-all is removed at L2. 14 blueprints require dual-prefix: tenants, accounts, creatives, users, settings, operations, products, inventory, authorized_properties, signals_agents, activity, workflows, audit_logs, gam. Write `tests/integration/test_tenant_subdomain_routing.py` in this PR — smoke-tests `/tenant/default/dashboard`, `/tenant/default/products`, `/tenant/default/creatives`, `/tenant/default/users`, `/tenant/default/settings` for 200 BEFORE the L2 catch-all deletion. See `implementation-checklist.md` Wave 2 "Tenant-scoped admin routes" block.
 3. Port JSON APIs: `schemas.py` (external contract — byte-identical), `tenant_management_api.py` (Cat-2), `sync_api.py` (Cat-2 + `/api/sync` mount), `gam_reporting_api.py` (Cat-1). All sync `def` [§4 Wave 2 / L1c-L1d].
 4. Implement Category-2 scoped exception handler [§4 Wave 2 / L1c-L1d].
 5. `datetime` serialization format audit [§4 Wave 2 / L1c-L1d].
@@ -410,7 +410,7 @@ git grep -l "flask" src/admin/ | wc -l  # <= 2
 2. Migrate 3 cache consumer sites in strict 12-step order (a→l) [§1.2 Decision 6].
 3. Fix `from flask import current_app` at `background_sync_service.py:472` → `SimpleAppCache` [§3.5.3 SG-6].
 4. Move `atexit` handlers (`webhook_delivery_service.py:185`, `delivery_simulator.py:45`) to FastAPI lifespan post-yield [§3.5.3 SG-2].
-4a. **PREREQUISITE — dual-prefix tenant routing.** Before the Flask catch-all is deleted, every tenant-scoped admin router must be registered with BOTH `/admin/*` AND `/tenant/{tenant_id}/*` prefixes. Flask currently serves ~14 blueprints at `/tenant/<tenant_id>/*` via the catch-all `app.mount("/", admin_wsgi)` at `src/app.py:44-45`. 14 blueprints require dual-prefix: tenants, accounts, creatives, users, settings, operations, products, inventory, authorized_properties, signals_agents, activity, workflows, audit_logs, gam. Write `tests/integration/test_tenant_subdomain_routing.py` BEFORE the catch-all deletion PR lands — smoke-tests `/tenant/default/dashboard`, `/tenant/default/products`, `/tenant/default/creatives`, `/tenant/default/users`, `/tenant/default/settings` for 200 post-L2. See `implementation-checklist.md` Wave 2 "Tenant-scoped admin routes" block.
+4a. **PREREQUISITE VERIFICATION — dual-prefix tenant routing.** Dual-prefix registration of the 14 tenant-scoped routers (tenants, accounts, creatives, users, settings, operations, products, inventory, authorized_properties, signals_agents, activity, workflows, audit_logs, gam) is performed in **L1d work item 2** (where each router is ported). The L2 prereq is verification only: re-run `tests/integration/test_tenant_subdomain_routing.py` (added in L1d) and confirm `/tenant/default/{dashboard,products,creatives,users,settings}` all return 200 against the FastAPI router stack BEFORE deleting the Flask catch-all in this layer. See `implementation-checklist.md` Wave 2 "Tenant-scoped admin routes" block.
 5. Delete: `src/admin/app.py`, `activity_stream.py`, `blueprints/` dir, `server.py`, `scripts/run_admin_ui.py`, dead helpers [§4 Wave 3].
 6. Modify `src/app.py`: delete Flask mount, `/a2a/` redirect shim, landing route hack, proxy refs, feature flag [§4 Wave 3].
 7. `git mv templates/ src/admin/templates/` and `static/ src/admin/static/` [§4 Wave 3].
@@ -455,7 +455,7 @@ docker build .                      # succeeds
 
 **Goal:** Consolidate factories in `tests/factories/`, adopt `app.dependency_overrides[get_db_session] = lambda: session` pattern in all new tests, retire inline `session.add()` in test bodies. All tests stay sync. Structural guard `test_architecture_repository_pattern.py` gains a ratcheting allowlist of pre-existing debt.
 
-**Prerequisites:** L2 merged. `v2.0.0-rc1` deployed and stable >= 1 week in production.
+**Prerequisites:** L2 merged. `v2.0.0-rc1` deployed and stable in staging >= 3 business days (L3 is test-harness modernization only; no production-visible surface change, so the bake is staging-only and shorter than L1b/L2 production bakes).
 
 **Knowledge to read:**
 - `async-audit/testing-strategy.md` — multi-tier testing strategy, ~6,000 tests safety net
@@ -724,7 +724,7 @@ wc -l "$OUT"
 
 **Exit gate:**
 ```bash
-# All 7 spikes PASS (Spike 1 is HARD GATE)
+# All 10 technical spikes + 1 decision gate (11 items) PASS per CLAUDE.md §v2.0 Spike Sequence (Spike 1 is HARD GATE)
 make quality && ./run_all_tests.sh  # green
 # Spike gate decisions recorded in spike-decision.md
 ```
@@ -741,7 +741,7 @@ make quality && ./run_all_tests.sh  # green
 
 1. Refactor engine to async: `create_async_engine` in `src/core/database/engine.py`.
 2. Re-alias `SessionDep` from `Session` to `AsyncSession` — the 1-line change.
-3. Atomically swap the structural guards: remove `test_architecture_handlers_use_sync_def.py`, add `test_architecture_admin_routes_async.py`. The two guards are mutually exclusive.
+3. Atomically swap the structural guards: remove `test_architecture_handlers_use_sync_def.py`, add `test_architecture_admin_handlers_async.py`. The two guards are mutually exclusive. (Per finding-13 resolution: L5b is the correct placement — the swap happens when the `AsyncSession` alias flips, so new `async def` pilot code can compile cleanly; the new guard's allowlist starts full and drains through L5c-L5d3.)
 4. Fix the pilot commit by `await`ing the handful of call sites in the engine module.
 
 **Exit gate:**

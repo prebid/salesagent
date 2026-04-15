@@ -405,9 +405,9 @@ For transparency:
 
 - **Playwright end-to-end OAuth flow:** the audit trusted the Authlib Starlette client documentation. A Wave 1 staging smoke test should exercise the full Google OAuth flow against the new `auth.py` router before any traffic cutover.
 
-- **Benchmark of async SQLAlchemy vs pre-migration sync baseline on hot admin routes:** covered in the execution-details doc but not runtime-verified yet. Recommend benchmarking a read-heavy listing route and a write-heavy form route in Wave 1 (pre-async-conversion) and again in Wave 4 (post-async-conversion) to quantify latency profile change. Acceptable range is net-neutral to ~5% improvement; significantly worse is a signal that `pool_size` tuning is needed (Risk #6 in `async-pivot-checkpoint.md` §4). Original "`run_in_threadpool` overhead benchmark" framing is stale under the full-async pivot.
+- **Benchmark of async SQLAlchemy vs sync baseline on hot admin routes:** covered in the execution-details doc but not runtime-verified yet. Per the 2026-04-14 layering, capture a read-heavy listing route and a write-heavy form route at L4 EXIT (`baseline-sync.json`, see Spike 3) and again at L5e (post-async-conversion) to quantify latency profile change. Acceptable range is net-neutral to ~5% improvement; significantly worse is a signal that `pool_size` tuning is needed (Risk #6 in `async-pivot-checkpoint.md` §4). The original "`run_in_threadpool` overhead benchmark" framing was tied to the pre-2026-04-11 sync-`def`-everywhere proposal and does not apply to the L0-L4 sync handlers (which are sync `def` + sync DB, no threadpool-for-DB hop).
 
-### Non-code surface AdCP impact (Agent F confirmation, pivoted 2026-04-11)
+### Non-code surface AdCP impact (Agent F confirmation, layered scope per 2026-04-14)
 
 All 105 action items in Agent F's non-code surface inventory (`async-audit/agent-f-nonsurface-inventory.md`) have been verified AdCP-safe:
 
@@ -455,7 +455,7 @@ The v2.0 migration preserves two non-obvious architectural facts that are load-b
 
 **File:** `src/app.py:68` — `lifespan=combine_lifespans(app_lifespan, mcp_app.lifespan)`. The FastMCP lifespan (`lifespan_context` at `src/core/main.py:82-103`) starts `delivery_webhook_scheduler` and `media_buy_status_scheduler`. These only run because `combine_lifespans` yields through both.
 
-**Note (2026-04-11 pivot):** Under the full-async SQLAlchemy pivot, scheduler bodies' DB access becomes `async with get_db_session() as session:` / `await session.execute(...)`. No structural change to the lifespan composition itself — schedulers are already running inside an async context via `asyncio.create_task(...)`. Only the DB call-sites inside the scheduler loops change.
+**Note (2026-04-14 layered scope, supersedes the 2026-04-11 pivot phrasing):** Through L0-L4, scheduler bodies use sync DB access — `with get_db_session()` / `session.execute(...)` — wrapped in `await run_in_threadpool(...)` from inside the async scheduler loop. At L5+, the bodies become `async with get_db_session() as session:` / `await session.execute(...)` directly (no threadpool). No structural change to the lifespan composition itself — schedulers are already running inside an async context via `asyncio.create_task(...)`.
 
 **Why this is load-bearing for AdCP protocol correctness:**
 - `delivery_webhook_scheduler` is what fires outbound AdCP webhooks to subscribers (creative approvals, media buy state changes, etc.) via `create_a2a_webhook_payload` / `create_mcp_webhook_payload`. If it stops, every human-in-the-loop approval silently stops notifying AdCP callers.

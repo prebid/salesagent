@@ -779,7 +779,7 @@ Tag v2.0.0-rc1 will land in staging 72h before production cut.
 - `/Users/quantum/Documents/ComputedChaos/salesagent/tests/unit/test_architecture_adcp_datetime_nullability.py` (~60 LOC — M8 schema-drift guard)
 - `/Users/quantum/Documents/ComputedChaos/salesagent/tests/unit/test_openapi_byte_stability.py` (~100 LOC — M9 OpenAPI snapshot)
 - `/Users/quantum/Documents/ComputedChaos/salesagent/tests/unit/fixtures/openapi_snapshot.json` (snapshot baseline, updated only on intentional schema changes)
-- `/Users/quantum/Documents/ComputedChaos/salesagent/tests/unit/test_architecture_admin_routes_async.py` (~100 LOC — F6.2.2 structural guard)
+- `/Users/quantum/Documents/ComputedChaos/salesagent/tests/unit/test_architecture_admin_handlers_async.py` (~100 LOC — F6.2.2 structural guard)
 - `/Users/quantum/Documents/ComputedChaos/salesagent/tests/unit/test_architecture_admin_async_db_access.py` (~100 LOC — F6.2.3 structural guard)
 - `/Users/quantum/Documents/ComputedChaos/salesagent/tests/unit/test_architecture_templates_no_orm.py` (~100 LOC — F6.2.4 structural guard)
 - `/Users/quantum/Documents/ComputedChaos/salesagent/tests/unit/test_architecture_get_db_connection_callers_allowlist.py` (~60 LOC — D2 fork-safety guard)
@@ -1076,7 +1076,7 @@ Grouped by verification strategy. HIGH confidence assumptions get single-line pl
 
 3. **Full async SQLAlchemy in v2.0** (pivoted 2026-04-11). Verify: benchmark per Part 3.D compares async vs pre-migration sync baseline. When: Wave 2 baseline captured; Wave 4-5 comparison run. Failure: regression >10% on read-heavy hot endpoints (write-heavy regressions up to 15% acceptable). Fallback: tune `pool_size` (Risk #6) OR (last resort) hand-roll `selectinload` eager-loads on the worst offenders; if that's not enough, fall back to Option C and defer async. Pre-Wave-0 lazy-loading audit spike (Risk #1) is the early-warning gate — if the audit reveals relationship-access scope is untenable, switch to Option C before starting Wave 0.
 
-4. **Admin handlers `async def` + full async SQLAlchemy end-to-end** (pivoted 2026-04-11). Verify: AST guard `test_architecture_admin_routes_async.py` (renamed from the original `test_architecture_admin_async_signatures.py` for consistency with sibling guards) asserts every `src/admin/routers/*.py` handler is `async def`; sibling guard `test_architecture_admin_async_db_access.py` asserts DB access uses `async with get_db_session()` + `await db.execute(...)` rather than sync `with` or `run_in_threadpool(_sync_fetch)`. The stale `test_architecture_admin_sync_db_no_async.py` from the pre-pivot sync-def resolution is DELETED (wrong direction). When: Wave 1 entry (handler signature guard); Wave 4 entry (async DB access guard). Failure: sync handler or sync DB access found. Fallback: rewrite that handler.
+4. **Admin handlers `async def` + full async SQLAlchemy end-to-end** (pivoted 2026-04-11). Verify: AST guard `test_architecture_admin_handlers_async.py` (renamed from the original `test_architecture_admin_async_signatures.py` for consistency with sibling guards) asserts every `src/admin/routers/*.py` handler is `async def`; sibling guard `test_architecture_admin_async_db_access.py` asserts DB access uses `async with get_db_session()` + `await db.execute(...)` rather than sync `with` or `run_in_threadpool(_sync_fetch)`. The stale `test_architecture_admin_sync_db_no_async.py` from the pre-pivot sync-def resolution is DELETED (wrong direction). When: Wave 1 entry (handler signature guard); Wave 4 entry (async DB access guard). Failure: sync handler or sync DB access found. Fallback: rewrite that handler.
 
 5. **Starlette `SessionMiddleware` sufficient (<3.5KB).** See Group 3 detailed recipe below.
 
@@ -1316,13 +1316,13 @@ def test_allowlist_shrinks_over_time():
 
 **How it ratchets:** each layer/sub-PR edits the `ALLOWLIST` set to remove migrated files. L1a-L1b together remove 4 entries. L1c-L1d together remove 25 (including `src/admin/utils/helpers.py` and `src/admin/server.py` in the L1d high-risk sub-PR). L2 removes the last 3 (`src/admin/app.py`, `src/app.py`, `src/admin/blueprints/activity_stream.py`). After L2, `ALLOWLIST = set()` and `test_no_flask_imports_outside_allowlist` enforces zero tolerance.
 
-#### `tests/unit/test_architecture_admin_routes_async.py`
+#### `tests/unit/test_architecture_admin_handlers_async.py`
 
-Scans `src/admin/routers/*.py` and asserts every function decorated with `@router.get/post/put/delete/patch` is `async def`. Sibling to existing `test_architecture_repository_pattern.py`. **Pivoted 2026-04-11:** this guard was originally named `test_architecture_admin_async_signatures.py` under a pre-pivot draft; renamed for consistency with other `test_architecture_admin_*_async.py` guards in the full-async pivot. The stale `test_architecture_admin_sync_db_no_async.py` (which asserted async handlers must wrap DB in `run_in_threadpool`) is the wrong direction under the pivot and is DELETED; this guard replaces it.
+Scans `src/admin/routers/*.py` and asserts every function decorated with `@router.get/post/put/delete/patch` is `async def`. Sibling to existing `test_architecture_repository_pattern.py`. **[L5+ guard per the 2026-04-14 layering.]** The mutually-exclusive L0-L4 guard is `test_architecture_handlers_use_sync_def.py`; the two swap atomically at L5b (see execution-plan.md L5b work item 3). The stale `test_architecture_admin_sync_db_no_async.py` (which asserted async handlers must wrap DB in `run_in_threadpool`) is wrong-direction at every layer and is NOT implemented.
 
 #### `tests/unit/test_architecture_admin_async_db_access.py`
 
-Scans `src/admin/routers/*.py` and asserts every DB access site uses `async with get_db_session()` + `await db.execute(...)` patterns, NOT sync `with get_db_session()` or `run_in_threadpool(_sync_fetch)` wrappers around DB work. The `run_in_threadpool` helper is still valid for file I/O, CPU-bound, and sync-third-party-library calls — the guard specifically flags calls where the wrapped function does DB work (identified by an inner `get_db_session()` call or a `Session`/`AsyncSession` parameter). Sibling guard added under the full-async pivot (2026-04-11).
+Scans `src/admin/routers/*.py` and asserts every DB access site uses `async with get_db_session()` + `await db.execute(...)` patterns, NOT sync `with get_db_session()` or `run_in_threadpool(_sync_fetch)` wrappers around DB work. The `run_in_threadpool` helper is still valid for file I/O, CPU-bound, and sync-third-party-library calls — the guard specifically flags calls where the wrapped function does DB work (identified by an inner `get_db_session()` call or a `Session`/`AsyncSession` parameter). [L5+ guard per the 2026-04-14 layering. At L0-L4, sync `with get_db_session()` IS the correct pattern; this guard is not yet active.]
 
 #### `tests/admin/test_templates_url_for_resolves.py`
 

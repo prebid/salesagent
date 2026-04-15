@@ -91,6 +91,12 @@ These were surfaced by the 2nd/3rd-order audit. Every one of them has shipped-br
 
 6. **OAuth redirect URI byte-immutability.** The paths `/admin/auth/google/callback`, `/admin/auth/oidc/callback` (**NOT** `/admin/auth/oidc/{tenant_id}/callback` — tenant context is in the session, not the URL; corrected per FE-3 audit 2026-04-11), and `/admin/auth/gam/callback` (**NOT** `/auth/gam/callback` — the `/admin` prefix is part of the registered URI; corrected per FE-3 audit 2026-04-11) are registered in Google Cloud Console and per-tenant OIDC provider configs. Any path change — including trailing slash, case, or prefix drift — yields `redirect_uri_mismatch` and login is dead. See `flask-to-fastapi-deep-audit.md` §1 (blocker 6).
 
+**Session cookie rename (`session` → `adcp_session`):** SessionMiddleware must accept BOTH cookie names through the L1a–L2 bake window to avoid logging out every active admin session at deploy. Legacy `session` cookie drops at L2 exit.
+
+**Reverse-proxy headers:** `uvicorn --proxy-headers --forwarded-allow-ips='*'` must be enabled in production entrypoints so `request.client.host` reflects the end-user IP (not the Fly proxy's IP) and `request.url.scheme` reflects `https` (not `http`). Audit-log call sites previously using `request.remote_addr` (Flask) now read `request.client.host` (Starlette) via FlyHeadersMiddleware.
+
+**Multi-tenant dual-prefix routing:** L1c/L1d routers MUST register under BOTH `/admin/...` and `/tenant/{tenant_id}/...` prefixes. 14 admin routers need dual-prefix registration; missing a prefix means the multi-tenant path is silently unreachable (404) while the single-tenant admin path works. The `include_router()` calls in `src/app.py` mount each admin router twice — once with each prefix — and templates always use `url_for()` with the `admin_*` route names (the dual mount produces identical names).
+
 ---
 
 ## Test-Before-Implement Discipline
@@ -177,6 +183,20 @@ Strict mode: any `MISSING TEST` fails the pre-merge check. Reviewer runs this be
 
 ---
 
+## 2026 FastAPI-native baseline
+
+The plan targets 2026 best practices. When in doubt, default to these idioms and flag any older pattern proposal:
+
+- FastAPI: lifespan context manager (not `@app.on_event`)
+- Pydantic v2 + `pydantic-settings` for configuration
+- SQLAlchemy 2.0 `Mapped[]` annotations + async engine at L5+
+- `structlog` with `contextvars` for logging
+- `TestClient` (L0–L4) → `httpx.AsyncClient` (L5+)
+- Pure-ASGI middleware (`BaseHTTPMiddleware` only where streaming mutation is needed)
+- `SessionDep` / `Depends()` injection for auth, DB session, tenant context, identity
+
+---
+
 ## Recommended reading order (fresh reader, ~2 hours)
 
 1. **This file** — you are here. Mission, blockers, map.
@@ -211,7 +231,7 @@ Strict mode: any `MISSING TEST` fails the pre-merge check. Reviewer runs this be
 
 ## Derivative audit reports (2026-04-11)
 
-After the async pivot, six parallel opus agents (agents A-F) produced deep-audit reports on different facets of the absorbed-async v2.0 scope. All reports live in `async-audit/` and are committed at `3e0afa02` / `d8957931` on `feat/v2.0.0-flask-to-fastapi`. A fresh session should consult these before making scope or idiom decisions.
+After the (subsequently reversed) 2026-04-11 async pivot, six parallel opus agents (agents A-F) produced deep-audit reports on different facets of the absorbed-async v2.0 scope. The reports remain authoritative for L5+ planning even though the overall pivot was superseded by the 2026-04-14 layering decision (L0–L4 sync, L5+ async). All reports live in `async-audit/` and are committed at `3e0afa02` / `d8957931` on `feat/v2.0.0-flask-to-fastapi`. A fresh session should consult these before making scope or idiom decisions.
 
 | Report | Lines | When to read |
 |---|---|---|
@@ -428,7 +448,7 @@ Legacy "Wave" section headings predate the 8-layer rename. Translation:
 | L2    | 5–7                      | Flask removal — irreversible cut point; 48h zero-flask-traffic bake |
 | L3    | 3–4                      | Test harness modernization (test-side only) |
 | L4    | 6–8                      | SessionDep + DTOs + pydantic-settings + structlog + render() deletion + ContextManager refactor (revised up) |
-| L5a   | 5–7                      | 7 spikes; lazy-load audit is HARD GATE for L5b |
+| L5a   | 5–7                      | 10 technical + 1 decision gate (11 items); lazy-load audit is HARD GATE for L5b |
 | L5b   | 1–2                      | SessionDep alias flip + engine refactor |
 | L5c   | 3–5                      | 3-router async pilot + async test harness adoption |
 | L5d1  | 2–3                      | ContextManager refactor finalization |

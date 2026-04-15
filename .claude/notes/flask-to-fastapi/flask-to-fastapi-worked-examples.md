@@ -226,7 +226,7 @@ from authlib.integrations.base_client.errors import OAuthError
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select
-from starlette.concurrency import run_in_threadpool  # STALE — async pivot: unused import (DB helpers are async def). Remove when implementing.
+from starlette.concurrency import run_in_threadpool  # [L0-L4] KEEP: OAuth/OIDC callback handlers remain `async def` per Authlib exception allowlist, so sync DB helpers called from them must be wrapped in `await run_in_threadpool(...)`. [L5+] Drop when handler + DB helpers are fully async.
 
 from src.admin.auth_utils import extract_user_info
 from src.admin.domain_access import get_user_tenant_access
@@ -255,6 +255,7 @@ router = APIRouter(tags=["admin-auth"])
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.get("/login", name="admin_auth_login", response_class=HTMLResponse)
+# [L0-L4 → def login(...); L5+ → async def login(...)]
 async def login(
     request: Request,
     next: Annotated[str | None, Query()] = None,
@@ -263,7 +264,9 @@ async def login(
     """Show login page or redirect to the appropriate OAuth provider.
 
     The tenant-resolution logic (Apx-Incoming-Host / subdomain → tenant_id →
-    OIDC check) is pushed into async helpers called directly with `await` (full-async pivot 2026-04-11).
+    OIDC check) is pushed into helpers called directly. [L0-L4: helpers are
+    sync `def` and called without `await`. L5+: helpers are `async def` and
+    called with `await`.]
     """
     # Anchor the post-login redirect safely in the session (never trust the query arg directly)
     if next:
@@ -476,9 +479,9 @@ def _fallback_login_redirect(request: Request, tenant_context: str | None) -> Re
 async def _enumerate_tenants_for_user(email: str) -> list[dict]:
     """Port of the tenant enumeration block at blueprints/auth.py:572-634.
 
-    `async def` with `async with get_db_session()` per the full-async pivot
-    (2026-04-11). Previously wrapped in `run_in_threadpool` — that is now
-    forbidden for DB work; `AsyncSession` is async-native.
+    [L0-L4: sync `def` with `with get_db_session()`. L5+: `async def` with
+    `async with get_db_session()`.] At L5+, `AsyncSession` is async-native and
+    DB work is never wrapped in `run_in_threadpool`.
     """
     from src.core.database.models import User  # local to mirror Flask import style
 
@@ -900,7 +903,7 @@ from authlib.integrations.base_client.errors import OAuthError
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select
-from starlette.concurrency import run_in_threadpool  # STALE — async pivot: unused import (DB helpers are async def). Remove when implementing.
+from starlette.concurrency import run_in_threadpool  # [L0-L4] KEEP: OAuth/OIDC callback handlers remain `async def` per Authlib exception allowlist, so sync DB helpers called from them must be wrapped in `await run_in_threadpool(...)`. [L5+] Drop when handler + DB helpers are fully async.
 
 from src.admin.auth_utils import extract_user_info
 from src.admin.flash import flash
@@ -943,7 +946,7 @@ async def oidc_login(tenant_id: str, request: Request) -> RedirectResponse:
 async def _check_tenant_oidc_available(tenant_id: str) -> str | None:
     """Return error message if OIDC is not available, None if it is.
 
-    `async def` per the full-async pivot (2026-04-11).
+    [L0-L4: sync `def`; L5+: `async def`.]
     """
     async with get_db_session() as db:
         tenant = (await db.execute(
@@ -1071,7 +1074,7 @@ async def _resolve_or_create_user(tenant_id: str, email: str, sso_name: str) -> 
     """Port of blueprints/oidc.py:309-370.
 
     Returns a dict {email, name} on success or a string sentinel on failure.
-    `async def` per the full-async pivot (2026-04-11).
+    [L0-L4: sync `def`; L5+: `async def`.]
     """
     from uuid import uuid4
     async with get_db_session() as db:
@@ -1384,6 +1387,10 @@ def _ext_from(filename: str) -> str | None:
     name="admin_tenants_upload_favicon",
     dependencies=[Depends(audit_action("upload_favicon"))],
 )
+# [L0-L4 → def upload_favicon(...); L5+ → async def upload_favicon(...).
+#  Even at L0-L4 this handler may need `async def` if it awaits file I/O via
+#  aiofiles — see body comments. The DB write uses `with get_db_session()`
+#  wrapped in `run_in_threadpool` from inside the async handler.]
 async def upload_favicon(
     tenant_id: str,
     request: Request,
@@ -1454,9 +1461,11 @@ async def upload_favicon(
         return RedirectResponse(settings_url, status_code=303)
 
     try:
-        # Async DB update — no run_in_threadpool wrapper for DB work under the
-        # full-async pivot (2026-04-11). run_in_threadpool remains valid for
-        # file I/O (filepath.unlink cleanup below) because pathlib is sync.
+        # [L0-L4: sync DB update inside run_in_threadpool because this handler
+        # is `async def` for file I/O; L5+: `await _update_tenant_favicon_url()`
+        # directly with no threadpool wrapper — DB is fully async.]
+        # run_in_threadpool remains valid at every layer for file I/O
+        # (filepath.unlink cleanup below) because pathlib is sync.
         await _update_tenant_favicon_url(tenant_id, public_url)
     except Exception:
         logger.error("Favicon DB update failed after disk write for %s", tenant_id, exc_info=True)
@@ -1642,6 +1651,8 @@ class TestFaviconUpload:
 ---
 
 ## Example 4.4 — ~~Server-Sent Events activity stream~~ **STALE — Decision 8 DELETE (2026-04-11)**
+
+> **[SUPERSEDED by Decision 8 — SSE is deleted at L5d4. This example is retained for reference only. DO NOT implement.]**
 
 > **Do NOT implement this example.** Decision 8 deep-think analysis verified the SSE `/events` route is **orphan code** — `templates/tenant_dashboard.html:972` says `// Use simple polling instead of EventSource for reliability`, zero `new EventSource(` exists in templates, and the only `/events` caller is one integration smoke test probe. The SSE route is **DELETED in Wave 4** (not migrated). The `sse_starlette` dependency is NOT added. See CLAUDE.md Decision 8 and `async-pivot-checkpoint.md` §3 "SSE / long-lived connections" for the deletion scope. The two surviving routes (`/activity` JSON poll + `/activities` REST) convert mechanically to `async def` + `async with get_db_session()` and are NOT covered by a worked example because the conversion is trivial.
 
@@ -2150,7 +2161,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
-from starlette.concurrency import run_in_threadpool  # STALE — async pivot: unused import (DB helpers are async def). Remove when implementing.
+from starlette.concurrency import run_in_threadpool  # [L0-L4] KEEP: OAuth/OIDC callback handlers remain `async def` per Authlib exception allowlist, so sync DB helpers called from them must be wrapped in `await run_in_threadpool(...)`. [L5+] Drop when handler + DB helpers are fully async.
 
 from src.admin.deps.audit import audit_action
 from src.admin.deps.auth import AdminUserDep, CurrentTenantDep
@@ -2176,6 +2187,7 @@ router = APIRouter(prefix="/tenant/{tenant_id}/products", tags=["admin-products"
     name="admin_products_add_product_form",
     response_class=HTMLResponse,
 )
+# [L0-L4 → def add_product_form(...); L5+ → async def add_product_form(...)]
 async def add_product_form(
     tenant_id: str,
     request: Request,
@@ -2199,6 +2211,7 @@ async def add_product_form(
     name="admin_products_add_product",
     dependencies=[Depends(audit_action("add_product"))],
 )
+# [L0-L4 → def add_product(...); L5+ → async def add_product(...)]
 async def add_product(
     tenant_id: str,
     request: Request,
@@ -2351,7 +2364,7 @@ async def add_product(
 # ─── Helpers ────────────────────────────────────────────────────────────────
 
 async def _load_adapter_context(tenant_id: str) -> tuple[str, list[str]]:
-    """`async def` per the full-async pivot (2026-04-11)."""
+    """[L0-L4: sync `def`; L5+: `async def`.]"""
     async with get_db_session() as db:
         tenant = (await db.execute(
             select(Tenant).filter_by(tenant_id=tenant_id)
@@ -2467,9 +2480,9 @@ async def create_product_for_tenant(cmd: CreateProductCommand) -> str:
     """Async service function. Raises ProductCreateValidationError with a
     user-facing message on any failure. Returns the product name on success.
 
-    `async def` per the full-async pivot (2026-04-11). The `_validate_formats`,
+    [L0-L4: sync `def`; L5+: `async def`.] At L5+ the `_validate_formats`,
     `_resolve_properties`, and `_build_impl_config` helpers are all `async def`
-    too — see the ported blocks below.
+    too — see the ported blocks below. At L0-L4 those helpers are sync.
     """
     if not cmd.name:
         raise ProductCreateValidationError("Product name is required")
@@ -2620,7 +2633,7 @@ def _validate_pricing_options(
 | Business logic mixed with form handling | `create_product_for_tenant(cmd)` pure function | Unit-testable without starting the admin app. |
 | No super-admin gating | `SuperAdminDep`-style gating via `user.role == "super_admin"` check on `override_pricing_floor` and `cross_tenant_principal_ids` | New feature; demonstrates the pattern. |
 | Validation errors via `flash()` side-effect | `ProductCreateValidationError` typed exception | Service returns value or raises; handler translates to HTTP. |
-| `asyncio.run(registry.list_all_formats_with_errors(...))` inside sync handler | `await registry.list_all_formats_with_errors(...)` directly — service is `async def` under the full-async pivot | No more `asyncio.run` inside handler; no more threadpool hop for DB or registry calls. |
+| `asyncio.run(registry.list_all_formats_with_errors(...))` inside sync handler | [L0-L4: keep the sync registry call as-is or wrap in `run_in_threadpool`. L5+: `await registry.list_all_formats_with_errors(...)` directly — service is `async def`.] | At L5+: no more `asyncio.run` inside handler; no more threadpool hop for DB or registry calls. |
 | `request.form.getlist("selected_property_tags")` inside `property_mode` branch | All multi-selects declared at handler top; branching happens in service | Single source of truth for form fields. |
 | `datetime.now(UTC)` inline | Service layer handles timestamps; handler doesn't care | |
 | `flash(f"Product '{product.name}' created...", "success")` + redirect to list | Same, via `request.url_for("admin_products_list_products", tenant_id=...)` | Flat name. |

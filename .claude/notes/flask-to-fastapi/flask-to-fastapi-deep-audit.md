@@ -224,14 +224,14 @@ SessionLocal = scoped_session(sessionmaker(bind=_engine))
 
 **Pre-L5 lazy-loading audit spike (MANDATORY before entering L5a):** `relationship()` access sites in SQLAlchemy lazily load under AsyncSession only within an active async session scope — out-of-scope access raises `sqlalchemy.exc.MissingGreenlet` (a HARD FAILURE). The audit enumerates every `relationship()` definition in `src/core/database/models/` and classifies every access site as safe (in-scope), fixable (eager-load via `selectinload`/`joinedload`), or requiring rewrite. If the audit reveals the scope is untenable, narrow the L5 conversion surface or defer residual async to a v2.1 epic — do not abandon L0-L4 (sync Flask removal ships standalone). Estimated effort: 1-3 days. See `async-pivot-checkpoint.md` §4 Risk #1 for the full audit procedure.
 
-**Plan changes required (under Option A):**
+**Plan changes required (under Option A) — [L5+ WORK — NOT L0-L4]:**
 1. Foundation modules (`flask-to-fastapi-foundation-modules.md`) — rewrite `get_db_session` call sites to `async with`; rewrite repository examples to `await session.execute(...)`; rewrite UoW classes to `async def __aenter__` / `async def __aexit__`
 2. Worked examples (`flask-to-fastapi-worked-examples.md`) — every handler is `async def`; every DB call-site is `async with` / `await`
 3. Main overview §13 — already updated to `async def` examples
-4. Replace the original structural guard `test_architecture_admin_sync_db_no_async.py` (wrong direction under Option A) with `test_architecture_admin_routes_async.py` (L5+ guard; L0-L4 uses `test_architecture_handlers_use_sync_def.py`) (AST-scans admin routers and asserts every `@router.<method>(...)` handler is `async def`). Sibling guard `test_architecture_admin_async_db_access.py` asserts DB access uses `async with get_db_session()` + `await session.execute(...)`, not sync `with` or `run_in_threadpool` wrappers
+4. Replace the original structural guard `test_architecture_admin_sync_db_no_async.py` (wrong direction under Option A) with `test_architecture_admin_handlers_async.py` (L5+ guard; L0-L4 uses `test_architecture_handlers_use_sync_def.py`) (AST-scans admin routers and asserts every `@router.<method>(...)` handler is `async def`). Sibling guard `test_architecture_admin_async_db_access.py` asserts DB access uses `async with get_db_session()` + `await session.execute(...)`, not sync `with` or `run_in_threadpool` wrappers
 5. Dependency changes: remove `psycopg2-binary`, `types-psycopg2`; add `asyncpg>=0.30.0` (fallback `psycopg[binary,pool]>=3.2.0` if Spike 2 driver-compat fails); add `pytest-asyncio` (or equivalent); explicit `sqlalchemy[asyncio]` extra
 6. `tests/harness/_base.py::IntegrationEnv` becomes `async def __aenter__` / `async def __aexit__`; integration tests mass-convert to `async def` + `@pytest.mark.asyncio`
-7. `alembic/env.py` async adapter (standard SQLAlchemy pattern, ~30 LOC)
+7. `alembic/env.py` async adapter (standard SQLAlchemy pattern, ~30 LOC) — **SUPERSEDED by Decision 6 + Spike 6: `alembic/env.py` stays sync (psycopg2) per `async-audit/database-deep-audit.md`. The async-env rewrite is NOT executed.**
 8. `factory_boy` adapter (evaluate three options in checkpoint §3)
 9. Benchmark harness compares async vs pre-migration sync baseline, not threadpool-overhead
 
@@ -720,9 +720,9 @@ References:
 
 The plan should add these guards. Some overlap with the original audit's proposals but with more detail:
 
-### 5.1 `tests/unit/test_architecture_admin_routes_async.py` (RENAMED from `test_architecture_admin_async_signatures.py` — pivoted 2026-04-11)
+### 5.1 `tests/unit/test_architecture_admin_handlers_async.py` (RENAMED from `test_architecture_admin_async_signatures.py`; canonical name standardized 2026-04-14)
 
-**Purpose:** enforce the full-async admin handler invariant (Blocker 1.4 Option A resolution). Original plan was `test_architecture_admin_sync_db_no_async.py` (asserted async handlers must wrap DB work in `run_in_threadpool`) — that guard was the wrong direction under the full-async pivot and is DELETED.
+**Purpose:** enforce the async admin handler invariant at L5+ (Blocker 1.4, the L5+ end state). The original plan was `test_architecture_admin_sync_db_no_async.py` (asserted async handlers must wrap DB work in `run_in_threadpool`) — that guard was wrong-direction at every layer and is NOT implemented.
 
 **Layer note:** This is an L5+ guard. L0-L4 uses `test_architecture_handlers_use_sync_def.py` (asserts admin handlers are sync `def`, not `async def`). The two guards are mutually exclusive: L5b swaps them in the same commit as the SessionDep alias flip.
 
@@ -792,7 +792,7 @@ Most items below have been applied via commits `d8957931` and `3e0afa02` (Agent 
 4. **[APPLIED]** §11 foundation — `render()` wrapper uses `url_for` exclusively; `_url_for` safe-lookup override pre-registered on `templates.env.globals` before first `TemplateResponse`.
 5. **[APPLIED]** §12 codemod — handles `script_name` split, trailing slashes, 302→307.
 6. **[APPLIED]** §16 assumption 4 rewritten: "admin handlers `async def` + full async SQLAlchemy" with `async with get_db_session()` / `await session.execute(...)` as the target pattern.
-7. **[APPLIED]** §21 verification — 9 new guard tests added; sync-db guard renamed to `test_architecture_admin_routes_async.py` (L5+ guard; L0-L4 uses `test_architecture_handlers_use_sync_def.py`) (not NEW — renamed from `test_architecture_admin_async_signatures.py`). The two guards are mutually exclusive and swap in the L5b commit.
+7. **[APPLIED]** §21 verification — 9 new guard tests added; sync-db guard renamed to `test_architecture_admin_handlers_async.py` (L5+ guard; L0-L4 uses `test_architecture_handlers_use_sync_def.py`) (not NEW — renamed from `test_architecture_admin_async_signatures.py`). The two guards are mutually exclusive and swap in the L5b commit.
 8. **[APPLIED]** §15 dependencies — `psycopg2-binary` removed from runtime (kept as deploy extra for pre-uvicorn health checks); `asyncpg>=0.30.0` added; explicit `sqlalchemy[asyncio]` extra.
 9. **[APPLIED]** §14 wave count expanded from 4 to 5-6 — Wave 4 (async DB layer) and Wave 5 (async cleanup + release) added.
 
@@ -800,14 +800,14 @@ Most items below have been applied via commits `d8957931` and `3e0afa02` (Agent 
 
 1. **[APPLIED]** `templating.py` greenfield: NO `admin_prefix`/`static_prefix`/`script_root` in `render()`; `_url_for` safe-lookup override pre-registered on `templates.env.globals`.
 2. **[APPLIED]** `csrf.py`: `/_internal/` exempt added; `SessionMiddleware` before CSRF ordering note added.
-3. **[APPLIED]** `deps/auth.py`: dep functions are `async def` with `async with get_db_session()` bodies per the full-async pivot; `AdminRedirect` handler URL-encodes `next_url`. (The original audit item said "switch to sync def" — that is now stale.)
+3. **[APPLIED, then LAYERED 2026-04-14 — L0-L4 uses sync `def` + `with get_db_session()`; async form is the L5+ end state]** `deps/auth.py`: under the L0-L4 layering, dep functions are sync `def` with `with get_db_session()` bodies; at L5+ they flip to `async def` + `async with get_db_session()`. `AdminRedirect` handler URL-encodes `next_url` at every layer. (The original audit item said "switch to sync def" — that was briefly stale under the April-11 async pivot, and is RE-APPLIED for L0-L4 per the April-14 layering.)
 4. **[APPLIED]** `middleware/external_domain.py`: explicit path-gate check; 307 instead of 302; body-preservation test added.
 5. **[APPLIED]** `app_factory.py`: `APIRouter(redirect_slashes=True, include_in_schema=False)`; scoped `AdCPError` exception handler that renders `error.html` for `text/html` Accept on `/admin/*`.
 6. **[APPLIED]** `oauth.py`: comment referencing OAuth callback URI immutability guard added.
 
 ### Worked examples (`flask-to-fastapi-worked-examples.md`)
 
-1. **[APPLIED]** All examples are `async def` end-to-end — `run_in_threadpool` is dropped for DB work (kept only for non-DB blocking operations like file I/O, CPU-bound, sync third-party libs). §§4.1, 4.2, 4.4, 4.5 cascaded in the propagation wave.
+1. **[APPLIED; L5+ END STATE — L0-L4 uses sync `def`]** All examples are shown in the L5+ `async def` form end-to-end — `run_in_threadpool` is dropped for DB work at L5+ (kept only for non-DB blocking operations like file I/O, CPU-bound, sync third-party libs). Note that `run_in_threadpool` IS still needed at L0-L4 in the L1 OAuth callback carve-out for sync DB calls embedded in `async def` handlers. §§4.1, 4.2, 4.4, 4.5 cascaded in the propagation wave. For the L0-L4 form of each example, mechanically transform `async def` → sync `def` and `async with get_db_session()` → `with get_db_session()` (except in OAuth callbacks, which remain `async def`).
 2. **[APPLIED]** Example 4.1 (Google OAuth) — byte-identical callback URL requirement documented.
 3. **[APPLIED]** Example 4.3 (favicon upload) — `async def` handler with `run_in_threadpool` only for the blocking file I/O, not the DB write.
 
@@ -837,7 +837,7 @@ Sorted by severity:
 | B1 | 🚨 BLOCKER | `script_root`/`script_name` silent template break (147 refs, 45 files) — fixed greenfield: `url_for` everywhere (admin routes named `admin_<bp>_<endpoint>`, static named `"static"`), NO `admin_prefix`/`static_prefix` globals | `templates/**/*.html` + `render()` wrapper + `scripts/codemod_templates_greenfield.py` | Wave 0 |
 | B2 | 🚨 BLOCKER | Trailing-slash 404 divergence Flask vs Starlette (111 `url_for`) | admin routers + `base.html` | Wave 0 |
 | B3 | 🚨 BLOCKER | `@app.exception_handler(AdCPError)` returns JSON to HTML browsers | `src/app.py:82-88` + new `error.html` | Wave 1 |
-| B4 | 🚨 BLOCKER | Async event loop session interleaving — pivoted 2026-04-11 to full async SQLAlchemy (Option A) absorbed into v2.0 Waves 4-5 | `src/core/database/database_session.py` + `src/admin/routers/*.py` + alembic env + test harness | Wave 0 decision + Wave 4-5 execution |
+| B4 | 🚨 BLOCKER | Async event loop session interleaving — resolved by L0-L4 sync-`def` handlers (Option C) + deferred async conversion at L5 (post-2026-04-14 layering; supersedes the April-11 "Option A" full-async pivot) | `src/core/database/database_session.py` + `src/admin/routers/*.py` + alembic env + test harness | Decision at L-1 (pre-L0 planning); execution at L5a-L5e within v2.0 |
 | B5 | 🚨 BLOCKER | Middleware order — Approximated must run BEFORE CSRF | `src/app.py` middleware stack | Wave 1 |
 | B6 | 🚨 BLOCKER | OAuth redirect URIs must be byte-identical to Google Cloud Console | `src/admin/routers/auth.py` | Wave 1 + staging smoke |
 | R1 | ⚠️ RISK | `require_tenant_access` doesn't check `tenant.is_active` (pre-existing) | `src/admin/utils/helpers.py:291-372` | Wave 2 |
@@ -889,7 +889,7 @@ Sorted by severity:
 
 The **biggest unmentioned risks** are **B4 (session scoping)** and **B2 (trailing slashes)** — both are blockers that could silently break production after a traffic cutover. Neither was in the first-order audit.
 
-The **plan default to `async def` admin handlers is CORRECT under the pivoted resolution** — the original audit recommended sync `def` (Option C) as a scope-reduction compromise, but the 2026-04-11 pivot absorbed full async SQLAlchemy into v2.0 as Waves 4-5 (Option A). Admin handlers are `async def` end-to-end with `AsyncSession`, repositories are async, and the scoped_session race is eliminated entirely. `run_in_threadpool` is reserved for non-DB blocking work (file I/O, CPU-bound, sync third-party libs). See §1.4 and `async-pivot-checkpoint.md`.
+The **admin handler default is sync `def` for Layers 0-4, then `async def` for Layers 5+** (post-2026-04-14 strategic layering). The original audit recommended sync `def` (Option C) as a scope-reduction compromise; the 2026-04-11 pivot briefly flipped that to full-async end state (Option A); the 2026-04-14 layering then re-scoped the handler form by layer. Through L4, admin handlers are sync `def` with sync SQLAlchemy (`scoped_session` + `Session`), which is race-free because FastAPI runs sync handlers in a threadpool where thread-local session scoping works correctly. At L5b, `SessionDep` re-aliases to `AsyncSession` as a one-file flip; L5c onward, handlers flip to `async def` and ~60 commit sites + ~200 `scalars`/`execute` sites mechanically add `await`. The async-first narrative in this section (and throughout the archived `async-pivot-checkpoint.md` / `async-audit/*.md`) applies to the L5+ end state only. `run_in_threadpool` is reserved for non-DB blocking work (file I/O, CPU-bound, sync third-party libs) at every layer. See §1.4, CLAUDE.md Invariant #4, and the L5+ roadmap in `async-pivot-checkpoint.md`.
 
 The **middleware order as proposed was buggy** — Approximated must run BEFORE CSRF, not after. This is a one-line fix in the plan but missing it would break external-domain onboarding.
 
