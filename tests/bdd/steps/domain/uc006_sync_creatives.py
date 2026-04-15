@@ -17,6 +17,7 @@ import json
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session
+from tests.bdd.steps._outcome_helpers import is_e2e
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 from tests.factories.principal import PrincipalFactory
@@ -399,12 +400,23 @@ def _set_tenant_approval_mode(ctx: dict, mode: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
+def _xfail_if_e2e(ctx: dict) -> None:
+    """xfail when running under e2e_rest: factory data is not in Docker's DB."""
+    if is_e2e(ctx):
+        import pytest
+
+        pytest.xfail(
+            "e2e_rest fixture injection gap — factory-created creatives are not in Docker DB. FIXME(salesagent-ajsb)"
+        )
+
+
 def _get_creative_from_db(ctx: dict) -> object:
     """Retrieve the synced creative from the DB for status assertion."""
     from sqlalchemy import select
 
     from src.core.database.models import Creative
 
+    _xfail_if_e2e(ctx)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
     with db_session(ctx) as session:
