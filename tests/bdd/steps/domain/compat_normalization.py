@@ -81,9 +81,19 @@ def when_get_products_with_both_brand_and_manifest(ctx: dict) -> dict:
 
 @then("the request succeeds")
 def then_request_succeeds(compat_result: dict) -> None:
-    """Verify the normalization completed without error."""
+    """Verify the normalization completed and detected a v2.5 caller.
+
+    Both scenarios using this step send brand_manifest (a V25_SIGNALS field),
+    so the normalizer must infer v2.5 and strip brand_manifest from params.
+    The precedence scenario keeps the existing brand (no translation logged),
+    so translations_applied may be empty there — we assert version + strip.
+    """
     nr = compat_result["normalization_result"]
-    assert nr.params is not None
+    assert isinstance(nr.params, dict), f"params must be dict, got {type(nr.params).__name__}"
+    assert nr.inferred_version == "2.5", f"brand_manifest input must infer v2.5 caller, got {nr.inferred_version!r}"
+    assert "brand_manifest" not in nr.params, (
+        f"deprecated brand_manifest must be stripped, got keys: {sorted(nr.params.keys())}"
+    )
 
 
 @then(parsers.parse('the brand was resolved with domain "{domain}"'))
@@ -104,9 +114,17 @@ def then_result_contains_buyer_campaign_ref(compat_result: dict, value: str) -> 
 
 @then("the result does not contain campaign_ref")
 def then_no_campaign_ref(compat_result: dict) -> None:
-    """Verify campaign_ref was removed."""
-    params = compat_result["normalization_result"].params
-    assert "campaign_ref" not in params
+    """Verify campaign_ref was removed AND the translation was recorded.
+
+    Absence alone is insufficient — a silent delete would also satisfy it.
+    The normalizer must log the rename so callers can trace v2.5→v3 mapping.
+    """
+    nr = compat_result["normalization_result"]
+    assert "campaign_ref" not in nr.params, f"campaign_ref must be removed, got keys: {sorted(nr.params.keys())}"
+    assert "campaign_ref → buyer_campaign_ref" in nr.translations_applied, (
+        f"translation must be recorded, got {nr.translations_applied!r}"
+    )
+    assert nr.inferred_version == "2.5", f"campaign_ref input must infer v2.5 caller, got {nr.inferred_version!r}"
 
 
 @then(parsers.parse('the result contains account with account_id "{value}"'))
