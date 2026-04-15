@@ -1190,20 +1190,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # T-UC-026-partition-keyword-remove, T-UC-026-partition-neg-kw-add,
             # T-UC-026-partition-neg-kw-remove, T-UC-026-boundary-neg-kw-add,
             # T-UC-026-boundary-neg-kw-remove, T-UC-026-partition-paused
-            "T-UC-026-boundary-bid-price",
-            "T-UC-026-boundary-buyer-ref",
-            "T-UC-026-boundary-format-ids",
-            "T-UC-026-boundary-pricing-option",
-            "T-UC-026-boundary-immutable",
             "T-UC-026-boundary-keyword-add",
             "T-UC-026-boundary-keyword-remove",
             "T-UC-026-partition-kw-add-shared",
             "T-UC-026-partition-kw-remove-shared",
             "T-UC-026-boundary-kw-add-shared",
             "T-UC-026-boundary-kw-remove-shared",
-            "T-UC-026-boundary-paused",
-            "T-UC-026-partition-replacement",
-            "T-UC-026-boundary-replacement",
         }
         if marker_names & _UC026_XFAIL_TAGS:
             item.add_marker(
@@ -1299,6 +1291,38 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "T-UC-026-partition-paused",
                 set(),
                 "UpdateMediaBuyRequest.get_total_budget not implemented / media_buy_id not accepted by wrappers",
+            ),
+            # d09y: boundary scenarios exposing real production gaps after step-parser fix.
+            (
+                "T-UC-026-boundary-buyer-ref",
+                {"second submission"},
+                "buyer_ref dedup on re-submit fails CreateMediaBuyRequest validation — spec-production gap",
+            ),
+            (
+                "T-UC-026-boundary-pricing-option",
+                {"empty string", "different product", "max_bid=true", "not in product", "matches last entry"},
+                "pricing_option validation returns 'validation_error' instead of AdCP 'INVALID_REQUEST' / "
+                "max_bid pricing requires bid_price / last-entry pricing_option rejects valid id — spec-production gap",
+            ),
+            (
+                "T-UC-026-boundary-immutable",
+                set(),
+                "UpdateMediaBuyRequest.get_total_budget not implemented / REST route requires buyer_ref on updates",
+            ),
+            (
+                "T-UC-026-boundary-paused",
+                {"on update", "idempotent"},
+                "UpdateMediaBuyRequest.get_total_budget not implemented / REST route requires buyer_ref on updates",
+            ),
+            (
+                "T-UC-026-boundary-replacement",
+                set(),
+                "UpdateMediaBuyRequest.get_total_budget not implemented / REST route requires buyer_ref on updates",
+            ),
+            (
+                "T-UC-026-partition-replacement",
+                set(),
+                "UpdateMediaBuyRequest.get_total_budget not implemented / REST route requires buyer_ref on updates",
             ),
         ]
         for tag, substrings, reason in _UC026_PARTITION_SELECTIVE:

@@ -1009,28 +1009,6 @@ def given_boundary_required_fields(ctx: dict, boundary_point: str) -> None:
     kwargs["packages"] = [pkg]
 
 
-@given(parsers.parse("a create_media_buy request with package bid_price per {partition}"))
-def given_partition_bid_price(ctx: dict, partition: str) -> None:
-    """Build create request per partition for bid_price validation."""
-    kwargs = _ensure_request_defaults(ctx)
-    pkg = _build_default_package(ctx)
-    partition = partition.strip()
-    if partition == "exact_bid":
-        pkg["bid_price"] = 2.50
-    elif partition == "ceiling_bid":
-        pkg["pricing_option_id"] = _resolve_pricing_id(ctx, "cpm-auction")
-        pkg["bid_price"] = 5.00
-    elif partition == "zero_bid":
-        pkg["bid_price"] = 0
-    elif partition == "bid_absent":
-        pkg.pop("bid_price", None)
-    elif partition == "negative_bid":
-        pkg["bid_price"] = -0.01
-    else:
-        raise ValueError(f"Unknown bid_price partition: {partition}")
-    kwargs["packages"] = [pkg]
-
-
 @given(parsers.parse("a create_media_buy request with package bid_price per boundary {boundary_point}"))
 def given_boundary_bid_price(ctx: dict, boundary_point: str) -> None:
     """Build create request per boundary for bid_price validation."""
@@ -1055,7 +1033,29 @@ def given_boundary_bid_price(ctx: dict, boundary_point: str) -> None:
     kwargs["packages"] = [pkg]
 
 
-@given(parsers.parse("a create_media_buy request with buyer_ref per {partition}"))
+@given(parsers.re(r"a create_media_buy request with package bid_price per (?!boundary )(?P<partition>.+)"))
+def given_partition_bid_price(ctx: dict, partition: str) -> None:
+    """Build create request per partition for bid_price validation."""
+    kwargs = _ensure_request_defaults(ctx)
+    pkg = _build_default_package(ctx)
+    partition = partition.strip()
+    if partition == "exact_bid":
+        pkg["bid_price"] = 2.50
+    elif partition == "ceiling_bid":
+        pkg["pricing_option_id"] = _resolve_pricing_id(ctx, "cpm-auction")
+        pkg["bid_price"] = 5.00
+    elif partition == "zero_bid":
+        pkg["bid_price"] = 0
+    elif partition == "bid_absent":
+        pkg.pop("bid_price", None)
+    elif partition == "negative_bid":
+        pkg["bid_price"] = -0.01
+    else:
+        raise ValueError(f"Unknown bid_price partition: {partition}")
+    kwargs["packages"] = [pkg]
+
+
+@given(parsers.re(r"a create_media_buy request with buyer_ref per (?!boundary )(?P<partition>.+)"))
 def given_partition_buyer_ref(ctx: dict, partition: str) -> None:
     """Build create request per partition for buyer_ref dedup validation."""
     kwargs = _ensure_request_defaults(ctx)
@@ -1095,7 +1095,7 @@ def given_boundary_buyer_ref(ctx: dict, boundary_point: str) -> None:
     kwargs["packages"] = [pkg]
 
 
-@given(parsers.parse("a create_media_buy request with format_ids per {partition}"))
+@given(parsers.re(r"a create_media_buy request with format_ids per (?!boundary )(?P<partition>.+)"))
 def given_partition_format_ids(ctx: dict, partition: str) -> None:
     """Build create request per partition for format_ids validation."""
     kwargs = _ensure_request_defaults(ctx)
@@ -1141,7 +1141,7 @@ def given_boundary_format_ids(ctx: dict, boundary_point: str) -> None:
     kwargs["packages"] = [pkg]
 
 
-@given(parsers.parse("a create_media_buy request with pricing_option_id per {partition}"))
+@given(parsers.re(r"a create_media_buy request with pricing_option_id per (?!boundary )(?P<partition>.+)"))
 def given_partition_pricing_option(ctx: dict, partition: str) -> None:
     """Build create request per partition for pricing_option_id validation."""
     kwargs = _ensure_request_defaults(ctx)
@@ -1194,7 +1194,7 @@ def _setup_update_partition(ctx: dict) -> tuple[dict, dict]:
     return update_kwargs, pkg_update
 
 
-@given(parsers.parse("a package update request per {partition}"))
+@given(parsers.re(r"a package update request per (?!boundary |replacement )(?P<partition>.+)"))
 def given_partition_immutable(ctx: dict, partition: str) -> None:
     """Build update request per partition for immutable fields validation."""
     update_kwargs, pkg_update = _setup_update_partition(ctx)
@@ -1487,7 +1487,7 @@ def _apply_keyword_boundary(pkg_update: dict, field_name: str, bp: str) -> None:
 # --- Paused partition/boundary ---
 
 
-@given(parsers.parse("a package request with paused per {partition}"))
+@given(parsers.re(r"a package request with paused per (?!boundary )(?P<partition>.+)"))
 def given_partition_paused(ctx: dict, partition: str) -> None:
     """Build request per partition for paused behavior."""
     partition = partition.strip()
@@ -1547,7 +1547,7 @@ def given_boundary_paused(ctx: dict, boundary_point: str) -> None:
 # --- Replacement semantics partition/boundary ---
 
 
-@given(parsers.parse("a package update request per replacement semantics {partition}"))
+@given(parsers.re(r"a package update request per replacement semantics (?P<partition>.+)"))
 def given_partition_replacement(ctx: dict, partition: str) -> None:
     """Build update request per partition for replacement semantics."""
     update_kwargs, pkg_update = _setup_update_partition(ctx)
