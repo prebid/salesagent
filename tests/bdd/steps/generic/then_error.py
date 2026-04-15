@@ -90,21 +90,31 @@ def _get_error_dict(error: object) -> dict:
 
 @then("the operation should fail")
 def then_operation_fails(ctx: dict) -> None:
-    """Assert the operation resulted in an error.
+    """Assert the operation resulted in a structured error.
 
     Checks two patterns:
     1. Exception-based: ctx["error"] set by dispatch on exception
     2. Partial success: response.errors non-empty (UC-004 delivery pattern)
+
+    The error must have BOTH a non-empty error code and a non-empty human
+    message — an error object with null/empty fields is not a valid failure
+    signal for the caller. An error whose code resolves to its own Python
+    class name (fallback in _get_error_code) means the code field wasn't
+    set explicitly, which is also not a proper structured error.
     """
-    if "error" in ctx:
-        return  # Exception-based error — OK
-    resp = ctx.get("response")
-    if resp is not None and hasattr(resp, "errors") and resp.errors:
-        # Promote the first response error to ctx["error"] so downstream
-        # Then steps (error_code, error_message) can find it.
-        ctx["error"] = resp.errors[0]
-        return
-    raise AssertionError("Expected an error but none was recorded in ctx")
+    error = ctx.get("error")
+    if error is None:
+        resp = ctx.get("response")
+        if resp is not None and hasattr(resp, "errors") and resp.errors:
+            # Promote the first response error to ctx["error"] so downstream
+            # Then steps (error_code, error_message) can find it.
+            error = resp.errors[0]
+            ctx["error"] = error
+    assert error is not None, "Expected an error but none was recorded in ctx"
+    code = _get_error_code(error)
+    message = _get_error_message(error)
+    assert code, f"Expected non-empty error code, got: {code!r} on {type(error).__name__}"
+    assert message, f"Expected non-empty error message, got: {message!r} on {type(error).__name__}"
 
 
 # ── Error code ───────────────────────────────────────────────────────
@@ -172,15 +182,24 @@ def then_error_tenant_context(ctx: dict) -> None:
 
 @then("the error message should indicate which parameters are invalid")
 def then_error_invalid_params(ctx: dict) -> None:
-    """Assert error message indicates which specific parameters are invalid.
+    """Assert error is a validation-type error that names the invalid parameter.
 
-    Step claims 'which parameters' — the error must name the actual invalid
-    field(s), not just contain generic keywords like 'invalid'.
+    Step claims 'which parameters' — the error must (a) be a validation error
+    (Pydantic ValidationError or AdCPValidationError), and (b) name the actual
+    invalid field(s), not just contain generic keywords like 'invalid'.
     """
+    from pydantic import ValidationError
+
+    from src.core.exceptions import AdCPValidationError
+
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
+    assert isinstance(error, ValidationError | AdCPValidationError), (
+        f"Expected a validation error (pydantic.ValidationError or AdCPValidationError) "
+        f"for a parameter-validity claim, got {type(error).__name__}: {error}"
+    )
     # Pydantic ValidationError: has per-field error details with field paths
-    if hasattr(error, "errors"):
+    if isinstance(error, ValidationError):
         field_errors = error.errors()
         assert field_errors, "ValidationError has no field-level error details"
         assert all("loc" in e for e in field_errors), f"Expected field locations in error details: {field_errors}"
