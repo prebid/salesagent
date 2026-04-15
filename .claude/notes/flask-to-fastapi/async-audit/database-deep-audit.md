@@ -1,6 +1,11 @@
 # Database Deep-Audit Report (2026-04-11)
 
-> **ASYNC IS PHASE 4+ WITHIN v2.0 (2026-04-14).** Phases 0-3 use sync admin handlers. This report is the Phase 4+ implementation roadmap. Do not implement async patterns from this file during Phases 0-3 (Flask removal).
+> **[ARCHIVED REFERENCE — 2026-04-14]** This report is a preserved artifact from the 3-round verification process (Apr 11-14) that produced the v2.0 8-layer execution model. For current implementation guidance, see:
+> - `../CLAUDE.md` — mission briefing + 8-layer model
+> - `../execution-plan.md` — layer-by-layer work items
+> - `../implementation-checklist.md` — per-layer gate checklist
+>
+> This file is preserved for institutional memory only. Its recommendations have been absorbed into the canonical docs above. Do NOT use this file as a primary reference for implementation decisions.
 
 > **Produced by:** 6 parallel Opus subagents with ultrathink, 2nd/3rd/4th-order derivative analysis
 > **Scope:** ORM models + relationships, session lifecycle + pool, repository pattern + queries, Alembic migrations, test DB infrastructure, data integrity + performance

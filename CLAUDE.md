@@ -9,8 +9,8 @@
 - **Migration branch:** `feat/v2.0.0-flask-to-fastapi` (all migration work commits here)
 
 Six critical invariants that are easy to forget and destructive to miss:
-1. **Phases 0-3:** Admin handlers use **sync `def`** with sync SQLAlchemy (`scoped_session` + `Session`). This is safe because FastAPI runs sync handlers in a threadpool where thread-local session scoping works correctly. `run_in_threadpool` wrapping is NOT needed for admin handlers — FastAPI handles it automatically. MCP and A2A handlers remain `async def`. Full async SQLAlchemy is Phase 4+ within v2.0 (after Flask removal).
-2. Middleware order: **Approximated runs BEFORE CSRF** (not after — counterintuitive but correct)
+1. **Layers 0-4:** Admin handlers use **sync `def`** with sync SQLAlchemy (`scoped_session` + `Session`). This is safe because FastAPI runs sync handlers in a threadpool where thread-local session scoping works correctly. `run_in_threadpool` wrapping is NOT needed for admin handlers — FastAPI handles it automatically. MCP and A2A handlers remain `async def`. Full async SQLAlchemy is Layer 5+ within v2.0 (after Flask removal and FastAPI-native pattern refinement).
+2. Middleware order: **Approximated runs BEFORE CSRF** (not after — counterintuitive but correct). Canonical stack is 9 middlewares at L2 (`Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS`) and 10 at L4+ (adds `RequestID` outermost). `SecurityHeadersMiddleware` (§11.28) lands in the L2 PR, positioned INSIDE `TrustedHost` and OUTSIDE `UnifiedAuth`.
 3. Templates use `{{ url_for('name', **params) }}` exclusively — for admin routes AND static assets. No prefix variables. Every admin route has `name="admin_..."`; static mount is `name="static"`. Starlette's `include_router(prefix=...)` does not set `scope["root_path"]`, so `url_for` is the only correct URL generator.
 4. `APIRouter(redirect_slashes=True, include_in_schema=False)` for all admin routers
 5. `@app.exception_handler(AdCPError)` must be Accept-aware (render HTML for `/admin/*` browsers, JSON otherwise)
@@ -161,7 +161,7 @@ When adding routes:
 - Every route must have an explicit `name=` parameter for `url_for()` resolution
 - Search existing: `grep -r "@router\.\(get\|post\|put\|delete\|patch\)" src/admin/`
 - Use `APIRouter(redirect_slashes=True, include_in_schema=False)` for all admin routers
-- Note: The pre-commit hook `check_route_conflicts.py` currently inspects Flask routes and will be rewritten for FastAPI during Phase 3 of the migration
+- Note: The pre-commit hook `check_route_conflicts.py` currently inspects Flask routes and will be rewritten for FastAPI during Layer 2 of the migration (Flask removal)
 
 ### 3. Database: Repository Pattern + ORM-First
 **No SQLite support** - Production uses PostgreSQL exclusively.

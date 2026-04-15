@@ -5,11 +5,9 @@
 **Release target:** salesagent v2.0.0 (major version, breaking changes allowed)
 **Related plan file:** `/Users/quantum/.claude/plans/squishy-meandering-marshmallow.md`
 
-> **ASYNC PIVOT REVERSED (2026-04-12) — v2.0 uses SYNC admin handlers for Phases 0-3.**
-> This file was written before the async reversion and has NOT been fully updated.
-> v2.0 ships with sync `def` admin handlers; async SQLAlchemy is deferred to Phase 4+ within v2.0.
-> Decision 6 in this file (line ~65, "Full async SQLAlchemy absorbed into v2.0") is
-> superseded. The authoritative implementation guide is `execution-plan.md`.
+> **LAYERED SCOPE (2026-04-14) — v2.0 uses SYNC admin handlers through L4, ASYNC in L5.**
+> This file was written before the layered scoping and has NOT been fully updated.
+> v2.0 ships sync `def` admin handlers through L0-L4; async SQLAlchemy lands at L5b (SessionDep alias flip) within v2.0 and mechanically propagates through L5c-L5e. Decision 6 in this file (line ~65, "Full async SQLAlchemy absorbed into v2.0") is structurally correct (async is in v2.0) but the timing is now layered, not front-loaded. The authoritative implementation guide is `execution-plan.md`.
 
 > **How to use this document:** This is a self-contained research and design reference. A reader can start at the top with zero prior knowledge of the salesagent codebase and understand the full scope, trade-offs, assumptions, and decisions behind the Flask → FastAPI migration. All findings come from multiple rounds of codebase exploration (three Opus Explore subagents) and design (seven Opus Plan subagents in total) run on 2026-04-11, plus web research of current FastAPI patterns as of April 2026.
 
@@ -51,13 +49,13 @@ Flask contributes:
 
 **Why this is worth doing:**
 - Eliminates ~11,000 LOC of boilerplate by using declarative FastAPI patterns
-- Removes ~75 MB from Docker image (Flask + flask-socketio + waitress + a2wsgi). **Note (Decision 9, 2026-04-11):** `flask-caching` is replaced rather than deleted — see §11.7 correction. `psycopg2-binary` + `libpq5` are retained (Docker savings adjust from ~80 MB to ~75 MB) for the Decision 1 sync-session factory, Decision 2 pre-uvicorn health checks, and Decision 9 sync-bridge supporting `background_sync_service.py`. Their full removal is a Phase 4+ sunset item.
+- Removes ~75 MB from Docker image (Flask + flask-socketio + waitress + a2wsgi). **Note (Decision 9, 2026-04-11):** `flask-caching` is replaced rather than deleted — see §11.7 correction. `psycopg2-binary` + `libpq5` are retained (Docker savings adjust from ~80 MB to ~75 MB) for the Decision 1 sync-session factory, Decision 2 pre-uvicorn health checks, and Decision 9 sync-bridge supporting `background_sync_service.py`. Their full removal is a post-v2.0 sunset item.
 - Unifies auth/session/middleware across all transports (MCP/A2A/REST/admin share one stack)
 - Eliminates the WSGI↔ASGI bridge overhead
 - Eliminates the scoped_session interleaving latent bug in `src/routes/api_v1.py` as a side effect of the full-async conversion (see async-pivot-checkpoint.md §4 Risk #15)
 - Simplifies testing (admin tests use the same `TestClient` + `dependency_overrides` pattern as REST tests)
 
-**Migration strategy:** 5-6 waves (Foundation+codemod → Foundational routers+session cutover → Bulk blueprint port → SSE+cleanup → Async DB layer → Async cutover & release). Flask catch-all stays live through Wave 2 as a safety net. A mandatory pre-Wave-0 lazy-loading audit spike (see async-pivot-checkpoint.md §4 Risk #1) gates the Wave 4-5 scope. See `async-pivot-checkpoint.md` for full detail on the full-async absorption.
+**Migration strategy:** 8 layers (L0-L7), grouped into 5-6 historical "waves" (see Wave ↔ Layer mapping). Flask catch-all stays live through Wave 2 as a safety net. A mandatory pre-L5 lazy-loading audit spike (see async-pivot-checkpoint.md §4 Risk #1) gates the L5 scope. See `async-pivot-checkpoint.md` for full detail on the full-async absorption.
 
 ---
 
@@ -68,8 +66,8 @@ Flask contributes:
 3. **Session cookie hard cutover:** one forced re-login at deploy is acceptable.
 4. **URL prefix stays `/admin/`** (bookmarks, docs, runbooks all reference it; zero benefit to moving to root).
 5. **`SESSION_SECRET` env var hard-required, `KeyError` at startup, no `secrets.token_hex()` fallback.** The old dev-mode fallback was a security smell anyway.
-6. **[REVERSED 2026-04-12] Sync SQLAlchemy for admin handlers in v2.0.** v2.0 admin handlers are sync `def` with `with get_db_session() as session:` using the existing `scoped_session` + `Session` infrastructure. Driver stays `psycopg2-binary`. Async SQLAlchemy (`AsyncSession`, `asyncpg`, `SessionDep`) deferred to Phase 4+ within v2.0 when measured production load justifies it. MCP and A2A handlers remain `async def` unchanged. See `execution-plan.md` for canonical sync patterns.
-7. **CSRF: roll-your-own Double Submit Cookie (~100 LOC, `src/admin/csrf.py`).** **[SUPERSEDED 2026-04-11]** CSRF strategy changed to Option A — SameSite=Lax + CSRFOriginMiddleware (~70 LOC). See CLAUDE.md blocker 5. ~~No external dep risk, bespoke to our form-post admin UI. See §11.6.~~
+6. **[LAYERED 2026-04-14] Sync SQLAlchemy for admin handlers through L4, async in L5.** L0-L4 admin handlers are sync `def` with `with get_db_session() as session:` using the existing `scoped_session` + `Session` infrastructure (driver stays `psycopg2-binary`). L4 introduces sync `SessionDep = Annotated[Session, Depends(get_session)]`; **L5b** re-aliases `SessionDep` to `AsyncSession` (1-file flip) and introduces `asyncpg`; **L5c-L5e** mechanically convert ~60 commit sites and ~200 `scalars`/`execute` call sites to `await`. MCP and A2A handlers remain `async def` unchanged throughout. See `execution-plan.md` for per-layer canonical patterns.
+7. **CSRF: Option A — SameSite=Lax session cookie + `CSRFOriginMiddleware` (~70 LOC pure-ASGI Origin header validation).** See CLAUDE.md invariant 5 and `flask-to-fastapi-foundation-modules.md` §11.7 for the authoritative implementation.
 8. **Error-shape split** (refined post AdCP safety audit):
    - **Category 1** (internal admin UI AJAX endpoints called by our own JavaScript — e.g. `change_account_status`, `src/admin/blueprints/api.py` dashboard AJAX, `src/admin/blueprints/format_search.py` format picker, **and `src/adapters/gam_reporting_api.py`** which is admin-session-authed) → native FastAPI `{"detail": "..."}`. We update our own JS in the same PR.
    - **Category 2** (external non-AdCP JSON APIs: **`tenant_management_api` and `sync_api` only** — both use non-AdCP auth headers like `X-Tenant-Management-API-Key` and `X-API-Key` for external provisioning/sync tooling) → preserved legacy `{"success": false, "error": "..."}` via a scoped exception handler (~30 LOC, path-prefix match against `/api/v1/tenant-management`, `/api/v1/sync`, `/api/sync`). None of these are part of the AdCP spec; preserving the shape is a backward-compat concession to non-AdCP internal tooling, NOT an AdCP spec requirement.
@@ -97,7 +95,7 @@ Flask contributes:
 7. ⚠️ **FIXED** — `/_internal/` added to CSRF exempt list. `/_internal/reset-db-pool` is a POST used by integration tests to reset DB pools; without the exempt entry, CSRF would block it. Updated in §11.6 above.
 
 8. ✅ **ADDED** — three new structural guards (beyond the two already planned):
-   - `tests/unit/test_architecture_csrf_exempt_covers_adcp.py` — runtime-introspects `app.routes`, asserts every non-GET route matching `/mcp`, `/a2a`, `/api/v1/`, or `/a2a/` is covered by `CSRFMiddleware._EXEMPT_PATH_PREFIXES`
+   - `tests/unit/test_architecture_csrf_exempt_covers_adcp.py` — runtime-introspects `app.routes`, asserts every non-GET route matching `/mcp`, `/a2a`, `/api/v1/`, or `/a2a/` is covered by `CSRFOriginMiddleware._EXEMPT_PATH_PREFIXES`
    - `tests/unit/test_architecture_approximated_middleware_path_gated.py` — asserts the Approximated middleware short-circuits on non-`/admin` paths
    - `tests/unit/test_architecture_admin_routes_excluded_from_openapi.py` — asserts `not any(p.startswith("/admin") for p in app.openapi()["paths"])`
 
@@ -127,15 +125,24 @@ The first-order audit (§2.7) verified AdCP protocol safety. A subsequent **deep
 
 4. 🚨 **Session scoping on the async event-loop thread — PIVOTED 2026-04-11 to full async SQLAlchemy.** `src/core/database/database_session.py:148` uses `scoped_session` with default `threading.get_ident()` scopefunc. Under Flask+a2wsgi, each request runs on its own worker thread → isolated sessions. Under `async def` handlers sharing the event loop thread, concurrent requests share the same `scoped_session` identity → transaction interleaving, stale reads, duplicate commits. **Original fix (Option C):** default admin handlers to sync `def` so FastAPI auto-offloads them to distinct threadpool workers. **Pivoted fix (Option A, chosen):** replace `scoped_session(sessionmaker(...))` with `async_sessionmaker(_engine, class_=AsyncSession, expire_on_commit=False)`, switch the driver `psycopg2-binary` → `asyncpg`, and convert admin handlers, repositories, UoW, `_impl` functions, alembic env, and the test harness to async. The scoped_session race is eliminated entirely because there is no more thread-identity scoping to race on. This also fixes a pre-existing latent bug where the REST routes in `src/routes/api_v1.py` already share `scoped_session` identity across async tasks. Add structural guard `test_architecture_admin_routes_async.py` — AST-scans admin routers and asserts every `@router.<method>(...)` handler is `async def`. See `async-pivot-checkpoint.md` for the full new plan including pre-Wave-0 lazy-loading audit spike (Risk #1).
 
-5. 🚨 **Middleware ordering bug — CSRF must run AFTER Approximated, not before.** The plan's proposed order puts `CSRFMiddleware` BEFORE `ApproximatedExternalDomainMiddleware`. Failure scenario: external-domain user POSTs to `/admin/tenant/t1/accounts/create` via Approximated. CSRF fires first, user has no session cookie (different domain), CSRF fails with 403, redirect never runs. The entire external-domain onboarding flow breaks. **Fix:** swap the order — `ApproximatedExternalDomainMiddleware` runs BEFORE `CSRFMiddleware`. Corrected stack:
+5. 🚨 **Middleware ordering bug — CSRF must run AFTER Approximated, not before.** An earlier draft placed `CSRFOriginMiddleware` OUTSIDE `ApproximatedExternalDomainMiddleware`. Failure scenario: external-domain user POSTs to `/admin/tenant/t1/accounts/create` via Approximated. CSRF fires first, Origin header doesn't match allowed origins, CSRF returns 403, redirect never runs. The entire external-domain onboarding flow breaks. **Fix:** the canonical stack places ExternalDomain OUTSIDE CSRF:
+   ```
+   Canonical runtime order (outermost → innermost, L2 shape, 9 middlewares):
+   Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS
+   ```
+   (L4+ adds `RequestID` as the new outermost middleware. See `flask-to-fastapi-foundation-modules.md` §cross-cutting/Middleware ordering for the L1a (6) / L2 (9) / L4-L6 (10) progressive shapes. `SecurityHeadersMiddleware` lands in the same L2 PR as `TrustedHostMiddleware` — see §11.28.)
+
+   Registered in `src/app.py` via `add_middleware` in **REVERSE** order (LIFO — innermost added first):
    ```python
-   # Outermost → innermost (add_middleware is LIFO):
-   CORSMiddleware
-   SessionMiddleware
-   ApproximatedExternalDomainMiddleware   # ← MOVED UP
-   CSRFMiddleware
-   RestCompatMiddleware
-   UnifiedAuthMiddleware
+   app.add_middleware(CORSMiddleware, ...)                    # innermost
+   app.add_middleware(RestCompatMiddleware)
+   app.add_middleware(CSRFOriginMiddleware, ...)
+   app.add_middleware(SessionMiddleware, **session_kwargs)
+   app.add_middleware(UnifiedAuthMiddleware)
+   app.add_middleware(TrustedHostMiddleware, allowed_hosts=...)   # added at L2
+   app.add_middleware(ApproximatedExternalDomainMiddleware)
+   app.add_middleware(FlyHeadersMiddleware)
+   app.add_middleware(RequestIDMiddleware)                        # added at L4/L6, outermost
    ```
    Also: switch the Approximated redirect from 302 to **307** (preserves POST body per RFC 7231 §6.4.7).
 
@@ -143,13 +150,13 @@ The first-order audit (§2.7) verified AdCP protocol safety. A subsequent **deep
 
 ### Plan defaults that change as a result
 
-- **[REVERSED 2026-04-12]** ~~Admin handlers are `async def` end-to-end with full async SQLAlchemy.~~ **v2.0 uses sync `def` handlers with `with get_db_session() as session:`.** Async SQLAlchemy deferred to Phase 4+ within v2.0. See `execution-plan.md` for canonical sync patterns.
+- **[LAYERED 2026-04-14]** Admin handlers use **sync `def` through L0-L4** with `with get_db_session() as session:`, then flip to `async def` + `AsyncSession` at L5b; L5c-L5e complete the mechanical conversion. Async SQLAlchemy lands in v2.0 at L5 (not deferred to a separate release). See `execution-plan.md` for per-layer canonical patterns.
 - **Middleware order swaps Approximated and CSRF** — Approximated runs before CSRF, not after.
 - **Redirect code changes from 302 to 307** — preserves POST body on external-domain redirect.
 - **`render()` wrapper uses `url_for` exclusively** — no `admin_prefix`/`static_prefix`/`script_root` globals. Handlers pass any pre-resolved base URLs (for JS consumption) via per-render context vars named `js_*_base` (e.g. `js_workflows_base = str(request.url_for('admin_workflows_list_workflows', tenant_id=tenant_id))`). A `_url_for` safe-lookup override in `render()` catches `NoMatchFound` and logs the offending template filename before re-raising.
 - **`APIRouter` construction includes `redirect_slashes=True`** — matches Flask permissive default.
 - **Admin error handler renders `error.html`** — for HTML `Accept` on `/admin/*` paths.
-- **`FLASK_SECRET_KEY` transition becomes dual-read for v2.0** (supersedes user directive #5) — plan originally said hard-required rename, but `scripts/setup-dev.py`, `docker-compose.yml`, `tests/unit/test_setup_dev.py` (9 occurrences), and two docs files all reference the old name. Hard-removing breaks dev workflow and 9 tests. Dual-read `SESSION_SECRET or FLASK_SECRET_KEY` in v2.0, hard-remove in Phase 5.
+- **`FLASK_SECRET_KEY` transition becomes dual-read through L0-L6** (supersedes user directive #5) — plan originally said hard-required rename, but `scripts/setup-dev.py`, `docker-compose.yml`, `tests/unit/test_setup_dev.py` (9 occurrences), and two docs files all reference the old name. Hard-removing breaks dev workflow and 9 tests. Dual-read `SESSION_SECRET or FLASK_SECRET_KEY` through L0-L6, hard-remove in L7 (final polish before v2.0.0 tag).
 
 ### Additional structural guards (9 total, up from the original plan's 2)
 
@@ -172,7 +179,7 @@ Plus two derivative guards:
 15. `test_architecture_a2a_routes_grafted.py` — NEW from §4.8 apps inventory. Asserts `/a2a`, `/.well-known/agent-card.json`, `/agent.json` appear as top-level `Route` objects in `app.routes` (NOT nested inside a `Mount`). Prevents a future refactor that "improves" A2A integration by mounting it as a sub-app and breaks middleware propagation + `_replace_routes()`.
 11. `test_architecture_harness_overrides_isolated.py` — prevent `app.dependency_overrides` leakage across test envs
 
-### Derivative opportunities enabled by the migration (deferred to Phase 4+ within v2.0)
+### Derivative opportunities enabled by the migration (landing at L4/L6/L7 within v2.0, or post-v2.0)
 
 - **Drop nginx entirely** — the container runs nginx + uvicorn for historical reasons; Fly.io terminates TLS externally and uvicorn has proxy-header support. Dropping nginx saves ~30 MB image size, simplifies the Dockerfile, and removes one restart-loop failure mode. Not in v2.0 scope to keep the migration focused.
 - **Ratchet-migrate REST routes to `Annotated[T, Depends()]` pattern** — `src/routes/api_v1.py` currently uses old-style `= resolve_auth` defaults. Inconsistency with the new admin Annotated pattern breeds confusion. 14 route signatures.
@@ -476,7 +483,7 @@ uvicorn → src.app:app (FastAPI)
 #### 4.8.1 Subtleties that are load-bearing (non-obvious from reading the code)
 
 **A2A is grafted, not mounted.** `a2a_app.add_routes_to_app(app, ...)` at `src/app.py:118` does NOT call `app.mount(...)`. It injects the SDK's Starlette `Route` objects directly into `app.router.routes` at the top level. Consequences:
-- FastAPI middleware (`UnifiedAuthMiddleware`, `RestCompatMiddleware`, `CORSMiddleware`, the future `SessionMiddleware`/`CSRFMiddleware` from Wave 1) all reach A2A handlers because they share the root scope. `scope["state"]["auth_context"]` propagates cleanly.
+- FastAPI middleware (`UnifiedAuthMiddleware`, `RestCompatMiddleware`, `CORSMiddleware`, the future `SessionMiddleware`/`CSRFOriginMiddleware` from Wave 1) all reach A2A handlers because they share the root scope. `scope["state"]["auth_context"]` propagates cleanly.
 - `_replace_routes()` at `src/app.py:192-215` walks `app.routes` to find the SDK's three static agent-card paths (`/.well-known/agent-card.json`, `/.well-known/agent.json`, `/agent.json`) and swaps them for dynamic `Route(path, dynamic_agent_card, methods=[...])` objects that read `Apx-Incoming-Host`/`Host` headers and emit tenant-aware agent cards.
 - **Any future refactor that mounts A2A as a sub-app would break both middleware propagation AND `_replace_routes()`** — the sub-app's internal routes would not be visible to `app.routes` iteration, and the dynamic agent-card swap would silently skip the SDK routes.
 - This migration does not touch this pattern. It's documented here so a future Wave N doesn't accidentally "improve" it.
@@ -909,7 +916,7 @@ from src.core.auth_middleware import UnifiedAuthMiddleware
 from src.core.exceptions import AdCPError
 from src.admin.app_factory import build_admin_router, admin_lifespan_hooks
 from src.admin.middleware.external_domain import ApproximatedExternalDomainMiddleware
-from src.admin.csrf import CSRFMiddleware
+from src.admin.csrf import CSRFOriginMiddleware
 from src.admin.sessions import session_middleware_kwargs
 from src.admin.oauth import init_oauth
 from src.routes.api_v1 import router as api_v1_router
@@ -955,16 +962,23 @@ app.include_router(build_admin_router(), prefix="/admin")
 a2a_app.add_routes_to_app(app, ...)
 app.mount("/mcp", mcp_app)
 
-# Middleware (add_middleware is LIFO; outermost registered last)
-# CORRECTED ORDER per deep audit blocker #5:
-# Approximated MUST run BEFORE CSRF so external-domain POST users
-# get redirected (307) instead of CSRF-rejected (403).
-app.add_middleware(UnifiedAuthMiddleware)
+# Middleware (add_middleware is LIFO; outermost registered last).
+# Canonical runtime order (outermost → innermost, L4/L6 shape, 10 middlewares):
+# RequestID → Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS
+# See foundation-modules §cross-cutting/Middleware ordering for L1a (6) and L2 (9) progressive shapes.
+# Registration order is REVERSE of runtime order (innermost added first).
+# Hard invariant (notes/CLAUDE.md #2): ExternalDomain runs BEFORE CSRF so
+# external-domain POSTs get 307-redirected instead of CSRF-rejected.
+app.add_middleware(CORSMiddleware, ...)                        # innermost
 app.add_middleware(RestCompatMiddleware)
-app.add_middleware(CSRFMiddleware)                         # ← now AFTER Approximated
-app.add_middleware(ApproximatedExternalDomainMiddleware)   # ← MOVED UP
+app.add_middleware(CSRFOriginMiddleware, ...)
 app.add_middleware(SessionMiddleware, **session_middleware_kwargs())
-app.add_middleware(CORSMiddleware, ...)
+app.add_middleware(UnifiedAuthMiddleware)
+app.add_middleware(SecurityHeadersMiddleware, https_only=settings.https_only)  # added at L2 (§11.28)
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=...)   # added at L2
+app.add_middleware(ApproximatedExternalDomainMiddleware)
+app.add_middleware(FlyHeadersMiddleware)
+app.add_middleware(RequestIDMiddleware)                        # added at L4/L6, outermost
 
 # Root landing pages (FastAPI-native)
 @app.get("/")
@@ -1252,92 +1266,11 @@ def invalidate_tenant_oidc_client(tenant_id: str) -> None:
 
 OAuth state rides on `request.session` — same cookie as admin session.
 
-### 11.6 CSRF: ~~roll-your-own Double Submit Cookie~~ CSRFOriginMiddleware (`src/admin/csrf.py`, ~120 LOC)
+### 11.6 CSRF: `CSRFOriginMiddleware` (`src/admin/csrf.py`, ~70 LOC)
 
-> **[SUPERSEDED 2026-04-11]** The Double Submit Cookie approach below was rejected. v2.0 implements **CSRFOriginMiddleware** (~120 LOC, pure-ASGI Origin header validation). SameSite=Lax session cookie + Origin validation. Zero JavaScript changes, zero template changes, zero form changes. See `flask-to-fastapi-foundation-modules.md` section 11.7 for the correct implementation.
+Option A — `SameSite=Lax` session cookie + pure-ASGI Origin header validation. Zero JavaScript changes, zero template changes, zero form changes (no hidden `csrf_token` inputs, no `X-CSRF-Token` headers).
 
-**Original description (superseded):** ~~Decision: bespoke, not a library.~~ Zero external dep risk, full control.
-
-Mechanism:
-1. On safe-method requests (GET/HEAD/OPTIONS), middleware generates a token via `itsdangerous.URLSafeTimedSerializer`, sets it as `adcp_csrf` cookie (SameSite=Lax, Secure in prod, HttpOnly=False for JS XHR), stashes on `request.state.csrf_token`
-2. On unsafe-method requests, middleware validates form field `csrf_token` OR header `X-CSRF-Token` matches the cookie
-3. Mismatch → 403 with `{"detail": "CSRF token missing or invalid"}`
-4. Exemption list: OAuth callbacks, `/mcp`, `/a2a`, `/api/v1/*`, webhooks (authenticated via Bearer)
-
-```python
-# src/admin/csrf.py  (~100 LOC)
-import os, secrets
-from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
-
-_COOKIE_NAME = "adcp_csrf"
-_FORM_FIELD = "csrf_token"
-_HEADER_NAME = "X-CSRF-Token"
-_TOKEN_MAX_AGE = 24 * 3600
-_SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
-_EXEMPT_PATH_PREFIXES = (
-    "/mcp", "/a2a", "/api/v1/", "/_internal/",
-    "/admin/auth/callback", "/admin/auth/oidc/",
-)
-# /_internal/ added per ADCP safety audit §4 — /_internal/reset-db-pool is a POST
-# used by the integration test harness to reset DB pools; it's gated by
-# ADCP_TESTING=true env but must also be CSRF-exempt.
-
-def _signer():
-    return URLSafeTimedSerializer(os.environ["SESSION_SECRET"], salt="adcp-csrf")
-
-def _new_token():
-    return _signer().dumps(secrets.token_urlsafe(32))
-
-def _validate(token):
-    try:
-        _signer().loads(token, max_age=_TOKEN_MAX_AGE)
-        return True
-    except (BadSignature, SignatureExpired):
-        return False
-
-class CSRFMiddleware:
-    """Pure-ASGI Double Submit Cookie CSRF middleware."""
-    def __init__(self, app):
-        self.app = app
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] != "http":
-            return await self.app(scope, receive, send)
-
-        method = scope["method"]
-        path = scope["path"]
-        headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
-
-        cookie_header = headers.get("cookie", "")
-        cookie_token = _extract_cookie(cookie_header, _COOKIE_NAME)
-
-        is_exempt = any(path.startswith(p) for p in _EXEMPT_PATH_PREFIXES)
-        if method not in _SAFE_METHODS and not is_exempt:
-            form_token = await _read_csrf_from_body(scope, receive, headers)
-            header_token = headers.get(_HEADER_NAME.lower())
-            submitted = form_token or header_token
-            if not cookie_token or not submitted or submitted != cookie_token or not _validate(cookie_token):
-                await _respond_403(send)
-                return
-
-        token = cookie_token if cookie_token and _validate(cookie_token) else _new_token()
-        scope.setdefault("state", {})["csrf_token"] = token
-
-        async def send_with_cookie(message):
-            if message["type"] == "http.response.start":
-                message.setdefault("headers", [])
-                message["headers"].append((
-                    b"set-cookie",
-                    f"{_COOKIE_NAME}={token}; Path=/; SameSite=Lax; "
-                    f"{'Secure; ' if _is_prod() else ''}Max-Age={_TOKEN_MAX_AGE}".encode()
-                ))
-            await send(message)
-        await self.app(scope, receive, send_with_cookie)
-```
-
-Jinja global `{{ csrf_token }}` reads from `request.state.csrf_token`. Templates: `<input type="hidden" name="csrf_token" value="{{ csrf_token }}">`. Codemod: `{{ csrf_token() }}` → `{{ csrf_token }}`.
-
-**Testing:** dep override isn't possible (middleware, not Dep). `IntegrationEnv.get_admin_client()` fetches `/admin/` first, extracts CSRF cookie, includes in subsequent POSTs automatically.
+**Canonical implementation:** see `flask-to-fastapi-foundation-modules.md` §11.7 for the full middleware code, exemption list, and test harness integration. The pre-pivot Double Submit Cookie design that previously occupied this section has been retired — `git log` preserves it.
 
 ### 11.7 Caching — REPLACE `flask-caching` with `SimpleAppCache`, then delete (corrected 2026-04-11)
 
@@ -1357,13 +1290,29 @@ The 3 consumer sites migrate:
 uvicorn src.app:app --proxy-headers --forwarded-allow-ips='*'
 ```
 
-Replaces `CustomProxyFix` + werkzeug `ProxyFix`. `X-Script-Name` / `X-Forwarded-Prefix` vanishes because `include_router(prefix="/admin")` handles root path via `scope["root_path"]`.
+Replaces `CustomProxyFix` + werkzeug `ProxyFix`. `--proxy-headers` handles
+`X-Forwarded-For` / `X-Forwarded-Proto` rewriting so `request.url.scheme`
+reflects the edge proxy's view; load-bearing for OAuth redirect URI
+generation on Fly.io. Note: `include_router(prefix="/admin")` only prepends
+`/admin` to each route's `path` string — it does NOT set `scope["root_path"]`,
+which is populated exclusively by uvicorn's `--root-path` or the
+`X-Forwarded-Prefix` header. v2.0 serves admin at a fixed `/admin/` prefix
+with no reverse-proxy path rewriting, so `root_path` stays empty. All URL
+generation MUST use `request.url_for('name', ...)` (Starlette's named-route
+resolver, which combines `root_path` + route `path`) — never
+`request.script_root`, `request.script_name`, or hard-coded prefixes. See
+`flask-to-fastapi-deep-audit.md` §1.1 for the full breakdown.
 
 `FlyHeadersMiddleware` stays as ~30 LOC pure ASGI **IF** Fly still sends only `Fly-*` headers at cutover. Verify first — Fly added standard `X-Forwarded-*` mid-2024 and this may already be redundant.
 
 ### 11.9 External-domain redirect (pure ASGI, `src/admin/middleware/external_domain.py`, ~90 LOC)
 
-Replaces 58-LOC `@app.before_request redirect_external_domain_admin`. **Pure ASGI** (Starlette #1729). Must run BEFORE `SessionMiddleware`.
+Replaces 58-LOC `@app.before_request redirect_external_domain_admin`. **Pure
+ASGI** (Starlette #1729). Lives outside `UnifiedAuth` in the canonical stack
+`Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS`
+(L2 shape, 9 middlewares; L4+ prepends `RequestID` as the new outermost for 10 total). Hard invariant: must
+run BEFORE `CSRFOriginMiddleware` so external-domain POSTs are redirected before
+CSRF rejection — see notes/CLAUDE.md invariant 2. `SecurityHeadersMiddleware` (§11.28) lands in the same L2 PR.
 
 **🚨 CRITICAL INVARIANT (per [AdCP safety audit §4](flask-to-fastapi-adcp-safety.md)):** the middleware MUST preserve the `is_admin_request` path gate from `src/admin/app.py:226-230`. If the path does not start with `/admin`, the middleware MUST short-circuit to pass-through WITHOUT performing any tenant lookup or emitting any redirect. Otherwise, a proxy forwarding an `Apx-Incoming-Host` header to `/mcp`, `/a2a`, or `/api/v1/*` would 302 the AdCP client to a browser URL and break the call.
 
@@ -1836,7 +1785,7 @@ async def change_status(
     tenant: CurrentTenantDep, request: Request,
     accounts: AccountRepoDep,
 ) -> StatusChangeResponse:
-    # CSRF validation happens in CSRFMiddleware (applied globally).
+    # CSRF validation happens in CSRFOriginMiddleware (applied globally).
     # Direct async DB work — no run_in_threadpool wrapper under the full-async
     # pivot (2026-04-11). AccountRepoDep is backed by Depends(get_session);
     # the session commits on normal return, rolls back on exception — owned
@@ -1885,12 +1834,12 @@ Registered via `app.add_exception_handler(HTTPException, legacy_error_shape_hand
 
 ---
 
-## 14. Migration Strategy — 5-6 Waves (pivoted 2026-04-11 from 4)
+## 14. Migration Strategy — 8 Layers (L0-L7), grouped as 5-6 legacy "waves" (pivoted 2026-04-11 from 4)
 
 The "written today" framing pushes toward fewer, bigger, atomic PRs. Eight waves presume backward-compat matters — it doesn't here. But one giant PR (~16,600-18,000 LOC per Agent A scope audit) is unreviewable. Five-to-six waves keep each PR at ~one week of work.
 
 **Wave 0-3** ship the Flask removal + admin FastAPI rewrite (originally the whole scope).
-**Wave 4-5** absorb the async SQLAlchemy migration that the original plan deferred to Phase 4+ within v2.0 (see §18 and `async-pivot-checkpoint.md`).
+**L5-L7** absorb the async SQLAlchemy migration that the original plan deferred to a post-v2.0 release. Under the 2026-04-14 layering, async is in v2.0 but sequenced after Flask removal (L2) and FastAPI-native pattern refinement (L4). See `execution-plan.md` L5 for the canonical plan and `async-pivot-checkpoint.md` for decision history.
 **Mandatory pre-Wave-0 lazy-loading audit spike** — see checkpoint §4 Risk #1. If the spike's outcome demands deferring async, fall back to the original 4-wave plan and push async to a later phase.
 
 **Flask catch-all stays live until Wave 3 as the migration safety net.**
@@ -1912,7 +1861,7 @@ The "written today" framing pushes toward fewer, bigger, atomic PRs. Eight waves
 ### Wave 1 — Foundational routers + session cutover (~4,000 LOC)
 
 - Port `public.py`, `core.py`, `auth.py`, `oidc.py` → `src/admin/routers/`
-- Wire `SessionMiddleware`, `CSRFMiddleware`, `ApproximatedExternalDomainMiddleware` in `src/app.py`
+- Wire `SessionMiddleware`, `CSRFOriginMiddleware`, `ApproximatedExternalDomainMiddleware` in `src/app.py`
 - Comment out `register_blueprint` calls in old `src/admin/app.py`
 - Flask catch-all serves everything else
 - **Cookie name `session` → `adcp_session`** → forced re-login
@@ -1992,13 +1941,13 @@ Eight waves imply safety via backward-compat seams — exactly what the user rej
 - `waitress>=3.0.0`
 - `a2wsgi>=1.10.0`
 - `types-waitress` (dev)
-- ~~`psycopg2-binary>=2.9.9`~~ **STALE — RETAINED per Decisions 1 (Path B sync factory), 2 (pre-fork orchestrator), 9 (sync-bridge). `asyncpg` added ALONGSIDE, not replacing. Removal deferred to Phase 4+ within v2.0.**
+- ~~`psycopg2-binary>=2.9.9`~~ **STALE — RETAINED per Decisions 1 (Path B sync factory), 2 (pre-fork orchestrator), 9 (sync-bridge). `asyncpg` added ALONGSIDE at L5a, not replacing. Removal deferred to post-v2.0 when the sync-bridge sunsets.**
 - ~~`types-psycopg2>=2.9.21.20251012`~~ **STALE — RETAINED per above.** Both stay in both dev-dep blocks.
 
 **ADDED:**
 - ~~`sse-starlette>=2.2.0`~~ **STALE — Decision 8 DELETE: SSE route is orphan code, dependency NOT added.**
 - `pydantic-settings>=2.7.0` (typed config)
-- `itsdangerous>=2.2.0` (explicit pin; Starlette transitive; now also used by roll-your-own CSRF)
+- ~~`itsdangerous>=2.2.0` (explicit pin; Starlette transitive; now also used by roll-your-own CSRF)~~ **STALE — CSRF strategy is now Origin-header validation (CSRFOriginMiddleware, foundation-modules.md §11.7); no `itsdangerous` usage in CSRF. It remains a transitive dep of `SessionMiddleware` and does NOT need an explicit pin.**
 - `asyncpg>=0.30.0` — async Postgres driver (full-async pivot, 2026-04-11). Fallback: `psycopg[binary,pool]>=3.2.0` if Spike 2 (driver compat) fails — see `CLAUDE.md` pre-Wave-0 spike sequence and Agent B risk matrix.
 - `pytest-asyncio>=0.25.0` (dev) OR equivalent anyio config — required for async test harness
 - `structlog>=24.4.0` — structured logging with async contextvar propagation (Agent E Category 16 idiom upgrade; major async debuggability win)
@@ -2088,75 +2037,15 @@ Eight waves imply safety via backward-compat seams — exactly what the user rej
 
 ---
 
-## 18. Async SQLAlchemy in v2.0 Waves 4-5 (absorbed, not deferred)
+## 18. Async SQLAlchemy (absorbed into v2.0 at Layers 5-7)
 
-**Pivoted 2026-04-11** — what was originally a separate follow-on is now absorbed into v2.0 as Phase 4+ (Waves 4-5). See `async-pivot-checkpoint.md` for the full target state, risk register, and revised scope estimate.
-
-**Scope (per checkpoint §3):**
-- Convert `create_engine` → `create_async_engine` in `src/core/database/database_session.py`
-- Convert `Session` → `AsyncSession` via `async_sessionmaker(_engine, class_=AsyncSession, expire_on_commit=False)` — the `expire_on_commit=False` setting is critical for async because committed-object lazy loads otherwise trigger `MissingGreenlet`
-- Convert all repository classes to `async def` methods; use `await session.execute(select(...))` + `.scalars()` rather than sync `session.scalars(...).first()`
-- Convert UoW classes to `async def __aenter__` / `async def __aexit__` (or delete them entirely under the Agent E idiom upgrade: FastAPI's request-scoped session IS the unit of work)
-- Driver swap: `psycopg2-binary` → `asyncpg` (~6 URL rewrite sites); alembic env.py async adapter
-- Convert remaining sync `_impl` functions in `src/core/tools/*.py` to `async def` (several are already async)
-- Convert `tests/harness/_base.py::IntegrationEnv` to `async def __aenter__` / `async def __aexit__`; mass-convert integration tests to `async def` + `@pytest.mark.asyncio`
-- Adapt `factory_boy` — see checkpoint §3 "factory_boy" for the three options to evaluate
-- Audit every `relationship()` access site for lazy-load out of session scope (Risk #1 — the single biggest v2.0 scope risk)
-- Bump `pool_size` to match or exceed the pre-migration sync threadpool capacity (Risk #6)
-
-**Why absorbed, not separable:** the original "separable" argument assumed a sync `def` admin-handler seam with explicit `run_in_threadpool` calls. Under the pivot, that seam never exists — admin handlers go straight to async, and extracting sync UoW call-sites would be a second refactor on the same files. Absorbing the work means one migration, one branch, one release.
-
-**Pre-Wave-0 spike (MANDATORY):** run the lazy-loading audit (checkpoint §4 Risk #1) before committing to the Wave 4-5 scope. If the audit reveals the scope is untenable (hundreds of out-of-scope relationship accesses with no clean fix), fall back to Option C: Phases 0-3 as originally planned with sync admin + Phase 4+ does async separately.
-
----
-
-## 18.5 Non-Code Surface Impact (Agent F inventory)
-
-The async pivot touches 27+ categories of non-code surface (per `async-audit/agent-f-nonsurface-inventory.md`). Highlights:
-
-### Dep graph (9 action items, ~2h effort)
-- `psycopg2-binary` → `asyncpg>=0.30.0,<0.32` swap
-- `types-psycopg2` removal (mypy)
-- `greenlet` explicitly verified in uv.lock
-- `pytest-asyncio>=1.1.0,<2.0` pinned
-- `factory-boy` needs async adapter (custom wrapper at `tests/factories/_async_adapter.py`)
-
-### Build + CI (15 action items, ~6h effort)
-- `[tool.pytest.ini_options] asyncio_mode = "auto"` MUST be added pre-Wave-0
-- Postgres version aligned to 17 across all CI/compose/agent-db
-- New `tox -e driver-compat` env
-- New `tox -e benchmark` env
-- Dead `test-migrations` pre-commit hook removed
-- 5 new pre-commit hooks for async patterns
-
-### Docker + deployment (12 action items, ~4h effort)
-- `Dockerfile` libpq removal (save ~8MB)
-- `scripts/deploy/run_all_services.py` has THREE sync-psycopg2 paths that break (see deep-audit §2.9)
-- `scripts/deploy/entrypoint_admin.sh:9` has a direct `psycopg2.connect()` probe
-- `DatabaseConnection` class at `src/core/database/db_config.py:105-172` is a separate sync-DB path
-
-### Observability (10 action items, ~8h effort)
-- `/health/pool`, `/health/schedulers`, `/metrics` endpoints (new)
-- DB pool Prometheus gauges (new)
-- asyncio task gauge, event loop lag histogram (new)
-- `contextvars`-based request-ID propagation (replaces thread-local)
-
-### Docs (20+ action items, ~15h effort)
-- CLAUDE.md Pattern #3, #5, #8 async updates
-- `docs/development/patterns-reference.md` repository example
-- `docs/development/troubleshooting.md` async error section (new)
-- `docs/deployment/environment-variables.md` DB_POOL_SIZE etc
-- NEW: `docs/development/async-debugging.md`
-- NEW: `docs/development/async-cookbook.md`
-- NEW: `docs/development/lazy-loading-guide.md`
-- NEW: `docs/development/asyncpg-migration.md`
-
-### Structural guards (10 action items, ~25h effort)
-- **3 new MUST-0 guards:** no-default-lazy-relationship, no-server-default-without-refresh, no-module-level-get-engine
-- **3 new MUST-4 guards:** admin-routes-async, admin-async-db-access, templates-no-orm-objects
-- Update 22 existing guards' allowlists as Wave 4 progresses
-
-**Total non-code effort:** ~60 engineer-hours = ~8 person-days spread across Waves 0, 4, 5. See `async-audit/agent-f-nonsurface-inventory.md` for the per-item breakdown.
+> **Superseded by `execution-plan.md` (L5 canonical plan) and `flask-to-fastapi-foundation-modules.md` §11.18–§11.27 (package-native async patterns).** The pre-pivot §18 described async as a v2.1 follow-on; the 2026-04-11 pivot absorbed async into v2.0, and the 2026-04-14 layering sequenced it as L5 (after Flask removal at L2 and FastAPI-native pattern refinement at L4).
+>
+> For current guidance:
+> - **Per-layer work items (L5a–L5e):** `execution-plan.md` Layers 5–7
+> - **Canonical async patterns and modules:** `flask-to-fastapi-foundation-modules.md` §11.18–§11.27
+> - **Non-code surface inventory (Agent F):** `async-audit/agent-f-nonsurface-inventory.md` (archived; findings absorbed into `implementation-checklist.md` per-layer checklists)
+> - **Decision history (async pivot arc):** `async-pivot-checkpoint.md`
 
 ---
 
@@ -2318,6 +2207,6 @@ Research and design was gathered during a single Claude Code session on 2026-04-
 
 **User decisions gathered via 2 rounds of AskUserQuestion:**
 - Template strategy (Option B), CSRF (roll-your-own), URL prefix (`/admin/`), secret handling (hard-required)
-- ~~Async DB (separate PR)~~ **PIVOTED 2026-04-11: async DB absorbed into v2.0 Phase 4+ (Waves 4-5) per `async-pivot-checkpoint.md`.** Error-shape split (category 1 native / category 2 compat) — unchanged.
+- ~~Async DB (separate PR)~~ **PIVOTED 2026-04-11, LAYERED 2026-04-14: async DB absorbed into v2.0 at L5-L7 per `async-pivot-checkpoint.md` and `execution-plan.md`.** Error-shape split (category 1 native / category 2 compat) — unchanged.
 
 **This document is canonical for v2.0.0 Flask → FastAPI migration planning.** When a future session needs to revisit this work, start here, then consult the plan file at `/Users/quantum/.claude/plans/squishy-meandering-marshmallow.md` for the latest snapshot.

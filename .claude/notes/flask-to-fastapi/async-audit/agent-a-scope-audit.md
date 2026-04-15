@@ -1,6 +1,11 @@
 # Agent A — Async Conversion Scope Audit
 
-> **ASYNC IS PHASE 4+ WITHIN v2.0 (2026-04-14).** Phases 0-3 use sync admin handlers. This report is the Phase 4+ implementation roadmap. Do not implement async patterns from this file during Phases 0-3 (Flask removal).
+> **[ARCHIVED REFERENCE — 2026-04-14]** This report is a preserved artifact from the 3-round verification process (Apr 11-14) that produced the v2.0 8-layer execution model. For current implementation guidance, see:
+> - `../CLAUDE.md` — mission briefing + 8-layer model
+> - `../execution-plan.md` — layer-by-layer work items
+> - `../implementation-checklist.md` — per-layer gate checklist
+>
+> This file is preserved for institutional memory only. Its recommendations have been absorbed into the canonical docs above. Do NOT use this file as a primary reference for implementation decisions.
 
 **Date:** 2026-04-11
 **Author:** Agent A (Opus scoping subagent, post-pivot)
@@ -651,6 +656,8 @@ This is slightly longer than the checkpoint's 4-6 week estimate, driven primaril
 ## 6. Pre-Wave-0 spike checklist (3-5 days, mandatory)
 
 **This is the go/no-go gate. Execute each spike and record results. If ANY spike fails, fall back to v2.0 sync + v2.1 async.**
+
+> **Archived-report alignment note (2026-04-14):** the canonical spike list is now 10 technical spikes + 1 decision gate (Spike 8) = 11 items, codified in `CLAUDE.md` §"v2.0 Spike Sequence". The per-spike details below predate Spikes 4.25, 4.5, 5.5, and 7 (GAM adapter threadpool saturation). Consult the CLAUDE.md canonical table for current gate thresholds.
 
 1. **Spike 1 — AsyncSession + asyncpg smoke test (1 day)**
    - Create branch `spike/async-db-smoke`

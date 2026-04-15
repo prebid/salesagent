@@ -1,15 +1,12 @@
 # Flask → FastAPI v2.0.0 Migration — Mission Briefing
 
-> **v2.0 STRATEGIC LAYERING (2026-04-14) — Phases 0-3 use SYNC, Phase 4+ converts to ASYNC.**
+> **v2.0 STRATEGIC LAYERING (2026-04-14) — Layers 0-4 use SYNC, Layers 5-7 convert to ASYNC and polish.**
 >
-> v2.0 includes the FULL migration: Flask removal (Phases 0-3, sync handlers) followed by
-> async conversion (Phase 4+). The April 11 async pivot was reversed for Phase 0-3 after
-> cost-benefit analysis — sync `def` admin handlers (Option C from deep audit §1.4) are correct
-> during Flask removal. Async SQLAlchemy is Phase 4+ within v2.0, sequenced after Flask is gone.
+> v2.0 includes the FULL migration: Flask removal (L0-L2, sync handlers), test-harness modernization (L3), FastAPI-native pattern refinement still sync (L4), async conversion (L5), native refinements (L6), polish and ship (L7). The April 11 async pivot was reversed for L0-L4 after cost-benefit analysis — sync `def` admin handlers (Option C from deep audit §1.4) are correct during Flask removal. Async SQLAlchemy is Layer 5+ within v2.0, sequenced after Flask is gone and after the sync `SessionDep` boundary exists (so async becomes a 1-file alias flip at L5b, followed by mechanical conversion of ~60 commit sites and ~200 scalars/execute sites).
 >
-> The `async-pivot-checkpoint.md` and `async-audit/` reports are the Phase 4+ implementation roadmap.
+> The `async-pivot-checkpoint.md` and `async-audit/` reports are the L5-L7 implementation roadmap.
 
-**Mission:** Migrate `src/admin/` (Flask blueprints + Jinja templates + session auth) to FastAPI with **sync `def` admin handlers** (Phases 0-3), then convert to full async (Phase 4+), without breaking the AdCP MCP/REST surface, OAuth callbacks, or the ~147 template refs that depend on `request.script_root`. Async SQLAlchemy is Phase 4+ within v2.0.
+**Mission:** Migrate `src/admin/` (Flask blueprints + Jinja templates + session auth) to FastAPI with **sync `def` admin handlers** (L0-L4), then convert to full async (L5) and polish (L6-L7), without breaking the AdCP MCP/REST surface, OAuth callbacks, or the ~147 template refs that depend on `request.script_root`. Async SQLAlchemy is Layer 5+ within v2.0.
 
 **Branch:** `feat/v2.0.0-flask-to-fastapi` — Flask removal + admin rewrite using sync handlers, one PR per wave, merged to main.
 
@@ -23,6 +20,61 @@ The **source of truth** for "am I ready to ship Wave N?" is `implementation-chec
 
 ---
 
+## Ownership & Bus-Factor Policy
+
+> **Why this section exists:** A 72–110 engineer-day migration with an irreversible cut (L2) and async-conversion cliff (L5) cannot be bus-factor 1. This section assigns the named roles, defines the handoff protocol, and sets the reviewer-rotation rules that prevent single-person concentration. All `[TO BE ASSIGNED]` entries must be populated **before L0 sprint kickoff** — the assignment is itself a gate.
+
+### Roles
+
+| Role | Responsibility | Assignment |
+|------|----------------|-----------:|
+| **Primary migration lead** | Drives the layer sequence, owns the rollout calendar, arbitrates layer-scope disputes, authors layer-entry gate sign-offs. | [TO BE ASSIGNED] |
+| **Backup lead** | Shadows the primary lead; authorized to run any L0-L4 layer entry/exit in the primary's absence. Escalation path for L5+ decisions when primary is unavailable. | [TO BE ASSIGNED] |
+| **Security reviewer** | Owns the CSRF/session/OAuth/rate-limit/security-headers review gates. Mandatory reviewer on L1b (OAuth cutover), L2 (SecurityHeaders + rate-limits lands), and any PR touching `src/admin/csrf.py`, `src/admin/sessions.py`, `src/admin/oauth.py`, `src/admin/rate_limits.py`, or `src/admin/middleware/security_headers.py`. | [TO BE ASSIGNED] |
+| **Incident commander** | First-responder for any production-impacting incident during the migration bake windows (L1a flag flip, L1b OAuth cutover, L2 Flask removal 48h, L5b SessionDep flip, L5c pilot bake, L5d* per-sub-PR bakes, L7 release). Owns the `admin-migration-health` dashboard (§6.5). | [TO BE ASSIGNED] |
+
+### Bus-factor policy
+
+**Minimum 2 engineers must be capable of executing a rollback at any layer.** Before entering a layer with a rollback procedure in §5, both the primary and backup must have:
+- Read the rollback section for that layer
+- Walked through the procedure in staging at least once (simulated rollback)
+- Confirmed they have the necessary credentials (container registry access, DB access, feature-flag service access)
+
+If either engineer is unavailable (vacation, illness, leaving the team), the layer does not enter. Re-assign before proceeding.
+
+### Handoff protocol
+
+When the primary-lead role transfers (planned or unplanned):
+
+1. **2-day minimum hand-off period.** The incoming lead shadows the outgoing lead for 2 business days before taking the lead role.
+2. **Written handoff document.** The outgoing lead writes a handoff note covering: current layer, next 3 decision points, known risks not yet mitigated, pending PRs, communication threads with reviewers/stakeholders.
+3. **Handoff log.** Every handoff is appended to `docs/development/migration-handoffs.md` with date, outgoing lead, incoming lead, layer at handoff, and link to the handoff note.
+4. **Re-ratification of assignments.** When the primary lead changes, confirm backup-lead, security-reviewer, and incident-commander assignments are still accurate; update this section if any role also changes.
+
+### Reviewer rotation
+
+**No single reviewer approves more than 3 consecutive layer PRs.** After 3 consecutive approvals by the same reviewer, a rotation is mandatory — another qualified reviewer approves the next layer PR. Rationale: fresh eyes catch pattern-drift that a reviewer steeped in the same sequence will rationalize.
+
+Exceptions: the security reviewer is exempt from rotation for security-critical layers (L1b, L2 security work) — their repeated review IS the security coverage model.
+
+### Time-off blackout windows
+
+The following layers have blackout windows during which no one on the named roles may be on scheduled leave:
+
+- **L1b** — OAuth cutover + 48h bake
+- **L2** — Flask removal + 48h bake
+- **L5d3** — Bulk async router conversion (largest single PR in L5)
+- **L5e** — Final async sweep
+- **L7** — Release layer
+
+If a blackout coincides with pre-scheduled leave, the layer entry is deferred until the blackout window is clear. Blackout windows are announced at layer planning, not at layer entry.
+
+### Assignment deadline
+
+**All roles must be populated before L0 sprint kickoff.** L0 entry gate includes a checklist item: `All Ownership & Bus-Factor Policy roles assigned in .claude/notes/flask-to-fastapi/CLAUDE.md`. The assignment PR updates this file and lists the names inline (replacing `[TO BE ASSIGNED]`).
+
+---
+
 ## Critical Invariants (the 6 deep-audit blockers)
 
 These were surfaced by the 2nd/3rd-order audit. Every one of them has shipped-breaking potential. Do not touch admin code without understanding all six.
@@ -33,25 +85,110 @@ These were surfaced by the 2nd/3rd-order audit. Every one of them has shipped-br
 
 3. **`@app.exception_handler(AdCPError)` HTML regression.** Admin user clicks a button, the handler returns a JSON blob to the browser, user sees raw JSON. **Fix:** Accept-aware handler — render `templates/error.html` when `Accept: text/html` and path starts with `/admin/`; JSON otherwise. This is intentionally different from the JSON-only handler currently at `src/app.py:82-88`. See `flask-to-fastapi-deep-audit.md` §1 (blocker 3).
 
-4. **Admin handlers default to sync `def`, NOT `async def` (scoped_session event-loop bug).** FastAPI runs sync `def` handlers in a threadpool, which is safe with `scoped_session` (thread-local identity). `async def` handlers share the event loop's single thread, causing transaction interleaving via `scoped_session`. **Fix:** All admin route handlers use sync `def`. Async SQLAlchemy (`AsyncSession`, `asyncpg`) is Phase 4+ within v2.0 (after Flask removal in Phases 0-3). See `flask-to-fastapi-deep-audit.md` §1.4 (Option C). The `async-pivot-checkpoint.md` and `async-audit/` reports are the Phase 4+ implementation roadmap.
+4. **Admin handlers default to sync `def`, NOT `async def` (scoped_session event-loop bug).** FastAPI runs sync `def` handlers in a threadpool, which is safe with `scoped_session` (thread-local identity). `async def` handlers share the event loop's single thread, causing transaction interleaving via `scoped_session`. **Fix:** All admin route handlers use sync `def` through L4. Async SQLAlchemy (`AsyncSession`, `asyncpg`) is Layer 5+ within v2.0 (after Flask removal in L2 and FastAPI-native pattern refinement in L4). **Exception:** L1 permits `async def` in OAuth callback handlers where Authlib's Starlette integration requires it — these are the only async-def admin handlers through L4, and they use `with get_db_session()` (sync context) for DB access. See `flask-to-fastapi-deep-audit.md` §1.4 (Option C). The `async-pivot-checkpoint.md` and `async-audit/` reports are the L5-L7 implementation roadmap.
 
-5. **Middleware ordering: Approximated BEFORE CSRF.** Counterintuitive but correct. If CSRF fires first, an external-domain POST user fails CSRF validation (403) before the Approximated redirect can fire (should be 307). Also switch the redirect from 302 → 307 to preserve the POST body. **CSRF strategy decided (2026-04-11): Option A — `SameSite=Lax` session cookie + `CSRFOriginMiddleware` (~70 LOC pure-ASGI Origin header validation).** NOT double-submit cookie — that would require changing ~80 fetch calls + ~47 forms for zero practical security gain. Key insight: the planned `SameSite=None` in production was solely for EventSource (SSE); Decision 8 deletes SSE, so `SameSite=Lax` is correct in all environments. `HttpOnly=True` also restored (SSE was the only reason for `False`). Zero JavaScript changes, zero template changes, zero form changes. See `flask-to-fastapi-deep-audit.md` §1 (blocker 5).
+5. **Middleware ordering: Approximated BEFORE CSRF.** Counterintuitive but correct. If CSRF fires first, an external-domain POST user fails CSRF validation (403) before the Approximated redirect can fire (should be 307). Also switch the redirect from 302 → 307 to preserve the POST body. **CSRF strategy decided (2026-04-11): Option A — `SameSite=Lax` session cookie + `CSRFOriginMiddleware` (~70 LOC pure-ASGI Origin header validation).** NOT double-submit cookie — that would require changing ~80 fetch calls + ~47 forms for zero practical security gain. Key insight: the planned `SameSite=None` in production was solely for EventSource (SSE); Decision 8 deletes SSE, so `SameSite=Lax` is correct in all environments. `HttpOnly=True` also restored (SSE was the only reason for `False`). Zero JavaScript changes, zero template changes, zero form changes. See `flask-to-fastapi-deep-audit.md` §1 (blocker 5). **OIDC callback footnote:** `/admin/auth/oidc/callback` is CSRF-exempt and uses a separate `SameSite=None; Secure; HttpOnly` transit cookie for `{state, nonce, code_verifier}` across the cross-origin `form_post` response. See `foundation-modules.md §11.6.1` for the full `oauth_transit.py` module + exempt-path entry + state-validation replacement for Origin validation on this path.
 
 6. **OAuth redirect URI byte-immutability.** The paths `/admin/auth/google/callback`, `/admin/auth/oidc/callback` (**NOT** `/admin/auth/oidc/{tenant_id}/callback` — tenant context is in the session, not the URL; corrected per FE-3 audit 2026-04-11), and `/admin/auth/gam/callback` (**NOT** `/auth/gam/callback` — the `/admin` prefix is part of the registered URI; corrected per FE-3 audit 2026-04-11) are registered in Google Cloud Console and per-tenant OIDC provider configs. Any path change — including trailing slash, case, or prefix drift — yields `redirect_uri_mismatch` and login is dead. See `flask-to-fastapi-deep-audit.md` §1 (blocker 6).
+
+---
+
+## Test-Before-Implement Discipline
+
+Every work item in L0-L7 follows this 7-step cycle. The discipline is enforced at PR review — the feature branch preserves Red/Green granularity even when the PR squash-merges.
+
+### The 7-step cycle
+
+1. **Spec the obligation** — write a single sentence describing the invariant. Example: "Admin handlers never return JSON to browsers for AdCPError."
+2. **Pick the test layer** — structural guard (AST scan), unit (behavior in isolation), integration (DB + FastAPI), e2e (full stack), or golden-fingerprint (byte-parity comparison).
+3. **Write the failing test** — run it; verify it fails for the **expected semantic reason**, NOT ImportError/NameError/SyntaxError. The failure must demonstrate the obligation is unmet by current code.
+4. **Commit the test alone** — `git commit -m "test: obligation X — expected failing"`. The Red state is now in feature-branch history; CI will show one red build.
+5. **Implement the minimum change** — no gold-plating, no adjacent refactors, no speculative generality.
+6. **Commit impl with the same test now passing** — `git commit -m "feat: X satisfies obligation"`. CI shows green.
+7. **Codify as structural guard if category-recurring** — if the violation could appear in any future file (not just this one), convert to an AST-scanning guard with ratcheting allowlist. Use the `/write-guard` skill.
+
+### Escape hatches
+
+The discipline is NOT ceremonial theater — it has legitimate escapes for:
+
+- **Pure mechanical renames** (codemod-style `blueprint → router`, `Phase → Layer`): the test IS the codemod. Re-running the codemod on a pristine tree and diffing against the expected output is the assertion. One commit is fine.
+- **Documentation-only edits** (`docs/`, `.claude/notes/`, `CLAUDE.md` prose): no test needed.
+- **Infrastructure/config** (`pyproject.toml`, `tox.ini`, Dockerfile, `.pre-commit-config.yaml`): CI itself is the assertion — `make quality` passing is the test.
+- **Dependency bumps**: golden-fingerprint diff is the test; no new test file needed.
+- **Deletion of dead code** (verified unused via existing structural guard): the guard's green state is the assertion.
+
+Each escape uses a commit trailer declaring the waiver:
+
+```
+docs: clarify L5 async conversion sub-layering
+
+discipline: N/A - docs-only edit
+```
+
+```
+chore: bump httpx to 0.28.0
+
+discipline: N/A - dep bump; golden fingerprints unchanged
+```
+
+### Post-hoc verification
+
+On the feature branch, BEFORE squash-merge, run:
+
+```bash
+git log main..HEAD --pretty=format:"%H %s" | awk '
+  /^[a-f0-9]+ test:/ { red_sha=$1; red_msg=$0; next }
+  /^[a-f0-9]+ (feat|fix|refactor):/ {
+    if (red_sha) {
+      print "PAIR OK: " red_msg " → " $0
+      red_sha=""; red_msg=""
+    } else {
+      # Non-paired impl — check for discipline: N/A trailer in commit body
+      cmd = "git show --no-patch --format=%B " $1 " | grep -q \"^discipline: N/A\""
+      if (system(cmd) != 0) {
+        print "MISSING TEST: " $0
+      }
+    }
+  }
+  /^[a-f0-9]+ (chore|docs|style):/ { next }
+'
+```
+
+Strict mode: any `MISSING TEST` fails the pre-merge check. Reviewer runs this before hitting Squash Merge.
+
+### Migration-specific applications
+
+- **Porting a Flask route** → golden-fingerprint test written (fails because FastAPI router doesn't exist yet) → commit red → port route → fingerprint matches → commit green.
+- **Deleting `src/admin/app.py`** → `test_architecture_no_flask_imports.py` with empty allowlist written → fails because `create_app` is imported by 5+ files → commit red → sweep imports → commit green.
+- **Adding CSRFOriginMiddleware** → 7 Origin-scenario pytest cases written against unimplemented `src.admin.csrf.CSRFOriginMiddleware` → fail with ImportError (expected — module doesn't exist yet) → commit red → implement middleware → all 7 pass → commit green.
+- **Converting a handler to `async def`** → `test_<handler>_async.py` using `AsyncClient` written → fails because sync `def` can't be awaited → commit red → flip signature + body → commit green.
+
+### What the discipline PREVENTS
+
+- Reviewer can't tell if a test was written ad-hoc after the fix vs designed to catch the bug (the Red state in history is the proof).
+- "I'll add tests later" drift — there is no "later"; Red-first is the entry condition.
+- Gold-plating — the minimum-to-green rule constrains implementation scope.
+- Mystery regressions from refactors — each refactor carries a test that proves it didn't break the pre-existing behavior.
+
+### Cross-references
+
+- Matrix row 48 in `implementation-checklist.md` §4.6 (meta-guard) enforces allowlist monotonicity across all tests written under this cycle.
+- Layer-scope commit-lint in `flask-to-fastapi-foundation-modules.md` §11.27 enforces that the per-cycle commits stay within a single declared layer.
 
 ---
 
 ## Recommended reading order (fresh reader, ~2 hours)
 
 1. **This file** — you are here. Mission, blockers, map.
-2. **`execution-plan.md`** — START HERE for implementation. Canonical sync patterns and 7-phase definitions.
-3. **`flask-to-fastapi-migration.md` §1–§2.8** — overall context, Phase 1 vs Phase 2 framing, AdCP boundary verification, deep-audit summary. Skim the rest.
-3. **`flask-to-fastapi-deep-audit.md` §1–§2** — read the 6 blockers and the risk register in full detail. This is the single most important read after the overview.
-4. **`implementation-checklist.md`** — know what the per-wave acceptance criteria actually are. This is the "am I ready?" source of truth.
+2. **`execution-plan.md`** — START HERE for implementation. Canonical sync patterns and 8-layer (L0-L7) definitions.
+3. **`implementation-checklist.md`** — per-layer acceptance criteria; the "am I ready?" source of truth.
+4. **`flask-to-fastapi-deep-audit.md` §1–§2** — the 6 blockers and the risk register in full detail.
 5. **`flask-to-fastapi-adcp-safety.md`** — confirm the AdCP boundary is clear; note the 8 first-order action items.
 6. **`flask-to-fastapi-foundation-modules.md`** — reference only. Read the module you are about to implement; do not read end-to-end.
 7. **`flask-to-fastapi-worked-examples.md`** — reference only. Read the example that matches the blueprint you are translating.
-8. **`flask-to-fastapi-execution-details.md`** — reference only. Read the wave you are currently shipping.
+8. **`flask-to-fastapi-execution-details.md`** — reference only. Read the layer you are currently shipping.
+9. **[Historical reference]** **`flask-to-fastapi-migration.md` §1–§2.8** — predates 8-layer rename. Skim only for high-level context.
+10. **[Decision history]** **`async-pivot-checkpoint.md`** and **`async-audit/*.md`** — archived verification artifacts. Not current guidance.
 
 ---
 
@@ -60,10 +197,10 @@ These were surfaced by the 2nd/3rd-order audit. Every one of them has shipped-br
 | File | When to read | Detail level |
 |---|---|---|
 | `CLAUDE.md` (this file) | First, always | Entry point / map |
-| **`execution-plan.md`** | **START HERE for implementation** | **7 phases in strict order, standalone briefings** |
+| **`execution-plan.md`** | **START HERE for implementation** | **8 layers (L0-L7) in strict order, standalone briefings** |
 | `implementation-checklist.md` | Tick boxes AFTER completing work | Verification tracking, 55 audit findings |
-| `async-pivot-checkpoint.md` | Before touching async/DB code | Target state (corrected 2026-04-12) |
-| `flask-to-fastapi-migration.md` | Context pass (reference only) | Overview |
+| `async-pivot-checkpoint.md` | **[Historical reference]** Decision-history artifact; not current guidance | Target state (corrected 2026-04-12) |
+| `flask-to-fastapi-migration.md` | **[Historical reference]** Predates 8-layer rename; skim for context only | Overview |
 | `flask-to-fastapi-deep-audit.md` | Before writing admin code | 6 blockers + 20 risks |
 | `flask-to-fastapi-adcp-safety.md` | Before touching MCP/REST surface | 1st-order audit |
 | `flask-to-fastapi-foundation-modules.md` | When implementing a foundation module | Full code + tests |
@@ -111,7 +248,7 @@ After the database audit, a third audit round focused on the frontend surfaces i
 
 ### ~~Open decisions blocking Wave 4~~ Decision triage (async pivot reversed 2026-04-12)
 
-> **Wave 4 (async DB layer) is Phase 4+ within v2.0.** Of the 9 decisions below, 4 are PHASE 4+ (Decisions 1, 3, 7, 9 — activated after Flask removal), 4 are UNCHANGED (Decisions 2, 4, 5, 8), and 1 is REDUCED (Decision 6). The full text below is the Phase 4+ implementation plan.
+> **Async DB layer is Layer 5+ within v2.0.** Of the 9 decisions below, 4 are L5+ (Decisions 1, 3, 7, 9 — activated after Flask removal and FastAPI-native pattern refinement), 4 are UNCHANGED / applied throughout (Decisions 2, 4, 5, 8), and 1 is REDUCED (Decision 6). Decision 7 (ContextManager refactor) is specifically scheduled for **L4** (not L5d) so that L5 is a pure async-idiom conversion with no structural surgery. The full text below is the L5+ implementation plan.
 
 The 9 questions Agent A identified. **Decisions 1, 7, and 9 were resolved via ultrathink deep-think analysis on 2026-04-11** (3 parallel Opus subagents, each producing 1st/2nd/3rd-order derivative analysis). Decisions 2, 3, 5, 8 were resolved earlier by Audit 06 (see meta-audit round). Decisions 4 and 6 are mechanical Wave 4 work, not blockers. **Ledger closed.**
 
@@ -125,22 +262,41 @@ The 9 questions Agent A identified. **Decisions 1, 7, and 9 were resolved via ul
 8. **SSE session lifetime** — **RESOLVED (Decision 8 deep-think 2026-04-11): DELETE the SSE route entirely.** Audit 06 said "already correct, just async I/O upgrades" — correct about session-per-tick (verified: `get_recent_activities()` at `activity_stream.py:167` does open/close per call, ~5ms), but wrong about the scope. The `/tenant/{id}/events` SSE route at `activity_stream.py:226-364` is **orphan code** — `templates/tenant_dashboard.html:972` literally says `// Use simple polling instead of EventSource for reliability` and fetch-polls `/tenant/{id}/activity` (JSON) at 5s intervals (`:978`). Zero `new EventSource(` exists in `templates/` or `static/`. Only `/events` callers are `tests/integration/test_admin_ui_routes_comprehensive.py:367-370` (smoke probe) and `docs/development/troubleshooting.md:74`. Wave 4 deletes: SSE route + generator + rate-limit state (`MAX_CONNECTIONS_PER_TENANT`, `connection_counts`, `connection_timestamps`) + HEAD probe + smoke test + docs line + `sse_starlette` dependency in `migration.md:749`. Net: **−170 LOC, −3 unwritten test files, −1 pip dep (`sse_starlette`)**. Two surviving routes (`/activity` JSON poll + `/activities` REST) convert mechanically: `def → async def`, `with → async with get_db_session()`, `db_session.scalars(stmt).all() → (await db_session.execute(stmt)).scalars().all()`. Additionally fix `api_mode=False → api_mode=True` on the JSON poll route (pre-existing bug — JS `fetch` sees HTML 302 redirect on auth failure, never gets the 401 the template expects). Structural guard `tests/unit/test_architecture_no_sse_handlers.py` asserts zero `EventSourceResponse`/`StreamingResponse(mimetype="text/event-stream")` in `src/admin/routers/`. **2026-04-11 decision (supersedes Audit 06 SUBSTITUTE).**
 9. **`src/services/background_sync_service.py`** — **RESOLVED: Option B sync-bridge.** Service runs multi-hour GAM inventory sync jobs via `threading.Thread` workers, incompatible with async SQLAlchemy (asyncpg `pool_recycle=3600` rotates mid-session, identity map grows unbounded over hours, Fly.io TCP keepalives expire). **Fix:** new `src/services/background_sync_db.py` module with a separate sync psycopg2 engine and `get_sync_db_session()` factory. Background threads use the sync-bridge; async request path is untouched. `psycopg2-binary` + `types-psycopg2` + `libpq-dev` + `libpq5` all retained (partial reversal of Agent F F1.1.1/F1.2.1). Also fixes the Wave 3 `from flask import current_app` ImportError at line 472 (replaced with `SimpleAppCache` helper, see Decision 6). Scope guarded by `tests/unit/test_architecture_sync_bridge_scope.py` — a ratcheting allowlist containing ONLY `background_sync_service.py`. Validated by pre-Wave-0 **Spike 5.5** (0.5 day, soft blocker — fallback is Option A: asyncio task + single async session per sync, suboptimal but viable). Sunset target v2.1+ (phase-per-session async refactor). Docker image savings adjust from ~80MB to ~75MB (libpq stays). Other long-running services (`background_approval_service`, `order_approval_service`) have bounded durations <`pool_recycle=3600` and do NOT need the sync-bridge — they convert to async normally. **2026-04-11 decision.**
 
-### ~~Mandatory pre-Wave-0 spike sequence~~ DEFERRED TO PHASE 4+
+### v2.0 Spike Sequence (Canonical — 10 technical spikes + 1 decision gate)
 
-> **All 10 spikes are Phase 4+ scope** (gating async conversion). Phases 0-3 require no validation spikes — sync SQLAlchemy is the existing proven pattern. The spike sequence below gates Phase 4 entry.
+Pre-L5 research spikes. Each has a HARD or SOFT gate; HARD = STOP and reassess if fail, SOFT = document and proceed. Spikes 1-7 are technical; Spike 8 is the aggregate go/no-go decision gate at L5a EXIT.
 
-Per Agent B §4 and Agent A §6, the 5.5-7.5 day spike sequence gates Wave 4-5 entry. **Expanded from 7 to 10 spikes on 2026-04-11** to add Spikes 4.25, 4.5 and 5.5 validating Decisions 3, 7 and 9 deep-think resolutions:
+| # | Spike | Gate | Layer | Estimate | Fail action |
+|---|-------|------|-------|----------|-------------|
+| 1 | Lazy-load audit (`lazy="raise"` on 68 relationships) | HARD | L5a | 1-2 days | If >40 fixes or >2 days: ship L0-L4 only; defer async to v2.1. Do not abandon L0-L4. |
+| 2 | asyncpg vs psycopg3 driver compatibility | HARD | L5a | 1 day | If asyncpg incompatible: use psycopg[binary,pool]>=3.2.0; document perf delta |
+| 3 | Perf baseline capture (sync) | HARD | **L4 EXIT** | 0.5 day | Cannot skip — L5 comparison oracle |
+| 4 | 5-representative-test async conversion | SOFT | L5a | 1 day | Document patterns; feed into L5c pilot |
+| 4.25 | Factory-boy async shim (8 edge cases, Decision 3) | SOFT | L5a | 1 day | If fails: STOP Wave 4; reconsider polyfactory |
+| 4.5 | ContextManager stateless refactor validation (Decision 7) | SOFT | **L4** | 0.5-1 day | Refactor gets dedicated L4 sub-phase PR |
+| 5 | Scheduler alive-tick conversion (2 ticks) | SOFT | L5a | 0.5 day | Forced-shutdown deadlock check per Risk #26 |
+| 5.5 | Two-engine MVCC visibility (Decision 9) | SOFT | L5a | 0.5 day | Revert to Option A if fails (suboptimal but viable) |
+| 6 | Alembic async env.py evaluation | SOFT | L5a | 0.5 day | Default: keep env.py sync per database-deep-audit |
+| 7 | GAM adapter threadpool saturation test | SOFT | L5a | 0.5 day | Informs threadpool size + per-adapter CapacityLimiter |
+| **8** | **L5 go/no-go decision gate** (aggregates 1-7 + writes spike-decision.md) | **HARD** | **L5a EXIT** | 0.5 day | **Decision point**: proceed full async, reduce scope, OR ship L0-L4 only and defer async to v2.1 |
 
-1. **Spike 1 — Lazy-load audit** (HARD GATE): set `lazy="raise"` on all 68 relationships (verified 2026-04-12 by grep of `models.py`), run `tox -e integration`. Pass: <40 failures fixable in <2 days. **Fail = abandon absorbed-async, revert to sync-def Option C + defer async to v2.1.**
+**Total spike budget:** 5.5-8 days.
+
+Spike 8 is NOT a technical spike — it is the formal decision gate at L5a end. This resolves the 10-vs-11 count ambiguity: **"10 technical spikes + 1 decision gate = 11 total pre-L5b work items."**
+
+**Per-spike detail** (retained from prior draft; used by `execution-details.md` and `implementation-checklist.md` for acceptance criteria):
+
+1. **Spike 1 — Lazy-load audit** (HARD GATE): set `lazy="raise"` on all 68 relationships (verified 2026-04-12 by grep of `models.py`), run `tox -e integration`. Pass: <40 failures fixable in <2 days. **Fail = STOP L5, reassess scope, and either reduce the async surface or defer residual async to a v2.1 epic; do not abandon L0-L4 (sync Flask removal is already valuable standalone).** See `foundation-modules.md §11.29` for the eager-load decision matrix and Spike 1 failure-triage procedure.
 2. **Spike 2 — Driver compat**: run tests under `asyncpg`. Fail = switch to `psycopg[binary,pool]>=3.2.0`.
-3. **Spike 3 — Performance baseline**: capture sync latency on 20 admin routes + 5 MCP tool calls as `baseline-sync.json` for Wave 4 comparison. **Under Path B (Decision 1), the baseline includes adapter `run_in_threadpool` wraps** — Wave 5 benchmark parity measurements must NOT compare sync baseline vs "bare async" but vs "async + threadpool-wrapped adapters" since that is the v2.0 production shape.
+3. **Spike 3 — Performance baseline**: capture sync latency on 20 admin routes + 5 MCP tool calls as `baseline-sync.json` at the **L4 EXIT** (not L5a entry) — the async flip at L5b must be measurable against a baseline that already reflects the L4 pattern refinement (DTO boundary, structlog, SessionDep as sync alias). **Under Path B (Decision 1), the baseline includes adapter `run_in_threadpool` wraps** — L5 benchmark parity measurements must NOT compare sync baseline vs "bare async" but vs "async + threadpool-wrapped adapters" since that is the v2.0 production shape.
 4. **Spike 4 — Test harness**: convert `tests/harness/_base.py` + 5 representative tests; verify xdist + factory-boy work.
-5. **Spike 4.25 — Factory async-shim validation** (soft blocker, 0.5 day, Decision 3): create `tests/factories/_async_shim.py` per §11.13.1(D) recipe; temporarily flip `TenantFactory` to `AsyncSQLAlchemyModelFactory` base; run 8 edge-case tests: (a) SubFactory chain resolves without flush (monkey-patch `AsyncSession.flush` to raise), (b) `RelatedFactory` runs after parent add (`TenantFactory.currency_usd → CurrencyLimitFactory`), (c) `AccountFactory._create` override still works, (d) partial-error rollback via savepoint, (e) nested fixture guard fires, (f) wrong session type guard fires, (g) factory not in `ALL_FACTORIES` fails loudly, (h) 3-deep `AgentAccountAccessFactory` chain works. Pass: all 8 green, no `MissingGreenlet`. Fail action (HARD): recipe has a bug → STOP Wave 4 and re-analyze; at that point reconsider polyfactory.
-6. **Spike 4.5 — ContextManager refactor smoke test** (soft blocker, 0.5-1 day, Decision 7): rewrite `src/core/context_manager.py` as stateless async module functions, delete `DatabaseManager`, convert smallest caller (`src/core/tools/creatives/_workflow.py::_create_sync_workflow_steps`) end-to-end, update `tests/harness/media_buy_update.py` EXTERNAL_PATCHES, delete 18 lines of singleton-reset hacks in `conftest_db.py`/`integration_db.py`/`test_gam_lifecycle.py`. Pass: refactor size <400 LOC AND <15 files AND <50 test patches AND error-path composition test proves outer `session_scope()` rollback does NOT wipe error-logging writes (fail case: use separate `async with session_scope()` for error logs). Fail action (SOFT): refactor gets a dedicated Wave 4a sub-phase PR instead of being bundled into the pilot — not a gate failure on the pivot.
+5. **Spike 4.25 — Factory async-shim validation** (soft blocker, Decision 3): create `tests/factories/_async_shim.py` per §11.13.1(D) recipe; temporarily flip `TenantFactory` to `AsyncSQLAlchemyModelFactory` base; run 8 edge-case tests. Pass: all 8 green, no `MissingGreenlet`. Fail action (HARD): recipe has a bug → STOP Wave 4 and re-analyze; reconsider polyfactory.
+6. **Spike 4.5 — ContextManager refactor smoke test** (soft blocker, Decision 7): rewrite `src/core/context_manager.py` as stateless async module functions, delete `DatabaseManager`, convert smallest caller end-to-end. Pass: refactor size <400 LOC AND <15 files AND <50 test patches AND error-path composition test proves outer `session_scope()` rollback does NOT wipe error-logging writes. Fail action (SOFT): refactor gets a dedicated L4 sub-phase PR.
 7. **Spike 5 — Scheduler alive-tick**: convert 2 scheduler tick bodies; observe container logs.
-8. **Spike 5.5 — Two-engine coexistence** (soft blocker, 0.5 day, Decision 9): prove async asyncpg engine + sync psycopg2 engine coexist in one Python process. 4 test cases: (a) engine lazy-init + dispose cycle clean, (b) MVCC visibility bidirectional (async write → sync read, sync write → async read), (c) 5 concurrent async requests + 1 sync thread no deadlock, (d) post-dispose leaked connections ≤1 from baseline. Pass: all 4 green. Fail action (SOFT): revert to Option A (asyncio task + single async session per sync), suboptimal but viable — document in `spike-decision.md`.
+8. **Spike 5.5 — Two-engine coexistence** (soft blocker, Decision 9): prove async asyncpg engine + sync psycopg2 engine coexist. 4 test cases. Pass: all 4 green. Fail action (SOFT): revert to Option A — document in `spike-decision.md`.
 9. **Spike 6 — Alembic async**: rewrite `alembic/env.py`; run upgrade/downgrade roundtrip. Fallback: keep env.py sync.
-10. **Spike 7 — `server_default` audit**: grep + categorize columns; confirm <30 to rewrite.
+10. **Spike 7 — `server_default` audit**: grep + categorize columns; confirm <30 to rewrite. (In the canonical table above, row 7 is re-themed as "GAM adapter threadpool saturation test" per the 2026-04-14 canonicalization — both test series run in parallel; the `server_default` audit rolls into the Spike 1 fix inventory.)
+11. **Spike 8 — L5 go/no-go decision gate** (HARD): at L5a EXIT, commit `spike-decision.md` with: pass/fail summary per spike 1-7, `baseline-sync.json` comparison (if any L5 experiments were run on the spike branch), resolved status of the 9 open decisions (1-9), and the final go/no-go call. **Go condition:** Spike 1 PASSES AND no more than 2 soft spikes fail. **No-go condition:** Spike 1 FAILS OR more than 2 soft spikes fail — narrow L5 scope or defer async to v2.1 (L0-L4 ships regardless).
 
 ---
 
@@ -175,12 +331,12 @@ Plus orphan: `src/admin/server.py` (~103 LOC, standalone Flask runner via Waitre
 
 These are the places where "copy what the rest of the repo does" is **wrong**. Admin is different.
 
-- **Phases 0-3: Admin handlers use sync `def` with sync SQLAlchemy.** FastAPI auto-runs sync handlers in a threadpool where `scoped_session` thread-local identity works correctly. DB access uses `with get_db_session() as session:` inside the handler. No `SessionDep`, no `AsyncSession`, no `run_in_threadpool` for DB. Phase 4a introduces sync `SessionDep`; Phase 4c converts to async. See `execution-plan.md` Phase 0 for the canonical handler pattern.
+- **L0-L4: Admin handlers use sync `def` with sync SQLAlchemy.** FastAPI auto-runs sync handlers in a threadpool where `scoped_session` thread-local identity works correctly. DB access uses `with get_db_session() as session:` inside the handler. No `SessionDep`, no `AsyncSession`, no `run_in_threadpool` for DB. L4 introduces sync `SessionDep = Annotated[Session, Depends(get_session)]`; L5b re-aliases `SessionDep` to `AsyncSession` as a 1-file flip; L5c+ mechanically converts commit sites. See `execution-plan.md` Layer 0 for the canonical handler pattern.
 - **Middleware order: Approximated BEFORE CSRF.** Counterintuitive relative to standard stacks where CSRF sits near the outside. Here, Approximated's external-domain redirect must fire before CSRF sees the form body. See blocker 5.
 - **Templates use `{{ url_for('name', **params) }}` exclusively** — for admin routes AND static assets. No prefix variables, no Jinja globals holding URL strings, no `script_root`, no `admin_prefix`, no `static_prefix`. Every admin route has `name="admin_<blueprint>_<endpoint>"`; the static mount is `name="static"`. This is the FastAPI canonical pattern from the official docs, verified in `Jinja2Templates._setup_env_defaults` at `starlette/templating.py:118-129` (auto-registers `url_for` as a Jinja global that calls `request.url_for(...)` via `@pass_context`). `NoMatchFound` at render time on a missing name is caught pre-merge by `test_templates_url_for_resolves.py`.
 - **`AdCPError` handler branches on `Accept`.** For admin HTML browser users, render `templates/error.html`. For JSON API callers, return JSON. Different from the plain JSON-only handler at `src/app.py:82-88` — do not copy that one.
-- **Phases 0-3: Admin handlers use `with get_db_session() as session:` for DB access.** No `SessionDep`, no `Depends(get_session)`, no `AsyncSession`. The handler owns the session lifecycle via the sync context manager. Repositories are instantiated inside the `with` block. This is the same pattern as the existing Flask blueprints, just in FastAPI syntax. Phase 4a introduces `SessionDep = Annotated[Session, Depends(get_session)]` (still sync); Phase 4c re-aliases to `AsyncSession`.
-- **`FLASK_SECRET_KEY` is dual-read alongside `SESSION_SECRET`** during Phases 0-3 for dev ergonomics. It is hard-removed in Phase 5. Do not rip it out during Flask removal — you will break every dev's local `.env`.
+- **L0-L3: Admin handlers use `with get_db_session() as session:` for DB access.** No `SessionDep`, no `Depends(get_session)`, no `AsyncSession`. The handler owns the session lifecycle via the sync context manager. Repositories are instantiated inside the `with` block. This is the same pattern as the existing Flask blueprints, just in FastAPI syntax. L4 introduces `SessionDep = Annotated[Session, Depends(get_session)]` (still sync); L5b re-aliases to `AsyncSession`.
+- **`FLASK_SECRET_KEY` is dual-read alongside `SESSION_SECRET`** during L0-L6 for dev ergonomics. It is hard-removed in L7. Do not rip it out during Flask removal — you will break every dev's local `.env`.
 
 ---
 
@@ -201,39 +357,92 @@ Catalogued in `flask-to-fastapi-adcp-safety.md`; listed here so they are not los
 ## Branch and folder cleanup intent
 
 - **Branch:** `feat/v2.0.0-flask-to-fastapi`. All migration work lives here.
-- **Merge cadence:** one PR per phase. Phases 0, 1a, 1b, 2a, 2b, 3 (Flask removal, sync). Phases 4a-4e (FastAPI-native patterns + async). Phase 5 (cleanup + v2.0.0 final). See `execution-plan.md`.
+- **Merge cadence:** one PR per layer (or per sub-PR where noted). L0 (spike + foundation), L1a-L1d (Flask parity — OAuth-not-yet / OAuth / low-risk HTML / high-risk + APIs), L2 (Flask removal + Dockerfile `--proxy-headers` + TrustedHostMiddleware + pre-commit hook rewrites), L3 (test harness modernization), L4 (sync SessionDep, DTO boundary, structlog, pydantic-settings extension, `render()` deletion, ContextManager refactor, `baseline-sync.json` capture at EXIT), L5a (spikes 1/2/3/4/4.25/4.5/5.5), L5b (SessionDep alias flip), L5c (3-router async pilot), L5d1-L5d5 (sync-bridge / adapter Path-B wrap / bulk router conversion / SSE deletion / mop-up), L5e (final async sweep), L6 (delete `flash.py`, app.state singletons for `SimpleAppCache`, router subdir reorg, `logfire` instrumentation), L7 (polish, allowlists → zero, perf baseline comparison, mypy strict ratcheting, `docs/ARCHITECTURE.md` refresh, v2.0.0 tag). See `execution-plan.md`.
 - **Post-migration cleanup:** `.claude/notes/flask-to-fastapi/` is a planning-phase artifact. After v2.0.0 ships and stabilizes (~2 releases later), archive or delete this folder. Anything worth keeping long-term gets promoted to `docs/` or `CLAUDE.md` at the repo root.
 
 ---
 
-## Phase 4+ items (do NOT mix into Phases 0-3)
+## Post-L2 items (do NOT mix into L0-L2)
 
-These are intentionally sequenced AFTER Flask removal (Phases 0-3). They are part of v2.0 but belong in Phase 4+. If you find yourself wanting to do them during Flask removal, stop and file them as Phase 4+ work items.
+These are intentionally sequenced AFTER Flask removal (L0-L2). They are part of v2.0 but belong in L3-L7. If you find yourself wanting to do them during Flask removal, stop and file them as the appropriate layer's work item.
 
-- **Async SQLAlchemy** — Phase 4c-4e (see `async-pivot-checkpoint.md` for Phase 4+ roadmap)
-- **Sync `SessionDep` + DTO boundary + structlog** — Phase 4a (FastAPI-native patterns, still sync)
-- **Testing infrastructure (spikes, factory-boy async shim)** — Phase 4b
-- **REST routes ratchet to `Annotated[...]` form** — Phase 4a (part of SessionDep + Annotated consistency)
-- **`require_tenant_access` to check `is_active`** — Phase 4a (small fix, breaking change OK on v2.0 branch)
-- **Hard-remove `FLASK_SECRET_KEY` dual-read** — Phase 5 (final cleanup)
+- **Test harness modernization (factories, `dependency_overrides`, `TestClient` patterns)** — L3
+- **Sync `SessionDep` + DTO boundary + structlog + pydantic-settings extension + `app.state` singletons + `render()` deletion + ContextManager refactor** — L4 (FastAPI-native patterns, still sync; perf baseline `baseline-sync.json` captured at L4 EXIT)
+- **REST routes ratchet to `Annotated[...]` form** — L4 (part of SessionDep + Annotated consistency)
+- **`require_tenant_access` to check `is_active`** — L4 (small fix, breaking change OK on v2.0 branch)
+- **Pre-L5 spike sequence (1, 2, 3, 4, 4.25, 4.5, 5, 5.5, 6, 7)** — L5a entry (Spike 3 baseline capture actually lands at L4 EXIT as noted above)
+- **Async SQLAlchemy conversion** — L5b (SessionDep alias flip) → L5c (3-router pilot) → L5d1-L5d5 (sync-bridge, adapter Path-B wrap, bulk routers, SSE deletion, mop-up) → L5e (final sweep). See `async-pivot-checkpoint.md` for reference material.
+- **Native refinements (delete `flash.py`, `app.state` for `SimpleAppCache`, router subdir reorg, `logfire` instrumentation — NOT `opentelemetry-sdk`)** — L6
+- **Hard-remove `FLASK_SECRET_KEY` dual-read, allowlists → zero, perf baseline comparison vs `baseline-sync.json`, mypy strict ratcheting, `docs/ARCHITECTURE.md` refresh, v2.0.0 tag** — L7 (final cleanup and ship)
 - Drop nginx — post-v2.0 (needs battle-testing first)
 - `Apx-Incoming-Host` IP allowlist — post-v2.0 (ops concern)
 - `/_internal/` auth hardening — post-v2.0 (currently network-gated only)
 
 ---
 
-## v2.0 Strategic Layering
+## v2.0 Strategic Layering (8 layers, L0-L7)
 
-v2.0 is structured as 5 layers, each producing a working, testable system:
+> **Naming note:** Archived docs (`async-pivot-checkpoint.md` and all `async-audit/*.md`) were written referring to a "7-layer model". That terminology predates the L6→L6+L7 split on 2026-04-14 (polish/ship separated from native refinements). The canonical count is now 8 layers, L0 through L7 inclusive.
 
-| Layer | Phases | What changes | Gate |
+v2.0 is structured as 8 layers, each producing a working, testable system:
+
+| Layer | Thesis | Scope | Gate |
 |---|---|---|---|
-| 1. Flask Removal | 0-3 | Port blueprints, template codemod, middleware, OAuth, delete Flask | `rg -w flask src/` = 0 |
-| 2. FastAPI-Native | 4a | Sync SessionDep, DTOs, structlog, pydantic-settings, UoW removal | All handlers use SessionDep |
-| 3. Testing | 4b | Spikes 1-4.25, dependency_overrides patterns, structural guards | <40 lazy-load failures |
-| 4. Async | 4c-4e | AsyncSession, asyncpg, async handlers/repos, adapter wrapping | All handlers async, perf parity |
-| 5. Cleanup | 5 | Delete sync artifacts, dead code, archive planning docs, tag v2.0.0 | Zero guard allowlist entries |
+| **L0** Spike & Foundation | Pure addition — Flask serves 100% | Foundation modules (templating, flash, deps, middleware stubs), codemod script (not executed), structural guards (stubs), feature flag + `X-Served-By` header | `make quality` green; Flask traffic share = 100% |
+| **L1** Flask Parity (sync) | Feature-flag-gated byte-identical port | Middleware + public/core routers (L1a), auth + OIDC + session cutover (L1b), low-risk HTML (L1c), high-risk HTML + APIs (L1d). OAuth handlers may be `async def` per Authlib requirement (exception allowlist) | Parity golden fixtures match Flask within tolerance; Flask catch-all 0 traffic for 48h |
+| **L2** Flask Removal | Delete Flask — single irreversible cut | Delete `src/admin/app.py`, Flask blueprints, Flask WSGI mount; `flask` out of `pyproject.toml`; Dockerfile gains `uvicorn --proxy-headers --forwarded-allow-ips='*'`; `TrustedHostMiddleware` added; pre-commit hooks (`check_route_conflicts.py` etc.) rewritten for FastAPI AST | `rg -w flask src/ | wc -l` = 0; v2.0.0-rc1 tag |
+| **L3** Test Harness Modernization | Factories + `dependency_overrides` + `TestClient` become the norm | Consolidate factories in `tests/factories/`, adopt `app.dependency_overrides[get_db_session] = lambda: session` pattern, retire inline `session.add()` in tests, ratchet allowlist of pre-existing debt | All new integration tests use factories; ratcheting allowlist shrinks |
+| **L4** Pattern Refinement (sync) | FastAPI-native idioms without async risk | Sync `SessionDep = Annotated[Session, Depends(get_session)]`, DTO boundary at repo layer, pydantic-settings extension, `structlog` wiring, `app.state` singletons (no async), `render()` wrapper **deleted** in favor of Jinja2Templates via dependency, ContextManager refactor (Decision 7), **`baseline-sync.json` captured at EXIT** for L5 comparison | All admin handlers use `SessionDep`; baseline file committed; ContextManager guard green |
+| **L5** Async Conversion | `SessionDep` alias flip + mechanical await conversion of ~60 commit sites and ~200 scalars/execute sites | **L5a** spikes 1/2/3 (re-run vs baseline)/4/4.25/4.5/5.5. **L5b** one-line re-alias `SessionDep` to `AsyncSession`. **L5c** 3-router async pilot. **L5d** sub-PRs: **L5d1** sync-bridge for `background_sync_service.py` (Decision 9), **L5d2** adapter Path-B `run_in_threadpool` wrap (Decision 1), **L5d3** bulk router conversion, **L5d4** SSE deletion (Decision 8), **L5d5** mop-up. **L5e** final sweep. | All admin handlers `async def`; perf within budget vs `baseline-sync.json`; zero `MissingGreenlet` in suite |
+| **L6** Native Refinements | Post-async cleanup now safe | Delete `flash.py` (replaced by `app.state` flash store), `app.state` singletons for `SimpleAppCache`, router subdir reorg, `logfire` instrumentation (**NOT** `opentelemetry-sdk`) | All post-async cleanups landed; no Flask-era modules remaining |
+| **L7** Polish & Ship | Allowlists → zero; release | Structural-guard allowlists at 0, perf comparison vs `baseline-sync.json` green, mypy strict ratcheting green, `docs/ARCHITECTURE.md` refreshed, `FLASK_SECRET_KEY` dual-read hard-removed, `v2.0.0` tag | `v2.0.0` released |
 
-**Key insight:** SessionDep does not require async. Layer 2 introduces `SessionDep = Annotated[Session, Depends(get_session)]` with sync `Session`. Layer 4 re-aliases it to `AsyncSession` — a 1-file change in `deps.py`. This separation dramatically reduces Layer 4's risk.
+**Key insight:** `SessionDep` does not require async. **L4** introduces `SessionDep = Annotated[Session, Depends(get_session)]` with sync `Session`. **L5b** re-aliases it to `AsyncSession` — a 1-file change in `deps.py`. The rest of L5 is mechanical: `await` the ~60 commits and ~200 scalars/execute sites that the alias flip makes async at the type-checker layer. This separation dramatically reduces L5's risk and is the reason L5 is labelled "conversion", not "rewrite."
 
-**AdCP safety:** None of the 5 layers changes any AdCP surface. MCP tool signatures, A2A protocol, REST endpoints, webhook payloads, and OpenAPI schema are all unchanged throughout.
+**AdCP safety:** None of the 8 layers changes any AdCP surface. MCP tool signatures, A2A protocol, REST endpoints, webhook payloads, and OpenAPI schema are all unchanged throughout.
+
+### Wave ↔ Layer mapping
+
+Legacy "Wave" section headings predate the 8-layer rename. Translation:
+
+| Legacy Wave | Current Layer | Scope |
+|-------------|---------------|-------|
+| Wave 0 | L0 | Foundation + template codemod |
+| Wave 1 | L1a + L1b | Middleware + public/core routers; auth + OIDC cutover |
+| Wave 2 | L1c + L1d | Low-risk HTML routers; medium/high-risk + APIs |
+| Wave 3 | L2 | Flask removal + cache migration + cleanup |
+| Wave 4 | L3 + L4 + L5a-L5e | Test harness; sync refinement; async conversion |
+| Wave 5 | L6 + L7 | Native refinements; polish & ship |
+
+---
+
+## v2.0 Timeline Summary
+
+| Layer | Estimate (engineer-days) | Notes |
+|-------|-------------------------:|-------|
+| L0    | 5–7                      | Foundation modules, 11 sub-items, structural guards, golden fingerprints |
+| L1a   | 3–4                      | Middleware stack + codemod + flag |
+| L1b   | 4–5                      | OAuth + OIDC + session cutover |
+| L1c   | 4–5                      | 8 low-risk HTML routers (parallelizable across ~3 engineers) |
+| L1d   | 8–12                     | 14 medium/high-risk HTML routers + 4 JSON APIs (revised up) |
+| L2    | 5–7                      | Flask removal — irreversible cut point; 48h zero-flask-traffic bake |
+| L3    | 3–4                      | Test harness modernization (test-side only) |
+| L4    | 6–8                      | SessionDep + DTOs + pydantic-settings + structlog + render() deletion + ContextManager refactor (revised up) |
+| L5a   | 5–7                      | 7 spikes; lazy-load audit is HARD GATE for L5b |
+| L5b   | 1–2                      | SessionDep alias flip + engine refactor |
+| L5c   | 3–5                      | 3-router async pilot + async test harness adoption |
+| L5d1  | 2–3                      | ContextManager refactor finalization |
+| L5d2  | 3–4                      | Adapter Path-B threadpool wrap |
+| L5d3  | 8–12                     | Bulk router + repository async conversion (~300 repo methods, ~2400 LOC) |
+| L5d4  | 1–2                      | SSE deletion |
+| L5d5  | 2–4                      | Async mop-up of `_impl`/`tools.py`/`main.py` |
+| L5e   | 3–4                      | Final async sweep + perf baseline vs L4 exit |
+| L6    | 3–4                      | flash.py, app.state cache, logfire, router subdir reorg |
+| L7    | 3–5                      | Allowlists → 0, mypy strict, docs refresh, v2.0.0 tag |
+| **Total** | **72–110 engineer-days** | Sequential baseline |
+
+**Calendar time:** 14–22 weeks with single-engineer sequencing + staging bakes (L1c 3d, L2 48h, L5b 48h, L7 1 week).
+
+**Confidence:** Estimates revised upward per final verification audit. L5d3 is largest/most uncertain; high-end may extend to 15 days if repository method count exceeds ~300.
+
+**Parallelization:** L0 foundation modules / L1c routers / L1d routers / L5a spikes each parallelize across ~3 engineers. Critical path single-threaded through L1a → L1b → L2 → L4 → L5b → L5c → L5d3 → L5e → L7.

@@ -1,8 +1,11 @@
-Now I have complete visibility. I'm ready to produce the report. Given the size, I will be thorough and systematic.
-
----
-
 # Plan-File Update Proposal: Flask→FastAPI Blocker #4 Pivot (sync def → full async SQLAlchemy)
+
+> **[ARCHIVED REFERENCE — 2026-04-14]** This report is a preserved artifact from the 3-round verification process (Apr 11-14) that produced the v2.0 8-layer execution model. For current implementation guidance, see:
+> - `../CLAUDE.md` — mission briefing + 8-layer model
+> - `../execution-plan.md` — layer-by-layer work items
+> - `../implementation-checklist.md` — per-layer gate checklist
+>
+> This file is preserved for institutional memory only. Its recommendations have been absorbed into the canonical docs above. Do NOT use this file as a primary reference for implementation decisions.
 
 > **ASYNC IS PHASE 4+ WITHIN v2.0 (2026-04-14).** Phases 0-3 use sync admin handlers. This report is the Phase 4+ implementation roadmap (the original 45 edits are the async target state). Do not implement async patterns from this file during Phases 0-3 (Flask removal).
 
@@ -387,7 +390,7 @@ async def change_status(
     tenant_id: str, account_id: str, payload: StatusChangeRequest,
     tenant: CurrentTenantDep, request: Request,
 ) -> StatusChangeResponse:
-    # CSRF validation happens in CSRFMiddleware (applied globally)
+    # CSRF validation happens in CSRFOriginMiddleware (applied globally)
     def _update():
         with AccountUoW(tenant_id) as uow:
             account = uow.accounts.get_by_id(account_id)
@@ -410,7 +413,7 @@ async def change_status(
     tenant_id: str, account_id: str, payload: StatusChangeRequest,
     tenant: CurrentTenantDep, request: Request,
 ) -> StatusChangeResponse:
-    # CSRF validation happens in CSRFMiddleware (applied globally).
+    # CSRF validation happens in CSRFOriginMiddleware (applied globally).
     # Direct async DB work — no run_in_threadpool wrapper under the full-async
     # pivot (2026-04-11). AccountUoW is an async context manager backed by
     # AsyncSession.

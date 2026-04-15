@@ -1,6 +1,11 @@
 # Agent E — Ideal-State Gap Audit (2026 FastAPI-Native Design Review)
 
-> **ASYNC IS PHASE 4+ WITHIN v2.0 (2026-04-14).** Phases 0-3 use sync admin handlers. This report is the Phase 4+ implementation roadmap — all 14 ideal-state gaps (E1-E14) are pulled into v2.0 layered as: E1/E7/E8/E9/E10 into Phase 4a (sync SessionDep + DTOs + structlog), E11/E12/E13/E14 into Phase 4b (testing), E2/E3/E4/E5/E6 completing in Phase 4c (async). Do not implement async patterns from this file during Phases 0-3.
+> **[ARCHIVED REFERENCE — 2026-04-14]** This report is a preserved artifact from the 3-round verification process (Apr 11-14) that produced the v2.0 8-layer execution model. For current implementation guidance, see:
+> - `../CLAUDE.md` — mission briefing + 8-layer model
+> - `../execution-plan.md` — layer-by-layer work items
+> - `../implementation-checklist.md` — per-layer gate checklist
+>
+> This file is preserved for institutional memory only. Its recommendations have been absorbed into the canonical docs above. Do NOT use this file as a primary reference for implementation decisions.
 
 **Date:** 2026-04-11
 **Author:** Claude (Opus 4.6, 1M context)
@@ -1325,7 +1330,7 @@ app = FastAPI(lifespan=combined_lifespan)
 # Inner → outer (LIFO order matters)
 app.add_middleware(CORSMiddleware, allow_origins=cors_origins, allow_credentials=True)
 app.add_middleware(RestCompatMiddleware)
-app.add_middleware(CSRFMiddleware, signer=get_settings().session_secret, salt="adcp-csrf-v1")
+app.add_middleware(CSRFOriginMiddleware, signer=get_settings().session_secret, salt="adcp-csrf-v1")
 app.add_middleware(SessionMiddleware, **session_middleware_kwargs())
 app.add_middleware(UnifiedAuthMiddleware)
 app.add_middleware(ExternalDomainRedirectMiddleware)  # must run BEFORE CSRF (Blocker 5)
@@ -1347,7 +1352,7 @@ From `flask-to-fastapi-foundation-modules.md` §11.10 and `flask-to-fastapi-migr
 ```python
 app.add_middleware(CORSMiddleware, allow_origins=...)      # innermost
 app.add_middleware(RestCompatMiddleware)
-app.add_middleware(CSRFMiddleware)                          # new, admin
+app.add_middleware(CSRFOriginMiddleware)                          # new, admin
 app.add_middleware(SessionMiddleware, **session_kwargs)     # new, admin
 app.add_middleware(UnifiedAuthMiddleware)
 app.add_middleware(ExternalDomainRedirectMiddleware)        # new, admin

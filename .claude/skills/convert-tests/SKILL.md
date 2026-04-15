@@ -1,11 +1,12 @@
 ---
 name: convert-tests
-lifecycle: deferred-v2.1
+lifecycle: layer-5c
 description: >
-  DEFERRED TO v2.1 — async test conversion is not in v2.0 scope.
-  v2.0 uses sync test patterns. This skill is preserved for v2.1 async migration.
+  For Layer 5c of v2.0 migration: converts sync tests to async when admin
+  handlers flip to AsyncSession. DO NOT invoke during Layers 0-4 —
+  the test suite is sync through L4 and async conversion begins in L5b/L5c.
 original_description: >
-  Convert sync test files to async for the SQLAlchemy async migration (Phase 4c).
+  Convert sync test files to async for the SQLAlchemy async migration.
   Applies mechanical transforms, converts TestClient to AsyncClient, converts
   factory session binding, and runs converted tests.
 args: <test-file-path>
@@ -16,6 +17,18 @@ args: <test-file-path>
 ## Args
 
 `/convert-tests tests/integration/test_accounts.py`
+
+## Entry conditions (HARD GATES — verify ALL before invoking)
+
+This skill must NOT run until every one of the following is true:
+
+1. **L2 merged** — `rg -w flask src/ | wc -l` returns `0`; `flask` is not in `pyproject.toml` runtime deps.
+2. **L4 merged** — `SessionDep = Annotated[Session, Depends(get_session)]` (still sync) exists in `src/admin/deps/` and `baseline-sync.json` has been captured at the L4 exit.
+3. **L5a spikes green** — Spikes 1, 2, 3, 4, 4.25, 4.5, and 5.5 all pass per `execution-plan.md` L5a exit gate. Spike gate decisions recorded in `spike-decision.md`.
+4. **Async factory shim merged** — `AsyncSQLAlchemyModelFactory` exists in `tests/factories/` and the shim validation test from Spike 4.25 is green.
+5. **Target file is in the L5c pilot wave** — the 3-router pilot list (see `execution-plan.md` L5c) or a later L5d/L5e wave. Do NOT convert a test file whose production code has not yet flipped to `AsyncSession`.
+
+If any gate fails, STOP. The skill will produce a broken test suite if invoked early.
 
 ## Protocol
 

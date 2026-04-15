@@ -1,15 +1,15 @@
 # Flask → FastAPI Migration: Five Hard-Case Worked Examples
 
-> **v2.0 PHASE GUIDE (2026-04-12)**
+> **v2.0 LAYER GUIDE (2026-04-14)**
 >
-> These worked examples show the FULL v2.0 target (async). For Phase 0-3 implementation:
-> - Change all `async def` handlers to `def` (except OAuth callbacks which may need `async def` for Authlib)
+> These worked examples show the FULL v2.0 target (async, post-L5). For L0-L4 implementation:
+> - Change all `async def` handlers to `def` (except OAuth callbacks which may need `async def` for Authlib — L1 exception allowlist)
 > - Change `async with get_db_session() as db:` to `with get_db_session() as db:`
 > - Change `(await db.execute(stmt)).scalars()` to `db.scalars(stmt)`
 > - Change `await` calls to direct calls for sync functions
 >
-> All admin SQLAlchemy is sync during Phases 0-3 (async pivot reversed 2026-04-12; async conversion is Phase 4+).
-> For authoritative Phase 0-3 patterns, see `execution-plan.md`.
+> All admin SQLAlchemy is sync through L0-L4; async conversion begins at L5b (SessionDep alias flip) and lands router-by-router through L5c/L5d/L5e.
+> For authoritative L0-L4 patterns, see `execution-plan.md` Layer 0.
 
 Appendix to §13 of `/Users/quantum/Documents/ComputedChaos/salesagent/.claude/notes/flask-to-fastapi-migration.md`. These five examples cover what `accounts.py` doesn't: OAuth redirect flows, dynamic per-tenant client registration, binary multipart uploads, Server-Sent Events, and the 300-LOC multi-branch product form. All Flask sources have been read from disk and cited by file:line.
 
@@ -19,7 +19,7 @@ Conventions used below (established in §11 of the main doc):
 - `flash(request, msg, category)` → native utility at `src/admin/flash.py`
 - `AdminRedirect` → typed exception handled by `src/app.py` → `RedirectResponse(303)`
 - `oauth` → module-level `authlib.integrations.starlette_client.OAuth` instance at `src/admin/oauth.py`
-- All admin SQLAlchemy is sync during Phases 0-3 (async pivot reversed 2026-04-12): `with get_db_session() as session:` / `session.scalars(stmt).first()`. `run_in_threadpool` is used ONLY in the 3-4 OAuth callback handlers that must be `async def` for Authlib compatibility — and only for DB-touching helper functions called from those handlers. MCP and A2A handlers remain async. See `execution-plan.md` Phase 0 for the canonical handler pattern. Async conversion is Phase 4+.
+- All admin SQLAlchemy is sync through L0-L4: `with get_db_session() as session:` / `session.scalars(stmt).first()`. `run_in_threadpool` is used ONLY in the 3-4 OAuth callback handlers that must be `async def` for Authlib compatibility (L1 exception allowlist) — and only for DB-touching helper functions called from those handlers. MCP and A2A handlers remain async throughout. See `execution-plan.md` Layer 0 for the canonical handler pattern. Async conversion is L5+.
 - CSRF protection uses SameSite=Lax session cookie + CSRFOriginMiddleware (Origin header validation). No csrf_token form fields, no X-CSRF-Token headers, no JavaScript changes needed.
 
 ---
@@ -547,10 +547,10 @@ async def _lookup_idp_logout_url(tenant_id: str) -> str | None:
 
 | Flask | FastAPI-native | Why |
 |---|---|---|
-| `@auth_bp.route("/login")` + `def login()` | `@router.get("/login", name="admin_auth_login")` async def | Verb-explicit decorator; flat route name. (Phase 4+ target. Phase 0-3 uses `def` with sync SQLAlchemy.) |
+| `@auth_bp.route("/login")` + `def login()` | `@router.get("/login", name="admin_auth_login")` async def | Verb-explicit decorator; flat route name. (L5+ target. L0-L4 uses `def` with sync SQLAlchemy; OAuth callbacks may already be `async def` under L1's Authlib allowlist.) |
 | `request.args.get("next")` | `next: Annotated[str | None, Query()] = None` | Declarative, typed, self-documenting OpenAPI. |
 | `session["login_next_url"] = next_url` | `request.session["login_next_url"] = ...` | Starlette `SessionMiddleware` exposes `request.session` (signed-cookie backend). |
-| `get_db_session()` called inline | `await _detect_tenant_from_host(request)` | `AsyncSession` is async-native; helper is `async def` with `async with get_db_session()`. (Phase 4+ target. Phase 0-3 uses sync `with get_db_session() as db:` / `db.scalars(stmt)`.) |
+| `get_db_session()` called inline | `await _detect_tenant_from_host(request)` | `AsyncSession` is async-native; helper is `async def` with `async with get_db_session()`. (L5+ target. L0-L4 uses sync `with get_db_session() as db:` / `db.scalars(stmt)`.) |
 | `current_app.oauth.google.authorize_redirect(uri)` | `oauth.google.authorize_redirect(request, uri)` (from `authlib.integrations.starlette_client`) | The starlette variant is `async` and uses `request.session` directly — no Flask `current_app` thread-local. |
 | Manual `current_app.session_interface.save_session(...)` at `auth.py:437` | _deleted_ | Starlette always writes the cookie on `http.response.start`; the Flask-specific bug doesn't exist. |
 | `session.modified = True` | _deleted_ | `request.session` is a `dict` subclass that marks itself dirty on every mutation. |
@@ -1502,7 +1502,7 @@ async def _update_tenant_favicon_url(tenant_id: str, public_url: str) -> None:
 | `file.seek(0,2); file.tell(); file.seek(0)` to measure size | Chunked read loop with running `total` counter and early exit | Flask's MAX_CONTENT_LENGTH didn't enforce by default; FastAPI's default `Starlette` max form size is very large. We enforce explicitly by chunking. |
 | Content-type never checked | `ct in ALLOWED_FAVICON_CONTENT_TYPES` | Defense in depth — extension can be forged on a renamed `.png` that's actually HTML. |
 | `os.path.realpath` check | `tenant_dir.relative_to(base)` with `try/except ValueError` | Cleaner; pathlib does the traversal check without string prefix math. |
-| Sync DB update inline | `await _update_tenant_favicon_url(...)` (direct async call; `_update_tenant_favicon_url` is `async def` with `async with get_db_session()` under the full-async pivot) | Pivoted 2026-04-11 — async DB end-to-end. See §18 + `async-pivot-checkpoint.md` §3. |
+| Sync DB update inline | `await _update_tenant_favicon_url(...)` (direct async call; `_update_tenant_favicon_url` is `async def` with `async with get_db_session()` at L5+) | L0-L4 use sync DB; L5 converts to async end-to-end. See `execution-plan.md` L5 and `flask-to-fastapi-foundation-modules.md` §11.18–§11.27. |
 | No rollback on DB failure after disk write | Explicit `filepath.unlink(missing_ok=True)` on DB exception | Keeps disk and DB consistent; the old code left orphan files. |
 | `@log_admin_action("upload_favicon")` decorator | `dependencies=[Depends(audit_action("upload_favicon"))]` | Dep-based side effects; no decorator stacking. |
 | `flash("msg", "error")` | `flash(request, "msg", "error")` | §11.3. |

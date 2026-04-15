@@ -1,9 +1,10 @@
 ---
 name: async-convert
-lifecycle: deferred-v2.1
+lifecycle: layer-5
 description: >
-  DEFERRED TO v2.1 — async SQLAlchemy conversion is not in v2.0 scope.
-  v2.0 uses sync admin handlers. This skill is preserved for v2.1 async migration.
+  For Layer 5 of v2.0 migration: converts sync modules to async SQLAlchemy
+  after Flask removal (L2) and FastAPI-native pattern refinement (L4) are
+  merged. DO NOT invoke during Layers 0-4 — admin handlers are sync through L4.
 original_description: >
   Convert a sync Python module to async SQLAlchemy. Applies mechanical transforms,
   checks for lazy-load risks, session.merge, inspect(), and bulk_*_mappings.
@@ -16,6 +17,29 @@ args: <file-path>
 ## Args
 
 `/async-convert src/core/database/repositories/accounts.py`
+
+## Entry conditions (HARD GATES — verify ALL before invoking)
+
+This skill must NOT run until every one of the following is true:
+
+1. **L2 merged** — `rg -w flask src/ | wc -l` returns `0`.
+2. **L4 merged** — `SessionDep` exists as a sync alias, DTO boundary is enforced by structural guard, `baseline-sync.json` captured at L4 exit.
+3. **L5a spikes green** — Spikes 1 (lazy-load audit), 2 (asyncpg driver compat), 3 (perf baseline — captured at L4 exit, compared at L5 exit), 4 (dual session factory), 4.25 (factory-boy async shim), 4.5 (adapter Path-B wrap), 5.5 (sync-bridge contract). Gate decisions recorded in `spike-decision.md`.
+4. **Target file is in the current L5 sub-wave:**
+   - L5b: `SessionDep` re-aliased to `AsyncSession` (one commit — not called by this skill).
+   - L5c: 3-router async pilot list.
+   - L5d1–L5d5: bulk conversions (5d1 sync-bridge landed, 5d2 adapter wrap, 5d3 bulk routers, 5d4 SSE deletion, 5d5 mop-up).
+   - L5e: final async sweep.
+
+## Forbidden targets (per Decisions 1 and 9)
+
+This skill MUST NOT be invoked on:
+
+- `src/adapters/**` — adapters stay sync and are called via `await run_in_threadpool(adapter.method, ...)` at the `_impl` caller (Decision 1 Path B). These files use `get_sync_db_session()` via the sync factory — do not flip them to `AsyncSession`.
+- `src/services/background_sync_service.py` — runs under the sync-bridge (Decision 9). Stays sync; deletion of `psycopg2-binary` waits until this module is rewritten as a proper async service (Layer 5+ sunset item, not in v2.0 scope for this skill).
+- Any module imported by Path-B adapters or by `background_sync_service.py` — check call graph before invoking. The sync-bridge expects these to remain on the sync session.
+
+If the target file matches any pattern above, STOP and report. The skill will break the sync-bridge invariant if invoked incorrectly.
 
 ## Protocol
 
@@ -79,7 +103,7 @@ git diff src/
 
 ## Hard rules
 
-1. The `session.scalars()` transform is `(await session.execute(stmt)).scalars()` — NOT `await session.scalars()` (this is the #1 mistake)
+1. Both `await session.scalars(stmt)` and `(await session.execute(stmt)).scalars()` are valid on `AsyncSession`. **`await session.scalars(stmt)` is canonical** — it is a real async method on `AsyncSession` since SQLAlchemy 1.4.24 and matches the SQLAlchemy docs' recommended form. Do not "fix" `await session.scalars(...)` to the verbose form; both are correct.
 2. Check EVERY relationship access for lazy-load traps — not just the obvious ones
 3. Change `Session` type hint to `AsyncSession` — mypy catches callers that need updating
 4. Run tests after conversion — do not assume mechanical transforms are correct

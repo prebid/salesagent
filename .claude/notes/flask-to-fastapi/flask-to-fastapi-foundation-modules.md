@@ -1,15 +1,17 @@
 # §11 Foundation Modules — Detailed Elaboration
 
-> **v2.0 PHASE GUIDE (2026-04-12)**
+> **v2.0 LAYER GUIDE (2026-04-14)**
 >
-> This file contains foundation module designs for the FULL v2.0 migration. Sections are tagged by phase:
-> - **[PHASE 0-3]** — Implement during Flask removal using **sync** patterns from `execution-plan.md`
-> - **[PHASE 4+]** — Implement during async conversion. These sections contain `async def`, `AsyncSession`, `SessionDep` patterns.
-> - **[PHASE 0 CANDIDATE]** — Can land early (framework-agnostic, no async dependency)
+> This file contains foundation module designs for the FULL v2.0 migration. Sections are tagged by layer:
+> - **[L0-L4]** — Implement during sync layers (Flask removal + test harness + FastAPI-native pattern refinement) using **sync** patterns from `execution-plan.md`
+> - **[L4]** — Sync `SessionDep`, DTO boundary, structlog wiring, pydantic-settings extension, `render()` wrapper deletion, ContextManager refactor. Lands AFTER Flask removal (L2) and test harness modernization (L3).
+> - **[L5+]** — Implement during async conversion. These sections contain `async def`, `AsyncSession` patterns. Activated at L5b (SessionDep alias flip) and completed across L5c-L5e.
+> - **[L6]** — Native refinements: delete `flash.py`, `app.state` singletons for `SimpleAppCache`, router subdir reorg, `logfire` instrumentation.
+> - **[L0 CANDIDATE]** — Can land early (framework-agnostic, no layer dependency)
 >
-> **For Phase 0-3 implementation, always use `sync def` handlers with `with get_db_session() as session:` in handler bodies.**
+> **For L0-L4 implementation, always use `sync def` handlers with `with get_db_session() as session:` in handler bodies (except the 3-4 OAuth callback handlers in L1b that require `async def` for Authlib compatibility — those are the only async-def handlers through L4).**
 
-**Key v2.0 scope changes:** Sections 11.0 (engine.py) and 11.0.1 (deps.py/SessionDep) do NOT exist in Phases 0-3 — the existing `database_session.py` provides all session infrastructure. Sections 11.0.4.D-H (dep factories, cross-repo composition) are replaced by direct repository instantiation inside `with get_db_session()` blocks. Section 11.7 (csrf.py) implements CSRFOriginMiddleware (Origin header validation), NOT Double Submit Cookie.
+**Key v2.0 scope changes:** Sections 11.0 (engine.py) and 11.0.1 (deps.py/SessionDep) do NOT exist in L0-L3 — the existing `database_session.py` provides all session infrastructure. **L4 introduces sync `SessionDep = Annotated[Session, Depends(get_session)]`**; L5b re-aliases it to `AsyncSession`. Sections 11.0.4.D-H (dep factories, cross-repo composition) are replaced by direct repository instantiation inside `with get_db_session()` blocks through L3, then adopted at L4. Section 11.7 (csrf.py) implements CSRFOriginMiddleware (Origin header validation), NOT Double Submit Cookie.
 
 Target file tree under `src/admin/`:
 ```
@@ -31,13 +33,13 @@ src/admin/
     fly_headers.py
 ```
 
-Everything below uses Python 3.12+ syntax. Under the full-async SQLAlchemy pivot (2026-04-11, see `async-pivot-checkpoint.md`), these foundation modules use `AsyncSession` via `async with get_db_session() as db:` / `await db.execute(...)` — SQLAlchemy 2.0 async-native. The pre-pivot plan said "sync SQLAlchemy inside `get_db_session()` context managers, per v2.0.0 charter"; that charter was rewritten 2026-04-11 to absorb async into v2.0. Under Agent E's idiom upgrade (Categories 1-2 in `async-audit/agent-e-ideal-state-gaps.md`), handlers and deps prefer the DI pattern `session: SessionDep` via `Depends(get_session)` over inline `async with` — but both forms are valid and the guard tests accept either.
+Everything below uses Python 3.12+ syntax. These foundation modules use sync `Session` via `with get_db_session() as db:` during Layers 0-4. Layer 5c converts admin handlers and their repository dependencies to `AsyncSession`. Each section below is phase-tagged (`[Layer 0-4]` sync, `[Layer 5+]` async). Do not mix patterns across layer boundaries. Under Agent E's idiom upgrade (Categories 1-2 in `async-audit/agent-e-ideal-state-gaps.md`), Layer 4 introduces the DI pattern `session: SessionDep = Annotated[Session, Depends(get_session)]` (still sync); Layer 5b re-aliases `SessionDep` to `AsyncSession` as a 1-file flip.
 
 ---
 
 ## 11.0 `src/core/database/engine.py` — Lifespan-scoped async engine (Agent E Category 1)
 
-> **[PHASE 4+]** This module is created in Phase 4c. Phases 0-3 use the existing `database_session.py` with sync patterns.
+> **[L5+]** This module is created at L5b (SessionDep alias flip to `AsyncSession`) and completed across L5c-L5e. L0-L4 use the existing `database_session.py` with sync patterns.
 
 > **Added 2026-04-11 under the Agent E idiom upgrade.** The engine is lifespan-scoped rather than module-global to prevent pytest-asyncio event-loop leak bugs (Agent B Risk Interaction B). Engine + sessionmaker live on `app.state.db_engine` / `app.state.db_sessionmaker` — never at module import time.
 
@@ -92,7 +94,21 @@ def make_sessionmaker(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
     return async_sessionmaker(
         bind=engine,
         class_=AsyncSession,
-        expire_on_commit=False,   # MANDATORY for async — see Risk #5
+        # expire_on_commit=False is MANDATORY for AsyncSession. With the SQLA
+        # default `True`, every post-commit attribute read (even innocuous ones
+        # like `media_buy.id` right after `session.commit()`) triggers a lazy
+        # refresh under the hood. Under asyncpg that lazy refresh runs sync I/O
+        # on a connection owned by the async greenlet boundary and raises
+        # `sqlalchemy.exc.MissingGreenlet: greenlet_spawn has not been called`
+        # with no useful stack. The failure is non-deterministic because it
+        # only fires when the attribute is actually accessed, so integration
+        # tests catch maybe 1 in 5 violations. Setting expire_on_commit=False
+        # instructs SQLA to keep instances live post-commit — callers that need
+        # a true refresh must call `await session.refresh(obj)` explicitly.
+        # The structural guard `test_architecture_async_sessionmaker_expire_on_commit`
+        # (§11.0.7) fails the build if any `async_sessionmaker(...)` call omits
+        # this kwarg or sets it to True.
+        expire_on_commit=False,
         autoflush=False,          # explicit flush, no surprises
         autobegin=True,           # SQLA 2.0 default, still worth being explicit
     )
@@ -136,7 +152,7 @@ Integration test fixture that creates and disposes the engine per test; see §11
 
 ## 11.0.1 `src/core/database/deps.py` — SessionDep (Agent E Category 2)
 
-> **[PHASE 4a SYNC, then PHASE 4c ASYNC]** Phase 4a introduces sync `SessionDep = Annotated[Session, Depends(get_session)]`. Phase 4c re-aliases to `AsyncSession`. Phases 0-3 use `with get_db_session() as session:` in handler bodies.
+> **[L4 SYNC, then L5b ASYNC]** L4 introduces sync `SessionDep = Annotated[Session, Depends(get_session)]`. L5b re-aliases to `AsyncSession` (1-file change). L0-L3 use `with get_db_session() as session:` in handler bodies.
 
 > **Added 2026-04-11 under the Agent E idiom upgrade.** The idiomatic FastAPI-native pattern: handlers receive `session: SessionDep` as a parameter. The DI layer owns session lifecycle. No `async with` in handler bodies.
 
@@ -215,7 +231,7 @@ async def test_get_session_rolls_back_on_exception(client):
 
 ## 11.0.2 `src/core/settings.py` — Pydantic Settings class (Agent E Category 15)
 
-> **[PHASE 0 CANDIDATE]** Framework-agnostic. Can land in Phase 0 or Phase 4a.
+> **[L0 CANDIDATE]** Framework-agnostic. Can land in L0 or L4.
 
 > **Added 2026-04-11 under the Agent E idiom upgrade.** Every config value goes through a single `Settings` class loaded via `@lru_cache get_settings()`. No more `os.environ.get("FOO", "")` scattered throughout the codebase.
 
@@ -248,6 +264,10 @@ class Settings(BaseSettings):
 
     # Sessions & CSRF (FLASK_SECRET_KEY dual-read during v2.0 per directive #5)
     session_secret: SecretStr = Field(..., alias="SESSION_SECRET", min_length=32)
+
+    # CSRF (Option A: Origin header validation + SameSite=Lax session cookie)
+    csrf_allowed_origins: list[str] = Field(default_factory=list, alias="CSRF_ALLOWED_ORIGINS")
+    csrf_allowed_origin_suffixes: list[str] = Field(default_factory=list, alias="CSRF_ALLOWED_ORIGIN_SUFFIXES")
 
     # OAuth
     google_client_id: str | None = Field(None, alias="GOOGLE_CLIENT_ID")
@@ -289,9 +309,9 @@ def get_settings() -> Settings:
 
 ## 11.0.3 `src/core/logging.py` — Structured logging via structlog (Agent E Category 16)
 
-> **[PHASE 4a]** Added alongside SessionDep. structlog provides async-debuggable request-scoped logging.
+> **[L4]** Added alongside sync `SessionDep`. structlog provides request-scoped logging with ContextVar propagation (matters especially once L5 lands async handlers).
 
-> **Added 2026-04-11 under the Agent E idiom upgrade.** Async debugging is 3x harder without request-ID context-var propagation. Adding `structlog` in v2.0 (~250 LOC) avoids the much larger retrofit cost in Phase 4+ (~400 LOC touching every log line).
+> **Added 2026-04-11 under the Agent E idiom upgrade.** Async debugging is 3x harder without request-ID context-var propagation. Adding `structlog` at L4 (~250 LOC) avoids the much larger retrofit cost if it were deferred to a post-async layer (~400 LOC touching every log line).
 
 ### A. Implementation
 
@@ -382,7 +402,7 @@ def get_logger(name: str) -> structlog.stdlib.BoundLogger:
 
 ## 11.0.4 `src/core/database/repositories/base.py` — Repository base + per-repository dep factories (Agent E Categories 2 + 3)
 
-> **[PHASE 4+]** Repository DI factories with `Depends(get_session)`. Phases 0-3 use the existing UoW pattern with sync sessions.
+> **[L4+]** Repository DI factories with `Depends(get_session)` land at L4 (still sync Session) and auto-upgrade to AsyncSession at L5b via the alias flip. L0-L3 use the existing UoW pattern with sync sessions.
 
 > **Added 2026-04-11 under the Agent E idiom upgrade.** This is the operational recipe for the two biggest idiom upgrades in the Agent E audit: Category 2 (SessionDep DI, E1) and Category 3 (no-UoW repository pattern, E2+E3). §11.0.1 SessionDep tells you *how* the session enters the request; this section tells you *how* repositories compose on top of it and how `_impl` functions receive sessions from non-request callers.
 
@@ -845,7 +865,7 @@ This works and is technically equivalent, but it leaks `AsyncSession` into the h
 
 ## 11.0.5 DTO layer — Pydantic v2 wrappers over ORM models (Agent E Category 5)
 
-> **[PHASE 4a]** Pydantic DTOs at the handler/template boundary. Prevents lazy-load crashes under async.
+> **[L4]** Pydantic DTOs at the handler/template boundary. Lands BEFORE async conversion so L5 does not need to fix lazy-load crashes at the template-render boundary in addition to the call-site conversion.
 
 > **Added 2026-04-11 under the Agent E idiom upgrade.** The DTO boundary is the **architectural prevention** for Risk #1 (lazy-load realization in production). If templates receive DTOs, lazy loads become impossible by construction.
 
@@ -925,7 +945,7 @@ class AccountCreateRequest(BaseModel):
 
 ## 11.0.6 `src/core/database/scope.py` — Non-request `session_scope()` helper (Agent E Category 2 / scheduler edition)
 
-> **[PHASE 4+]** Async session scope context manager. Phases 0-3 use sync `get_db_session()`.
+> **[L5+]** Async session scope context manager. L0-L4 use sync `get_db_session()`.
 
 > **Added 2026-04-11 under the Agent E idiom upgrade.** §11.0.1 `SessionDep` solves "how does a request handler get a session". This section solves "how does a scheduler, background task, CLI script, or alembic migration get a session when there is no `Request` at all". It is the non-request analog and it shares the lifespan-scoped sessionmaker with §11.0.1, so both paths commit/rollback through identical code.
 
@@ -1372,9 +1392,104 @@ The order is load-bearing. If `mcp_lifespan` starts first, the scheduler tick fi
 
 ---
 
+## 11.0.7 `tests/unit/test_architecture_async_sessionmaker_expire_on_commit.py` — Structural guard (L5b+)
+
+> **[L5b]** Activated at the `SessionDep` alias flip. Scans every `async_sessionmaker(...)` construction site and fails the build if `expire_on_commit=False` is absent or set to anything other than `False`.
+
+### Purpose
+
+`expire_on_commit` defaults to `True` on SQLAlchemy `async_sessionmaker`. With that default, post-commit attribute access on any previously-committed instance triggers a lazy refresh. Under asyncpg the refresh crosses the greenlet boundary sync-style and raises `sqlalchemy.exc.MissingGreenlet: greenlet_spawn has not been called; can't call await_() here`. The failure is latent — it only fires when a specific attribute is read after commit, so code review misses it and integration tests catch only a fraction of violations.
+
+This guard converts the violation into a compile-time assertion: if any `async_sessionmaker(...)` call in the repo omits `expire_on_commit=False` (or sets it to `True`), `make quality` fails immediately. Sync `sessionmaker(...)` is out of scope — `expire_on_commit=True` is safe on the sync path and is the correct SQLA default there.
+
+### Implementation
+
+```python
+# tests/unit/test_architecture_async_sessionmaker_expire_on_commit.py
+"""Structural guard: async_sessionmaker(...) MUST pass expire_on_commit=False.
+
+Without it, post-commit attribute access on AsyncSession instances triggers
+a lazy refresh that crosses the greenlet boundary and raises MissingGreenlet.
+See §11.0.A `make_sessionmaker` for the expanded rationale.
+
+Scope: every .py file under src/ and tests/. Sync `sessionmaker(...)` is
+OUT of scope — expire_on_commit=True is safe on the sync path.
+"""
+from __future__ import annotations
+
+import ast
+from pathlib import Path
+
+ROOT = Path(__file__).parent.parent.parent
+SCAN_DIRS = (ROOT / "src", ROOT / "tests")
+
+# Ratcheting allowlist — starts empty at L5b activation. Shrinks only.
+ALLOWLIST: frozenset[str] = frozenset()
+
+
+def _iter_async_sessionmaker_calls(tree: ast.AST):
+    """Yield every Call node whose callable is the name `async_sessionmaker`.
+
+    Matches:
+      async_sessionmaker(...)                 # direct import
+      sqlalchemy.ext.asyncio.async_sessionmaker(...)  # qualified
+    """
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Name) and func.id == "async_sessionmaker":
+            yield node
+        elif isinstance(func, ast.Attribute) and func.attr == "async_sessionmaker":
+            yield node
+
+
+def _expire_on_commit_ok(call: ast.Call) -> bool:
+    """True iff the call has `expire_on_commit=False` as an explicit kwarg."""
+    for kw in call.keywords:
+        if kw.arg != "expire_on_commit":
+            continue
+        return isinstance(kw.value, ast.Constant) and kw.value.value is False
+    return False
+
+
+def test_async_sessionmaker_always_sets_expire_on_commit_false():
+    violations: list[str] = []
+    for scan_dir in SCAN_DIRS:
+        for py in scan_dir.rglob("*.py"):
+            rel = py.relative_to(ROOT).as_posix()
+            if rel in ALLOWLIST:
+                continue
+            try:
+                tree = ast.parse(py.read_text())
+            except SyntaxError:
+                continue
+            for call in _iter_async_sessionmaker_calls(tree):
+                if not _expire_on_commit_ok(call):
+                    violations.append(f"  {rel}:{call.lineno}")
+    assert not violations, (
+        "async_sessionmaker(...) MUST pass expire_on_commit=False.\n"
+        "See foundation-modules.md §11.0.A for why — MissingGreenlet on post-commit "
+        "attribute access under asyncpg. Violations:\n"
+        + "\n".join(violations)
+    )
+```
+
+### Meta-test
+
+Uses the `write-guard` skill pattern: plant a fixture source containing `async_sessionmaker(bind=engine)` (no kwarg) in a temp directory, point the scan dir at it, assert the guard raises. Flip the fixture to `async_sessionmaker(bind=engine, expire_on_commit=False)`, assert the guard is silent. Flip to `async_sessionmaker(bind=engine, expire_on_commit=True)`, assert the guard raises.
+
+### Activation
+
+- **L5b entry:** activates in the same PR that re-aliases `SessionDep = Annotated[AsyncSession, Depends(get_session)]`. Before L5b the guard has nothing to scan (no `async_sessionmaker` call sites exist yet).
+- **Allowlist:** empty at inception. Any new `async_sessionmaker(...)` call must pass the kwarg from day one.
+- **Scope excludes sync `sessionmaker(...)`** — sync sessions' default `expire_on_commit=True` is correct and idiomatic, the MissingGreenlet crash is async-specific.
+
+---
+
 ## 11.1 `src/admin/templating.py`
 
-> **[PHASE 0-3]** This module is part of Flask removal. Use sync patterns.
+> **[L0-L2]** This module is part of Flask removal. Use sync patterns. It stays sync through L4 and auto-converts at L5 only to the extent its callers flip to `async def` (most functions here are framework-agnostic utilities and remain sync across all layers).
 
 ### A. Implementation
 
@@ -1402,7 +1517,7 @@ and the custom Jinja filters declared at src/admin/app.py:154-155.
 Design rules (load-bearing):
 - Jinja `Undefined` (default, NOT StrictUndefined). Existing Flask templates
   reference attributes on `tenant` that may be None; flipping to strict would
-  break ~40 templates on cutover. Tracked for Phase 4+.
+  break ~40 templates on cutover. Tracked for L6 (native refinements).
 - The `request` object is always in the context. All per-request data
   (`session`, `csrf_token`, `url_for`) is reached THROUGH request in templates,
   which keeps `env.globals` free of request-scoped state (thread-safety).
@@ -1532,7 +1647,7 @@ def render(
     `static` via the StaticFiles mount on the outer app).
 
     `csrf_token` is pulled from `request.state.csrf_token` (stamped by
-    CSRFMiddleware). `tenant` is NOT injected here — handlers pass it
+    CSRFOriginMiddleware). `tenant` is NOT injected here — handlers pass it
     explicitly via `context={"tenant": ...}` when they need it, to avoid
     the N+1 DB hit that the old Flask inject_context performed.
 
@@ -1573,7 +1688,7 @@ Notes on what the sketch omitted:
 
 - **`session` in templates:** Templates should reach it via `{{ request.session.get('foo') }}`, not a top-level `session`. Flask's implicit `{{ session.foo }}` becomes `{{ request.session.foo }}`; codemod does this rewrite. Why not put session on globals? `env.globals` is process-wide; setting it per-request would be a data race under Uvicorn workers.
 - **`url_for`:** `request.url_for("route_name", **params)` is available on the Starlette `Request`. In templates: `{{ request.url_for('accounts_list_accounts', tenant_id=t) }}`. The Flask convention `url_for('accounts.list_accounts', ...)` becomes the flat `accounts_list_accounts` — this is a codemod transformation, not a runtime shim.
-- **`Undefined` vs `StrictUndefined`:** We keep default `Undefined` for v2.0.0. `StrictUndefined` would raise on every missing tenant attribute at render time; legacy templates have dozens. Phase 4+ ticket.
+- **`Undefined` vs `StrictUndefined`:** We keep default `Undefined` for v2.0.0. `StrictUndefined` would raise on every missing tenant attribute at render time; legacy templates have dozens. Post-v2.0 ticket.
 - **Signature note:** FastAPI 0.109+ requires `request` as keyword arg in `TemplateResponse` — passing request in context is deprecated. The wrapper handles both.
 
 ### B. Tests
@@ -1661,7 +1776,7 @@ class TestRenderIntegratesWithTenantDep:
 - Imports `src.admin.flash.get_flashed_messages`, `src.core.domain_config.get_support_email/get_sales_agent_domain`.
 - Public API: `templates` singleton (for tests to add loaders), `render(request, name, context, *, status_code, headers)`.
 - Does NOT touch DB.
-- Does NOT interact with `UnifiedAuthMiddleware` directly — but handlers that call `render()` must have access to `request.state.csrf_token`, which requires `CSRFMiddleware` to have run.
+- Does NOT interact with `UnifiedAuthMiddleware` directly — but handlers that call `render()` must have access to `request.state.csrf_token`, which requires `CSRFOriginMiddleware` to have run.
 
 ### D. Gotchas
 
@@ -1674,7 +1789,7 @@ class TestRenderIntegratesWithTenantDep:
 
 ## 11.2 `src/admin/sessions.py`
 
-> **[PHASE 0-3]** This module is part of Flask removal. Use sync patterns.
+> **[L0-L2]** This module is part of Flask removal. Use sync patterns. It stays sync through L4 and auto-converts at L5 only to the extent its callers flip to `async def` (most functions here are framework-agnostic utilities and remain sync across all layers).
 
 ### A. Implementation
 
@@ -1827,7 +1942,7 @@ class TestSessionMiddlewareKwargs:
 
 ## 11.3 `src/admin/flash.py`
 
-> **[PHASE 0-3]** This module is part of Flask removal. Use sync patterns.
+> **[L0-L2]** This module is part of Flask removal. Use sync patterns. It stays sync through L4 and auto-converts at L5 only to the extent its callers flip to `async def` (most functions here are framework-agnostic utilities and remain sync across all layers).
 
 ### A. Implementation
 
@@ -1993,9 +2108,9 @@ class TestGetFlashedMessages:
 
 ## 11.4 `src/admin/deps/auth.py`
 
-> **[PHASE 0-3]** This module is part of Flask removal. Use sync patterns.
+> **[L0-L2]** This module is part of Flask removal. Use sync patterns. It stays sync through L4 and auto-converts at L5 only to the extent its callers flip to `async def` (most functions here are framework-agnostic utilities and remain sync across all layers).
 >
-> **Phase note:** Code examples in this section show async patterns for Phase 4+ completeness. During Phases 0-3, use `def` instead of `async def` and `session.scalars(stmt)` instead of `(await session.execute(stmt)).scalars()`.
+> **Layer note:** Code examples in this section show async patterns for L5+ completeness. During L0-L4, use `def` instead of `async def` and `session.scalars(stmt)` instead of `(await session.execute(stmt)).scalars()`. Both `await session.scalars(...)` and `(await session.execute(...)).scalars()` are valid on `AsyncSession` at L5+ — `await session.scalars(...)` is canonical per SQLAlchemy docs (native method since 1.4.24).
 
 ### A. Implementation
 
@@ -2602,7 +2717,7 @@ async def admin_redirect_handler(request: Request, exc: AdminRedirect) -> Redire
 
 ## 11.5 `src/admin/deps/audit.py`
 
-> **[PHASE 0-3]** This module is part of Flask removal. Use sync patterns.
+> **[L0-L2]** This module is part of Flask removal. Use sync patterns. It stays sync through L4 and auto-converts at L5 only to the extent its callers flip to `async def` (most functions here are framework-agnostic utilities and remain sync across all layers).
 
 ### A. Implementation
 
@@ -2760,7 +2875,7 @@ class TestAuditAction:
 
 ## 11.6 `src/admin/oauth.py`
 
-> **[PHASE 0-3]** This module is part of Flask removal. Use sync patterns.
+> **[L0-L2]** This module is part of Flask removal. Use sync patterns. It stays sync through L4 and auto-converts at L5 only to the extent its callers flip to `async def` (most functions here are framework-agnostic utilities and remain sync across all layers).
 
 ### A. Implementation
 
@@ -3022,259 +3137,440 @@ class TestTenantClientCache:
 
 ---
 
-## 11.7 `src/admin/csrf.py` — CSRFOriginMiddleware
+## 11.6.1 OIDC `form_post` transit cookie
 
-> **[PHASE 0-3]** This module is part of Flask removal. Use sync patterns.
+> **[L1b]** Sub-section under §11.6. Resolves the SG-5 CSRF/OIDC cookie-attachment edge case. Pure-ASGI; no Flask dependencies; lands with the OIDC router port in L1b.
 
-> **[SUPERSEDED 2026-04-11]** The Double Submit Cookie implementation below is the **rejected** approach.
-> v2.0 implements **CSRFOriginMiddleware** (~120 LOC, pure-ASGI Origin header validation).
-> See CLAUDE.md blocker 5: "NOT double-submit cookie — that would require changing ~80 fetch calls
-> + ~47 forms for zero practical security gain."
->
-> **v2.0 CSRF strategy:** SameSite=Lax session cookie + Origin header validation.
-> Key design choices:
-> 1. **Origin header validation**, not token-based. Zero JavaScript changes, zero template changes, zero form changes.
-> 2. **Pure ASGI**, not BaseHTTPMiddleware (same rationale as other middleware).
-> 3. **No body reading** — Origin validation is purely header-based. No replay-receive complexity.
-> 4. **No separate cookie** — no `adcp_csrf` cookie, no `itsdangerous` dependency for CSRF.
-> 5. **Exempt paths:** `/mcp`, `/a2a`, `/api/v1/`, `/.well-known/`, `/agent.json`, `/_internal/`,
->    `/admin/auth/callback`, `/admin/auth/oidc/callback`, `/admin/auth/gam/callback`.
+### A. Background
 
-### A. Implementation (SUPERSEDED — preserved for reference only)
+Google OIDC (and every OP that matches the OpenID Connect Core 1.0 spec) supports `response_mode=form_post` — the IdP returns the authorization code/state via an HTML form that auto-submits to the RP's callback URL. The browser issues a cross-origin POST whose `Origin` is the IdP's host (e.g., `https://accounts.google.com`), NOT our origin. Two separate problems fall out of this single fact:
+
+1. **Session cookie dropped by SameSite.** The project-wide session cookie is set with `SameSite=Lax` (confirmed in §11.2 / `SessionMiddleware` registration). RFC 6265bis §5.3.7.1 and the living [SameSite draft](https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-rfc6265bis) are explicit: `Lax` cookies are NOT attached to cross-site POSTs — only to top-level GET navigations and same-site requests. When Google posts the form to `/admin/auth/oidc/callback`, the browser strips `adcp_session`. The callback handler therefore cannot read any state the login-initiation step wrote to `request.session`.
+2. **CSRF middleware refuses the callback.** `CSRFOriginMiddleware` (§11.7) validates `Origin` on unsafe methods against the configured allowed-origins list. The IdP's origin is never on that list (and cannot be — `allowed_origins` is our own public origins, not every OP we might federate with). So the callback also fails Origin validation before any handler runs.
+
+Both are blocking: current Flask OIDC code at `src/admin/blueprints/oidc.py:209, 215` writes `state`, `nonce`, and the PKCE `code_verifier` to `session` pre-redirect and reads them back on callback. Port-to-FastAPI without mitigation = OIDC login permanently broken.
+
+The widespread mitigation in the Python OIDC ecosystem (and what Authlib recommends) is a **separate short-lived "transit" cookie** set on the login-initiation response with `SameSite=None; Secure; HttpOnly` so it survives the cross-origin POST, carrying only the three OIDC round-trip fields. The admin session cookie remains `SameSite=Lax` — no weakening of the general CSRF posture.
+
+### B. Impact — what breaks without the transit cookie
+
+- Every tenant whose OIDC provider uses `response_mode=form_post` (Google with `form_post` opt-in, ADFS, Okta OIDC-SAML hybrid, Azure AD B2C in some configs) — login is dead.
+- Providers that default to `response_mode=query` (most OIDC deployments, including Google's default) — unaffected, but we cannot predict per-tenant `response_mode` without auditing every tenant's `OIDCConfig`. Assume form_post is possible.
+- CSRFOriginMiddleware returns 403 on the callback before Authlib even parses the response.
+
+### C. Implementation — `src/admin/oauth_transit.py`
+
+~60 LOC. Pure stdlib + `itsdangerous`.
 
 ```python
-"""SUPERSEDED by CSRFOriginMiddleware. See CLAUDE.md blocker 5.
-Original Double Submit Cookie implementation preserved for reference only.
-v2.0 uses SameSite=Lax + Origin header validation (~120 LOC) instead.
+"""OIDC form_post transit cookie.
 
-ORIGINAL DESIGN CHOICES (no longer applicable):
+Carries {state, nonce, code_verifier} across the cross-origin POST from the IdP
+back to our callback URL. Separate from the admin session cookie because SameSite=Lax
+on that cookie strips it from cross-site POSTs.
 
-1. Pure ASGI, NOT BaseHTTPMiddleware. BaseHTTPMiddleware runs in a separate
-   task group (Starlette #1729) and its body reads break request.receive
-   downstream. Pure ASGI lets us intercept receive messages cleanly.
-
-2. Double Submit Cookie, not synchronizer pattern. Simpler, stateless,
-   doesn't require storing tokens server-side. The signed token proves
-   it came from us (itsdangerous) and the cookie+form match proves the
-   client possesses the cookie (i.e., same-origin).
-
-3. Separate cookie from session. Reasons:
-   - CSRF cookie must be readable by JS (for AJAX XHR headers).
-     Session cookie is HttpOnly.
-   - CSRF cookie can be shorter-lived (24h) than session (14d).
-   - Enables stateless token validation (no session state coupling).
-
-4. Middleware ORDER: CSRFMiddleware runs INSIDE SessionMiddleware (i.e.,
-   registered LATER, so it's outer via add_middleware's LIFO). That way
-   request.session is available if we ever want to tie CSRF to session.
-   In v2.0.0 we don't — but putting CSRF inside Session avoids the
-   reverse issue (Session can't see our scope changes). See README at
-   the bottom for the ordering rationale.
-
-5. Body reading: on unsafe-method + form content type, we must read the
-   ENTIRE request body to find the csrf_token field, THEN re-inject that
-   body into the receive channel so the downstream handler sees a fresh
-   stream. This is the tricky part. See _read_csrf_from_body().
+Signed + short-lived; compromises on confidentiality are bounded because the
+fields are single-use OIDC round-trip values, not auth material.
 """
 from __future__ import annotations
 
 import logging
-import os
-import secrets
 from typing import Any
-from urllib.parse import parse_qs
 
+from fastapi import Request, Response
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 logger = logging.getLogger(__name__)
 
-_COOKIE_NAME = "adcp_csrf"
-_FORM_FIELD = "csrf_token"
-_HEADER_NAME = "x-csrf-token"
-_TOKEN_MAX_AGE = 24 * 3600
-_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
-_EXEMPT_PATH_PREFIXES: tuple[str, ...] = (
+TRANSIT_COOKIE = "oauth_transit"
+TRANSIT_MAX_AGE = 600  # 10 minutes — OIDC spec caps state validity at ~10min
+
+
+def get_transit_serializer(secret: str) -> URLSafeTimedSerializer:
+    """Factory — one serializer per secret. Not memoized; caller holds the ref."""
+    return URLSafeTimedSerializer(secret, salt="oauth_transit_v1")
+
+
+def start_oauth_flow(
+    response: Response,
+    *,
+    secret: str,
+    state: str,
+    nonce: str,
+    code_verifier: str,
+) -> None:
+    """Called from the login-initiation handler BEFORE the redirect to the IdP.
+
+    Sets the transit cookie on the outgoing 302/303 response. The cookie survives
+    the IdP round-trip because SameSite=None allows cross-site attachment.
+    """
+    serializer = get_transit_serializer(secret)
+    payload = serializer.dumps({"state": state, "nonce": nonce, "code_verifier": code_verifier})
+    response.set_cookie(
+        key=TRANSIT_COOKIE,
+        value=payload,
+        max_age=TRANSIT_MAX_AGE,
+        httponly=True,
+        secure=True,          # REQUIRED with SameSite=None
+        samesite="none",      # survives the cross-origin form_post
+        path="/admin/auth/",  # narrow — only visible to /admin/auth/* paths
+    )
+
+
+def finish_oauth_flow(
+    request: Request,
+    *,
+    secret: str,
+) -> dict[str, Any] | None:
+    """Called from the OIDC callback handler BEFORE Authlib token exchange.
+
+    Returns the decoded payload or None if the cookie is missing / expired / tampered.
+    """
+    raw = request.cookies.get(TRANSIT_COOKIE)
+    if not raw:
+        logger.warning("oauth_transit_cookie_missing")
+        return None
+
+    serializer = get_transit_serializer(secret)
+    try:
+        return serializer.loads(raw, max_age=TRANSIT_MAX_AGE)
+    except SignatureExpired:
+        logger.warning("oauth_transit_cookie_expired")
+        return None
+    except BadSignature:
+        logger.warning("oauth_transit_cookie_tampered")
+        return None
+
+
+def delete_transit_cookie(response: Response) -> None:
+    """Call on BOTH success and failure callback paths.
+
+    Attributes MUST match set_cookie exactly — browsers identify cookies by
+    (name, path, domain), but the Set-Cookie attributes that form the delete
+    directive must replicate SameSite/Secure or some browsers will silently
+    ignore the delete.
+    """
+    response.delete_cookie(
+        key=TRANSIT_COOKIE,
+        path="/admin/auth/",
+        httponly=True,
+        secure=True,
+        samesite="none",
+    )
+```
+
+### D. Callback flow integration
+
+```python
+# src/admin/routers/oidc.py — callback excerpt
+@router.post("/callback", name="admin_oidc_callback")
+async def oidc_callback(request: Request, response: Response, ...):
+    transit = finish_oauth_flow(request, secret=settings.session_secret)
+    if transit is None:
+        raise HTTPException(400, "OIDC state cookie missing or expired")
+
+    if request.query_params.get("state") != transit["state"]:
+        delete_transit_cookie(response)
+        raise HTTPException(400, "OIDC state mismatch")
+
+    # Authlib token exchange consumes code_verifier + nonce from `transit`
+    token = await oauth.google.authorize_access_token(
+        request,
+        code_verifier=transit["code_verifier"],
+        claims_options={"nonce": {"value": transit["nonce"]}},
+    )
+
+    # ... establish session, set admin session cookie ...
+
+    delete_transit_cookie(response)
+    return RedirectResponse("/admin/", status_code=303)
+```
+
+### E. CSRFOriginMiddleware exempt path
+
+`CSRFOriginMiddleware` (§11.7) must **not** Origin-validate the OIDC callback — the Origin is the IdP, and we have no way to pre-register every federated IdP's origin. Add `/admin/auth/oidc/callback` to the existing exempt list (alongside `/_internal/` and any adapter callbacks):
+
+```python
+# §11.7 CSRFOriginMiddleware — extend exempt list
+CSRF_EXEMPT_PATHS = (
+    "/_internal/",
+    "/admin/auth/oidc/callback",  # OIDC form_post — state validated by oauth_transit
+    # ...
+)
+```
+
+The state validation in `finish_oauth_flow` + state-param comparison above is the CSRF defence on this path — it's stronger than Origin validation for this specific class of request because the state is a signed, single-use, timed value the attacker cannot forge.
+
+### F. Tests
+
+`tests/integration/test_oidc_form_post_cross_origin_callback.py` — 2 cases:
+
+```python
+@pytest.mark.integration
+async def test_oidc_form_post_cross_origin_callback_validates(async_client, monkeypatch):
+    """Green path: IdP form_post POST carries oauth_transit cookie, callback accepts."""
+    # 1. GET /admin/auth/oidc/login — handler calls start_oauth_flow, 302s to IdP
+    # 2. Simulate IdP response: POST /admin/auth/oidc/callback with Origin=https://accounts.google.com
+    #    + oauth_transit cookie preserved (client does NOT preserve SameSite=Lax adcp_session — asserts the exact failure mode we're mitigating)
+    # Assert: 303 redirect to /admin/, adcp_session cookie set, oauth_transit cookie deleted.
+
+
+@pytest.mark.integration
+async def test_oidc_form_post_rejects_state_mismatch(async_client):
+    """Negative path: tampered state → 400 + transit cookie deleted."""
+    # 1. Obtain a valid oauth_transit cookie via login-init
+    # 2. POST callback with state=<different_value>
+    # Assert: 400, oauth_transit cookie cleared in Set-Cookie response, adcp_session NOT created.
+```
+
+### G. Gotchas
+
+- **`SameSite=None` without `Secure` is silently dropped by modern browsers.** The `secure=True` parameter is not optional — omit it and the cookie simply never arrives on the callback. In local dev over `http://localhost:8000`, Chrome accepts `SameSite=None; Secure` on localhost as a special case; Firefox requires `about:config` tweaks. Staging must run under HTTPS for this flow to work.
+- **`delete_transit_cookie` attribute symmetry.** If set_cookie used `samesite="none"` and delete_cookie omits it, some browsers (notably Safari) treat the delete as a distinct cookie and leave the original in place. The `oauth_transit.py` helpers enforce symmetric attributes.
+- **Cookie path scoping reduces blast radius.** `path="/admin/auth/"` means the cookie is only attached on `/admin/auth/*` — it cannot be replayed against `/admin/tenants/*` or `/_internal/`, nor leak in `document.cookie` on other admin pages.
+- **10-minute max_age.** Matches OIDC spec guidance on state validity. If users bounce off the IdP and come back 15 minutes later, they get a fresh login-initiation round; do not extend this timeout.
+- **Not used by Google OAuth2 non-OIDC flow.** The google-login path at `src/admin/routers/auth.py` uses `response_mode=query` (the default). Only the OIDC router needs `oauth_transit`.
+
+### H. Cross-references
+
+- `§11.6` Authlib singleton — unaffected; it handles token exchange, not state transit
+- `§11.7` CSRFOriginMiddleware — exempt-path list extension above
+- `implementation-checklist.md §3.5.3 SG-5` — this sub-section is the documented resolution
+- `flask-to-fastapi-deep-audit.md §1.5` "OIDC form_post response mode" — original risk documentation (the paragraph in that section that says "the OIDC callback does not rely on a pre-auth session cookie" is WRONG for the current Flask code and is corrected by pointing to §11.6.1)
+
+---
+
+## 11.7 `src/admin/csrf.py` — CSRFOriginMiddleware
+
+> **[Layers 0-4]** This module is part of Flask removal. Sync patterns. Pure-ASGI middleware.
+
+> **Strategy:** SameSite=Lax session cookie + Origin header validation (Option A from CLAUDE.md blocker 5). No token in forms, no cookie rotation, no body read. ~140 LOC pure-ASGI.
+>
+> **Why this works:** SameSite=Lax on the session cookie blocks cross-site cookie attachment on unsafe methods (POST/PUT/PATCH/DELETE); cross-origin XHR from a malicious page cannot attach the session cookie, so any unsafe request that REACHES us carrying a session cookie originated from our origin or from a top-level navigation we initiated. Origin-header validation closes the residual gap: same-site subdomains and legacy user-agents that don't enforce SameSite still emit `Origin` on cross-origin requests, and we reject any mismatch. The combination is CSRF-safe without requiring token plumbing through ~80 fetch calls and ~47 form templates.
+>
+> **The historical Double Submit Cookie implementation has been superseded.** Its rationale and code were removed from the plan on 2026-04-14. If you need the archival text for context, see git history.
+
+### A. Implementation
+
+```python
+"""CSRF defense via Origin header validation + SameSite=Lax session cookie.
+
+Protects unsafe HTTP methods (POST/PUT/PATCH/DELETE) on non-exempt paths
+by requiring the Origin (or Referer fallback) header to match one of the
+configured allowed origins. Safe methods and exempt paths pass through.
+
+Design choices:
+1. Pure-ASGI, not BaseHTTPMiddleware — avoids Starlette #1729 task-group
+   interleaving and keeps body streams intact for downstream handlers.
+2. Header-only validation — no form-field parsing, no body buffering.
+3. Paired with SessionMiddleware's SameSite=Lax HttpOnly=True session
+   cookie (the session cookie is the only credential that matters for
+   CSRF on admin routes).
+4. Wildcard subdomain matching — accepts requests from `*.PRIMARY_DOMAIN`
+   plus any explicit virtual_hosts, so newly-created tenants don't get
+   stale-rejected after startup.
+5. Exempt paths include AdCP transport surfaces (/mcp, /a2a, /api/v1),
+   internal health endpoints (/_internal/), and the three OAuth callback
+   paths that Google/OIDC providers POST to directly (byte-immutable,
+   see notes/CLAUDE.md invariant 6).
+"""
+from __future__ import annotations
+
+import json
+import logging
+from html import escape
+from typing import Any, Iterable
+from urllib.parse import urlsplit
+
+logger = logging.getLogger(__name__)
+
+_SAFE_METHODS: frozenset[str] = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
+
+# Byte-immutable OAuth callback paths (notes/CLAUDE.md invariant 6). Providers
+# POST the authorization-code response to these URLs; they cannot be
+# CSRF-protected because the POST originates from the provider's origin.
+_OAUTH_CALLBACK_EXEMPTS: tuple[str, ...] = (
+    "/admin/auth/google/callback",
+    "/admin/auth/oidc/callback",
+    "/admin/auth/gam/callback",
+)
+
+# AdCP and internal transport surfaces — out-of-scope for admin CSRF.
+_TRANSPORT_EXEMPT_PREFIXES: tuple[str, ...] = (
     "/mcp",
     "/a2a",
     "/api/v1/",
     "/.well-known/",
     "/agent.json",
-    "/admin/auth/callback",
-    "/admin/auth/oidc/callback",
+    "/_internal/",
 )
-_MAX_BODY_BYTES = 1 * 1024 * 1024  # 1MB — refuse larger bodies outright
+# FIXME(adcp-webhooks): when AdCP inbound push-notification receivers land
+# (per PushNotificationConfig DB rows), add their path prefix to this tuple
+# and update test_architecture_csrf_exempt_covers_webhooks.py.
 
 
-def _is_prod() -> bool:
-    return os.environ.get("PRODUCTION", "").lower() == "true"
+def _extract_header(scope: dict, name: str) -> str | None:
+    """Extract a single header value from an ASGI scope.
 
+    ASGI contract guarantees header names in `scope["headers"]` are already
+    lowercased bytes — Uvicorn, Hypercorn, Daphne and Starlette's TestClient
+    all emit them that way. The defensive `.lower()` on the raw name covers
+    the case where a unit test constructs a scope by hand with mixed-case
+    header bytes; it is cheap (byte-level) and avoids a test-only footgun.
 
-def _signer() -> URLSafeTimedSerializer:
-    """Signer shares the SessionMiddleware secret with a distinct salt.
-
-    Distinct salt ensures a token signed for CSRF cannot be replayed as a
-    session cookie or vice-versa, even though they share the secret.
+    First-match policy: duplicate headers (a client sending two Origin lines)
+    are reduced to the first occurrence. RFC 6454 §7.2 says Origin is a
+    single-value header, so two Origin lines is already malformed — rejecting
+    it by reading only the first is safe and avoids ambiguity.
     """
-    secret = os.environ.get("SESSION_SECRET", "")
-    if not secret:
-        raise RuntimeError("SESSION_SECRET not set; CSRFMiddleware cannot sign tokens")
-    return URLSafeTimedSerializer(secret, salt="adcp-csrf-v1")
-
-
-def _new_token() -> str:
-    return _signer().dumps(secrets.token_urlsafe(32))
-
-
-def _validate_token(token: str) -> bool:
-    if not token:
-        return False
-    try:
-        _signer().loads(token, max_age=_TOKEN_MAX_AGE)
-        return True
-    except (BadSignature, SignatureExpired):
-        return False
-    except Exception:
-        logger.exception("CSRF token validation raised unexpectedly")
-        return False
-
-
-def _extract_cookie(cookie_header: str, cookie_name: str) -> str | None:
-    """Parse a Cookie header and return the named cookie's value.
-
-    Handles:
-    - Multiple cookies separated by "; "
-    - Quoted values (per RFC 6265 §4.1.1 only quotes around value allowed)
-    - Names that happen to be substrings of other names (e.g., `csrf` vs `adcp_csrf`)
-    - Empty values (returns None, not "")
-
-    Does NOT use http.cookies.SimpleCookie because it chokes on unquoted
-    special characters that browsers happily send.
-    """
-    if not cookie_header:
-        return None
-    # RFC 6265: cookie-pair separator is "; " but be lenient on whitespace
-    for raw in cookie_header.split(";"):
-        raw = raw.strip()
-        if not raw:
-            continue
-        name, _, value = raw.partition("=")
-        if name.strip() != cookie_name:
-            continue
-        value = value.strip()
-        if value.startswith('"') and value.endswith('"') and len(value) >= 2:
-            value = value[1:-1]
-        return value or None
+    target = name.lower().encode("latin-1")
+    for raw_name, raw_value in scope.get("headers", []):
+        if raw_name.lower() == target:
+            return raw_value.decode("latin-1")
     return None
 
 
-async def _read_csrf_from_body(
-    scope: dict,
-    receive: Any,
-    headers: dict[str, str],
-) -> tuple[str | None, Any]:
-    """Read the request body once, extract csrf_token, return a replay-receive.
+_DEFAULT_PORTS: dict[str, int] = {"http": 80, "https": 443, "ws": 80, "wss": 443}
 
-    Returns (token_or_None, new_receive_callable). The new_receive_callable
-    replays the buffered body bytes exactly once, then yields the remaining
-    receive messages from the upstream channel. The downstream handler MUST
-    use the returned receive, not the original.
 
-    Body size guarded by _MAX_BODY_BYTES — malicious clients cannot OOM us
-    with a huge multipart upload.
+def _origin_of(url: str) -> str | None:
+    """Return RFC 6454-serialized scheme://host[:port] for a URL.
 
-    Only parses form-encoded bodies (application/x-www-form-urlencoded).
-    For multipart/form-data, we let the downstream handler read it and rely
-    on the header path instead — parsing multipart in middleware is both
-    expensive (full multipart parser) and risky (stream consumption).
+    Applies the serialization rules browsers apply before sending
+    Origin/Referer-derived origins on the wire:
+      - scheme lowercased
+      - host lowercased
+      - default port for the scheme stripped (443 for https, 80 for http, etc.)
+      - IPv6 hosts re-bracketed (urllib strips brackets in `.hostname`)
+
+    Any allowed_origins registered WITH a default port would otherwise never
+    match a browser Origin header (which serializes without the default port),
+    403-ing every same-origin POST.
     """
-    content_type = headers.get("content-type", "").lower()
-
-    # Multipart bodies: skip form parsing, rely on header token only
-    if "multipart/form-data" in content_type:
-        return None, receive
-
-    # Only parse form-encoded
-    is_form = "application/x-www-form-urlencoded" in content_type
-    if not is_form:
-        return None, receive
-
-    # Buffer the entire body
-    chunks: list[bytes] = []
-    more_body = True
-    total = 0
-    messages: list[dict] = []
-    while more_body:
-        message = await receive()
-        messages.append(message)
-        if message["type"] != "http.request":
-            # Disconnect or unknown — bail
-            break
-        body = message.get("body", b"")
-        total += len(body)
-        if total > _MAX_BODY_BYTES:
-            # Too large: stop reading, surface a replay receive that replays
-            # what we have and let downstream handle it as truncated
-            chunks.append(body)
-            break
-        chunks.append(body)
-        more_body = message.get("more_body", False)
-
-    full_body = b"".join(chunks)
-
-    token: str | None = None
     try:
-        parsed = parse_qs(full_body.decode("latin-1"), keep_blank_values=True)
-        values = parsed.get(_FORM_FIELD, [])
-        if values:
-            token = values[0]
-    except Exception:
-        logger.exception("Failed to parse form body for CSRF token")
-        token = None
-
-    # Build a replay receive: first message replays the buffered body as a
-    # single http.request, then subsequent calls delegate to upstream receive
-    replayed = False
-
-    async def replay_receive():
-        nonlocal replayed
-        if not replayed:
-            replayed = True
-            return {
-                "type": "http.request",
-                "body": full_body,
-                "more_body": False,
-            }
-        # Caller should not call again since more_body=False, but be safe
-        return await receive()
-
-    return token, replay_receive
+        parts = urlsplit(url)
+    except ValueError:
+        return None
+    if not parts.scheme or not parts.hostname:
+        return None
+    scheme = parts.scheme.lower()
+    host = parts.hostname.lower()
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    try:
+        port = parts.port
+    except ValueError:
+        return None
+    if port is None or port == _DEFAULT_PORTS.get(scheme):
+        return f"{scheme}://{host}"
+    return f"{scheme}://{host}:{port}"
 
 
-async def _respond_403(send: Any, detail: str = "CSRF token missing or invalid") -> None:
-    import json
-    body = json.dumps({"detail": detail}).encode("utf-8")
+def _is_exempt(path: str) -> bool:
+    if path in _OAUTH_CALLBACK_EXEMPTS:
+        return True
+    return any(path.startswith(p) for p in _TRANSPORT_EXEMPT_PREFIXES)
+
+
+def _scope_wants_html(scope: dict) -> bool:
+    """Mirror of src.admin.content_negotiation._wants_html, scope-native."""
+    path: str = scope.get("path", "")
+    if not (path.startswith("/admin/") or path.startswith("/tenant/")):
+        return False
+    if _extract_header(scope, "hx-request"):
+        return False
+    xrw = _extract_header(scope, "x-requested-with")
+    if xrw and xrw.lower() == "xmlhttprequest":
+        return False
+    accept = _extract_header(scope, "accept") or ""
+    if "application/json" in accept and "text/html" not in accept:
+        return False
+    return "text/html" in accept
+
+
+def _render_403_html(detail: str) -> str:
+    return (
+        "<!DOCTYPE html>\n"
+        "<html><head><meta charset=\"utf-8\"><title>403 Forbidden</title></head>"
+        "<body style=\"font-family: sans-serif; max-width: 600px; margin: 4em auto;\">"
+        "<h1>403 Forbidden</h1>"
+        f"<p>{escape(detail)}</p>"
+        "<p><a href=\"/admin/\">Return to the admin dashboard</a></p>"
+        "</body></html>"
+    )
+
+
+async def _respond_403(send: Any, scope: dict, detail: str) -> None:
+    """403 response, Accept-aware.
+
+    Browsers hitting admin paths get HTML; API/MCP/A2A callers and XHR fetches
+    get JSON. Mirrors the AdCPError handler's negotiation logic so CSRF reject
+    path and domain-error path have identical UX. Middleware runs BEFORE
+    FastAPI exception handlers, so negotiation is inlined here.
+    """
+    if _scope_wants_html(scope):
+        body = _render_403_html(detail).encode("utf-8")
+        content_type = b"text/html; charset=utf-8"
+    else:
+        body = json.dumps({"detail": detail}).encode("utf-8")
+        content_type = b"application/json"
     await send({
         "type": "http.response.start",
         "status": 403,
         "headers": [
-            (b"content-type", b"application/json"),
+            (b"content-type", content_type),
             (b"content-length", str(len(body)).encode()),
+            (b"vary", b"Origin, Accept"),
         ],
     })
-    await send({
-        "type": "http.response.body",
-        "body": body,
-    })
+    await send({"type": "http.response.body", "body": body})
 
 
-def _is_exempt(path: str) -> bool:
-    return any(path.startswith(p) for p in _EXEMPT_PATH_PREFIXES)
+class CSRFOriginMiddleware:
+    """Pure-ASGI CSRF defense via Origin header validation.
 
+    Constructor accepts:
+    - allowed_origins: explicit set of origin strings (e.g. {"https://admin.example.com"})
+    - allowed_origin_suffixes: domain suffixes for wildcard matching
+      (e.g. {".scope3.com"} accepts any "https://*.scope3.com" or "http://*.scope3.com")
 
-class CSRFMiddleware:
-    """SUPERSEDED by CSRFOriginMiddleware. See CLAUDE.md blocker 5."""
-    def __init__(self, app: Any) -> None:
+    The wildcard set lets newly-provisioned tenant subdomains work without
+    a startup-time refresh. Both sets are closed over at construction.
+    """
+
+    def __init__(
+        self,
+        app: Any,
+        *,
+        allowed_origins: Iterable[str] = (),
+        allowed_origin_suffixes: Iterable[str] = (),
+    ) -> None:
         self.app = app
+        self.allowed_origins: frozenset[str] = frozenset(
+            o.rstrip("/").lower() for o in allowed_origins if o
+        )
+        self.allowed_suffixes: tuple[str, ...] = tuple(
+            s.lower() for s in allowed_origin_suffixes if s
+        )
+        if not self.allowed_origins and not self.allowed_suffixes:
+            raise RuntimeError(
+                "CSRFOriginMiddleware requires at least one of "
+                "allowed_origins or allowed_origin_suffixes"
+            )
+
+    def _origin_allowed(self, normalized_origin: str) -> bool:
+        if normalized_origin in self.allowed_origins:
+            return True
+        # Wildcard subdomain match: extract host from normalized origin
+        # ("https://foo.example.com" → "foo.example.com")
+        try:
+            host = urlsplit(normalized_origin).netloc.lower()
+        except ValueError:
+            return False
+        return any(
+            host.endswith(suffix) or host == suffix.lstrip(".")
+            for suffix in self.allowed_suffixes
+        )
 
     async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
         if scope["type"] != "http":
@@ -3284,247 +3580,397 @@ class CSRFMiddleware:
         method: str = scope["method"]
         path: str = scope["path"]
 
-        # Build a case-insensitive headers dict
-        headers: dict[str, str] = {}
-        for name, value in scope.get("headers", []):
-            headers[name.decode("latin-1").lower()] = value.decode("latin-1")
+        # Safe methods always bypass
+        if method in _SAFE_METHODS:
+            await self.app(scope, receive, send)
+            return
 
-        cookie_header = headers.get("cookie", "")
-        cookie_token = _extract_cookie(cookie_header, _COOKIE_NAME)
+        # Exempt paths bypass
+        if _is_exempt(path):
+            await self.app(scope, receive, send)
+            return
 
-        downstream_receive = receive
+        # Origin validation
+        origin = _extract_header(scope, "origin")
 
-        if method not in _SAFE_METHODS and not _is_exempt(path):
-            # Unsafe method — validate
-            form_token, downstream_receive = await _read_csrf_from_body(scope, receive, headers)
-            header_token = headers.get(_HEADER_NAME)
-            submitted = form_token or header_token
-
-            if not cookie_token or not submitted or submitted != cookie_token:
+        if origin is None:
+            # No Origin header — legacy user-agent or a same-origin request
+            # the browser did not annotate. Fall back to Referer.
+            #
+            # SAFETY: "missing Origin AND missing Referer = accept" is safe
+            # ONLY because SameSite=Lax on the session cookie blocks the
+            # cookie on cross-site unsafe requests. Without Lax, this branch
+            # would be a CSRF hole. The Lax-dependency is load-bearing —
+            # if SessionMiddleware is configured with same_site="none",
+            # this branch must reject instead.
+            referer = _extract_header(scope, "referer")
+            if referer is None:
+                await self.app(scope, receive, send)
+                return
+            ref_origin = _origin_of(referer)
+            if ref_origin is None:
+                await _respond_403(send, scope, "CSRF: unparseable Referer")
+                return
+            if not self._origin_allowed(ref_origin):
                 logger.info(
-                    "CSRF rejection: path=%s method=%s has_cookie=%s has_submitted=%s match=%s",
-                    path, method, bool(cookie_token), bool(submitted),
-                    (submitted == cookie_token) if submitted and cookie_token else False,
+                    "CSRF rejection (referer): path=%s method=%s referer_origin=%s",
+                    path, method, ref_origin,
                 )
-                await _respond_403(send)
+                await _respond_403(send, scope, "CSRF: cross-origin request rejected")
                 return
+            await self.app(scope, receive, send)
+            return
 
-            if not _validate_token(cookie_token):
-                logger.info("CSRF rejection: path=%s expired or invalid signature", path)
-                await _respond_403(send, "CSRF token expired")
-                return
+        if origin == "null":
+            # Origin: null appears for file://, sandboxed iframes with
+            # "allow-scripts" but not "allow-same-origin", and certain
+            # cross-origin redirect chains. None of these are legitimate
+            # admin request sources — reject.
+            logger.info(
+                "CSRF rejection (null origin): path=%s method=%s", path, method,
+            )
+            await _respond_403(send, scope, "CSRF: opaque origin rejected")
+            return
 
-        # Determine token to set on response: rotate only if missing/invalid
-        if cookie_token and _validate_token(cookie_token):
-            token_for_response = cookie_token
-            needs_set_cookie = False
-        else:
-            token_for_response = _new_token()
-            needs_set_cookie = True
+        normalized = _origin_of(origin)
+        if normalized is None:
+            await _respond_403(send, scope, "CSRF: unparseable Origin")
+            return
 
-        # Expose on scope state for templates / handlers
-        scope.setdefault("state", {})
-        scope["state"]["csrf_token"] = token_for_response
+        if not self._origin_allowed(normalized):
+            logger.info(
+                "CSRF rejection: path=%s method=%s origin=%s", path, method, normalized,
+            )
+            await _respond_403(send, scope, "CSRF: cross-origin request rejected")
+            return
 
-        async def send_with_cookie(message: dict) -> None:
-            if message["type"] == "http.response.start" and needs_set_cookie:
-                headers_list = list(message.get("headers", []))
-                cookie_attrs = [
-                    f"{_COOKIE_NAME}={token_for_response}",
-                    "Path=/",
-                    "SameSite=Lax",
-                    f"Max-Age={_TOKEN_MAX_AGE}",
-                ]
-                if _is_prod():
-                    cookie_attrs.append("Secure")
-                # HttpOnly INTENTIONALLY OMITTED — JS needs to read for XHR
-                cookie_value = "; ".join(cookie_attrs)
-                headers_list.append((b"set-cookie", cookie_value.encode("latin-1")))
-                message["headers"] = headers_list
-            await send(message)
-
-        await self.app(scope, downstream_receive, send_with_cookie)
+        await self.app(scope, receive, send)
 ```
 
 ### B. Tests
 
 ```python
-# tests/unit/admin/test_csrf.py
+# tests/unit/admin/test_csrf_origin_middleware.py
 import pytest
-from fastapi import FastAPI, Request, Form
-from starlette.middleware.sessions import SessionMiddleware
+from starlette.applications import Starlette
+from starlette.responses import PlainTextResponse
+from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from src.admin.csrf import (
-    CSRFMiddleware,
-    _extract_cookie,
-    _new_token,
-    _validate_token,
-    _signer,
-)
+from src.admin.csrf import CSRFOriginMiddleware, _extract_header, _origin_of
 
 
-@pytest.fixture(autouse=True)
-def _env(monkeypatch):
-    monkeypatch.setenv("SESSION_SECRET", "x" * 64)
-    monkeypatch.delenv("PRODUCTION", raising=False)
+def _build(*, allowed_origins=("https://admin.sales-agent.example.com",),
+           allowed_suffixes=()):
+    async def ok(request):
+        return PlainTextResponse("ok")
+
+    inner = Starlette(routes=[
+        Route("/admin/foo", ok, methods=["GET", "POST", "PUT", "DELETE"]),
+        Route("/mcp/tool", ok, methods=["POST"]),
+        Route("/admin/auth/google/callback", ok, methods=["POST"]),
+    ])
+    wrapped_app = CSRFOriginMiddleware(
+        inner,
+        allowed_origins=allowed_origins,
+        allowed_origin_suffixes=allowed_suffixes,
+    )
+    assert wrapped_app is not inner, "harness must wrap inner app with CSRF middleware"
+    return TestClient(wrapped_app)
 
 
-class TestExtractCookie:
-    def test_single_cookie(self):
-        assert _extract_cookie("adcp_csrf=abc", "adcp_csrf") == "abc"
+class TestHarnessSanity:
+    """If these fail, the harness stopped exercising the middleware."""
 
-    def test_multi_cookie(self):
-        h = "adcp_session=xyz; adcp_csrf=abc; other=qqq"
-        assert _extract_cookie(h, "adcp_csrf") == "abc"
+    def test_wrong_origin_actually_returns_403(self):
+        # If the middleware were bypassed, this would be 200.
+        with _build() as c:
+            r = c.post("/admin/foo", headers={"Origin": "https://evil.example.com"})
+        assert r.status_code == 403, "harness is not routing through CSRF middleware"
 
-    def test_missing_cookie_returns_none(self):
-        assert _extract_cookie("adcp_session=xyz", "adcp_csrf") is None
-
-    def test_empty_value_returns_none(self):
-        assert _extract_cookie("adcp_csrf=", "adcp_csrf") is None
-
-    def test_substring_name_not_matched(self):
-        assert _extract_cookie("csrf=wrong", "adcp_csrf") is None
-
-    def test_quoted_value_unwrapped(self):
-        assert _extract_cookie('adcp_csrf="abc"', "adcp_csrf") == "abc"
+    def test_missing_allowed_origins_raises(self):
+        async def noop(scope, receive, send): pass
+        with pytest.raises(RuntimeError):
+            CSRFOriginMiddleware(noop, allowed_origins=(), allowed_origin_suffixes=())
 
 
-class TestTokenLifecycle:
-    def test_validate_accepts_fresh(self):
-        t = _new_token()
-        assert _validate_token(t) is True
+class TestHeaderExtraction:
+    def test_handcrafted_uppercase_header_name_still_matches(self):
+        scope = {"headers": [(b"Origin", b"https://foo")]}
+        assert _extract_header(scope, "origin") == "https://foo"
 
-    def test_validate_rejects_tampered(self):
-        t = _new_token()
-        assert _validate_token(t + "X") is False
-
-    def test_validate_rejects_empty(self):
-        assert _validate_token("") is False
-
-
-def _build_app():
-    app = FastAPI()
-    app.add_middleware(SessionMiddleware, secret_key="x" * 64)
-    app.add_middleware(CSRFMiddleware)
-
-    @app.get("/form")
-    def show_form(request: Request):
-        return {"csrf_token": request.state.csrf_token}
-
-    @app.post("/submit")
-    def submit(request: Request, csrf_token: str = Form(...)):
-        return {"ok": True, "received": csrf_token}
-
-    return app
+    def test_duplicate_origin_uses_first_value(self):
+        scope = {"headers": [
+            (b"origin", b"https://admin.sales-agent.example.com"),
+            (b"origin", b"https://evil.example.com"),
+        ]}
+        assert _extract_header(scope, "origin") == "https://admin.sales-agent.example.com"
 
 
-class TestMiddlewareFlow:
-    def test_get_sets_csrf_cookie(self):
-        app = _build_app()
-        with TestClient(app) as c:
-            r = c.get("/form")
+class TestSafeMethods:
+    def test_get_passes(self):
+        with _build() as c:
+            assert c.get("/admin/foo").status_code == 200
+
+    def test_head_passes(self):
+        with _build() as c:
+            assert c.head("/admin/foo").status_code == 200
+
+
+class TestExemptPaths:
+    def test_mcp_post_without_origin_passes(self):
+        with _build() as c:
+            assert c.post("/mcp/tool").status_code == 200
+
+    def test_oauth_callback_post_without_origin_passes(self):
+        with _build() as c:
+            assert c.post("/admin/auth/google/callback").status_code == 200
+
+
+class TestOriginValidation:
+    def test_matching_origin_passes(self):
+        with _build() as c:
+            r = c.post("/admin/foo",
+                       headers={"Origin": "https://admin.sales-agent.example.com"})
         assert r.status_code == 200
-        assert "adcp_csrf" in r.cookies
-        assert r.json()["csrf_token"]
 
-    def test_post_without_cookie_is_403(self):
-        app = _build_app()
-        with TestClient(app) as c:
-            r = c.post("/submit", data={"csrf_token": "anything"})
+    def test_mismatched_origin_403(self):
+        with _build() as c:
+            r = c.post("/admin/foo",
+                       headers={"Origin": "https://evil.example.com"})
         assert r.status_code == 403
 
-    def test_post_with_matching_cookie_and_form_succeeds(self):
-        app = _build_app()
-        with TestClient(app) as c:
-            r = c.get("/form")
-            token = r.cookies["adcp_csrf"]
-            r2 = c.post("/submit", data={"csrf_token": token})
-        assert r2.status_code == 200
-        assert r2.json()["received"] == token
-
-    def test_post_with_mismatched_tokens_is_403(self):
-        app = _build_app()
-        with TestClient(app) as c:
-            c.get("/form")  # sets cookie
-            other_token = _new_token()
-            r = c.post("/submit", data={"csrf_token": other_token})
+    def test_null_origin_403(self):
+        with _build() as c:
+            r = c.post("/admin/foo", headers={"Origin": "null"})
         assert r.status_code == 403
 
-    def test_exempt_path_bypasses_validation(self):
-        app = _build_app()
-
-        @app.post("/api/v1/noop")
-        def noop():
-            return {"ok": True}
-
-        with TestClient(app) as c:
-            r = c.post("/api/v1/noop")
+    def test_missing_origin_with_matching_referer_passes(self):
+        with _build() as c:
+            r = c.post("/admin/foo",
+                       headers={"Referer": "https://admin.sales-agent.example.com/prev"})
         assert r.status_code == 200
 
-    def test_header_token_accepted_for_xhr(self):
-        app = _build_app()
-        with TestClient(app) as c:
-            c.get("/form")
-            token = c.cookies["adcp_csrf"]
-            # Empty form body but X-CSRF-Token header
-            r = c.post(
-                "/submit",
-                data={"csrf_token": token},
-                headers={"X-CSRF-Token": token},
-            )
+    def test_missing_origin_and_referer_passes_under_lax(self):
+        # Legacy UA case — SameSite=Lax on the session cookie is the primary defense.
+        with _build() as c:
+            assert c.post("/admin/foo").status_code == 200
+
+
+class TestWildcardSuffix:
+    def test_suffix_match_passes(self):
+        with _build(allowed_origins=(),
+                    allowed_suffixes=(".scope3.com",)) as c:
+            r = c.post("/admin/foo",
+                       headers={"Origin": "https://tenant-foo.scope3.com"})
         assert r.status_code == 200
 
-    def test_multipart_bypasses_form_parse_uses_header(self):
-        app = _build_app()
-        with TestClient(app) as c:
-            c.get("/form")
-            token = c.cookies["adcp_csrf"]
+    def test_suffix_root_match_passes(self):
+        # "scope3.com" itself (not a subdomain) should match suffix ".scope3.com"
+        with _build(allowed_origins=(),
+                    allowed_suffixes=(".scope3.com",)) as c:
+            r = c.post("/admin/foo",
+                       headers={"Origin": "https://scope3.com"})
+        assert r.status_code == 200
+
+    def test_suffix_non_match_403(self):
+        with _build(allowed_origins=(),
+                    allowed_suffixes=(".scope3.com",)) as c:
+            r = c.post("/admin/foo",
+                       headers={"Origin": "https://scope3.com.evil.com"})
+        assert r.status_code == 403
+
+
+class TestOriginNormalization:
+    def test_uppercase_origin_normalized(self):
+        with _build() as c:
+            r = c.post("/admin/foo",
+                       headers={"Origin": "HTTPS://ADMIN.SALES-AGENT.EXAMPLE.COM"})
+        assert r.status_code == 200
+
+    def test_unparseable_origin_403(self):
+        with _build() as c:
+            r = c.post("/admin/foo", headers={"Origin": "not-a-url"})
+        assert r.status_code == 403
+
+    def test_default_https_port_stripped(self):
+        # The browser sends "https://admin.sales-agent.example.com" even if the
+        # allowed set registered port 443 — they must match post-normalization.
+        assert _origin_of("https://admin.sales-agent.example.com:443") == \
+            "https://admin.sales-agent.example.com"
+
+    def test_default_http_port_stripped(self):
+        assert _origin_of("http://admin.sales-agent.example.com:80") == \
+            "http://admin.sales-agent.example.com"
+
+    def test_nondefault_port_preserved(self):
+        assert _origin_of("https://admin.sales-agent.example.com:8443") == \
+            "https://admin.sales-agent.example.com:8443"
+
+    def test_default_ws_port_stripped(self):
+        assert _origin_of("ws://chat.example.com:80") == "ws://chat.example.com"
+
+    def test_default_wss_port_stripped(self):
+        assert _origin_of("wss://chat.example.com:443") == "wss://chat.example.com"
+
+    def test_ipv6_bracketed_default_port_stripped(self):
+        # IPv6 hosts: urllib strips brackets in `.hostname`; _origin_of re-brackets.
+        assert _origin_of("https://[2001:db8::1]:443") == "https://[2001:db8::1]"
+
+    def test_ipv6_bracketed_nondefault_port_preserved(self):
+        assert _origin_of("https://[2001:db8::1]:8443") == "https://[2001:db8::1]:8443"
+
+    def test_case_normalized_with_default_port(self):
+        # Upper-case scheme + default port: lowercase scheme, strip port.
+        assert _origin_of("HTTPS://ADMIN.EXAMPLE.COM:443") == "https://admin.example.com"
+
+    def test_malformed_port_returns_none(self):
+        # urlsplit raises ValueError on parts.port when it contains non-digits.
+        assert _origin_of("https://admin.example.com:notaport") is None
+
+
+class TestContentNegotiation:
+    """403 response body mirrors AdCPError handler's negotiation."""
+
+    def test_browser_admin_path_gets_html(self):
+        with _build() as c:
             r = c.post(
-                "/submit",
-                files={"upload": ("a.txt", b"data")},
-                data={"csrf_token": token},
-                headers={"X-CSRF-Token": token},  # multipart needs header path
+                "/admin/foo",
+                headers={
+                    "Origin": "https://evil.example.com",
+                    "Accept": "text/html,application/xhtml+xml",
+                },
             )
-        assert r.status_code in (200, 422)  # 422 if handler can't bind multipart
+        assert r.status_code == 403
+        assert r.headers["content-type"].startswith("text/html")
+        assert "<h1>403 Forbidden</h1>" in r.text
+
+    def test_api_accept_gets_json(self):
+        with _build() as c:
+            r = c.post(
+                "/admin/foo",
+                headers={
+                    "Origin": "https://evil.example.com",
+                    "Accept": "application/json",
+                },
+            )
+        assert r.status_code == 403
+        assert r.headers["content-type"] == "application/json"
+        assert r.json()["detail"].startswith("CSRF:")
+
+    def test_htmx_request_gets_json(self):
+        # HX-Request trumps Accept for HTMX callers.
+        with _build() as c:
+            r = c.post(
+                "/admin/foo",
+                headers={
+                    "Origin": "https://evil.example.com",
+                    "Accept": "text/html",
+                    "HX-Request": "true",
+                },
+            )
+        assert r.status_code == 403
+        assert r.headers["content-type"] == "application/json"
+
+    def test_xhr_request_gets_json(self):
+        with _build() as c:
+            r = c.post(
+                "/admin/foo",
+                headers={
+                    "Origin": "https://evil.example.com",
+                    "Accept": "text/html",
+                    "X-Requested-With": "XMLHttpRequest",
+                },
+            )
+        assert r.status_code == 403
+        assert r.headers["content-type"] == "application/json"
+
+    def test_non_admin_path_gets_json_even_with_html_accept(self):
+        # /mcp is exempt from CSRF, but any non-admin path that DID hit a 403
+        # branch would still take the JSON path — _scope_wants_html requires
+        # /admin/ or /tenant/ prefix. Verified indirectly: there is no browser
+        # POST to /api/v1/* in the admin UX, so the JSON default is correct.
+        # (No production code path exercises this branch; skipped as a
+        # behavioral promise of _scope_wants_html rather than a live test.)
+        pytest.skip("exempt paths never hit _respond_403; documented behavior only")
+
+    def test_vary_header_present(self):
+        with _build() as c:
+            r = c.post(
+                "/admin/foo",
+                headers={"Origin": "https://evil.example.com", "Accept": "text/html"},
+            )
+        assert r.status_code == 403
+        assert "Origin" in r.headers.get("vary", "")
+        assert "Accept" in r.headers.get("vary", "")
+
+
+class TestConstruction:
+    def test_empty_allowed_raises(self):
+        async def noop(scope, receive, send): pass
+        with pytest.raises(RuntimeError):
+            CSRFOriginMiddleware(noop, allowed_origins=(), allowed_origin_suffixes=())
 ```
 
 ### C. Integration
 
-- Imports `itsdangerous` only. No DB, no other module dependencies beyond env.
-- Public API: `CSRFMiddleware` class.
-- Registered in `app_factory.py` via `app.add_middleware(CSRFMiddleware)`.
-- Exposes `request.state.csrf_token` for `templating.py`'s `render()` wrapper.
-- **Middleware ordering** (critical): `add_middleware` is LIFO — the LAST added is the OUTERMOST. Desired runtime order:
-  ```
-  outermost ─┐
-  ExternalDomainRedirect   (runs first, can short-circuit)
-  FlyHeadersMiddleware     (normalize headers)
-  UnifiedAuthMiddleware    (token extraction)
-  SessionMiddleware        (populate request.session)
-  CSRFMiddleware           (needs session? no, but keeping it inside session
-                            for future use and so _read_csrf_from_body's
-                            buffered receive doesn't conflict with Session)
-  CORSMiddleware           (innermost, close to handlers)
-  innermost ─┘
-  ```
-  Registered in `app_factory` in REVERSE (CORSMiddleware first, ExternalDomainRedirect last).
+Public API:
+```python
+CSRFOriginMiddleware(
+    app,
+    *,
+    allowed_origins: Iterable[str] = (),
+    allowed_origin_suffixes: Iterable[str] = (),
+)
+```
 
-### D. Gotchas
+Registered in `app_factory.py` (added in REVERSE order of canonical stack — LIFO):
+```python
+# Innermost first
+app.add_middleware(CORSMiddleware, ...)
+app.add_middleware(RestCompatMiddleware)
+app.add_middleware(
+    CSRFOriginMiddleware,
+    allowed_origins=settings.csrf_allowed_origins,
+    allowed_origin_suffixes=settings.csrf_allowed_origin_suffixes,
+)
+app.add_middleware(SessionMiddleware, ..., same_site="lax", https_only=True)
+app.add_middleware(UnifiedAuthMiddleware)
+app.add_middleware(SecurityHeadersMiddleware, https_only=settings.https_only)  # added at L2 (§11.28)
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=...)   # added at L2
+app.add_middleware(ApproximatedExternalDomainMiddleware)
+app.add_middleware(FlyHeadersMiddleware)
+app.add_middleware(RequestIDMiddleware)                        # added at L4/L6, outermost
+# Outermost runtime (L4/L6, 10 middlewares):
+# RequestID → Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS
+# See §cross-cutting/Middleware ordering for the L1a (6) and L2 (9) progressive shapes.
+```
 
-- **Body read exhaustion:** Without the replay-receive pattern, downstream handlers get an empty body (they've already been consumed). Test this end-to-end.
-- **Multipart forms:** We do not parse multipart bodies. Handlers that accept file uploads MUST send the CSRF token in the `X-CSRF-Token` header, not the form body. The codemod can't enforce this at compile time — add a pre-commit grep for `{% form %} enctype="multipart/form-data"` without X-CSRF-Token handling.
-- **Cookie-only origin binding:** Double Submit Cookie does NOT defend against subdomain attacks (a malicious subdomain can set cookies on the parent domain). Scope CSRF cookie with `Path=/` is insufficient if attacker controls `evil.sales-agent.example.com`. Mitigation: `adcp_csrf` is set at the current host only (no `Domain=` attribute), so it does NOT share across subdomains. This is intentional.
-- **`HttpOnly=False`:** The CSRF cookie is readable by JavaScript. This is REQUIRED for XHR to send it in `X-CSRF-Token`. An attacker with XSS can exfiltrate the CSRF token — but with XSS they can already perform any authenticated action directly, so this is not a degradation.
-- **`_MAX_BODY_BYTES = 1MB`:** Form POSTs over 1MB are rejected via truncation (the replay receive will give downstream a truncated body). If you have forms that legitimately submit >1MB of text, bump this.
-- **TestClient cookie flow:** `TestClient` persists cookies across requests within the `with` block. The pattern is: `c.get("/form")` to populate the CSRF cookie, then `c.post(...)` — the cookie is auto-sent. Extract the token from `c.cookies["adcp_csrf"]` for the form field. The `IntegrationEnv.get_admin_client()` helper wraps this into a single authenticated client fixture.
+### D. Why SameSite=Lax is sufficient paired with Origin validation
+
+1. **SameSite=Lax on the session cookie** blocks cross-site cookie attachment on unsafe methods. An attacker page at `evil.example.com` posting to `/admin/foo` sends the request, but the session cookie is stripped — request arrives unauthenticated → 302 to login (not 200 with exploit).
+2. **Origin header validation** closes residual gaps: (a) same-site subdomains, (b) legacy UAs that don't yet enforce SameSite. The Origin header is attached by browsers on cross-origin unsafe requests; we reject mismatches.
+3. **No token plumbing.** Double-Submit Cookie would force every fetch site (~80) and form template (~47) to insert a token — 127 surface changes for zero incremental security given (1) and (2).
+
+### E. Gotchas
+
+- **Constructor MUST raise on empty origins/suffixes.** A misconfigured deployment that accepts any origin is worse than crash-on-startup.
+- **Referer fallback is Lax-dependent.** The "missing Origin + missing Referer = accept" branch is safe ONLY if SessionMiddleware uses `same_site="lax"` (or stricter). If you ever set `same_site="none"`, change this branch to reject.
+- **Origin: null is always rejected.** No legitimate admin source produces it.
+- **Wildcard suffix matching uses domain suffix only**, not regex — `.scope3.com` matches `tenant.scope3.com` and `scope3.com` itself, but NOT `scope3.com.evil.com` (suffix check requires the dot or exact match).
+- **No body reading.** Content-Length checks belong on upload endpoints, not here.
+
+### F. Test strategy
+
+1. **Unit:** per-branch coverage (matching Origin, mismatched, null, missing with Referer, missing both, safe method, exempt path, wildcard suffix, normalization). See §B.
+2. **Integration:** `tests/integration/test_csrf_origin_end_to_end.py` — real Starlette app with Session + Approximated + CSRF in canonical order; assert cross-origin POST is 403 AND same-origin POST is 200; assert wildcard-tenant POST is 200.
+3. **Staging smoke:** Playwright walk of admin UI with middleware live; any working-in-Flask fetch must still work (zero template/JS changes).
 
 ---
 
 ## 11.8 `src/admin/middleware/external_domain.py`
 
-> **[PHASE 0-3]** This module is part of Flask removal. Use sync patterns.
+> **[L0-L2]** This module is part of Flask removal. Use sync patterns. It stays sync through L4 and auto-converts at L5 only to the extent its callers flip to `async def` (most functions here are framework-agnostic utilities and remain sync across all layers).
 
 ### A. Implementation
 
@@ -3544,10 +3990,22 @@ LOGIC:
 5. If no tenant found or tenant has no subdomain: pass through (let the
    admin UI show whatever error page it shows).
 
-MUST run BEFORE SessionMiddleware — Approximated strips cookies on the
-OAuth bounce, and we want to redirect before the session attempts to bind.
-MUST be pure ASGI (Starlette #1729) because SessionMiddleware downstream
-is sensitive to BaseHTTPMiddleware task-group interleaving.
+MUST run AFTER UnifiedAuth and BEFORE Session/CSRF in the middleware stack.
+Canonical L4/L6 order (outermost runtime → innermost runtime, 10 middlewares):
+RequestID → Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS
+See §cross-cutting/Middleware ordering for the L1a (6) and L2 (9) progressive shapes.
+Add via add_middleware in REVERSE order (LIFO):
+app.add_middleware(CORS); ...; app.add_middleware(RequestID).
+
+ExternalDomain reads only the Apx-Incoming-Host header — it does NOT touch
+request.session, so its position relative to Session is functionally
+independent. The hard invariant is that it runs BEFORE CSRF: external-domain
+POSTs are 307-redirected to the canonical subdomain BEFORE CSRF can reject
+the request for a missing/mismatched Origin header.
+
+MUST be pure ASGI (Starlette #1729). BaseHTTPMiddleware in this slot would
+break the body-streaming contract for downstream handlers when CSRF
+short-circuits a 403.
 """
 from __future__ import annotations
 
@@ -3722,7 +4180,7 @@ class TestExternalDomainRedirect:
 
 ## 11.9 `src/admin/middleware/fly_headers.py`
 
-> **[PHASE 0-3]** This module is part of Flask removal. Use sync patterns.
+> **[L0-L2]** This module is part of Flask removal. Use sync patterns. It stays sync through L4 and auto-converts at L5 only to the extent its callers flip to `async def` (most functions here are framework-agnostic utilities and remain sync across all layers).
 
 ### A. Implementation
 
@@ -3854,7 +4312,7 @@ async def test_lifespan_passes_through():
 
 ## 11.10 `src/admin/app_factory.py`
 
-> **[PHASE 0-3]** This module is part of Flask removal. Use sync patterns.
+> **[L0-L2]** This module is part of Flask removal. Use sync patterns. It stays sync through L4 and auto-converts at L5 only to the extent its callers flip to `async def` (most functions here are framework-agnostic utilities and remain sync across all layers).
 
 ### A. Implementation
 
@@ -3876,7 +4334,7 @@ Caller pattern in src/app.py:
         app.add_exception_handler(exc_cls, handler)
     app.include_router(admin.router, prefix="/admin")
     app.mount("/static", StaticFiles(directory="src/admin/static"), name="static")
-    # NOTE: directory is "static" until Phase 3 git mv; becomes "src/admin/static" after Phase 3
+    # NOTE: directory is "static" until L2 git mv; becomes "src/admin/static" after L2 (Flask removal)
 """
 from __future__ import annotations
 
@@ -3889,13 +4347,14 @@ from starlette.responses import RedirectResponse
 from starlette.requests import Request
 from urllib.parse import quote
 
-from src.admin.csrf import CSRFMiddleware
+from src.admin.csrf import CSRFOriginMiddleware
 from src.admin.deps.auth import AdminRedirect, AdminAccessDenied
 from src.admin.middleware.external_domain import ExternalDomainRedirectMiddleware
 from src.admin.middleware.fly_headers import FlyHeadersMiddleware
 from src.admin.oauth import init_oauth
 from src.admin.sessions import session_middleware_kwargs
 from src.admin.templating import render
+from src.core.settings import get_settings
 
 
 @dataclass
@@ -3918,6 +4377,8 @@ async def admin_access_denied_handler(request: Request, exc: Exception) -> Any:
 
 def build_admin() -> AdminBuild:
     """Assemble admin router + middleware + handlers."""
+    settings = get_settings()
+
     # Startup-time side effects
     init_oauth()
 
@@ -3946,7 +4407,10 @@ def build_admin() -> AdminBuild:
         (ExternalDomainRedirectMiddleware, {}),
         # UnifiedAuthMiddleware is registered at the root app level in src/app.py
         (SessionMiddleware, session_middleware_kwargs()),
-        (CSRFMiddleware, {}),
+        (CSRFOriginMiddleware, {
+            "allowed_origins": tuple(settings.csrf_allowed_origins),
+            "allowed_origin_suffixes": tuple(settings.csrf_allowed_origin_suffixes),
+        }),
     ]
 
     exception_handlers: list[tuple[type[Exception], Callable]] = [
@@ -3975,12 +4439,26 @@ from src.admin.app_factory import build_admin
 class TestAppFactory:
     def test_build_admin_returns_router(self, monkeypatch):
         monkeypatch.setenv("SESSION_SECRET", "x" * 64)
+        monkeypatch.setenv("CSRF_ALLOWED_ORIGINS", '["https://admin.sales-agent.example.com"]')
         admin = build_admin()
         assert admin.router is not None
-        assert (CSRFMiddleware_cls := next(m for m, _ in admin.middleware if m.__name__ == "CSRFMiddleware"))
+        assert next(m for m, _ in admin.middleware if m.__name__ == "CSRFOriginMiddleware")
+
+    def test_csrf_uses_origin_middleware(self, monkeypatch):
+        monkeypatch.setenv("SESSION_SECRET", "x" * 64)
+        monkeypatch.setenv("CSRF_ALLOWED_ORIGINS", '["https://admin.sales-agent.example.com"]')
+        admin = build_admin()
+        csrf_entries = [
+            (cls, kw) for cls, kw in admin.middleware
+            if cls.__name__ == "CSRFOriginMiddleware"
+        ]
+        assert len(csrf_entries) == 1
+        _, kw = csrf_entries[0]
+        assert kw["allowed_origins"], "allowed_origins must not be empty (RuntimeError guard)"
 
     def test_end_to_end_admin_mount(self, monkeypatch):
         monkeypatch.setenv("SESSION_SECRET", "x" * 64)
+        monkeypatch.setenv("CSRF_ALLOWED_ORIGINS", '["https://admin.sales-agent.example.com"]')
         app = FastAPI()
         admin = build_admin()
         for mw_cls, mw_kw in reversed(admin.middleware):
@@ -4015,7 +4493,7 @@ class TestAppFactory:
 
 ## 11.9.5 `src/admin/middleware/request_id.py` — Request ID propagation (Agent E Category 8)
 
-> **[PHASE 0-3]** This module is part of Flask removal. Use sync patterns. The structlog integration (`bind_request_id`) is Phase 4a; during Phases 0-3, use stdlib `logging` with request_id passed as a log parameter.
+> **[L0-L2]** This module is part of Flask removal. Use sync patterns. The structlog integration (`bind_request_id`) lands at L4; through L0-L3, use stdlib `logging` with request_id passed as a log parameter. The middleware itself is framework-agnostic and remains sync across all layers.
 
 > **Added 2026-04-11 under the Agent E idiom upgrade.** Under async, contextvars propagate correctly across `await` boundaries. The combination `RequestIDMiddleware` + `structlog.contextvars.merge_contextvars` means every log line emitted during a request automatically carries the `request_id` — critical for debugging async-interleaved requests.
 
@@ -4068,7 +4546,7 @@ class RequestIDMiddleware:
 ### C. Integration
 
 - Registered as the **outermost** middleware in `src/app.py` so every request gets a `request_id` before anything else runs
-- Order: `RequestIDMiddleware → FlyHeaders → ExternalDomainRedirect → UnifiedAuth → Session → CSRF → RestCompat → CORS → handler`
+- Order: `RequestIDMiddleware → FlyHeaders → ExternalDomainRedirect → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS → handler`
 - Emits `X-Request-ID` on responses; echoes upstream value if the client sent one
 - Structural guard `test_architecture_middleware_order.py` enforces the registration order
 
@@ -4081,7 +4559,7 @@ class RequestIDMiddleware:
 
 ## 11.11 `src/app.py` — Exception handlers (Agent E Category 6)
 
-> **[PHASE 0-3]** This module is part of Flask removal. Use sync patterns.
+> **[L0-L2]** This module is part of Flask removal. Use sync patterns. It stays sync through L4 and auto-converts at L5 only to the extent its callers flip to `async def` (most functions here are framework-agnostic utilities and remain sync across all layers).
 
 > **Added 2026-04-11 under the Agent E idiom upgrade.** The plan covered `AdCPError` (Blocker 3) and `AdminRedirect` but missed four other handlers a 2026 FastAPI app needs: `HTTPException` (Accept-aware), `RequestValidationError`, `AdminAccessDenied`, and the catch-all `Exception`.
 
@@ -4101,9 +4579,29 @@ from src.core.settings import get_settings
 
 
 def _wants_html(request: Request) -> bool:
-    """Is this an admin browser?"""
+    """Return True only for browser navigation requests wanting HTML.
+
+    Rejects XHR/HTMX/fetch patterns even when Accept contains text/html:
+    - HTMX sets HX-Request: true
+    - jQuery/XHR sets X-Requested-With: XMLHttpRequest
+    - Fetch without explicit Accept sends */* (does NOT match "text/html" substring)
+
+    Accept substring check remains the primary signal; only browser navigation
+    sends Accept like "text/html,application/xhtml+xml,...". Path-scoping
+    to /admin/ adds a second guard — AdCP surfaces (/mcp, /a2a, /api) never
+    want HTML regardless of Accept.
+    """
+    if request.headers.get("hx-request"):
+        return False
+    if request.headers.get("x-requested-with", "").lower() == "xmlhttprequest":
+        return False
     accept = request.headers.get("accept", "")
-    return request.url.path.startswith("/admin/") and "text/html" in accept
+    if "application/json" in accept and "text/html" not in accept:
+        return False
+    if "text/html" not in accept:
+        return False
+    # Path-scope: HTML rendering only for admin surface
+    return request.url.path.startswith("/admin/") or request.url.path.startswith("/tenant/")
 
 
 @app.exception_handler(AdCPError)
@@ -4180,16 +4678,53 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 - **Handler order matters.** FastAPI dispatches to the most specific handler first (subclass before superclass), so `AdCPError` handler fires before `Exception`. Correct.
 - **`AdCPError` JSON shape is byte-stable** for API callers — Agent D M9 `test_openapi_byte_stability.py` + an explicit JSON schema snapshot protect this.
 - **`_wants_html` only returns True on admin paths.** API callers (`/api/v1/*`, `/mcp`, `/a2a`) always get JSON, regardless of their `Accept` header. This preserves AdCP wire format.
+- **XHR/HTMX navigation:** `_wants_html` returns False for requests with `HX-Request: true` or `X-Requested-With: XMLHttpRequest` even when Accept contains `text/html`. This prevents admin JS `fetch()` calls from accidentally receiving HTML error pages when the browser happened to send `Accept: text/html` by default.
+
+### E. Tests — content negotiation edge cases
+
+```python
+# tests/unit/admin/test_accept_aware_handler.py
+class TestAcceptAwareHandler:
+    def test_browser_navigation_gets_html(self, client):
+        r = client.get("/admin/foo", headers={"Accept": "text/html,application/xhtml+xml,*/*;q=0.8"})
+        assert r.headers["content-type"].startswith("text/html")
+
+    def test_fetch_default_gets_json(self, client):
+        r = client.get("/admin/foo", headers={"Accept": "*/*"})
+        assert r.headers["content-type"].startswith("application/json")
+
+    def test_xhr_gets_json_even_with_html_accept(self, client):
+        r = client.get("/admin/foo", headers={
+            "Accept": "text/html",
+            "X-Requested-With": "XMLHttpRequest",
+        })
+        assert r.headers["content-type"].startswith("application/json")
+
+    def test_htmx_gets_json_even_with_html_accept(self, client):
+        r = client.get("/admin/foo", headers={
+            "Accept": "text/html",
+            "HX-Request": "true",
+        })
+        assert r.headers["content-type"].startswith("application/json")
+
+    def test_non_admin_path_gets_json(self, client):
+        r = client.get("/api/v1/foo", headers={"Accept": "text/html"})
+        assert r.headers["content-type"].startswith("application/json")
+```
 
 ---
 
 ## 11.13 Test harness fixtures — async-native via httpx + ASGITransport (Agent E Category 14)
 
-> **[PHASE 4+]** Async test harness. Phases 0-3 use the existing sync `TestClient(app)` and `IntegrationEnv` harness.
+> **[L5+]** Async test harness. L0-L3 use the existing sync `TestClient(app)` and `IntegrationEnv` harness. L3 modernizes test patterns (factories, `dependency_overrides`) but stays sync.
 >
-> **Phase note:** Code examples in this section show async patterns for Phase 4+ completeness. During Phases 0-3, use `def` instead of `async def` and `session.scalars(stmt)` instead of `(await session.execute(stmt)).scalars()`.
+> **Layer note:** Code examples in this section show async patterns for L5+ completeness. During L0-L4, use `def` instead of `async def` and `session.scalars(stmt)` instead of `(await session.execute(stmt)).scalars()`. Both `await session.scalars(...)` and `(await session.execute(...)).scalars()` are valid on `AsyncSession` at L5+ — `await session.scalars(...)` is canonical per SQLAlchemy docs (native method since 1.4.24).
 
 > **Added 2026-04-11 under the Agent E idiom upgrade.** Sync `TestClient(app)` spawns its own event loop in a thread and conflicts with async lifespan state stored on `app.state`. `httpx.AsyncClient(transport=ASGITransport(app=app))` runs in the test's own event loop and sees `app.state` correctly.
+
+> **LifespanManager note (L5+):** Starlette's `TestClient` automatically triggers FastAPI lifespan, so `app.state.db_engine` and `app.state.http_client` are populated during tests. If/when the harness migrates to native `httpx.AsyncClient + ASGITransport` for async tests, add `asgi-lifespan>=2.1.0` to dev deps and wrap the test app in `LifespanManager(app)` to trigger lifespan manually (ASGITransport does NOT run lifespan). For v2.0 L0-L4 scope, `TestClient` is sufficient — `asgi-lifespan` addition deferred to L5 harness conversion.
+
+> **Async savepoints — deferred post-v2.0:** factory-boy async shim + `async with session.begin_nested()` savepoints are not in v2.0 scope. All factories in `tests/factories/` are sync `factory.alchemy.SQLAlchemyModelFactory` through L4. L5c test conversion keeps factories sync; async test cases access data via sync fixtures set up before the async handler call. Revisit if/when v2.1 introduces async factories with `AsyncSQLAlchemyModelFactory` base class.
 
 ### A. Implementation
 
@@ -4285,9 +4820,9 @@ async def test_list_accounts(client, session):
 
 ## 11.13.1 Integration tests — `async_engine → async_db → async_app → async_client` fixture chain
 
-> **[PHASE 4+]** Async integration test fixture chain. Phases 0-3 use the existing sync `integration_db` fixture and `IntegrationEnv` harness.
+> **[L5+]** Async integration test fixture chain. L0-L3 use the existing sync `integration_db` fixture and `IntegrationEnv` harness.
 >
-> **Phase note:** Code examples in this section show async patterns for Phase 4+ completeness. During Phases 0-3, use `def` instead of `async def` and `session.scalars(stmt)` instead of `(await session.execute(stmt)).scalars()`.
+> **Layer note:** Code examples in this section show async patterns for L5+ completeness. During L0-L4, use `def` instead of `async def` and `session.scalars(stmt)` instead of `(await session.execute(stmt)).scalars()`. Both `await session.scalars(...)` and `(await session.execute(...)).scalars()` are valid on `AsyncSession` at L5+ — `await session.scalars(...)` is canonical per SQLAlchemy docs (native method since 1.4.24).
 
 > **Added 2026-04-11 under the Agent E idiom upgrade.** This is the operational recipe for integration-test fixtures under async SQLAlchemy. The existing §11.13 introduces `AsyncClient + ASGITransport` at a high level; this subsection is the concrete chain that Wave 4 engineers sit down and paste.
 
@@ -4803,9 +5338,9 @@ Pool sizing per worker: `pool_size=5, max_overflow=5 = 10 connections peak per w
 
 ## 11.13.2 Unit tests — `mock_async_session` + `dependency_overrides` cheat-sheet
 
-> **[PHASE 4+]** Async unit test fixtures. Phases 0-3 use the existing sync mocking patterns with `patch('src.core.database.database_session.get_db_session')`.
+> **[L5+]** Async unit test fixtures. L0-L4 use the existing sync mocking patterns with `patch('src.core.database.database_session.get_db_session')`.
 >
-> **Phase note:** Code examples in this section show async patterns for Phase 4+ completeness. During Phases 0-3, use `def` instead of `async def` and `session.scalars(stmt)` instead of `(await session.execute(stmt)).scalars()`.
+> **Layer note:** Code examples in this section show async patterns for L5+ completeness. During L0-L4, use `def` instead of `async def` and `session.scalars(stmt)` instead of `(await session.execute(stmt)).scalars()`. Both `await session.scalars(...)` and `(await session.execute(...)).scalars()` are valid on `AsyncSession` at L5+ — `await session.scalars(...)` is canonical per SQLAlchemy docs (native method since 1.4.24).
 
 > **Added 2026-04-11 under the Agent E idiom upgrade.** Integration tests use a real `AsyncSession` against agent-db Postgres (§11.13.1). Unit tests mock everything. This section defines the unit fixture surface and catalogs every `dependency_overrides` key that new unit tests commonly need.
 
@@ -5130,9 +5665,9 @@ def test_no_dependency_override_leak() -> None:
 
 ## 11.14 Adapter Path B wrap pattern (Decision 1, 2026-04-11)
 
-> **[PHASE 4+]** Adapter `run_in_threadpool` wrapping and dual session factory. Phases 0-3 call adapters synchronously from sync handlers without wrapping.
+> **[L5d2]** Adapter `run_in_threadpool` wrapping and dual session factory (Decision 1 Path B). L0-L4 call adapters synchronously from sync handlers without wrapping.
 >
-> **Phase note:** Code examples in this section show async patterns for Phase 4+ completeness. During Phases 0-3, use `def` instead of `async def` and `session.scalars(stmt)` instead of `(await session.execute(stmt)).scalars()`.
+> **Layer note:** Code examples in this section show async patterns for L5+ completeness. During L0-L4, use `def` instead of `async def` and `session.scalars(stmt)` instead of `(await session.execute(stmt)).scalars()`. Both `await session.scalars(...)` and `(await session.execute(...)).scalars()` are valid on `AsyncSession` at L5+ — `await session.scalars(...)` is canonical per SQLAlchemy docs (native method since 1.4.24).
 
 > **Added 2026-04-11 under the Decision 1 deep-think resolution.** Adapters stay sync under v2.0. The 18 adapter call sites in `src/core/tools/*.py` + 1 in `src/admin/blueprints/operations.py:252` wrap their sync adapter methods in `await run_in_threadpool(...)`. This section is the canonical reference for the wrap pattern plus the dual-session-factory machinery that supports it.
 
@@ -5161,7 +5696,7 @@ Adapter code running inside run_in_threadpool worker threads uses
 `get_sync_db_session()`; every other code path (handlers, _impl
 functions, schedulers, repositories) uses `get_db_session()`.
 
-Sunset target for the sync factory: Phase 4+ when adapters go native async.
+Sunset target for the sync factory: post-v2.0, when the `googleads`/`requests`-based adapters are ported to native async HTTP clients.
 """
 from __future__ import annotations
 
@@ -5444,31 +5979,47 @@ class AuditLogger:
 - ~30 `_impl` call sites update to `await audit_logger.log_operation(...)` — async path.
 - Adapter call sites update to `self.audit_logger._log_operation_sync(...)` (the underscore prefix signals intentional private-method access from the privileged sync path).
 
-### F. Threadpool tune
+### F. Threadpool tune — lands at L0 lifespan (not L5+)
 
-Anyio's default thread limiter is 40 workers. Adapter burst load can saturate this under concurrent admin traffic. Bump to 80 (env-overridable) at lifespan startup:
+> **[L0]** The threadpool limiter bump is L0 scope, not L5+. FastAPI runs sync `def` admin handlers in the anyio threadpool starting from L0 (Flask parity still uses the threadpool via `a2wsgi.WSGIMiddleware` under the hood, but the moment any FastAPI-native handler ships, the limiter size directly governs admin concurrency).
+
+Anyio's default thread limiter is 40 workers. Sync FastAPI handlers run in this threadpool; admin OAuth bursts + (L5+) adapter `run_in_threadpool` wraps can push concurrency past 40. The 41st request blocks waiting for a token before the handler even starts.
+
+Configure in app lifespan BEFORE any request is served:
 
 ```python
-# src/app.py::lifespan (Wave 4 addition)
+# src/app.py::lifespan — L0 addition, refined in L5 when adapter wraps go live
 from contextlib import asynccontextmanager
-import anyio
+import anyio.to_thread
+import logging
 import os
+
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Tune anyio thread limiter for Path B adapter burst capacity.
-    # Default 40 is too low for concurrent admin traffic that calls
-    # multiple adapter methods per request. Decision 1 analysis
-    # recommends 80; env-override via ADCP_THREADPOOL_SIZE.
-    anyio.to_thread.current_default_thread_limiter().total_tokens = int(
-        os.environ.get("ADCP_THREADPOOL_SIZE", "80")
-    )
+    # Configure in app lifespan BEFORE any request is served.
+    # Default anyio threadpool is 40 tokens. Sync FastAPI handlers run in this
+    # threadpool; admin OAuth bursts + adapter wraps can push concurrency past 40.
+    # The 41st request blocks waiting for a token before the handler even starts.
+    #
+    # ADCP_THREADPOOL_TOKENS env var allows ops-tuning; default 80 covers
+    # observed peak admin load (~30 concurrent OAuth callbacks) with headroom.
+    # NOTE: threadpool tokens × DB pool size interaction — pool_size=20 +
+    # max_overflow=30 = 50 DB connections; at 80 tokens + heavy DB load,
+    # sustained saturation will queue on DB pool, not threadpool. Monitor both.
+    _tokens = int(os.environ.get("ADCP_THREADPOOL_TOKENS", "80"))
+    anyio.to_thread.current_default_thread_limiter().total_tokens = _tokens
+    logger.info("threadpool_limiter_configured", tokens=_tokens)
     ...
     yield
     ...
 ```
 
-Monitoring: the `/health/pool` endpoint (Wave 5 acceptance) exposes the current thread limiter's `borrowed_tokens` and `total_tokens` alongside the async and sync engine pool stats.
+**Env var name:** `ADCP_THREADPOOL_TOKENS` is canonical. An older draft used `ADCP_THREADPOOL_SIZE`; both remained in various references during the pivot. New code uses `ADCP_THREADPOOL_TOKENS`.
+
+Monitoring: the `/health/pool` endpoint (L5+ acceptance) exposes the current thread limiter's `borrowed_tokens` and `total_tokens` alongside the async and sync engine pool stats.
 
 ### G. Structural guard against drift
 
@@ -5494,13 +6045,13 @@ Adapters running inside `run_in_threadpool` worker threads hold sync `Session` i
 - **Sync-vs-async engine pool math.** 15+25 (async) + 5+10 (sync adapter) + 2+3 (sync-bridge from Decision 9) = 60 peak connections. PG default `max_connections=100` has headroom. Production deploys that raise `max_connections` should document the new async/sync split.
 - **Threadpool capacity vs concurrent requests.** 80 workers is sized for ~80 concurrent adapter-invoking requests. Admin UI traffic typically ≤10 concurrent; MCP tool call concurrent load can spike higher. Monitor `anyio.to_thread.current_default_thread_limiter().borrowed_tokens` via `/health/pool` and raise `ADCP_THREADPOOL_SIZE` if it saturates.
 - **`application_name` in `pg_stat_activity`.** The async engine connections show `application_name='adcp-salesagent'`; Path B sync connections show `application_name='adcp-salesagent-sync'`; Decision 9 sync-bridge connections show `application_name='adcp-salesagent-sync-bridge'`. Three distinct labels make debugging stale connections easy.
-- **Phase 4+ sunset path.** If `googleads` releases an async variant and the 4 `requests`-based adapters are ported to `httpx.AsyncClient`, each adapter converts individually to `async def`, the wrap at the `_impl` caller becomes `await adapter.method(...)` instead of `await run_in_threadpool(adapter.method, ...)`, and eventually the sync factory in `database_session.py` + psycopg2 dep + libpq can all be deleted. Structural guard allowlist adjusts as each adapter completes.
+- **Post-v2.0 sunset path.** If `googleads` releases an async variant and the 4 `requests`-based adapters are ported to `httpx.AsyncClient`, each adapter converts individually to `async def`, the wrap at the `_impl` caller becomes `await adapter.method(...)` instead of `await run_in_threadpool(adapter.method, ...)`, and eventually the sync factory in `database_session.py` + psycopg2 dep + libpq can all be deleted. Structural guard allowlist adjusts as each adapter completes.
 
 ---
 
-## §11.15 SimpleAppCache — flask-caching replacement (Decision 6, 2026-04-11)
+## 11.15 SimpleAppCache — flask-caching replacement (Decision 6, 2026-04-11)
 
-> **[PHASE 0-3]** This module is part of Flask removal. Use sync patterns.
+> **[L0-L2]** This module is part of Flask removal. Use sync patterns. It stays sync through L4 and auto-converts at L5 only to the extent its callers flip to `async def` (most functions here are framework-agnostic utilities and remain sync across all layers).
 
 Replaces `flask-caching` (`SimpleCache` backend) with a thread-safe, async-safe in-process cache backed by `cachetools.TTLCache`. Ships in **Wave 3** as a prep module, with consumer sites migrating in the same PR, followed by `flask-caching` removal from `pyproject.toml`.
 
@@ -5732,24 +6283,2108 @@ Steps 1-4 CAN ship in a prep PR before Wave 3. Steps 5-12 bundle into Wave 3.
 
 ---
 
+## 11.15.1 `tests/unit/test_architecture_no_module_scope_create_app.py` — Module-scope create_app() guard
+
+> **[Layer 2 / Wave 3]** AST-scanning guard activated in Layer 2 (Wave 3) immediately before `src/admin/app.py` is deleted. Prevents a 4th-derivative pytest-collection cascade.
+
+> **Why:** when Layer 2 deletes `src/admin/app.py`, any test module that evaluates `admin_app = create_app()` at module scope fails to import. Since pytest collects all test modules before running any test, one broken module poisons the entire collection step — every test in the suite is reported as collection-error, not just the offending file. The guard forbids module-scope `create_app()` calls so the cascade cannot recur.
+
+### A. Implementation
+
+```python
+"""AST scan: disallow module-scope `create_app()` calls in tests/.
+
+Module-scope `create_app()` evaluates at import time. If the imported module
+(or the module it transitively imports) is absent, pytest collection fails
+for this test module — and pytest-collection is all-or-nothing, so a single
+broken module halts the entire suite.
+
+Rule: `create_app()` may only be called inside a function body (fixture,
+method, helper). Module-scope assignment like `admin_app = create_app()`
+or naked expression `create_app()` at top level is forbidden.
+"""
+import ast
+from pathlib import Path
+
+import pytest
+
+TESTS_DIR = Path(__file__).parent.parent
+REPO_ROOT = TESTS_DIR.parent
+
+
+def _module_scope_create_app_calls(tree: ast.Module) -> list[int]:
+    """Return line numbers of top-level statements that call create_app()."""
+    offenders = []
+    for stmt in tree.body:
+        # Top-level assignment: `x = create_app()`
+        if isinstance(stmt, ast.Assign):
+            if isinstance(stmt.value, ast.Call) and _is_create_app(stmt.value):
+                offenders.append(stmt.lineno)
+        # Top-level naked expression: `create_app()`
+        elif isinstance(stmt, ast.Expr):
+            if isinstance(stmt.value, ast.Call) and _is_create_app(stmt.value):
+                offenders.append(stmt.lineno)
+    return offenders
+
+
+def _is_create_app(call: ast.Call) -> bool:
+    if isinstance(call.func, ast.Name):
+        return call.func.id == "create_app"
+    if isinstance(call.func, ast.Attribute):
+        return call.func.attr == "create_app"
+    return False
+
+
+def _iter_test_files():
+    for path in TESTS_DIR.rglob("*.py"):
+        if "conftest" in path.name or path.name.startswith("test_"):
+            yield path
+
+
+def test_no_module_scope_create_app_calls():
+    offenders: list[tuple[Path, int]] = []
+    for path in _iter_test_files():
+        try:
+            tree = ast.parse(path.read_text())
+        except SyntaxError:
+            continue
+        for lineno in _module_scope_create_app_calls(tree):
+            offenders.append((path.relative_to(REPO_ROOT), lineno))
+    assert not offenders, (
+        "Module-scope create_app() calls break pytest collection when "
+        "src/admin/app.py is deleted in Layer 2. Move each call into a "
+        "fixture or function body:\n"
+        + "\n".join(f"  {p}:{n}" for p, n in offenders)
+    )
+```
+
+### B. Tests (meta-test)
+
+```python
+# tests/unit/test_architecture_no_module_scope_create_app_meta.py
+"""Meta-test: plant a violation, assert the guard catches it."""
+import ast
+from textwrap import dedent
+
+from tests.unit.test_architecture_no_module_scope_create_app import (
+    _module_scope_create_app_calls,
+)
+
+
+def test_module_scope_assignment_detected():
+    tree = ast.parse(dedent("""
+        from src.admin.app import create_app
+        app = create_app()
+    """))
+    assert _module_scope_create_app_calls(tree) == [3]
+
+
+def test_function_scope_call_not_detected():
+    tree = ast.parse(dedent("""
+        from src.admin.app import create_app
+
+        def get_app():
+            return create_app()
+    """))
+    assert _module_scope_create_app_calls(tree) == []
+
+
+def test_fixture_scope_call_not_detected():
+    tree = ast.parse(dedent("""
+        import pytest
+        from src.admin.app import create_app
+
+        @pytest.fixture
+        def app():
+            return create_app()
+    """))
+    assert _module_scope_create_app_calls(tree) == []
+
+
+def test_naked_expression_detected():
+    tree = ast.parse(dedent("""
+        from src.admin.app import create_app
+        create_app()
+    """))
+    assert _module_scope_create_app_calls(tree) == [3]
+
+
+def test_unrelated_call_not_detected():
+    tree = ast.parse(dedent("""
+        app = something_else()
+    """))
+    assert _module_scope_create_app_calls(tree) == []
+```
+
+### C. Activation
+
+- **Layer 2 entry gate:** the 5 known module-scope sites must be fixed BEFORE this guard activates. Sites: `tests/integration/conftest.py:18`, `tests/integration/test_template_url_validation.py:16`, `tests/integration/test_product_deletion.py:15`, `tests/admin/test_accounts_blueprint.py:17` (covered by whole-file deletion), `tests/admin/test_product_creation_integration.py:8` (covered by whole-file deletion).
+- **Layer 2 exit gate:** guard runs in `make quality` with zero allowlist — any new module-scope `create_app()` call fails the build immediately.
+- **Interaction with other guards:** none — this is a standalone AST scan over `tests/`.
+
+---
+
+## 11.16 `tests/unit/test_architecture_admin_handlers_async.py` — Admin-handlers-async guard (L5c+)
+
+> **[Layer 5c]** Activated when the 3-router async pilot lands. Atomically replaces two L0-L4 guards (`test_architecture_handlers_use_sync_def.py` and `test_architecture_no_async_db_access.py`) in the SAME commit — no dual-enforcement window.
+
+### A. Implementation
+
+```python
+# tests/unit/test_architecture_admin_handlers_async.py
+"""AST scan: every admin router handler must be async def.
+
+Activated in Layer 5c when the 3-router pilot lands. Before L5c, the
+inverse guard (test_architecture_handlers_use_sync_def.py) enforced the
+opposite — those two guards are atomic-swapped in the same commit.
+"""
+import ast
+from pathlib import Path
+
+ADMIN_ROUTERS_DIR = Path(__file__).parent.parent.parent / "src" / "admin" / "routers"
+
+
+_ROUTER_METHODS: frozenset[str] = frozenset({
+    "get", "post", "put", "delete", "patch", "options", "head", "trace",
+    "route", "api_route", "websocket",
+})
+
+
+def _is_router_handler(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """True iff ANY decorator on the function is `@<something>.<router-method>(...)`
+    or bare `@<something>.<router-method>`.
+
+    Walks ALL decorators — an outer `@audit_log` wrapping an inner `@router.post`
+    must still flag the function. Matches both Call forms (`@router.post(...)`)
+    and bare Attribute forms (`@router.websocket`).
+    """
+    for dec in node.decorator_list:
+        target = dec.func if isinstance(dec, ast.Call) else dec
+        if isinstance(target, ast.Attribute) and target.attr in _ROUTER_METHODS:
+            return True
+    return False
+
+
+def test_admin_handlers_all_async():
+    violations = []
+    for py in ADMIN_ROUTERS_DIR.rglob("*.py"):
+        tree = ast.parse(py.read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and _is_router_handler(node):
+                violations.append(f"{py.relative_to(ADMIN_ROUTERS_DIR.parent.parent.parent)}:{node.lineno}:{node.name}")
+    assert not violations, (
+        "Admin router handlers must be async def (activated at L5c).\n"
+        + "\n".join(f"  {v}" for v in violations)
+    )
+```
+
+### B. Tests (meta-test)
+
+Meta-test plants a sync-def handler in a temp router file, asserts guard flags it; plants an async-def handler, asserts guard is silent. Uses the `write-guard` skill pattern. Each stacked-decorator case below validates a specific branch of `_is_router_handler`:
+
+```python
+# tests/unit/test_architecture_admin_handlers_async_meta.py
+import ast
+import textwrap
+
+from tests.unit.test_architecture_admin_handlers_async import _is_router_handler
+
+
+def _fn(src: str) -> ast.FunctionDef | ast.AsyncFunctionDef:
+    tree = ast.parse(textwrap.dedent(src))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return node
+    raise AssertionError("no function in source")
+
+
+def test_stacked_decorator_with_audit_outer_detected():
+    # @audit_log wraps @router.post — walk ALL decorators, not just the outermost.
+    node = _fn("""
+        @audit_log
+        @router.post("/foo")
+        def handler(): pass
+    """)
+    assert _is_router_handler(node)
+
+
+def test_stacked_decorator_with_router_outer_detected():
+    node = _fn("""
+        @router.post("/foo")
+        @audit_log
+        def handler(): pass
+    """)
+    assert _is_router_handler(node)
+
+
+def test_websocket_decorator_detected():
+    node = _fn("""
+        @router.websocket("/ws")
+        async def handler(ws): pass
+    """)
+    assert _is_router_handler(node)
+
+
+def test_bare_attribute_decorator_detected():
+    # @router.websocket with no Call — bare Attribute form.
+    node = _fn("""
+        @router.websocket
+        async def handler(ws): pass
+    """)
+    assert _is_router_handler(node)
+
+
+def test_non_router_decorator_not_detected():
+    node = _fn("""
+        @audit_log
+        @require_admin
+        def helper(): pass
+    """)
+    assert not _is_router_handler(node)
+
+
+def test_module_level_function_not_detected():
+    node = _fn("""
+        def plain_function(): pass
+    """)
+    assert not _is_router_handler(node)
+```
+
+### C. Activation
+
+- **L5c entry gate (atomic):** in the same commit that converts the first pilot router to `async def`, (a) delete `tests/unit/test_architecture_handlers_use_sync_def.py`, (b) delete `tests/unit/test_architecture_no_async_db_access.py`, (c) add this guard.
+- **Rationale for atomic swap:** the sync-def guard becomes wrong the moment any pilot handler flips to async; keeping both guards in the same commit window would fire contradictory assertions on the same file. The atomic swap prevents the dual-enforcement cliff.
+- **Allowlist:** empty at inception. Any NEW handler that lands after L5c must be async-def from day one.
+
+---
+
+## 11.17 `tests/unit/test_architecture_admin_route_names_unique.py` — Route name uniqueness guard (L2)
+
+> **[Layer 2]** AST-scan equivalent + runtime-introspection guard asserting admin routes have unique `name=` values. Starlette silently accepts duplicate route names — the second registration wins, the first becomes unreachable via `request.url_for('name')`.
+
+### A. Implementation
+
+```python
+# tests/unit/test_architecture_admin_route_names_unique.py
+"""Assert admin routes have unique name= values for url_for resolution.
+
+Starlette silently accepts duplicate route names — the second registration
+wins, the first becomes unreachable via request.url_for('name'). Scope the
+check to admin/tenant routes only so it doesn't false-positive on A2A SDK
+grafted routes or MCP mount names.
+"""
+from collections import Counter
+
+from fastapi.routing import APIRoute
+from starlette.testclient import TestClient
+
+
+def test_admin_route_names_unique(admin_app):
+    # admin_app is a fixture yielding the configured FastAPI app
+    admin_names = [
+        r.name for r in admin_app.routes
+        if isinstance(r, APIRoute)
+        and r.name is not None
+        and (r.path.startswith("/admin/") or r.path.startswith("/tenant/"))
+    ]
+    counts = Counter(admin_names)
+    duplicates = {name: count for name, count in counts.items() if count > 1}
+    assert not duplicates, (
+        "Duplicate admin route names — Starlette silently drops the first "
+        "registration; url_for will resolve to the second only:\n"
+        + "\n".join(f"  {name} (x{count})" for name, count in duplicates.items())
+    )
+
+
+def test_all_admin_routes_named(admin_app):
+    unnamed = [
+        r.path for r in admin_app.routes
+        if isinstance(r, APIRoute)
+        and r.name is None
+        and (r.path.startswith("/admin/") or r.path.startswith("/tenant/"))
+    ]
+    assert not unnamed, (
+        "Admin/tenant routes must have name= set (Pattern #3 — url_for is "
+        "the only URL generator):\n"
+        + "\n".join(f"  {p}" for p in unnamed)
+    )
+```
+
+### B. Tests (meta-test)
+
+Meta-test constructs a FastAPI app with two routes sharing `name="foo"`; asserts the guard raises. Flips one name; asserts the guard passes. Second meta-test plants an unnamed admin route; asserts `test_all_admin_routes_named` flags it.
+
+### C. Activation
+
+- **L2 entry gate:** the guard activates in the same PR that deletes the Flask catch-all. Scope-limited to `/admin/` + `/tenant/` paths so A2A SDK grafted routes (which have their own name conventions) are not false-positive matches.
+- **Allowlist:** empty at inception. The Wave 0/L0 guard `test_architecture_admin_routes_named.py` enforces the `name=` invariant ahead of time; this guard adds the uniqueness check on top.
+
+---
+
 ## Cross-cutting concerns
 
 ### Middleware ordering (final answer)
 
-In `src/app.py`, the registration order (bottom-to-top = outermost-to-innermost):
+Canonical runtime order (outermost → innermost). Three progressive shapes — the stack grows as the migration advances:
 
-```python
-# Inner → outer (LIFO registration order)
-app.add_middleware(CORSMiddleware, allow_origins=...)      # innermost
-app.add_middleware(RestCompatMiddleware)
-app.add_middleware(CSRFMiddleware)                          # new, admin
-app.add_middleware(SessionMiddleware, **session_kwargs)     # new, admin
-app.add_middleware(UnifiedAuthMiddleware)
-app.add_middleware(ExternalDomainRedirectMiddleware)        # new, admin
-app.add_middleware(FlyHeadersMiddleware)                    # new, outermost
+**L1a (initial port, 6 middlewares):**
+```
+Fly → ExternalDomain → UnifiedAuth → Session → CSRF → RestCompat → CORS → handler
 ```
 
-Runtime order per request: Fly → ExternalDomain → UnifiedAuth → Session → CSRF → RestCompat → CORS → handler. Justification for CSRF inside Session: `request.session` is available in case a future handler wants to double-bind CSRF to session state; for v2.0.0 the order doesn't matter semantically, but keeping the more-innovative middleware (CSRF) innermost minimizes blast radius on changes.
+**L2 (Flask removal, 9 middlewares — adds TrustedHost AND SecurityHeaders):**
+```
+Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS → handler
+```
+
+**L4 / L6 (async + observability, 10 middlewares — adds RequestID outermost):**
+```
+RequestID → Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS → handler
+```
+
+Registration in `src/app.py` is in **REVERSE** order (LIFO — `add_middleware` last-added becomes outermost). L4/L6 canonical registration:
+
+```python
+app.add_middleware(CORSMiddleware, allow_origins=...)          # innermost
+app.add_middleware(RestCompatMiddleware)
+app.add_middleware(CSRFOriginMiddleware, ...)
+app.add_middleware(SessionMiddleware, **session_kwargs)
+app.add_middleware(UnifiedAuthMiddleware)
+app.add_middleware(SecurityHeadersMiddleware, https_only=settings.https_only)  # added at L2 (§11.28)
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=...)   # added at L2
+app.add_middleware(ApproximatedExternalDomainMiddleware)
+app.add_middleware(FlyHeadersMiddleware)
+app.add_middleware(RequestIDMiddleware)                        # added at L4/L6, outermost
+```
+
+**Hard invariant (notes/CLAUDE.md #2):** `ApproximatedExternalDomainMiddleware` runs BEFORE `CSRFOriginMiddleware` — the canonical order satisfies this (ExternalDomain is outer of the pair).
+
+**Rationale:**
+- `UnifiedAuth` is **outside** `Session` by design — it authenticates from headers only (`x-adcp-auth`, `Authorization: Bearer`) and does NOT depend on `request.session`. Session still wraps CSRF/RestCompat/CORS so admin handlers downstream have session state.
+- `ExternalDomain` does not touch `request.session`; its position relative to Session is functionally independent. The load-bearing constraint is that it runs before CSRF.
+- `Fly` is outermost of the L1a stack so every inner middleware sees `X-Forwarded-*` normalized from `Fly-Forwarded-*`. At L4/L6, `RequestID` takes the outermost slot above `Fly`.
+
+---
+
+## 11.18 `src/core/http.py` — Shared httpx clients
+
+> **[L2 sync + L5 async]** Replace ad-hoc `httpx.AsyncClient()` and `requests.*` call sites with lifespan-managed shared clients on `app.state.*`.
+>
+> **See also:** `§11.30` Concurrency math — httpx `max_connections=100` / `max_keepalive_connections=20` below must be read against the threadpool token and DB pool sizing. At 80 threadpool tokens each handler can open up to 1 outbound httpx connection, so `max_connections=100` leaves 20 headroom for webhook delivery retries and JWKS refresh. If a future deploy raises `ADCP_THREADPOOL_TOKENS` above 80, revisit `max_connections` via the derivation in §11.30.B.
+
+> **Why:** ~45 `requests.*` sites across `src/adapters/{kevel,triton_digital,xandr,mock_ad_server,gam_reporting_service}.py`, `src/admin/blueprints/{auth.py,tenants.py,settings.py}`, `src/core/webhook_delivery.py` each construct per-call clients — no connection pool reuse, no shared timeout policy, no shared retry. Vendored SDK calls (`googleads`, `google-ads`) internally use `requests` via deep integration and are intentionally left alone; `requests>=2.33.0` stays as a pinned dep for them.
+
+### A. Sync client (L2 ships alongside proxy-headers)
+
+```python
+# src/core/http.py (partial)
+import httpx
+from src.core.config import get_config
+
+DEFAULT_TIMEOUT = httpx.Timeout(
+    connect=5.0, read=30.0, write=30.0, pool=5.0,
+)
+OAUTH_TIMEOUT = httpx.Timeout(
+    connect=5.0, read=10.0, write=10.0, pool=5.0,
+)
+DEFAULT_LIMITS = httpx.Limits(
+    max_keepalive_connections=20,
+    max_connections=100,
+    keepalive_expiry=30.0,
+)
+
+
+def make_sync_client(timeout: httpx.Timeout | None = None) -> httpx.Client:
+    return httpx.Client(
+        timeout=timeout or DEFAULT_TIMEOUT,
+        limits=DEFAULT_LIMITS,
+        transport=httpx.HTTPTransport(retries=3),  # connect-retry only
+        headers={"User-Agent": f"adcp-sales-agent/{get_config().app.version}"},
+    )
+```
+
+Register in L2 lifespan:
+```python
+async def lifespan(app: FastAPI):
+    app.state.http_client_sync = make_sync_client()
+    app.state.http_client_sync_oauth = make_sync_client(timeout=OAUTH_TIMEOUT)
+    try:
+        yield
+    finally:
+        app.state.http_client_sync.close()
+        app.state.http_client_sync_oauth.close()
+```
+
+Replace `requests.get(...)` calls across the 45 sites with `request.app.state.http_client_sync.get(...)`. Adapter code uses the dependency-injected sync client; webhook/outbound code in `src/core/webhook_delivery.py` upgrades to async in L5.
+
+### B. Async client (L5+ scope)
+
+```python
+def make_async_client(timeout: httpx.Timeout | None = None) -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        timeout=timeout or DEFAULT_TIMEOUT,
+        limits=DEFAULT_LIMITS,
+        transport=httpx.AsyncHTTPTransport(retries=3),
+        headers={"User-Agent": f"adcp-sales-agent/{get_config().app.version}"},
+    )
+```
+
+Lifespan registration:
+```python
+app.state.http_client = make_async_client()
+# ... yield ...
+await app.state.http_client.aclose()
+```
+
+Replace the 4 ad-hoc `httpx.AsyncClient()` sites in `src/services/webhook_delivery_service.py`, `src/services/order_approval_service.py`, `src/core/property_list_resolver.py`, `src/core/creative_agent_registry.py` with `request.app.state.http_client`.
+
+### C. Retry semantics (shared with P8)
+
+`httpx.HTTPTransport(retries=N)` retries **connection failures only** (not 5xx, not read timeouts). For application-level retries on idempotent outbound (webhooks, JWKS fetch), use `tenacity` (already a transitive dep via `google-api-core`) or `stamina`:
+
+```python
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+import httpx
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    retry=retry_if_exception_type((httpx.HTTPStatusError, httpx.TimeoutException)),
+    reraise=True,
+)
+def fetch_jwks(request, issuer: str) -> dict:
+    r = request.app.state.http_client_sync.get(f"{issuer}/.well-known/jwks.json")
+    r.raise_for_status()
+    return r.json()
+```
+
+Use `tenacity` for sync paths (L2); for async (L5) either upgrade to `tenacity.retry` with `AsyncRetrying`, or adopt `stamina` for its typed `stamina.retry()` decorator with circuit-breaker integration.
+
+### D. Tests
+
+```python
+# tests/unit/test_http_clients.py
+def test_sync_client_has_shared_transport_with_retries():
+    client = make_sync_client()
+    assert isinstance(client._transport, httpx.HTTPTransport)
+    assert client.timeout.connect == 5.0
+
+def test_oauth_client_has_shorter_read_timeout():
+    client = make_sync_client(timeout=OAUTH_TIMEOUT)
+    assert client.timeout.read == 10.0
+```
+
+### E. Scope summary
+
+- **L2:** create `src/core/http.py`, add `make_sync_client`, register in lifespan, replace ~45 `requests.*` call sites in admin/core/adapters (excluding vendored SDK internals).
+- **L5:** add `make_async_client`, register async client in lifespan, replace 4 ad-hoc `httpx.AsyncClient()` sites.
+- **LOC estimate:** ~300 net (lifespan ~30, 45+4 call-site replacements, retry helpers, tests).
+
+---
+
+## 11.19 `src/core/config.py` — Consolidate env reads (extend existing)
+
+> **[L4]** Extend existing `src/core/config.py` (NOT create new). `BaseSettings` groups already exist. Consolidate 146 `os.environ.get()` call sites across 40 files over L2/L4.
+
+### Scope
+
+- `src/core/config.py` already has: `GAMOAuthConfig`, `DatabaseConfig`, `ServerConfig`, `GoogleOAuthConfig`, `SuperAdminConfig`, `AppConfig`, and `get_config()` singleton.
+- Add `env_file=".env.secrets"` to `model_config` of each group — eliminates manual dotenv loading.
+- Add missing groups as needed: `CSRFConfig` (allowed_origins, allowed_suffixes), `OAuthCallbackConfig` (OIDC issuer URLs), `ThreadpoolConfig` (ADCP_THREADPOOL_TOKENS), `ObservabilityConfig` (logfire enabled/send/console flags — see §11.20).
+- **Do NOT** consolidate dynamic/tenant-scoped config (read from DB, not env) — those stay per-tenant (e.g., `gemini_api_key` per-tenant override).
+
+### Consolidation pattern
+
+Per-module sweep (one PR per module, amortized L2→L4):
+1. Grep target module for `os.environ` / `os.getenv`
+2. For each env var, add corresponding field to appropriate `BaseSettings` group (with default)
+3. Replace call site with `get_config().group.field`
+4. Add `get_config()` to module's imports
+
+### Guard
+
+`test_architecture_no_direct_os_environ.py` — scope to `src/admin/` (Layer-scope) with allowlist for startup-path files (entry points, deploy scripts). Guard activates in L4 with captured baseline, shrinks to zero by L7.
+
+### Deferred
+
+Moving tenant-scoped keys into pydantic-settings is NOT in scope — those are DB-sourced and tenant-variable.
+
+---
+
+## 11.20 Observability — logfire instrumentation
+
+> **[L4]** Use existing `logfire>=4.16.0` dep; DO NOT add `opentelemetry-sdk` directly. Logfire wraps OTLP and provides drop-in instrumentations for FastAPI, SQLAlchemy, httpx.
+
+### Wire-up (L4 lifespan)
+
+```python
+# src/core/observability.py (new, ~25 LOC)
+import logfire
+from src.core.config import get_config
+
+def configure_observability(app):
+    config = get_config()
+    if not config.observability.enabled:
+        return
+    logfire.configure(
+        send_to_logfire=config.observability.send_to_logfire,  # False for self-hosted
+        console=config.observability.console,
+    )
+    logfire.instrument_fastapi(app, capture_headers=False)
+    logfire.instrument_sqlalchemy()
+    logfire.instrument_httpx()
+    # structlog ↔ logfire bridge already wired via configure_logging()
+```
+
+Called from L4 lifespan after middleware registration:
+```python
+async def lifespan(app: FastAPI):
+    configure_observability(app)
+    # ... engines, http clients, caches ...
+    yield
+```
+
+### LOC estimate
+
+~25 LOC in new `src/core/observability.py` + ~5 LOC lifespan call + config-group additions. **NOT 200 LOC** — logfire does the heavy lifting.
+
+### DEFER direct OTLP
+
+`opentelemetry-sdk` + `opentelemetry-instrumentation-{fastapi,sqlalchemy,httpx}` is **NOT added** — would duplicate what logfire does. If self-hosted OTLP collector is needed, configure logfire's OTLP exporter (`LOGFIRE_SEND_TO_LOGFIRE=false; LOGFIRE_OTLP_ENDPOINT=...`).
+
+---
+
+## 11.21 `app.state` singletons
+
+> **[L4]** Move all per-request-shared singletons to `app.state.*` via lifespan. Greenfield FastAPI pattern.
+
+### Targets
+
+- `app.state.http_client` — async httpx (§11.18, L5)
+- `app.state.http_client_sync` — sync httpx (§11.18, L2)
+- `app.state.http_client_sync_oauth` — sync httpx with OAuth timeout (§11.18, L2)
+- `app.state.inventory_cache` — `SimpleAppCache` (Decision 6, L4 consolidation with cache module)
+- `app.state.templates` — single `Jinja2Templates` instance (L4; currently only function-local load in `src/landing/landing_page.py`)
+- `app.state.oauth` — consolidate 5 `OAuth()` constructions in `src/admin/blueprints/auth.py` + `src/admin/blueprints/oidc.py` (4 sites) to a single app-scoped registry
+
+### Access pattern
+
+Handlers:
+```python
+@router.get("/foo")
+def foo(request: Request):
+    templates = request.app.state.templates
+    return templates.TemplateResponse(request, "foo.html", {...})
+```
+
+DI (preferred):
+```python
+def get_http_client(request: Request) -> httpx.Client:
+    return request.app.state.http_client_sync
+
+SyncHttpClientDep = Annotated[httpx.Client, Depends(get_http_client)]
+```
+
+### Deferred (already per-app or out of scope)
+
+- `oauth` is already per-app in `create_app()` — just consolidate the 5 construction sites, don't move to module-global (which would regress).
+- `logger` instances stay module-global (loggers are idempotent; moving to `app.state` adds no benefit).
+- `db_engine` / `db_sessionmaker` stay as per current plan — `app.state.db_engine` per Decision 2.
+
+---
+
+## 11.22 Handler signature convention — `Annotated[..., Path/Query/...]`
+
+> **[L1/L2]** FastAPI handlers use `Annotated[T, Path()/Query()/Body()/Form()/Header()/Cookie()/File()/Depends()]` for every parameter. Modern FastAPI idiom (0.95+).
+
+### Rule
+
+Every parameter of a function decorated with `@router.{get,post,put,delete,patch}` MUST use `Annotated[T, <FastAPI-parameter-class>]` unless:
+- Typed as a Pydantic `BaseModel` subclass (request body, inferred)
+- Named `request: Request`, `response: Response`, `background: BackgroundTasks`
+- Prefixed `_` (conventional private)
+- `*args` / `**kwargs`
+
+### Examples
+
+```python
+# YES
+@router.get("/tenant/{tenant_id}/products/{product_id}", name="admin_products_get")
+def get_product(
+    tenant_id: Annotated[str, Path()],
+    product_id: Annotated[str, Path()],
+    include_draft: Annotated[bool, Query()] = False,
+    session: SessionDep = None,
+) -> ProductDTO:
+    ...
+
+# NO — bare str for Path param
+@router.get("/tenant/{tenant_id}/products", name="admin_products_list")
+def list_products(tenant_id: str, session: SessionDep):  # ← WRONG
+    ...
+```
+
+### Guard
+
+`test_architecture_handlers_use_annotated.py` — AST scan of `src/admin/routers/`. Excludes Pydantic-body params, Request/Response/BackgroundTasks, underscore-prefixed, `*args`/`**kwargs`. Empty allowlist at L1/L2.
+
+### LOC
+
+~100 LOC guard + meta-test; ~150 LOC of handler signature changes across ported blueprints.
+
+---
+
+## 11.23 DTO base classes — `RequestDTO` / `ResponseDTO`
+
+> **[L4]** Two base classes with different `model_config`. Blanket `strict=True, frozen=True` on all DTOs is HARMFUL — strict rejects form string-to-int coercion; frozen breaks handler mutation patterns.
+
+### Base classes
+
+```python
+# src/admin/dtos/_base.py
+from pydantic import BaseModel, ConfigDict
+
+
+class RequestDTO(BaseModel):
+    """Base for form/JSON input DTOs. Permissive coercion, mutable.
+
+    Do NOT set strict=True — HTML form strings like "123" must coerce to int.
+    Do NOT set frozen=True — handlers mutate before validation.
+    """
+    model_config = ConfigDict(
+        extra="forbid",  # reject unknown fields (environment-gated elsewhere)
+        str_strip_whitespace=True,
+    )
+
+
+class ResponseDTO(BaseModel):
+    """Base for ORM→template DTOs. Strict, frozen, constructed from ORM.
+
+    from_attributes=True: construct from ORM model via DTO.model_validate(my_model).
+    frozen=True: prevents accidental handler mutation of response data.
+    """
+    model_config = ConfigDict(
+        from_attributes=True,
+        frozen=True,
+        extra="forbid",
+    )
+```
+
+### Usage
+
+```python
+class CreateProductRequest(RequestDTO):
+    name: str
+    cpm: float
+
+class ProductResponse(ResponseDTO):
+    id: str
+    name: str
+    cpm: float
+    is_active: bool  # derived via @computed_field
+
+@router.post("/tenant/{tenant_id}/products", name="admin_products_create")
+def create_product(
+    tenant_id: Annotated[str, Path()],
+    req: CreateProductRequest,
+    session: SessionDep,
+) -> ProductResponse:
+    product = ProductRepository(session).create(req, tenant_id)
+    return ProductResponse.model_validate(product)
+```
+
+### Guard
+
+`test_architecture_dto_config.py` — AST scan `src/admin/dtos/**`. Asserts `RequestDTO` subclasses don't set `strict=True` or `frozen=True`; `ResponseDTO` subclasses set both + `from_attributes=True`.
+
+### Deferred
+
+- `strict=True` globally (original proposal): rejected. Breaks form handling.
+- `frozen=True` on `RequestDTO`: rejected. Breaks `model_validator(mode="after")` patterns that set derived fields.
+
+---
+
+## 11.24 `TrustedHostMiddleware` — L2 hardening (GZip dropped)
+
+> **[L2]** Add `TrustedHostMiddleware` with wildcard subdomain support. DROP `GZipMiddleware` — nginx already gzips (configs at `config/nginx/nginx-*.conf`).
+
+### TrustedHostMiddleware
+
+```python
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=get_config().server.trusted_hosts,  # e.g. ["*.scope3.com", "scope3.com", "localhost"]
+)
+```
+
+Position: OUTSIDE `UnifiedAuth`, INSIDE `Fly`. Reject-at-the-edge discipline.
+
+Per-config `trusted_hosts`:
+- dev: `["*"]` (permissive)
+- staging/prod: `["*.scope3.com", "scope3.com"]` + platform-specific hostnames
+
+### GZipMiddleware — DEFER
+
+nginx already gzips responses at the edge. Adding FastAPI `GZipMiddleware` double-compresses (wastes CPU) without benefit. If/when nginx is dropped post-v2.0, re-evaluate.
+
+### Updated canonical middleware stack (L2, 9 middlewares)
+
+```
+Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS
+```
+
+(`TrustedHost` added between `ExternalDomain` and `SecurityHeaders` — reject non-allowed hosts before security-header injection and auth parsing. `SecurityHeaders` (§11.28) lands in the same L2 PR, INSIDE `TrustedHost` and OUTSIDE `UnifiedAuth`.) `RequestID` becomes the outermost middleware when it lands in L4/L6 — runtime order then (10 middlewares): `RequestID → Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS`.
+
+---
+
+## 11.25 Small-win patterns (L4 consolidation)
+
+Low-cost additional patterns grouped here so they travel together at L4.
+
+### 11.25.1 `lazy="raise_on_sql"` on relationships (~10 LOC, L4)
+
+Attach `lazy="raise_on_sql"` to high-fan-out relationships in `src/core/database/models.py`. Catches N+1 lazy-loads at query time instead of deferring to async context switching. Zero `lazy=` overrides exist today; add to relationships flagged in Spike 1 audit.
+
+### 11.25.2 `pytest-httpx` + `respx` dev deps
+
+Add to pyproject dev deps:
+- `pytest-httpx>=0.30.0` — cleaner than respx for simple outbound mocks
+- `respx>=0.20.0` — already referenced in foundation-modules §11.13.2
+
+Test fixture pattern in §11.13.
+
+### 11.25.3 `rich.traceback.install()` in dev
+
+Add to `src/core/main.py` or entry-point module:
+
+```python
+import os
+if os.environ.get("ENV") == "development":
+    from rich.traceback import install
+    install(show_locals=True, suppress=["httpx", "uvicorn"])
+```
+
+`rich` is already a prod dep. ~3 LOC.
+
+### 11.25.4 Postgres `statement_timeout` — two-tier pattern
+
+A blanket 30s timeout catches runaway OLTP queries but would kill legitimate long-running reports (GAM reporting jobs regularly scan 10-100M impression rows and take 5-10 minutes). The two-tier pattern sets an aggressive default per-connection and lets reporting paths opt into a larger bound for the duration of a single transaction.
+
+**Defaults:**
+
+```python
+# src/core/database/db_config.py (L4 sync landing)
+from contextlib import contextmanager
+from sqlalchemy import event, text
+
+DEFAULT_STATEMENT_TIMEOUT_MS = 30_000          # 30s — OLTP default
+LONG_RUNNING_STATEMENT_TIMEOUT_MS = 600_000    # 10min — reporting ceiling
+
+
+@event.listens_for(_sync_engine, "connect")
+def _set_default_statement_timeout(dbapi_conn, conn_record):
+    """Applied to every new connection from the sync engine's pool.
+
+    Catches runaway joins, infinite-recursion CTEs, and seq-scans on missing
+    indexes before they saturate the connection for the pool_recycle window.
+    Override per-transaction via `with_long_statement_timeout(session)`.
+    """
+    with dbapi_conn.cursor() as cur:
+        cur.execute(f"SET statement_timeout = {DEFAULT_STATEMENT_TIMEOUT_MS}")
+
+
+@contextmanager
+def with_long_statement_timeout(session):
+    """Raise statement_timeout to LONG_RUNNING_STATEMENT_TIMEOUT_MS for the
+    duration of the current transaction, then restore.
+
+    Usage (sync, for L0-L4 GAM reporting):
+        with get_db_session() as session:
+            with with_long_statement_timeout(session):
+                rows = session.execute(report_query).all()
+    """
+    session.execute(text(f"SET LOCAL statement_timeout = {LONG_RUNNING_STATEMENT_TIMEOUT_MS}"))
+    try:
+        yield
+    finally:
+        # SET LOCAL auto-reverts on txn commit/rollback — explicit reset is
+        # a belt-and-suspenders guard for nested-use scenarios.
+        session.execute(text(f"SET LOCAL statement_timeout = {DEFAULT_STATEMENT_TIMEOUT_MS}"))
+```
+
+**Async counterpart (L5+):**
+
+```python
+# src/core/database/engine.py
+from contextlib import asynccontextmanager
+from sqlalchemy import text
+
+from src.core.database.db_config import (
+    DEFAULT_STATEMENT_TIMEOUT_MS,
+    LONG_RUNNING_STATEMENT_TIMEOUT_MS,
+)
+
+
+@asynccontextmanager
+async def with_long_statement_timeout_async(session):
+    """Async variant. Note: asyncpg does NOT fire SQLAlchemy's `connect`
+    event the way psycopg2 does — it routes connection setup through its
+    own connect hook. Pass `connect_args={"server_settings": {"statement_timeout": "30s"}}`
+    when building the async engine (see `make_engine` in §11.0) so every
+    asyncpg connection gets the default; this helper raises the per-transaction
+    ceiling on top of that baseline.
+    """
+    await session.execute(
+        text(f"SET LOCAL statement_timeout = {LONG_RUNNING_STATEMENT_TIMEOUT_MS}")
+    )
+    try:
+        yield
+    finally:
+        await session.execute(
+            text(f"SET LOCAL statement_timeout = {DEFAULT_STATEMENT_TIMEOUT_MS}")
+        )
+```
+
+**Usage examples — GAM reporting:**
+
+```python
+# Sync (L0-L4)
+from src.core.database.db_config import with_long_statement_timeout
+
+def run_gam_impressions_report(tenant_id: str) -> ReportRows:
+    with get_db_session() as session:
+        with with_long_statement_timeout(session):
+            return session.execute(GAM_IMPRESSIONS_QUERY, {"t": tenant_id}).all()
+
+
+# Async (L5+)
+from src.core.database.engine import with_long_statement_timeout_async
+
+async def run_gam_impressions_report(tenant_id: str, session: SessionDep) -> ReportRows:
+    async with with_long_statement_timeout_async(session):
+        result = await session.execute(GAM_IMPRESSIONS_QUERY, {"t": tenant_id})
+        return result.all()
+```
+
+**Cross-reference:** `async-audit/database-deep-audit.md` H1 (asyncpg-specific regression — the `connect` event does not fire under asyncpg, so the `server_settings` kwarg is the only way to make the default stick at the connection layer).
+
+**Test file:** `tests/integration/test_statement_timeout.py` with three tests:
+
+- **`test_default_statement_timeout_applied`** — open a session, run `SHOW statement_timeout`, assert the result parses to 30000ms (Postgres emits `"30s"` on some versions, `"30000"` / `"30000ms"` on others; the test should accept any of those three serializations via `_normalize_pg_timeout`).
+- **`test_long_running_override_applies_within_transaction`** — enter `with_long_statement_timeout(session)`, `SHOW statement_timeout` returns 600000ms; exit the block, `SHOW statement_timeout` returns 30000ms again.
+- **`test_short_query_not_affected`** — run a trivial `SELECT 1` with the default timeout active, assert it returns a result rather than raising `QueryCanceled` (catches regressions where the default is accidentally lowered below sane OLTP latency).
+
+### 11.25.5 `types-cachetools` when SimpleAppCache lands
+
+Add to pyproject dev deps when Decision 6 ships: `types-cachetools`.
+
+---
+
+## 11.26 `tests/unit/test_structural_guard_allowlist_monotonic.py` — Meta-guard
+
+> **[L0]** Meta-guard ratcheting all structural-guard allowlists monotonically downward. Pattern matches existing `.duplication-baseline` (`check_code_duplication.py`).
+
+### Design
+
+Per-guard baseline file at `.guard-baselines/<guard-name>.json`:
+```json
+{
+  "guard": "test_architecture_no_flask_imports",
+  "allowlist_count": 18,
+  "committed_sha": "abc1234",
+  "updated_at": "2026-04-14"
+}
+```
+
+Each new-allowlist-count must be `<=` baseline. On green, auto-update the baseline (reducing it) — same mechanism as `.duplication-baseline`.
+
+### Implementation sketch
+
+```python
+# tests/unit/test_structural_guard_allowlist_monotonic.py
+import json
+from pathlib import Path
+
+import pytest
+
+BASELINES_DIR = Path(__file__).parent.parent.parent / ".guard-baselines"
+
+
+def _current_allowlist_count(guard_module_name: str) -> int:
+    """Import the guard module and count entries in its ALLOWLIST or EXPECTED_VIOLATIONS constant."""
+    module = __import__(f"tests.unit.{guard_module_name}", fromlist=["*"])
+    for name in ("ALLOWLIST", "EXPECTED_VIOLATIONS", "KNOWN_VIOLATIONS"):
+        allowlist = getattr(module, name, None)
+        if allowlist is not None:
+            return len(allowlist)
+    return 0
+
+
+def _baseline_counts():
+    for baseline_file in BASELINES_DIR.glob("*.json"):
+        data = json.loads(baseline_file.read_text())
+        yield baseline_file, data
+
+
+def test_allowlist_counts_monotonic():
+    violations = []
+    for baseline_file, data in _baseline_counts():
+        guard_module = data["guard"]
+        current = _current_allowlist_count(guard_module)
+        baseline = data["allowlist_count"]
+        if current > baseline:
+            violations.append(
+                f"  {guard_module}: baseline={baseline}, current={current} (GREW by {current - baseline})"
+            )
+    assert not violations, (
+        "Structural-guard allowlist(s) GREW — allowlists can only shrink.\n"
+        "Fix the new violations, do not add to allowlist:\n"
+        + "\n".join(violations)
+    )
+
+
+def test_baselines_auto_update_on_shrink(tmp_path):
+    # Meta-test: a baseline auto-updates when current < baseline
+    # (via make quality hook; not tested here at runtime, but
+    # the hook's correctness is asserted by snapshot + re-run)
+    pass
+```
+
+### Integration with `make quality`
+
+Add a post-test hook that, on green, iterates through `.guard-baselines/` and updates any baseline where `current < baseline`. This is identical to how `check_code_duplication.py` updates `.duplication-baseline`.
+
+### Interaction with layer exits
+
+Row 48 of the Goals-Adherence Matrix (`implementation-checklist.md` §4.6). Any allowlist growth at any point fails `make quality`, blocking merge.
+
+### Related: `test_architecture_no_get_db_session_in_handler_body.py`
+
+Catches the L4→L5 SessionDep drift scenario: admin handlers that forgot the SessionDep migration and kept `with get_db_session() as session:` in handler bodies. When L5c flips `SessionDep` to `AsyncSession`, these unmigrated handlers silently contradict (sync `get_db_session()` + async handlers = two engines, pool drift).
+
+Activated at L4 with empty allowlist; prevents the cascade by catching sync-session-in-handler-body at commit time.
+
+Implementation pattern same as §11.16 — AST scan of `src/admin/routers/` flagging `with get_db_session` usage inside `FunctionDef`/`AsyncFunctionDef` decorated with `@router.*`. Matrix row 30.
+
+---
+
+## 11.27 Layer-scope commit-lint rule
+
+> **[L0]** CI check asserting commits don't span more than one layer's work items. Prevents reviewer drift during long-lived migration branch.
+
+### Rule
+
+Every commit on `feat/v2.0.0-flask-to-fastapi` MUST declare a `Layer:` trailer:
+
+```
+feat: convert accounts router to async
+
+Layer: L5c
+```
+
+CI runs `.github/workflows/layer-scope-check.yml`:
+1. Parse the `Layer:` trailer (L0/L1a/L1b/L1c/L1d/L2/L3/L4/L5a/L5b/L5c/L5d1-5/L5e/L6/L7).
+2. Read the layer's "Files to create/modify" list from `implementation-checklist.md`.
+3. Compute the set of files changed in the commit (`git diff --name-only HEAD~1 HEAD`).
+4. Assert every changed file is in the declared layer's file list (or on the global allowlist: `CLAUDE.md` notes, `docs/`, `README.md`).
+5. If any file is out-of-layer, fail with a message naming the file and the layer it belongs to.
+
+### Escapes
+
+- `Layer: multi-layer` trailer permitted ONLY with reviewer sign-off in PR description.
+- Docs-only commits: use `Layer: docs` trailer.
+- Infra/config: use `Layer: infra` trailer.
+
+### Implementation
+
+```yaml
+# .github/workflows/layer-scope-check.yml
+name: Layer-scope
+on: [pull_request]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Parse and verify
+        run: python scripts/ops/check_layer_scope.py ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
+```
+
+`scripts/ops/check_layer_scope.py` reads layer-to-file mappings from `implementation-checklist.md` §2 (Files to create/modify per layer) and enforces containment.
+
+### Interaction with matrix
+
+Row 48 of the Goals-Adherence Matrix (`implementation-checklist.md` §4.6) checks allowlist growth; this rule checks layer cohesion. Together they prevent scope drift and hidden violations.
+
+### Interaction with 7-step cycle
+
+The Test-Before-Implement cycle in `CLAUDE.md` of this folder produces Red/Green commit pairs. Both commits in each pair carry the same `Layer:` trailer. The post-hoc `PAIR OK` verification and the `Layer:` trailer check are run together before squash-merge.
+
+---
+
+## 11.28 `src/admin/middleware/security_headers.py` — Security headers (CSP/HSTS/X-Frame/etc.)
+
+> **[L2+]** Pure-ASGI middleware that injects browser-hardening response headers on every response. Lands with `TrustedHostMiddleware` at L2. Position: INSIDE `TrustedHostMiddleware`, OUTSIDE `UnifiedAuthMiddleware` — runs on every response including auth-rejected ones so that login, error, and 403 pages carry the same hardening headers as authenticated pages. Sync/async-agnostic (pure ASGI — intercepts `send()` on `http.response.start`).
+
+### A. Purpose and scope
+
+Every admin HTML response and every AdCP JSON response must carry the standard browser-hardening header set:
+
+- `Strict-Transport-Security` (HSTS) — forces HTTPS for 1 year, preloadable
+- `X-Frame-Options: DENY` — prevents clickjacking (even when CSP `frame-ancestors` is honored; double-defense for legacy UAs)
+- `X-Content-Type-Options: nosniff` — prevents MIME-type sniffing attacks
+- `Referrer-Policy: strict-origin-when-cross-origin` — leaks only origin (not path) on cross-origin navigations
+- `Content-Security-Policy` (CSP) — restricts script/style/img/font/connect sources
+- `Permissions-Policy` — disables browser feature access (accelerometer, camera, geolocation, gyroscope, magnetometer, microphone, payment, usb)
+
+Flask had no equivalent module; Approximated's edge proxy sets a subset of these but they are not uniformly applied (and Approximated is bypassed when a request reaches via the subdomain path). SecurityHeadersMiddleware makes the policy application origin-independent.
+
+### B. Implementation
+
+```python
+# src/admin/middleware/security_headers.py
+"""Pure-ASGI middleware that injects standard browser-hardening headers on every response.
+
+Runtime position (canonical L4+ stack):
+    RequestID → Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS
+
+INSIDE TrustedHost, OUTSIDE UnifiedAuth — runs on every response including login
+pages, 403s, and error pages so that hardening headers are origin-independent.
+"""
+from collections.abc import Iterable
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+# Default CSP — tight but compatible with current admin templates. Adjust in settings
+# if a specific router needs `connect-src` additions.
+DEFAULT_CSP = (
+    "default-src 'self'; "
+    "script-src 'self'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: https:; "
+    "font-src 'self' data:; "
+    "connect-src 'self'; "
+    "frame-ancestors 'none'; "
+    "base-uri 'self'; "
+    "form-action 'self';"
+)
+
+# Permissions-Policy — disable sensors/media APIs admin does not use.
+_DISABLED_PERMISSIONS = (
+    "accelerometer=()",
+    "camera=()",
+    "geolocation=()",
+    "gyroscope=()",
+    "magnetometer=()",
+    "microphone=()",
+    "payment=()",
+    "usb=()",
+)
+DEFAULT_PERMISSIONS_POLICY = ", ".join(_DISABLED_PERMISSIONS)
+
+
+class SecurityHeadersMiddleware:
+    """Injects hardening headers on every HTTP response.
+
+    Args:
+        app: downstream ASGI app
+        https_only: if True, emit HSTS. Default True. Set False in staging with
+            non-public domains (HSTS is irrevocable for 1 year — do not enable
+            unless the hostname is committed to HTTPS for the duration).
+        csp: override the default CSP string. None → DEFAULT_CSP.
+        hsts_seconds: HSTS max-age. Default 1 year (31_536_000). IMPORTANT: this
+            is a browser-side commitment — once shipped, the domain cannot go
+            back to HTTP for `hsts_seconds` seconds. Do not enable in staging
+            environments that may revert to HTTP.
+    """
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        https_only: bool = True,
+        csp: str | None = None,
+        hsts_seconds: int = 31_536_000,
+    ) -> None:
+        self.app = app
+        self.https_only = https_only
+        self.csp = csp if csp is not None else DEFAULT_CSP
+        self.hsts_seconds = hsts_seconds
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        send_with_headers = self._send_with_headers(send)
+        await self.app(scope, receive, send_with_headers)
+
+    def _send_with_headers(self, send: Send) -> Send:
+        hsts_header = (
+            f"max-age={self.hsts_seconds}; includeSubDomains; preload".encode()
+            if self.https_only
+            else None
+        )
+        csp_header = self.csp.encode()
+        permissions_header = DEFAULT_PERMISSIONS_POLICY.encode()
+
+        async def wrapped(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))
+                # Only add headers not already set by the handler (allow explicit override).
+                existing = {name.lower() for name, _ in headers}
+                if hsts_header is not None and b"strict-transport-security" not in existing:
+                    headers.append((b"strict-transport-security", hsts_header))
+                if b"x-frame-options" not in existing:
+                    headers.append((b"x-frame-options", b"DENY"))
+                if b"x-content-type-options" not in existing:
+                    headers.append((b"x-content-type-options", b"nosniff"))
+                if b"referrer-policy" not in existing:
+                    headers.append((b"referrer-policy", b"strict-origin-when-cross-origin"))
+                if b"content-security-policy" not in existing:
+                    headers.append((b"content-security-policy", csp_header))
+                if b"permissions-policy" not in existing:
+                    headers.append((b"permissions-policy", permissions_header))
+                message["headers"] = headers
+            await send(message)
+
+        return wrapped
+```
+
+### C. Registration
+
+Added in `app_factory.py` / `src/app.py`. LIFO registration order (innermost first) — `SecurityHeaders` registers AFTER `UnifiedAuth` and BEFORE `TrustedHost`:
+
+```python
+app.add_middleware(CORSMiddleware, allow_origins=...)          # innermost
+app.add_middleware(RestCompatMiddleware)
+app.add_middleware(CSRFOriginMiddleware, ...)
+app.add_middleware(SessionMiddleware, **session_kwargs)
+app.add_middleware(UnifiedAuthMiddleware)
+app.add_middleware(SecurityHeadersMiddleware, https_only=settings.https_only)  # NEW at L2
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=...)
+app.add_middleware(ApproximatedExternalDomainMiddleware)
+app.add_middleware(FlyHeadersMiddleware)
+app.add_middleware(RequestIDMiddleware)                        # outermost at L4/L6
+```
+
+**Canonical runtime order (L4+, 10 middlewares):**
+```
+RequestID → Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS
+```
+
+### D. Tests
+
+```python
+# tests/unit/admin/test_security_headers.py
+from starlette.applications import Starlette
+from starlette.responses import JSONResponse, PlainTextResponse
+from starlette.routing import Route
+from starlette.testclient import TestClient
+
+from src.admin.middleware.security_headers import SecurityHeadersMiddleware
+
+
+def _app(*, https_only: bool = True) -> Starlette:
+    async def ok(_): return PlainTextResponse("ok")
+    async def boom(_): raise RuntimeError("boom")
+    async def forbidden(_): return JSONResponse({"detail": "forbidden"}, status_code=403)
+
+    app = Starlette(routes=[
+        Route("/ok", ok),
+        Route("/boom", boom),
+        Route("/403", forbidden),
+    ])
+    app.add_middleware(SecurityHeadersMiddleware, https_only=https_only)
+    return app
+
+
+def test_security_headers_on_200():
+    client = TestClient(_app())
+    r = client.get("/ok")
+    assert r.status_code == 200
+    assert r.headers.get("strict-transport-security") == "max-age=31536000; includeSubDomains; preload"
+    assert r.headers.get("x-frame-options") == "DENY"
+    assert r.headers.get("x-content-type-options") == "nosniff"
+    assert r.headers.get("referrer-policy") == "strict-origin-when-cross-origin"
+    assert "default-src 'self'" in r.headers.get("content-security-policy", "")
+    assert "frame-ancestors 'none'" in r.headers.get("content-security-policy", "")
+    assert "camera=()" in r.headers.get("permissions-policy", "")
+
+
+def test_security_headers_on_csrf_rejection():
+    """Headers present on 403 responses (auth/CSRF-rejected requests).
+
+    Load-bearing: SecurityHeaders sits OUTSIDE UnifiedAuth/Session/CSRF, so it
+    fires even when the inner chain returns 403.
+    """
+    client = TestClient(_app())
+    r = client.get("/403")
+    assert r.status_code == 403
+    assert r.headers.get("x-frame-options") == "DENY"
+    assert "default-src 'self'" in r.headers.get("content-security-policy", "")
+
+
+def test_security_headers_on_500():
+    """Headers present on 500 responses.
+
+    Starlette converts the exception to 500 via the exception_handler chain;
+    SecurityHeaders' send-wrap fires on the response.start message regardless.
+    """
+    client = TestClient(_app(), raise_server_exceptions=False)
+    r = client.get("/boom")
+    assert r.status_code == 500
+    assert r.headers.get("x-frame-options") == "DENY"
+
+
+def test_hsts_disabled_when_https_only_false():
+    client = TestClient(_app(https_only=False))
+    r = client.get("/ok")
+    assert "strict-transport-security" not in r.headers
+    # Other headers still present
+    assert r.headers.get("x-frame-options") == "DENY"
+```
+
+### E. Structural guard
+
+Draft `tests/unit/architecture/test_architecture_security_headers_middleware_present.py` (TODO, lands in same L2 PR as the middleware):
+
+Scans `src/app.py` / `src/admin/app_factory.py` AST and asserts:
+1. `SecurityHeadersMiddleware` appears in the registration chain
+2. It is registered BETWEEN `UnifiedAuthMiddleware` and `TrustedHostMiddleware` (checked by relative call-order in the AST)
+
+Registered in §5.5 guard table with `Empty` allowlist strategy.
+
+### F. Gotchas
+
+- **HSTS is irrevocable for 1 year.** Do NOT enable `https_only=True` in staging with a non-public domain. Once a browser has seen the header, it will refuse HTTP for `hsts_seconds` even if the server downgrades. Settings toggle: `ADCP_HTTPS_ONLY=false` in staging.
+- **`SameSite=None` on cookies vs `frame-ancestors 'none'` in CSP are independent.** Cookie SameSite controls when the cookie is attached. CSP `frame-ancestors` controls what can embed the page. Both can and should be set independently per their respective threat models.
+- **Do NOT add `Content-Security-Policy-Report-Only` as a second header in this middleware.** Report-Only is a separate policy that browsers honor alongside the enforced one. If/when we want to roll out a tighter CSP, introduce it as a Report-Only policy first, collect reports, then swap to enforcing. That is v2.1 scope — the enforced-from-day-1 policy above is deliberately permissive enough that no existing admin page breaks.
+- **`style-src 'unsafe-inline'` is a compromise.** Some existing Jinja templates inline `<style>` blocks. Removing `'unsafe-inline'` from `style-src` requires a separate audit pass (templates + any JS that sets `element.style`). That audit belongs in v2.1, not v2.0.
+- **CSP does NOT cover `iframe src`.** Use `X-Frame-Options: DENY` AND CSP `frame-ancestors 'none'` — legacy UAs honor only the former; modern UAs honor the latter. Double-defense is intentional.
+- **Header already-set respect:** the middleware uses `in existing` checks so a specific handler can override (e.g., a PDF-serving endpoint that needs `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'`). This is rare; default is "middleware wins if handler did not set."
+- **Do NOT reach into `scope["state"]` here.** This middleware runs OUTSIDE `UnifiedAuthMiddleware`, so `request.state.auth_context` is not yet populated. The header policy is identity-independent by design.
+
+---
+
+## 11.29 Eager-load strategy for async SQLAlchemy
+
+> **[L5]** The pattern library for Spike 1 fixes and every repository method written after the async flip. Without a conscious eager-load strategy, `lazy="raise"` is a tripwire that fires on production traffic hours after merge.
+
+### A. Why this section exists
+
+Spike 1 sets `lazy="raise"` on all 68 relationships in `src/core/database/models.py`. Every existing repository query that relied on implicit lazy loading will fail — not with a deprecation warning, but with `sqlalchemy.exc.InvalidRequestError: 'MediaBuy.packages' is not available due to lazy='raise'`. The HARD gate in Spike 1 is "can we fix this in <2 days?" — if yes, L5 proceeds; if no, L5 narrows or defers to v2.1.
+
+What "fix" means in this context is: at every query site, decide whether the relationship is needed by the response, and if so, attach an eager-load directive. Getting the directive WRONG (joinedload where selectinload was correct, or vice-versa) causes silent performance cliffs — a correct-but-slow query often feels fine in dev and quietly dies in prod under real cardinality.
+
+### B. Relationship-type decision matrix
+
+| Relationship shape | Directive | Why | Example from `models.py` |
+|---|---|---|---|
+| many-to-one (child → parent) | `joinedload` | Single-row JOIN adds 1 query of fixed width; no row explosion. | `Product.tenant`, `MediaBuy.principal` |
+| one-to-many (parent → children) | `selectinload` | JOIN would multiply parent rows by child count → result-set explosion. `IN (...)` fan-out is 1 extra query but bounded width. | `MediaBuy.packages` (`models.py:972`), `Product.pricing_options` (`models.py:338`) |
+| one-to-one | `joinedload` | Cardinality is 1:1; JOIN is a fixed-width add, no explosion. | `Tenant.adapter_config` (`models.py:133-138`, `uselist=False`) |
+| many-to-many (through assoc table) | `selectinload` | Any JOIN path produces Cartesian explosion proportional to the product of both sides' cardinalities. `IN (...)` on the assoc table is 2 queries but bounded. | `Principal.properties` (via `principal_properties`) |
+| self-referential (tree / graph) | `selectinload` + depth limit | `joinedload` on self-ref creates unbounded JOIN aliases. Always set `.options(selectinload(Model.parent).options(selectinload(Model.parent).selectinload(Model.parent)))` with explicit depth, or the IN fan-out can walk to unbounded depth. | `WorkflowStep.parent_step` (if/when enabled) |
+
+### C. Why not always joinedload?
+
+On first glance `joinedload` looks simpler (1 query instead of 2). But consider a `MediaBuy` with 50 packages and 30 creatives per package:
+
+```sql
+-- joinedload on all three — the pathological case
+SELECT mb.*, p.*, c.*
+FROM media_buys mb
+LEFT JOIN packages p ON p.media_buy_id = mb.id
+LEFT JOIN creatives c ON c.package_id = p.id
+WHERE mb.id = 42;
+-- Result set: 1 × 50 × 30 = 1,500 rows, each carrying full mb.* and p.* columns.
+```
+
+Row width × count × pickle-wire-cost = 30-100× the payload of the same data fetched via selectinload:
+
+```sql
+-- selectinload — 3 queries, bounded width
+SELECT mb.* FROM media_buys WHERE id = 42;               -- 1 row
+SELECT p.*  FROM packages  WHERE media_buy_id IN (42);   -- 50 rows
+SELECT c.*  FROM creatives WHERE package_id  IN (...);   -- 1,500 rows (same as above) but only once, not 50×
+```
+
+The quadratic-explosion cost is invisible in dev with 2-package fixtures and catastrophic in prod with 100-package media buys. `selectinload` for collections is the default; deviate only when profiling proves the 1-extra-query cost is the bottleneck.
+
+### D. Pattern for repository methods
+
+Combine `joinedload` (parents) and `selectinload` (children) in the same query:
+
+```python
+# src/core/database/repositories/tenant_repository.py
+from sqlalchemy import select
+from sqlalchemy.orm import joinedload, selectinload
+
+from src.core.database.models import Tenant
+
+
+class TenantRepository:
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def get_with_products(self, tenant_id: str) -> Tenant | None:
+        """Fetch tenant with adapter_config (1:1 join) and products → pricing_options (nested collections)."""
+        stmt = (
+            select(Tenant)
+            .options(
+                joinedload(Tenant.adapter_config),       # 1:1 — JOIN is safe
+                selectinload(Tenant.products)            # 1:N — separate IN query
+                .selectinload(Product.pricing_options),  # 1:N on child — chained selectinload
+                selectinload(Tenant.currency_limits),    # 1:N — separate IN query
+            )
+            .where(Tenant.tenant_id == tenant_id)
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+```
+
+The chained `.selectinload(Product.pricing_options)` is the idiom for "load children of children" — NOT `joinedload(Tenant.products).joinedload(Product.pricing_options)`, which multiplies rows.
+
+### E. Avoid over-eager loading — profile with `echo=True`
+
+Every eager-load directive added should be verified to actually be used. A common anti-pattern is adding `selectinload` for every relationship "just in case" — this adds N queries to every read, even when the caller never touches the loaded attribute. The fix:
+
+```python
+# Development-only: see what SQL actually runs
+engine = create_async_engine(url, echo=True, ...)
+
+# Production: emit metrics via SQLAlchemy's event.listens_for(engine.sync_engine, "before_cursor_execute")
+# and aggregate by endpoint. The anomaly is a route that emits 10+ SELECT queries —
+# that's a sign of missing eager-loads OR a loop over a collection with per-row queries.
+```
+
+Add a structural guard at L5e exit: a repository method that declares `.options(...)` with >5 eager-loads requires a comment explaining why. Over-eager defaults are as bad as missing-eager.
+
+### F. When `lazy="raise"` is too aggressive — `lazy="raise_on_sql"` caveat
+
+`lazy="raise"` fires on ANY attribute access — including `len(mb.packages)` on an already-loaded collection if `expire_on_commit=True` expired it. `lazy="raise_on_sql"` is softer: it fires only when the access WOULD emit SQL. For most cases use `lazy="raise"` (stricter, catches bugs). Rare exception: session-lifecycle boundaries where we intentionally access an expired attribute and want to re-load it implicitly. Document every `lazy="raise_on_sql"` use; the structural guard requires a comment with `# lazy="raise_on_sql": ...` rationale.
+
+### G. Spike 1 failure triage — 4-step procedure
+
+When Spike 1 fires a lazy-load exception:
+
+1. **Run the failing test** — `tox -e integration -- tests/integration/test_<failing>.py -x`. Capture the stack trace including the last repository method called.
+2. **Collect the error** — grep `sqlalchemy.exc.InvalidRequestError.*lazy='raise'` from the pytest JSON report at `test-results/<latest>/integration.json`. List every distinct `<Model>.<attr>` pair. This is the fix surface.
+3. **Add eager-load at the repository query, NOT at the call site.** Eager-load directives belong in the query that owns the session; adding them at the caller couples business logic to persistence shape. For each `<Model>.<attr>` pair, find the repository method that returned the Model instance and extend its `.options(...)` with the correct directive from the matrix above.
+4. **Re-run.** If the test still fails on a different relationship, repeat. If the test fails on the same relationship, the `.options()` was added to the wrong method (often because the test uses a different repository method than you patched).
+
+Target: ~2 minutes per fix. 40 fixes × 2 min = ~80 minutes total, fitting well inside the 2-day HARD gate budget.
+
+### H. HARD gate threshold — <40 fixes fixable in <2 days
+
+Spike 1 pass criteria, restated for clarity:
+
+- **PASS** = < 40 unique `<Model>.<attr>` pairs AND the fix pattern for each is one of {`joinedload`, `selectinload`, `selectinload.selectinload`} from the matrix AND no pair requires structural schema change.
+- **FAIL** = ≥ 40 pairs OR ≥ 1 pair requires schema change (e.g., replacing a relationship with a materialized aggregate) OR the estimated fix time at 2 min/fix exceeds 2 working days.
+
+On FAIL: do NOT attempt to force L5 through. L0-L4 already ship standalone value (sync Flask removal + FastAPI-native refinement); the correct move is to narrow L5's scope (fewer async routers — e.g., only the 3 pilot routers from L5c) or defer full-async to a v2.1 epic. See `CLAUDE.md` Critical Invariant #1 (L5 HARD gate semantics).
+
+### I. `backref=` → `back_populates` mandatory conversion (Spike 1 prep)
+
+`models.py` currently has 5 `relationship("...", backref="...")` declarations at the exact lines:
+
+- `models.py:727` — `Creative.tenant = relationship("Tenant", backref="creatives")`
+- `models.py:1900` — `AuthorizedProperty.tenant = relationship("Tenant", backref="authorized_properties")`
+- `models.py:1935` — `PropertyTag.tenant = relationship("Tenant", backref="property_tags")`
+- `models.py:1971` — `PublisherPartner.tenant = relationship("Tenant", backref="publisher_partners")`
+- `models.py:2010` — `PushNotificationConfig.tenant = relationship("Tenant", backref="push_notification_configs", overlaps="principal")`
+
+Under `backref=`, SQLAlchemy synthesizes the reverse-side `relationship` at mapper-configuration time — the attribute on `Tenant` (e.g., `Tenant.creatives`) **does not appear in source code**. Spike 1's `lazy="raise"` sweep works by textually editing every `relationship(...)` call in `models.py`. Backref-synthesized reverse sides are invisible to the sweep and will NOT receive `lazy="raise"` — so they'll silently fall back to `lazy="select"` and mask failures that a consistent posture would catch.
+
+**Mandatory Spike 1 prep step:** before running the `lazy="raise"` sweep, convert all 5 `backref=` to explicit `back_populates` pairs. Example:
+
+```python
+# models.py — before
+class Creative(Base):
+    tenant = relationship("Tenant", backref="creatives")
+
+# models.py — after
+class Creative(Base):
+    tenant = relationship("Tenant", back_populates="creatives", lazy="raise")
+
+class Tenant(Base):
+    # ... add on the Tenant side ...
+    creatives = relationship("Creative", back_populates="tenant", lazy="raise")
+```
+
+Repeat for all 5 pairs. This is ~20 LOC mechanical. Commit BEFORE the `lazy="raise"` sweep so the sweep sees both sides of every relationship.
+
+**Structural guard:** `tests/unit/architecture/test_architecture_no_backref_only_relationships.py` — AST-walks `src/core/database/models.py` for `relationship(..., backref=...)` calls and asserts the count is 0. Added at L5a entry; its allowlist is empty from day one (any new `backref=` fails the build).
+
+### J. Cross-references
+
+- `async-audit/database-deep-audit.md` — original Spike 1 sizing and backref hazard
+- `async-audit/agent-b-risk-matrix.md` Risk #2 (lazy-load) — fold "decision matrix: see foundation-modules §11.29" note
+- `implementation-checklist.md` L5a Spike 1 row — entry gate: "convert 5 backref= to back_populates before lazy sweep"
+- `execution-plan.md` Layer 5a Spike 1 entry criterion — same
+
+---
+
+## 11.30 Concurrency math — threadpool × DB pool × httpx
+
+> **[L0+]** The capacity-planning reference used by every L2 pool-size commit, every L5 engine refactor, every `/health/pool` dashboard threshold, and every production deploy. This section replaces ad-hoc number-picking with a single derivation that all downstream numbers cite.
+
+### A. The pools table
+
+Every request that reaches an admin handler can, under worst-case conditions, consume one token from each of these pools simultaneously:
+
+| Pool | Where configured | Default | Rationale |
+|---|---|---|---|
+| AnyIO threadpool | `src/app.py::lifespan` (§11.14.F) | 80 tokens (`ADCP_THREADPOOL_TOKENS`) | Sync handlers + adapter `run_in_threadpool` wrap. Default anyio=40 is too low for admin OAuth bursts. |
+| Sync DB engine — admin | `src/core/database/engine.py` (L5b sync-side; L0-L4 whole-codebase) | `pool_size=40, max_overflow=40` → 80 peak | **Revised from 20+30 = 50** to match threadpool tokens under the Path-B worst case (see §C). |
+| Async DB engine (L5+) | `src/core/database/engine.py` (L5b async-side) | `pool_size=20, max_overflow=30` → 50 peak | Async request path does not multiply connections per threadpool token; 50 is sufficient for 200+ req/s. |
+| Sync-bridge engine (Decision 9) | `src/services/background_sync_db.py` | `pool_size=10, max_overflow=5` → 15 peak | Multi-hour GAM inventory sync jobs. Narrow pool; long-lived connections. |
+| httpx client — shared | `src/core/http.py` (§11.18) | `max_connections=100, max_keepalive_connections=20` | Outbound HTTP (webhooks, JWKS fetch, OAuth token exchange). |
+
+### B. The worst-case walkthrough — 80 concurrent GAM-calling admin requests
+
+Start from 80 concurrent users simultaneously hitting admin endpoints that call GAM adapter methods:
+
+1. Each request consumes 1 **threadpool token** (sync handler entry). 80 tokens used — threadpool saturated.
+2. Each sync handler opens `with get_db_session()` — each consumes 1 **sync DB connection**. 80 DB connections demanded.
+3. Each handler invokes `await run_in_threadpool(adapter.create_media_buy, ...)`. The adapter runs in a SEPARATE worker thread (anyio's internal thread pool under `run_in_threadpool`) — WITHIN that thread, the adapter opens its own `get_sync_db_session()` to log audit entries. **This is the key multiplier:** +1 DB connection per request, from a different code path (adapter's audit log), at the same time as the handler's session is still held.
+4. Worst-case DB demand: `80 handlers × 2 connections/handler = 160 connections` spiking simultaneously.
+5. Each adapter may issue outbound HTTP via httpx. `80 × 1 httpx connection = 80` — fits inside `max_connections=100` with some headroom.
+
+### C. The tuning invariant — `DB pool max ≥ threadpool tokens` NOT `/2`
+
+An older draft suggested `DB pool = threadpool_tokens / 2` on the theory that "each request holds one DB connection, and 40 is enough headroom." This is wrong under Path B: the adapter worker thread opens a SECOND DB connection for audit logging while the handler's first connection is still held. The invariant must reflect the worst case, not the average.
+
+**Corrected invariant:** for Path B with adapter-side audit logging, budget `2 × threadpool_tokens` DB connections. This drives the revised admin pool:
+
+- **Old:** `pool_size=20, max_overflow=30` → 50 peak → saturates at ~25 concurrent adapter-calling requests
+- **New:** `pool_size=40, max_overflow=40` → 80 peak (per request path) + sync-bridge 15 = **95 total**, staying under PG default `max_connections=100` with 5-connection headroom for psql debugging + alembic runs
+
+Sync-bridge stays `pool_size=10, max_overflow=5` because background_sync_service runs at most 1 tenant sync at a time (single-thread executor).
+
+### D. Verifying PostgreSQL `max_connections`
+
+Peak per uvicorn worker under L0-L4 (no async engine yet):
+
+```
+80 (admin sync) + 15 (sync-bridge) + 5 (alembic buffer) = 100 connections
+```
+
+Peak per uvicorn worker under L5+ (async engine added):
+
+```
+80 (admin sync during adapter wraps) + 50 (async request path during non-adapter work) +
+15 (sync-bridge) + 5 (alembic) = 150 connections
+```
+
+The 150 figure assumes a pathological mix; in practice sync and async paths don't both saturate simultaneously because a single request is on one path at a time — but during rolling deploys both engines are briefly active.
+
+**For production** set `max_connections=250` on Postgres to accommodate 1 uvicorn worker with headroom. For multi-worker deploys see §G.
+
+### E. Per-request accounting example
+
+100 concurrent users, each averaging 200ms admin requests:
+
+- Throughput: 100 users × (1 / 0.2s) = **500 req/s** sustained — NOT 400 as stated in a prior draft (200ms = 5 req/s per user × 100 users).
+- At 500 req/s average latency 200ms, each pool sees: threadpool ~100 tokens concurrent (still fits 80... wait, that's over-saturated; traffic queues on threadpool tokens and average latency rises until the system finds a new equilibrium), DB ~100 connections concurrent (fits inside 80+40 peak + headroom), httpx ~100 connections concurrent (fits inside 100).
+- Bottleneck identification: threadpool tokens is the first to saturate in this example, NOT DB. Symptom: request p95 latency climbs while DB pool shows idle connections. The fix is to raise `ADCP_THREADPOOL_TOKENS` or reduce handler work, NOT to raise DB pool.
+
+### F. Per-adapter semaphore — Spike 7 follow-up
+
+GAM has per-network-code rate limits (~3000 requests/minute default). If 80 threadpool tokens all try to call the same adapter simultaneously, the adapter's caller queue grows unbounded waiting on GAM response time (20-30s at saturation). Mitigation via `anyio.CapacityLimiter` per adapter at the `run_in_threadpool` boundary:
+
+```python
+# src/adapters/__init__.py
+ADAPTER_LIMITERS: dict[str, CapacityLimiter] = {
+    "gam": CapacityLimiter(20),      # bounded per-network-code concurrency
+    "kevel": CapacityLimiter(40),
+    "triton_digital": CapacityLimiter(10),
+    "xandr": CapacityLimiter(20),
+    "mock_ad_server": CapacityLimiter(100),  # no external rate limit
+}
+
+# In _impl calling an adapter:
+async def _create_media_buy_impl(..., adapter_name: str):
+    limiter = ADAPTER_LIMITERS[adapter_name]
+    async with limiter:
+        result = await run_in_threadpool(adapter.create_media_buy, ...)
+```
+
+This caps the adapter-specific thread consumption without shrinking the overall threadpool — other handlers (no adapter call) proceed unimpeded. Spike 7 surfaces the exact limits per adapter.
+
+### G. Multi-worker deployments — when to add workers
+
+Rule of thumb: add a second uvicorn worker when a single worker's threadpool stays >80% saturated for 5+ minutes. Each worker has its own process-memory state and its own DB pool — N workers = N × pool sizing:
+
+- 4 workers × 80 admin peak = 320 connections demanded
+- 4 workers × 15 sync-bridge = 60 connections demanded (assuming every worker runs background sync, which is wrong — pin sync-bridge to worker-0 only, so stays at 15 total)
+- 4 workers × 20 alembic headroom = 80 connections headroom (loose)
+
+Verify PG `max_connections ≥ 400`. Fly.io Postgres standard plan default is 256 — upgrade to 1GB plan (`max_connections=400`) before going to 4 workers.
+
+### H. Monitoring — the three exporters
+
+Surface each pool's saturation as a Prometheus metric:
+
+```python
+# DB pool (SQLAlchemy)
+from sqlalchemy.pool import QueuePool
+sync_engine.pool  # QueuePool methods: .checkedout(), .size(), .overflow()
+
+# Threadpool (anyio)
+import anyio.to_thread
+limiter = anyio.to_thread.current_default_thread_limiter()
+# limiter.total_tokens, limiter.borrowed_tokens, limiter.statistics()
+
+# httpx
+# httpx does not expose live pool stats; attach a transport hook or use structlog timing events.
+```
+
+Dashboard panels (per `implementation-checklist.md §6.5` admin-migration-health dashboard):
+
+- `sync_engine_pool_saturation` — `checkedout / (size + overflow)` — alert `>0.9 for 5min`
+- `threadpool_saturation` — `borrowed_tokens / total_tokens` — alert `>0.9 for 5min`
+- `httpx_concurrent_requests` — from structlog event timings — alert `>80 for 5min` (out of 100 max)
+
+### I. Revised pool-size commits across the plan
+
+The following locations currently say `pool_size=20, max_overflow=30` for the admin sync engine and must be revised to `pool_size=40, max_overflow=40` under this §11.30 derivation:
+
+- `async-pivot-checkpoint.md` Decision 1 §"Total sync/async engine math" (370-372): sync engine pool_size=5, max_overflow=10 — that's Path-B sync factory, stays as-is (it's the small pool for adapter-worker threads only). The revision is for the MAIN admin sync engine in L0-L4 database_session (currently sized per the pre-async plan).
+- `implementation-checklist.md` L2 acceptance criteria — any explicit pool-size values for admin sync engine
+- `foundation-modules.md §11.18` httpx section — add cross-ref "httpx limits interact with threadpool tokens; see §11.30"
+
+Sync-bridge pool stays `pool_size=10, max_overflow=5` (unchanged).
+
+### J. Cross-references
+
+- `implementation-checklist.md §6.5` admin-migration-health dashboard — panel thresholds use this section's saturation formulas
+- `foundation-modules.md §11.14` Path-B adapter wrap — the multiplier-of-2 arises from its audit-logging pattern
+- `foundation-modules.md §11.18` shared httpx — `max_connections=100` is the upper limit for outbound HTTP
+- `async-pivot-checkpoint.md` Decision 1 — pool-size math original (superseded for admin pool by this section's revision)
+
+---
+
+## 11.31 `src/routes/health.py` — Liveness / readiness / diagnostic split
+
+> **[L1a/L2]** Replace the single Flask `/admin/health` endpoint with 4 purpose-separated endpoints. `/healthz` is the dumb liveness probe (never touches DB, always 200 if the process is alive). `/readyz` is the readiness probe (checks DB + alembic head + scheduler state; 503 on any failure; what orchestrators poll for rolling deploys). `/health/db` and `/health/pool` are diagnostic-only (expose pool stats for debugging; not polled). Legacy `/admin/health` → 308 permanent redirect to `/healthz`.
+
+### A. Why split
+
+The single-endpoint health check is a category error:
+- **Liveness** (`/healthz`): "Is the process alive enough to serve traffic?" A liveness failure → kill the container. Must be cheap: a DB query here causes every liveness flap to kill containers during DB maintenance → cascading restart storms.
+- **Readiness** (`/readyz`): "Should a load balancer route traffic to me right now?" A readiness failure → take out of rotation temporarily. DB check belongs here: a container with a broken DB should be taken out of rotation, but NOT killed (the DB might come back).
+- **Diagnostic** (`/health/db`, `/health/pool`): "Show me internal state for debugging." Ops teams curl these; orchestrators don't.
+
+### B. Endpoints
+
+| Endpoint | Purpose | DB touch | Cost | Polled by |
+|----------|---------|----------|------|-----------|
+| `/healthz` | Liveness | Never | ~1ms (in-process state only) | Kubernetes/Fly liveness probe |
+| `/readyz` | Readiness | `SELECT 1` + alembic head check + scheduler state | ~5-50ms | Kubernetes/Fly readiness probe; LB |
+| `/health/db` | DB pool stats | Pool introspection only | ~1ms | Humans/dashboards |
+| `/health/pool` | anyio threadpool stats | Threadpool introspection only | ~1ms | Humans/dashboards |
+| `/admin/health` (legacy) | 308 → `/healthz` | N/A | <1ms | Existing consumers (smoke tests, old probes) |
+
+### C. Implementation
+
+```python
+# src/routes/health.py
+"""Health-check endpoints: liveness, readiness, diagnostic.
+
+Canonical split (docs/deployment/health-checks.md):
+- /healthz — liveness, cheap, never touches DB, always 200 if process alive.
+- /readyz — readiness, SELECT 1 + alembic head + scheduler state; 503 if unhealthy.
+- /health/db — diagnostic pool stats.
+- /health/pool — anyio threadpool stats.
+- /admin/health — legacy alias; 308 → /healthz.
+
+Registration: mounted on the ROOT app, no auth, no tenant scoping, no CSRF.
+"""
+from __future__ import annotations
+
+import anyio
+from alembic.migration import MigrationContext
+from alembic.script import ScriptDirectory
+from alembic.config import Config
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse, RedirectResponse
+from sqlalchemy import text
+
+from src.core.database.database_session import get_db_session
+
+router = APIRouter(include_in_schema=False)
+
+
+@router.get("/healthz", name="healthz")
+def healthz() -> JSONResponse:
+    """Liveness. MUST NOT touch DB. Always 200 if process alive.
+
+    Kubernetes/Fly kills the container on liveness failure — making this DB-gated
+    would cause a DB blip to kill every container simultaneously.
+    """
+    return JSONResponse({"status": "ok"})
+
+
+@router.get("/readyz", name="readyz")
+def readyz(request: Request) -> JSONResponse:
+    """Readiness. Checks DB + alembic head + scheduler state. 503 on any failure.
+
+    Kubernetes/Fly takes the container out of rotation on readiness failure; it
+    does NOT kill it. This is the correct place for DB health checks.
+    """
+    checks: dict[str, str] = {}
+    ok = True
+
+    # 1. DB connectivity
+    try:
+        with get_db_session() as session:
+            session.execute(text("SELECT 1"))
+        checks["db"] = "ok"
+    except Exception as exc:  # noqa: BLE001 — we want any failure to 503
+        checks["db"] = f"failed: {type(exc).__name__}"
+        ok = False
+
+    # 2. Alembic head parity (detect deploy-without-migrate)
+    try:
+        with get_db_session() as session:
+            ctx = MigrationContext.configure(session.connection())
+            db_head = ctx.get_current_revision()
+        expected_head = ScriptDirectory.from_config(Config("alembic.ini")).get_current_head()
+        if db_head != expected_head:
+            checks["migrations"] = f"behind: db={db_head} expected={expected_head}"
+            ok = False
+        else:
+            checks["migrations"] = "ok"
+    except Exception as exc:  # noqa: BLE001
+        checks["migrations"] = f"failed: {type(exc).__name__}"
+        ok = False
+
+    # 3. Scheduler state (set on app.state by lifespan hook)
+    scheduler_healthy = getattr(request.app.state, "scheduler_healthy", True)
+    checks["scheduler"] = "ok" if scheduler_healthy else "stalled"
+    if not scheduler_healthy:
+        ok = False
+
+    body = {"status": "ok" if ok else "not_ready", "checks": checks}
+    return JSONResponse(body, status_code=200 if ok else 503)
+
+
+@router.get("/health/db", name="health_db")
+def health_db(request: Request) -> JSONResponse:
+    """Diagnostic: DB pool stats. Not polled."""
+    engine = request.app.state.db_engine
+    pool = engine.pool
+    return JSONResponse({
+        "size": pool.size(),
+        "checked_in": pool.checkedin(),
+        "checked_out": pool.checkedout(),
+        "overflow": pool.overflow(),
+    })
+
+
+@router.get("/health/pool", name="health_pool")
+def health_pool() -> JSONResponse:
+    """Diagnostic: anyio threadpool stats. Not polled."""
+    limiter = anyio.to_thread.current_default_thread_limiter()
+    return JSONResponse({
+        "total_tokens": limiter.total_tokens,
+        "borrowed_tokens": limiter.borrowed_tokens,
+        "statistics": str(limiter.statistics()),
+    })
+
+
+@router.get("/admin/health", name="admin_health_legacy", include_in_schema=False)
+def legacy_admin_health() -> RedirectResponse:
+    """Legacy alias. 308 preserves method (GET→GET) and is cacheable."""
+    return RedirectResponse(url="/healthz", status_code=308)
+```
+
+### D. Orchestrator configuration
+
+**fly.toml:**
+```toml
+[[services.http_checks]]
+  interval = "10s"
+  timeout = "2s"
+  grace_period = "5s"
+  method = "GET"
+  path = "/readyz"
+  protocol = "http"
+
+[[services.tcp_checks]]
+  interval = "15s"
+  timeout = "2s"
+  grace_period = "10s"
+```
+
+**k8s Deployment (illustrative):**
+```yaml
+livenessProbe:
+  httpGet: { path: /healthz, port: 8080 }
+  periodSeconds: 10
+  timeoutSeconds: 2
+  failureThreshold: 3
+readinessProbe:
+  httpGet: { path: /readyz, port: 8080 }
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 2
+```
+
+### E. Tests
+
+```python
+# tests/integration/routes/test_health_split.py
+
+def test_healthz_never_touches_db(integration_client, monkeypatch):
+    """Liveness must not open a DB session even if DB is down."""
+    called = {"get_db": 0}
+    import src.routes.health as health_mod
+    orig = health_mod.get_db_session
+    def spy(*a, **kw):
+        called["get_db"] += 1
+        return orig(*a, **kw)
+    monkeypatch.setattr(health_mod, "get_db_session", spy)
+
+    r = integration_client.get("/healthz")
+    assert r.status_code == 200
+    assert r.json() == {"status": "ok"}
+    assert called["get_db"] == 0
+
+
+def test_readyz_checks_db(integration_client):
+    r = integration_client.get("/readyz")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "ok"
+    assert body["checks"]["db"] == "ok"
+    assert body["checks"]["migrations"] == "ok"
+
+
+def test_readyz_503_on_db_down(integration_client, broken_db_engine):
+    r = integration_client.get("/readyz")
+    assert r.status_code == 503
+    assert r.json()["checks"]["db"].startswith("failed:")
+
+
+def test_legacy_admin_health_redirects(integration_client):
+    r = integration_client.get("/admin/health", follow_redirects=False)
+    assert r.status_code == 308
+    assert r.headers["location"] == "/healthz"
+```
+
+### F. Structural guard
+
+Draft `tests/unit/architecture/test_architecture_health_endpoints_split.py`:
+
+AST scan of `src/routes/health.py`:
+1. `healthz` function body contains NO call to `get_db_session` (literal name match)
+2. `readyz` function body contains a call to `get_db_session`
+3. `legacy_admin_health` returns a `RedirectResponse` with `status_code=308`
+4. Enforcement: any future edit that adds DB access to `/healthz` fails the guard.
+
+Registered in §5.5 guard table with `Empty` allowlist.
+
+### G. Gotchas
+
+- **`/healthz` MUST NOT touch the DB.** Period. If you are tempted to "quickly check DB" from `/healthz`, revisit the liveness-vs-readiness distinction above. Use `/readyz` for DB-gated health.
+- **`MigrationContext` requires a live DB connection.** If the DB is down, the alembic-head check itself will fail — which is correct (the `/readyz` endpoint returns 503 with `checks["migrations"] = "failed: ..."` and `checks["db"] = "failed: ..."`).
+- **No auth on the probes.** These are probes, not admin endpoints. CSRF is exempted (the `/admin/*` prefix on the legacy path is the only admin-adjacent part; the redirect target `/healthz` is at root). Do not add `require_auth` or tenant checks here.
+- **`is_test` app-state flag:** in unit tests where the DB is mocked out entirely, the fixture sets `app.state.is_test = True` and the readyz handler can short-circuit the DB check. Current implementation does NOT do this — it runs the real `SELECT 1` in integration tests (which have real DB) and mocks `get_db_session` in unit tests. If a future edit adds the short-circuit, guard it behind an explicit `if app.state.is_test` branch so production never silently returns "ok" on a dead DB.
+- **`/readyz` response must be JSON, not plain text.** Kubernetes parses the body of readiness checks; human operators grep for `failed:` substrings. Keep the `{"checks": {...}}` shape stable.
+
+---
+
+## 11.32 `src/admin/rate_limits.py` — SlowAPI rate limiter for sensitive endpoints
+
+> **[L1b/L2]** Per-IP / per-token rate limiting for login, OAuth init, and MCP endpoints. Uses `slowapi>=0.1.9` with memory backend in L1b-L6 (process-local, single-worker acceptable); v2.1 swaps to Redis backend for multi-worker. Purpose: brake credential-stuffing against login, abuse of OAuth init endpoints (which call Google Cloud), and runaway MCP clients.
+
+### A. Targets and limits
+
+| Endpoint | Limit | Scope |
+|----------|-------|-------|
+| `POST /admin/login` | 5/min | per source IP |
+| `GET /admin/auth/google/initiate` | 20/min | per source IP |
+| `GET /admin/auth/oidc/initiate` | 20/min | per source IP |
+| `GET /admin/auth/gam/initiate` | 20/min | per source IP |
+| MCP tool calls | 100/min | per auth token (`x-adcp-auth`) |
+| A2A endpoints | 100/min | per auth token (`authorization`) |
+
+Numbers are launch defaults; tunable per settings.
+
+### B. Implementation
+
+```python
+# src/admin/rate_limits.py
+"""SlowAPI rate limiter.
+
+Backend: memory:// (process-local) for L1b-L6. This is intentionally NOT Redis
+during v2.0 — single-worker deployment makes memory sufficient, and Redis adds
+deployment/operational complexity that is a v2.1 concern. See §11.33 related
+setting `ADCP_RATE_LIMIT_BACKEND` for the v2.1 swap.
+
+Key function: for MCP/A2A, rate-limit by auth token (more precise than IP when
+multiple clients share a NAT); for browser endpoints, rate-limit by IP.
+"""
+from __future__ import annotations
+
+from fastapi import Request
+from fastapi.responses import JSONResponse
+from slowapi import Limiter
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
+
+
+def _key_func(request: Request) -> str:
+    """Prefer auth token over IP — clients behind NAT share an IP.
+
+    Order of precedence:
+    1. MCP: x-adcp-auth header (token-scoped rate limit)
+    2. A2A: Authorization: Bearer <token>
+    3. Fallback: source IP (browser endpoints, unauthenticated paths)
+    """
+    mcp_token = request.headers.get("x-adcp-auth")
+    if mcp_token:
+        return f"mcp:{mcp_token}"
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.startswith("Bearer "):
+        return f"a2a:{auth_header[7:]}"
+    return f"ip:{get_remote_address(request)}"
+
+
+limiter = Limiter(
+    key_func=_key_func,
+    default_limits=[],      # opt-in per endpoint via decorator
+    storage_uri="memory://",  # v2.1: redis://...
+    headers_enabled=True,   # emit X-RateLimit-* response headers
+)
+
+
+async def rate_limit_exceeded_handler(
+    request: Request, exc: RateLimitExceeded
+) -> JSONResponse:
+    """429 response with Retry-After header.
+
+    For /admin/* HTML requests where the client is a browser, we still return
+    JSON — the AdCPError exception handler chain (see §11.11) handles HTML
+    translation for browser clients. This handler is the JSON-first default.
+    """
+    retry_after = int(exc.detail.split(" ")[-1]) if " per " in exc.detail else 60
+    return JSONResponse(
+        {"detail": f"Rate limit exceeded: {exc.detail}"},
+        status_code=429,
+        headers={"Retry-After": str(retry_after)},
+    )
+```
+
+### C. Integration in `app_factory.py`
+
+```python
+# src/admin/app_factory.py (excerpt)
+from slowapi.errors import RateLimitExceeded
+from src.admin.rate_limits import limiter, rate_limit_exceeded_handler
+
+
+def create_app() -> FastAPI:
+    app = FastAPI(...)
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+    # ... middleware, routers ...
+    return app
+```
+
+### D. Per-endpoint decorator usage
+
+```python
+# src/admin/routers/auth.py (excerpt)
+from src.admin.rate_limits import limiter
+
+
+@router.post("/login", name="admin_auth_login")
+@limiter.limit("5/minute")
+def login_submit(request: Request, ...):
+    """Rate-limited to 5 attempts per minute per IP — brake credential stuffing.
+
+    Note: decorator REQUIRES the handler signature to include `request: Request`
+    even if the body doesn't reference it. slowapi inspects args to find the
+    Request object for key_func.
+    """
+    ...
+
+
+@router.get("/auth/google/initiate", name="admin_auth_google_initiate")
+@limiter.limit("20/minute")
+def google_initiate(request: Request): ...
+
+
+@router.get("/auth/oidc/initiate", name="admin_auth_oidc_initiate")
+@limiter.limit("20/minute")
+def oidc_initiate(request: Request): ...
+
+
+@router.get("/auth/gam/initiate", name="admin_auth_gam_initiate")
+@limiter.limit("20/minute")
+def gam_initiate(request: Request): ...
+```
+
+MCP tool rate limiting is applied at the MCP mount level (middleware or per-tool decorator in `src/core/main.py`) — 100/min per auth token via the same limiter instance.
+
+### E. pyproject.toml
+
+```toml
+# Add to dependencies:
+slowapi = ">=0.1.9"
+```
+
+### F. Tests
+
+```python
+# tests/integration/admin/test_rate_limits.py
+
+def test_login_rate_limited_after_5_attempts(integration_client):
+    for _ in range(5):
+        r = integration_client.post("/admin/login", data={"password": "wrong"})
+        assert r.status_code in (401, 403)
+    # 6th attempt trips the limiter
+    r = integration_client.post("/admin/login", data={"password": "wrong"})
+    assert r.status_code == 429
+    assert "Retry-After" in r.headers
+
+
+def test_rate_limit_by_token_not_ip(integration_client):
+    """Two clients behind the same IP with different tokens have independent buckets."""
+    headers_a = {"x-adcp-auth": "token-a"}
+    headers_b = {"x-adcp-auth": "token-b"}
+    # Exhaust token-a's bucket
+    for _ in range(100):
+        integration_client.post("/mcp/", headers=headers_a, json={...})
+    # token-b should still work (different bucket despite same source IP)
+    r = integration_client.post("/mcp/", headers=headers_b, json={...})
+    assert r.status_code != 429
+```
+
+### G. Gotchas
+
+- **`@limiter.limit(...)` decorators require the handler to take `request: Request` as a parameter.** slowapi introspects the signature to find the `Request` arg for `key_func`. If you omit it, the decorator silently no-ops on some versions and raises on others — always include it explicitly.
+- **Memory backend is process-local.** In a multi-worker deploy (e.g., 4 uvicorn workers), each worker has its own counter — effective limit is `N_workers × limit_per_worker`. v2.0 is single-worker so this is fine. v2.1 must swap `storage_uri="memory://"` to `storage_uri="redis://..."` before adding workers.
+- **MCP uses `x-adcp-auth`; A2A uses `Authorization: Bearer ...`.** The `_key_func` above handles both. Do not assume a single header — the two protocols genuinely use different auth headers per AdCP spec.
+- **`RateLimitExceeded` is raised BEFORE the handler runs.** If your handler has side effects (logging, metrics) and you want those to fire even on rate-limited requests, put them in middleware, not the handler body.
+- **Rate-limit buckets are global per-key.** You cannot "refund" a request (e.g., after a successful login, restore one slot). The bucket is time-based TTL; callers just wait the retry-after period.
+- **Do NOT rate-limit `/healthz`, `/readyz`, `/metrics`, or internal probes.** These are polled every 10s by orchestrators; rate-limiting them will take the container out of rotation.
+
+---
+
+## 11.33 `tests/integration/test_session_cookie_size.py` — Cookie-size budget guard
+
+> **[L1b/L2]** Integration-test guard that asserts the `adcp_session` cookie stays under 3.5 KB for realistic user workloads. Browser cookie limit is 4 KB; proxies (nginx, Fly.io) cap total request header size at 4-8 KB. The 3.5 KB budget leaves headroom for other cookies (CSRF, analytics) and proxy headers.
+
+### A. Rationale
+
+Starlette's `SessionMiddleware` serializes the entire `request.session` dict as a signed, base64-encoded cookie. Common bloat sources:
+- Multi-tenant user with N tenant memberships → full tenant list in session
+- Flash messages stacked during a multi-step form flow
+- CSRF tokens (if we ever switched to double-submit)
+- OAuth flow state dicts (Authlib can store PKCE verifiers, state tokens)
+
+Crossing 4 KB → browsers silently drop the cookie → users logged out mid-session. Crossing 8 KB → Fly.io edge returns 431 "Request Header Fields Too Large" before the request ever reaches the app.
+
+### B. Budget
+
+```python
+# tests/integration/test_session_cookie_size.py
+MAX_COOKIE_BYTES = 3_584  # 3.5 KB — leaves 0.5 KB headroom under 4 KB browser limit.
+```
+
+Do NOT raise this number. If a change pushes a realistic user over 3.5 KB, the fix is architectural (see §E runbook), not a budget increase.
+
+### C. Implementation
+
+```python
+# tests/integration/test_session_cookie_size.py
+"""Cookie-size budget guard.
+
+Rationale: §11.33. 3.5 KB budget protects against browser 4 KB limit and proxy
+4-8 KB header cap. Crossing either → users silently logged out.
+
+Pattern: walk a realistic user through the admin UI, inspect the adcp_session
+cookie after every state transition, assert size ≤ 3.5 KB.
+"""
+from __future__ import annotations
+
+import pytest
+
+MAX_COOKIE_BYTES = 3_584  # 3.5 KB — do NOT raise without §E runbook review.
+
+
+def _session_cookie_size(client) -> int:
+    """Return the byte size of the current adcp_session cookie, or 0."""
+    for cookie in client.cookies.jar:
+        if cookie.name == "adcp_session" and cookie.value:
+            return len(cookie.value)
+    return 0
+
+
+def test_session_cookie_minimal_user(integration_client, minimal_user_session):
+    """Newly-logged-in user with zero tenants + zero flashes."""
+    size = _session_cookie_size(integration_client)
+    assert size > 0, "session cookie must be set after login"
+    assert size <= MAX_COOKIE_BYTES, (
+        f"Minimal session already uses {size} bytes — something fundamentally "
+        f"wrong. Expected ≤ ~500 bytes for bare authenticated session."
+    )
+
+
+def test_session_cookie_heavy_user(integration_client, heavy_tenant_session_client):
+    """Realistic heavy user: 10 tenants + 5 stacked flashes + CSRF state."""
+    size = _session_cookie_size(heavy_tenant_session_client)
+    assert size <= MAX_COOKIE_BYTES, (
+        f"Heavy-user session exceeded budget: {size} bytes > {MAX_COOKIE_BYTES}. "
+        f"Run §E runbook in foundation-modules.md §11.33 before increasing budget. "
+        f"Do NOT raise MAX_COOKIE_BYTES — architectural fix required."
+    )
+```
+
+### D. Heavy fixture spec
+
+```python
+# tests/integration/conftest.py (excerpt)
+
+@pytest.fixture
+def heavy_tenant_session_client(integration_client, factory):
+    """Client with a realistic worst-case session:
+    - 10 tenant memberships (realistic for agency-holding-company user)
+    - 5 flash messages stacked (mid-multi-step-form state)
+    - CSRF token in session
+    """
+    user = factory.UserFactory.create(tenants=[factory.TenantFactory.create() for _ in range(10)])
+    integration_client.post("/admin/login", data={"email": user.email, "password": "test"})
+    for msg in ["step 1 done", "step 2 done", "validation warning", "creative uploaded", "product saved"]:
+        integration_client.get(f"/admin/_test/flash?msg={msg}")  # test-only endpoint
+    return integration_client
+```
+
+### E. When-this-fails runbook
+
+If `test_session_cookie_heavy_user` fails:
+
+1. **Measure the delta.** Add `print(dict(request.session))` in a test fixture to see which keys grew.
+2. **Identify the new key.** Compare to the known-baseline keys: `user_email`, `user_id`, `tenant_memberships`, `csrf_state`, `oauth_state`, `flashes`.
+3. **Decide the fix.**
+   - If the new key is a large list (e.g., all tenant IDs for a user with 50 memberships), move the list to a DB-backed user-scoped cache; store only an opaque session key in the cookie.
+   - If the new key is a user-profile field, move it to the user table; read on demand in handlers.
+   - If the new key is derived (e.g., computed permissions), compute on read, don't store.
+4. **Do NOT raise `MAX_COOKIE_BYTES`.** The 3.5 KB budget is the architectural ceiling. Raising it today to "fix" a test failure pushes the problem to the next person who adds a session key. The budget is a correctness requirement like any other structural invariant.
+5. **If after steps 1-4 the fix is genuinely "we need a bigger cookie,"** the correct architectural move is DB-backed sessions: replace `SessionMiddleware` with a custom middleware that stores session data in Postgres and puts only an opaque session ID in the cookie. That is a v2.1 epic, not a v2.0 budget-raise.
+
+### F. Cross-reference
+
+Registered in root `CLAUDE.md` structural-guards table row: `Session cookie size budget | tests/integration/test_session_cookie_size.py`.
+
+---
 
 ### Critical Files for Implementation
 

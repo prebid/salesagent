@@ -1,6 +1,11 @@
-# ⚠️ BLOCKER 4 RESOLUTION HAS PIVOTED — READ THIS FIRST
+# ARCHIVE — async-pivot-checkpoint — READ THIS FIRST
 
-> **ASYNC DEFERRED TO PHASE 4+ WITHIN v2.0 (2026-04-12).** The async pivot described in this document has been reversed for Phases 0-3. v2.0 ships with sync admin handlers for Phases 0-3 (the original Option C from the deep audit). This document is preserved as the Phase 4+ async migration roadmap within v2.0. Do NOT implement any content from this file during Phases 0-3 — it will be the starting point for Phase 4+.
+> **[ARCHIVED — 2026-04-14]** This checkpoint documents the async-pivot decision arc (Apr 11 pivot to absorb async → Apr 12 reversion to sync-first → Apr 14 unified 8-layer model). Preserved for decision-history context. For current async-conversion guidance, see:
+> - `execution-plan.md` Layers 4-7 — canonical async migration plan
+> - `CLAUDE.md` 8-layer table — phased approach
+> - `flask-to-fastapi-foundation-modules.md` §11.18–§11.27 — package-native async patterns
+>
+> When reading this file, mentally substitute "Layer 5+" wherever it says "Phase 4+" or "v2.1" — async is now absorbed into v2.0 via Layer 5 conversion. Its §3 target state, §4 risk register, and scope estimates remain useful as L5-entry reference material, but **do NOT implement any recipe from this file verbatim — cross-check every recipe against the per-layer guidance in `execution-plan.md` first.**
 
 **Date:** 2026-04-11
 **Author:** Claude + user directive
@@ -366,6 +371,8 @@ result = await run_in_threadpool(adapter.create_media_buy, request, packages, ..
 - Sync-bridge engine in `background_sync_db.py`: `pool_size=2, max_overflow=3` = 5 peak
 - **Total: 60 peak connections** (within default `max_connections=100` with headroom)
 
+> **⚠️ SUPERSEDED for the admin sync engine (2026-04-14).** The checkpoint pool sizing above is kept for historical reference. Under Commit E's canonical concurrency math (`foundation-modules.md §11.30`), the ADMIN sync engine (used by every L0-L4 sync-def handler, NOT the Path-B adapter sync factory above) is revised to `pool_size=40, max_overflow=40` → 80 peak, sized to match the 80-token threadpool under the Path-B worst case where a handler thread holds 1 connection AND its wrapped adapter opens a SECOND audit-log connection in the worker thread. The sync-bridge stays `pool_size=10, max_overflow=5` (tuned for single-thread background sync, NOT the narrower `pool_size=2, max_overflow=3` listed above — the checkpoint value was for the ultra-narrow pool, the canonical v2.0 value accommodates concurrent sync reads during GAM syncs). The Path-B adapter sync factory (`pool_size=5, max_overflow=10`) is unchanged. See `foundation-modules.md §11.30` for the full derivation.
+
 **Shutdown ordering** in `src/core/main.py::lifespan_context.__aexit__`:
 1. `await request_shutdown()` — signal background_sync threads via `_shutdown_event`
 2. `await wait_for_shutdown(30.0)` — wait up to 30s for threads to drain
@@ -517,7 +524,7 @@ No structural change. Just update DB calls.
 
 ### Risk #9 — Middleware state propagation
 
-`UnifiedAuthMiddleware`, `RestCompatMiddleware`, `CSRFMiddleware` (Wave 1), `ApproximatedExternalDomainMiddleware` (Wave 1) — all are pure ASGI. No change required; they're already async.
+`UnifiedAuthMiddleware`, `RestCompatMiddleware`, `CSRFOriginMiddleware` (Wave 1), `ApproximatedExternalDomainMiddleware` (Wave 1) — all are pure ASGI. No change required; they're already async.
 
 ### Risk #10 — Performance characteristics
 
@@ -692,7 +699,7 @@ Per the previous audit pass, these were already in the "correct direction" and r
 - `flask-to-fastapi-worked-examples.md` §4.3 `upload_favicon` (already async due to `UploadFile.read()`)
 - `flask-to-fastapi-worked-examples.md` §4.4 `activity_events` SSE (already async)
 - Folder `CLAUDE.md` OAuth / SSE / upload conventions
-- `foundation-modules.md` middleware classes (`CSRFMiddleware`, `ApproximatedExternalDomainMiddleware`, `FlyHeadersMiddleware`) — already pure ASGI async
+- `foundation-modules.md` middleware classes (`CSRFOriginMiddleware`, `ApproximatedExternalDomainMiddleware`, `FlyHeadersMiddleware`) — already pure ASGI async
 - All exception handlers — already async (FastAPI requirement)
 
 These files won't need editing BUT the DB access inside them (e.g., `upload_favicon` `run_in_threadpool(_update_tenant_favicon_url, ...)`) becomes `await uow.tenants.update_favicon_url(...)`.

@@ -103,4 +103,4 @@ Report any mismatches as potential regressions.
 
 - `/capture-fixtures` — capture golden fixtures BEFORE porting (run first)
 - `/port-blueprint` — port the Flask blueprint to FastAPI
-- `/convert-tests` — DEFERRED TO v2.1 (v2.0 uses sync test patterns)
+- `/convert-tests` — Layer 5c of v2.0: converts sync tests to async when admin handlers flip to `AsyncSession`. Do NOT invoke during L0-L4.

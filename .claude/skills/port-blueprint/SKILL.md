@@ -19,16 +19,16 @@ args: <blueprint-name>
 
 ### Step 0: Prerequisite check
 
-Verify these foundation modules exist before proceeding. If ANY are missing, STOP — Phase 0 must be completed first (see `execution-plan.md` Phase 0).
+Verify these foundation modules exist before proceeding. If ANY are missing, STOP — Layer 0 must be completed first (see `execution-plan.md` Layer 0).
 
 ```bash
-test -f src/admin/templating.py && test -f src/admin/flash.py && test -f src/admin/deps/__init__.py && test -d src/admin/routers && echo "OK" || echo "STOP: Phase 0 foundation modules not yet created"
+test -f src/admin/templating.py && test -f src/admin/flash.py && test -f src/admin/deps/__init__.py && test -d src/admin/routers && echo "OK" || echo "STOP: L0 foundation modules not yet created"
 ```
 
 ### Step 1: Read sources (do NOT skip any)
 
 1. `src/admin/blueprints/{name}.py` — full Flask source
-2. `.claude/notes/flask-to-fastapi/execution-plan.md` — find the phase containing this blueprint
+2. `.claude/notes/flask-to-fastapi/execution-plan.md` — find the layer containing this blueprint (typically L1)
 3. `.claude/notes/flask-to-fastapi/CLAUDE.md` — 6 critical invariants (especially #1: sync def handlers)
 4. `tests/migration/fixtures/fingerprints/{name}.json` — golden fixtures (if exists)
 5. `.claude/notes/flask-to-fastapi/flask-to-fastapi-worked-examples.md` — find matching worked example (if any)
@@ -130,4 +130,4 @@ git diff src/admin/routers/{name}.py
 - `/capture-fixtures` — capture golden response fixtures BEFORE porting (must run first)
 - `/write-guard` — create structural guards that enforce these patterns
 - `/test-router` — write integration tests AFTER porting
-- `/async-convert` — DEFERRED TO v2.1 (v2.0 uses sync handlers)
+- `/async-convert` — Layer 5+ of v2.0 (sync admin handlers in L0-L4; async conversion begins in L5)

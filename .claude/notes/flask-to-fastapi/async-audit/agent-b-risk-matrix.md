@@ -1,8 +1,11 @@
-I have enough grounding. Now let me produce the risk analysis report. The body of the report is what the caller expects.
-
----
-
 # Risk Analysis Report: Full Async SQLAlchemy Absorbed into Flask→FastAPI v2.0.0
+
+> **[ARCHIVED REFERENCE — 2026-04-14]** This report is a preserved artifact from the 3-round verification process (Apr 11-14) that produced the v2.0 8-layer execution model. For current implementation guidance, see:
+> - `../CLAUDE.md` — mission briefing + 8-layer model
+> - `../execution-plan.md` — layer-by-layer work items
+> - `../implementation-checklist.md` — per-layer gate checklist
+>
+> This file is preserved for institutional memory only. Its recommendations have been absorbed into the canonical docs above. Do NOT use this file as a primary reference for implementation decisions.
 
 > **ASYNC IS PHASE 4+ WITHIN v2.0 (2026-04-14).** Phases 0-3 use sync admin handlers. This report is the Phase 4+ implementation roadmap. Do not implement async patterns from this file during Phases 0-3 (Flask removal).
 
@@ -18,7 +21,7 @@ I have enough grounding. Now let me produce the risk analysis report. The body o
 
 | # | Name | Severity | Detectable pre-merge? | Mitigation effort | Fallback viable? |
 |---|---|---|---|---|---|
-| 1 | Lazy-load `MissingGreenlet` on `relationship()` access | **H** | Yes, with new `raiseload` guard + targeted greenlet probe | 3–5 days (audit + fix + cookbook adoption) | **No** — full rollback to sync is the only escape; partial rollback impossible because one lazy load poisons the whole surface |
+| 1 | Lazy-load `MissingGreenlet` on `relationship()` access | **H** | Yes, with new `raiseload` guard + targeted greenlet probe | 3–5 days (audit + fix + cookbook adoption) | **No** — full rollback to sync is the only escape; partial rollback impossible because one lazy load poisons the whole surface — **decision matrix (joinedload vs selectinload vs backref→back_populates conversion): see `foundation-modules.md §11.29`** |
 | 2 | `psycopg2` → `asyncpg` driver-behavior delta (JSONB/UUID/Interval/Array/isolation) | **H** | Yes, with driver-spike `tox -e driver-compat` | 1–2 days (spike) + 1–2 days (fixes) | Yes — pin `psycopg` v3 (`psycopg[binary,pool]`) async instead, avoid asyncpg codec differences entirely |
 | 3 | `pytest-asyncio` event-loop scoping, session-scope conflicts, xdist interaction | **M** | Yes, smoke-suite runs in parallel | 2–3 days | Yes — serialize xdist workers per DB; slower but works |
 | 4 | Alembic `env.py` async rewrite + CI migration execution | **M** | Yes (CI migration job runs every PR) | 0.5–1 day | Yes — keep `alembic env.py` sync; async-URL rewriter at boot time still possible |
@@ -1078,7 +1081,7 @@ If A2A SDK interop has issues:
 
 #### A. Root cause
 
-All middleware classes are already pure ASGI async (per deep-audit §3.9 and checkpoint §2 ordering notes). `UnifiedAuthMiddleware`, `RestCompatMiddleware`, `CSRFMiddleware`, `ApproximatedExternalDomainMiddleware` — no conversion needed.
+All middleware classes are already pure ASGI async (per deep-audit §3.9 and checkpoint §2 ordering notes). `UnifiedAuthMiddleware`, `RestCompatMiddleware`, `CSRFOriginMiddleware`, `ApproximatedExternalDomainMiddleware` — no conversion needed.
 
 **The one subtle risk:** middleware state-sharing via `scope["state"]`. Starlette's `scope["state"]` is a shared dict for middleware-to-handler communication. Under async, `scope` is per-request (not global), so there's no cross-request state leak. But: if any middleware stashes a DB session in `scope["state"]["db_session"]`, that session must be released in middleware teardown (after the response is sent). Sync sessions can be cleaned up on the main thread; async sessions must be `await`-cleaned.
 
@@ -1838,7 +1841,9 @@ Goal: run these experiments BEFORE committing to absorbed-async v2.0 scope. Each
 
 ---
 
-### Spike 8 — Go/no-go decision
+### Spike 8 — L5 go/no-go decision gate
+
+> **Canonical alignment (2026-04-14):** per `CLAUDE.md` §"v2.0 Spike Sequence", Spike 8 is the aggregate decision gate at L5a EXIT, NOT a technical spike. It is one of 11 pre-L5b work items (10 technical spikes 1-7 + 4.25, 4.5, 5.5 + 1 decision gate = Spike 8). Fail action: narrow L5 scope OR ship L0-L4 only and defer async to v2.1.
 
 After completing spikes 1-7 (budget: 3 days), convene a decision meeting. Use this checklist:
 

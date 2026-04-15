@@ -2,22 +2,24 @@
 name: phase-gate
 lifecycle: migration
 description: >
-  Validate a migration phase's exit criteria by running every gate command
+  Validate a migration layer's exit criteria by running every gate command
   and checking every constraint. Reports PASS/FAIL with details.
-args: <phase-number>
+args: <layer-number>
 ---
 
-# Phase Exit Gate Validation
+# Layer Exit Gate Validation
 
 ## Args
 
-`/phase-gate 0` or `/phase-gate 2a` or `/phase-gate 3`
+`/phase-gate L0` or `/phase-gate L2` or `/phase-gate L5c`
+
+Back-compat: `/phase-gate 0` is accepted as an alias for `L0`; `/phase-gate 2a` and `/phase-gate 3` still resolve (legacy phase IDs map to the new layer IDs per the table in `.claude/notes/flask-to-fastapi/CLAUDE.md`). Prefer the `L*` form in new callers.
 
 ## Protocol
 
 ### Step 1: Read exit gate
 
-Read `.claude/notes/flask-to-fastapi/execution-plan.md`, find the phase section, extract:
+Read `.claude/notes/flask-to-fastapi/execution-plan.md`, find the layer section, extract:
 - The "Exit gate" code block (commands to run)
 - The "What NOT to do" section (constraints to verify)
 
@@ -25,7 +27,7 @@ Read `.claude/notes/flask-to-fastapi/execution-plan.md`, find the phase section,
 
 Execute every command from the exit gate block sequentially. Capture exit codes and output.
 
-Example for Phase 0:
+Example for Layer 0:
 ```bash
 make quality
 tox -e integration
@@ -53,7 +55,7 @@ ls src/admin/blueprints/*.py | wc -l  # should match expected count
 ### Step 4: Report
 
 ```
-Phase {N} Exit Gate: {PASS|FAIL}
+Layer {L*} Exit Gate: {PASS|FAIL}
 
 Gate commands:
   [PASS] make quality (exit 0)
@@ -72,4 +74,5 @@ Overall: FAIL (1 gate command failed)
 1. Run EVERY command in the gate — not just `make quality`
 2. Check EVERY "What NOT to do" constraint — not just the obvious ones
 3. Report actual numbers vs thresholds (e.g., "98 url_for refs, need >= 134")
-4. A single FAIL = the phase is not ready to merge
+4. A single FAIL = the layer is not ready to merge
+5. For `L5` (async conversion), the EXIT gate MUST include a perf comparison against `baseline-sync.json` captured at the `L4` EXIT — a regression beyond budget fails the gate even if every unit test passes

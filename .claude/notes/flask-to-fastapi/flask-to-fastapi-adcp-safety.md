@@ -4,9 +4,10 @@
 **Status:** Pre-implementation audit
 **Purpose:** Verify that the v2.0.0 Flask → FastAPI migration plan does NOT impact the AdCP protocol surface and does NOT make assumptions that would require updates from external AdCP consumers
 
-> **ASYNC PIVOT REVERSED (2026-04-12) — v2.0 uses SYNC admin handlers for Phases 0-3.**
-> This file predates the async reversion. Any references to async admin handlers
-> or `AsyncSession` are Phase 4+ scope. v2.0 ships with sync `def` handlers for Phases 0-3.
+> **LAYERED SCOPE (2026-04-14) — v2.0 uses SYNC admin handlers through L0-L4, then converts to async in L5.**
+> This file predates the layered scoping. Any references to async admin handlers
+> or `AsyncSession` are Layer 5+ scope. v2.0 ships with sync `def` handlers through L4 and
+> flips to async in L5 (`SessionDep` alias re-alias + mechanical `await` conversion).
 > The authoritative implementation guide is `execution-plan.md`.
 
 > **Companion to:** [flask-to-fastapi-migration.md](flask-to-fastapi-migration.md). Read that first for the migration plan itself. This file is the audit findings produced by three parallel Opus Explore subagents on 2026-04-11.
@@ -49,7 +50,7 @@ Verified by reading each file's imports, docstring, route decorators, and cross-
 | `src/core/auth_middleware.py` | `UnifiedAuthMiddleware` (pure ASGI) | Reads Bearer token, populates `scope["state"]["auth_context"]` |
 | `src/routes/rest_compat_middleware.py` | REST version compat | Reads/rewrites JSON body for `/api/v1/*` POSTs |
 
-**Verified invariant:** The migration plan explicitly states "Phase 2 does NOT touch" all of these files. The invariant holds.
+**Verified invariant:** The migration plan explicitly states the Flask-removal work (L2) and the admin surface ports (L1) do NOT touch any of these files. The invariant holds across every layer L0-L7.
 
 ### Internal admin surfaces (IN migration scope)
 
@@ -167,7 +168,7 @@ def test_no_admin_paths_in_openapi():
 
 ## 4. Middleware Verification
 
-### Body-read interaction — CSRFMiddleware vs RestCompatMiddleware
+### Body-read interaction — CSRFOriginMiddleware vs RestCompatMiddleware
 
 **Verified from the actual `src/routes/rest_compat_middleware.py` source:**
 - `RestCompatMiddleware` is a `BaseHTTPMiddleware` subclass (line 29)
@@ -178,15 +179,15 @@ def test_no_admin_paths_in_openapi():
 **Trace for `POST /api/v1/products`:**
 1. `CORSMiddleware` — headers only ✅
 2. `SessionMiddleware` — pure scope manipulation, no body read ✅
-3. `CSRFMiddleware` — `/api/v1/` is exempt, short-circuits before body read ✅
+3. `CSRFOriginMiddleware` — `/api/v1/` is exempt, short-circuits before body read ✅
 4. `ApproximatedExternalDomainMiddleware` — headers only ✅
 5. `RestCompatMiddleware` — reads+rewrites JSON body (safe via BaseHTTPMiddleware replay) ✅
 6. `UnifiedAuthMiddleware` — headers only ✅
 7. Handler — FastAPI re-reads replayed body ✅
 
-**Verdict:** CLEAR, provided `CSRFMiddleware` is implemented with the exempt-prefix check BEFORE any `await receive()` call. The foundation modules companion file enforces this.
+**Verdict:** CLEAR, provided `CSRFOriginMiddleware` is implemented with the exempt-prefix check BEFORE any `await receive()` call. The foundation modules companion file enforces this.
 
-**[UPDATE 2026-04-11]** Under the decided CSRF strategy (CSRFOriginMiddleware / Option A), there is NO body reading. The CSRFMiddleware-vs-RestCompatMiddleware body-read conflict described above is eliminated entirely. CSRFOriginMiddleware validates the Origin header only — zero interaction with the request body.
+**[UPDATE 2026-04-11]** Under the decided CSRF strategy (CSRFOriginMiddleware / Option A), there is NO body reading. The CSRFOriginMiddleware-vs-RestCompatMiddleware body-read conflict described above is eliminated entirely. CSRFOriginMiddleware validates the Origin header only — zero interaction with the request body.
 
 ### SessionMiddleware side effects on AdCP paths
 
@@ -296,7 +297,7 @@ All `test_architecture_bdd_*` (7 files) scoped to `tests/bdd/steps/**` and `docs
 
 1. **`tests/unit/test_architecture_no_flask_imports.py`** — already planned. Ratchets per wave.
 2. **`tests/admin/test_templates_url_for_resolves.py`** — already planned. Validates template `url_for` names against live route registry.
-3. **`tests/unit/test_architecture_csrf_exempt_covers_adcp.py`** — **NEW.** Runtime-introspects `app.routes`, finds every non-GET route whose path matches `/mcp`, `/a2a`, `/api/v1/`, or `/a2a/`, asserts each is covered by `CSRFMiddleware._EXEMPT_PATH_PREFIXES`. Catches regressions where someone adds a new AdCP POST route.
+3. **`tests/unit/test_architecture_csrf_exempt_covers_adcp.py`** — **NEW.** Runtime-introspects `app.routes`, finds every non-GET route whose path matches `/mcp`, `/a2a`, `/api/v1/`, or `/a2a/`, asserts each is covered by `CSRFOriginMiddleware._EXEMPT_PATH_PREFIXES`. Catches regressions where someone adds a new AdCP POST route.
 4. **`tests/unit/test_architecture_approximated_middleware_path_gated.py`** — **NEW.** Asserts `ApproximatedExternalDomainMiddleware` short-circuits on any path not starting with `/admin`. Prevents the near-blocker from §4.
 5. **`tests/unit/test_architecture_admin_routes_excluded_from_openapi.py`** — **NEW.** Asserts `not any(p.startswith("/admin") for p in app.openapi()["paths"])`. Guards the `include_in_schema=False` invariant.
 6. *(Optional, lower-ROI)* `tests/unit/test_architecture_admin_no_raw_select.py` — scans `src/admin/routers/*.py` for raw `select(OrmModel)` calls (enforcing "use repositories"). Duplicates part of `test_architecture_no_raw_select.py` but scoped narrowly so it's easier to reason about.
@@ -472,7 +473,7 @@ The v2.0 migration preserves two non-obvious architectural facts that are load-b
 
 ### Summary: these are Wave-0 structural guards, NOT Wave-3 cleanup
 
-Both guards land in Wave 0 alongside the other migration guards. They cost ~40 lines of Python each and prevent a whole class of silent-failure refactors in Phase 4+ work. Added to the plan via `flask-to-fastapi-migration.md` §4.8 "Apps loaded at runtime inventory" and `flask-to-fastapi-deep-audit.md` §3.7 + §3.8.
+Both guards land in L0 alongside the other migration guards. They cost ~40 lines of Python each and prevent a whole class of silent-failure refactors in L5+ work. Added to the plan via `flask-to-fastapi-migration.md` §4.8 "Apps loaded at runtime inventory" and `flask-to-fastapi-deep-audit.md` §3.7 + §3.8.
 
 ---
 

@@ -1,6 +1,11 @@
 # Frontend Deep-Audit Report (2026-04-11)
 
-> **ASYNC IS PHASE 4+ WITHIN v2.0 (2026-04-14).** Phases 0-3 use sync admin handlers. This report is the Phase 4+ implementation roadmap. Do not implement async patterns from this file during Phases 0-3 (Flask removal). The authoritative implementation guide is `execution-plan.md`.
+> **[ARCHIVED REFERENCE — 2026-04-14]** This report is a preserved artifact from the 3-round verification process (Apr 11-14) that produced the v2.0 8-layer execution model. For current implementation guidance, see:
+> - `../CLAUDE.md` — mission briefing + 8-layer model
+> - `../execution-plan.md` — layer-by-layer work items
+> - `../implementation-checklist.md` — per-layer gate checklist
+>
+> This file is preserved for institutional memory only. Its recommendations have been absorbed into the canonical docs above. Do NOT use this file as a primary reference for implementation decisions.
 
 > **Produced by:** 6 parallel Opus subagents with ultrathink, 2nd/3rd/4th-order derivative analysis
 > **Scope:** Jinja templates + url_for, JavaScript + fetch endpoints, OAuth + session + auth flows, static assets + CSS, error pages + flash + admin UX, route parity + handler migration
@@ -36,7 +41,7 @@ Contains `script_name`(7), `session.*`(9), `get_flashed_messages()`(1), `g.test_
 
 ### F4. CSRF added where none existed
 **Source:** FE-2 (JavaScript), FE-3 (Auth)
-`CSRFProtect` is never initialized in current Flask app. Zero fetch() calls send tokens. Adding `CSRFMiddleware` breaks all ~47 HTML form POSTs and ~80 JS POST/DELETE fetch calls unless tokens are added simultaneously.
+`CSRFProtect` is never initialized in current Flask app. Zero fetch() calls send tokens. Adding `CSRFOriginMiddleware` breaks all ~47 HTML form POSTs and ~80 JS POST/DELETE fetch calls unless tokens are added simultaneously.
 
 ### F5. `tojson` filter missing in Starlette
 **Source:** FE-5 (Errors/Flash)
