@@ -458,10 +458,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         if is_rest and any(t.startswith("T-UC-006") for t in marker_names) and "account" in marker_names:
             item.add_marker(pytest.mark.xfail(reason="REST route doesn't forward account param", strict=False))
 
-        # Transport-specific xfails: REST drops all filter params.
-        # E2E_REST has the same gap — Docker's REST endpoint also drops filters.
-        # FIXME: filed as production bug — REST endpoint needs filter param support.
-        if is_rest or is_e2e_rest:
+        # Transport-specific xfails: in-process REST harness stub drops all filter params.
+        # E2E_REST is NOT affected — Docker's REST endpoint implements the filters, so
+        # applying this strict xfail there would cause XPASS(strict) failures.
+        # FIXME(salesagent-g4ld): filed as production bug — in-process REST stub needs filter support.
+        if is_rest:
             for tag in _REST_XFAIL_TAGS:
                 if tag in marker_names:
                     item.add_marker(pytest.mark.xfail(reason="REST endpoint drops filter params", strict=True))
@@ -538,6 +539,18 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     strict=False,
                 )
             )
+
+        # FIXME(salesagent-l9iz): E2E_REST — UC-006 account_resolution_boundary
+        # success-path partitions rely on account fixtures not injected into the
+        # Docker DB. Only the two success boundary_points fail on Docker.
+        if is_e2e_rest and "T-UC-006-boundary-account" in marker_names:
+            if any(s in nodeid for s in ("active", "single match")):
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="E2E: success-path account fixtures not injected into Docker DB",
+                        strict=False,
+                    )
+                )
 
         # FIXME(salesagent-vov / salesagent-qzz2): UC-019 REST/E2E_REST — REST endpoint
         # returns Method Not Allowed for get_media_buys. Same gap applies to e2e_rest
