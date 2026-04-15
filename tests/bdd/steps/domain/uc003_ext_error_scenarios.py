@@ -548,12 +548,11 @@ def given_adapter_error_during_update(ctx: dict) -> None:
     calls adapter methods during update_media_buy_impl — this simulates ad server
     failure.
     """
-    from src.core.exceptions import AdCPError
+    from src.core.exceptions import AdCPAdapterError
 
     env = ctx["env"]
     mock_adapter = env.mock["adapter"].return_value
-    error = AdCPError(
-        error_code="ADAPTER_ERROR",
+    error = AdCPAdapterError(
         message="Ad server returned error during update",
         recovery="retryable",
         details={"suggestion": "Retry the operation or contact ad server support"},
