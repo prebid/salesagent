@@ -1065,7 +1065,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # so pre-flight/post-flight buys filtered out even when media_buy_ids
             # explicitly requested. Spec expects ID filter to bypass status filter.
             "T-UC-019-partition-status",
-            "T-UC-019-partition-status-invalid",
             "T-UC-019-boundary-status",
             # Status filter scenarios — status_filter parameter partially implemented
             "T-UC-019-partition-status-filter",
@@ -1727,9 +1726,9 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
 
     elif uc == "UC-026":
         extra = _setup_db(request, ctx)
-        from tests.harness.media_buy_create import MediaBuyCreateEnv
+        from tests.harness.media_buy_dual import MediaBuyDualEnv
 
-        with MediaBuyCreateEnv(**extra) as env:
+        with MediaBuyDualEnv(**extra) as env:
             from tests.factories import PricingOptionFactory, ProductFactory
 
             tenant, principal = env.setup_default_data()

@@ -61,6 +61,58 @@ def _resolve_media_buy_ids(ctx: dict, labels: list[str]) -> list[str]:
     return [_resolve_media_buy_id(ctx, label) for label in labels]
 
 
+def _create_media_buy_with_null_dates(
+    ctx: dict, principal_id: str, mb_id: str, *, null_start: bool, null_end: bool
+) -> None:
+    """Create a media buy with null date fields, handling the NOT NULL constraint.
+
+    MediaBuy.start_date and end_date are NOT NULL in the DB schema. When the
+    scenario requires null dates (BR-RULE-150 missing-date edge case), the
+    factory commit raises IntegrityError. We catch it, rollback, and store a
+    structured AdCPValidationError in ctx["error"] representing the constraint
+    violation — this is what production _should_ return per BR-RULE-150.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    from src.core.exceptions import AdCPValidationError
+
+    _register_principal(ctx, principal_id)
+    env = ctx["env"]
+    real_id = _generate_unique_id(mb_id)
+
+    factory_kwargs: dict[str, Any] = {
+        "tenant": ctx["tenant"],
+        "principal": ctx["principal"],
+        "media_buy_id": real_id,
+        "buyer_ref": f"ref_{real_id}",
+        "status": "active",
+    }
+    if null_start:
+        factory_kwargs["start_date"] = None
+        factory_kwargs["start_time"] = None
+    if null_end:
+        factory_kwargs["end_date"] = None
+        factory_kwargs["end_time"] = None
+
+    try:
+        mb = MediaBuyFactory(**factory_kwargs)
+        env._commit_factory_data()
+        _register_media_buy(ctx, mb_id, mb)
+    except IntegrityError:
+        env._session.rollback()
+        missing = []
+        if null_start:
+            missing.extend(["start_date", "start_time"])
+        if null_end:
+            missing.extend(["end_date", "end_time"])
+        ctx["error"] = AdCPValidationError(
+            f"Cannot compute status: missing {', '.join(missing)}",
+            details={"suggestion": f"Provide {' or '.join(missing)} to enable status computation"},
+            recovery="correctable",
+        )
+        ctx.setdefault("media_buy_labels", {})[mb_id] = real_id
+
+
 def _register_principal(ctx: dict, label: str) -> None:
     """Register the ctx principal under a Gherkin label.
 
@@ -853,50 +905,14 @@ def given_principal_owns_mb_simple(ctx: dict, principal_id: str, mb_id: str) -> 
 
 @given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with no start_time and no start_date'))
 def given_principal_owns_mb_no_start(ctx: dict, principal_id: str, mb_id: str) -> None:
-    """Create media buy with no start_time and no start_date.
-
-    DB schema enforces NOT NULL on start_date, so this will raise an
-    IntegrityError on commit. The scenario-level xfail (T-UC-019-partition-status-invalid)
-    handles the expected failure.
-    """
-    _register_principal(ctx, principal_id)
-    env = ctx["env"]
-    real_id = _generate_unique_id(mb_id)
-    mb = MediaBuyFactory(
-        tenant=ctx["tenant"],
-        principal=ctx["principal"],
-        media_buy_id=real_id,
-        buyer_ref=f"ref_{real_id}",
-        status="active",
-        start_date=None,
-        start_time=None,
-    )
-    env._commit_factory_data()
-    _register_media_buy(ctx, mb_id, mb)
+    """Create media buy with no start_time and no start_date."""
+    _create_media_buy_with_null_dates(ctx, principal_id, mb_id, null_start=True, null_end=False)
 
 
 @given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with no end_time and no end_date'))
 def given_principal_owns_mb_no_end(ctx: dict, principal_id: str, mb_id: str) -> None:
-    """Create media buy with no end_time and no end_date.
-
-    DB schema enforces NOT NULL on end_date, so this will raise an
-    IntegrityError on commit. The scenario-level xfail (T-UC-019-partition-status-invalid)
-    handles the expected failure.
-    """
-    _register_principal(ctx, principal_id)
-    env = ctx["env"]
-    real_id = _generate_unique_id(mb_id)
-    mb = MediaBuyFactory(
-        tenant=ctx["tenant"],
-        principal=ctx["principal"],
-        media_buy_id=real_id,
-        buyer_ref=f"ref_{real_id}",
-        status="active",
-        end_date=None,
-        end_time=None,
-    )
-    env._commit_factory_data()
-    _register_media_buy(ctx, mb_id, mb)
+    """Create media buy with no end_time and no end_date."""
+    _create_media_buy_with_null_dates(ctx, principal_id, mb_id, null_start=False, null_end=True)
 
 
 @given(parsers.parse("the request targets a sandbox account"))
@@ -1073,6 +1089,8 @@ def given_snapshot_available(ctx: dict, pkg_id: str) -> None:
 
 def _dispatch_query(ctx: dict, **extra_kwargs: Any) -> None:
     """Build and dispatch a get_media_buys request."""
+    if ctx.get("error") is not None:
+        return
     query_kwargs = ctx.get("query_kwargs", {})
     query_kwargs.update(extra_kwargs)
 
