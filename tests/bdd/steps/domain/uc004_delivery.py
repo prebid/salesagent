@@ -2495,7 +2495,7 @@ def _ensure_media_buy_in_db(
     if created_date:
         from datetime import datetime
 
-        mb_kwargs["created_date"] = datetime.fromisoformat(created_date)
+        mb_kwargs["created_at"] = datetime.fromisoformat(created_date)
 
     MediaBuyFactory.create(**mb_kwargs)
 
