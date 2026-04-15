@@ -1740,15 +1740,11 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             yield
 
     elif uc == "UC-006":
-        marker_names = {m.name for m in request.node.iter_markers()}
-        if "account" in marker_names:
-            extra = _setup_db(request, ctx)
-            from tests.harness.creative_sync import CreativeSyncEnv
+        extra = _setup_db(request, ctx)
+        from tests.harness.creative_sync import CreativeSyncEnv
 
-            with CreativeSyncEnv(**extra) as env:
-                ctx["env"] = env
-                yield
-        else:
+        with CreativeSyncEnv(**extra) as env:
+            ctx["env"] = env
             yield
 
     elif uc == "UC-005":
