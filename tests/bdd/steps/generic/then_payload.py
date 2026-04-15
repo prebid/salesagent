@@ -150,35 +150,69 @@ def then_format_name_type(ctx: dict) -> None:
 
 @then("each format should include asset requirements with type and dimensions")
 def then_format_assets(ctx: dict) -> None:
-    """Assert EVERY format has asset requirements with type (asset_type) AND dimensions (on renders).
+    """Assert EVERY format has asset requirements with the exact required keys.
 
-    Step text says 'each format' — a format missing asset requirements entirely is a failure,
-    not a format to silently skip.
+    UC-005 POST-S2: Asset requirements included per format. The Gherkin claim
+    is "asset requirements with type and dimensions" — enforce the exact
+    required key set per adcp spec:
+
+      - asset items MUST carry: ``asset_type`` AND ``asset_id`` (type + identity)
+      - render items MUST carry: ``dimensions`` with a width field
+        (``width`` for fixed, or ``min_width`` for responsive)
+
+    A format missing asset requirements entirely is a failure — the step says
+    "each format", not "most formats".
     """
+    # Per adcp v1.2.1 AssetRequirement: asset_type is the type enum, asset_id is
+    # the identifier. These are the minimum keys the buyer needs to understand
+    # what to submit.
+    required_asset_keys = {"asset_type", "asset_id"}
+
     formats = _get_formats(ctx)
     assert len(formats) > 0, "No formats in response — cannot verify asset requirements"
 
     for f in formats:
         has_assets = hasattr(f, "assets") and f.assets
         has_renders = hasattr(f, "renders") and f.renders
-        # Step says "each format should include asset requirements" — every format must have
-        # at least assets or renders (not silently skip formats without them)
         assert has_assets or has_renders, (
             f"Format '{_fmt_name(f)}' has neither assets nor renders — "
             f"step requires 'each format' to include asset requirements"
         )
-        # Verify assets have type indicators
+
         if has_assets:
             for a in f.assets:
-                has_type = hasattr(a, "asset_type") or hasattr(a, "type") or hasattr(a, "asset_id")
-                assert has_type, f"Asset in format '{_fmt_name(f)}' missing type indicator"
-        # Verify renders have dimensions
+                # Enumerate actual keys on the asset (via model_dump for Pydantic
+                # or attribute introspection for plain objects).
+                if hasattr(a, "model_dump"):
+                    asset_keys = set(a.model_dump(exclude_none=True).keys())
+                else:
+                    asset_keys = {k for k in dir(a) if not k.startswith("_") and getattr(a, k, None) is not None}
+                missing = required_asset_keys - asset_keys
+                assert not missing, (
+                    f"Asset in format '{_fmt_name(f)}' missing required keys {missing} "
+                    f"(has: {asset_keys & required_asset_keys or 'none of the required keys'}). "
+                    f"Spec requires each asset requirement to carry asset_type + asset_id."
+                )
+                # asset_type value must be a concrete string (enum value), not None/empty.
+                asset_type = getattr(a, "asset_type", None)
+                asset_type_str = asset_type.value if hasattr(asset_type, "value") else asset_type
+                assert asset_type_str, (
+                    f"Asset in format '{_fmt_name(f)}' has empty asset_type — buyers cannot know what media to upload"
+                )
+
         if has_renders:
             for r in f.renders:
                 dims = getattr(r, "dimensions", None)
                 assert dims is not None, f"Render in format '{_fmt_name(f)}' missing dimensions"
-                assert getattr(dims, "width", None) is not None or getattr(dims, "min_width", None) is not None, (
-                    f"Render dimensions in format '{_fmt_name(f)}' missing width"
+                # Enumerate dimension keys and require at least one width specification.
+                if hasattr(dims, "model_dump"):
+                    dim_keys = set(dims.model_dump(exclude_none=True).keys())
+                else:
+                    dim_keys = {k for k in dir(dims) if not k.startswith("_") and getattr(dims, k, None) is not None}
+                width_keys = {"width", "min_width"}
+                assert dim_keys & width_keys, (
+                    f"Render dimensions in format '{_fmt_name(f)}' missing width specification. "
+                    f"Expected one of {width_keys}, got keys: {dim_keys}"
                 )
 
 
@@ -279,46 +313,65 @@ _KNOWN_FILTER_FIELDS = frozenset(
 def _assert_partition_outcome(ctx: dict, field: str, expected: str) -> None:
     """Assert partition/boundary test outcome against real production results.
 
-    "valid" means production code returned successfully AND produced a well-formed
-    response with a formats array. "invalid" means production code raised an error.
-    The field parameter is validated against known filter fields to catch Gherkin typos.
+    Shared helper for both ``then_partition_filtering_result`` (filtering) and
+    ``then_boundary_handling_result`` (boundary). Keeping the logic in ONE place
+    prevents the two steps from drifting apart and enforces consistent
+    filter-field spell-checking.
+
+    Semantics:
+      - ``expected == "valid"`` → production returned successfully AND the
+        response is well-formed (has a ``formats`` list). This proves the
+        filter was accepted, not just that no exception leaked.
+      - ``expected == "invalid"`` → production raised an error; the response
+        must NOT be present (otherwise the filter was silently accepted).
+
+    The ``field`` parameter is validated against ``_KNOWN_FILTER_FIELDS`` to
+    catch Gherkin typos at test-collection time rather than letting a wrong
+    filter name pass silently.
     """
     assert field in _KNOWN_FILTER_FIELDS, (
         f"Unknown filter field '{field}' in partition/boundary test. Known fields: {sorted(_KNOWN_FILTER_FIELDS)}"
     )
     if expected == "valid":
-        assert "error" not in ctx, f"Expected valid result but got error: {ctx.get('error')}"
+        assert "error" not in ctx, f"Expected valid filter result for '{field}' but got error: {ctx.get('error')}"
         resp = ctx.get("response")
-        assert resp is not None, "Expected response but none found"
-        # "valid" means the filter was accepted and a well-formed response was produced.
-        # Verify response has the expected structure (formats array present).
-        if hasattr(resp, "formats"):
-            assert isinstance(resp.formats, list), f"Expected formats to be a list, got {type(resp.formats)}"
+        assert resp is not None, (
+            f"Expected response for '{field}' filter but ctx['response'] is absent — "
+            "production did not produce a result"
+        )
+        # "valid" means the filter was accepted AND produced a well-formed list.
+        assert hasattr(resp, "formats"), (
+            f"Response for '{field}' filter missing 'formats' attribute — "
+            f"got {type(resp).__name__} which is not a ListCreativeFormatsResponse shape"
+        )
+        assert isinstance(resp.formats, list), (
+            f"Expected 'formats' to be a list for '{field}' filter, got {type(resp.formats).__name__}"
+        )
     elif expected == "invalid":
-        assert "error" in ctx, "Expected error but operation succeeded"
+        assert "error" in ctx, (
+            f"Expected '{field}' filter to be rejected as invalid, but operation succeeded "
+            f"with response: {ctx.get('response')!r}"
+        )
+        # On invalid input, there should be NO valid response — a success response
+        # alongside an error means the filter was silently accepted.
+        resp = ctx.get("response")
+        assert resp is None, (
+            f"Expected no response on invalid '{field}' filter, got both error "
+            f"{ctx.get('error')!r} AND response {resp!r}"
+        )
     else:
-        raise AssertionError(f"Unexpected outcome value: {expected}")
+        raise AssertionError(f"Unexpected outcome value '{expected}' for '{field}' — expected 'valid' or 'invalid'")
 
 
 @then(parsers.re(r"the (?P<field>.+) filtering should result in (?P<expected>\w+)"))
 def then_partition_filtering_result(ctx: dict, field: str, expected: str) -> None:
     """Generic partition test: any '<field> filtering should result in <expected>'.
 
-    Inlines assertion logic so the step body is self-contained.
+    Delegates to ``_assert_partition_outcome`` — same logic as
+    ``then_boundary_handling_result`` to guarantee consistent semantics
+    across partition and boundary Gherkin phrasings.
     """
-    assert field in _KNOWN_FILTER_FIELDS, (
-        f"Unknown filter field '{field}' in partition test. Known fields: {sorted(_KNOWN_FILTER_FIELDS)}"
-    )
-    if expected == "valid":
-        assert "error" not in ctx, f"Expected valid result but got error: {ctx.get('error')}"
-        resp = ctx.get("response")
-        assert resp is not None, "Expected response but none found"
-        if hasattr(resp, "formats"):
-            assert isinstance(resp.formats, list), f"Expected formats to be a list, got {type(resp.formats)}"
-    elif expected == "invalid":
-        assert "error" in ctx, "Expected error but operation succeeded"
-    else:
-        raise AssertionError(f"Unexpected outcome value: {expected}")
+    _assert_partition_outcome(ctx, field, expected)
 
 
 @then(parsers.re(r"the (?P<field>.+) handling should be (?P<expected>\w+)"))

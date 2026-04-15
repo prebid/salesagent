@@ -99,7 +99,7 @@ _COUNT_ONLY_ALLOWLIST: set[str] = {
     "bdd/steps/domain/uc026_package_media_buy.py:2352 then_new_pkg_in_mb",
     "bdd/steps/domain/uc026_package_media_buy.py:2385 then_new_pkg_created",
     "bdd/steps/generic/then_media_buy.py:76 then_response_has_packages",
-    "bdd/steps/generic/then_media_buy.py:750 then_response_has_success_fields",
+    "bdd/steps/generic/then_media_buy.py:819 then_response_has_success_fields",
     "bdd/steps/generic/then_payload.py:152 then_format_assets",
     "bdd/steps/generic/then_payload.py:91 then_has_referrals",
     "bdd/steps/generic/then_payload.py:105 then_referral_fields",
