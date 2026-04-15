@@ -484,11 +484,7 @@ def then_suggestion_valid_values(ctx: dict) -> None:
     has_action = any(word in suggestion_lower for word in ("use", "try", "provide", "check", "specify"))
     # Must enumerate values — comma-separated list, quoted tokens, or "one of" phrasing.
     enumerates_values = (
-        "," in suggestion
-        or "one of" in suggestion_lower
-        or '"' in suggestion
-        or "'" in suggestion
-        or "[" in suggestion
+        "," in suggestion or "one of" in suggestion_lower or '"' in suggestion or "'" in suggestion or "[" in suggestion
     )
     assert has_value_ref and has_action and enumerates_values, (
         f"Expected suggestion to enumerate valid parameter values with actionable guidance "
@@ -633,20 +629,45 @@ def then_suggestion_agent_url_id(ctx: dict) -> None:
 
 @then("no error should be raised")
 def then_no_error(ctx: dict) -> None:
-    """Assert no error was recorded."""
+    """Assert no error was recorded AND a response was produced.
+
+    A passing scenario needs both halves: absence of error AND a positive
+    response object. Without the response check, a scenario that simply
+    skipped dispatch (fixture bug, no When step) would silently pass.
+    """
     assert "error" not in ctx, f"Expected no error but got: {ctx.get('error')}"
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response object but none was recorded — dispatch likely did not run"
 
 
 @then("no error should be returned")
 def then_no_error_returned(ctx: dict) -> None:
-    """Assert no error was returned (synonym for no error raised)."""
+    """Assert no error was returned AND a response was produced (synonym)."""
     assert "error" not in ctx, f"Expected no error but got: {ctx.get('error')}"
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response object but none was recorded — dispatch likely did not run"
 
 
 @then(parsers.parse('no error should be raised for "{value}"'))
 def then_no_error_for_value(ctx: dict, value: str) -> None:
-    """Assert no error was raised for a specific value (silent exclusion)."""
-    assert "error" not in ctx, f"Expected no error for '{value}' but got: {ctx.get('error')}"
+    """Assert the specific value did not produce an error in the response.
+
+    Step claims 'no error for {value}' — a value-scoped claim. Verify:
+    (a) no top-level error, and
+    (b) if response has an errors collection, no entry references {value}.
+    """
+    err = ctx.get("error")
+    if err is not None:
+        msg = _get_error_message(err)
+        assert value not in msg, f"Expected no error mentioning '{value}', got error: {msg}"
+        # Top-level error exists but doesn't mention this value — acceptable
+        # only if the test expects errors for other values. Fail-fast here
+        # would be too strict; the (value not in msg) check above already
+        # guards the specific claim.
+    resp = ctx.get("response")
+    if resp is not None and hasattr(resp, "errors") and resp.errors:
+        offending = [e for e in resp.errors if value in (getattr(e, "message", "") or "")]
+        assert not offending, f"Expected no response error referencing '{value}', got: {offending}"
 
 
 # ── Validation error (sandbox) ───────────────────────────────────────

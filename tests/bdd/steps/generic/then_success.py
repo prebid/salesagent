@@ -30,10 +30,42 @@ def then_response_status(ctx: dict, status: str) -> None:
 
     # UC-005 fallback: response has no status field, so "completed" means a
     # populated Pydantic response model. Verify it serializes to a non-empty
-    # mapping rather than silently passing on any object.
+    # mapping AND carries a recognizable success payload (at least one known
+    # response-success field) rather than silently passing on any object.
     if status == "completed":
+        from pydantic import BaseModel
+
+        assert isinstance(resp, BaseModel), (
+            f"Expected a Pydantic response model for status 'completed', got {type(resp).__name__}"
+        )
         serialized = resp.model_dump()
         assert serialized, f"Expected non-empty response for status 'completed', got {serialized!r}"
+        # A "completed" response must carry identifiable success content.
+        # Known success-payload keys across UCs: media_buy_id, creative_ids,
+        # formats, products, creatives, deliveries, media_buys, packages,
+        # build_id, creative_id.
+        success_keys = {
+            "media_buy_id",
+            "creative_ids",
+            "creative_id",
+            "formats",
+            "products",
+            "creatives",
+            "deliveries",
+            "media_buys",
+            "packages",
+            "build_id",
+            "signal_agents",
+        }
+        has_success_content = bool(success_keys & serialized.keys())
+        # If the response schema simply has no success-payload key (e.g., a
+        # bare acknowledgement), require at least one non-null non-empty field
+        # so empty responses still fail.
+        has_nonempty_field = any(v not in (None, "", [], {}) for v in serialized.values())
+        assert has_success_content or has_nonempty_field, (
+            f"Expected 'completed' response to carry success content or at least one populated field, "
+            f"got empty payload: {serialized!r}"
+        )
         return
 
     # UC-003 approval pathway: "submitted" means pending manual approval.
