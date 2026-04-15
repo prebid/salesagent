@@ -11,9 +11,12 @@ BR-RULE-061 (delete_missing), BR-RULE-062 (dry_run)
 import pytest
 
 from src.core.schemas.account import SyncAccountsRequest
+from tests.harness import Transport
 from tests.harness.account_sync import AccountSyncEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+
+ALL_TRANSPORTS = [Transport.IMPL, Transport.A2A, Transport.REST, Transport.MCP]
 
 
 def _action_value(action):
@@ -388,3 +391,159 @@ class TestSyncAccountsApproval:
             tenant_dict = get_tenant_by_id("harness_audit_t")
             assert tenant_dict is not None
             assert tenant_dict["account_approval_mode"] == "credit_review"
+
+
+class TestSyncAccountsBillingPolicyTransport:
+    """BR-RULE-059: billing policy behavior must be identical across all transports.
+
+    Part of salesagent-wp9u — transport-matrix coverage for #1184 billing policy.
+    """
+
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
+    def test_unsupported_billing_returns_failed(self, integration_db, transport):
+        """Seller that does not support 'operator' billing rejects operator accounts
+        with per-account action=failed, status=rejected, code=BILLING_NOT_SUPPORTED."""
+        with AccountSyncEnv(
+            tenant_id=f"bp_unsup_{transport.value}",
+            principal_id=f"agent_bp_{transport.value}",
+        ) as env:
+            env.setup_default_data()
+            env.set_billing_policy(["agent"])
+
+            req = SyncAccountsRequest(
+                accounts=[
+                    {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"},
+                ],
+            )
+            result = env.call_via(transport, req=req)
+
+        assert result.is_success, f"Expected success for {transport}: {result.error}"
+        accounts = result.payload.accounts
+        assert len(accounts) == 1
+        acct = accounts[0]
+        assert _action_value(acct.action) == "failed"
+        assert _status_value(acct.status) == "rejected"
+        assert acct.errors is not None
+        assert acct.errors[0].code == "BILLING_NOT_SUPPORTED"
+
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
+    def test_billing_rejection_error_includes_suggestion(self, integration_db, transport):
+        """BR-RULE-059 requires the error payload to include a suggestion field
+        pointing buyers to supported billing models."""
+        with AccountSyncEnv(
+            tenant_id=f"bp_sugg_{transport.value}",
+            principal_id=f"agent_bps_{transport.value}",
+        ) as env:
+            env.setup_default_data()
+            env.set_billing_policy(["agent"])
+
+            req = SyncAccountsRequest(
+                accounts=[
+                    {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"},
+                ],
+            )
+            result = env.call_via(transport, req=req)
+
+        assert result.is_success
+        err = result.payload.accounts[0].errors[0]
+        assert err.suggestion is not None
+        assert "agent" in err.suggestion
+
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
+    def test_unconfigured_billing_policy_accepts_all(self, integration_db, transport):
+        """When supported_billing is not configured, all billing values are accepted."""
+        with AccountSyncEnv(
+            tenant_id=f"bp_any_{transport.value}",
+            principal_id=f"agent_bpa_{transport.value}",
+        ) as env:
+            env.setup_default_data()
+
+            req = SyncAccountsRequest(
+                accounts=[
+                    {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"},
+                    {"brand": {"domain": "beta.com"}, "operator": "example.com", "billing": "agent"},
+                ],
+            )
+            result = env.call_via(transport, req=req)
+
+        assert result.is_success
+        actions = {a.brand.domain: _action_value(a.action) for a in result.payload.accounts}
+        assert actions == {"acme.com": "created", "beta.com": "created"}
+
+
+class TestSyncAccountsApprovalTransport:
+    """BR-RULE-060: account approval mode behavior must be identical across all transports.
+
+    Part of salesagent-wp9u — transport-matrix coverage for #1184 approval workflow.
+    """
+
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
+    def test_credit_review_returns_pending_with_setup(self, integration_db, transport):
+        """credit_review → status=pending_approval with setup(url + message + expires_at)."""
+        with AccountSyncEnv(
+            tenant_id=f"ap_cr_{transport.value}",
+            principal_id=f"agent_apcr_{transport.value}",
+        ) as env:
+            env.setup_default_data()
+            env.set_approval_mode("credit_review")
+
+            req = SyncAccountsRequest(
+                accounts=[
+                    {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"},
+                ],
+            )
+            result = env.call_via(transport, req=req)
+
+        assert result.is_success
+        acct = result.payload.accounts[0]
+        assert _status_value(acct.status) == "pending_approval"
+        assert acct.setup is not None
+        assert acct.setup.message is not None
+        assert acct.setup.url is not None
+        assert acct.setup.expires_at is not None
+
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
+    def test_legal_review_returns_pending_message_only(self, integration_db, transport):
+        """legal_review → status=pending_approval with setup(message only, no url, no expires_at)."""
+        with AccountSyncEnv(
+            tenant_id=f"ap_lr_{transport.value}",
+            principal_id=f"agent_aplr_{transport.value}",
+        ) as env:
+            env.setup_default_data()
+            env.set_approval_mode("legal_review")
+
+            req = SyncAccountsRequest(
+                accounts=[
+                    {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"},
+                ],
+            )
+            result = env.call_via(transport, req=req)
+
+        assert result.is_success
+        acct = result.payload.accounts[0]
+        assert _status_value(acct.status) == "pending_approval"
+        assert acct.setup is not None
+        assert acct.setup.message is not None
+        assert acct.setup.url is None
+        assert acct.setup.expires_at is None
+
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
+    def test_auto_approve_returns_active_no_setup(self, integration_db, transport):
+        """account_approval_mode=None (default) → status=active with no setup."""
+        with AccountSyncEnv(
+            tenant_id=f"ap_au_{transport.value}",
+            principal_id=f"agent_apau_{transport.value}",
+        ) as env:
+            env.setup_default_data()
+
+            req = SyncAccountsRequest(
+                accounts=[
+                    {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"},
+                ],
+            )
+            result = env.call_via(transport, req=req)
+
+        assert result.is_success
+        acct = result.payload.accounts[0]
+        assert _status_value(acct.status) == "active"
+        assert acct.setup is None

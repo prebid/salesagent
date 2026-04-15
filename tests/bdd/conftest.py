@@ -254,25 +254,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     break
 
         # UC-011 REST: per-request auth implemented (salesagent-xms)
-
-        # FIXME(#1184): UC-011 MCP — billing policy and approval mode not populated
-        # from DB. The real MCP auth chain resolves identity from DB which doesn't
-        # carry supported_billing or account_approval_mode. These are tenant-level
-        # configs that need a DB migration to persist.
-        _UC011_MCP_IDENTITY_XFAIL: set[str] = {
-            "T-UC-011-ext-c-rejected",  # billing rejection
-            "T-UC-011-ext-c-mixed",  # per-account billing rejection
-            "T-UC-011-ext-d-pending-url",  # approval mode pending
-            "T-UC-011-ext-d-pending-message",  # approval mode pending
-            "T-UC-011-atomic-all-failed",  # all-failed (uses billing rejection)
-        }
-        if is_mcp and (marker_names & _UC011_MCP_IDENTITY_XFAIL):
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="MCP: billing/approval config not in DB — needs #1184",
-                    strict=True,
-                )
-            )
+        # UC-011 MCP: billing policy and approval mode now populated from DB via
+        # account_approval_mode column + proper harness writes (#1184 complete).
 
         # FIXME(salesagent-9d5): UC-006 REST — account resolution through CreativeSyncEnv
         # REST route for sync_creatives exists but account kwarg may not be
