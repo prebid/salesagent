@@ -1080,6 +1080,42 @@ def then_assignment_created_as_paused(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
+@given("a creative with a format_id that does not exist in any agent registry")
+def given_creative_with_unknown_format(ctx: dict) -> None:
+    """Set up a creative whose format is not registered with any agent.
+
+    Configures the registry mock's ``get_format`` coroutine to return None
+    (agent is reachable but format does not exist), so
+    ``_validate_creative_input`` raises a ValueError whose message points
+    the buyer at ``list_creative_formats`` (spec POST-F2/F3 → error_code
+    CREATIVE_FORMAT_UNKNOWN).
+    """
+    from unittest.mock import AsyncMock
+
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+
+    format_id = "nonexistent_format_999"
+    creative_id = "creative-unknown-fmt-001"
+    creative_payload = {
+        "creative_id": creative_id,
+        "name": "Unknown Format Creative",
+        "format_id": {"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
+        "assets": {
+            "image": {
+                "url": "https://example.com/banner.png",
+                "width": 300,
+                "height": 250,
+            },
+        },
+    }
+    ctx.setdefault("creatives", []).append(creative_payload)
+    ctx["creative_format_id"] = format_id
+
+    registry = env.mock["registry"].return_value
+    registry.get_format = AsyncMock(return_value=None)
+
+
 @given("a creative with a format_id whose agent_url is unreachable")
 def given_creative_with_unreachable_agent(ctx: dict) -> None:
     """Set up a creative whose format agent returns a connection error.
