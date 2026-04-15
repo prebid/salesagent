@@ -1,0 +1,149 @@
+{% extends "base.html" %} {% block title %}{% if provider %}Edit{% else %}Add{%
+endif %} TMP Provider - {{ tenant_name }} - Sales Agent Admin{% endblock %} {%
+block content %}
+<div class="card">
+  <div
+    style="
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1.5rem;
+    "
+  >
+    <h2>
+      {% if provider %}Edit{% else %}Add{% endif %} TMP Provider - {{
+      tenant_name }}
+    </h2>
+    <a
+      href="{{ url_for('tmp_providers.list_tmp_providers', tenant_id=tenant_id) }}"
+      class="btn btn-secondary"
+      >← Back to TMP Providers</a
+    >
+  </div>
+
+  <form method="POST">
+    <div class="form-group">
+      <label for="name">Provider Name <span style="color: red">*</span></label>
+      <input
+        type="text"
+        id="name"
+        name="name"
+        class="form-control"
+        value="{{ provider.name if provider else '' }}"
+        placeholder="e.g. si-agent-demo"
+        required
+      />
+      <small class="form-text text-muted"
+        >Human-readable label for this TMP provider.</small
+      >
+    </div>
+
+    <div class="form-group">
+      <label for="endpoint"
+        >Endpoint URL <span style="color: red">*</span></label
+      >
+      <input
+        type="url"
+        id="endpoint"
+        name="endpoint"
+        class="form-control"
+        value="{{ provider.endpoint if provider else '' }}"
+        placeholder="e.g. http://buyer-agent:3003"
+        required
+      />
+      <small class="form-text text-muted">
+        The base HTTP URL the TMP Router calls. The router appends
+        <code>/context-match</code> and <code>/identity-match</code> to this
+        URL.
+      </small>
+    </div>
+
+    <div class="form-group">
+      <label>Capabilities</label>
+      <div style="display: flex; gap: 2rem; margin-top: 0.5rem">
+        <label
+          style="
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            cursor: pointer;
+          "
+        >
+          <input
+            type="checkbox"
+            name="context_match"
+            {%
+            if
+            not
+            provider
+            or
+            provider.context_match
+            %}checked{%
+            endif
+            %}
+          />
+          <span
+            ><strong>Context Match</strong> — provider handles
+            <code>POST /context-match</code></span
+          >
+        </label>
+        <label
+          style="
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            cursor: pointer;
+          "
+        >
+          <input
+            type="checkbox"
+            name="identity_match"
+            {%
+            if
+            not
+            provider
+            or
+            provider.identity_match
+            %}checked{%
+            endif
+            %}
+          />
+          <span
+            ><strong>Identity Match</strong> — provider handles
+            <code>POST /identity-match</code></span
+          >
+        </label>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label for="timeout_ms">Timeout (ms)</label>
+      <input
+        type="number"
+        id="timeout_ms"
+        name="timeout_ms"
+        class="form-control"
+        value="{{ provider.timeout_ms if provider else 200 }}"
+        min="10"
+        max="5000"
+        style="max-width: 200px"
+      />
+      <small class="form-text text-muted">
+        Per-provider latency budget. TMP spec targets p95 &lt; 50ms in
+        production; 200ms is appropriate for local/staging environments.
+      </small>
+    </div>
+
+    <div style="display: flex; gap: 1rem; margin-top: 2rem">
+      <button type="submit" class="btn btn-primary">
+        {% if provider %}Save Changes{% else %}Add TMP Provider{% endif %}
+      </button>
+      <a
+        href="{{ url_for('tmp_providers.list_tmp_providers', tenant_id=tenant_id) }}"
+        class="btn btn-secondary"
+        >Cancel</a
+      >
+    </div>
+  </form>
+</div>
+{% endblock %}

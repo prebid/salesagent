@@ -2611,6 +2611,31 @@ Exclude any products that don't match the brand's tone.</pre>
                     </p>
                 </div>
             </div>
+
+            <div class="form-section">
+                <h3>Trusted Match Providers</h3>
+                <p class="form-section-description">
+                    Register buyer-side TMP providers that the TMP Router fans out to for
+                    context and identity matching during ad selection.
+                </p>
+
+                <div style="margin-bottom: 1rem;">
+                    <a href="{{ url_for('tmp_providers.list_tmp_providers', tenant_id=tenant.tenant_id) }}"
+                       class="btn btn-primary">
+                        Manage TMP Providers
+                    </a>
+                </div>
+
+                <div style="padding: 1rem; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px;">
+                    <p style="margin: 0; color: #6b7280; font-size: 0.875rem;">
+                        💡 <strong>What are Trusted Match Providers?</strong><br>
+                        TMP providers are buyer-side agents that implement the Trusted Match Protocol.
+                        The TMP Router fans out context and identity match requests to all active providers
+                        in parallel. Each provider evaluates requests against its synced package set and
+                        returns scored offers — without the router ever combining context and identity signals.
+                    </p>
+                </div>
+            </div>
         </div>
 
         <!-- API Settings -->
