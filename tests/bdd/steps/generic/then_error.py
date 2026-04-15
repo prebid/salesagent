@@ -441,50 +441,97 @@ def then_error_has_fix_suggestion(ctx: dict) -> None:
 
 @then("the suggestion should advise providing authentication credentials")
 def then_suggestion_auth(ctx: dict) -> None:
-    """Assert suggestion advises providing authentication credentials (not just mentioning 'auth')."""
+    """Assert suggestion advises providing authentication credentials.
+
+    Step claim has two parts: (a) auth-related concept and (b) actionable
+    guidance about providing/including the credential. Checks the raw
+    suggestion text — must name the credential mechanism (credential,
+    authentication, token, bearer, or the x-adcp-auth header) AND advise
+    an action (provide/include/use/supply/set/pass).
+    """
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
     d = _get_error_dict(error)
     suggestion = (d.get("suggestion") or "").lower()
     assert suggestion, "Expected non-empty suggestion"
-    # Must mention credentials/authentication AND an action word (provide/include/use/supply)
-    has_auth_concept = "credential" in suggestion or "authenticat" in suggestion or "token" in suggestion
+    auth_terms = ("credential", "authenticat", "token", "bearer", "x-adcp-auth", "api key", "api-key")
+    has_auth_concept = any(term in suggestion for term in auth_terms)
     has_action = any(word in suggestion for word in ("provide", "include", "use", "supply", "set", "pass"))
     assert has_auth_concept and has_action, (
-        f"Expected suggestion to advise providing authentication credentials, got: {d.get('suggestion')}"
+        f"Expected suggestion to advise providing authentication credentials "
+        f"(needs one of {auth_terms} + action verb), got: {d.get('suggestion')}"
     )
 
 
 @then("the suggestion should provide valid parameter values")
 def then_suggestion_valid_values(ctx: dict) -> None:
-    """Assert suggestion references valid parameter values with actionable guidance."""
+    """Assert suggestion lists valid parameter values, not just says 'be valid'.
+
+    Step claim: 'provide valid parameter values' — the suggestion must
+    (a) reference validity concept, (b) provide actionable guidance,
+    AND (c) actually enumerate candidate values (a comma-separated list,
+    a bracketed list, or 'one of X, Y, Z' phrasing). A suggestion that
+    says 'use a valid value' without listing the valid values is not
+    actionable.
+    """
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
     d = _get_error_dict(error)
     suggestion = d.get("suggestion", "")
     assert suggestion, "Expected non-empty suggestion"
     suggestion_lower = suggestion.lower()
-    # Must reference validity AND provide actionable guidance (use/try/provide/check)
     has_value_ref = any(kw in suggestion_lower for kw in ("valid", "allowed", "values", "accepted", "supported"))
     has_action = any(word in suggestion_lower for word in ("use", "try", "provide", "check", "specify"))
-    assert has_value_ref and has_action, (
-        f"Expected suggestion to provide valid parameter values with actionable guidance, got: {suggestion}"
+    # Must enumerate values — comma-separated list, quoted tokens, or "one of" phrasing.
+    enumerates_values = (
+        "," in suggestion
+        or "one of" in suggestion_lower
+        or '"' in suggestion
+        or "'" in suggestion
+        or "[" in suggestion
+    )
+    assert has_value_ref and has_action and enumerates_values, (
+        f"Expected suggestion to enumerate valid parameter values with actionable guidance "
+        f"(needs validity ref + action verb + enumeration via comma/quotes/'one of'), got: {suggestion}"
     )
 
 
 @then("the suggestion should advise using valid DisclosurePosition enum values")
 def then_suggestion_disclosure_enum(ctx: dict) -> None:
-    """Assert suggestion mentions valid DisclosurePosition values specifically."""
+    """Assert suggestion references DisclosurePosition AND enumerates real enum values.
+
+    Step claim names 'DisclosurePosition enum values' specifically. The
+    suggestion must (a) reference disclosure/position context and (b) name
+    at least one actual DisclosurePosition enum member so the caller knows
+    what to substitute.
+    """
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
     d = _get_error_dict(error)
     suggestion = (d.get("suggestion") or "").lower()
     assert suggestion, "Expected non-empty suggestion"
-    # Must reference disclosure positions specifically (not just generic "valid")
     has_disclosure_ref = "disclosureposition" in suggestion or "disclosure" in suggestion or "position" in suggestion
-    has_enum_or_values = "enum" in suggestion or "valid" in suggestion or "values" in suggestion
-    assert has_disclosure_ref and has_enum_or_values, (
-        f"Expected DisclosurePosition enum values suggestion, got: {d.get('suggestion')}"
+    # Real DisclosurePosition enum values from the AdCP spec. At least one
+    # must be named so the caller has a valid substitute to pick from.
+    enum_values = (
+        "pre_roll",
+        "pre-roll",
+        "post_roll",
+        "post-roll",
+        "mid_roll",
+        "mid-roll",
+        "overlay",
+        "adjacent",
+        "integrated",
+        "companion",
+        "during",
+        "before",
+        "after",
+    )
+    names_enum_value = any(val in suggestion for val in enum_values)
+    assert has_disclosure_ref and names_enum_value, (
+        f"Expected DisclosurePosition suggestion to name at least one valid enum value "
+        f"(one of {enum_values}), got: {d.get('suggestion')}"
     )
 
 
@@ -511,11 +558,15 @@ def then_suggestion_positions_or_omit(ctx: dict) -> None:
 
 @then("the suggestion should advise removing duplicate positions")
 def then_suggestion_remove_dupes(ctx: dict) -> None:
-    """Assert suggestion advises removing duplicate positions.
+    """Assert suggestion mentions deduplication AND identifies positions as the target.
 
-    Step text: 'removing duplicate positions'. The suggestion must reference
-    duplicates (duplicate/unique/deduplicate) AND a corrective action
-    (remove/deduplicate/ensure unique).
+    Step text: 'removing duplicate positions'. The suggestion must:
+    (a) name the duplicate/dedup concept,
+    (b) reference positions (the entity being deduplicated),
+    (c) advise a corrective action (remove/ensure unique/eliminate).
+    A suggestion saying 'remove duplicates' without naming positions, or
+    saying 'use unique values' without a removal verb, is not actionable
+    enough to match the step claim.
     """
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
@@ -523,27 +574,37 @@ def then_suggestion_remove_dupes(ctx: dict) -> None:
     suggestion = (d.get("suggestion") or "").lower()
     assert suggestion, "Expected non-empty suggestion"
     has_duplicate_ref = any(kw in suggestion for kw in ("duplicate", "unique", "deduplicate", "distinct"))
+    has_position_ref = "position" in suggestion or "value" in suggestion or "item" in suggestion
     has_action = any(kw in suggestion for kw in ("remove", "deduplicate", "ensure", "use unique", "eliminate"))
-    assert has_duplicate_ref and has_action, (
-        f"Expected suggestion about removing duplicates "
-        f"(needs duplicate reference + corrective action), got: {d.get('suggestion')}"
+    assert has_duplicate_ref and has_position_ref and has_action, (
+        f"Expected suggestion to advise removing duplicate positions "
+        f"(needs duplicate ref + position/value/item ref + corrective action), got: {d.get('suggestion')}"
     )
 
 
 @then("the suggestion should advise providing at least one FormatId or omitting the filter")
 def then_suggestion_format_id_or_omit(ctx: dict) -> None:
-    """Assert suggestion advises providing FormatId or omitting the filter."""
+    """Assert suggestion offers BOTH alternatives: provide FormatId OR omit filter.
+
+    Step claim is a disjunction with two concrete branches:
+      (a) provide at least one FormatId, OR
+      (b) omit the filter.
+    The suggestion must name FormatId/format_id/format AND at least one of
+    these corrective actions. Must also convey the 'or omit' alternative
+    via an omit/remove/skip verb OR 'optional' phrasing — 'provide a
+    FormatId' alone silently drops the 'or omit' branch.
+    """
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
     d = _get_error_dict(error)
     suggestion = (d.get("suggestion") or "").lower()
     assert suggestion, "Expected non-empty suggestion"
-    # Must reference FormatId/format AND either omit or provide guidance.
-    # Production may use "FormatId" (camelCase), "format_id" (snake), or just "format".
     has_format_ref = "formatid" in suggestion or "format_id" in suggestion or "format" in suggestion
-    has_action = "omit" in suggestion or "provide" in suggestion or "include" in suggestion
-    assert has_format_ref and has_action, (
-        f"Expected suggestion about FormatId with omit/provide guidance, got: {d.get('suggestion')}"
+    has_provide_action = any(kw in suggestion for kw in ("provide", "include", "add", "at least one", "at least 1"))
+    has_omit_alternative = any(kw in suggestion for kw in ("omit", "remove", "skip", "optional", "without"))
+    assert has_format_ref and (has_provide_action or has_omit_alternative), (
+        f"Expected suggestion about FormatId with provide/omit guidance "
+        f"(format ref + (provide action OR omit alternative)), got: {d.get('suggestion')}"
     )
 
 
