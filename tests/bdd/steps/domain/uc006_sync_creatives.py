@@ -1080,6 +1080,43 @@ def then_assignment_created_as_paused(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
+@given("a creative with a format_id whose agent_url is unreachable")
+def given_creative_with_unreachable_agent(ctx: dict) -> None:
+    """Set up a creative whose format agent returns a connection error.
+
+    Configures the registry mock's ``get_format`` coroutine to raise a
+    ConnectionError so ``_validate_creative_input`` wraps it into a
+    'Cannot validate format ... is unreachable' ValueError, producing
+    a failed SyncCreativeResult (POST-F2/F3).
+    """
+    from unittest.mock import AsyncMock
+
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+
+    format_id = "display_300x250"
+    creative_id = "creative-unreachable-001"
+    creative_payload = {
+        "creative_id": creative_id,
+        "name": "Unreachable Agent Creative",
+        "format_id": {"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
+        "assets": {
+            "image": {
+                "url": "https://example.com/banner.png",
+                "width": 300,
+                "height": 250,
+            },
+        },
+    }
+    ctx.setdefault("creatives", []).append(creative_payload)
+    ctx["creative_format_id"] = format_id
+
+    registry = env.mock["registry"].return_value
+    registry.get_format = AsyncMock(
+        side_effect=ConnectionError(f"Connection refused to {env.DEFAULT_AGENT_URL}"),
+    )
+
+
 @given("the request has an empty principal_id")
 def given_request_empty_principal_id(ctx: dict) -> None:
     """Buyer presents an identity whose principal_id is the empty string.
