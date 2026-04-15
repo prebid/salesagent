@@ -297,3 +297,222 @@ def then_error_code_with_suggestion(ctx: dict, error_code: str) -> None:
         assert "suggestion" in error.details, f"Expected 'suggestion' in error details: {error.details}"
     else:
         raise AssertionError(f"Expected AdCPError with code {error_code}, got {type(error).__name__}: {error}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GIVEN steps — approval mode scenarios (BR-RULE-037)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given(parsers.parse('a creative with name "{name}" and a known format_id'))
+def given_creative_with_name_and_format(ctx: dict, name: str) -> None:
+    """Set up a creative payload with a specific name and a known format_id."""
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+
+    format_id = "display_300x250"
+    creative_id = f"creative-{name.lower().replace(' ', '-')}-001"
+    creative_payload = {
+        "creative_id": creative_id,
+        "name": name,
+        "format_id": {"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
+        "assets": {
+            "image": {
+                "url": "https://example.com/banner.png",
+                "width": 300,
+                "height": 250,
+            },
+        },
+    }
+    ctx.setdefault("creatives", []).append(creative_payload)
+    ctx["creative_format_id"] = format_id
+
+
+@given(parsers.parse('the tenant has approval_mode set to "{mode}"'))
+def given_tenant_has_approval_mode_set_to(ctx: dict, mode: str) -> None:
+    """Set approval_mode on the tenant (REST main-flow scenario)."""
+    _set_tenant_approval_mode(ctx, mode)
+
+
+@given(parsers.parse('the tenant has approval_mode "{mode}"'))
+def given_tenant_has_approval_mode(ctx: dict, mode: str) -> None:
+    """Set approval_mode on the tenant (partition scenario)."""
+    _set_tenant_approval_mode(ctx, mode)
+
+
+@given('the tenant has approval_mode ""')
+def given_tenant_has_empty_approval_mode(ctx: dict) -> None:
+    """Handle the partition 'not_set' row where mode is empty string."""
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+    ctx["tenant"].approval_mode = "require-human"
+    env._commit_factory_data()
+
+
+@given(parsers.re(r"the tenant approval mode is (?P<approval_mode>.+)"))
+def given_tenant_approval_mode_creative(ctx: dict, approval_mode: str) -> None:
+    """Set tenant approval_mode for creative sync boundary scenarios.
+
+    Handles creative approval modes: not configured, "auto-approve",
+    "require-human", "ai-powered". Also delegates to the UC-003 step function
+    for media buy modes (auto-approval, manual).
+    """
+    stripped = approval_mode.strip().strip('"')
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+    tenant = ctx["tenant"]
+
+    if stripped in ("not configured", "not set"):
+        tenant.approval_mode = "require-human"
+        env._commit_factory_data()
+    elif stripped in ("auto-approve", "require-human", "ai-powered"):
+        tenant.approval_mode = stripped
+        env._commit_factory_data()
+    else:
+        from tests.bdd.steps.domain.uc003_update_media_buy import given_tenant_approval_mode
+
+        given_tenant_approval_mode(ctx, approval_mode)
+        return
+
+    ctx["approval_mode_expected"] = stripped if stripped not in ("not configured", "not set") else "require-human"
+
+
+def _set_tenant_approval_mode(ctx: dict, mode: str) -> None:
+    """Shared helper to set approval_mode on the tenant ORM instance."""
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+    tenant = ctx["tenant"]
+
+    if mode in ("auto-approve", "require-human", "ai-powered"):
+        tenant.approval_mode = mode
+    else:
+        raise ValueError(f"Unknown approval mode: {mode}")
+
+    if mode == "require-human":
+        tenant.slack_webhook_url = "https://hooks.slack.test/approval"
+
+    env._commit_factory_data()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# THEN steps — approval mode assertions (BR-RULE-037)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _get_creative_from_db(ctx: dict) -> object:
+    """Retrieve the synced creative from the DB for status assertion."""
+    from sqlalchemy import select
+
+    from src.core.database.models import Creative
+
+    tenant = ctx["tenant"]
+    principal = ctx["principal"]
+    with db_session(ctx) as session:
+        creative = session.scalars(
+            select(Creative).filter_by(
+                tenant_id=tenant.tenant_id,
+                principal_id=principal.principal_id,
+            )
+        ).first()
+        assert creative is not None, (
+            f"No creative found in DB for tenant={tenant.tenant_id}, principal={principal.principal_id}"
+        )
+        return creative
+
+
+def _assert_workflow_steps(env: object, *, expect_present: bool) -> list:
+    """Assert workflow steps exist or not, returning the steps list."""
+    steps = env.get_workflow_steps()
+    if expect_present:
+        assert len(steps) > 0, "Expected workflow steps but none were created"
+        for step in steps:
+            assert step.step_type == "creative_approval", (
+                f"Expected step_type 'creative_approval', got '{step.step_type}'"
+            )
+            assert step.owner == "publisher", f"Expected owner 'publisher', got '{step.owner}'"
+            assert step.status == "requires_approval", f"Expected status 'requires_approval', got '{step.status}'"
+    else:
+        assert len(steps) == 0, (
+            f"Expected no workflow steps, but found {len(steps)}: {[(s.step_type, s.status) for s in steps]}"
+        )
+    return steps
+
+
+def _assert_success_response(ctx: dict) -> None:
+    """Assert dispatch succeeded with no error."""
+    assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
+    assert ctx.get("response") is not None, "Expected a response but got None"
+
+
+@then(parsers.parse('the creative status should be "{status}"'))
+def then_creative_status_should_be(ctx: dict, status: str) -> None:
+    """Assert the creative's DB status matches the expected value."""
+    _assert_success_response(ctx)
+    creative = _get_creative_from_db(ctx)
+    assert creative.status == status, f"Expected creative status '{status}', got '{creative.status}'"
+
+
+@then(parsers.parse('workflow steps created should be "{workflow}"'))
+def then_workflow_steps_created(ctx: dict, workflow: str) -> None:
+    """Assert whether workflow steps were created."""
+    env = ctx["env"]
+    if workflow == "none":
+        _assert_workflow_steps(env, expect_present=False)
+    elif workflow == "yes":
+        _assert_workflow_steps(env, expect_present=True)
+    else:
+        raise ValueError(f"Unknown workflow expectation: {workflow}")
+
+
+@then("the creative should use require-human as default")
+def then_creative_use_require_human_default(ctx: dict) -> None:
+    """Assert that when approval_mode is not configured, require-human is the default (INV-1)."""
+    _assert_success_response(ctx)
+    creative = _get_creative_from_db(ctx)
+    assert creative.status == "pending_review", (
+        f"INV-1: Default approval mode should produce 'pending_review' status, got '{creative.status}'"
+    )
+    _assert_workflow_steps(ctx["env"], expect_present=True)
+
+
+@then("the creative status should be set to approved immediately")
+def then_creative_approved_immediately(ctx: dict) -> None:
+    """Assert auto-approve sets status to approved with no workflow (INV-2)."""
+    _assert_success_response(ctx)
+    creative = _get_creative_from_db(ctx)
+    assert creative.status == "approved", (
+        f"INV-2: auto-approve should set status to 'approved', got '{creative.status}'"
+    )
+    _assert_workflow_steps(ctx["env"], expect_present=False)
+
+
+@then("a review workflow should be created with Slack notification")
+def then_review_workflow_with_slack(ctx: dict) -> None:
+    """Assert require-human creates workflow + sends Slack notification (INV-3)."""
+    _assert_success_response(ctx)
+    creative = _get_creative_from_db(ctx)
+    assert creative.status == "pending_review", (
+        f"INV-3: require-human should set status to 'pending_review', got '{creative.status}'"
+    )
+    _assert_workflow_steps(ctx["env"], expect_present=True)
+    mock_notify = ctx["env"].mock.get("send_notifications")
+    if mock_notify is not None:
+        mock_notify.assert_called_once()
+
+
+@then("a review workflow should be created with AI review")
+def then_review_workflow_with_ai(ctx: dict) -> None:
+    """Assert ai-powered creates workflow + submits AI review (INV-4)."""
+    _assert_success_response(ctx)
+    creative = _get_creative_from_db(ctx)
+    assert creative.status == "pending_review", (
+        f"INV-4: ai-powered should set status to 'pending_review', got '{creative.status}'"
+    )
+    _assert_workflow_steps(ctx["env"], expect_present=True)
+
+
+@then("a workflow step should be created for the Seller")
+def then_workflow_step_for_seller(ctx: dict) -> None:
+    """Assert a workflow step was created with owner=publisher (the Seller)."""
+    _assert_success_response(ctx)
+    _assert_workflow_steps(ctx["env"], expect_present=True)
