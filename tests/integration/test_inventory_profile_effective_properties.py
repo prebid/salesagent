@@ -19,6 +19,7 @@ import pytest
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import InventoryProfile, PricingOption, Product, Tenant
+from tests.helpers import assert_effective_properties_normalized
 from tests.helpers.adcp_factories import create_test_db_product
 
 
@@ -238,12 +239,11 @@ class TestEffectiveProperties:
             assert product.inventory_profile_id == test_profile.id
             assert product.inventory_profile is not None
 
-            # effective_properties should return profile's publisher_properties
+            # effective_properties should return profile data + selection_type (non-destructive)
             effective = product.effective_properties
-            assert effective == test_profile.publisher_properties
-            assert len(effective) == 1
-            assert effective[0]["publisher_domain"] == "example.com"
-            assert effective[0]["property_ids"] == ["example_homepage"]
+            assert_effective_properties_normalized(
+                effective, test_profile.publisher_properties, expected_selection_type="by_id"
+            )
 
             # Product's direct properties should be None (uses property_tags for XOR constraint)
             assert product.properties is None
@@ -471,9 +471,11 @@ class TestEffectiveImplementationConfig:
             assert effective_formats == test_profile.format_ids
             assert len(effective_formats) == 2
 
-            # effective_properties uses profile, not product's direct properties
+            # effective_properties uses profile (non-destructive normalization)
             effective_properties = product.effective_properties
-            assert effective_properties == test_profile.publisher_properties
+            assert_effective_properties_normalized(
+                effective_properties, test_profile.publisher_properties, expected_selection_type="by_id"
+            )
 
             # effective_property_tags returns None for profile-based products
             effective_property_tags = product.effective_property_tags

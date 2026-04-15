@@ -44,6 +44,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc006_sync_creatives",
     "tests.bdd.steps.domain.uc011_accounts",
     "tests.bdd.steps.domain.admin_accounts",
+    "tests.bdd.steps.domain.uc_get_products_inventory",
     "tests.bdd.steps.domain.compat_normalization",
 ]
 
@@ -604,6 +605,8 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
         return "UC-011"
     if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
         return "ADMIN"
+    if "inventory_profile" in marker_names:
+        return "UC-GET-PRODUCTS"
     if any(t.startswith("T-COMPAT") for t in marker_names):
         return "COMPAT"
     return None
@@ -756,5 +759,12 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 yield
         else:
             pytest.xfail(f"UC-004 harness not yet wired for type: {harness_type}")
+    elif uc == "UC-GET-PRODUCTS":
+        request.getfixturevalue("integration_db")
+        from tests.harness.product import ProductEnv
+
+        with ProductEnv() as env:
+            ctx["env"] = env
+            yield
     else:
         pytest.xfail(f"No harness wired for {uc}")

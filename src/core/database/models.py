@@ -368,60 +368,14 @@ class Product(Base, JSONValidatorMixin):
         If no properties/property_ids/property_tags are set, defaults to "all" variant
         (all properties from this publisher).
         """
+        from src.core.helpers.publisher_property_helpers import ensure_selection_type
+
         if self.inventory_profile_id and self.inventory_profile:
-            return self.inventory_profile.publisher_properties
+            return ensure_selection_type(self.inventory_profile.publisher_properties)
 
         # Convert product's authorization to AdCP publisher_properties format
         if self.properties:
-            # Legacy: Full Property objects - convert to discriminated union format
-            # AdCP 2.13.0+ requires selection_type discriminator
-            import re
-
-            property_id_pattern = re.compile(r"^[a-z0-9_]+$")
-            property_tag_pattern = re.compile(r"^[a-z0-9_]+$")
-
-            converted = []
-            for prop in self.properties:
-                if isinstance(prop, dict):
-                    # Check if already has selection_type (already converted)
-                    if "selection_type" in prop:
-                        converted.append(prop)
-                    else:
-                        # Convert legacy format to new discriminated union format
-                        publisher_domain = prop.get("publisher_domain", "unknown")
-                        prop_ids = prop.get("property_ids", [])
-                        prop_tags = prop.get("property_tags", [])
-
-                        # Filter to only valid property IDs (must match ^[a-z0-9_]+$)
-                        valid_ids = [pid for pid in prop_ids if property_id_pattern.match(str(pid))]
-                        # Filter to only valid property tags (must match ^[a-z0-9_]+$)
-                        valid_tags = [tag for tag in prop_tags if property_tag_pattern.match(str(tag))]
-
-                        if valid_ids:
-                            # Convert to by_id variant
-                            converted.append(
-                                {
-                                    "publisher_domain": publisher_domain,
-                                    "property_ids": valid_ids,
-                                    "selection_type": "by_id",
-                                }
-                            )
-                        elif valid_tags:
-                            # Convert to by_tag variant
-                            converted.append(
-                                {
-                                    "publisher_domain": publisher_domain,
-                                    "property_tags": valid_tags,
-                                    "selection_type": "by_tag",
-                                }
-                            )
-                        else:
-                            # Convert to all variant (default - when legacy IDs/tags are invalid)
-                            converted.append({"publisher_domain": publisher_domain, "selection_type": "all"})
-                else:
-                    # Unknown format, skip
-                    pass
-            return converted if converted else None
+            return ensure_selection_type(self.properties)
         elif self.property_ids:
             # AdCP 2.0.0 by_id variant
             # Get publisher_domain from tenant (use subdomain or virtual_host)

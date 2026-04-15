@@ -24,6 +24,7 @@ from tests.factories.core import (
 from tests.factories.creative import CreativeAssignmentFactory, CreativeFactory
 from tests.factories.creative_asset import CreativeAssetFactory
 from tests.factories.format import FormatFactory, FormatIdFactory
+from tests.factories.inventory_profile import InventoryProfileFactory
 from tests.factories.media_buy import MediaBuyFactory, MediaPackageFactory
 from tests.factories.metrics import FormatPerformanceMetricsFactory
 from tests.factories.principal import PrincipalFactory
@@ -40,6 +41,7 @@ ALL_FACTORIES = [
     PropertyTagFactory,
     PublisherPartnerFactory,
     PrincipalFactory,
+    InventoryProfileFactory,
     ProductFactory,
     PricingOptionFactory,
     MediaBuyFactory,
@@ -60,6 +62,7 @@ __all__ = [
     "CreativeFactory",
     "FormatFactory",
     "FormatIdFactory",
+    "InventoryProfileFactory",
     "CurrencyLimitFactory",
     "GAMInventoryFactory",
     "FormatPerformanceMetricsFactory",
