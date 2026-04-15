@@ -172,7 +172,7 @@ def _get_overlay_field(pkg: Any, field: str) -> Any:
 
 
 def _get_packages(ctx: dict) -> list:
-    """Extract packages from create_media_buy response."""
+    """Extract packages from create or update media_buy response."""
     resp = ctx.get("response")
     assert resp is not None, f"Expected a response. Error: {ctx.get('error')}"
     # CreateMediaBuyResult wraps .response which has .packages
@@ -180,6 +180,11 @@ def _get_packages(ctx: dict) -> list:
     packages = getattr(inner, "packages", None)
     if packages is None:
         packages = getattr(resp, "packages", None)
+    # UpdateMediaBuySuccess uses affected_packages instead of packages
+    if packages is None:
+        packages = getattr(inner, "affected_packages", None)
+    if packages is None:
+        packages = getattr(resp, "affected_packages", None)
     assert packages is not None, "No packages in response"
     return list(packages)
 

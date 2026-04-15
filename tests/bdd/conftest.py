@@ -1123,15 +1123,17 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
-        # --- UC-026: xfails for update scenarios (need MediaBuyUpdateEnv wiring) ---
-        # and for spec-production gaps in package validation / keyword targeting.
-        # FIXME(salesagent-av7): UC-026 update and advanced scenarios need production wiring.
+        # --- UC-026: xfails for spec-production gaps ---
+        # Transport wiring done (a3xo: MediaBuyDualEnv routes updates correctly).
+        # Remaining failures are production-level: AffectedPackage lacks full state,
+        # keyword targeting ops not implemented, error codes/suggestions missing.
+        # FIXME(salesagent-av7): UC-026 production gaps in update response and validation.
         _UC026_XFAIL_TAGS: set[str] = {
-            # Main flow scenarios with explicit format_ids — production code
-            # tries format_id["id"] on FormatId Pydantic model (not subscriptable)
+            # Main flow: production tries format_id["id"] on FormatId Pydantic model
             "T-UC-026-main-explicit-formats",
             "T-UC-026-main-full-config",
-            # Update scenarios — MediaBuyCreateEnv doesn't support update dispatch
+            # Update alt-flows: AffectedPackage lacks budget/targeting_overlay/format_ids;
+            # keyword_targets_add/remove and negative_keywords_add/remove not implemented
             "T-UC-026-alt-update",
             "T-UC-026-alt-update-buyer-ref",
             "T-UC-026-alt-pause",
@@ -1159,7 +1161,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-026-ext-h-cross-ok",
             "T-UC-026-ext-h-cross-reverse",
             "T-UC-026-ext-i",
-            # Invariant scenarios — update wiring or validation not implemented
+            # Invariant scenarios — production validation gaps
             # Graduated: T-UC-026-inv-194-1 (all 4 transports pass)
             "T-UC-026-inv-194-2",
             "T-UC-026-inv-195-1",
@@ -1181,14 +1183,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-026-inv-201-5",
             "T-UC-026-inv-089-2",
             # Graduated: T-UC-026-inv-089-3 (all 4 transports pass)
-            # Partition/boundary scenarios — graduated tags removed, remaining need wiring
-            # Graduated: T-UC-026-partition-required-fields, T-UC-026-boundary-required-fields,
-            # T-UC-026-partition-bid-price, T-UC-026-partition-buyer-ref,
-            # T-UC-026-partition-format-ids, T-UC-026-partition-pricing-option,
-            # T-UC-026-partition-immutable, T-UC-026-partition-keyword-add,
-            # T-UC-026-partition-keyword-remove, T-UC-026-partition-neg-kw-add,
-            # T-UC-026-partition-neg-kw-remove, T-UC-026-boundary-neg-kw-add,
-            # T-UC-026-boundary-neg-kw-remove, T-UC-026-partition-paused
+            # Keyword boundary/partition: keyword targeting ops not implemented in production
             "T-UC-026-boundary-keyword-add",
             "T-UC-026-boundary-keyword-remove",
             "T-UC-026-partition-kw-add-shared",
@@ -1199,7 +1194,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         if marker_names & _UC026_XFAIL_TAGS:
             item.add_marker(
                 pytest.mark.xfail(
-                    reason="UC-026 spec-production gap — update env / validation not yet wired",
+                    reason="UC-026 spec-production gap — AffectedPackage lacks full state / "
+                    "keyword ops not implemented / error codes missing",
                     strict=False,
                 )
             )
@@ -1207,8 +1203,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # --- UC-026 partition/boundary: selective xfail for graduated tags ---
         # FIXME(salesagent-7wan): These partition/boundary tags were graduated
         # (most examples pass) but specific examples still fail due to production
-        # bugs (get_total_budget missing, FormatId not subscriptable, BUDGET_TOO_LOW
-        # on budget=0, transport wrappers don't accept media_buy_id for updates).
+        # gaps (FormatId not subscriptable, BUDGET_TOO_LOW on budget=0,
+        # AffectedPackage lacks full state, keyword ops not implemented).
         _UC026_PARTITION_SELECTIVE: list[tuple[str, set[str], str]] = [
             # budget=0 rejected with BUDGET_TOO_LOW — spec says 0 is valid
             (
@@ -1240,56 +1236,54 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "max_bid pricing validation rejects valid ceiling semantics — spec-production gap",
             ),
             # FIXME(salesagent-e4ij): pricing option not-found / wrong-product returns
-            # 'validation_error' instead of AdCP-spec 'INVALID_REQUEST'. AdCPValidationError
-            # is caught and re-raised as plain ValueError in media_buy_create.py, stripping
-            # error code metadata.
+            # 'validation_error' instead of AdCP-spec 'INVALID_REQUEST'.
             (
                 "T-UC-026-partition-pricing-option",
                 {"pricing_option_not_found", "pricing_option_wrong_product"},
                 "Production returns 'validation_error' instead of AdCP-spec 'INVALID_REQUEST' — "
                 "AdCPValidationError caught and re-raised as plain ValueError, stripping error code",
             ),
-            # Update scenarios: get_total_budget missing / transport wrappers don't accept media_buy_id
-            # ALL examples under these tags fail — no selective substring needed
+            # Update partition/boundary: AffectedPackage doesn't carry full package
+            # state (budget, format_ids, targeting_overlay) and keyword ops not implemented.
             (
                 "T-UC-026-partition-immutable",
                 set(),
-                "UpdateMediaBuyRequest.get_total_budget not implemented / media_buy_id not accepted by wrappers",
+                "AffectedPackage lacks full state — update response omits budget/format_ids/product_id",
             ),
             (
                 "T-UC-026-partition-keyword-add",
                 set(),
-                "UpdateMediaBuyRequest.get_total_budget not implemented / media_buy_id not accepted by wrappers",
+                "keyword_targets_add not implemented in _update_media_buy_impl",
             ),
             (
                 "T-UC-026-partition-keyword-remove",
                 set(),
-                "UpdateMediaBuyRequest.get_total_budget not implemented / media_buy_id not accepted by wrappers",
+                "keyword_targets_remove not implemented in _update_media_buy_impl",
             ),
             (
                 "T-UC-026-partition-neg-kw-add",
                 set(),
-                "UpdateMediaBuyRequest.get_total_budget not implemented / media_buy_id not accepted by wrappers",
+                "negative_keywords_add not implemented in _update_media_buy_impl",
             ),
             (
                 "T-UC-026-partition-neg-kw-remove",
                 set(),
-                "UpdateMediaBuyRequest.get_total_budget not implemented / media_buy_id not accepted by wrappers",
+                "negative_keywords_remove not implemented in _update_media_buy_impl",
             ),
             (
                 "T-UC-026-boundary-neg-kw-add",
                 set(),
-                "UpdateMediaBuyRequest.get_total_budget not implemented / media_buy_id not accepted by wrappers",
+                "negative_keywords_add not implemented in _update_media_buy_impl",
             ),
             (
                 "T-UC-026-boundary-neg-kw-remove",
                 set(),
-                "UpdateMediaBuyRequest.get_total_budget not implemented / media_buy_id not accepted by wrappers",
+                "negative_keywords_remove not implemented in _update_media_buy_impl",
             ),
             (
                 "T-UC-026-partition-paused",
                 set(),
-                "UpdateMediaBuyRequest.get_total_budget not implemented / media_buy_id not accepted by wrappers",
+                "AffectedPackage lacks full state — paused update response omits expected fields",
             ),
             # d09y: boundary scenarios exposing real production gaps after step-parser fix.
             (
@@ -1306,22 +1300,22 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             (
                 "T-UC-026-boundary-immutable",
                 set(),
-                "UpdateMediaBuyRequest.get_total_budget not implemented / REST route requires buyer_ref on updates",
+                "AffectedPackage lacks full state — update response omits budget/format_ids/product_id",
             ),
             (
                 "T-UC-026-boundary-paused",
                 {"on update", "idempotent"},
-                "UpdateMediaBuyRequest.get_total_budget not implemented / REST route requires buyer_ref on updates",
+                "AffectedPackage lacks full state — paused update response omits expected fields",
             ),
             (
                 "T-UC-026-boundary-replacement",
                 set(),
-                "UpdateMediaBuyRequest.get_total_budget not implemented / REST route requires buyer_ref on updates",
+                "AffectedPackage lacks full state — replacement semantics not reflected in update response",
             ),
             (
                 "T-UC-026-partition-replacement",
                 set(),
-                "UpdateMediaBuyRequest.get_total_budget not implemented / REST route requires buyer_ref on updates",
+                "AffectedPackage lacks full state — replacement semantics not reflected in update response",
             ),
         ]
         for tag, substrings, reason in _UC026_PARTITION_SELECTIVE:
