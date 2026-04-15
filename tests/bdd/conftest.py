@@ -1183,13 +1183,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-026-inv-201-5",
             "T-UC-026-inv-089-2",
             # Graduated: T-UC-026-inv-089-3 (all 4 transports pass)
-            # Keyword boundary/partition: keyword targeting ops not implemented in production
-            "T-UC-026-boundary-keyword-add",
-            "T-UC-026-boundary-keyword-remove",
-            "T-UC-026-partition-kw-add-shared",
-            "T-UC-026-partition-kw-remove-shared",
-            "T-UC-026-boundary-kw-add-shared",
-            "T-UC-026-boundary-kw-remove-shared",
+            # Graduated to _UC026_PARTITION_SELECTIVE (x2l0): keyword boundary/partition
+            # tags now mostly pass — only REST update dispatch + specific cross-transport
+            # validation gaps remain. Selective xfail handles the narrower failure set.
         }
         if marker_names & _UC026_XFAIL_TAGS:
             item.add_marker(
@@ -1201,10 +1197,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             )
 
         # --- UC-026 partition/boundary: selective xfail for graduated tags ---
-        # FIXME(salesagent-7wan): These partition/boundary tags were graduated
-        # (most examples pass) but specific examples still fail due to production
-        # gaps (FormatId not subscriptable, BUDGET_TOO_LOW on budget=0,
-        # AffectedPackage lacks full state, keyword ops not implemented).
+        # FIXME(salesagent-7wan): Remaining failures are production-level gaps.
+        # x2l0: narrowed from set() (all-fail) after a3xo MediaBuyDualEnv wiring
+        # graduated most partition/boundary examples. Two failure patterns remain:
+        #   1. REST update dispatch: REST success-path update tests fail (error-path
+        #      tests and create-path tests pass because validation catches them first)
+        #   2. Cross-transport production gaps: conflict_with_overlay validation,
+        #      creative_assignments/optimization_goals replacement, empty keyword
+        #      validation not implemented
         _UC026_PARTITION_SELECTIVE: list[tuple[str, set[str], str]] = [
             # budget=0 rejected with BUDGET_TOO_LOW — spec says 0 is valid
             (
@@ -1217,12 +1217,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {"budget = 0"},
                 "production rejects budget=0 with BUDGET_TOO_LOW — spec allows zero budget",
             ),
-            # FormatId not subscriptable — production tries format_id["id"] on Pydantic model
-            (
-                "T-UC-026-partition-format-ids",
-                set(),  # all format_id examples fail
-                "FormatId not subscriptable — production uses dict access on Pydantic model",
-            ),
+            # Graduated: T-UC-026-partition-format-ids (all 4 transports pass after a3xo)
             # buyer_ref dedup requires full create_media_buy fields not present in update env
             (
                 "T-UC-026-partition-buyer-ref",
@@ -1243,47 +1238,212 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "Production returns 'validation_error' instead of AdCP-spec 'INVALID_REQUEST' — "
                 "AdCPValidationError caught and re-raised as plain ValueError, stripping error code",
             ),
-            # Update partition/boundary: AffectedPackage doesn't carry full package
-            # state (budget, format_ids, targeting_overlay) and keyword ops not implemented.
+            # Immutable: only REST success-path update tests fail (error tests pass)
             (
                 "T-UC-026-partition-immutable",
-                set(),
-                "AffectedPackage lacks full state — update response omits budget/format_ids/product_id",
+                {"rest-update_mutable_only", "rest-no_immutable_fields_present"},
+                "REST update dispatch not wired for partition immutable success tests",
             ),
+            (
+                "T-UC-026-boundary-immutable",
+                {"rest-update with only mutable"},
+                "REST update dispatch not wired for boundary immutable success tests",
+            ),
+            # Keyword add partition: only REST success-path tests fail
             (
                 "T-UC-026-partition-keyword-add",
-                set(),
-                "keyword_targets_add not implemented in _update_media_buy_impl",
+                {
+                    "rest-new_keyword",
+                    "rest-existing_keyword_update_bid",
+                    "rest-mixed_new_and_update",
+                    "rest-same_keyword_different_match",
+                },
+                "REST update dispatch not wired for partition keyword-add success tests",
             ),
+            # Keyword remove partition: only REST success-path tests fail
             (
                 "T-UC-026-partition-keyword-remove",
-                set(),
-                "keyword_targets_remove not implemented in _update_media_buy_impl",
+                {
+                    "rest-remove_existing_pair",
+                    "rest-remove_nonexistent_pair",
+                    "rest-remove_all_keywords",
+                    "rest-mixed_existing_and_nonexistent",
+                },
+                "REST update dispatch not wired for partition keyword-remove success tests",
+            ),
+            # Keyword boundary add: empty keyword string on impl/a2a/mcp +
+            # REST success-path tests fail
+            (
+                "T-UC-026-boundary-keyword-add",
+                {
+                    "impl-empty keyword string",
+                    "a2a-empty keyword string",
+                    "mcp-empty keyword string",
+                    "rest-single new keyword target",
+                    "rest-existing (keyword, match_type) pair",
+                    "rest-same keyword with broad and exact",
+                    "rest-bid_price = 0",
+                },
+                "empty keyword validation not implemented / REST update not wired",
+            ),
+            # Keyword boundary remove: empty keyword string on impl/a2a/mcp +
+            # REST success-path tests fail
+            (
+                "T-UC-026-boundary-keyword-remove",
+                {
+                    "impl-empty keyword string",
+                    "a2a-empty keyword string",
+                    "mcp-empty keyword string",
+                    "rest-remove single existing",
+                    "rest-remove non-existent pair",
+                    "rest-remove all keyword targets",
+                    "rest-mix of existing and non-existent",
+                },
+                "empty keyword validation not implemented / REST update not wired",
+            ),
+            # Keyword shared partition: conflict_with_overlay on impl/a2a/mcp +
+            # REST success-path tests fail
+            (
+                "T-UC-026-partition-kw-add-shared",
+                {
+                    "impl-conflict_with_overlay",
+                    "a2a-conflict_with_overlay",
+                    "mcp-conflict_with_overlay",
+                    "rest-typical_add",
+                    "rest-add_with_bid_price",
+                    "rest-add_without_bid_price",
+                    "rest-all_match_types",
+                    "rest-boundary_min_array",
+                    "rest-boundary_min_keyword",
+                    "rest-cross_dimension_valid",
+                    "rest-upsert_existing",
+                    "rest-zero_bid_price",
+                },
+                "conflict_with_overlay not implemented / REST update not wired",
             ),
             (
+                "T-UC-026-partition-kw-remove-shared",
+                {
+                    "impl-conflict_with_overlay",
+                    "a2a-conflict_with_overlay",
+                    "mcp-conflict_with_overlay",
+                    "rest-typical_remove",
+                    "rest-all_match_types",
+                    "rest-boundary_min_array",
+                    "rest-boundary_min_keyword",
+                    "rest-cross_dimension_valid",
+                    "rest-remove_nonexistent",
+                },
+                "conflict_with_overlay not implemented / REST update not wired",
+            ),
+            # Keyword shared boundary: overlay conflict on impl/a2a/mcp +
+            # REST success-path tests fail
+            (
+                "T-UC-026-boundary-kw-add-shared",
+                {
+                    "impl-keyword_targets_add WITH targeting_overlay.keyword_targets-error",
+                    "a2a-keyword_targets_add WITH targeting_overlay.keyword_targets-error",
+                    "mcp-keyword_targets_add WITH targeting_overlay.keyword_targets-error",
+                    "rest-array length 1",
+                    "rest-keyword length 1",
+                    "rest-keyword_targets_add WITH targeting_overlay.negative_keywords",
+                    "rest-keyword_targets_add WITHOUT",
+                    "rest-match_type = 'broad'",
+                    "rest-match_type = 'exact'",
+                    "rest-match_type = 'phrase'",
+                },
+                "overlay conflict validation not implemented / REST update not wired",
+            ),
+            (
+                "T-UC-026-boundary-kw-remove-shared",
+                {
+                    "impl-keyword_targets_remove WITH targeting_overlay.keyword_targets-error",
+                    "a2a-keyword_targets_remove WITH targeting_overlay.keyword_targets-error",
+                    "mcp-keyword_targets_remove WITH targeting_overlay.keyword_targets-error",
+                    "rest-array length 1",
+                    "rest-keyword length 1",
+                    "rest-keyword_targets_remove WITHOUT",
+                    "rest-match_type = 'broad'",
+                    "rest-match_type = 'exact'",
+                    "rest-match_type = 'phrase'",
+                    "rest-remove pair that does NOT exist",
+                    "rest-remove pair that exists",
+                },
+                "overlay conflict validation not implemented / REST update not wired",
+            ),
+            # Negative keyword partition: conflict_with_overlay on impl/a2a/mcp +
+            # REST success-path tests fail
+            (
                 "T-UC-026-partition-neg-kw-add",
-                set(),
-                "negative_keywords_add not implemented in _update_media_buy_impl",
+                {
+                    "impl-conflict_with_overlay",
+                    "a2a-conflict_with_overlay",
+                    "mcp-conflict_with_overlay",
+                    "rest-typical_add",
+                    "rest-add_duplicate",
+                    "rest-all_match_types",
+                    "rest-boundary_min_array",
+                    "rest-boundary_min_keyword",
+                    "rest-cross_dimension_valid",
+                },
+                "conflict_with_overlay not implemented / REST update not wired",
             ),
             (
                 "T-UC-026-partition-neg-kw-remove",
-                set(),
-                "negative_keywords_remove not implemented in _update_media_buy_impl",
+                {
+                    "impl-conflict_with_overlay",
+                    "a2a-conflict_with_overlay",
+                    "mcp-conflict_with_overlay",
+                    "rest-typical_remove",
+                    "rest-all_match_types",
+                    "rest-boundary_min_array",
+                    "rest-boundary_min_keyword",
+                    "rest-cross_dimension_valid",
+                    "rest-remove_nonexistent",
+                },
+                "conflict_with_overlay not implemented / REST update not wired",
             ),
+            # Negative keyword boundary: overlay conflict on impl/a2a/mcp +
+            # REST success-path tests fail
             (
                 "T-UC-026-boundary-neg-kw-add",
-                set(),
-                "negative_keywords_add not implemented in _update_media_buy_impl",
+                {
+                    "impl-negative_keywords_add WITH targeting_overlay.negative_keywords-error",
+                    "a2a-negative_keywords_add WITH targeting_overlay.negative_keywords-error",
+                    "mcp-negative_keywords_add WITH targeting_overlay.negative_keywords-error",
+                    "rest-negative_keywords_add WITHOUT",
+                    "rest-negative_keywords_add WITH targeting_overlay.keyword_targets",
+                    "rest-add pair that already exists",
+                    "rest-array length 1",
+                    "rest-keyword length 1",
+                    "rest-match_type = 'broad'",
+                    "rest-match_type = 'exact'",
+                    "rest-match_type = 'phrase'",
+                },
+                "overlay conflict validation not implemented / REST update not wired",
             ),
             (
                 "T-UC-026-boundary-neg-kw-remove",
-                set(),
-                "negative_keywords_remove not implemented in _update_media_buy_impl",
+                {
+                    "impl-negative_keywords_remove WITH targeting_overlay.negative_keywords-error",
+                    "a2a-negative_keywords_remove WITH targeting_overlay.negative_keywords-error",
+                    "mcp-negative_keywords_remove WITH targeting_overlay.negative_keywords-error",
+                    "rest-negative_keywords_remove WITHOUT",
+                    "rest-array length 1",
+                    "rest-keyword length 1",
+                    "rest-match_type = 'broad'",
+                    "rest-match_type = 'exact'",
+                    "rest-match_type = 'phrase'",
+                    "rest-remove pair that does NOT exist",
+                    "rest-remove pair that exists",
+                },
+                "overlay conflict validation not implemented / REST update not wired",
             ),
+            # Paused: only REST update-path tests fail (create-path passes)
             (
                 "T-UC-026-partition-paused",
-                set(),
-                "AffectedPackage lacks full state — paused update response omits expected fields",
+                {"rest-pause_on_update", "rest-resume_on_update"},
+                "REST update dispatch not wired for partition paused update tests",
             ),
             # d09y: boundary scenarios exposing real production gaps after step-parser fix.
             (
@@ -1297,25 +1457,40 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "pricing_option validation returns 'validation_error' instead of AdCP 'INVALID_REQUEST' / "
                 "max_bid pricing requires bid_price / last-entry pricing_option rejects valid id — spec-production gap",
             ),
-            (
-                "T-UC-026-boundary-immutable",
-                set(),
-                "AffectedPackage lacks full state — update response omits budget/format_ids/product_id",
-            ),
+            # Paused boundary: only REST update-path tests fail (create-path passes)
             (
                 "T-UC-026-boundary-paused",
-                {"on update", "idempotent"},
-                "AffectedPackage lacks full state — paused update response omits expected fields",
+                {
+                    "rest-paused=false on update",
+                    "rest-paused=true on update",
+                    "rest-paused=true on already-paused",
+                },
+                "REST update dispatch not wired for boundary paused update tests",
+            ),
+            # Replacement: REST all tests fail (update dispatch) +
+            # creative_assignments/optimization_goals on impl/a2a/mcp
+            (
+                "T-UC-026-partition-replacement",
+                {
+                    "creative_assignments",
+                    "optimization_goals",
+                    "rest-omit_array_fields",
+                    "rest-replace_catalogs",
+                    "rest-replace_targeting_overlay",
+                },
+                "creative_assignments/optimization_goals replacement not implemented / REST update not wired",
             ),
             (
                 "T-UC-026-boundary-replacement",
-                set(),
-                "AffectedPackage lacks full state — replacement semantics not reflected in update response",
-            ),
-            (
-                "T-UC-026-partition-replacement",
-                set(),
-                "AffectedPackage lacks full state — replacement semantics not reflected in update response",
+                {
+                    "creative_assignments",
+                    "optimization_goals",
+                    "rest-all array fields omitted",
+                    "rest-catalogs provided",
+                    "rest-only scalar fields updated",
+                    "rest-targeting_overlay replacement",
+                },
+                "creative_assignments/optimization_goals replacement not implemented / REST update not wired",
             ),
         ]
         for tag, substrings, reason in _UC026_PARTITION_SELECTIVE:
