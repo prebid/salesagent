@@ -33,6 +33,7 @@ from src.admin.blueprints.publisher_partners import publisher_partners_bp
 from src.admin.blueprints.schemas import schemas_bp
 from src.admin.blueprints.settings import settings_bp, tenant_management_settings_bp
 from src.admin.blueprints.signals_agents import signals_agents_bp
+from src.admin.blueprints.tmp_providers_bp import tmp_providers_bp
 
 # from src.admin.blueprints.tasks import tasks_bp  # Disabled - tasks eliminated in favor of workflow system
 from src.admin.blueprints.tenants import tenants_bp
@@ -351,6 +352,7 @@ def create_app(config=None):
     app.register_blueprint(authorized_properties_bp, url_prefix="/tenant")
     app.register_blueprint(creative_agents_bp, url_prefix="/tenant/<tenant_id>/creative-agents")
     app.register_blueprint(signals_agents_bp, url_prefix="/tenant/<tenant_id>/signals-agents")
+    app.register_blueprint(tmp_providers_bp, url_prefix="/tenant/<tenant_id>/tmp-providers")
     app.register_blueprint(inventory_bp)  # Has its own internal routing
     app.register_blueprint(inventory_profiles_bp, url_prefix="/tenant/<tenant_id>/inventory-profiles")
     app.register_blueprint(publisher_partners_bp, url_prefix="/tenant")  # Publisher partnerships

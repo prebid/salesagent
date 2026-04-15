@@ -1,0 +1,235 @@
+{% extends "base.html" %} {% block title %}TMP Providers - {{ tenant_name }} -
+Sales Agent Admin{% endblock %} {% block content %}
+<div class="card">
+  <div
+    style="
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1rem;
+    "
+  >
+    <h2>Trusted Match Providers - {{ tenant_name }}</h2>
+    <div style="display: flex; gap: 0.5rem">
+      <a
+        href="{{ url_for('tenants.tenant_settings', tenant_id=tenant_id) }}#integrations"
+        class="btn btn-secondary"
+        >← Back to Settings</a
+      >
+      <a
+        href="{{ url_for('tmp_providers.add_tmp_provider', tenant_id=tenant_id) }}"
+        class="btn btn-primary"
+        >Add TMP Provider</a
+      >
+    </div>
+  </div>
+
+  {% if not providers %}
+  <!-- Empty state -->
+  <div
+    style="
+      text-align: center;
+      padding: 3rem 2rem;
+      border: 2px dashed #e5e7eb;
+      border-radius: 8px;
+      margin-bottom: 2rem;
+    "
+  >
+    <div style="font-size: 3rem; margin-bottom: 1rem">🔀</div>
+    <h3 style="margin: 0 0 0.75rem 0; color: #374151">
+      No TMP Providers Registered
+    </h3>
+    <p style="color: #6b7280; max-width: 560px; margin: 0 auto 1.5rem auto">
+      Trusted Match Providers are buyer-side agents that the TMP Router fans out
+      to during ad selection. Each provider evaluates context signals and/or
+      identity signals against their synced package set and returns scored
+      offers. The TMP Router calls all active providers in parallel within the
+      configured latency budget, then merges results for the publisher-side
+      join.
+    </p>
+    <a
+      href="{{ url_for('tmp_providers.add_tmp_provider', tenant_id=tenant_id) }}"
+      class="btn btn-primary"
+    >
+      Add Your First TMP Provider
+    </a>
+  </div>
+
+  <div
+    style="
+      padding: 1rem;
+      background: #fffbeb;
+      border: 1px solid #fcd34d;
+      border-radius: 6px;
+    "
+  >
+    <p style="margin: 0; color: #92400e; font-size: 0.875rem">
+      💡 <strong>Use Cases for TMP Providers</strong><br />
+      • <strong>Context Match</strong>: Provider evaluates conversation context
+      signals against its synced package set and returns relevant ad offers<br />
+      • <strong>Identity Match</strong>: Provider evaluates user eligibility
+      (frequency caps, audience membership, consent) for each package<br />
+      • <strong>Both</strong>: Most providers implement both endpoints for full
+      TMP participation
+    </p>
+  </div>
+
+  {% else %}
+  <!-- Providers table -->
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Endpoint</th>
+        <th>Capabilities</th>
+        <th>Timeout</th>
+        <th>Status</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for provider in providers %}
+      <tr>
+        <td>
+          <strong>{{ provider.name }}</strong>
+        </td>
+        <td>
+          <code style="font-size: 0.85rem; word-break: break-all"
+            >{{ provider.endpoint }}</code
+          >
+        </td>
+        <td>
+          {% if provider.context_match %}
+          <span
+            class="badge"
+            style="background: #dbeafe; color: #1e40af; margin-right: 0.25rem"
+            >Context Match</span
+          >
+          {% endif %} {% if provider.identity_match %}
+          <span class="badge" style="background: #f3e8ff; color: #6b21a8"
+            >Identity Match</span
+          >
+          {% endif %}
+        </td>
+        <td>{{ provider.timeout_ms }} ms</td>
+        <td>
+          {% if provider.is_active %}
+          <span style="color: #059669; font-weight: 600">✓ Active</span>
+          {% else %}
+          <span style="color: #9ca3af">Inactive</span>
+          {% endif %}
+        </td>
+        <td>
+          <div style="display: flex; gap: 0.5rem; flex-wrap: wrap">
+            <a
+              href="{{ url_for('tmp_providers.edit_tmp_provider', tenant_id=tenant_id, provider_id=provider.provider_id) }}"
+              class="btn btn-secondary btn-sm"
+              >Edit</a
+            >
+            <button
+              onclick="healthCheck('{{ provider.provider_id }}', '{{ provider.name }}')"
+              class="btn btn-secondary btn-sm"
+            >
+              Health
+            </button>
+            {% if provider.is_active %}
+            <button
+              onclick="deactivateProvider('{{ provider.provider_id }}', '{{ provider.name }}')"
+              class="btn btn-warning btn-sm"
+            >
+              Deactivate
+            </button>
+            {% endif %}
+            <button
+              onclick="deleteProvider('{{ provider.provider_id }}', '{{ provider.name }}')"
+              class="btn btn-danger btn-sm"
+            >
+              Delete
+            </button>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+
+<script>
+  function healthCheck(providerId, providerName) {
+    fetch(
+      `{{ url_for('tmp_providers.list_tmp_providers', tenant_id=tenant_id) }}${providerId}/health`,
+      {
+        method: "GET",
+      },
+    )
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.success) {
+          alert(`✅ ${providerName}: healthy`);
+        } else {
+          alert(
+            `❌ ${providerName}: ${data.error || data.status || "unhealthy"}`,
+          );
+        }
+      })
+      .catch((err) => alert(`❌ ${providerName}: ${err}`));
+  }
+
+  function deactivateProvider(providerId, providerName) {
+    if (
+      !confirm(
+        `Deactivate TMP provider "${providerName}"? The TMP Router will stop routing to it within 30 seconds.`,
+      )
+    )
+      return;
+    fetch(
+      `{{ url_for('tmp_providers.list_tmp_providers', tenant_id=tenant_id) }}${providerId}/deactivate`,
+      {
+        method: "POST",
+        headers: {
+          "X-CSRFToken":
+            document.querySelector('meta[name="csrf-token"]')?.content || "",
+        },
+      },
+    )
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.success) {
+          location.reload();
+        } else {
+          alert(`Error: ${data.error}`);
+        }
+      })
+      .catch((err) => alert(`Error: ${err}`));
+  }
+
+  function deleteProvider(providerId, providerName) {
+    if (
+      !confirm(
+        `Permanently delete TMP provider "${providerName}"? This cannot be undone.`,
+      )
+    )
+      return;
+    fetch(
+      `{{ url_for('tmp_providers.list_tmp_providers', tenant_id=tenant_id) }}${providerId}/delete`,
+      {
+        method: "DELETE",
+        headers: {
+          "X-CSRFToken":
+            document.querySelector('meta[name="csrf-token"]')?.content || "",
+        },
+      },
+    )
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.success) {
+          location.reload();
+        } else {
+          alert(`Error: ${data.error}`);
+        }
+      })
+      .catch((err) => alert(`Error: ${err}`));
+  }
+</script>
+{% endblock %}
