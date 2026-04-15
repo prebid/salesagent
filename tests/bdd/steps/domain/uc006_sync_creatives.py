@@ -290,11 +290,34 @@ def then_proceed_with_resolved_account(ctx: dict) -> None:
             )
 
 
-@then(parsers.parse("the error should be {error_code} with suggestion"))
-def then_error_code_with_suggestion(ctx: dict, error_code: str) -> None:
-    """Assert error has the expected error_code and includes a suggestion."""
+def _extract_error_code_and_suggestion(error: object) -> tuple[str | None, str | None]:
+    """Return (error_code, suggestion) for either AdCPError or adcp.types.Error.
+
+    - AdCPError: error_code attribute; suggestion lives in details['suggestion'].
+    - adcp.types.Error: code attribute; suggestion is a top-level field.
+    """
     from src.core.exceptions import AdCPError
 
+    if isinstance(error, AdCPError):
+        code = error.error_code
+        suggestion = (error.details or {}).get("suggestion") if error.details else None
+        return code, suggestion
+    code = getattr(error, "error_code", None) or getattr(error, "code", None)
+    suggestion = getattr(error, "suggestion", None)
+    if suggestion is None:
+        details = getattr(error, "details", None)
+        if isinstance(details, dict):
+            suggestion = details.get("suggestion")
+    return code, suggestion
+
+
+@then(parsers.parse("the error should be {error_code} with suggestion"))
+def then_error_code_with_suggestion(ctx: dict, error_code: str) -> None:
+    """Assert error has the expected error_code and includes a suggestion.
+
+    Accepts both src.core.exceptions.AdCPError and adcp.types.Error shapes —
+    different UCs dispatch through different error hierarchies.
+    """
     _SPEC_PRODUCTION_GAP_CODES = {
         "ASSIGNMENTS_EMPTY",
         "ASSIGNMENT_CREATIVE_ID_REQUIRED",
@@ -309,12 +332,11 @@ def then_error_code_with_suggestion(ctx: dict, error_code: str) -> None:
         )
     assert error is not None, f"Expected error {error_code} but none was recorded"
 
-    if isinstance(error, AdCPError):
-        assert error.error_code == error_code, f"Expected error code '{error_code}', got '{error.error_code}'"
-        assert error.details, f"Expected details with suggestion on {error_code} error"
-        assert "suggestion" in error.details, f"Expected 'suggestion' in error details: {error.details}"
-    else:
-        raise AssertionError(f"Expected AdCPError with code {error_code}, got {type(error).__name__}: {error}")
+    actual_code, suggestion = _extract_error_code_and_suggestion(error)
+    assert actual_code == error_code, (
+        f"Expected error code '{error_code}', got '{actual_code}' ({type(error).__name__}: {error})"
+    )
+    assert suggestion, f"Expected non-empty suggestion on {error_code} error, got {suggestion!r} ({error!r})"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -997,17 +1019,15 @@ def then_error_includes_suggestion(ctx: dict) -> None:
     """
     import pytest
 
-    from src.core.exceptions import AdCPError
-
     error = ctx.get("error")
     assert error is not None, f"Expected an error but none recorded. Response: {ctx.get('response')}"
-    if not isinstance(error, AdCPError):
-        raise AssertionError(f"Expected AdCPError, got {type(error).__name__}: {error}")
-    details = error.details or {}
-    if "suggestion" not in details:
+    _, suggestion = _extract_error_code_and_suggestion(error)
+    if not suggestion:
+        code = getattr(error, "error_code", None) or getattr(error, "code", None)
+        recovery = getattr(error, "recovery", None)
         pytest.xfail(
-            f"SPEC-PRODUCTION GAP: Expected 'suggestion' in error.details but got details={details} "
-            f"(error_code={error.error_code}, recovery={error.recovery})"
+            f"SPEC-PRODUCTION GAP: Expected 'suggestion' on error but got {suggestion!r} "
+            f"(error_code={code}, recovery={recovery}, type={type(error).__name__})"
         )
 
 
