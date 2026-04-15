@@ -356,3 +356,35 @@ class TestSyncAccountsApproval:
         assert result.setup.message is not None
         assert result.setup.url is not None
         assert result.setup.expires_at is not None
+
+    @pytest.mark.asyncio
+    async def test_set_approval_mode_writes_to_account_approval_mode_column(self, integration_db):
+        """Regression for salesagent-69xd: AccountSyncEnv.set_approval_mode() must write to
+        the account_approval_mode DB column (BR-RULE-060), NOT the creative approval_mode
+        column (BR-RULE-037). The MCP real-auth chain reads account_approval_mode from the
+        DB tenant row — if the harness writes to the wrong column, MCP tests silently fall
+        through to the default (None → 'auto') even though the harness claims credit_review.
+        """
+        from sqlalchemy import select
+
+        from src.core.config_loader import get_tenant_by_id
+        from src.core.database.database_session import get_db_session
+        from src.core.database.models import Tenant
+
+        with AccountSyncEnv(tenant_id="harness_audit_t", principal_id="harness_audit_p") as env:
+            env.setup_default_data()
+            env.set_approval_mode("credit_review")
+
+            # Fresh session (simulates MCP auth chain opening its own session)
+            with get_db_session() as fresh_session:
+                tenant = fresh_session.scalars(select(Tenant).filter_by(tenant_id="harness_audit_t")).first()
+                assert tenant is not None
+                # MUST be written to account_approval_mode (BR-RULE-060)
+                assert tenant.account_approval_mode == "credit_review", (
+                    "set_approval_mode writes to wrong DB column; MCP auth chain won't see it"
+                )
+
+            # And the serialized tenant dict used by resolve_identity must include it
+            tenant_dict = get_tenant_by_id("harness_audit_t")
+            assert tenant_dict is not None
+            assert tenant_dict["account_approval_mode"] == "credit_review"

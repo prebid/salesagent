@@ -101,7 +101,11 @@ class AccountSyncEnv(IntegrationEnv):
 
             tenant = self._session.get(Tenant, self._tenant_id)
             if tenant:
-                tenant.approval_mode = mode
+                # BR-RULE-060: account approval mode is a distinct field from creative
+                # approval_mode (BR-RULE-037). Write to the correct column so the MCP
+                # real-auth chain (which reads DB via config_loader.get_tenant_by_id)
+                # sees the test-configured value.
+                tenant.account_approval_mode = mode
                 self._session.commit()
 
     def identity_for(self, transport: Any) -> Any:
