@@ -546,6 +546,173 @@ class PropertyDiscoveryService:
         logger.debug(f"Created tag: {tag_id}")
         return True
 
+    async def sync_properties_from_registry(
+        self,
+        tenant_id: str,
+        publisher_domains: list[str],
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Resolve properties via the AAO registry API.
+
+        The registry handles all authorization models (property_ids, property_tags,
+        inline properties, publisher_properties) and follows authoritative_location
+        delegation. This is more reliable than parsing adagents.json directly.
+
+        Falls back to direct adagents.json fetch if the registry is unreachable.
+
+        Args:
+            tenant_id: Tenant ID
+            publisher_domains: List of domains to resolve
+            dry_run: If True, don't commit to database
+
+        Returns:
+            Sync stats dictionary
+        """
+        from src.services.registry_client import get_registry_client
+
+        stats: dict[str, Any] = {
+            "domains_synced": 0,
+            "properties_found": 0,
+            "tags_found": 0,
+            "properties_created": 0,
+            "properties_updated": 0,
+            "tags_created": 0,
+            "errors": [],
+            "dry_run": dry_run,
+            "source": "registry",
+        }
+
+        if not publisher_domains:
+            stats["errors"].append("No publisher domains to resolve")
+            return stats
+
+        # Bulk-resolve all domains via registry
+        registry = get_registry_client()
+        try:
+            results = await registry.resolve_properties_bulk(publisher_domains)
+        except Exception as e:
+            logger.warning(f"Registry bulk resolve failed, falling back to direct fetch: {e}")
+            stats["source"] = "direct_fallback"
+            return await self.sync_properties_from_adagents(tenant_id, publisher_domains, dry_run)
+
+        if not results:
+            logger.warning("Registry returned empty results, falling back to direct fetch")
+            stats["source"] = "direct_fallback"
+            return await self.sync_properties_from_adagents(tenant_id, publisher_domains, dry_run)
+
+        with get_db_session() as session:
+            for domain in publisher_domains:
+                resolved = results.get(domain)
+                if not resolved:
+                    stats["errors"].append(f"{domain}: not found in registry")
+                    logger.warning(f"⚠️ {domain}: not found in registry")
+                    continue
+
+                try:
+                    properties = resolved.get("properties", [])
+                    if not properties:
+                        stats["errors"].append(f"{domain}: no properties in registry response")
+                        logger.warning(f"⚠️ {domain}: no properties in registry response")
+                        continue
+
+                    # Convert registry format to adagents.json format for reuse
+                    # Registry returns: {id, type, name, identifiers, tags}
+                    # Discovery expects: {property_type, name, identifiers, tags}
+                    normalized_properties = []
+                    for prop in properties:
+                        normalized = {
+                            "property_type": prop.get("type", "website"),
+                            "name": prop.get("name", prop.get("id", "Unknown")),
+                            "identifiers": prop.get("identifiers", []),
+                            "tags": prop.get("tags", []),
+                        }
+                        if prop.get("id"):
+                            normalized["property_id"] = prop["id"]
+                        normalized_properties.append(normalized)
+
+                    stats["properties_found"] += len(normalized_properties)
+                    logger.info(f"Registry resolved {len(normalized_properties)} properties from {domain}")
+
+                    # Batch-check existing properties
+                    property_ids_to_check = []
+                    properties_data = []
+                    for prop in normalized_properties:
+                        property_id = self._generate_property_id(tenant_id, domain, prop)
+                        if property_id:
+                            property_ids_to_check.append(property_id)
+                            properties_data.append((property_id, prop))
+
+                    from sqlalchemy.sql import Select
+
+                    stmt_props: Select[tuple[AuthorizedProperty]] = select(AuthorizedProperty).where(
+                        AuthorizedProperty.tenant_id == tenant_id,
+                        AuthorizedProperty.property_id.in_(property_ids_to_check),
+                    )
+                    existing_properties_objs = list(session.scalars(stmt_props).all())
+                    existing_properties: dict[str, AuthorizedProperty] = {
+                        p.property_id: p for p in existing_properties_objs
+                    }
+
+                    for property_id, prop in properties_data:
+                        was_created = self._create_or_update_property_batched(
+                            session, tenant_id, domain, prop, property_id, existing_properties
+                        )
+                        if was_created:
+                            stats["properties_created"] += 1
+                        else:
+                            stats["properties_updated"] += 1
+
+                    # Extract and sync tags
+                    all_tags: set[str] = set()
+                    for prop in normalized_properties:
+                        for tag in prop.get("tags", []):
+                            if isinstance(tag, str):
+                                all_tags.add(tag)
+
+                    stats["tags_found"] += len(all_tags)
+
+                    if all_tags:
+                        stmt_tags: Select[tuple[PropertyTag]] = select(PropertyTag).where(
+                            PropertyTag.tenant_id == tenant_id, PropertyTag.tag_id.in_(all_tags)
+                        )
+                        existing_tags_objs = list(session.scalars(stmt_tags).all())
+                        existing_tags: dict[str, PropertyTag] = {t.tag_id: t for t in existing_tags_objs}
+
+                        for tag in all_tags:
+                            was_created = self._create_or_update_tag_batched(session, tenant_id, tag, existing_tags)
+                            if was_created:
+                                stats["tags_created"] += 1
+
+                    stats["domains_synced"] += 1
+                    logger.info(f"✅ Registry sync: {len(normalized_properties)} properties from {domain}")
+
+                except Exception as e:
+                    error = f"{domain}: {str(e)}"
+                    stats["errors"].append(error)
+                    logger.error(f"❌ Error processing registry result for {domain}: {e}", exc_info=True)
+
+            if dry_run:
+                session.rollback()
+                logger.info("🔍 DRY RUN - No changes committed to database")
+            else:
+                session.commit()
+                logger.info(
+                    f"✅ Registry sync complete: {stats['domains_synced']} domains, "
+                    f"{stats['properties_created']} properties created, "
+                    f"{stats['properties_updated']} updated"
+                )
+
+        return stats
+
+    def sync_properties_from_registry_sync(
+        self,
+        tenant_id: str,
+        publisher_domains: list[str],
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Synchronous wrapper for sync_properties_from_registry."""
+        return asyncio.run(self.sync_properties_from_registry(tenant_id, publisher_domains, dry_run))
+
     def sync_properties_from_adagents_sync(
         self,
         tenant_id: str,

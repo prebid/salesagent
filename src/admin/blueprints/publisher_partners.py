@@ -241,16 +241,10 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
 
                     discovery_service = get_property_discovery_service()
 
-                    # Compute agent_url for property resolution (handles property_ids, property_tags)
-                    if tenant.virtual_host:
-                        agent_url_for_sync: str | None = f"https://{tenant.virtual_host}"
-                    else:
-                        agent_url_for_sync = get_tenant_url(tenant.subdomain)
-
                     for domain in verified_domains:
-                        # Try to fetch real properties from adagents.json
-                        property_stats = discovery_service.sync_properties_from_adagents_sync(
-                            tenant_id, publisher_domains=[domain], dry_run=False, agent_url=agent_url_for_sync
+                        # Try registry first, falls back to direct adagents.json
+                        property_stats = discovery_service.sync_properties_from_registry_sync(
+                            tenant_id, publisher_domains=[domain], dry_run=False
                         )
                         domain_properties_created = property_stats.get("properties_created", 0)
                         properties_created += domain_properties_created
@@ -443,16 +437,22 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
             # CRITICAL: Now sync properties from verified publishers
             # This populates AuthorizedProperty table which is used by Admin UI for building
             # inventory profiles and products (requires full property details)
+            #
+            # Uses the AAO registry API first — it handles all authorization models
+            # (property_ids, property_tags, authoritative_location delegation).
+            # Falls back to direct adagents.json parsing if registry is unreachable.
             if verified_domains:
                 logger.info(f"Syncing properties from {len(verified_domains)} verified publishers")
                 from src.services.property_discovery_service import get_property_discovery_service
 
                 discovery_service = get_property_discovery_service()
-                property_stats = discovery_service.sync_properties_from_adagents_sync(
-                    tenant_id, publisher_domains=verified_domains, dry_run=False, agent_url=agent_url
+                property_stats = discovery_service.sync_properties_from_registry_sync(
+                    tenant_id, publisher_domains=verified_domains, dry_run=False
                 )
+                source = property_stats.get("source", "registry")
                 logger.info(
-                    f"Property sync completed: {property_stats['properties_created']} created, "
+                    f"Property sync completed (source={source}): "
+                    f"{property_stats['properties_created']} created, "
                     f"{property_stats['properties_updated']} updated, "
                     f"{property_stats['tags_created']} tags created"
                 )
