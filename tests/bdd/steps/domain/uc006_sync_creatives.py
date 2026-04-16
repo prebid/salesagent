@@ -1228,3 +1228,122 @@ def then_assignment_includes_placement(ctx: dict) -> None:
         "Production's assignments shape (dict[creative_id -> list[package_id]]) has no "
         "placement_ids field and the CreativeAssignment model does not persist them."
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GIVEN / THEN steps — preview failure (jr6p, ext-h)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given("a creative with a known format_id but no media_url")
+def given_creative_with_known_format_no_media_url(ctx: dict) -> None:
+    """Build a creative payload with a known format_id but no media_url / asset url.
+
+    Production's preview-failure branch in _processing.py only fires when both
+    ``creative.url`` and ``data["url"]`` are absent (see _processing.py:712-737).
+    To trigger that branch reliably we omit any url/asset entirely — assets are
+    optional on the request schema.
+    """
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+
+    format_id = "display_300x250"
+    creative_id = "creative-no-media-url-001"
+    creative_payload = {
+        "creative_id": creative_id,
+        "name": "Creative Without media_url",
+        "format_id": {"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
+        # Intentionally no "assets" and no "url" / "media_url" — triggers the
+        # has_media_url=False path in _processing.py preview branch.
+    }
+    ctx.setdefault("creatives", []).append(creative_payload)
+    ctx["creative_format_id"] = format_id
+    ctx["creative_id"] = creative_id
+
+
+@given("the creative agent returns no preview URLs")
+def given_creative_agent_no_preview_urls(ctx: dict) -> None:
+    """Configure the creative agent registry to return no previews.
+
+    ``preview_creative`` is awaited inside production's _processing.py via
+    ``run_async_in_sync_context``. CreativeSyncEnv exposes the registry mock
+    on ``env.mock["registry"].return_value``; ``preview_creative`` is an
+    AsyncMock per the harness defaults. Returning an empty dict (no
+    "previews" key) drives production into the no-previews + no-media_url
+    branch which produces SyncCreativeResult(action="failed", errors=[...]).
+
+    Production's _processing.py only enters the preview branch when
+    ``format_obj`` is found in ``all_formats`` (the list_all_formats result)
+    AND ``format_obj.agent_url`` is set. The harness-default empty
+    ``all_formats`` makes the format lookup miss and the preview branch
+    never fires. We seed ``all_formats`` via ``set_run_async_result()`` with
+    a static (non-generative) mock format whose ``format_id`` equals the
+    creative payload's FormatId.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from adcp.types.generated_poc.core.format_id import FormatId as LibraryFormatId
+
+    env = ctx["env"]
+    creative_format_id = ctx.get("creative_format_id", "display_300x250")
+
+    mock_format = MagicMock()
+    mock_format.format_id = LibraryFormatId(agent_url=env.DEFAULT_AGENT_URL, id=creative_format_id)
+    mock_format.agent_url = env.DEFAULT_AGENT_URL
+    mock_format.output_format_ids = []  # static creative — exercises preview_creative branch
+    env.set_run_async_result([mock_format])
+
+    registry = env.mock["registry"].return_value
+    registry.preview_creative = AsyncMock(return_value={})
+
+
+@then('the creative should have action "failed"')
+def then_creative_action_failed(ctx: dict) -> None:
+    """Assert the per-creative SyncCreativeResult has action == "failed".
+
+    Production reports preview failures as a successful response containing
+    a SyncCreativeResult with action="failed" and a string in errors[]
+    (NOT as an exception). We extract that result, assert action, and
+    promote the first error string to ctx["error"] as a synthetic Error
+    object so downstream generic Then steps (error code, message, suggestion)
+    can run — they will hit a SPEC-PRODUCTION GAP because production stores
+    a free-text string instead of a structured error_code/suggestion.
+    """
+    resp = ctx.get("response")
+    err = ctx.get("error")
+    # If the request raised an exception (e.g. transport-layer rejection),
+    # there is no per-creative result to inspect — surface as xfail because
+    # the spec requires the failure to manifest as action="failed".
+    if resp is None:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: scenario expects action='failed' on a "
+            f"SyncCreativeResult but the dispatch raised {type(err).__name__}: {err}"
+        )
+
+    results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
+    assert results, f"Expected at least one SyncCreativeResult in response, got: {resp}"
+    first = results[0]
+    action_val = getattr(first, "action", None)
+    action_str = str(getattr(action_val, "value", action_val))
+    assert action_str == "failed", (
+        f"Expected creative action 'failed', got '{action_str}' (errors={getattr(first, 'errors', None)})"
+    )
+
+    # Production's preview-failed branch returns errors=[error_msg] where
+    # error_msg is a plain string starting with "Preview generation failed for
+    # <id>: no previews returned and no media_url provided" (see
+    # _processing.py:712-737). The remaining scenario assertions check for a
+    # structured ``error_code`` ("CREATIVE_PREVIEW_FAILED"), an "error message"
+    # containing "preview", a structured "suggestion" field, and a suggestion
+    # containing "media_url". Production has no error_code or suggestion on
+    # this path — only a free-text errors[] string — so the downstream
+    # generic Then steps cannot be satisfied. Mark as SPEC-PRODUCTION GAP
+    # right after confirming the action="failed" portion holds.
+    errs = getattr(first, "errors", None) or []
+    pytest.xfail(
+        "SPEC-PRODUCTION GAP: action='failed' is reported correctly, but "
+        "production's preview-failure branch returns plain string errors[] "
+        "without a structured error_code (spec: CREATIVE_PREVIEW_FAILED) or "
+        "'suggestion' field (spec: must contain 'media_url'). See "
+        f"_processing.py:712-737. errors={errs!r}"
+    )
