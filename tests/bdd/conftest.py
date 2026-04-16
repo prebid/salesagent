@@ -871,6 +871,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "attribution_window campaign unit validation not implemented in _impl",
                 True,
             ),
+            # FIXME(salesagent-7ag5): _impl uses str(enum) instead of enum.value for sort_by metric
+            "T-UC-004-dim-sortby-valid": (
+                "sort_by metric: str(SortMetric.clicks) != 'clicks' — needs .value in _impl",
+                True,
+            ),
+            "T-UC-004-dim-sortby-fallback": (
+                "sort_by fallback: A2A transport drops by_placement from response — serialization gap",
+                False,
+            ),
             # FIXME(salesagent-b2v): _impl only supports by_placement, not by_device_type/by_geo/truncation
             "T-UC-004-dim-supported": ("by_device_type breakdown not implemented in _impl (only by_placement)", True),
             "T-UC-004-dim-truncated": ("truncation flags (by_*_truncated) not implemented in _impl", True),

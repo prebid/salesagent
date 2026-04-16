@@ -72,6 +72,7 @@ class DeliveryPollMixin:
         package_id: str = "pkg_001",
         clicks: int | None = None,
         packages: list[dict[str, Any]] | None = None,
+        by_placement: list[dict[str, Any]] | None = None,
     ) -> None:
         """Configure adapter to return specific delivery data for a media buy.
 
@@ -79,6 +80,8 @@ class DeliveryPollMixin:
         For multi-package responses, pass ``packages`` — a list of dicts with
         ``package_id``, ``impressions``, and ``spend`` keys. Totals are auto-computed
         as the sum of per-package values.
+
+        ``by_placement`` attaches placement breakdown data to each package.
         """
         if packages is not None:
             by_package = [
@@ -86,6 +89,7 @@ class DeliveryPollMixin:
                     package_id=p["package_id"],
                     impressions=p.get("impressions", 0),
                     spend=p.get("spend", 0.0),
+                    by_placement=p.get("by_placement") or by_placement,
                 )
                 for p in packages
             ]
@@ -98,6 +102,7 @@ class DeliveryPollMixin:
                     package_id=package_id,
                     impressions=impressions,
                     spend=spend,
+                    by_placement=by_placement,
                 )
             ]
             totals = DeliveryTotals(impressions=float(impressions), spend=spend)

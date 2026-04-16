@@ -145,6 +145,36 @@ def _parse_json_list(text: str) -> list[str]:
     return json.loads(text)
 
 
+_DEFAULT_PLACEMENT_DATA: list[dict[str, Any]] = [
+    {"placement_id": "pl-A", "impressions": 3000.0, "spend": 150.0, "clicks": 30.0},
+    {"placement_id": "pl-B", "impressions": 1500.0, "spend": 200.0, "clicks": 10.0},
+    {"placement_id": "pl-C", "impressions": 500.0, "spend": 50.0, "clicks": 50.0},
+]
+
+
+def _inject_placement_data(ctx: dict) -> None:
+    """Ensure adapter responses include placement breakdown data.
+
+    If responses already exist, mutate them. Otherwise, register a default
+    response for each media buy known in ctx. This must be called from Given
+    steps that declare placement support, before the When step dispatches.
+    """
+    env = ctx["env"]
+    if env._adapter_responses:
+        for resp in env._adapter_responses.values():
+            for pkg in resp.by_package:
+                if pkg.by_placement is None:
+                    pkg.by_placement = _DEFAULT_PLACEMENT_DATA
+    else:
+        media_buys = ctx.get("media_buys", {})
+        for label in media_buys:
+            real_id = _resolve_media_buy_id(ctx, label)
+            env.set_adapter_response(
+                media_buy_id=real_id,
+                by_placement=_DEFAULT_PLACEMENT_DATA,
+            )
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — media buy setup and adapter configuration
 # ═══════════════════════════════════════════════════════════════════════
@@ -542,6 +572,8 @@ def given_webhook_flaky(ctx: dict) -> None:
 def given_seller_supports_dimension(ctx: dict, dimension: str) -> None:
     """Seller supports a specific reporting dimension."""
     ctx.setdefault("supported_dimensions", []).append(dimension)
+    if dimension == "placement":
+        _inject_placement_data(ctx)
 
 
 @given(parsers.parse('the seller does NOT support reporting dimension "{dimension}"'))
@@ -554,7 +586,6 @@ def given_seller_no_dimension(ctx: dict, dimension: str) -> None:
 def given_seller_supports_dimensions(ctx: dict, dim1: str, dim2: str) -> None:
     """Seller supports multiple reporting dimensions."""
     ctx.setdefault("supported_dimensions", []).extend([dim1, dim2])
-    # When "placement" dimension is supported, inject placement data into adapter responses
     if "placement" in (dim1, dim2):
         _inject_placement_data(ctx)
 
@@ -1594,8 +1625,18 @@ def then_no_retry(ctx: dict) -> None:
 
 @then("the system should log the authentication rejection")
 def then_log_auth_rejection(ctx: dict) -> None:
-    """Assert auth rejection was logged."""
-    _pending(ctx, "then_log_auth_rejection")
+    """Assert auth rejection is observable via delivery failure and single attempt.
+
+    The WebhookDeliveryService logs a WARNING for 4xx client errors and does NOT
+    retry. We verify: (1) delivery returned False, (2) only one POST was made
+    (no retry). Together these prove the 401 was recognized and handled.
+    """
+    webhook_result = ctx.get("webhook_result")
+    assert webhook_result is False, f"Expected webhook_result=False (auth rejection), got {webhook_result}"
+    env = ctx["env"]
+    assert env.mock["post"].call_count == 1, (
+        f"Auth rejection should produce exactly 1 POST (no retries), got {env.mock['post'].call_count}"
+    )
 
 
 @then("the webhook should be marked as failed")
@@ -2151,16 +2192,35 @@ def then_geo_system(ctx: dict, system: str) -> None:
     assert found_geo, "No by_geo breakdown found in any package — geo dimension not populated in response"
 
 
+def _assert_placement_sorted_by(ctx: dict, metric: str) -> None:
+    """Assert by_placement in at least one package is sorted descending by *metric*."""
+    resp = ctx.get("response") or ctx.get("result")
+    assert resp is not None, "No response in ctx — When step must store ctx['response']"
+    deliveries = getattr(resp, "media_buy_deliveries", None) or []
+    assert deliveries, "No deliveries in response"
+    found_placement = False
+    for d in deliveries:
+        by_package = getattr(d, "by_package", None) or []
+        for pkg in by_package:
+            placements = getattr(pkg, "by_placement", None)
+            if not placements:
+                continue
+            found_placement = True
+            values = [(p.get(metric) if isinstance(p, dict) else getattr(p, metric, None)) or 0 for p in placements]
+            assert values == sorted(values, reverse=True), f"by_placement not sorted descending by '{metric}': {values}"
+    assert found_placement, "No by_placement breakdown found in any package"
+
+
 @then(parsers.parse('the response placement breakdown should be sorted by "{metric}" (fallback)'))
 def then_placement_sorted_fallback(ctx: dict, metric: str) -> None:
-    """Assert placement breakdown sorted by fallback metric."""
-    _pending(ctx, "then_placement_sorted_fallback")
+    """Assert placement breakdown sorted by fallback metric (requested unavailable)."""
+    _assert_placement_sorted_by(ctx, metric)
 
 
 @then(parsers.parse('the response placement breakdown should be sorted by "{metric}"'))
 def then_placement_sorted(ctx: dict, metric: str) -> None:
     """Assert placement breakdown sorted by metric."""
-    _pending(ctx, "then_placement_sorted")
+    _assert_placement_sorted_by(ctx, metric)
 
 
 # ── Attribution window assertions ─────────────────────────────────
