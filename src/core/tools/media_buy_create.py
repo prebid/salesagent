@@ -3528,7 +3528,10 @@ async def _create_media_buy_impl(
                     targeting_overlay=package.targeting_overlay,
                     impressions=getattr(package, "impressions", None),
                     creative_assignments=package.creative_assignments,
+                    format_ids=getattr(package, "format_ids", None),
                     format_ids_to_provide=getattr(package, "format_ids", None),
+                    catalogs=getattr(package, "catalogs", None),
+                    optimization_goals=getattr(package, "optimization_goals", None),
                 )
             )
 
