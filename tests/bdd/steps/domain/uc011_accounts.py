@@ -178,10 +178,8 @@ def given_seller_no_billing(ctx: dict) -> None:
 
 
 def _set_billing_policy(ctx: dict, supported: list[str]) -> None:
-    """Set billing policy on the env and clear identity cache."""
-    env = ctx["env"]
-    env._supported_billing = supported
-    env._identity_cache.clear()  # Force re-creation with new billing policy
+    """Set billing policy via the harness."""
+    ctx["env"].set_billing_policy(supported)
 
 
 @given(parsers.parse('the seller does not support "{billing}" billing'))
@@ -198,10 +196,8 @@ def given_seller_partial_billing(ctx: dict, supported: str, rejected: str) -> No
 
 
 def _set_approval_mode(ctx: dict, mode: str) -> None:
-    """Set approval mode on the env and clear identity cache."""
-    env = ctx["env"]
-    env._account_approval_mode = mode
-    env._identity_cache.clear()
+    """Set approval mode via the harness."""
+    ctx["env"].set_approval_mode(mode)
 
 
 @given("the seller requires credit review for new accounts")

@@ -52,7 +52,9 @@ class TenantContext(BaseModel):
     human_review_required: bool = True
     policy_settings: dict[str, Any] | None = None
     signals_agent_config: dict[str, Any] | None = None
-    approval_mode: str = "require-human"
+    supported_billing: list[str] | None = None  # BR-RULE-059: seller billing policy
+    approval_mode: str = "require-human"  # BR-RULE-037: creative approval mode
+    account_approval_mode: str | None = None  # BR-RULE-060: account approval mode (auto|credit_review|legal_review)
     gemini_api_key: str | None = None
     creative_review_criteria: str | None = None
     brand_manifest_policy: str = "require_auth"
@@ -111,7 +113,9 @@ class TenantContext(BaseModel):
             human_review_required=tenant.human_review_required if tenant.human_review_required is not None else True,
             policy_settings=safe_json_loads(tenant.policy_settings, None),
             signals_agent_config=safe_json_loads(tenant.signals_agent_config, None),
+            supported_billing=safe_json_loads(tenant.supported_billing, None),
             approval_mode=tenant.approval_mode or "require-human",
+            account_approval_mode=tenant.account_approval_mode,
             gemini_api_key=tenant.gemini_api_key,
             creative_review_criteria=tenant.creative_review_criteria,
             brand_manifest_policy=tenant.brand_manifest_policy or "require_auth",

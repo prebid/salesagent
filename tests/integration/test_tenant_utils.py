@@ -86,3 +86,57 @@ def test_serialize_tenant_nullable_fields_have_defaults(integration_db):
         assert result["virtual_host"] is None
         assert result["slack_webhook_url"] is None
         assert result["admin_token"] is None
+
+
+@pytest.mark.requires_db
+def test_account_approval_mode_round_trips_through_tenant_context(integration_db):
+    """BR-RULE-060: account_approval_mode is a tenant-level config, distinct from
+    creative approval_mode (BR-RULE-037). Verify the field persists on the ORM model,
+    is serialized by serialize_tenant_to_dict, and populated by TenantContext.from_orm_model
+    and TenantContext.from_dict.
+
+    This is the regression test for salesagent-b3un (part of epic salesagent-wwut).
+    """
+    from src.core.tenant_context import TenantContext
+    from tests.factories import TenantFactory
+    from tests.harness._base import IntegrationEnv
+
+    with IntegrationEnv(tenant_id="test_aam"):
+        tenant = TenantFactory(tenant_id="test_aam", account_approval_mode="credit_review")
+
+        # 1. serialize_tenant_to_dict exposes the key
+        d = serialize_tenant_to_dict(tenant)
+        assert d["account_approval_mode"] == "credit_review"
+
+        # 2. TenantContext.from_orm_model populates the field
+        ctx = TenantContext.from_orm_model(tenant)
+        assert ctx.account_approval_mode == "credit_review"
+
+        # 3. Round-trip via from_dict preserves the value
+        ctx2 = TenantContext.from_dict(d)
+        assert ctx2.account_approval_mode == "credit_review"
+
+        # 4. Tenant.get works via TenantContext.get()
+        assert ctx.get("account_approval_mode") == "credit_review"
+
+
+@pytest.mark.requires_db
+def test_account_approval_mode_defaults_to_none_when_unset(integration_db):
+    """When a tenant has not configured account approval, account_approval_mode is None
+    (meaning 'auto'). Creative approval_mode has its own default ('require-human') and
+    must not leak into account approval semantics.
+    """
+    from src.core.tenant_context import TenantContext
+    from tests.factories import TenantFactory
+    from tests.harness._base import IntegrationEnv
+
+    with IntegrationEnv(tenant_id="test_aam_default"):
+        tenant = TenantFactory(tenant_id="test_aam_default")
+
+        d = serialize_tenant_to_dict(tenant)
+        assert d["account_approval_mode"] is None
+
+        ctx = TenantContext.from_orm_model(tenant)
+        assert ctx.account_approval_mode is None
+        # Creative approval_mode keeps its own default, unaffected
+        assert ctx.approval_mode == "require-human"
