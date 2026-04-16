@@ -1,7 +1,3 @@
-Plan mode is active and I do not have Write access. I will deliver the full deeply-elaborated plan as my final assistant message, as the task instructions explicitly permit: "Return findings directly as your final assistant message — the parent agent reads your text output, not files you create."
-
----
-
 # Flask → FastAPI Migration: Deep Elaboration of §14, §16, §21
 
 > **LAYERED SCOPE (2026-04-14) — L0-L4 use SYNC admin handlers; L5 converts to ASYNC.**
@@ -288,7 +284,7 @@ on url_for(...) sites and resolve by re-running:
 
 1. `/Users/quantum/Documents/ComputedChaos/salesagent/src/admin/routers/public.py`, `core.py`, `auth.py`, `oidc.py` exist with every route from the corresponding Flask blueprints in `/Users/quantum/Documents/ComputedChaos/salesagent/src/admin/blueprints/`.
 2. `GET /admin/login` returns 200 from `src/admin/routers/auth.py::login`, not from Flask. Verified by grep: `curl -sI http://localhost:8000/admin/login | grep -i server` returns the uvicorn banner, and a new integration test `tests/integration/test_admin_auth_router.py` asserts the route resolves via `IntegrationEnv.get_admin_client()`.
-3. `POST /admin/auth/callback` (Google OAuth) completes a full redirect chain ending at `/admin/` with a valid `adcp_session` cookie set by `SessionMiddleware`.
+3. `GET /admin/auth/google/callback` (Google OAuth — Authlib re-exchange) completes a full redirect chain ending at `/admin/` with a valid `adcp_session` cookie set by `SessionMiddleware`. Verified against the byte-immutable URI list in `tests/unit/test_oauth_redirect_uris_immutable.py`.
 4. `GET /admin/health` returns 200 from the new FastAPI `core.py` router. Old Flask `/admin/health` route is commented out in `src/admin/app.py`.
 5. `SessionMiddleware` is registered in `/Users/quantum/Documents/ComputedChaos/salesagent/src/app.py` in the canonical L1a stack `Fly → ExternalDomain → UnifiedAuth → Session → CSRF → RestCompat → CORS` (outermost → innermost; `TrustedHost` added at L2, `RequestID` at L4/L6 — see `foundation-modules.md` §cross-cutting/Middleware ordering for the full L1a/L2/L4-L6 progression). Middleware ordering verified by `test_middleware_ordering.py`.
 6. `CSRFOriginMiddleware` is registered **inside** `SessionMiddleware` (`request.session` is available to handlers downstream of CSRF). Unit test asserts order.
@@ -337,7 +333,7 @@ on url_for(...) sites and resolve by re-running:
 | Authlib `starlette_client.OAuth` has a silent API drift from `flask_client.OAuth` around `authorize_redirect` signatures | Medium | High — OAuth callback 500s | Spike a Playwright happy-path in staging **before** the Wave 1 PR is marked ready. Entry criterion #5 below. |
 | `request.url_for("bp_endpoint")` fails to resolve because `APIRouter(prefix="/admin")` nests another prefix | Medium | High — `NoMatchFound` at runtime | Assumption #19 verified via `test_url_for_nesting.py` that calls `request.url_for` on a router mounted the same way. |
 | Concurrent PRs rename routes in `/Users/quantum/Documents/ComputedChaos/salesagent/templates/base.html` (header nav) during Wave 1 branch | High | Medium — merge conflict hell | Declare `src/admin/routers/public.py|core.py|auth.py|oidc.py` freeze; template conflicts resolved by re-running codemod. |
-| CSRFOriginMiddleware kills OAuth callback because Google POSTs the callback with no session cookie yet | Medium | Critical — OAuth broken | CSRF middleware exempts paths in a hardcoded list: `/admin/auth/callback`, `/admin/auth/oidc/callback`, `/api/v1/*`, `/a2a/*`, `/mcp/*`. Test asserts POST to exempt paths without CSRF returns the handler's response, not 403. |
+| CSRFOriginMiddleware rejects OIDC form_post callback because the IdP's Origin cannot be pre-registered | Medium | Critical — OIDC broken | `CSRFOriginMiddleware._EXEMPT_PATH_PREFIXES` is the canonical exempt tuple at `src/admin/csrf.py` per `foundation-modules.md §11.7`: `/mcp`, `/a2a`, `/api/v1/`, `/.well-known/`, `/agent.json`, `/_internal/`, `/admin/auth/google/callback`, `/admin/auth/oidc/callback`, `/admin/auth/gam/callback`. State validation (§11.6.1) replaces Origin validation on the OIDC path. Guard: `test_architecture_csrf_exempt_covers_adcp.py`. |
 | Staging `SESSION_SECRET` leaks in logs or environment dumps | Low | Medium | Code review gate: grep PR for any `logger.info.*SESSION_SECRET` or `print.*SESSION_SECRET`. |
 | `SessionMiddleware` payload exceeds 3.5KB for super-admin sessions | Low | Medium — cookie silently truncated | Verification test (see Part 2 assumption #5). If fails, fallback to `starlette-session` Redis backend; not a release-blocker because super-admin is a tiny user set. |
 
@@ -1090,11 +1086,11 @@ Grouped by verification strategy. HIGH confidence assumptions get single-line pl
 
 ### Group 2: MEDIUM confidence (12 — full recipes)
 
-**10. Roll-your-own CSRF secure and correct.**
-- **How:** unit tests `tests/unit/test_csrf_middleware.py` covering: valid cookie+header pass, cookie-only fail, header-only fail, mismatched fail, SameSite=Strict cookie flags present, exempt path bypass, non-unsafe method bypass. Plus Playwright `tests/e2e/test_admin_csrf_enforcement.py`. Plus security-focused code review by second engineer.
-- **When:** Wave 0 exit (unit tests green). Wave 1 exit (Playwright green). Wave 2 entry (security review sign-off).
-- **Failure symptom:** CSRF bypass demonstrated in a test; legitimate forms blocked.
-- **Fallback:** adopt `starlette-csrf` from PyPI (explicitly rejected in §15 but reinstatable as escape hatch); ~1 day of work.
+**10. CSRFOriginMiddleware (Option A) secure and correct — Origin-header validation + SameSite=Lax session cookie. Canonical implementation: `foundation-modules.md §11.7`. Zero JavaScript changes, zero template changes, zero form changes — the entire defense is an ASGI middleware that inspects the Origin (or Referer fallback) header against a wildcard-subdomain allow-list.**
+- **How:** `tests/unit/test_csrf_origin_middleware.py` covering seven scenarios: (1) safe method (GET/HEAD/OPTIONS/TRACE) bypasses validation; (2) unsafe method with matching Origin passes; (3) unsafe method with mismatched Origin returns 403; (4) unsafe method with missing Origin but matching Referer passes; (5) unsafe method with `Origin: null` is always rejected; (6) exempt-path POST (`/admin/auth/google/callback`, `/admin/auth/oidc/callback`, `/admin/auth/gam/callback`, `/mcp/*`, `/a2a/*`, `/api/v1/*`, `/_internal/*`, `/.well-known/*`, `/agent.json`) bypasses validation; (7) wildcard subdomain match against `*.PRIMARY_DOMAIN` accepts newly-provisioned tenant subdomains. Plus OIDC transit-cookie exception per §11.6.1: the OIDC callback is on the exempt list AND state-validated through `oauth_transit` (signed, single-use, 10-minute max_age) so the defense is strictly stronger than Origin validation on that path. Plus Playwright `tests/e2e/test_admin_csrf_enforcement.py` exercising a logged-in user submitting a form from an evil origin.
+- **When:** L1a exit (unit tests green). L1b exit (Playwright green). L2 entry (security review sign-off).
+- **Failure symptom:** same-origin POST 403s (origin normalization bug — see `_origin_of` RFC-6454 serialization in §11.7) OR cross-origin POST returns 200 (allowed-origins registration missed a virtual host).
+- **Fallback:** `starlette-csrf` PyPI package (~1 day, explicitly rejected in §15 but reinstatable).
 
 **11. `sse-starlette` disconnect detection works behind nginx/Fly.**
 - **How:** Wave 3 integration test `tests/integration/test_activity_stream_disconnect.py` opens an SSE connection, sends a disconnect, asserts the server's producer coroutine is cancelled within 2s. Plus staging test against Fly production-like setup: 100 concurrent SSE clients, drop 50 mid-stream, assert CPU/memory return to baseline within 10s.
@@ -1377,7 +1373,10 @@ Proposed addition to `/Users/quantum/Documents/ComputedChaos/salesagent/tests/ha
                 session_data["user"] = admin_user
                 session_data["tenant_id"] = self._tenant_id
                 session_data["authenticated"] = True
-                session_data["csrf_token"] = "test-csrf-token-fixed"
+            # CSRF-Option-A: Origin-header validation replaces token-based
+            # CSRF; TestClient defaults Origin=http://testserver which is
+            # added to ALLOWED_ORIGINS in the test config, so no per-test
+            # priming is needed. See foundation-modules.md §11.7.
             self._admin_client = client
 
         return self._admin_client
@@ -1423,12 +1422,12 @@ def test_create_account_redirects_to_list(self, integration_db):
     with IntegrationEnv(tenant_id="t1", principal_id="p1") as env:
         TenantFactory(tenant_id="t1")
         client = env.get_admin_client()
-        csrf = client.cookies["adcp_csrf"]
+        # CSRF-Option-A: same-origin TestClient POSTs pass by Origin header
+        # alone (Origin=http://testserver is in ALLOWED_ORIGINS).
 
         resp = client.post(
             "/admin/tenant/t1/accounts",
-            data={"name": "New Co", "csrf_token": csrf},
-            headers={"X-CSRF-Token": csrf},
+            data={"name": "New Co"},
             follow_redirects=False,
         )
         assert resp.status_code == 303
@@ -1447,12 +1446,12 @@ def test_change_status_returns_json(self, integration_db):
         tenant = TenantFactory(tenant_id="t1")
         acc = AccountFactory(tenant=tenant, status="active")
         client = env.get_admin_client()
-        csrf = client.cookies["adcp_csrf"]
+        # CSRF-Option-A: same-origin TestClient POST passes by Origin alone.
 
         resp = client.post(
             f"/admin/tenant/t1/accounts/{acc.account_id}/status",
             json={"status": "paused"},
-            headers={"X-CSRF-Token": csrf, "Accept": "application/json"},
+            headers={"Accept": "application/json"},
         )
         assert resp.status_code == 200
         assert resp.json() == {"success": True, "status": "paused"}
@@ -1465,7 +1464,7 @@ def test_upload_creative_file(self, integration_db, tmp_path):
     with IntegrationEnv(tenant_id="t1", principal_id="p1") as env:
         TenantFactory(tenant_id="t1")
         client = env.get_admin_client()
-        csrf = client.cookies["adcp_csrf"]
+        # CSRF-Option-A: same-origin TestClient POST passes by Origin alone.
 
         fake_image = tmp_path / "banner.png"
         fake_image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
@@ -1474,8 +1473,7 @@ def test_upload_creative_file(self, integration_db, tmp_path):
             resp = client.post(
                 "/admin/tenant/t1/creatives/upload",
                 files={"file": ("banner.png", fh, "image/png")},
-                data={"name": "Summer Banner", "csrf_token": csrf},
-                headers={"X-CSRF-Token": csrf},
+                data={"name": "Summer Banner"},
                 follow_redirects=False,
             )
         assert resp.status_code == 303
@@ -1512,7 +1510,7 @@ All Playwright tests live under `/Users/quantum/Documents/ComputedChaos/salesage
 **1. Login via Google OAuth (happy path)**
 - **File:** `tests/e2e/test_admin_login_flow.py`
 - **Stack state:** Docker stack with `ADCP_AUTH_TEST_MODE=true` + mocked Google OIDC endpoint.
-- **Assertions:** (a) `/admin/login` returns Google button; (b) click Google button → mock OIDC server issues token → `/admin/auth/callback` redirects to `/admin/`; (c) dashboard visible; (d) `adcp_session` cookie present with `HttpOnly` flag; (e) session contains `email`, `tenant_id`, `authenticated=True`.
+- **Assertions:** (a) `/admin/login` returns Google button; (b) click Google button → mock OIDC server issues token → `/admin/auth/google/callback` redirects to `/admin/`; (c) dashboard visible; (d) `adcp_session` cookie present with `HttpOnly` flag; (e) session contains `email`, `tenant_id`, `authenticated=True`.
 
 **2. Login via per-tenant OIDC**
 - **File:** `tests/e2e/test_admin_oidc_login_flow.py`
@@ -1527,7 +1525,7 @@ All Playwright tests live under `/Users/quantum/Documents/ComputedChaos/salesage
 **4. CSRF rejection**
 - **File:** `tests/e2e/test_admin_csrf_enforcement.py`
 - **Stack state:** Docker + authenticated session.
-- **Assertions:** (a) GET form page; (b) extract form HTML; (c) POST with `csrf_token` omitted from body → 403 with `{"detail": "CSRF token missing"}`; (d) POST with mismatched token → 403; (e) POST with valid token → 303.
+- **Assertions:** (a) GET form page from `testserver`; (b) POST with `Origin: https://evil.example.com` AND valid session cookie → 403 with `{"detail": "CSRF Origin check failed"}`; (c) POST with `Origin: null` → 403 (always rejected); (d) POST with `Origin` header omitted and no `Referer` → 200/303 (SameSite=Lax is the defense for legacy UAs); (e) POST with `Origin: https://testserver` (same-origin) → 303.
 
 **5. Session expiration**
 - **File:** `tests/e2e/test_admin_session_expiration.py`

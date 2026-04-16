@@ -228,8 +228,8 @@ Checked the full registered route table:
 
 ```python
 _EXEMPT_PATH_PREFIXES = (
-    "/mcp", "/a2a", "/api/v1/", "/_internal/",   # ← ADD /_internal/
-    "/admin/auth/callback", "/admin/auth/oidc/",
+    "/mcp", "/a2a", "/api/v1/", "/_internal/", "/.well-known/", "/agent.json",
+    "/admin/auth/google/callback", "/admin/auth/oidc/callback", "/admin/auth/gam/callback",
 )
 ```
 
