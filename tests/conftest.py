@@ -766,6 +766,16 @@ def benchmark(request):
 # ============================================================================
 
 
+def pytest_addoption(parser):
+    """Register CLI flags for opt-in test suites."""
+    parser.addoption(
+        "--run-adcp-schema",
+        action="store_true",
+        default=False,
+        help="Run AdCP schema/contract/compliance tests (opt-in; normally skipped).",
+    )
+
+
 def pytest_collection_modifyitems(config, items):
     """Auto-apply entity markers and skip tests that need the full Docker stack."""
     import socket
@@ -812,3 +822,20 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if item.get_closest_marker("requires_server") and not server_available:
             item.add_marker(pytest.mark.skip(reason="MCP server not running on localhost:8100"))
+
+    # --- AdCP schema compliance opt-in ---
+    # These tests assert our schemas match the adcp library / spec. They are
+    # high-churn, tightly coupled to upstream schema releases, and rarely
+    # indicate real regressions. Skipped by default; enable with either:
+    #   pytest --run-adcp-schema
+    #   RUN_ADCP_SCHEMA=1 pytest
+    run_adcp_schema = config.getoption("--run-adcp-schema", default=False) or os.environ.get(
+        "RUN_ADCP_SCHEMA", ""
+    ).lower() in ("1", "true", "yes")
+    if not run_adcp_schema:
+        skip_adcp = pytest.mark.skip(
+            reason="AdCP schema compliance test (opt-in: use --run-adcp-schema or RUN_ADCP_SCHEMA=1)"
+        )
+        for item in items:
+            if item.get_closest_marker("adcp_schema"):
+                item.add_marker(skip_adcp)

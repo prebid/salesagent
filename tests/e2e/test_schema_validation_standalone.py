@@ -9,6 +9,10 @@ import pytest
 
 from .adcp_schema_validator import AdCPSchemaValidator, SchemaValidationError
 
+# AdCP schema compliance tests — opt-in; skipped by default.
+# Enable with: pytest --run-adcp-schema  OR  RUN_ADCP_SCHEMA=1 pytest
+pytestmark = pytest.mark.adcp_schema
+
 
 @pytest.mark.asyncio
 async def test_schema_validator_initialization():

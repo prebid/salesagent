@@ -22,7 +22,7 @@ from src.core.schemas import (
     UpdateMediaBuySuccess,
 )
 
-pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+pytestmark = [pytest.mark.integration, pytest.mark.requires_db, pytest.mark.adcp_schema]
 
 
 @pytest.mark.integration

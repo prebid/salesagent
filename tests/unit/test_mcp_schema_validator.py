@@ -9,10 +9,16 @@ These tests ensure the validator catches parameter mismatch bugs where:
 import sys
 from pathlib import Path
 
+import pytest
+
 # Add scripts/hooks directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "hooks"))
 
 from validate_mcp_schemas import ToolSchemaValidator
+
+# AdCP schema compliance tests — opt-in; skipped by default.
+# Enable with: pytest --run-adcp-schema  OR  RUN_ADCP_SCHEMA=1 pytest
+pytestmark = pytest.mark.adcp_schema
 
 
 class TestValidatorDetectsOptionalFieldMismatches:

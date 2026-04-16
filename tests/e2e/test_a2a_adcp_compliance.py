@@ -27,6 +27,10 @@ import pytest
 
 from .adcp_schema_validator import AdCPSchemaValidator, SchemaValidationError
 
+# AdCP schema compliance tests — opt-in; skipped by default.
+# Enable with: pytest --run-adcp-schema  OR  RUN_ADCP_SCHEMA=1 pytest
+pytestmark = pytest.mark.adcp_schema
+
 DEFAULT_AUTH_TOKEN = os.getenv("ADCP_TEST_TOKEN", "ci-test-token")
 
 

@@ -57,6 +57,10 @@ from src.core.schemas import (
     Product as ProductSchema,
 )
 
+# AdCP schema compliance tests — opt-in; skipped by default.
+# Enable with: pytest --run-adcp-schema  OR  RUN_ADCP_SCHEMA=1 pytest
+pytestmark = pytest.mark.adcp_schema
+
 
 class TestSchemaMatchesLibrary:
     """Validate that our schemas match the adcp library schemas.

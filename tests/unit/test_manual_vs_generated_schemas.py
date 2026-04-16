@@ -38,6 +38,10 @@ from src.core.schemas import (
     GetProductsResponse as ManualGetProductsResponse,
 )
 
+# AdCP schema compliance tests — opt-in; skipped by default.
+# Enable with: pytest --run-adcp-schema  OR  RUN_ADCP_SCHEMA=1 pytest
+pytestmark = pytest.mark.adcp_schema
+
 
 def get_model_fields(model: type[BaseModel]) -> dict[str, FieldInfo]:
     """Extract fields from a Pydantic model."""

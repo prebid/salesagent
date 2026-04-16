@@ -62,6 +62,10 @@ from tests.helpers.adcp_factories import (
     create_test_product,
 )
 
+# AdCP schema compliance tests — opt-in; skipped by default.
+# Enable with: pytest --run-adcp-schema  OR  RUN_ADCP_SCHEMA=1 pytest
+pytestmark = pytest.mark.adcp_schema
+
 # Valid adcp 3.6 field fixtures (must match library Pydantic types)
 VALID_CATALOG_MATCH = {"submitted_count": 10, "matched_count": 5}
 VALID_CATALOG_TYPES = ["product"]

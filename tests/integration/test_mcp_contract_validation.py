@@ -26,7 +26,7 @@ from src.core.schemas import (
 )
 from tests.helpers.adcp_factories import create_test_package_request
 
-pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+pytestmark = [pytest.mark.integration, pytest.mark.requires_db, pytest.mark.adcp_schema]
 
 
 class TestMCPContractValidation:

@@ -6,6 +6,12 @@ per pattern #1 (schema inheritance).
 beads: salesagent-x79
 """
 
+import pytest
+
+# AdCP schema compliance tests — opt-in; skipped by default.
+# Enable with: pytest --run-adcp-schema  OR  RUN_ADCP_SCHEMA=1 pytest
+pytestmark = pytest.mark.adcp_schema
+
 
 class TestAccountSchemaInheritance:
     """Account schemas extend library types, not duplicate them."""

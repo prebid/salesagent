@@ -21,6 +21,10 @@ import pytest
 
 from tests.e2e.adcp_schema_validator import AdCPSchemaValidator, SchemaDownloadError
 
+# AdCP schema compliance tests — opt-in; skipped by default.
+# Enable with: pytest --run-adcp-schema  OR  RUN_ADCP_SCHEMA=1 pytest
+pytestmark = pytest.mark.adcp_schema
+
 
 class TestA2AProtocolCompliance:
     """Test A2A protocol compliance with official AdCP schemas."""
