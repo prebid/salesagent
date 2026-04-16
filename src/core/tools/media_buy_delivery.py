@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 console = Console()
 
 from adcp.types import Error, MediaBuyStatus
+from adcp.types.generated_poc.core.attribution_window import AttributionWindow
 from adcp.types.generated_poc.core.context import ContextObject
 
 # adcp 3.6.0: Use schemas.ReportingPeriod (extends creative ReportingPeriod) for adapter compat.
@@ -52,6 +53,24 @@ from src.core.schemas import (
 )
 from src.core.testing_hooks import AdCPTestContext, DeliverySimulator, TimeSimulator, apply_testing_hooks
 from src.core.validation_helpers import format_validation_error
+
+PLATFORM_DEFAULT_ATTRIBUTION_WINDOW = AttributionWindow(
+    model="last_touch",
+    post_click={"interval": 30, "unit": "days"},
+)
+
+
+def _resolve_attribution_window(
+    req_attribution_window: Any | None,
+) -> AttributionWindow:
+    if req_attribution_window is not None:
+        data = (
+            req_attribution_window.model_dump()
+            if hasattr(req_attribution_window, "model_dump")
+            else req_attribution_window
+        )
+        return AttributionWindow(**data)
+    return PLATFORM_DEFAULT_ATTRIBUTION_WINDOW
 
 
 def _is_circuit_breaker_open(tenant_id: str) -> bool:
@@ -553,6 +572,7 @@ def _get_media_buy_delivery_impl(
             notification_type=notification_type,
             sequence_number=sequence_number,
             next_expected_at=next_expected_at,
+            attribution_window=_resolve_attribution_window(req.attribution_window),
         )
 
         # Apply testing hooks if needed

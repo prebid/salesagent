@@ -2302,3 +2302,65 @@ class TestDeliveryProtocol:
         assert delivery.totals.video_completions is None
         # aggregated_totals optional fields
         assert response.aggregated_totals.video_completions is None
+
+
+# ===========================================================================
+# Attribution Window Echo (BR-RULE-092 INV-2, INV-3)
+# ===========================================================================
+
+
+class TestAttributionWindowEcho:
+    """Response echoes attribution_window per BR-RULE-092.
+
+    INV-3: response must echo the applied attribution_window.
+    INV-2: when request omits attribution_window, return platform default.
+    """
+
+    def test_echoes_request_attribution_window(self):
+        """When buyer sends attribution_window, response echoes it back."""
+        with DeliveryPollEnv() as env:
+            env.add_buy(media_buy_id="mb_attr")
+            env.set_adapter_response("mb_attr", impressions=100, spend=5.0)
+            response = env.call_impl(
+                media_buy_ids=["mb_attr"],
+                attribution_window={
+                    "model": "last_touch",
+                    "post_click": {"interval": 7, "unit": "days"},
+                },
+            )
+            aw = response.attribution_window
+            assert aw is not None
+            assert aw.model.value == "last_touch"
+            assert aw.post_click.interval == 7
+            assert aw.post_click.unit.value == "days"
+
+    def test_platform_default_when_omitted(self):
+        """When buyer omits attribution_window, response returns platform default."""
+        with DeliveryPollEnv() as env:
+            env.add_buy(media_buy_id="mb_default")
+            env.set_adapter_response("mb_default", impressions=100, spend=5.0)
+            response = env.call_impl(media_buy_ids=["mb_default"])
+            aw = response.attribution_window
+            assert aw is not None
+            assert aw.model.value == "last_touch"
+            assert aw.post_click is not None
+            assert aw.post_click.interval == 30
+            assert aw.post_click.unit.value == "days"
+
+    def test_echoes_first_touch_model(self):
+        """Echoes non-default attribution model faithfully."""
+        with DeliveryPollEnv() as env:
+            env.add_buy(media_buy_id="mb_ft")
+            env.set_adapter_response("mb_ft", impressions=100, spend=5.0)
+            response = env.call_impl(
+                media_buy_ids=["mb_ft"],
+                attribution_window={
+                    "model": "first_touch",
+                    "post_view": {"interval": 1, "unit": "days"},
+                },
+            )
+            aw = response.attribution_window
+            assert aw is not None
+            assert aw.model.value == "first_touch"
+            assert aw.post_view.interval == 1
+            assert aw.post_view.unit.value == "days"
