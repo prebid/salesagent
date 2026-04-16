@@ -68,7 +68,7 @@ def test_validation_error_formatting():
         assert "brand_manifest.BrandManifest.target_audience" in error_msg
         assert "Expected string, got object" in error_msg
         assert "AdCP spec requires this field to be a simple string" in error_msg
-        assert "https://adcontextprotocol.org/schemas/v1/" in error_msg
+        assert "https://adcontextprotocol.org/schemas/latest/" in error_msg
 
 
 def test_validation_error_formatting_missing_field():

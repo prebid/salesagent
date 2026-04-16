@@ -1,7 +1,7 @@
 """Protocol envelope wrapper for AdCP responses per AdCP v2.4 spec.
 
 This module implements the protocol envelope pattern defined in:
-https://adcontextprotocol.org/schemas/v1/core/protocol-envelope.json
+https://adcontextprotocol.org/schemas/latest/core/protocol-envelope.json
 
 The envelope separates protocol-level concerns (status, task_id, context_id, message)
 from domain response data (payload). This allows the same domain response models to work
@@ -62,7 +62,7 @@ class ProtocolEnvelope(BaseModel):
     task-specific response payloads. Task response schemas should NOT include
     these fields - they are protocol-level concerns.
 
-    Per AdCP v2.4 spec: /schemas/v1/core/protocol-envelope.json
+    Per AdCP v2.4 spec: /schemas/latest/core/protocol-envelope.json
     """
 
     # Required fields

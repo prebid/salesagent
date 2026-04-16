@@ -60,17 +60,19 @@ class AdCPSchemaValidator:
     Automatically downloads, caches, and validates against official AdCP schemas.
     """
 
-    BASE_SCHEMA_URL = "https://adcontextprotocol.org/schemas/v1"
-    INDEX_URL = "https://adcontextprotocol.org/schemas/v1/index.json"
+    BASE_SCHEMA_URL = "https://adcontextprotocol.org/schemas/latest"
+    INDEX_URL = "https://adcontextprotocol.org/schemas/latest/index.json"
 
-    def __init__(self, cache_dir: Path | None = None, offline_mode: bool = False, adcp_version: str = "v1"):
+    def __init__(self, cache_dir: Path | None = None, offline_mode: bool = False, adcp_version: str = "latest"):
         """
         Initialize the schema validator.
 
         Args:
             cache_dir: Directory to cache schemas. Defaults to schemas/{version}
             offline_mode: If True, only use cached schemas (no downloads)
-            adcp_version: AdCP schema version to use (e.g., "v1", "v2")
+            adcp_version: AdCP schema version path segment (e.g., "latest", "2.5.0").
+                The upstream registry retired the ``/schemas/v1/`` namespace; schemas
+                now live at ``/schemas/latest/`` and pinned semver paths.
         """
         self.offline_mode = offline_mode
         self.adcp_version = adcp_version
@@ -677,14 +679,14 @@ async def adcp_validator_offline():
 # Utility functions for test setup
 
 
-async def preload_schemas(task_names: list[str] = None, load_all: bool = True, adcp_version: str = "v1"):
+async def preload_schemas(task_names: list[str] = None, load_all: bool = True, adcp_version: str = "latest"):
     """
     Preload schemas for faster test execution.
 
     Args:
         task_names: List of task names to preload. If None, loads common tasks.
         load_all: If True, loads all schemas from registry (core, enums, tasks).
-        adcp_version: AdCP schema version to use (e.g., "v1", "v2")
+        adcp_version: AdCP schema version path segment (e.g., "latest", "2.5.0").
     """
     async with AdCPSchemaValidator(adcp_version=adcp_version) as validator:
         # Preload index

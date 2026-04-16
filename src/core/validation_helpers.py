@@ -158,7 +158,7 @@ def format_validation_error(validation_error: ValidationError, context: str = "r
     error_msg = (
         f"Invalid {context}: The following fields do not match the AdCP specification:\n\n"
         + "\n".join(error_details)
-        + "\n\nPlease check the AdCP spec at https://adcontextprotocol.org/schemas/v1/ for correct field types."
+        + "\n\nPlease check the AdCP spec at https://adcontextprotocol.org/schemas/latest/ for correct field types."
     )
 
     return error_msg

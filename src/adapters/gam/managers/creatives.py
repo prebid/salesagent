@@ -697,7 +697,7 @@ class GAMCreativesManager:
         elif asset_type == "video":
             # For video, we can use VideoRedirectCreative
             # Per AdCP spec, video assets have required duration field
-            # https://adcontextprotocol.org/schemas/v1/core/assets/video-asset.json
+            # https://adcontextprotocol.org/schemas/latest/core/assets/video-asset.json
             duration = asset.get("duration")
             if not duration:
                 raise ValueError(f"Video creative {asset.get('creative_id')} missing required duration field")

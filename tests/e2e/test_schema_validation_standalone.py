@@ -3,17 +3,35 @@ Standalone test for AdCP schema validation functionality.
 
 This test validates that our schema validation system works correctly
 without needing a running server, by testing the validation logic directly.
+
+These tests exercise validator mechanics (init, caching, offline mode, task-name
+mapping, request/response validation) and deliberately do NOT reach the live
+AdCP registry. They run against a committed fixture in
+``tests/fixtures/adcp_schemas/`` that contains the ``get-products`` transitive
+schema closure. To regenerate the fixture, drive ``preload_schemas()`` from
+``adcp_schema_validator`` and copy the transitive closure of the seed refs.
+Live spec-conformance checks belong in ``tests/unit/test_adcp_contract.py``
+(validated against the pinned ``adcp`` library), not here.
 """
+
+from pathlib import Path
 
 import pytest
 
 from .adcp_schema_validator import AdCPSchemaValidator, SchemaValidationError
 
+_FIXTURE_SCHEMAS = Path(__file__).resolve().parents[1] / "fixtures" / "adcp_schemas"
+
+
+def _offline_validator() -> AdCPSchemaValidator:
+    """Return a validator bound to the committed schema fixtures, no network."""
+    return AdCPSchemaValidator(cache_dir=_FIXTURE_SCHEMAS, offline_mode=True)
+
 
 @pytest.mark.asyncio
 async def test_schema_validator_initialization():
     """Test that the schema validator can be initialized and download schemas."""
-    async with AdCPSchemaValidator() as validator:
+    async with _offline_validator() as validator:
         # Test that we can get the schema index
         index = await validator.get_schema_index()
         assert isinstance(index, dict)
@@ -37,7 +55,7 @@ async def test_schema_validator_initialization():
 @pytest.mark.asyncio
 async def test_invalid_get_products_response():
     """Test validation of an invalid get-products response."""
-    async with AdCPSchemaValidator() as validator:
+    async with _offline_validator() as validator:
         # Create an invalid response (missing required 'products' field)
         invalid_response = {
             "message": "Here are some products",
@@ -61,7 +79,7 @@ async def test_get_products_request_validation():
     Per AdCP spec, buying_mode is required. When buying_mode is 'brief',
     the brief field is also required. When 'wholesale', brief must not be provided.
     """
-    async with AdCPSchemaValidator() as validator:
+    async with _offline_validator() as validator:
         # Brief mode with brief text
         brief_request = {"buying_mode": "brief", "brief": "Looking for display advertising"}
         await validator.validate_request("get-products", brief_request)
@@ -88,21 +106,15 @@ async def test_get_products_request_validation():
 
 @pytest.mark.asyncio
 async def test_offline_mode():
-    """Test that offline mode works with cached schemas."""
-    # First, ensure schemas are cached by using online mode
-    async with AdCPSchemaValidator() as validator:
+    """Offline mode validates responses against committed fixtures without network."""
+    async with _offline_validator() as validator:
         await validator.validate_response("get-products", {"products": []})
-
-    # Now test offline mode
-    async with AdCPSchemaValidator(offline_mode=True) as offline_validator:
-        # Should work with cached schemas
-        await offline_validator.validate_response("get-products", {"products": []})
 
 
 @pytest.mark.asyncio
 async def test_schema_caching():
     """Test that schemas are properly cached for performance."""
-    async with AdCPSchemaValidator() as validator:
+    async with _offline_validator() as validator:
         # First call should download the schema
         schema_ref = await validator._find_schema_ref_for_task("get-products", "response")
         schema1 = await validator.get_schema(schema_ref)
@@ -122,7 +134,7 @@ async def test_schema_caching():
 @pytest.mark.asyncio
 async def test_task_name_mapping():
     """Test that different task name formats are handled correctly."""
-    async with AdCPSchemaValidator() as validator:
+    async with _offline_validator() as validator:
         # Test hyphen format (schema format)
         schema_ref1 = await validator._find_schema_ref_for_task("get-products", "response")
 
