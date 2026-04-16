@@ -1400,7 +1400,7 @@ class MockAdServer(AdServerAdapter):
                         # Handle format selection
                         formats = request.form.getlist("formats")
                         if formats:
-                            product_obj.formats = formats
+                            product_obj.format_ids = formats
 
                         # Validate the configuration
                         validation_errors = self.validate_product_config(new_config)
@@ -1416,7 +1416,7 @@ class MockAdServer(AdServerAdapter):
                                 product=product,
                                 config=config,
                                 formats=available_formats,
-                                selected_formats=product_obj.formats or [],
+                                selected_formats=product_obj.format_ids or [],
                                 error=validation_errors[0],
                             )
 
@@ -1435,7 +1435,7 @@ class MockAdServer(AdServerAdapter):
                             product=product,
                             config=new_config,
                             formats=available_formats,
-                            selected_formats=product_obj.formats or [],
+                            selected_formats=product_obj.format_ids or [],
                             success=True,
                         )
 
@@ -1450,7 +1450,7 @@ class MockAdServer(AdServerAdapter):
                         product=product,
                         config=config,
                         formats=available_formats,
-                        selected_formats=product_obj.formats or [],
+                        selected_formats=product_obj.format_ids or [],
                     )
 
             return wrapped_view()
