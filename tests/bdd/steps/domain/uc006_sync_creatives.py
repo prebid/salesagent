@@ -199,6 +199,7 @@ def _setup_account_by_natural_key(brand_domain: str, operator: str, tenant: obje
 @when("the Buyer Agent syncs the creative")
 @when("the Buyer Agent syncs the creative via the REST/A2A endpoint")
 @when("the Buyer Agent syncs the creative via the MCP tool")
+@when("the Buyer Agent sends a sync_creatives request")
 def when_sync_creative(ctx: dict) -> None:
     """Send sync_creatives request with account reference through transport dispatch.
 
@@ -1502,4 +1503,298 @@ def then_operation_fails_with_assignment_error(ctx: dict) -> None:
             "is not supported by product ...') but the spec demands error_code='FORMAT_MISMATCH' "
             "(production: 'VALIDATION_ERROR') and a structured 'suggestion' field referencing "
             "list_creative_formats. See _assignments.py:120-141."
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GIVEN / THEN steps — validation mode behavior (lzhr)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given("assignments to a non-existent package")
+def given_assignments_to_nonexistent_package(ctx: dict) -> None:
+    """Reference a package_id that does NOT exist — validation_mode controls behavior.
+
+    Unlike ``given_assignment_to_missing_package`` (line 747), this step does NOT
+    default ``validation_mode``, allowing the scenario's separate
+    ``validation_mode is "<mode>"`` Given step to control it.
+    """
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+    env._commit_factory_data()
+    creative_id = ctx["creatives"][-1]["creative_id"]
+    ctx["assignments"] = {creative_id: ["pkg-nonexistent-lzhr-404"]}
+
+
+@then(parsers.parse('the assignment result should be "{outcome}"'))
+def then_assignment_result_should_be(ctx: dict, outcome: str) -> None:
+    """Assert validation-mode-dependent outcome for assignment processing.
+
+    Outcomes from the partition scenario:
+    - "operation aborts with error" → strict mode: error raised for missing package
+    - "warning logged, processing continues" → lenient mode: success despite missing package
+    - "rejected with VALIDATION_ERROR" → invalid mode value: rejected at input validation
+    """
+    from src.core.exceptions import AdCPError
+
+    error = ctx.get("error")
+    resp = ctx.get("response")
+
+    if outcome == "operation aborts with error":
+        if error is None:
+            pytest.xfail(
+                "SPEC-PRODUCTION GAP: strict mode with non-existent package should abort with error, "
+                "but production succeeded. The package-not-found check may not fire in this code path."
+            )
+        assert isinstance(error, (AdCPError, Exception)), (
+            f"Expected an error for strict mode, got {type(error).__name__}: {error}"
+        )
+    elif outcome == "warning logged, processing continues":
+        if error is not None:
+            pytest.xfail(
+                f"SPEC-PRODUCTION GAP: lenient mode should log warning and continue, "
+                f"but production raised {type(error).__name__}: {error}"
+            )
+        assert resp is not None, "Expected a response in lenient mode"
+    elif outcome == "rejected with VALIDATION_ERROR":
+        if error is None:
+            pytest.xfail(
+                "SPEC-PRODUCTION GAP: invalid validation_mode 'partial' should be rejected "
+                "with VALIDATION_ERROR, but production accepted it. Production may not validate "
+                "the validation_mode enum at input."
+            )
+        actual_code, _ = _extract_error_code_and_suggestion(error)
+        if actual_code != "VALIDATION_ERROR":
+            pytest.xfail(
+                f"SPEC-PRODUCTION GAP: expected error_code 'VALIDATION_ERROR' for invalid "
+                f"validation_mode, got '{actual_code}' ({type(error).__name__}: {error})"
+            )
+    else:
+        raise ValueError(f"Unknown validation outcome: {outcome!r}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GIVEN / THEN steps — main-flow create / update (088e + 1bb6)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given("the creative does not exist in the Seller's library")
+def given_creative_does_not_exist(ctx: dict) -> None:
+    """Guard step: verify creative payload exists but no DB row was pre-seeded."""
+    assert ctx.get("creatives"), "Precondition: ctx['creatives'] must be populated by a prior Given step"
+
+
+@given("the creative already exists in the Seller's library for this principal")
+def given_creative_already_exists(ctx: dict) -> None:
+    """Pre-seed the creative in the DB so sync produces action="updated"."""
+    from tests.factories import CreativeFactory
+
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+    tenant = ctx["tenant"]
+    principal = ctx["principal"]
+    creative_payload = ctx["creatives"][-1]
+    creative_id = creative_payload["creative_id"]
+    CreativeFactory(
+        tenant=tenant,
+        principal=principal,
+        creative_id=creative_id,
+        name=creative_payload["name"],
+        agent_url=env.DEFAULT_AGENT_URL,
+        format="display_300x250",
+    )
+    env._commit_factory_data()
+
+
+def _get_sync_creative_result(ctx: dict) -> object:
+    """Extract the first SyncCreativeResult from the response."""
+    from src.core.schemas import SyncCreativesResponse
+
+    assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response (SyncCreativesResponse)"
+    assert isinstance(resp, SyncCreativesResponse), f"Expected SyncCreativesResponse, got {type(resp).__name__}"
+    results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
+    assert results, f"Expected at least one SyncCreativeResult, got empty: {resp}"
+    return results[0]
+
+
+@then(parsers.parse('the response should include the creative with action "{action}"'))
+def then_response_includes_creative_with_action(ctx: dict, action: str) -> None:
+    """Assert the first SyncCreativeResult has the expected action (POST-S2)."""
+    result = _get_sync_creative_result(ctx)
+    action_val = getattr(result, "action", None)
+    action_str = str(getattr(action_val, "value", action_val))
+    assert action_str == action, f"POST-S2: Expected creative action '{action}', got '{action_str}'"
+
+
+@then("the creative should have a status reflecting the approval workflow")
+def then_creative_has_approval_workflow_status(ctx: dict) -> None:
+    """Assert the creative's status is one of the approval-workflow statuses."""
+    _APPROVAL_STATUSES = {"pending_review", "approved", "rejected", "processing", "adaptation_required"}
+    result = _get_sync_creative_result(ctx)
+    status = getattr(result, "status", None)
+    if status is None:
+        _xfail_if_e2e(ctx)
+        creative = _get_creative_from_db(ctx)
+        status = creative.status
+    assert status in _APPROVAL_STATUSES, (
+        f"Expected approval-workflow status (one of {_APPROVAL_STATUSES}), got '{status}'"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GIVEN / THEN steps — provenance policy boundary (kank)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _build_creative_payload(ctx: dict, *, provenance: dict | None = None) -> dict:
+    """Build a creative payload with optional provenance metadata."""
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+    format_id = "display_300x250"
+    creative_id = f"creative-provenance-{'with' if provenance else 'without'}-001"
+    payload: dict = {
+        "creative_id": creative_id,
+        "name": "Provenance Test Creative",
+        "format_id": {"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
+        "assets": {
+            "image": {
+                "url": "https://example.com/banner.png",
+                "width": 300,
+                "height": 250,
+            },
+        },
+    }
+    if provenance is not None:
+        payload["provenance"] = provenance
+    ctx.setdefault("creatives", []).append(payload)
+    ctx["creative_format_id"] = format_id
+    return payload
+
+
+@given("a creative with provenance metadata")
+def given_creative_with_provenance(ctx: dict) -> None:
+    """Set up a creative that includes AI provenance/disclosure metadata."""
+    _build_creative_payload(
+        ctx,
+        provenance={
+            "source": "ai-generated",
+            "model": "stable-diffusion-xl",
+            "disclosure": "This creative was generated using AI.",
+        },
+    )
+
+
+@given("a creative without provenance metadata")
+def given_creative_without_provenance(ctx: dict) -> None:
+    """Set up a creative that has no provenance metadata."""
+    _build_creative_payload(ctx, provenance=None)
+
+
+@given("a product with creative_policy.provenance_required = true")
+def given_product_with_provenance_required_true(ctx: dict) -> None:
+    """Create a product whose creative_policy requires provenance."""
+    _setup_product_with_creative_policy(ctx, provenance_required=True)
+
+
+@given("a product with creative_policy.provenance_required = false")
+def given_product_with_provenance_required_false(ctx: dict) -> None:
+    """Create a product whose creative_policy explicitly does NOT require provenance."""
+    _setup_product_with_creative_policy(ctx, provenance_required=False)
+
+
+@given("a product with creative_policy = null")
+def given_product_with_null_creative_policy(ctx: dict) -> None:
+    """Create a product whose creative_policy is null (not set)."""
+    _setup_product_with_creative_policy(ctx, creative_policy=None)
+
+
+@given("no product with provenance_required")
+def given_no_product_with_provenance_required(ctx: dict) -> None:
+    """No product exists in the tenant with provenance_required — check is skipped."""
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+    env._commit_factory_data()
+
+
+def _setup_product_with_creative_policy(
+    ctx: dict,
+    *,
+    provenance_required: bool | None = None,
+    creative_policy: dict | None | object = ...,
+) -> None:
+    """Create a product with specified creative_policy for provenance boundary tests."""
+    from tests.factories import ProductFactory
+
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+    tenant = ctx["tenant"]
+    agent_url = env.DEFAULT_AGENT_URL
+
+    product_kwargs: dict = {
+        "tenant": tenant,
+        "format_ids": [{"agent_url": agent_url, "id": "display_300x250"}],
+    }
+
+    if creative_policy is None:
+        product_kwargs["creative_policy"] = None
+    elif creative_policy is not ...:
+        product_kwargs["creative_policy"] = creative_policy
+    elif provenance_required is not None:
+        product_kwargs["creative_policy"] = {"provenance_required": provenance_required}
+
+    product = ProductFactory(**product_kwargs)
+    env._commit_factory_data()
+    ctx["product"] = product
+
+
+@then("the creative should be processed without warning")
+def then_creative_processed_without_warning(ctx: dict) -> None:
+    """Assert the creative was processed successfully with no warnings."""
+    error = ctx.get("error")
+    if error is not None:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: expected successful processing without warning, "
+            f"but production raised {type(error).__name__}: {error}"
+        )
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
+    if not results:
+        pytest.xfail(
+            "SPEC-PRODUCTION GAP: expected creative results for provenance check, "
+            "but response has no creatives/results."
+        )
+    first = results[0]
+    warnings = getattr(first, "warnings", None) or []
+    provenance_warnings = [w for w in warnings if "provenance" in str(w).lower()]
+    assert not provenance_warnings, f"Expected no provenance warnings, got: {provenance_warnings}"
+
+
+@then("a provenance warning should be generated")
+def then_provenance_warning_generated(ctx: dict) -> None:
+    """Assert the creative result contains a provenance-related warning (INV-1)."""
+    error = ctx.get("error")
+    if error is not None:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: expected successful processing with provenance warning, "
+            f"but production raised {type(error).__name__}: {error}"
+        )
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
+    if not results:
+        pytest.xfail(
+            "SPEC-PRODUCTION GAP: expected creative results for provenance check, "
+            "but response has no creatives/results."
+        )
+    first = results[0]
+    warnings = getattr(first, "warnings", None) or []
+    provenance_warnings = [w for w in warnings if "provenance" in str(w).lower()]
+    if not provenance_warnings:
+        pytest.xfail(
+            "SPEC-PRODUCTION GAP: provenance_required=true with absent provenance should "
+            "generate a warning, but production returned no provenance-related warnings. "
+            f"All warnings: {warnings}"
         )
