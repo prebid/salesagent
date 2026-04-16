@@ -537,8 +537,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
-        # FIXME(salesagent-tlb8): E2E_REST — sandbox account fixtures and response
-        # shape differences in Docker vs in-process.
+        # FIXME(salesagent-hsz): E2E_REST — sandbox accounts created in test
+        # process are not visible to Docker's separate DB.
         _UC011_E2E_SANDBOX_CONTEXT_TAGS: set[str] = {
             "T-UC-011-sandbox-list-filter",
             "T-UC-011-ext-g-absent",
@@ -546,7 +546,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         if is_e2e_rest and (marker_names & _UC011_E2E_SANDBOX_CONTEXT_TAGS):
             item.add_marker(
                 pytest.mark.xfail(
-                    reason="E2E: Docker-specific sandbox/context shape differs from in-process harness",
+                    reason="e2e_rest fixture injection gap — sandbox accounts created in test not visible to Docker DB",
                     strict=False,
                 )
             )
