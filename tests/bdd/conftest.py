@@ -1278,8 +1278,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # keyword targeting ops not implemented, error codes/suggestions missing.
         # FIXME(salesagent-av7): UC-026 production gaps in update response and validation.
         _UC026_XFAIL_TAGS: set[str] = {
-            # Main flow: production tries format_id["id"] on FormatId Pydantic model
-            "T-UC-026-main-explicit-formats",
+            # Graduated: T-UC-026-main-explicit-formats (qq6f: format_ids now echoed)
+            # Full-config: optimization_goals missing `kind`, targeting_overlay.audiences extra_forbidden
             "T-UC-026-main-full-config",
             # Update alt-flows: AffectedPackage lacks budget/targeting_overlay/format_ids;
             # keyword_targets_add/remove and negative_keywords_add/remove not implemented

@@ -1726,28 +1726,12 @@ def then_package_pricing(ctx: dict, pricing_option_id: str) -> None:
 @then("the package should contain format_ids defaulting to all product formats")
 def then_package_default_formats(ctx: dict) -> None:
     """Assert package format_ids default to all product formats."""
-    import pytest
-    from sqlalchemy import select
-
-    from src.core.database.database_session import get_db_session
-    from src.core.database.models import MediaPackage
-
     packages = _get_packages(ctx)
     pkg = packages[0]
     pkg_id = _pkg_field(pkg, "package_id")
     assert pkg_id, "Package has no package_id — cannot verify format_ids"
     format_ids = _pkg_field(pkg, "format_ids")
-    if format_ids is None:
-        with get_db_session() as session:
-            db_pkg = session.scalars(select(MediaPackage).filter_by(package_id=pkg_id)).first()
-            if db_pkg:
-                db_format_ids = getattr(db_pkg, "format_ids", None)
-                if db_format_ids:
-                    pytest.xfail(
-                        f"SPEC-PRODUCTION GAP: format_ids persisted in DB ({len(db_format_ids)} items) "
-                        "but not echoed in response. FIXME(salesagent-9vgz.1)"
-                    )
-        pytest.xfail("SPEC-PRODUCTION GAP: format_ids not present on package or in DB. FIXME(salesagent-9vgz.1)")
+    assert format_ids is not None, "Package format_ids is None — production should echo format_ids"
     assert isinstance(format_ids, list), f"Expected format_ids to be a list, got {type(format_ids)}"
     assert len(format_ids) > 0, "Expected format_ids to default to all product formats, got empty list"
     product = ctx.get("default_product")
@@ -1885,8 +1869,6 @@ def then_package_explicit_formats(ctx: dict, fmt_ids: str) -> None:
 @then("the response should contain a package with all provided fields echoed")
 def then_package_all_fields(ctx: dict) -> None:
     """Assert package echoes all provided fields from the request."""
-    import pytest
-
     packages = _get_packages(ctx)
     assert len(packages) > 0, "No packages in response"
     pkg = packages[0]
@@ -1906,11 +1888,7 @@ def then_package_all_fields(ctx: dict) -> None:
         # Compare scalar fields for value echo
         if isinstance(expected_value, (str, int, float, bool)):
             _compare_echoed_scalar(field, expected_value, actual, mismatched_fields)
-    if missing_fields:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: Package created but fields {missing_fields} not echoed "
-            f"in response. FIXME(salesagent-9vgz.1)"
-        )
+    assert not missing_fields, f"Package created but fields {missing_fields} not echoed in response"
     if mismatched_fields:
         details = "; ".join(mismatched_fields)
         raise AssertionError(f"Echoed fields have wrong values: {details}")
@@ -2490,14 +2468,9 @@ def then_pricing_defaults(ctx: dict) -> None:
 @then(parsers.parse("the package should be created with format_ids {fmt_ids}"))
 def then_created_with_formats(ctx: dict, fmt_ids: str) -> None:
     """Assert package was created with specific format_ids."""
-    import pytest
-
     pkgs = _assert_has_packages(ctx)
     actual_format_ids = _pkg_field(pkgs[0], "format_ids")
-    if actual_format_ids is None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: format_ids not echoed in response. Expected {fmt_ids}. FIXME(salesagent-9vgz.1)"
-        )
+    assert actual_format_ids is not None, "format_ids not echoed in response — production should echo format_ids"
     try:
         expected = json.loads(fmt_ids)
     except (json.JSONDecodeError, TypeError):
