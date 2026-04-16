@@ -255,21 +255,28 @@ def docker_services_e2e(request):
     # Note: run_all_tests.sh sets COMPOSE_PROJECT_NAME, so we inherit that environment.
     # If running manually without script, it defaults to folder name.
 
-    init_result = subprocess.run(
-        [
-            "docker-compose",
-            "-f",
-            "docker-compose.e2e.yml",
-            "exec",
-            "-T",
-            "adcp-server",
-            "python",
-            "scripts/setup/init_database_ci.py",
-        ],
-        env=init_env,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        init_result = subprocess.run(
+            [
+                "docker-compose",
+                "-f",
+                "docker-compose.e2e.yml",
+                "exec",
+                "-T",
+                "adcp-server",
+                "python",
+                "scripts/setup/init_database_ci.py",
+            ],
+            env=init_env,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(
+            "docker-compose exec init_database_ci.py timed out after 5 min — "
+            "container likely deadlocked (check for stale stacks: docker ps)"
+        )
     if init_result.returncode != 0:
         print("❌ CI data initialization failed:")
         print(f"STDOUT: {init_result.stdout}")
