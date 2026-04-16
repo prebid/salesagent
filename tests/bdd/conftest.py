@@ -477,13 +477,18 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
-        # FIXME(salesagent-nmg9): E2E_REST — set_registry_formats has no sidecar mock
-        # path. Docker's real creative agent serves its own 49-format catalog, so
-        # scenarios that inject specific format fixtures via Given steps and assert
-        # on those names can't run against E2E. Remove when E2E gains catalog-injection.
+        # FIXME(salesagent-nmg9, salesagent-rwly, salesagent-hamk): E2E_REST —
+        # set_registry_formats has no sidecar mock path. Docker's real creative
+        # agent serves its own catalog, so scenarios that inject specific format
+        # fixtures via Given steps and assert on those names can't run against
+        # E2E. Remove when E2E gains catalog-injection.
         _UC005_E2E_FIXTURE_INJECTION_TAGS: set[str] = {
+            "T-UC-005-inv-031-1-holds",
             "T-UC-005-inv-031-1-violated",
             "T-UC-005-inv-031-2-holds",
+            "T-UC-005-inv-049-1-holds",
+            "T-UC-005-inv-049-1-violated",
+            "T-UC-005-inv-049-2-holds",
             "T-UC-005-inv-049-2-violated",
             "T-UC-005-inv-049-3-holds",
             "T-UC-005-inv-049-3-violated",
@@ -491,8 +496,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-005-inv-049-4-holds",
             "T-UC-005-inv-049-4-violated",
             "T-UC-005-inv-049-4-nodim",
+            "T-UC-005-inv-049-5-holds",
+            "T-UC-005-inv-049-6-holds",
+            "T-UC-005-inv-049-7-holds",
+            "T-UC-005-inv-049-7-violated",
+            "T-UC-005-inv-049-9-holds",
             "T-UC-005-inv-049-9-violated",
             "T-UC-005-inv-049-9-nofield",
+            "T-UC-005-inv-049-10-holds",
             "T-UC-005-inv-049-10-violated",
             "T-UC-005-inv-049-10-nofield",
             "T-UC-005-dim-boundary",
