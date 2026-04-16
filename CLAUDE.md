@@ -8,13 +8,13 @@
 - **Ready-to-ship checklist:** `.claude/notes/flask-to-fastapi/implementation-checklist.md`
 - **Migration branch:** `feat/v2.0.0-flask-to-fastapi` (all migration work commits here)
 
-Six critical invariants that are easy to forget and destructive to miss:
-1. **Layers 0-4:** Admin handlers use **sync `def`** with sync SQLAlchemy (`scoped_session` + `Session`). This is safe because FastAPI runs sync handlers in a threadpool where thread-local session scoping works correctly. `run_in_threadpool` wrapping is NOT needed for admin handlers — FastAPI handles it automatically. MCP and A2A handlers remain `async def`. Full async SQLAlchemy is Layer 5+ within v2.0 (after Flask removal and FastAPI-native pattern refinement).
-2. Middleware order: **Approximated runs BEFORE CSRF** (not after — counterintuitive but correct). Canonical stack is 9 middlewares at L2 (`Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS`) and 10 at L4+ (adds `RequestID` outermost). `SecurityHeadersMiddleware` (§11.28) lands in the L2 PR, positioned INSIDE `TrustedHost` and OUTSIDE `UnifiedAuth`.
-3. Templates use `{{ url_for('name', **params) }}` exclusively — for admin routes AND static assets. No prefix variables. Every admin route has `name="admin_..."`; static mount is `name="static"`. Starlette's `include_router(prefix=...)` does not set `scope["root_path"]`, so `url_for` is the only correct URL generator.
-4. `APIRouter(redirect_slashes=True, include_in_schema=False)` for all admin routers
-5. `@app.exception_handler(AdCPError)` must be Accept-aware (render HTML for `/admin/*` browsers, JSON otherwise)
-6. OAuth redirect URIs are byte-immutable contracts with Google Cloud Console
+Six critical invariants that are easy to forget and destructive to miss (numbering matches `.claude/notes/flask-to-fastapi/CLAUDE.md` §Critical Invariants):
+1. **Templates use `{{ url_for('name', **params) }}` exclusively** — for admin routes AND static assets. No prefix variables. Every admin route has `name="admin_..."`; static mount is `name="static"`. Starlette's `include_router(prefix=...)` does not set `scope["root_path"]`, so `url_for` is the only correct URL generator.
+2. `APIRouter(redirect_slashes=True, include_in_schema=False)` for all admin routers.
+3. `@app.exception_handler(AdCPError)` must be Accept-aware (render HTML for `/admin/*` browsers, JSON otherwise).
+4. **Layers 0-4:** Admin handlers use **sync `def`** with sync SQLAlchemy. Each `with get_db_session()` yields a fresh `Session` from a **bare `sessionmaker`** (Decision D2 — NO `scoped_session` registry; enforced by `tests/unit/test_architecture_no_scoped_session.py`). FastAPI runs sync handlers in its AnyIO threadpool; because there is no thread-local registry, thread reuse cannot leak session state between requests. `run_in_threadpool` wrapping is NOT needed for admin-handler DB work — the handler is already off the event loop. MCP and A2A handlers remain `async def`. At L0, `src/core/database/database_session.py` drops `scoped_session` entirely. Full async SQLAlchemy is Layer 5+ within v2.0 (SessionDep alias flip at L5b).
+5. Middleware order: **Approximated runs BEFORE CSRF** (not after — counterintuitive but correct). Canonical stack is 9 middlewares at L2 (`Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS`) and 10 at L4+ (adds `RequestID` outermost). `SecurityHeadersMiddleware` (§11.28) lands in the L2 PR, positioned INSIDE `TrustedHost` and OUTSIDE `UnifiedAuth`.
+6. **OAuth redirect URIs are byte-immutable contracts with Google Cloud Console:** `/admin/auth/google/callback`, `/admin/auth/oidc/callback` (**NO `{tenant_id}` segment** — tenant context is in the session; verified at `src/admin/blueprints/oidc.py:209,215`), `/admin/auth/gam/callback` (**WITH `/admin` prefix** — route in `src/admin/blueprints/auth.py:931,959`). Guard: `tests/unit/test_oauth_redirect_uris_immutable.py`.
 
 ## 🤖 For Claude (AI Assistant)
 
