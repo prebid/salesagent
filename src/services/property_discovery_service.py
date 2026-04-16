@@ -5,7 +5,9 @@ and caches them in the database for use in inventory profiles and products.
 """
 
 import asyncio
+import hashlib
 import logging
+import re
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -19,6 +21,7 @@ from adcp import (
 )
 from adcp.adagents import get_properties_by_agent, normalize_url
 from sqlalchemy import select
+from sqlalchemy.sql import Select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AuthorizedProperty, PropertyTag
@@ -66,21 +69,11 @@ class PropertyDiscoveryService:
                 "dry_run": bool
             }
         """
-        stats: dict[str, Any] = {
-            "domains_synced": 0,
-            "properties_found": 0,
-            "tags_found": 0,
-            "properties_created": 0,
-            "properties_updated": 0,
-            "tags_created": 0,
-            "errors": [],
-            "dry_run": dry_run,
-        }
+        stats = self._make_stats(dry_run=dry_run)
 
         with get_db_session() as session:
             # Get publisher domains to sync
             if not publisher_domains:
-                # Get unique domains from existing properties
                 stmt = (
                     select(AuthorizedProperty.publisher_domain)
                     .where(AuthorizedProperty.tenant_id == tenant_id)
@@ -121,172 +114,24 @@ class PropertyDiscoveryService:
                 try:
                     # Check if fetch succeeded
                     if isinstance(result, Exception):
-                        if isinstance(result, AdagentsNotFoundError):
-                            error = f"{domain}: adagents.json not found (404)"
-                            stats["errors"].append(error)
-                            logger.warning(f"⚠️ {error}")
-                        elif isinstance(result, AdagentsTimeoutError):
-                            error = f"{domain}: Request timeout"
-                            stats["errors"].append(error)
-                            logger.warning(f"⚠️ {error}")
-                        elif isinstance(result, AdagentsValidationError):
-                            error = f"{domain}: Invalid adagents.json - {str(result)}"
-                            stats["errors"].append(error)
-                            logger.error(f"❌ {error}")
-                        else:
-                            error = f"{domain}: {str(result)}"
-                            stats["errors"].append(error)
-                            logger.error(f"❌ Error syncing {domain}: {result}", exc_info=True)
+                        self._log_fetch_error(domain, result, stats)
                         continue
 
                     # At this point, result is guaranteed to be dict[str, Any], not Exception
                     adagents_data: dict[str, Any] = result  # type: ignore[assignment]
 
-                    # Extract all properties from top-level "properties" array
-                    # Note: Some adagents.json files list properties at top-level,
-                    # others list them per-agent in "authorized_agents[].properties"
-                    all_properties_from_file = adagents_data.get("properties", [])
-
-                    # Check if the relevant agent has no property restrictions (means access to ALL properties)
-                    # Per AdCP spec: if property_ids/property_tags/properties/publisher_properties
-                    # are all missing/empty, agent has access to ALL properties from this publisher
-                    #
-                    # When agent_url is provided, only check OUR agent — another agent being
-                    # unrestricted doesn't grant us access to all properties.
-                    authorized_agents = adagents_data.get("authorized_agents", [])
-                    has_unrestricted_agent = False
-                    for agent in authorized_agents:
-                        if not isinstance(agent, dict):
-                            continue
-                        # When agent_url is provided, only check the matching agent
-                        # Use normalize_url for protocol-agnostic comparison (same as
-                        # get_properties_by_agent in the adcp library)
-                        if agent_url and normalize_url(agent.get("url", "")) != normalize_url(agent_url):
-                            continue
-                        # Check if ALL authorization fields are missing/empty
-                        has_property_ids = bool(agent.get("property_ids"))
-                        has_property_tags = bool(agent.get("property_tags"))
-                        has_properties = bool(agent.get("properties"))
-                        has_publisher_properties = bool(agent.get("publisher_properties"))
-
-                        if not (has_property_ids or has_property_tags or has_properties or has_publisher_properties):
-                            has_unrestricted_agent = True
-                            logger.info(
-                                f"Found unrestricted agent {agent.get('url')} - "
-                                f"authorized for ALL properties from {domain}"
-                            )
-                            break
-
-                    # Extract properties using adcp library
-                    # When agent_url is provided, use get_properties_by_agent() which
-                    # handles all authorization types: property_ids, property_tags,
-                    # inline properties, and publisher_properties
-                    if agent_url:
-                        properties_from_agents = get_properties_by_agent(adagents_data, agent_url)
-                        # Filter out publisher_properties selectors (cross-domain refs
-                        # without property_type - these are unresolved references)
-                        properties_from_agents = [p for p in properties_from_agents if p.get("property_type")]
-                    else:
-                        # Fallback: only gets inline agent.properties arrays
-                        properties_from_agents = get_all_properties(adagents_data)
-
-                    # If we have an unrestricted agent AND top-level properties exist,
-                    # sync all top-level properties (since agent has access to all of them)
-                    if has_unrestricted_agent and all_properties_from_file:
-                        logger.info(
-                            f"Syncing all {len(all_properties_from_file)} top-level properties "
-                            f"(unrestricted agent has access to all)"
-                        )
-                        # Use top-level properties as the authoritative list
-                        properties = all_properties_from_file
-                    elif properties_from_agents:
-                        properties = properties_from_agents
-                    else:
-                        properties = []
-
-                    # Filter properties to only those belonging to this publisher domain.
-                    # An adagents.json may list properties for many domains (e.g., Prisma Media
-                    # lists capital.fr, geo.fr, etc. in one file). When syncing for "capital.fr",
-                    # we should only store the property whose domain identifier matches.
-                    # Properties without a domain identifier (e.g., mobile apps) are kept.
-                    if properties:
-                        filtered = []
-                        for prop in properties:
-                            identifiers = prop.get("identifiers", [])
-                            domain_identifiers = [
-                                ident.get("value", "") for ident in identifiers if ident.get("type") == "domain"
-                            ]
-                            if not domain_identifiers:
-                                # No domain identifier (e.g., mobile_app) - keep it
-                                filtered.append(prop)
-                            elif domain in domain_identifiers:
-                                # Domain matches this publisher
-                                filtered.append(prop)
-                            else:
-                                logger.debug(
-                                    f"Skipping property {prop.get('name', 'unknown')} - "
-                                    f"domain {domain_identifiers} doesn't match publisher {domain}"
-                                )
-                        if len(filtered) != len(properties):
-                            logger.info(
-                                f"Filtered {len(properties)} properties to {len(filtered)} "
-                                f"matching publisher domain {domain}"
-                            )
-                        properties = filtered
+                    properties = self._extract_properties(adagents_data, domain, agent_url)
+                    properties = self._filter_properties_by_domain(properties, domain)
 
                     stats["properties_found"] += len(properties)
                     logger.info(f"Found {len(properties)} properties from {domain}")
 
-                    # Extract all tags
                     tags = get_all_tags(adagents_data)
                     stats["tags_found"] += len(tags)
                     logger.info(f"Found {len(tags)} unique tags from {domain}")
 
-                    # Batch-check existing properties for this tenant (performance optimization)
-                    property_ids_to_check = []
-                    properties_data = []
-                    for prop in properties:
-                        property_id = self._generate_property_id(tenant_id, domain, prop)
-                        if property_id:
-                            property_ids_to_check.append(property_id)
-                            properties_data.append((property_id, prop))
-
-                    # Batch fetch existing properties
-                    from sqlalchemy.sql import Select
-
-                    stmt_props: Select[tuple[AuthorizedProperty]] = select(AuthorizedProperty).where(
-                        AuthorizedProperty.tenant_id == tenant_id,
-                        AuthorizedProperty.property_id.in_(property_ids_to_check),
-                    )
-                    existing_properties_objs = list(session.scalars(stmt_props).all())
-                    existing_properties: dict[str, AuthorizedProperty] = {
-                        p.property_id: p for p in existing_properties_objs
-                    }
-
-                    # Create/update property records (using batched existence check)
-                    for property_id, prop in properties_data:
-                        was_created = self._create_or_update_property_batched(
-                            session, tenant_id, domain, prop, property_id, existing_properties
-                        )
-                        if was_created:
-                            stats["properties_created"] += 1
-                        else:
-                            stats["properties_updated"] += 1
-
-                    # Batch-check existing tags
-                    from sqlalchemy.sql import Select
-
-                    stmt_tags: Select[tuple[PropertyTag]] = select(PropertyTag).where(
-                        PropertyTag.tenant_id == tenant_id, PropertyTag.tag_id.in_(tags)
-                    )
-                    existing_tags_objs = list(session.scalars(stmt_tags).all())
-                    existing_tags: dict[str, PropertyTag] = {t.tag_id: t for t in existing_tags_objs}
-
-                    # Create tag records (using batched existence check)
-                    for tag in tags:
-                        was_created = self._create_or_update_tag_batched(session, tenant_id, tag, existing_tags)
-                        if was_created:
-                            stats["tags_created"] += 1
+                    self._batch_sync_properties(session, tenant_id, domain, properties, stats)
+                    self._batch_sync_tags(session, tenant_id, set(tags), stats)
 
                     stats["domains_synced"] += 1
                     logger.info(f"✅ Synced {len(properties)} properties and {len(tags)} tags from {domain}")
@@ -296,255 +141,9 @@ class PropertyDiscoveryService:
                     stats["errors"].append(error)
                     logger.error(f"❌ Error processing {domain}: {e}", exc_info=True)
 
-            # Commit all changes (unless dry-run)
-            if dry_run:
-                session.rollback()
-                logger.info("🔍 DRY RUN - No changes committed to database")
-            else:
-                session.commit()
-                logger.info(
-                    f"✅ Sync complete: {stats['domains_synced']} domains, "
-                    f"{stats['properties_created']} properties created, "
-                    f"{stats['properties_updated']} updated, "
-                    f"{stats['tags_created']} tags created"
-                )
+            self._finalize_session(session, dry_run, stats)
 
         return stats
-
-    def _generate_property_id(self, tenant_id: str, publisher_domain: str, prop_data: dict[str, Any]) -> str | None:
-        """Generate property_id from property data.
-
-        Returns None if property is invalid (missing required fields).
-        """
-        import hashlib
-        import re
-
-        property_type = prop_data.get("property_type")
-        if not property_type:
-            logger.warning(f"Property missing property_type: {prop_data}")
-            return None
-
-        identifiers = prop_data.get("identifiers", [])
-        if not identifiers:
-            logger.warning(f"Property missing identifiers: {prop_data}")
-            return None
-
-        first_ident_value = identifiers[0].get("value", "unknown")
-
-        # Create deterministic hash from all identifiers for uniqueness
-        identifier_str = "|".join(f"{ident.get('type', '')}={ident.get('value', '')}" for ident in identifiers)
-        full_key = f"{property_type}:{publisher_domain}:{identifier_str}"
-        hash_suffix = hashlib.sha256(full_key.encode()).hexdigest()[:8]
-
-        # Use readable prefix + hash for both readability and uniqueness
-        safe_value = re.sub(r"[^a-z0-9]+", "_", first_ident_value.lower())[:30]
-        return f"{property_type}_{safe_value}_{hash_suffix}".lower()
-
-    def _create_or_update_property_batched(
-        self,
-        session,
-        tenant_id: str,
-        publisher_domain: str,
-        prop_data: dict[str, Any],
-        property_id: str,
-        existing_properties: dict[str, Any],
-    ) -> bool:
-        """Create or update a property record (batched version).
-
-        Args:
-            session: Database session
-            tenant_id: Tenant ID
-            publisher_domain: Publisher domain
-            prop_data: Property data from adagents.json
-            property_id: Pre-generated property ID
-            existing_properties: Dict of existing properties keyed by property_id
-
-        Returns:
-            True if created, False if updated
-        """
-        property_type = prop_data.get("property_type")
-        identifiers = prop_data.get("identifiers", [])
-        property_name = prop_data.get("name", property_id.replace("_", " ").title())
-        property_tags = prop_data.get("tags", [])
-
-        existing = existing_properties.get(property_id)
-
-        if existing:
-            # Update existing property
-            existing.name = property_name
-            existing.identifiers = identifiers
-            existing.tags = property_tags
-            existing.updated_at = datetime.now(UTC)
-            logger.debug(f"Updated property: {property_id}")
-            return False
-        else:
-            # Create new property
-            new_property = AuthorizedProperty(
-                tenant_id=tenant_id,
-                property_id=property_id,
-                name=property_name,
-                property_type=property_type,
-                publisher_domain=publisher_domain,
-                identifiers=identifiers,
-                tags=property_tags,
-                verification_status="verified",  # From adagents.json = auto-verified
-                verification_checked_at=datetime.now(UTC),
-                created_at=datetime.now(UTC),
-                updated_at=datetime.now(UTC),
-            )
-            session.add(new_property)
-            logger.debug(f"Created property: {property_id}")
-            return True
-
-    def _create_or_update_tag_batched(
-        self, session, tenant_id: str, tag_id: str, existing_tags: dict[str, Any]
-    ) -> bool:
-        """Create or update a property tag (batched version).
-
-        Args:
-            session: Database session
-            tenant_id: Tenant ID
-            tag_id: Tag identifier
-            existing_tags: Dict of existing tags keyed by tag_id
-
-        Returns:
-            True if created, False if already exists
-        """
-        existing = existing_tags.get(tag_id)
-
-        if existing:
-            # Tag already exists, nothing to update
-            return False
-
-        # Create new tag
-        tag_name = tag_id.replace("_", " ").replace("-", " ").title()
-
-        new_tag = PropertyTag(
-            tenant_id=tenant_id,
-            tag_id=tag_id,
-            name=tag_name,
-            description="Tag discovered from publisher adagents.json",
-            created_at=datetime.now(UTC),
-            updated_at=datetime.now(UTC),
-        )
-        session.add(new_tag)
-        logger.debug(f"Created tag: {tag_id}")
-        return True
-
-    def _create_or_update_property(
-        self, session, tenant_id: str, publisher_domain: str, prop_data: dict[str, Any]
-    ) -> bool:
-        """Create or update a property record from adagents.json data.
-
-        Args:
-            session: Database session
-            tenant_id: Tenant ID
-            publisher_domain: Publisher domain this property belongs to
-            prop_data: Property data from adagents.json (with agent_url added by adcp library)
-
-        Returns:
-            True if created, False if updated
-        """
-        # Extract property info
-        property_type = prop_data.get("property_type")
-        if not property_type:
-            logger.warning(f"Property missing property_type: {prop_data}")
-            return False
-
-        identifiers = prop_data.get("identifiers", [])
-        if not identifiers:
-            logger.warning(f"Property missing identifiers: {prop_data}")
-            return False
-
-        # Generate property_id from property data
-        # Include publisher_domain to prevent collisions across different publishers
-        import hashlib
-        import re
-
-        first_ident_value = identifiers[0].get("value", "unknown")
-
-        # Create deterministic hash from all identifiers for uniqueness
-        identifier_str = "|".join(f"{ident.get('type', '')}={ident.get('value', '')}" for ident in identifiers)
-        full_key = f"{property_type}:{publisher_domain}:{identifier_str}"
-        hash_suffix = hashlib.sha256(full_key.encode()).hexdigest()[:8]
-
-        # Use readable prefix + hash for both readability and uniqueness
-        safe_value = re.sub(r"[^a-z0-9]+", "_", first_ident_value.lower())[:30]
-        property_id = f"{property_type}_{safe_value}_{hash_suffix}".lower()
-
-        # Get property name (from adagents.json or generate from ID)
-        property_name = prop_data.get("name", property_id.replace("_", " ").title())
-
-        # Get tags
-        property_tags = prop_data.get("tags", [])
-
-        # Check if exists
-        stmt = select(AuthorizedProperty).where(
-            AuthorizedProperty.tenant_id == tenant_id, AuthorizedProperty.property_id == property_id
-        )
-        existing = session.scalars(stmt).first()
-
-        if existing:
-            # Update existing property
-            existing.name = property_name
-            existing.identifiers = identifiers
-            existing.tags = property_tags
-            existing.updated_at = datetime.now(UTC)
-            logger.debug(f"Updated property: {property_id}")
-            return False
-        else:
-            # Create new property
-            new_property = AuthorizedProperty(
-                tenant_id=tenant_id,
-                property_id=property_id,
-                name=property_name,
-                property_type=property_type,
-                publisher_domain=publisher_domain,
-                identifiers=identifiers,
-                tags=property_tags,
-                verification_status="verified",  # From adagents.json = auto-verified
-                verification_checked_at=datetime.now(UTC),
-                created_at=datetime.now(UTC),
-                updated_at=datetime.now(UTC),
-            )
-            session.add(new_property)
-            logger.debug(f"Created property: {property_id}")
-            return True
-
-    def _create_or_update_tag(self, session, tenant_id: str, tag_id: str) -> bool:
-        """Create or update a property tag.
-
-        Args:
-            session: Database session
-            tenant_id: Tenant ID
-            tag_id: Tag identifier
-
-        Returns:
-            True if created, False if already exists
-        """
-        # Check if exists
-        stmt = select(PropertyTag).where(PropertyTag.tenant_id == tenant_id, PropertyTag.tag_id == tag_id)
-        existing = session.scalars(stmt).first()
-
-        if existing:
-            # Tag already exists, nothing to update
-            return False
-
-        # Create new tag
-        # Generate human-readable name from tag_id
-        tag_name = tag_id.replace("_", " ").replace("-", " ").title()
-
-        new_tag = PropertyTag(
-            tenant_id=tenant_id,
-            tag_id=tag_id,
-            name=tag_name,
-            description="Tag discovered from publisher adagents.json",
-            created_at=datetime.now(UTC),
-            updated_at=datetime.now(UTC),
-        )
-        session.add(new_tag)
-        logger.debug(f"Created tag: {tag_id}")
-        return True
 
     async def sync_properties_from_registry(
         self,
@@ -570,17 +169,7 @@ class PropertyDiscoveryService:
         """
         from src.services.registry_client import get_registry_client
 
-        stats: dict[str, Any] = {
-            "domains_synced": 0,
-            "properties_found": 0,
-            "tags_found": 0,
-            "properties_created": 0,
-            "properties_updated": 0,
-            "tags_created": 0,
-            "errors": [],
-            "dry_run": dry_run,
-            "source": "registry",
-        }
+        stats = self._make_stats(dry_run=dry_run, source="registry")
 
         if not publisher_domains:
             stats["errors"].append("No publisher domains to resolve")
@@ -615,54 +204,14 @@ class PropertyDiscoveryService:
                         logger.warning(f"⚠️ {domain}: no properties in registry response")
                         continue
 
-                    # Convert registry format to adagents.json format for reuse
-                    # Registry returns: {id, type, name, identifiers, tags}
-                    # Discovery expects: {property_type, name, identifiers, tags}
-                    normalized_properties = []
-                    for prop in properties:
-                        normalized = {
-                            "property_type": prop.get("type", "website"),
-                            "name": prop.get("name", prop.get("id", "Unknown")),
-                            "identifiers": prop.get("identifiers", []),
-                            "tags": prop.get("tags", []),
-                        }
-                        if prop.get("id"):
-                            normalized["property_id"] = prop["id"]
-                        normalized_properties.append(normalized)
+                    normalized_properties = self._normalize_registry_properties(properties)
 
                     stats["properties_found"] += len(normalized_properties)
                     logger.info(f"Registry resolved {len(normalized_properties)} properties from {domain}")
 
-                    # Batch-check existing properties
-                    property_ids_to_check = []
-                    properties_data = []
-                    for prop in normalized_properties:
-                        property_id = self._generate_property_id(tenant_id, domain, prop)
-                        if property_id:
-                            property_ids_to_check.append(property_id)
-                            properties_data.append((property_id, prop))
+                    self._batch_sync_properties(session, tenant_id, domain, normalized_properties, stats)
 
-                    from sqlalchemy.sql import Select
-
-                    stmt_props: Select[tuple[AuthorizedProperty]] = select(AuthorizedProperty).where(
-                        AuthorizedProperty.tenant_id == tenant_id,
-                        AuthorizedProperty.property_id.in_(property_ids_to_check),
-                    )
-                    existing_properties_objs = list(session.scalars(stmt_props).all())
-                    existing_properties: dict[str, AuthorizedProperty] = {
-                        p.property_id: p for p in existing_properties_objs
-                    }
-
-                    for property_id, prop in properties_data:
-                        was_created = self._create_or_update_property_batched(
-                            session, tenant_id, domain, prop, property_id, existing_properties
-                        )
-                        if was_created:
-                            stats["properties_created"] += 1
-                        else:
-                            stats["properties_updated"] += 1
-
-                    # Extract and sync tags
+                    # Extract tags from resolved properties
                     all_tags: set[str] = set()
                     for prop in normalized_properties:
                         for tag in prop.get("tags", []):
@@ -670,18 +219,7 @@ class PropertyDiscoveryService:
                                 all_tags.add(tag)
 
                     stats["tags_found"] += len(all_tags)
-
-                    if all_tags:
-                        stmt_tags: Select[tuple[PropertyTag]] = select(PropertyTag).where(
-                            PropertyTag.tenant_id == tenant_id, PropertyTag.tag_id.in_(all_tags)
-                        )
-                        existing_tags_objs = list(session.scalars(stmt_tags).all())
-                        existing_tags: dict[str, PropertyTag] = {t.tag_id: t for t in existing_tags_objs}
-
-                        for tag in all_tags:
-                            was_created = self._create_or_update_tag_batched(session, tenant_id, tag, existing_tags)
-                            if was_created:
-                                stats["tags_created"] += 1
+                    self._batch_sync_tags(session, tenant_id, all_tags, stats)
 
                     stats["domains_synced"] += 1
                     logger.info(f"✅ Registry sync: {len(normalized_properties)} properties from {domain}")
@@ -689,18 +227,12 @@ class PropertyDiscoveryService:
                 except Exception as e:
                     error = f"{domain}: {str(e)}"
                     stats["errors"].append(error)
-                    logger.error(f"❌ Error processing registry result for {domain}: {e}", exc_info=True)
+                    logger.error(
+                        f"❌ Error processing registry result for {domain}: {e}",
+                        exc_info=True,
+                    )
 
-            if dry_run:
-                session.rollback()
-                logger.info("🔍 DRY RUN - No changes committed to database")
-            else:
-                session.commit()
-                logger.info(
-                    f"✅ Registry sync complete: {stats['domains_synced']} domains, "
-                    f"{stats['properties_created']} properties created, "
-                    f"{stats['properties_updated']} updated"
-                )
+            self._finalize_session(session, dry_run, stats)
 
         return stats
 
@@ -734,6 +266,291 @@ class PropertyDiscoveryService:
         return asyncio.run(
             self.sync_properties_from_adagents(tenant_id, publisher_domains, dry_run, agent_url=agent_url)
         )
+
+    # ── Shared helpers ────────────────────────────────────────────────
+
+    @staticmethod
+    def _make_stats(dry_run: bool = False, **extra: Any) -> dict[str, Any]:
+        stats: dict[str, Any] = {
+            "domains_synced": 0,
+            "properties_found": 0,
+            "tags_found": 0,
+            "properties_created": 0,
+            "properties_updated": 0,
+            "tags_created": 0,
+            "errors": [],
+            "dry_run": dry_run,
+        }
+        stats.update(extra)
+        return stats
+
+    @staticmethod
+    def _log_fetch_error(domain: str, error: Exception, stats: dict[str, Any]) -> None:
+        if isinstance(error, AdagentsNotFoundError):
+            msg = f"{domain}: adagents.json not found (404)"
+            stats["errors"].append(msg)
+            logger.warning(f"⚠️ {msg}")
+        elif isinstance(error, AdagentsTimeoutError):
+            msg = f"{domain}: Request timeout"
+            stats["errors"].append(msg)
+            logger.warning(f"⚠️ {msg}")
+        elif isinstance(error, AdagentsValidationError):
+            msg = f"{domain}: Invalid adagents.json - {str(error)}"
+            stats["errors"].append(msg)
+            logger.error(f"❌ {msg}")
+        else:
+            msg = f"{domain}: {str(error)}"
+            stats["errors"].append(msg)
+            logger.error(f"❌ Error syncing {domain}: {error}", exc_info=True)
+
+    @staticmethod
+    def _extract_properties(adagents_data: dict[str, Any], domain: str, agent_url: str | None) -> list[dict[str, Any]]:
+        """Extract properties from adagents.json data."""
+        all_properties_from_file = adagents_data.get("properties", [])
+
+        # Check if the relevant agent has no property restrictions
+        authorized_agents = adagents_data.get("authorized_agents", [])
+        has_unrestricted_agent = False
+        for agent in authorized_agents:
+            if not isinstance(agent, dict):
+                continue
+            if agent_url and normalize_url(agent.get("url", "")) != normalize_url(agent_url):
+                continue
+            has_property_ids = bool(agent.get("property_ids"))
+            has_property_tags = bool(agent.get("property_tags"))
+            has_properties = bool(agent.get("properties"))
+            has_publisher_properties = bool(agent.get("publisher_properties"))
+
+            if not (has_property_ids or has_property_tags or has_properties or has_publisher_properties):
+                has_unrestricted_agent = True
+                logger.info(
+                    f"Found unrestricted agent {agent.get('url')} - authorized for ALL properties from {domain}"
+                )
+                break
+
+        if agent_url:
+            properties_from_agents = get_properties_by_agent(adagents_data, agent_url)
+            properties_from_agents = [p for p in properties_from_agents if p.get("property_type")]
+        else:
+            properties_from_agents = get_all_properties(adagents_data)
+
+        if has_unrestricted_agent and all_properties_from_file:
+            logger.info(
+                f"Syncing all {len(all_properties_from_file)} top-level properties "
+                f"(unrestricted agent has access to all)"
+            )
+            return all_properties_from_file
+        elif properties_from_agents:
+            return properties_from_agents
+        return []
+
+    @staticmethod
+    def _filter_properties_by_domain(properties: list[dict[str, Any]], domain: str) -> list[dict[str, Any]]:
+        """Filter properties to only those belonging to a specific publisher domain."""
+        if not properties:
+            return properties
+
+        filtered = []
+        for prop in properties:
+            identifiers = prop.get("identifiers", [])
+            domain_identifiers = [ident.get("value", "") for ident in identifiers if ident.get("type") == "domain"]
+            if not domain_identifiers:
+                filtered.append(prop)
+            elif domain in domain_identifiers:
+                filtered.append(prop)
+            else:
+                logger.debug(
+                    f"Skipping property {prop.get('name', 'unknown')} - "
+                    f"domain {domain_identifiers} doesn't match publisher {domain}"
+                )
+        if len(filtered) != len(properties):
+            logger.info(f"Filtered {len(properties)} properties to {len(filtered)} matching publisher domain {domain}")
+        return filtered
+
+    @staticmethod
+    def _normalize_registry_properties(
+        properties: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Convert registry format to adagents.json format for reuse.
+
+        Registry returns: {id, type, name, identifiers, tags}
+        Discovery expects: {property_type, name, identifiers, tags}
+        """
+        normalized = []
+        for prop in properties:
+            entry: dict[str, Any] = {
+                "property_type": prop.get("type", "website"),
+                "name": prop.get("name", prop.get("id", "Unknown")),
+                "identifiers": prop.get("identifiers", []),
+                "tags": prop.get("tags", []),
+            }
+            if prop.get("id"):
+                entry["property_id"] = prop["id"]
+            normalized.append(entry)
+        return normalized
+
+    def _batch_sync_properties(
+        self,
+        session: Any,
+        tenant_id: str,
+        domain: str,
+        properties: list[dict[str, Any]],
+        stats: dict[str, Any],
+    ) -> None:
+        """Batch-check and create/update property records."""
+        property_ids_to_check = []
+        properties_data = []
+        for prop in properties:
+            property_id = self._generate_property_id(tenant_id, domain, prop)
+            if property_id:
+                property_ids_to_check.append(property_id)
+                properties_data.append((property_id, prop))
+
+        stmt_props: Select[tuple[AuthorizedProperty]] = select(AuthorizedProperty).where(
+            AuthorizedProperty.tenant_id == tenant_id,
+            AuthorizedProperty.property_id.in_(property_ids_to_check),
+        )
+        existing_objs = list(session.scalars(stmt_props).all())
+        existing: dict[str, AuthorizedProperty] = {p.property_id: p for p in existing_objs}
+
+        for property_id, prop in properties_data:
+            was_created = self._create_or_update_property(session, tenant_id, domain, prop, property_id, existing)
+            if was_created:
+                stats["properties_created"] += 1
+            else:
+                stats["properties_updated"] += 1
+
+    def _batch_sync_tags(
+        self,
+        session: Any,
+        tenant_id: str,
+        tags: set[str],
+        stats: dict[str, Any],
+    ) -> None:
+        """Batch-check and create tag records."""
+        if not tags:
+            return
+
+        stmt_tags: Select[tuple[PropertyTag]] = select(PropertyTag).where(
+            PropertyTag.tenant_id == tenant_id, PropertyTag.tag_id.in_(tags)
+        )
+        existing_objs = list(session.scalars(stmt_tags).all())
+        existing: dict[str, PropertyTag] = {t.tag_id: t for t in existing_objs}
+
+        for tag in tags:
+            was_created = self._create_or_update_tag(session, tenant_id, tag, existing)
+            if was_created:
+                stats["tags_created"] += 1
+
+    @staticmethod
+    def _finalize_session(session: Any, dry_run: bool, stats: dict[str, Any]) -> None:
+        if dry_run:
+            session.rollback()
+            logger.info("🔍 DRY RUN - No changes committed to database")
+        else:
+            session.commit()
+            source = stats.get("source", "adagents")
+            logger.info(
+                f"✅ Sync complete (source={source}): {stats['domains_synced']} domains, "
+                f"{stats['properties_created']} properties created, "
+                f"{stats['properties_updated']} updated, "
+                f"{stats['tags_created']} tags created"
+            )
+
+    @staticmethod
+    def _generate_property_id(tenant_id: str, publisher_domain: str, prop_data: dict[str, Any]) -> str | None:
+        """Generate property_id from property data.
+
+        Returns None if property is invalid (missing required fields).
+        """
+        property_type = prop_data.get("property_type")
+        if not property_type:
+            logger.warning(f"Property missing property_type: {prop_data}")
+            return None
+
+        identifiers = prop_data.get("identifiers", [])
+        if not identifiers:
+            logger.warning(f"Property missing identifiers: {prop_data}")
+            return None
+
+        first_ident_value = identifiers[0].get("value", "unknown")
+
+        # Create deterministic hash from all identifiers for uniqueness
+        identifier_str = "|".join(f"{ident.get('type', '')}={ident.get('value', '')}" for ident in identifiers)
+        full_key = f"{property_type}:{publisher_domain}:{identifier_str}"
+        hash_suffix = hashlib.sha256(full_key.encode()).hexdigest()[:8]
+
+        # Use readable prefix + hash for both readability and uniqueness
+        safe_value = re.sub(r"[^a-z0-9]+", "_", first_ident_value.lower())[:30]
+        return f"{property_type}_{safe_value}_{hash_suffix}".lower()
+
+    @staticmethod
+    def _create_or_update_property(
+        session: Any,
+        tenant_id: str,
+        publisher_domain: str,
+        prop_data: dict[str, Any],
+        property_id: str,
+        existing_properties: dict[str, Any],
+    ) -> bool:
+        """Create or update a property record.
+
+        Returns True if created, False if updated.
+        """
+        property_type = prop_data.get("property_type")
+        identifiers = prop_data.get("identifiers", [])
+        property_name = prop_data.get("name", property_id.replace("_", " ").title())
+        property_tags = prop_data.get("tags", [])
+
+        existing = existing_properties.get(property_id)
+
+        if existing:
+            existing.name = property_name
+            existing.identifiers = identifiers
+            existing.tags = property_tags
+            existing.updated_at = datetime.now(UTC)
+            logger.debug(f"Updated property: {property_id}")
+            return False
+
+        new_property = AuthorizedProperty(
+            tenant_id=tenant_id,
+            property_id=property_id,
+            name=property_name,
+            property_type=property_type,
+            publisher_domain=publisher_domain,
+            identifiers=identifiers,
+            tags=property_tags,
+            verification_status="verified",
+            verification_checked_at=datetime.now(UTC),
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
+        session.add(new_property)
+        logger.debug(f"Created property: {property_id}")
+        return True
+
+    @staticmethod
+    def _create_or_update_tag(session: Any, tenant_id: str, tag_id: str, existing_tags: dict[str, Any]) -> bool:
+        """Create a tag record if it doesn't exist.
+
+        Returns True if created, False if already exists.
+        """
+        if existing_tags.get(tag_id):
+            return False
+
+        tag_name = tag_id.replace("_", " ").replace("-", " ").title()
+
+        new_tag = PropertyTag(
+            tenant_id=tenant_id,
+            tag_id=tag_id,
+            name=tag_name,
+            description="Tag discovered from publisher adagents.json",
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
+        session.add(new_tag)
+        logger.debug(f"Created tag: {tag_id}")
+        return True
 
 
 def get_property_discovery_service() -> PropertyDiscoveryService:
