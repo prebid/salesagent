@@ -13,28 +13,39 @@ fixtures from conftest without explicit imports, avoiding F811 lint errors).
 from __future__ import annotations
 
 import os
-import re
+
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
 
 
 def parse_postgres_url() -> tuple[str, str, str, int] | None:
     """Parse DATABASE_URL into connection components.
 
     Returns (user, password, host, port) or None if DATABASE_URL is not set
-    or does not match the expected PostgreSQL format.
+    or is not a valid PostgreSQL URL.
     """
     postgres_url = os.environ.get("DATABASE_URL", "")
-    match = re.match(r"postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)", postgres_url)
-    if not match:
+    if not postgres_url:
         return None
-    user, password, host, port_str, _ = match.groups()
-    return user, password, host, int(port_str)
+    try:
+        url = make_url(postgres_url)
+    except ArgumentError:
+        return None
+    if not url.drivername.startswith(("postgresql", "postgres")):
+        return None
+    return (
+        url.username or "",
+        str(url.password) if url.password else "",
+        url.host or "",
+        url.port or 5432,
+    )
 
 
 def _run_alembic_command(db_url: str, command_fn, target_revision: str) -> None:
     """Run an Alembic command with temporary DATABASE_URL override.
 
     Temporarily sets DATABASE_URL for alembic/env.py which reads from
-    DatabaseConfig.get_connection_string().
+    os.environ["DATABASE_URL"].
     """
     from alembic.config import Config
 
