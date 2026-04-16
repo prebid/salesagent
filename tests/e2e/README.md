@@ -256,9 +256,9 @@ docker-compose logs --tail=100 adcp-server
 docker-compose ps
 
 # Health endpoints
-curl http://localhost:8012/health  # MCP
-curl http://localhost:8091/health  # A2A
-curl http://localhost:8003/health  # Admin
+curl http://localhost:8012/healthz  # MCP
+curl http://localhost:8091/healthz  # A2A
+curl http://localhost:8003/healthz  # Admin
 ```
 
 ### Database Access
@@ -294,7 +294,7 @@ jobs:
 
     - name: Wait for services
       run: |
-        timeout 60 bash -c 'until curl -f http://localhost:8012/health; do sleep 2; done'
+        timeout 60 bash -c 'until curl -f http://localhost:8012/healthz; do sleep 2; done'
 
     - name: Run E2E tests
       run: |

@@ -268,9 +268,14 @@ async def login(
     sync `def` and called without `await`. L5+: helpers are `async def` and
     called with `await`.]
     """
-    # Anchor the post-login redirect safely in the session (never trust the query arg directly)
-    if next:
-        request.session["login_next_url"] = safe_next_url(next, fallback="")
+    # The post-login redirect target is carried in the `?next=` query string and
+    # re-validated by `src/admin/utils/urls.py::safe_next_url` at every read.
+    # We do NOT store it in the session: URL-carried state survives the D3
+    # session cookie cutover (Flask `session` → Starlette `adcp_session`) and
+    # prevents session-fixation of next-URLs. During the OAuth round-trip the
+    # next-URL is propagated via the signed `oauth_transit` cookie along with
+    # {state, nonce, code_verifier}; see `foundation-modules.md §11.6.1`.
+    validated_next = safe_next_url(next)  # path-only, prefix-allowlisted, else None
 
     just_logged_out = logged_out == "1"
 
@@ -437,10 +442,13 @@ async def google_callback(request: Request) -> RedirectResponse:
         request.session.pop("signup_flow", None)
         request.session.pop("signup_step", None)
         flash(request, f"Welcome {user_info.get('name', email)}! (Super Admin)", "success")
-        next_url = safe_next_url(
-            request.session.pop("login_next_url", None),
-            fallback=str(request.url_for("admin_core_index")),
-        )
+        # next URL is carried in `?next=` query string (validated by
+        # `src/admin/utils/urls.py::safe_next_url`) and, during OAuth round-trip,
+        # propagated via the signed `oauth_transit` cookie. No session state is
+        # used — this survives the D3 session cutover and prevents
+        # session-fixation of next-URLs. Re-run `safe_next_url` on every read.
+        validated_next = safe_next_url(request.query_params.get("next"))
+        next_url = validated_next or str(request.url_for("admin_core_index"))
         return RedirectResponse(next_url, status_code=303)
 
     # Signup flow branch (non-super-admin)
@@ -458,9 +466,11 @@ async def google_callback(request: Request) -> RedirectResponse:
         request.session["is_tenant_admin"] = t.get("is_admin", True)
         request.session.pop("available_tenants", None)
         flash(request, f"Welcome {user_info.get('name', email)}!", "success")
-        next_url = safe_next_url(
-            request.session.pop("login_next_url", None),
-            fallback=str(request.url_for("admin_tenants_dashboard", tenant_id=t["tenant_id"])),
+        # next URL is carried in `?next=` query string (validated by
+        # `src/admin/utils/urls.py::safe_next_url`). Re-run at the use site.
+        validated_next = safe_next_url(request.query_params.get("next"))
+        next_url = validated_next or str(
+            request.url_for("admin_tenants_dashboard", tenant_id=t["tenant_id"])
         )
         return RedirectResponse(next_url, status_code=303)
 
@@ -552,7 +562,7 @@ async def _lookup_idp_logout_url(tenant_id: str) -> str | None:
 |---|---|---|
 | `@auth_bp.route("/login")` + `def login()` | `@router.get("/login", name="admin_auth_login")` async def | Verb-explicit decorator; flat route name. (L5+ target. L0-L4 uses `def` with sync SQLAlchemy; OAuth callbacks may already be `async def` under L1's Authlib allowlist.) |
 | `request.args.get("next")` | `next: Annotated[str | None, Query()] = None` | Declarative, typed, self-documenting OpenAPI. |
-| `session["login_next_url"] = next_url` | `request.session["login_next_url"] = ...` | Starlette `SessionMiddleware` exposes `request.session` (signed-cookie backend). |
+| `session["login_next_url"] = next_url` | `validated_next = safe_next_url(request.query_params.get("next"))` | URL-carried next via `?next=` query string (validated by `src/admin/utils/urls.py::safe_next_url`). No session state used — survives D3 session cutover and prevents session-fixation. During OAuth round-trip the next-URL is carried in the signed `oauth_transit` cookie alongside `{state, nonce, code_verifier}`. |
 | `get_db_session()` called inline | `await _detect_tenant_from_host(request)` | `AsyncSession` is async-native; helper is `async def` with `async with get_db_session()`. (L5+ target. L0-L4 uses sync `with get_db_session() as db:` / `db.scalars(stmt)`.) |
 | `current_app.oauth.google.authorize_redirect(uri)` | `oauth.google.authorize_redirect(request, uri)` (from `authlib.integrations.starlette_client`) | The starlette variant is `async` and uses `request.session` directly — no Flask `current_app` thread-local. |
 | Manual `current_app.session_interface.save_session(...)` at `auth.py:437` | _deleted_ | Starlette always writes the cookie on `http.response.start`; the Flask-specific bug doesn't exist. |
@@ -585,7 +595,7 @@ async def _lookup_idp_logout_url(tenant_id: str) -> str | None:
 | OAuth callback arrives with mismatched `_state_google_*` | Authlib raises `MismatchingStateError` (subclass of `OAuthError`) — caught in existing branch | yes |
 | Cookie `adcp_session` missing at callback time (user cleared cookies) | Authlib state load fails → `OAuthError` → redirect to login | yes |
 
-**Open-redirect defense** — `safe_next_url()` is the only gate. It must run on every path that reads a `next` parameter AND must be reapplied when popping from the session (a value stored by an earlier route may have become unsafe if the fallback changed). All three uses above (login, callback, single-tenant auto-select) call it.
+**Open-redirect defense** — `src/admin/utils/urls.py::safe_next_url()` is the only gate. It must run on every path that reads a `next` parameter; the next-URL is carried in the `?next=` query string (or inside the signed `oauth_transit` cookie during the OAuth round-trip), **never** in the session. Re-validation on every read is mandatory (never trust that a prior validation is still safe). All three uses above (login, callback, single-tenant auto-select) call `safe_next_url(request.query_params.get("next"))` at the use site.
 
 **OAuth state management** — `authlib.integrations.starlette_client` stores `_state_google_<short>` keys on `request.session` automatically. These names are Authlib internals; do not touch them. `session.clear()` in `google_auth()` now happens BEFORE `authorize_redirect`, and Authlib then writes fresh state to the cleared session — this is the correct order, which `auth.py:416` already got right.
 
@@ -676,7 +686,8 @@ class TestGoogleOAuthLogin:
             env._commit_factory_data()
             client = env.get_rest_client()
             r = client.get("/login?next=https://evil.com/phish", follow_redirects=False)
-            # login_next_url was not stored (or stored as empty)
+            # `safe_next_url` rejected the external URL; `validated_next` is None.
+            # No session state was written (URL-carried mechanism — nothing to fixate).
             assert r.status_code in (200, 303)
             # Inspect session via a subsequent authenticated request if needed
 ```
@@ -1042,9 +1053,13 @@ async def oidc_callback(request: Request) -> RedirectResponse | HTMLResponse:
     request.session["auth_method"] = "oidc"
     flash(request, f"Welcome {result['name'] or result['email']}!", "success")
 
-    next_url = request.session.pop("login_next_url", None)
-    if next_url:
-        return RedirectResponse(next_url, status_code=303)
+    # next URL is carried in the signed `oauth_transit` cookie (consumed and
+    # cleared by the OIDC middleware before the handler runs; see
+    # `foundation-modules.md §11.6.1`). `safe_next_url()` is re-run here at the
+    # use site — never trust that a prior validation is still safe.
+    validated_next = safe_next_url(request.state.oauth_transit_next)
+    if validated_next:
+        return RedirectResponse(validated_next, status_code=303)
     return RedirectResponse(
         request.url_for("admin_tenants_dashboard", tenant_id=tenant_id),
         status_code=303,
@@ -1141,7 +1156,7 @@ async def _resolve_or_create_user(tenant_id: str, email: str, sso_name: str) -> 
 | User exists but `is_active=False` | Returns `"disabled"` |
 | Test flow completes → `render(..., "oidc_test_success.html", ...)` with HTTP 200 (not a redirect) | |
 | Test flow token exchange fails → redirect to `tenants_tenant_settings` with flash | |
-| `next` URL in session points outside our domain | `next_url = request.session.pop("login_next_url", None)` — we re-run `safe_next_url` at the use site (not shown above for brevity; add in Wave 1) |
+| `next` URL carried in `?next=` or `oauth_transit` cookie points outside our domain | `validated_next = safe_next_url(request.query_params.get("next"))` at the use site (no session storage — URL-carried state survives D3 session cutover and prevents session-fixation). `safe_next_url` re-runs on every read; rejected next-URLs fall through to the default redirect target. |
 
 **Security invariant: issuer validation must match tenant config.** Although Authlib validates that the `iss` claim in the ID token matches the `server_metadata_url`'s issuer, a tenant admin can still point `discovery_url` at a malicious IdP that returns consistent `iss` claims. The `_validate_issuer_url` function is a first-line defense against obviously wrong URLs; a belt-and-suspenders check would additionally compare the token's `iss` claim to an allowlist.
 

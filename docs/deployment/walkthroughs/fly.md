@@ -139,7 +139,7 @@ fly logs
 
 ```bash
 # Check health
-curl https://your-app-name.fly.dev/health
+curl https://your-app-name.fly.dev/healthz
 
 # Check status
 fly status --app your-app-name
@@ -151,7 +151,7 @@ fly status --app your-app-name
 |---------|-----|
 | Admin UI | https://your-app-name.fly.dev/admin |
 | MCP Server | https://your-app-name.fly.dev/mcp/ |
-| Health Check | https://your-app-name.fly.dev/health |
+| Health Check | https://your-app-name.fly.dev/healthz |
 
 > **Authentication**: Visiting `/admin` without being logged in will redirect you to the login page. After successful authentication, you'll be redirected back to the Admin UI.
 

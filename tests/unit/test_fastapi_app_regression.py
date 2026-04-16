@@ -129,9 +129,43 @@ class TestCORSConfiguration:
         allowed_origin = os.getenv("ALLOWED_ORIGINS", "http://localhost:8000").split(",")[0].strip()
         response = client.get("/health", headers={"Origin": allowed_origin})
         acao = response.headers.get("access-control-allow-origin", "")
-        assert acao == allowed_origin, (
-            f"Allowed origin '{allowed_origin}' should get matching CORS header, got '{acao}'"
-        )
+        assert (
+            acao == allowed_origin
+        ), f"Allowed origin '{allowed_origin}' should get matching CORS header, got '{acao}'"
+
+
+# ---------------------------------------------------------------------------
+# Health endpoints: /healthz liveness, /readyz readiness, /health legacy alias
+# ---------------------------------------------------------------------------
+
+
+class TestHealthEndpoints:
+    """Verify the three health endpoints return 200 for their respective probes.
+
+    /health — legacy alias kept for backwards compatibility (returns healthy body)
+    /healthz — liveness probe (no DB check, used by Docker HEALTHCHECK / Fly http_checks)
+    /readyz  — readiness probe (DB + alembic + scheduler tick, used by LB probes / CI gates)
+    """
+
+    def test_healthz_returns_200(self):
+        """/healthz liveness probe responds with 200 and no DB dependency."""
+        from starlette.testclient import TestClient
+
+        from src.app import app
+
+        client = TestClient(app)
+        response = client.get("/healthz")
+        assert response.status_code == 200
+
+    def test_readyz_returns_200_when_ready(self):
+        """/readyz readiness probe responds with 200 when DB + migrations + scheduler are healthy."""
+        from starlette.testclient import TestClient
+
+        from src.app import app
+
+        client = TestClient(app)
+        response = client.get("/readyz")
+        assert response.status_code == 200
 
 
 # ---------------------------------------------------------------------------
@@ -303,9 +337,9 @@ class TestFormatResolverNoEventLoopCreation:
         # Verify the module does not reference new_event_loop at attribute level
         assert not hasattr(fr_module, "new_event_loop"), "format_resolver should not export new_event_loop"
         # Verify run_async_in_sync_context is imported (the correct approach)
-        assert hasattr(fr_module, "run_async_in_sync_context"), (
-            "format_resolver should import run_async_in_sync_context"
-        )
+        assert hasattr(
+            fr_module, "run_async_in_sync_context"
+        ), "format_resolver should import run_async_in_sync_context"
 
     def test_get_format_works_from_sync_context(self):
         """get_format should work when called from a sync context."""

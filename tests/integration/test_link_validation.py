@@ -210,10 +210,12 @@ class TestLinkValidatorUtility:
         """Test that valid links are accepted."""
         validator = LinkValidator(authenticated_admin_session)
 
-        # Test valid link detection
-        is_valid, status_code, error = validator.validate_link("/health")
-        assert is_valid
-        assert status_code in (200, 302, 304)
+        # Test valid link detection for all health endpoints:
+        # /health is a legacy alias, /healthz is liveness, /readyz is readiness
+        for path in ("/health", "/healthz", "/readyz"):
+            is_valid, status_code, error = validator.validate_link(path)
+            assert is_valid, f"{path} should be a valid link (error: {error})"
+            assert status_code in (200, 302, 304), f"{path} returned {status_code}"
 
     def test_formats_broken_links_report(self):
         """Test that broken links are formatted correctly."""

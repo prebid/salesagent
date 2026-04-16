@@ -54,9 +54,10 @@ primary_region = "iad"
     interval = "30s"
     grace_period = "60s"
     method = "GET"
-    path = "/health"
+    path = "/healthz"
     protocol = "http"
     timeout = "10s"
+    # Fly http_checks are liveness-semantic (restart VM on failure). For rolling-deploy readiness gating, add a separate [[services.http_checks]] block targeting /readyz with grace_period >= 60s.
 
 [[vm]]
   memory = "4gb"

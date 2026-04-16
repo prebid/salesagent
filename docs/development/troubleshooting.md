@@ -496,7 +496,7 @@ services:
 
 ```bash
 # Service health endpoints (via nginx proxy)
-curl http://localhost:8000/health
+curl http://localhost:8000/healthz
 
 # Database health
 docker compose exec postgres pg_isready
@@ -565,7 +565,7 @@ Access via Admin UI Operations Dashboard.
 
 ```bash
 # Check service health (via nginx proxy)
-curl http://localhost:8000/health
+curl http://localhost:8000/healthz
 
 # Database status
 docker compose exec postgres pg_isready

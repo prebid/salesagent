@@ -104,7 +104,7 @@ setup_stack() {
     # Reuse running stack if healthy
     if [ -f "$STACK_ENV" ]; then
         source "$STACK_ENV"
-        if [ -n "${ADCP_SALES_PORT:-}" ] && curl -sf "http://localhost:${ADCP_SALES_PORT}/health" >/dev/null 2>&1; then
+        if [ -n "${ADCP_SALES_PORT:-}" ] && curl -sf "http://localhost:${ADCP_SALES_PORT}/readyz" >/dev/null 2>&1; then
             echo "Reusing existing Docker test stack (port $ADCP_SALES_PORT)" >&2
             source "$STACK_ENV"
             return

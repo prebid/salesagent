@@ -287,7 +287,24 @@ def media_buy_detail(tenant_id, media_buy_id):
 @operations_bp.route("/media-buy/<media_buy_id>/approve", methods=["POST"])
 @require_tenant_access()
 def approve_media_buy(tenant_id, media_buy_id, **kwargs):
-    """Approve a media buy by approving its workflow step."""
+    """Approve a media buy by approving its workflow step.
+
+    Session lifecycle (close-outer-before-adapter pattern, matching creatives.py:607-639):
+
+    Phase 1 (session 1): Load workflow step + media buy, validate, mark step approved/rejected,
+        set media_buy.approved_at/approved_by (approve) or status="rejected" (reject), decide
+        whether to call the adapter based on creative approval state. Commit and close.
+
+    Phase 2 (no session held): Call execute_approved_media_buy() if the adapter path applies.
+        That function opens its own MediaBuyUoW and commits media_buy.status="active".
+        Holding the outer session across this call (as the prior implementation did) makes the
+        outer session's stale ORM instance divergent from the adapter's write under bare
+        sessionmaker — a lost-update hazard. Closing the outer session first eliminates it.
+
+    Phase 3 (session 2): Re-open a fresh session to send the webhook notification (reads only).
+        For the "creatives not fully approved" branch we also set media_buy.status="draft" here
+        via the repository, since Phase 2 is skipped in that branch.
+    """
     from datetime import UTC, datetime
 
     from flask import flash, redirect, request, url_for
@@ -300,6 +317,19 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
     try:
         action = request.form.get("action")  # "approve" or "reject"
         reason = request.form.get("reason", "")
+
+        # Get user info for audit (same flask session read for every branch)
+        from flask import session as flask_session
+
+        user_info = flask_session.get("user", {})
+        user_email = user_info.get("email", "system") if isinstance(user_info, dict) else str(user_info)
+
+        # -------- Phase 1: outer session #1 — validate + mark step + commit -------------
+        step_data: dict | None = None
+        media_buy_data: dict | None = None
+        call_adapter = False  # True only on approve + all creatives approved + media_buy pending
+        adapter_task_status = AdcpTaskStatus.completed  # "completed" for approve, "rejected" for reject
+        flash_on_success = "Media buy approved successfully"  # default for approve-without-adapter
 
         with get_db_session() as db_session:
             # Find the pending approval workflow step for this media buy (tenant-scoped via Context join)
@@ -320,7 +350,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 flash("No pending approval found for this media buy", "warning")
                 return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
 
-            # Extract step data to dict to avoid detached instance errors after commit/nested sessions
+            # Extract step data to dict so it survives beyond this session
             step_data = {
                 "step_id": step.step_id,
                 "context_id": step.context_id,
@@ -328,19 +358,11 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 "request_data": step.request_data or {},
             }
 
-            # Get user info for audit
-            from flask import session as flask_session
-
-            user_info = flask_session.get("user", {})
-            user_email = user_info.get("email", "system") if isinstance(user_info, dict) else str(user_info)
-
             approve_repo = MediaBuyRepository(db_session, tenant_id)
             media_buy = approve_repo.get_by_id(media_buy_id)
 
-            # Extract media_buy data to dict to avoid detached instance errors after commit
-            media_buy_data = None
+            # Extract media_buy data to dict so it survives beyond this session
             if media_buy:
-                # Get push_notification_config from workflow step request_data (same pattern as sync_creatives)
                 push_config = step.request_data.get("push_notification_config") or {} if step.request_data else {}
                 media_buy_data = {
                     "principal_id": media_buy.principal_id,
@@ -364,7 +386,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 attributes.flag_modified(step, "comments")
 
                 if media_buy and media_buy.status == "pending_approval":
-                    # Check if all creatives are approved before moving to scheduled
+                    # Check if all creatives are approved before scheduling adapter execution
                     from src.core.database.models import Creative, CreativeAssignment
 
                     stmt_assignments = select(CreativeAssignment).filter_by(
@@ -389,136 +411,34 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         # No creatives assigned yet
                         all_creatives_approved = False
 
-                    # Update status based on creative approval state
-                    if all_creatives_approved:
-                        if media_buy.start_time and media_buy.end_time:
-                            # Compute flight window
-                            if media_buy.start_time:
-                                start_time = (
-                                    media_buy.start_time.astimezone(UTC)
-                                    if media_buy.start_time.tzinfo
-                                    else media_buy.start_time.replace(tzinfo=UTC)
-                                )
-
-                            if media_buy.end_time:
-                                end_time = (
-                                    media_buy.end_time.astimezone(UTC)
-                                    if media_buy.end_time.tzinfo
-                                    else media_buy.end_time.replace(tzinfo=UTC)
-                                )
-
-                            now = datetime.now(UTC)
-                            if now < start_time:
-                                media_buy.status = "scheduled"
-                            elif now > end_time:
-                                media_buy.status = "completed"
-                            else:
-                                media_buy.status = "active"
-                        else:
-                            # No start or end time - set to active
-                            media_buy.status = "active"
-                    else:
-                        # Keep it in a state that shows it needs creative approval
-                        # Use "draft" which will be displayed as "needs_approval" or "needs_creatives" by readiness service
-                        media_buy.status = "draft"
-
+                    # Record approver metadata on the outer session (always committed here).
+                    # The media_buy.status transition is owned by the adapter path
+                    # (execute_approved_media_buy → "active") when all creatives are approved;
+                    # otherwise we set status="draft" here so the readiness service surfaces it.
                     media_buy.approved_at = datetime.now(UTC)
                     media_buy.approved_by = user_email
-                    db_session.commit()
 
-                    # Execute adapter creation for approved media buy
-                    # This creates the order/line items in GAM (or other adapter)
-                    # Uses the same logic as auto-approved media buys
-                    from src.core.tools.media_buy_create import execute_approved_media_buy
-
-                    logger.info(f"[APPROVAL] Executing adapter creation for approved media buy {media_buy_id}")
-                    success, error_msg = execute_approved_media_buy(media_buy_id, tenant_id)
-
-                    if not success:
-                        # Adapter creation failed - update status and show error
-                        with get_db_session() as error_session:
-                            error_repo = MediaBuyRepository(error_session, tenant_id)
-                            error_buy = error_repo.update_status(media_buy_id, "failed")
-                            if error_buy:
-                                error_session.commit()
-
-                        flash(f"Media buy approved but adapter creation failed: {error_msg}", "error")
-                        return redirect(
-                            url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
-                        )
-
-                    logger.info(f"[APPROVAL] Adapter creation succeeded for {media_buy_id}")
-
-                    # Send webhook notification to buyer
-                    webhook_config = None
-                    if media_buy_data and media_buy_data["push_notification_url"]:
-                        stmt_webhook = (
-                            select(PushNotificationConfig)
-                            .filter_by(
-                                tenant_id=tenant_id,
-                                principal_id=media_buy_data["principal_id"],
-                                url=media_buy_data["push_notification_url"],
-                                is_active=True,
-                            )
-                            .order_by(PushNotificationConfig.created_at.desc())
-                        )
-                        webhook_config = db_session.scalars(stmt_webhook).first()
-
-                    if webhook_config and media_buy_data:
-                        approve_repo = MediaBuyRepository(db_session, tenant_id)
-                        all_packages = approve_repo.get_packages(media_buy_id)
-
-                        create_media_buy_approved_result = CreateMediaBuySuccessResponse(
-                            media_buy_id=media_buy_id,
-                            buyer_ref=media_buy_data["buyer_ref"],
-                            packages=[Package(package_id=x.package_id) for x in all_packages],
-                            context={},  # TODO: @yusuf - please fix this, like we've fixed in the creative approval
-                        )
-                        metadata = {
-                            "task_type": step_data["tool_name"],
-                            # TODO: @yusuf - check if we were passing principal_id and tenant to this previously
-                            # TODO: @yusuf - check if we want to make metadata typed
-                        }
-
-                        # Determine protocol type from workflow step request_data
-                        protocol = step_data["request_data"].get(
-                            "protocol", "mcp"
-                        )  # Default to MCP for backward compatibility
-
-                        # Create appropriate webhook payload based on protocol
-                        if protocol == "a2a":
-                            create_media_buy_approved_payload = create_a2a_webhook_payload(
-                                task_id=step_data["step_id"],
-                                status=AdcpTaskStatus.completed,
-                                result=create_media_buy_approved_result,
-                                context_id=step_data["context_id"],
-                            )
-                        else:
-                            create_media_buy_approved_payload = create_mcp_webhook_payload(
-                                task_id=step_data["step_id"],
-                                result=create_media_buy_approved_result,
-                                status=AdcpTaskStatus.completed,
-                            )
-
-                        try:
-                            service = get_protocol_webhook_service()
-                            asyncio.run(
-                                service.send_notification(
-                                    push_notification_config=webhook_config,
-                                    payload=create_media_buy_approved_payload,
-                                    metadata=metadata,
-                                )
-                            )
-                            logger.info(f"Sent webhook notification for approved media buy {media_buy_id}")
-                        except Exception as webhook_err:
-                            logger.warning(f"Failed to send webhook notification: {webhook_err}")
-
-                    flash("Media buy approved and order created successfully", "success")
+                    if all_creatives_approved:
+                        # Defer status write to Phase 2's adapter, which sets "active".
+                        # (Previously the outer session wrote "scheduled"/"active"/"completed"
+                        # here and committed, but the inner MediaBuyUoW always overwrote it
+                        # to "active" — the outer write was effectively dead code under
+                        # scoped_session and a lost-update hazard under bare sessionmaker.)
+                        call_adapter = True
+                    else:
+                        # No adapter call in this branch — status stays "draft" to indicate
+                        # the media buy is still waiting on creatives.
+                        media_buy.status = "draft"
+                        flash_on_success = "Media buy approved successfully"
                 else:
-                    db_session.commit()
-                    flash("Media buy approved successfully", "success")
+                    # No state transition — just a step-level approval ack.
+                    flash_on_success = "Media buy approved successfully"
+
+                db_session.commit()
 
             elif action == "reject":
+                adapter_task_status = AdcpTaskStatus.rejected
+
                 step.status = "rejected"
                 step.error_message = reason or "Rejected by administrator"
                 step.updated_at = datetime.now(UTC)
@@ -539,27 +459,57 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     attributes.flag_modified(media_buy, "status")
 
                 db_session.commit()
+                flash_on_success = "Media buy rejected"
 
-                # Send webhook notification to buyer
-                webhook_config = None
-                if media_buy_data and media_buy_data["push_notification_url"]:
-                    stmt_webhook = (
-                        select(PushNotificationConfig)
-                        .filter_by(
-                            tenant_id=tenant_id,
-                            principal_id=media_buy_data["principal_id"],
-                            url=media_buy_data["push_notification_url"],
-                            is_active=True,
-                        )
-                        .order_by(PushNotificationConfig.created_at.desc())
+            else:
+                # Unknown action — don't commit, fall through to the redirect.
+                return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
+
+        # -------- Phase 2: call adapter with no outer session held ----------------------
+        if call_adapter:
+            from src.core.tools.media_buy_create import execute_approved_media_buy
+
+            logger.info(f"[APPROVAL] Executing adapter creation for approved media buy {media_buy_id}")
+            success, error_msg = execute_approved_media_buy(media_buy_id, tenant_id)
+
+            if not success:
+                # Adapter creation failed — mark media buy "failed" in a fresh session.
+                with get_db_session() as error_session:
+                    error_repo = MediaBuyRepository(error_session, tenant_id)
+                    error_buy = error_repo.update_status(media_buy_id, "failed")
+                    if error_buy:
+                        error_session.commit()
+
+                flash(f"Media buy approved but adapter creation failed: {error_msg}", "error")
+                return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
+
+            logger.info(f"[APPROVAL] Adapter creation succeeded for {media_buy_id}")
+            flash_on_success = "Media buy approved and order created successfully"
+
+        # -------- Phase 3: fresh outer session #2 — send webhook ------------------------
+        # Kept inline (rather than extracted) so the raw select(PushNotificationConfig)
+        # below stays inside the approve_media_buy allowlist entry for the
+        # test_architecture_no_raw_select guard. Extracting it to a helper would add
+        # a new (file, function) entry to the allowlist, which the guard disallows.
+        if media_buy_data and step_data and media_buy_data.get("push_notification_url"):
+            with get_db_session() as webhook_session:
+                stmt_webhook = (
+                    select(PushNotificationConfig)
+                    .filter_by(
+                        tenant_id=tenant_id,
+                        principal_id=media_buy_data["principal_id"],
+                        url=media_buy_data["push_notification_url"],
+                        is_active=True,
                     )
-                    webhook_config = db_session.scalars(stmt_webhook).first()
+                    .order_by(PushNotificationConfig.created_at.desc())
+                )
+                webhook_config = webhook_session.scalars(stmt_webhook).first()
 
-                if webhook_config and media_buy_data:
-                    reject_repo = MediaBuyRepository(db_session, tenant_id)
-                    all_packages = reject_repo.get_packages(media_buy_id)
+                if webhook_config:
+                    webhook_repo = MediaBuyRepository(webhook_session, tenant_id)
+                    all_packages = webhook_repo.get_packages(media_buy_id)
 
-                    create_media_buy_rejected_result = CreateMediaBuySuccessResponse(
+                    webhook_result = CreateMediaBuySuccessResponse(
                         media_buy_id=media_buy_id,
                         buyer_ref=media_buy_data["buyer_ref"],
                         packages=[Package(package_id=x.package_id) for x in all_packages],
@@ -571,24 +521,21 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         # TODO: @yusuf - check if we want to make metadata typed
                     }
 
-                    # Determine protocol type from workflow step request_data
-                    protocol = step_data["request_data"].get(
-                        "protocol", "mcp"
-                    )  # Default to MCP for backward compatibility
+                    # Determine protocol type from workflow step request_data (default MCP for back-compat)
+                    protocol = step_data["request_data"].get("protocol", "mcp")
 
-                    # Create appropriate webhook payload based on protocol
                     if protocol == "a2a":
-                        create_media_buy_rejected_payload = create_a2a_webhook_payload(
+                        webhook_payload = create_a2a_webhook_payload(
                             task_id=step_data["step_id"],
-                            status=AdcpTaskStatus.rejected,
-                            result=create_media_buy_rejected_result,
+                            status=adapter_task_status,
+                            result=webhook_result,
                             context_id=step_data["context_id"],
                         )
                     else:
-                        create_media_buy_rejected_payload = create_mcp_webhook_payload(
+                        webhook_payload = create_mcp_webhook_payload(
                             task_id=step_data["step_id"],
-                            result=create_media_buy_rejected_result,
-                            status=AdcpTaskStatus.rejected,
+                            result=webhook_result,
+                            status=adapter_task_status,
                         )
 
                     try:
@@ -596,18 +543,16 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         asyncio.run(
                             service.send_notification(
                                 push_notification_config=webhook_config,
-                                payload=create_media_buy_rejected_payload,
+                                payload=webhook_payload,
                                 metadata=metadata,
                             )
                         )
-                        logger.info(f"Sent webhook notification for rejected media buy {media_buy_id}")
-
+                        logger.info(f"Sent webhook notification for media buy {media_buy_id}")
                     except Exception as webhook_err:
                         logger.warning(f"Failed to send webhook notification: {webhook_err}")
 
-                flash("Media buy rejected", "info")
-
-            return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
+        flash(flash_on_success, "success" if action == "approve" else "info")
+        return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
 
     except Exception as e:
         logger.error(f"Error approving/rejecting media buy {media_buy_id}: {e}", exc_info=True)

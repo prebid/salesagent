@@ -176,9 +176,11 @@ def test_initiate(tenant_id: str):
             flash("Tenant not found", "error")
             return redirect(url_for("auth.login"))
 
-        # Get OIDC config (doesn't require enabled, just configured)
-        config = get_or_create_auth_config(tenant_id)
-        if not config.oidc_client_id:
+        # Get OIDC config directly from this session to avoid nested session issues
+        from src.core.database.models import TenantAuthConfig
+
+        config = db_session.scalars(select(TenantAuthConfig).filter_by(tenant_id=tenant_id)).first()
+        if not config or not config.oidc_client_id:
             flash("OIDC not configured for this tenant", "error")
             return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
 

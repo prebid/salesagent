@@ -6,7 +6,8 @@
 
 > **LAYERED SCOPE (2026-04-14) — v2.0 uses SYNC admin handlers through L4, async in L5.**
 > This file predates the layered scoping. Blocker 4's original async-first resolution is
-> superseded for L0-L4 (sync `def` with `scoped_session`); the full async conversion lands in L5b
+> superseded for L0-L4 (sync `def` with bare `sessionmaker` + `Session` per Decision D2 —
+> NOT the legacy `scoped_session` registry); the full async conversion lands in L5b
 > (SessionDep alias flip) and L5c-L5e (mechanical await conversion). The authoritative
 > implementation guide is `execution-plan.md`.
 
@@ -23,7 +24,7 @@ But the deeper audit found **six critical blockers** the first-order pass missed
 1. 🚨 **`script_root` / `script_name` silent template breakage** — 147 occurrences across 45 templates break because Starlette's `include_router(prefix="/admin")` does NOT set `scope["root_path"]`, but Flask's WSGIMiddleware mount did
 2. 🚨 **Trailing-slash handling differs** — Starlette doesn't redirect `/foo` to `/foo/` by default; Flask does. 111 template `url_for()` calls are at risk of 404s
 3. 🚨 **`@app.exception_handler(AdCPError)` returns JSON to HTML admin browser users** — human clicks a button, sees raw JSON instead of a friendly error page. UX regression across every admin action path
-4. 🚨 **Session scoping on the async event-loop thread — PIVOTED 2026-04-11 to full async SQLAlchemy (Option A, absorbed into v2.0 Waves 4-5).** The original audit recommended sync `def` (Option C) as a scope-reduction compromise. The pivoted resolution is Option A: convert the DB layer to `AsyncSession` + `async_sessionmaker` end-to-end, driver change `psycopg2-binary → asyncpg`, eliminating scoped_session entirely. Admin handlers become `async def` end-to-end with `async with get_db_session()`. See §1.4 and `async-pivot-checkpoint.md` for the full new plan.
+4. 🚨 **Session scoping on the async event-loop thread — LAYERED 2026-04-14: Option C (sync `def` + bare `sessionmaker`) for L0-L4; Option A (full async) for L5.** The original audit recommended sync `def` (Option C) as a scope-reduction compromise. The 2026-04-11 pivot briefly flipped to end-state async; the 2026-04-14 layering re-scoped by phase. **Decision D2 (2026-04-14): `scoped_session` is ABANDONED entirely** — L0-L4 use a bare `sessionmaker` that produces a fresh Session on every `with get_db_session()` block, safe under FastAPI's threadpool because there is no thread-local registry to leak across reused threads. L5b re-aliases `SessionDep` to `AsyncSession` via `async_sessionmaker`, driver change `psycopg2-binary → asyncpg`. See §1.4 for the D2 rationale and `async-pivot-checkpoint.md` for the L5+ target state.
 5. 🚨 **Middleware ordering bug: CSRF must run AFTER Approximated, not before** — POSTing to `/admin/*` from an external domain currently produces a 403 (CSRF missing) before the redirect ever fires. Fix is a one-line reorder
 6. 🚨 **OAuth redirect URIs are immutable contracts with Google Cloud Console** — if the FastAPI router changes the path even by one character, OAuth fails with `redirect_uri_mismatch`
 
@@ -188,22 +189,50 @@ async def adcp_error_handler(request: Request, exc: AdCPError):
 
 **Severity:** 🚨 BLOCKER (architectural default change)
 
-**Status (2026-04-14):** Resolution has been layered. **L0-L4 use Option C** (sync `def` admin handlers with `scoped_session` — safe in FastAPI's threadpool), producing a fully working Flask-free sync v2.0 at end of L4. **L5 then converts to Option A** (full async SQLAlchemy) by re-aliasing `SessionDep` from `Session` to `AsyncSession` (one-line change at L5b) and mechanically converting ~60 commit sites and ~200 `scalars()`/`execute()` call sites to `await` across L5c-L5e. The `scoped_session` race is eliminated in L5 by the alias flip; during L0-L4 it is harmless because handlers run in threadpool threads with thread-local identity. **Both Option C and Option A are in v2.0 — sequenced, not chosen.** See `execution-plan.md` for the canonical layer-by-layer patterns and `async-pivot-checkpoint.md` for L5+ reference material.
+**Status (2026-04-14):** Resolution has been layered AND Decision D2 retires `scoped_session`. **L0-L4 use Option C** (sync `def` admin handlers) with a bare `sessionmaker` + per-`with`-block `Session` — safe in FastAPI's threadpool because there is no thread-local registry for reused threads to leak across. L0-L4 end state: a fully working Flask-free sync v2.0. **L5 then converts to Option A** (full async SQLAlchemy) by re-aliasing `SessionDep` from `Session` to `AsyncSession` (one-line change at L5b; `sessionmaker → async_sessionmaker` is the trivial swap) and mechanically converting ~60 commit sites and ~200 `scalars()`/`execute()` call sites to `await` across L5c-L5e. **The `scoped_session` race is eliminated at L0 by Decision D2, not deferred to L5.** **Both Option C and Option A are in v2.0 — sequenced, not chosen.** See `execution-plan.md` for the canonical layer-by-layer patterns and `async-pivot-checkpoint.md` for L5+ reference material.
 
-**The mechanism (unchanged — this is still what's broken today):** `src/core/database/database_session.py:148` uses:
+**The L0-L4 canonical mechanism (bare `sessionmaker`, not `scoped_session`):** Decision D2 replaces the legacy `scoped_session` registry with a bare `sessionmaker` that produces a fresh Session on every `with` block. `src/core/database/database_session.py` is rewritten as:
+
 ```python
-SessionLocal = scoped_session(sessionmaker(bind=_engine))
+_session_factory = sessionmaker(bind=_engine, expire_on_commit=True, class_=Session)
+
+@contextmanager
+def get_db_session() -> Generator[Session, None, None]:
+    """Per-operation session. Each `with` block gets a fresh Session from a bare
+    sessionmaker — no thread-local `scoped_session` registry, so AnyIO threadpool
+    thread reuse cannot leak state between requests.
+    """
+    session = _session_factory()
+    try:
+        yield session
+    except (OperationalError, DisconnectionError):
+        session.rollback()
+        # inline the healthy-state mutation (see src/core/database/database_session.py)
+        _is_healthy = False
+        _last_health_check = time.time()
+        raise
+    except SQLAlchemyError:
+        session.rollback()
+        raise
+    finally:
+        session.close()
 ```
 
-`scoped_session` with default scopefunc uses `threading.get_ident()` — one session per thread. Under Flask + `a2wsgi.WSGIMiddleware`, each request spins up a dedicated worker thread, so each request gets its own session identity. **Isolated.**
+**Why bare `sessionmaker` instead of `scoped_session`:**
+- **Threadpool safety:** AnyIO reuses OS threads across requests. `scoped_session(scopefunc=threading.get_ident)` yields one Session per thread → two requests on the same thread see the same Session, with shared identity map + pending flushes. Bare `sessionmaker` gives each `with` block its own Session.
+- **Nested-call safety:** Nested `with get_db_session()` calls get INDEPENDENT sessions (safer) rather than a SHARED scoped registry (implicit transaction merging is dangerous).
+- **L5 async flip:** `sessionmaker → async_sessionmaker` is a trivial swap; `scoped_session` has no async equivalent and would have required removal at L5 anyway.
+- **2026 SQLAlchemy guidance:** `scoped_session` is legacy-Flask pattern; 2.0 docs recommend `sessionmaker` + context-managed Session per operation for web apps.
 
-**Historical context (pre-pivot).** Under the *original* proposal with `async def` handlers and unchanged sync SQLAlchemy:
+Pre-existing parallel `scoped_session` registries in `src/services/gam_orders_service.py` and `src/services/gam_inventory_service.py` remain until L4 (Decision 7 / Spike 4.5) and are allowlisted in `test_architecture_no_scoped_session.py` with `FIXME(salesagent-xxxx)` comments.
+
+**Historical context (pre-pivot, pre-D2).** The original code at `src/core/database/database_session.py:148` used `SessionLocal = scoped_session(sessionmaker(bind=_engine))`. Under Flask + `a2wsgi.WSGIMiddleware`, each request spun up a dedicated worker thread, so `scoped_session` with default `threading.get_ident()` scopefunc gave each request its own session identity. Under the *original* (pre-pivot) async proposal with `async def` handlers and unchanged sync SQLAlchemy:
 - Multiple concurrent admin requests run on the **same event loop thread**
 - Each request's `with get_db_session()` block gets the **same** scoped_session identity
 - If request A commits mid-transaction and request B is still writing, they share a transaction
 - Stale reads, duplicate commits, silently corrupted state
 
-**Current state check (verified):** `rg 'run_in_threadpool' src/` returns 0 matches. Today's AdCP REST endpoints in `src/routes/api_v1.py` are already `async def` and call `_impl` directly without threadpool offload. **This is already a pre-existing latent bug** — if two concurrent AdCP REST requests touch the DB at the same time, they interleave. It hasn't bitten production because traffic is low and `scoped_session` happens to commit quickly.
+**Current state check (verified):** `rg 'run_in_threadpool' src/` returns 0 matches. Today's AdCP REST endpoints in `src/routes/api_v1.py` are already `async def` and call `_impl` directly without threadpool offload. **This is already a pre-existing latent bug** — if two concurrent AdCP REST requests touch the DB at the same time, they interleave under the legacy `scoped_session` registry. It hasn't bitten production because traffic is low and commits happen quickly. Decision D2 eliminates this race at the source by removing `scoped_session` entirely.
 
 **The migration plan would make this worse** by adding ~232 admin routes with DB access.
 
@@ -211,12 +240,12 @@ SessionLocal = scoped_session(sessionmaker(bind=_engine))
 
 - **Option A: Switch to async SQLAlchemy end-to-end.** Replace `scoped_session(sessionmaker(...))` with `async_sessionmaker(_engine, class_=AsyncSession, expire_on_commit=False)`. Admin handlers become `async def` with `async with get_db_session()` / `await session.execute(...)`. The scoped_session thread-identity race is eliminated entirely because `AsyncSession` does not use thread-identity scoping. Driver moves from `psycopg2-binary` to `asyncpg`. Correct long-term, touches 100+ files, requires careful lazy-loading audit, but fixes the pre-existing `src/routes/api_v1.py` latent bug as a side effect.
 - **Option B: Every `async def` admin handler wraps sync DB calls in `run_in_threadpool(_sync_fetch)`.** Feasible but bug-prone — one forgotten wrap causes session interleaving. Not chosen.
-- **Option C: Default admin handlers to sync `def`.** FastAPI auto-offloads to threadpool workers; each worker thread has its own session identity so `scoped_session` isolates correctly. Matches today's Flask semantics. Minimal v2.0 scope. Does NOT fix the pre-existing REST latent bug (which is on `async def` handlers). Was the pre-pivot choice.
+- **Option C: Default admin handlers to sync `def`.** FastAPI auto-offloads to threadpool workers. Under Decision D2, each `with get_db_session()` returns a fresh Session from a bare `sessionmaker` (no `scoped_session` registry, no thread-local state) — safe under AnyIO threadpool thread reuse because each `with` block creates and closes its own Session bound to the engine's connection pool. Matches today's Flask semantics. Minimal v2.0 scope. Does NOT fix the pre-existing REST latent bug (which is on `async def` handlers — those fixes land in L5). Was the pre-pivot choice.
 
-**Resolution: Options C then A, sequenced across layers.** L0-L4 ship Option C (sync `def` handlers with existing `scoped_session`); L5 lands Option A (full async SQLAlchemy) via SessionDep alias flip + mechanical await conversion. See `execution-plan.md` for per-layer patterns. Original Option-A rationale preserved below for L5+ reference:
+**Resolution: Options C then A, sequenced across layers.** L0-L4 ship Option C (sync `def` handlers with bare `sessionmaker` per Decision D2 — NOT the legacy `scoped_session` registry); L5 lands Option A (full async SQLAlchemy) via SessionDep alias flip + mechanical await conversion. See `execution-plan.md` for per-layer patterns. Original Option-A rationale preserved below for L5+ reference:
 
 1. **Greenfield 2026 FastAPI codebases write fully async code.** Sync `def` + threadpool is a scope-reduction hack, not the end state.
-2. **Fixes a pre-existing latent bug as a side effect.** `src/routes/api_v1.py` already has the scoped_session race on async tasks. Option A eliminates it; Option C leaves it intact.
+2. **Fixes a pre-existing latent bug as a side effect.** `src/routes/api_v1.py` had a scoped_session race on async tasks; Decision D2 (bare `sessionmaker`) already eliminates it at L0-L4. Option A remains the end state for all other reasons below.
 3. **Keeps the L5+ async conversion inside v2.0.** One migration, one branch, one release — L0-L4 sync first, L5-L7 async + polish on the same branch.
 4. **AdCP schema impact: zero.** Verified — wire format, MCP tool signatures, A2A protocol, REST endpoint bodies, OpenAPI surface, auth context, `AdCPError` hierarchy, webhook payloads — all unchanged. The pivot is purely an internal implementation-language change. Full verification in `async-pivot-checkpoint.md` §9.
 
@@ -786,7 +815,7 @@ Most items below have been applied via commits `d8957931` and `3e0afa02` (Agent 
 
 ### Main overview (`flask-to-fastapi-migration.md`)
 
-1. **[APPLIED, then LAYERED]** Admin handlers are `async def` end-to-end with full async SQLAlchemy — §10, §11, §13 examples updated. Under the 2026-04-14 layering, this end state now lands at L5 within v2.0; L0-L4 use sync `def` with `scoped_session`, L5b flips `SessionDep` to `AsyncSession`, L5c-L5e mechanically convert call sites.
+1. **[APPLIED, then LAYERED]** Admin handlers are `async def` end-to-end with full async SQLAlchemy — §10, §11, §13 examples updated. Under the 2026-04-14 layering, this end state now lands at L5 within v2.0; L0-L4 use sync `def` with a bare `sessionmaker` + `Session` per Decision D2 (NOT the legacy `scoped_session` registry), L5b flips `SessionDep` to `AsyncSession` (`sessionmaker → async_sessionmaker` trivial swap), L5c-L5e mechanically convert call sites.
 2. **[APPLIED]** Swap middleware order — Approximated BEFORE CSRF in §10.2.
 3. **[APPLIED]** §2.8 deep-audit revisions summary added.
 4. **[APPLIED]** §11 foundation — `render()` wrapper uses `url_for` exclusively; `_url_for` safe-lookup override pre-registered on `templates.env.globals` before first `TemplateResponse`.
@@ -889,7 +918,7 @@ Sorted by severity:
 
 The **biggest unmentioned risks** are **B4 (session scoping)** and **B2 (trailing slashes)** — both are blockers that could silently break production after a traffic cutover. Neither was in the first-order audit.
 
-The **admin handler default is sync `def` for Layers 0-4, then `async def` for Layers 5+** (post-2026-04-14 strategic layering). The original audit recommended sync `def` (Option C) as a scope-reduction compromise; the 2026-04-11 pivot briefly flipped that to full-async end state (Option A); the 2026-04-14 layering then re-scoped the handler form by layer. Through L4, admin handlers are sync `def` with sync SQLAlchemy (`scoped_session` + `Session`), which is race-free because FastAPI runs sync handlers in a threadpool where thread-local session scoping works correctly. At L5b, `SessionDep` re-aliases to `AsyncSession` as a one-file flip; L5c onward, handlers flip to `async def` and ~60 commit sites + ~200 `scalars`/`execute` sites mechanically add `await`. The async-first narrative in this section (and throughout the archived `async-pivot-checkpoint.md` / `async-audit/*.md`) applies to the L5+ end state only. `run_in_threadpool` is reserved for non-DB blocking work (file I/O, CPU-bound, sync third-party libs) at every layer. See §1.4, CLAUDE.md Invariant #4, and the L5+ roadmap in `async-pivot-checkpoint.md`.
+The **admin handler default is sync `def` for Layers 0-4, then `async def` for Layers 5+** (post-2026-04-14 strategic layering). The original audit recommended sync `def` (Option C) as a scope-reduction compromise; the 2026-04-11 pivot briefly flipped that to full-async end state (Option A); the 2026-04-14 layering then re-scoped the handler form by layer. Through L4, admin handlers are sync `def` with sync SQLAlchemy. Each `with get_db_session()` returns a fresh Session from a bare `sessionmaker` (no `scoped_session` registry, no thread-local state). Under FastAPI's threadpool, threads are reused across requests — a thread-local `scoped_session` would leak state; bare `sessionmaker` is safe because each `with` block creates and closes its own Session bound to the engine's connection pool. At L5b, `SessionDep` re-aliases to `AsyncSession` as a one-file flip (`sessionmaker → async_sessionmaker`); L5c onward, handlers flip to `async def` and ~60 commit sites + ~200 `scalars`/`execute` sites mechanically add `await`. The async-first narrative in this section (and throughout the archived `async-pivot-checkpoint.md` / `async-audit/*.md`) applies to the L5+ end state only. `run_in_threadpool` is reserved for non-DB blocking work (file I/O, CPU-bound, sync third-party libs) at every layer. See §1.4, CLAUDE.md Invariant #4, and the L5+ roadmap in `async-pivot-checkpoint.md`.
 
 The **middleware order as proposed was buggy** — Approximated must run BEFORE CSRF, not after. This is a one-line fix in the plan but missing it would break external-domain onboarding.
 

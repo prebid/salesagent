@@ -177,7 +177,7 @@ Special characters in passwords need URL encoding:
 
 ### 502 Bad Gateway errors
 
-If you can access `/health` but get 502 errors on `/admin` or `/mcp`, the deployment is missing required flags:
+If you can access `/healthz` but get 502 errors on `/admin` or `/mcp`, the deployment is missing required flags:
 ```bash
 gcloud run services update adcp-sales-agent \
   --region us-central1 \

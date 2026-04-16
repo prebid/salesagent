@@ -52,7 +52,7 @@ cmd_up() {
     local pg=false srv=false
     while [ $(date +%s) -lt $deadline ]; do
         [ "$pg" = false ] && dc exec -T postgres pg_isready -U adcp_user >/dev/null 2>&1 && pg=true && echo -e "${GREEN}PostgreSQL ready${NC}"
-        [ "$srv" = false ] && curl -sf "http://localhost:${MCP_PORT}/health" >/dev/null 2>&1 && srv=true && echo -e "${GREEN}Server ready${NC}"
+        [ "$srv" = false ] && curl -sf "http://localhost:${MCP_PORT}/readyz" >/dev/null 2>&1 && srv=true && echo -e "${GREEN}Server ready${NC}"
         [ "$pg" = true ] && [ "$srv" = true ] && break
         sleep 2
     done

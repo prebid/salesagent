@@ -1624,10 +1624,14 @@ templates.env.globals["get_flashed_messages"] = get_flashed_messages
 
 
 @pass_context
-def _url_for(context: dict[str, Any], name: str, /, **path_params: Any) -> URL:
+def _url_for(context: dict[str, Any], name: str, /, **path_params: Any) -> str:
+    """Return path-only URL. Starlette's request.url_for returns absolute
+    (scheme+host+path); templates want path-only so rendered HTML is portable
+    across hostnames (multi-tenant proxy, Approximated external domains, etc.).
+    Golden-fingerprint fixtures must be regenerated when this wrapper lands."""
     request: Request = context["request"]
     try:
-        return request.url_for(name, **path_params)
+        return str(request.url_for(name, **path_params).path)
     except NoMatchFound:
         template_name = getattr(context, "name", "<unknown>")
         logger.error(
@@ -1640,6 +1644,12 @@ def _url_for(context: dict[str, Any], name: str, /, **path_params: Any) -> URL:
 
 
 templates.env.globals["url_for"] = _url_for
+
+# NOTE: Return type is `str` (not `URL`). Golden fingerprint fixtures captured
+# before this change will break and must be regenerated in the L1a PR. Any
+# template or helper code that previously called `.path`, `.scheme`, or other
+# `URL` methods on a `url_for(...)` result must be updated to operate on a
+# plain string (the value is already path-only).
 
 
 def render(
@@ -1812,12 +1822,11 @@ cookie (itsdangerous). ~4KB cap. On every request the cookie is deserialized
 into `request.session` (a dict subclass that tracks mutation) and re-serialized
 on response if `request.session` was touched.
 
-Cookie name CHANGES from Flask's `session` to `adcp_session`. To avoid logging
-out every active admin session at deploy, SessionMiddleware dual-reads BOTH
-cookie names through the L1a–L2 bake window (legacy `session` cookie support
-drops at L2 exit). This is the canonical policy per CLAUDE.md §"Session cookie
-rename" and `implementation-checklist.md` L1a work items. The previous stance
-of "forced re-login at cutover" has been superseded.
+Cookie name CHANGES from Flask's `session` to `adcp_session`. SessionMiddleware
+reads `adcp_session` only; legacy `session=...` cookies are silently ignored.
+Users are bounced through Google OAuth once at L1a deploy. See CLAUDE.md
+§"Session cookie rename" and `implementation-checklist.md` L1a for the full
+rationale and customer-communication requirement.
 """
 from __future__ import annotations
 
@@ -2357,6 +2366,7 @@ async def is_super_admin(email: str) -> bool:
 # during the Wave 4 migration (e.g., `_get_admin_user_or_none` for the
 # is_super_admin cascade), we retain a thin transitional wrapper:
 
+# !!! L0-L4: this is L5+ admin-handler code. At L0-L4, use `def`, `Session` (not AsyncSession), and `session.execute(stmt)` (no await). See file-top banner.
 async def _load_tenant(tenant_id: str) -> dict[str, Any]:
     """DEPRECATED transitional helper — use TenantRepository.get_dto() instead.
 
@@ -2390,6 +2400,7 @@ async def _load_tenant(tenant_id: str) -> dict[str, Any]:
         }
 
 
+# !!! L0-L4: this is L5+ admin-handler code. At L0-L4, use `def`, `Session` (not AsyncSession), and `session.execute(stmt)` (no await). See file-top banner.
 async def _get_admin_user_or_none(request: Request) -> AdminUser | None:
     """Read the session and produce an AdminUser, or None if not authenticated.
 
@@ -2437,10 +2448,12 @@ async def _get_admin_user_or_none(request: Request) -> AdminUser | None:
 # Public deps
 # ---------------------------------------------------------------------------
 
+# !!! L0-L4: this is L5+ admin-handler code. At L0-L4, use `def`, `Session` (not AsyncSession), and `session.execute(stmt)` (no await). See file-top banner.
 async def get_admin_user_optional(request: Request) -> AdminUser | None:
     return await _get_admin_user_or_none(request)
 
 
+# !!! L0-L4: this is L5+ admin-handler code. At L0-L4, use `def`, `Session` (not AsyncSession), and `session.execute(stmt)` (no await). See file-top banner.
 async def get_admin_user(request: Request) -> AdminUser:
     user = await _get_admin_user_or_none(request)
     if user is None:
@@ -2448,6 +2461,7 @@ async def get_admin_user(request: Request) -> AdminUser:
     return user
 
 
+# !!! L0-L4: this is L5+ admin-handler code. At L0-L4, use `def`, `Session` (not AsyncSession), and `session.execute(stmt)` (no await). See file-top banner.
 async def get_admin_user_json(request: Request) -> AdminUser:
     """Same as get_admin_user but raises HTTPException(401) for JSON endpoints."""
     user = await _get_admin_user_or_none(request)
@@ -2461,12 +2475,14 @@ AdminUserJsonDep = Annotated[AdminUser, Depends(get_admin_user_json)]
 AdminUserOptional = Annotated[AdminUser | None, Depends(get_admin_user_optional)]
 
 
+# !!! L0-L4: this is L5+ admin-handler code. At L0-L4, use `def`, `Session` (not AsyncSession), and `session.execute(stmt)` (no await). See file-top banner.
 async def require_super_admin(user: AdminUserDep) -> AdminUser:
     if user.role != "super_admin":
         raise HTTPException(status_code=403, detail="Super admin required")
     return user
 
 
+# !!! L0-L4: this is L5+ admin-handler code. At L0-L4, use `def`, `Session` (not AsyncSession), and `session.execute(stmt)` (no await). See file-top banner.
 async def require_super_admin_json(user: AdminUserJsonDep) -> AdminUser:
     if user.role != "super_admin":
         raise HTTPException(status_code=403, detail="Super admin required")
@@ -2499,6 +2515,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant, User
 
 
+# !!! L0-L4: this is L5+ admin-handler code. At L0-L4, use `def`, `Session` (not AsyncSession), and `session.execute(stmt)` (no await). See file-top banner.
 async def _user_has_tenant_access(email: str, tenant_id: str) -> bool:
     async with get_db_session() as db:
         found = (await db.execute(
@@ -2507,6 +2524,7 @@ async def _user_has_tenant_access(email: str, tenant_id: str) -> bool:
         return found is not None
 
 
+# !!! L0-L4: this is L5+ admin-handler code. At L0-L4, use `def`, `Session` (not AsyncSession), and `session.execute(stmt)` (no await). See file-top banner.
 async def _tenant_has_auth_setup_mode(tenant_id: str) -> bool:
     async with get_db_session() as db:
         tenant = (await db.execute(
@@ -2515,6 +2533,7 @@ async def _tenant_has_auth_setup_mode(tenant_id: str) -> bool:
         return bool(tenant and getattr(tenant, "auth_setup_mode", False))
 
 
+# !!! L0-L4: this is L5+ admin-handler code. At L0-L4, use `def`, `Session` (not AsyncSession), and `session.execute(stmt)` (no await). See file-top banner.
 async def get_current_tenant(
     request: Request,
     user: AdminUserDep,
@@ -2553,6 +2572,7 @@ async def get_current_tenant(
     return await _load_tenant(tenant_id)
 
 
+# !!! L0-L4: this is L5+ admin-handler code. At L0-L4, use `def`, `Session` (not AsyncSession), and `session.execute(stmt)` (no await). See file-top banner.
 async def get_current_tenant_json(
     request: Request,
     user: AdminUserJsonDep,
@@ -3956,10 +3976,10 @@ app.add_middleware(SecurityHeadersMiddleware, https_only=settings.https_only)  #
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=...)   # added at L2
 app.add_middleware(ApproximatedExternalDomainMiddleware)
 app.add_middleware(FlyHeadersMiddleware)
-app.add_middleware(RequestIDMiddleware)                        # added at L4/L6, outermost
-# Outermost runtime (L4/L6, 10 middlewares):
+app.add_middleware(RequestIDMiddleware)                        # added at L4, outermost
+# Outermost runtime (L4+, 10 middlewares):
 # RequestID → Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS
-# See §cross-cutting/Middleware ordering for the L1a (6) and L2 (9) progressive shapes.
+# See §cross-cutting/Middleware ordering for the L1a (7) and L2 (9) progressive shapes.
 ```
 
 ### D. Why SameSite=Lax is sufficient paired with Origin validation
@@ -4007,9 +4027,9 @@ LOGIC:
    admin UI show whatever error page it shows).
 
 MUST run AFTER UnifiedAuth and BEFORE Session/CSRF in the middleware stack.
-Canonical L4/L6 order (outermost runtime → innermost runtime, 10 middlewares):
+Canonical L4+ order (outermost runtime → innermost runtime, 10 middlewares):
 RequestID → Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS
-See §cross-cutting/Middleware ordering for the L1a (6) and L2 (9) progressive shapes.
+See §cross-cutting/Middleware ordering for the L1a (7) and L2 (9) progressive shapes.
 Add via add_middleware in REVERSE order (LIFO):
 app.add_middleware(CORS); ...; app.add_middleware(RequestID).
 
@@ -4583,6 +4603,8 @@ class RequestIDMiddleware:
 
 ```python
 # src/app.py (exception handlers)
+from typing import Literal
+
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -4597,18 +4619,20 @@ from src.core.settings import get_settings
 def _wants_html(request: Request) -> bool:
     """Return True only for browser navigation requests wanting HTML.
 
-    Rejects XHR/HTMX/fetch patterns even when Accept contains text/html:
-    - HTMX sets HX-Request: true
+    Rejects XHR/fetch patterns even when Accept contains text/html:
     - jQuery/XHR sets X-Requested-With: XMLHttpRequest
     - Fetch without explicit Accept sends */* (does NOT match "text/html" substring)
+
+    NOTE: HTMX callers are NOT handled here — they get partial HTML via
+    `_response_mode` below (HTMX expects HTML fragments, not JSON). This
+    helper is retained for call sites that only need the binary full-HTML
+    vs. JSON decision and do not render partials.
 
     Accept substring check remains the primary signal; only browser navigation
     sends Accept like "text/html,application/xhtml+xml,...". Path-scoping
     to /admin/ adds a second guard — AdCP surfaces (/mcp, /a2a, /api) never
     want HTML regardless of Accept.
     """
-    if request.headers.get("hx-request"):
-        return False
     if request.headers.get("x-requested-with", "").lower() == "xmlhttprequest":
         return False
     accept = request.headers.get("accept", "")
@@ -4620,10 +4644,37 @@ def _wants_html(request: Request) -> bool:
     return request.url.path.startswith("/admin/") or request.url.path.startswith("/tenant/")
 
 
+def _response_mode(request: Request) -> Literal["htmx_partial", "html_full", "json"]:
+    """Determine response mode for errors (and redirects) based on request headers.
+
+    Three modes, not two:
+    - htmx_partial: HX-Request: true → render a fragment (no base.html extend).
+      Previously treated as JSON, which broke HTMX swap targets.
+    - html_full: browser navigation on /admin|/tenant with Accept: text/html.
+    - json: everything else (AdCP surfaces, XHR, API callers).
+    """
+    if request.headers.get("hx-request") == "true":
+        return "htmx_partial"
+    if request.headers.get("x-requested-with", "").lower() == "xmlhttprequest":
+        return "json"
+    accept = request.headers.get("accept", "")
+    is_admin = request.url.path.startswith(("/admin/", "/tenant/"))
+    if is_admin and "text/html" in accept and "application/json" not in accept:
+        return "html_full"
+    return "json"
+
+
 @app.exception_handler(AdCPError)
 async def adcp_error_handler(request: Request, exc: AdCPError):
-    """Accept-aware: HTML for admin browsers, JSON for APIs. (Blocker 3)"""
-    if _wants_html(request):
+    """Accept-aware: HTMX partial, full HTML for admin browsers, JSON for APIs. (Blocker 3)"""
+    mode = _response_mode(request)
+    if mode == "htmx_partial":
+        # HTMX swaps partial HTML fragments; do NOT extend base.html
+        return render(request, "error_partial.html", {
+            "error": exc.message,
+            "status_code": exc.status_code,
+        }, status_code=exc.status_code)
+    if mode == "html_full":
         return render(request, "error.html", {
             "error": exc.message,
             "status_code": exc.status_code,
@@ -4694,7 +4745,9 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 - **Handler order matters.** FastAPI dispatches to the most specific handler first (subclass before superclass), so `AdCPError` handler fires before `Exception`. Correct.
 - **`AdCPError` JSON shape is byte-stable** for API callers — Agent D M9 `test_openapi_byte_stability.py` + an explicit JSON schema snapshot protect this.
 - **`_wants_html` only returns True on admin paths.** API callers (`/api/v1/*`, `/mcp`, `/a2a`) always get JSON, regardless of their `Accept` header. This preserves AdCP wire format.
-- **XHR/HTMX navigation:** `_wants_html` returns False for requests with `HX-Request: true` or `X-Requested-With: XMLHttpRequest` even when Accept contains `text/html`. This prevents admin JS `fetch()` calls from accidentally receiving HTML error pages when the browser happened to send `Accept: text/html` by default.
+- **XHR navigation:** `_wants_html` returns False for requests with `X-Requested-With: XMLHttpRequest` even when Accept contains `text/html`. This prevents admin JS `fetch()` calls from accidentally receiving HTML error pages when the browser happened to send `Accept: text/html` by default.
+- **HTMX navigation:** Handled by `_response_mode`, NOT `_wants_html`. HTMX requests (`HX-Request: true`) get a partial HTML fragment (`error_partial.html`) so the swap target receives renderable HTML, not JSON. A prior version of this handler collapsed HTMX into the JSON branch — that was wrong; HTMX swaps expect HTML fragments.
+- **New template required: `templates/error_partial.html`** — just the error div block without `{% extends 'base.html' %}`. HTMX swaps it into `#error-flash` or similar. Keep the markup minimal (a single `<div class="error">` with `{{ error }}` and `{{ status_code }}`) so it composes into any swap target.
 
 ### E. Tests — content negotiation edge cases
 
@@ -6643,7 +6696,7 @@ Meta-test constructs a FastAPI app with two routes sharing `name="foo"`; asserts
 
 Canonical runtime order (outermost → innermost). Three progressive shapes — the stack grows as the migration advances:
 
-**L1a (initial port, 6 middlewares):**
+**L1a (initial port, 7 middlewares):**
 ```
 Fly → ExternalDomain → UnifiedAuth → Session → CSRF → RestCompat → CORS → handler
 ```
@@ -6653,12 +6706,12 @@ Fly → ExternalDomain → UnifiedAuth → Session → CSRF → RestCompat → C
 Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS → handler
 ```
 
-**L4 / L6 (async + observability, 10 middlewares — adds RequestID outermost):**
+**L4+ (observability floor, 10 middlewares — adds RequestID outermost; persists through L5/L6/L7):**
 ```
 RequestID → Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS → handler
 ```
 
-Registration in `src/app.py` is in **REVERSE** order (LIFO — `add_middleware` last-added becomes outermost). L4/L6 canonical registration:
+Registration in `src/app.py` is in **REVERSE** order (LIFO — `add_middleware` last-added becomes outermost). L4+ canonical registration:
 
 ```python
 app.add_middleware(CORSMiddleware, allow_origins=...)          # innermost
@@ -6670,7 +6723,7 @@ app.add_middleware(SecurityHeadersMiddleware, https_only=settings.https_only)  #
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=...)   # added at L2
 app.add_middleware(ApproximatedExternalDomainMiddleware)
 app.add_middleware(FlyHeadersMiddleware)
-app.add_middleware(RequestIDMiddleware)                        # added at L4/L6, outermost
+app.add_middleware(RequestIDMiddleware)                        # added at L4, outermost
 ```
 
 **Hard invariant (notes/CLAUDE.md #2):** `ApproximatedExternalDomainMiddleware` runs BEFORE `CSRFOriginMiddleware` — the canonical order satisfies this (ExternalDomain is outer of the pair).
@@ -6678,7 +6731,7 @@ app.add_middleware(RequestIDMiddleware)                        # added at L4/L6,
 **Rationale:**
 - `UnifiedAuth` is **outside** `Session` by design — it authenticates from headers only (`x-adcp-auth`, `Authorization: Bearer`) and does NOT depend on `request.session`. Session still wraps CSRF/RestCompat/CORS so admin handlers downstream have session state.
 - `ExternalDomain` does not touch `request.session`; its position relative to Session is functionally independent. The load-bearing constraint is that it runs before CSRF.
-- `Fly` is outermost of the L1a stack so every inner middleware sees `X-Forwarded-*` normalized from `Fly-Forwarded-*`. At L4/L6, `RequestID` takes the outermost slot above `Fly`.
+- `Fly` is outermost of the L1a stack so every inner middleware sees `X-Forwarded-*` normalized from `Fly-Forwarded-*`. At L4+, `RequestID` takes the outermost slot above `Fly`.
 
 ---
 
@@ -6829,9 +6882,9 @@ Moving tenant-scoped keys into pydantic-settings is NOT in scope — those are D
 
 ## 11.20 Observability — logfire instrumentation
 
-> **[L4]** Use existing `logfire>=4.16.0` dep; DO NOT add `opentelemetry-sdk` directly. Logfire wraps OTLP and provides drop-in instrumentations for FastAPI, SQLAlchemy, httpx.
+> **[L6]** Use existing `logfire>=4.16.0` dep; DO NOT add `opentelemetry-sdk` directly. Logfire wraps OTLP and provides drop-in instrumentations for FastAPI, SQLAlchemy, httpx.
 
-### Wire-up (L4 lifespan)
+### Wire-up (L6 lifespan)
 
 ```python
 # src/core/observability.py (new, ~25 LOC)
@@ -6852,7 +6905,7 @@ def configure_observability(app):
     # structlog ↔ logfire bridge already wired via configure_logging()
 ```
 
-Called from L4 lifespan after middleware registration:
+Called from L6 lifespan after middleware registration:
 ```python
 async def lifespan(app: FastAPI):
     configure_observability(app)
@@ -7051,7 +7104,7 @@ nginx already gzips responses at the edge. Adding FastAPI `GZipMiddleware` doubl
 Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS
 ```
 
-(`TrustedHost` added between `ExternalDomain` and `SecurityHeaders` — reject non-allowed hosts before security-header injection and auth parsing. `SecurityHeaders` (§11.28) lands in the same L2 PR, INSIDE `TrustedHost` and OUTSIDE `UnifiedAuth`.) `RequestID` becomes the outermost middleware when it lands in L4/L6 — runtime order then (10 middlewares): `RequestID → Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS`.
+(`TrustedHost` added between `ExternalDomain` and `SecurityHeaders` — reject non-allowed hosts before security-header injection and auth parsing. `SecurityHeaders` (§11.28) lands in the same L2 PR, INSIDE `TrustedHost` and OUTSIDE `UnifiedAuth`.) `RequestID` becomes the outermost middleware when it lands in L4+ — runtime order then (10 middlewares): `RequestID → Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS`.
 
 ---
 
@@ -7483,7 +7536,7 @@ app.add_middleware(SecurityHeadersMiddleware, https_only=settings.https_only)  #
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=...)
 app.add_middleware(ApproximatedExternalDomainMiddleware)
 app.add_middleware(FlyHeadersMiddleware)
-app.add_middleware(RequestIDMiddleware)                        # outermost at L4/L6
+app.add_middleware(RequestIDMiddleware)                        # outermost at L4+
 ```
 
 **Canonical runtime order (L4+, 10 middlewares):**
@@ -7886,7 +7939,7 @@ Sync-bridge pool stays `pool_size=10, max_overflow=5` (unchanged).
 
 ## 11.31 `src/routes/health.py` — Liveness / readiness / diagnostic split
 
-> **[L1a/L2]** Replace the single Flask `/admin/health` endpoint with 4 purpose-separated endpoints. `/healthz` is the dumb liveness probe (never touches DB, always 200 if the process is alive). `/readyz` is the readiness probe (checks DB + alembic head + scheduler state; 503 on any failure; what orchestrators poll for rolling deploys). `/health/db` and `/health/pool` are diagnostic-only (expose pool stats for debugging; not polled). Legacy `/admin/health` → 308 permanent redirect to `/healthz`.
+> **[L1a/L2]** Replace the single Flask `/admin/health` endpoint with 4 purpose-separated endpoints. `/healthz` is the dumb liveness probe (never touches DB, always 200 if the process is alive). `/readyz` is the readiness probe (checks DB + alembic head + scheduler state; 503 on any failure; what orchestrators poll for rolling deploys). `/health/db` and `/health/pool` are diagnostic-only (expose pool stats for debugging; not polled). Legacy `/admin/health` and `/health` are kept as 200-alias handlers returning the byte-identical body (decision D4: alias, not 308 redirect, because many naive probes — Docker `curl -f`, uptime monitors without follow-redirect — don't traverse 308s).
 
 ### A. Why split
 
@@ -7903,7 +7956,8 @@ The single-endpoint health check is a category error:
 | `/readyz` | Readiness | `SELECT 1` + alembic head check + scheduler state | ~5-50ms | Kubernetes/Fly readiness probe; LB |
 | `/health/db` | DB pool stats | Pool introspection only | ~1ms | Humans/dashboards |
 | `/health/pool` | anyio threadpool stats | Threadpool introspection only | ~1ms | Humans/dashboards |
-| `/admin/health` (legacy) | 308 → `/healthz` | N/A | <1ms | Existing consumers (smoke tests, old probes) |
+| `/admin/health` (legacy) | 200 alias, byte-identical body | Never | <1ms | Existing consumers (smoke tests, old probes) |
+| `/health` (legacy) | 200 alias, byte-identical body | Never | <1ms | External uptime monitors referencing `/health` |
 
 ### C. Implementation
 
@@ -7916,7 +7970,8 @@ Canonical split (docs/deployment/health-checks.md):
 - /readyz — readiness, SELECT 1 + alembic head + scheduler state; 503 if unhealthy.
 - /health/db — diagnostic pool stats.
 - /health/pool — anyio threadpool stats.
-- /admin/health — legacy alias; 308 → /healthz.
+- /admin/health — legacy 200 alias; byte-identical body to /healthz (D4).
+- /health — legacy 200 alias; byte-identical body to /healthz (D4).
 
 Registration: mounted on the ROOT app, no auth, no tenant scoping, no CSRF.
 """
@@ -8014,21 +8069,34 @@ def health_pool() -> JSONResponse:
 
 
 @router.get("/admin/health", name="admin_health_legacy", include_in_schema=False)
-def legacy_admin_health() -> RedirectResponse:
-    """Legacy alias. 308 preserves method (GET→GET) and is cacheable."""
-    return RedirectResponse(url="/healthz", status_code=308)
+async def admin_health_legacy() -> JSONResponse:
+    # Legacy alias; byte-identical body so external probes parsing the
+    # response body don't break. Decision D4: 200 alias (not 308 redirect),
+    # because many naive probes (Docker curl -f, uptime monitors without
+    # follow-redirect) don't traverse 308s.
+    return JSONResponse({"status": "healthy", "service": "mcp"})
+
+
+@router.get("/health", name="health_legacy", include_in_schema=False)
+async def health_legacy() -> JSONResponse:
+    # Legacy alias kept indefinitely. Byte-identical body so external
+    # uptime monitors that reference /health don't break at cutover.
+    return JSONResponse({"status": "healthy", "service": "mcp"})
 ```
 
 ### D. Orchestrator configuration
 
 **fly.toml:**
 ```toml
+# Fly http_checks are liveness-semantic (restart VM on failure); use /healthz.
+# For rolling-deploy readiness gating, add a separate [[services.http_checks]]
+# block targeting /readyz with grace_period >= 60s.
 [[services.http_checks]]
   interval = "10s"
   timeout = "2s"
   grace_period = "5s"
   method = "GET"
-  path = "/readyz"
+  path = "/healthz"
   protocol = "http"
 
 [[services.tcp_checks]]
@@ -8087,10 +8155,18 @@ def test_readyz_503_on_db_down(integration_client, broken_db_engine):
     assert r.json()["checks"]["db"].startswith("failed:")
 
 
-def test_legacy_admin_health_redirects(integration_client):
+def test_legacy_admin_health_alias_returns_200(integration_client):
+    # D4: /admin/health is a 200 alias (not a 308 redirect) so naive probes
+    # that don't follow redirects still see success.
     r = integration_client.get("/admin/health", follow_redirects=False)
-    assert r.status_code == 308
-    assert r.headers["location"] == "/healthz"
+    assert r.status_code == 200
+    assert r.json() == {"status": "healthy", "service": "mcp"}
+
+
+def test_legacy_health_alias_returns_200(integration_client):
+    r = integration_client.get("/health", follow_redirects=False)
+    assert r.status_code == 200
+    assert r.json() == {"status": "healthy", "service": "mcp"}
 ```
 
 ### F. Structural guard
@@ -8100,8 +8176,8 @@ Draft `tests/unit/architecture/test_architecture_health_endpoints_split.py`:
 AST scan of `src/routes/health.py`:
 1. `healthz` function body contains NO call to `get_db_session` (literal name match)
 2. `readyz` function body contains a call to `get_db_session`
-3. `legacy_admin_health` returns a `RedirectResponse` with `status_code=308`
-4. Enforcement: any future edit that adds DB access to `/healthz` fails the guard.
+3. `admin_health_legacy` AND `health_legacy` return a `JSONResponse` with the byte-identical body `{"status": "healthy", "service": "mcp"}` (D4 — alias, not 308 redirect)
+4. Enforcement: any future edit that adds DB access to `/healthz`, or flips the legacy alias back to a redirect, fails the guard.
 
 Registered in §5.5 guard table with `Empty` allowlist.
 

@@ -76,6 +76,7 @@ formats = filter_by_format_ids(formats, req.input_format_ids, "input_format_ids"
 
 ### What to Avoid
 - ❌ Don't use `session.query()` (use `select()` + `scalars()`)
+- ❌ Don't use `scoped_session` in new code — production uses bare `sessionmaker` yielding one Session per `with get_db_session()` block (migration Decision D2; enforced by `tests/unit/test_architecture_no_scoped_session.py`)
 - ❌ Don't duplicate library schemas (extend with inheritance)
 - ❌ Don't hardcode URLs in JavaScript or templates (use `url_for()`)
 - ❌ Don't bypass pre-commit hooks without good reason

@@ -129,7 +129,7 @@ Every item references the companion doc where full detail lives. Tick every box 
 - [ ] **Admin router OpenAPI: `include_in_schema=False`** — documented in `flask-to-fastapi-adcp-safety.md` §3
 - [ ] **`gam_reporting_api.py` reclassified Category 2 → Category 1** (session-cookie authed = admin-UI-only) — documented
 - [ ] **`tenant_management_api.py` route count fixed 19 → 6** in plan docs
-- [ ] **Session cookie name: `session` → `adcp_session`** — SessionMiddleware dual-reads BOTH cookie names through the L1a–L2 bake window to avoid a forced re-login at cutover (supersedes earlier user decision #7 of "one forced re-login acceptable"). Legacy `session` cookie support drops at L2 exit. See §L1a work items (`test_session_cookie_dual_read.py`) and CLAUDE.md §"Session cookie rename".
+- [ ] **Session cookie name: `session` → `adcp_session` with forced re-login at L1a cutover** (reaffirms user decision #7). SessionMiddleware is configured with `session_cookie="adcp_session"` only; legacy `session=...` cookies are silently ignored and users are redirected through OAuth on first post-cutover request. No dual-read middleware is built. Customer-communication plan is mandatory — see §L1a. Rationale: admin-only session surface (no external AdCP API users affected), zero custom crypto during security-critical layer, ~0 LOC vs. ~150 LOC + deletion PR.
 - [ ] **Scheduler stays single-worker in v2.0** — documented as a hard constraint; multi-worker deferred to v2.2 (requires scheduler lease design)
 
 ---
@@ -361,6 +361,17 @@ Every structural guard starts with one of three allowlist strategies:
 
 Full detail in `flask-to-fastapi-execution-details.md` Part 1.
 
+## Prerequisite refactor PRs (before L0)
+
+Pre-L0: three nested-session refactor PRs must land before B2's `get_db_session()` rewrite to bare `sessionmaker` (otherwise silent lost-update / detached-instance bugs surface in admin handlers under bare sessionmaker).
+
+- [ ] **PRE-1: `src/admin/blueprints/oidc.py:173` — `test_initiate()` refactor.** Inline `get_or_create_auth_config` query against the outer `db_session` (mirror the existing fix at `callback()` line 229). Prevents detached-instance error under bare sessionmaker on `config.oidc_client_secret` getter.
+- [ ] **PRE-2: `src/admin/blueprints/operations.py:304` — `approve_media_buy()` refactor.** Extract needed data to dict, close outer session before `execute_approved_media_buy`, open a fresh session for post-adapter status update (mirror `creatives.py:607-639` pattern). Prevents lost-update on `media_buy.status` under bare sessionmaker.
+- [ ] **PRE-3: `src/admin/blueprints/workflows.py:158` — `approve_workflow_step()` refactor.** Same extract-dict + close-outer pattern as PRE-2.
+- [ ] **PRE-4: `src/core/context_manager.py:26` — `ContextManager(DatabaseManager)` runtime compatibility check.** Add an integration test that exercises ContextManager under the new bare-sessionmaker `DatabaseManager.session` property. If identity-map assumptions break, refactor ContextManager to stateless (scope = Decision 7 / Spike 4.5 at L4).
+
+These refactors are strict improvements under the CURRENT `scoped_session` world (reducing nested-session coupling); they ship independently and land before B2 rewrites `get_db_session()` at L0.
+
 ### Wave 0 / L0 — Foundation + template codemod (~2,500 LOC)
 
 > **Knowledge sources for this wave:**
@@ -521,7 +532,7 @@ Full detail in `flask-to-fastapi-execution-details.md` Part 1.
 - [ ] `src/admin/routers/auth.py` (~1,100 LOC) — Google OAuth login flow via Authlib `starlette_client`
 - [ ] `src/admin/routers/oidc.py` (~500 LOC) — per-tenant OIDC dynamic client registration
 
-**Middleware stack wired in `src/app.py` — canonical L1a runtime order (outermost → innermost, 6 middlewares):**
+**Middleware stack wired in `src/app.py` — canonical L1a runtime order (outermost → innermost, 7 middlewares):**
 
 - [ ] 1. `FlyHeadersMiddleware` (new, outermost — header normalization)
 - [ ] 2. `ApproximatedExternalDomainMiddleware` (new, BEFORE CSRF per Blocker 5)
@@ -532,7 +543,40 @@ Full detail in `flask-to-fastapi-execution-details.md` Part 1.
 - [ ] 7. `CORSMiddleware` (already present, innermost)
 - [ ] Registration in `src/app.py` is in **REVERSE** order (LIFO — innermost added first): `CORS`, `RestCompat`, `CSRF`, `Session`, `UnifiedAuth`, `ApproximatedExternalDomain`, `FlyHeaders`
 - [ ] `tests/integration/test_middleware_ordering.py` exists and is green — inspects `app.user_middleware` and asserts the sequence matches canonical order
-- [ ] Note: `TrustedHostMiddleware` AND `SecurityHeadersMiddleware` land at L2 (9-middleware stack). `RequestIDMiddleware` lands at L4 (10-middleware stack). See `foundation-modules.md` §cross-cutting/Middleware ordering for the L1a (6) / L2 (9) / L4-L6 (10) progressive shapes.
+- [ ] Note: `TrustedHostMiddleware` AND `SecurityHeadersMiddleware` land at L2 (9-middleware stack). `RequestIDMiddleware` lands at L4 (10-middleware stack). See `foundation-modules.md` §cross-cutting/Middleware ordering for the L1a (7) / L2 (9) / L4+ (10) progressive shapes.
+
+**Middleware stack — canonical L2 runtime order (outermost → innermost, 9 middlewares, adds TrustedHost + SecurityHeaders):**
+
+> # WARNING: add_middleware calls in src/app.py are REVERSE of this runtime order (LIFO).
+
+- [ ] 1. `FlyHeadersMiddleware`
+- [ ] 2. `ApproximatedExternalDomainMiddleware`
+- [ ] 3. `TrustedHostMiddleware` (new at L2 — reject non-allowed hosts before security-header injection)
+- [ ] 4. `SecurityHeadersMiddleware` (new at L2 per §11.28 — inside TrustedHost, outside UnifiedAuth)
+- [ ] 5. `UnifiedAuthMiddleware`
+- [ ] 6. `SessionMiddleware`
+- [ ] 7. `CSRFOriginMiddleware`
+- [ ] 8. `RestCompatMiddleware`
+- [ ] 9. `CORSMiddleware`
+- [ ] Registration in `src/app.py` is **REVERSE** (LIFO — innermost added first): `CORS`, `RestCompat`, `CSRF`, `Session`, `UnifiedAuth`, `SecurityHeaders`, `TrustedHost`, `ApproximatedExternalDomain`, `FlyHeaders`
+- [ ] `tests/integration/test_middleware_ordering.py` updated to assert 9-middleware L2 sequence
+
+**Middleware stack — canonical L4+ runtime order (outermost → innermost, 10 middlewares, adds RequestID outermost):**
+
+> # WARNING: add_middleware calls in src/app.py are REVERSE of this runtime order (LIFO). Each add_middleware line below is annotated with its runtime position.
+
+- [ ] 1. `RequestIDMiddleware` (new at L4 — outermost for structured-log correlation; depends on L4 structlog wiring)
+- [ ] 2. `FlyHeadersMiddleware`
+- [ ] 3. `ApproximatedExternalDomainMiddleware`
+- [ ] 4. `TrustedHostMiddleware`
+- [ ] 5. `SecurityHeadersMiddleware`
+- [ ] 6. `UnifiedAuthMiddleware`
+- [ ] 7. `SessionMiddleware`
+- [ ] 8. `CSRFOriginMiddleware`
+- [ ] 9. `RestCompatMiddleware`
+- [ ] 10. `CORSMiddleware`
+- [ ] Registration LIFO: `CORS`, `RestCompat`, `CSRF`, `Session`, `UnifiedAuth`, `SecurityHeaders`, `TrustedHost`, `ApproximatedExternalDomain`, `FlyHeaders`, `RequestID`
+- [ ] `tests/integration/test_middleware_ordering.py` updated to assert 10-middleware L4+ sequence
 
 **Blockers fixed in Wave 1:**
 
@@ -567,8 +611,8 @@ Full detail in `flask-to-fastapi-execution-details.md` Part 1.
 
 **L1a derivative items (2026-04-15 sharpening):**
 
-- [ ] Session cookie dual-read window: Starlette `SessionMiddleware` is configured to accept BOTH `session` (legacy Flask cookie name) and `adcp_session` (new). L1a writes only `adcp_session` but reads both through L2 bake. Verified by: `tests/integration/test_session_cookie_dual_read.py` green (request carrying only `session=...` is authenticated; request carrying only `adcp_session=...` is authenticated; request with both prefers `adcp_session`).
-- [ ] Customer-communication plan for forced re-login (if dual-read is abandoned) is documented in `docs/migration/v2.0-customer-comms.md`. Verified by: file exists; product-owner sign-off block recorded inside the file with date and role.
+- [ ] Session cookie cutover: Starlette `SessionMiddleware` writes and reads `adcp_session` only. Verified by: `tests/integration/test_session_cookie_cutover.py` green — request carrying only legacy `session=...` receives an unauthenticated response (302 to login, not 500); request carrying only `adcp_session=...` is authenticated; `Set-Cookie: session=; Max-Age=0; Domain=<cookie-domain>; Path=/` is emitted on the login-redirect response to clear the stale legacy cookie from the browser.
+- [ ] Customer-communication plan for forced re-login (mandatory at L1a deploy) is documented in `docs/migration/v2.0-customer-comms.md`. Verified by: file exists; product-owner sign-off block recorded inside the file with date and role.
 - [ ] Feature-flag `ADCP_USE_FASTAPI_ADMIN`: name, default value (`false`), flip-commit SHA, and deletion-layer (L2 exit) are documented IN THIS CHECKLIST and in `src/core/config.py`. Verified by: `rg -n 'ADCP_USE_FASTAPI_ADMIN' src/core/config.py` returns ≥1 hit at L0 landing; flag deletion commit is part of the L2 PR diff.
 
 **Architecture guards update:**
@@ -817,7 +861,13 @@ Decision 8 eliminated the SSE port; the `/tenant/{id}/events` route and `sse_sta
 - [ ] `tests/unit/admin/test_security_headers.py` — 4 tests: `test_security_headers_on_200`, `test_security_headers_on_csrf_rejection`, `test_security_headers_on_500`, `test_hsts_disabled_when_https_only_false`.
 - [ ] `tests/unit/architecture/test_architecture_security_headers_middleware_present.py` — structural guard (draft TODO) asserting SecurityHeaders registration position between UnifiedAuth and TrustedHost; empty allowlist. Add row to §5.5 guard table.
 - [ ] `settings.https_only` boolean added to pydantic-settings — env var `ADCP_HTTPS_ONLY` (default `true` in prod, override `false` in staging with non-public domain).
-- [ ] `src/routes/health.py` (4 endpoints + legacy redirect) per §11.31 — `/healthz`, `/readyz`, `/health/db`, `/health/pool`, `/admin/health` → 308 to `/healthz`. Replaces single Flask `/admin/health`.
+- [ ] `src/routes/health.py` (5 endpoints + 2 byte-identical aliases) per §11.31 (REVISED):
+    - [ ] `/healthz` (liveness, no DB, always 200)
+    - [ ] `/readyz` (readiness: SELECT 1 + alembic head + scheduler tick; 503 on failure)
+    - [ ] `/health/db` (diagnostic; at L2 reads module-level `get_engine()`, rewires to `request.app.state.db_engine` at L4)
+    - [ ] `/health/pool` (diagnostic; anyio threadpool stats)
+    - [ ] `/health` KEPT as direct 200 alias with byte-identical body `{"status": "healthy", "service": "mcp"}` — NOT 308. External uptime monitors reference `/health`; naive probes don't follow redirects.
+    - [ ] `/admin/health` KEPT as direct 200 alias with same body — NOT 308. Avoids naive-probe breakage.
 - [ ] `tests/integration/routes/test_health_split.py` — 4 tests per §11.31.E including `test_healthz_never_touches_db`.
 - [ ] `tests/unit/architecture/test_architecture_health_endpoints_split.py` — structural guard per §11.31.F (empty allowlist).
 - [ ] Update `fly.toml` http_checks to target `/readyz` instead of `/admin/health`.
@@ -1133,6 +1183,7 @@ These rules apply to every layer's Entry and Exit subsections in §4, regardless
 - [ ] async-handlers allowlist shrunk to ≤ 5 entries (remaining for L5d5/L5e).
 - [ ] Layer-scope commit-lint green; 7-step audit green.
 - [ ] PR squash-merged.
+- [ ] **L5d3 file roster** — before L5d3.1 PR opens, generate the concrete file list per sub-PR and commit it as `.claude/notes/flask-to-fastapi/L5d3-file-roster.md`. Use `rg 'def ' src/admin/routers/` + `rg 'class.*Repository' src/core/database/repositories/` to enumerate. Split into 4 sub-PRs of ~600 LOC each grouped by domain (accounts/principals, media_buys/creatives, products/inventory, workflows/operations).
 
 ### L5d4 — SSE deletion (Decision 8)
 
@@ -1638,6 +1689,46 @@ Single-commit revert; largest revert commit. Flask catch-all re-activates.
   - L5b-only revert: ~1 hour (1-line flip reversal + guard swap + suite).
   - Full cascade (L5e → L5b): **1-3 hours** depending on conflict resolution during the reverse loop.
 - [ ] **Data loss risk:** none — no schema change, no data change. However, in-flight requests during the deploy swap may see `MissingGreenlet` or connection-pool exhaustion errors transiently; expect a brief 5xx spike at the cutover moment.
+
+#### Fast-path rollback (PRIMARY, ~2 min MTTR)
+
+Redeploy `v2.0.0-rc.L5a` container image. No CI pass, no git revert, no merge-conflict risk:
+
+```bash
+# Pre-built image redeploy — ~2 min MTTR (beats 15-min target; far beats 1-3h git-revert path).
+flyctl deploy --image registry.fly.io/salesagent:v2.0.0-rc.L5a --strategy rolling
+
+# Verify:
+flyctl status | grep "version"  # should show v2.0.0-rc.L5a
+curl -fsSL https://app.fly.dev/healthz | jq .
+```
+
+**When to use:**
+- Error-rate spike or p99 latency regression within 15 min of L5b deploy.
+- `MissingGreenlet` exceptions in production logs.
+- Connection-pool exhaustion signals.
+
+**Prerequisites (enforced by L5a EXIT gate):**
+- `v2.0.0-rc.L5a` git tag and container image created at L5a EXIT (post-Spike 8 go-decision, pre-L5b merge).
+- Container image retention bumped to **90 days** (vs default 30) to cover L5b+L5c+L5d1-L5d5+L5e bake window.
+- Zero schema changes between L5a and L5b — enforced by `tests/integration/test_l5b_no_schema_delta.py` (see Task 3).
+
+**Recovery sequence:**
+1. `flyctl deploy --image ...` (~2 min rolling deploy).
+2. Confirm `/healthz` green across all instances.
+3. During business hours, `git revert` L5b on main to close the feedback loop.
+4. File incident writeup referencing the `v2.0.0-rc.L5a` tag.
+
+#### Why no runtime kill-switch
+
+A runtime `ADCP_USE_ASYNC_SESSIONDEP` feature flag is NOT provided because it is architecturally infeasible: `async def` handlers cannot consume a sync `Session` (shape mismatch at every `await session.execute(...)` site), and the Critical Invariant #1 (sync handlers + `scoped_session` safety) would be violated under `async def` handlers consuming sync Session. The pre-built image redeploy IS the 2026 SRE answer — it matches the pattern already proven at L2 and L4 rollbacks.
+
+#### L5a EXIT checklist addition
+
+- [ ] Tag `v2.0.0-rc.L5a` created: `git tag v2.0.0-rc.L5a <L5a-merge-sha> && git push origin v2.0.0-rc.L5a`
+- [ ] Container image archived: `docker build -t registry.fly.io/salesagent:v2.0.0-rc.L5a . && docker push registry.fly.io/salesagent:v2.0.0-rc.L5a`
+- [ ] Image retention set to 90 days: `flyctl image list | grep v2.0.0-rc.L5a` confirms
+- [ ] Schema-freeze gate green: `tests/integration/test_l5b_no_schema_delta.py` passes (confirms zero migrations between L5a-EXIT and current branch)
 
 ### Layer 5c rollback procedure
 

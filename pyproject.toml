@@ -166,7 +166,6 @@ ignore = [
     # Justified suppressions — each must explain WHY it's ignored, not just WHAT it is.
     # Do not add new entries without a justification comment.
     "E501",    # Handled by ruff formatter; manual enforcement would conflict
-    "E402",    # Flask app (admin_ui.py) requires imports after app config; 3 occurrences
     "E722",    # 12 bare excepts in error-recovery paths (adapters, auth); TODO: add specific exceptions
     "F821",    # 4 false positives from conditional imports and TYPE_CHECKING blocks
     "F403",    # 8 star imports in __init__.py re-exports; TODO: replace with explicit imports
@@ -188,7 +187,29 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["E722", "F821"]
-"admin_ui.py" = ["E402", "E722"]
+
+# E402 — tracked in salesagent-e402-cleanup. These per-file-ignores are a bridge from the
+# former global "E402" ignore. Each file should be audited and imports reordered
+# where possible; entries marked "TODO(salesagent-e402-cleanup)" are candidates
+# for removal. Entries without TODO are legitimate conditional-import patterns.
+"src/adapters/constants.py" = ["E402"]             # Legitimate: re-export pattern — module-level data defined first, then re-exports from src.core.platform_mappings (documented in file at lines 22-26)
+"src/app.py" = ["E402"]                            # Legitimate: FastAPI app construction requires lifespan/middleware registration before importing handlers that reference `app`
+"src/core/audit_logger.py" = ["E402"]              # TODO(salesagent-e402-cleanup): `import os` at line 48 is badly-ordered — can be moved to top
+"src/core/auth.py" = ["E402"]                      # TODO(salesagent-e402-cleanup): late import of src.core.http_utils — can likely be moved to top
+"src/core/creative_agent_registry.py" = ["E402"]   # TODO(salesagent-e402-cleanup): late import of create_mcp_client — can likely be moved to top
+"src/core/helpers/adapter_helpers.py" = ["E402"]   # TODO(salesagent-e402-cleanup): adapter imports after build_agent_config() — can likely be moved to top
+"src/core/main.py" = ["E402"]                      # Structural: MCP tool registration with section comments; full reorder is a follow-up refactor
+"src/core/resolved_identity.py" = ["E402"]         # TODO(salesagent-e402-cleanup)
+"src/core/schemas/_base.py" = ["E402"]             # TODO(salesagent-e402-cleanup)
+"src/core/tools/creative_formats.py" = ["E402"]    # TODO(salesagent-e402-cleanup)
+"src/core/tools/media_buy_create.py" = ["E402"]    # TODO(salesagent-e402-cleanup)
+"src/core/tools/media_buy_delivery.py" = ["E402"]  # TODO(salesagent-e402-cleanup)
+"src/core/tools/media_buy_list.py" = ["E402"]      # TODO(salesagent-e402-cleanup)
+"src/core/tools/media_buy_update.py" = ["E402"]    # TODO(salesagent-e402-cleanup)
+"src/core/tools/performance.py" = ["E402"]         # TODO(salesagent-e402-cleanup)
+"src/core/tools/products.py" = ["E402"]            # TODO(salesagent-e402-cleanup)
+"src/core/tools/signals.py" = ["E402"]             # TODO(salesagent-e402-cleanup)
+# NOTE: src/admin/blueprints/creatives.py is NOT listed here — file is slated for deletion in L2 (Flask removal)
 
 # ─── Coverage configuration ──────────────────────────────────────
 [tool.coverage.run]

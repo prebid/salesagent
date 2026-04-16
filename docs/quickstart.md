@@ -23,7 +23,7 @@ docker run -p 8000:8000 \
   ghcr.io/prebid/salesagent:latest
 
 # Verify it's running
-curl http://localhost:8000/health
+curl http://localhost:8000/healthz
 ```
 
 ## Option 2: Clone and Run (Recommended for Development)
@@ -37,7 +37,7 @@ cd salesagent
 docker compose up -d
 
 # Verify it's running
-curl http://localhost:8000/health
+curl http://localhost:8000/healthz
 ```
 
 ## First-Time Setup
@@ -86,7 +86,7 @@ All services are accessible through port 8000:
 | Admin UI (alternate) | http://localhost:8000/admin |
 | MCP Server | http://localhost:8000/mcp/ |
 | A2A Server | http://localhost:8000/a2a |
-| Health Check | http://localhost:8000/health |
+| Health Check | http://localhost:8000/healthz |
 
 ## Connecting an AI Agent
 

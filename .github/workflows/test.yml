@@ -263,7 +263,7 @@ jobs:
     - name: Verify all services are healthy
       run: |
         # Check health endpoints
-        curl -f http://localhost:8000/health || {
+        curl -f http://localhost:8000/readyz || {
           echo "❌ Health check failed"
           docker compose logs
           exit 1

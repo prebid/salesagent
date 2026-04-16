@@ -640,7 +640,7 @@ Still applies (deep audit §3.1). Async doesn't fix this. Still v2.0 single-work
 
 ### Risk #42 — Site 2 inventory_list has no cache invalidation (Decision 6 deep-think, LOW — pre-existing)
 
-The `inventory_list` endpoint cache at `inventory.py:1133` has NO invalidation path — data can be stale up to 5 minutes after a GAM sync. Background sync invalidation at `background_sync_service.py:477` deletes only `inventory_tree:v2:{tenant_id}`, NOT `inventory_list:*`. **Pre-existing gap** (same behavior in Flask). Accept as-is for Phases 0-3; add invalidation in Phase 4+.
+The `inventory_list` endpoint cache at `inventory.py:1133` has NO invalidation path — data can be stale up to 5 minutes after a GAM sync. Background sync invalidation at `background_sync_service.py:477` deletes only `inventory_tree:v2:{tenant_id}`, NOT `inventory_list:*`. **Pre-existing gap** (same behavior in Flask). Accept as-is for Layers 0-4; add invalidation in Layer 5+.
 
 ### Risk #43 — install_app_cache lifespan startup race window (Decision 6, MEDIUM)
 
@@ -675,7 +675,7 @@ Fresh session should:
    - **Agent B — 2nd/3rd order deep dive:** for each of the 15 risks above, produce mitigation steps, verification tests, and fallback plans. Output: risk mitigation matrix with pre-Wave-0 spike items flagged.
    - **Agent C — Plan file updates:** produce exact `old_string`/`new_string` edits for every stale "sync def" or "defer async" reference across the 8 plan files. Output: list of Edit operations to apply.
 5. **Apply the plan-file updates** (~50-100 surgical edits)
-6. **Run a pre-Wave-0 spike** on Risk #1 (lazy loading audit) before committing to the absorbed-async v2.0 scope. If the spike reveals the scope is too big, fall back to: Phases 0-3 stay as planned (sync admin) + Phase 4+ does async separately.
+6. **Run a pre-Wave-0 spike** on Risk #1 (lazy loading audit) before committing to the absorbed-async v2.0 scope. If the spike reveals the scope is too big, fall back to: Layers 0-4 stay as planned (sync admin) + Layer 5+ does async separately.
 7. **Commit the plan updates** and **open Wave 0** with the new scope
 
 ## 7. What NOT to do in the next session

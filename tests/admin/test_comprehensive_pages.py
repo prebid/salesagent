@@ -197,6 +197,7 @@ def test_all_admin_pages():
     special_routes = [
         ("/", "Root"),
         ("/health", "Health Check"),
+        ("/healthz", "Liveness Probe"),
         ("/admin/login", "Login Page"),
         (f"/admin/tenant/{TENANT_ID}/login", "Tenant Login"),
         ("/admin/tenants", "Tenants List (Super Admin)"),

@@ -23,7 +23,7 @@ def wait_for_server_readiness(mcp_url: str, timeout: int = 60):
             # Synchronous wait logic using httpx for simplicity in sync/async contexts
             # But since we are in a helper, we can use sync httpx.Client or requests
             with httpx.Client() as client:
-                resp = client.get(f"{mcp_url}/health", timeout=1.0)
+                resp = client.get(f"{mcp_url}/readyz", timeout=1.0)
                 if resp.status_code == 200:
                     print("✓ Server is ready")
                     return

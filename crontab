@@ -2,7 +2,7 @@
 # Format: MIN HOUR DOM MON DOW COMMAND
 
 # Sync all GAM tenants every 6 hours
-0 */6 * * * python /app/scripts/sync_all_tenants.py
+0 */6 * * * python /app/scripts/ops/sync_all_tenants.py
 
 # Daily sync at 2 AM EST (7 AM UTC)
-0 7 * * * python /app/scripts/sync_all_tenants.py
+0 7 * * * python /app/scripts/ops/sync_all_tenants.py

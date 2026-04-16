@@ -25,6 +25,10 @@ from src.core.database.models import GAMInventory, Product, ProductInventoryMapp
 engine = create_engine(DatabaseConfig.get_connection_string())
 SessionLocal = sessionmaker(bind=engine)
 # Use scoped_session for thread-local sessions
+# FIXME(salesagent-b2-b): scoped_session removal scheduled for L4 (Decision 7 —
+# ContextManager stateless refactor + GAM service rewrite / Spike 4.5). See
+# .claude/notes/flask-to-fastapi/CLAUDE.md Decision 7 for target pattern.
+# Allowlisted in tests/unit/test_architecture_no_scoped_session.py.
 db_session = scoped_session(SessionLocal)
 
 logger = logging.getLogger(__name__)

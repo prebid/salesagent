@@ -26,7 +26,7 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parent.parent
 ENV_FILE = ROOT_DIR / ".env"
 ENV_TEMPLATE = ROOT_DIR / ".env.template"
-HEALTH_URL = "http://localhost:{port}/health"
+HEALTH_URL = "http://localhost:{port}/readyz"
 DEFAULT_PORT = 8000
 HEALTH_TIMEOUT_SECONDS = 120
 HEALTH_POLL_INTERVAL = 3

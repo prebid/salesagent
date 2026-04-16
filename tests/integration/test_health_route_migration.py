@@ -60,6 +60,62 @@ def test_health_routes_in_original_app(integration_db):
     print("✅ Both health routes work in original app!")
 
 
+@pytest.mark.requires_db
+def test_healthz_liveness_route(integration_db):
+    """Test that /healthz returns 200 (liveness probe, no DB check)."""
+    from src.admin.app import create_app
+    from src.core.database.database_session import reset_engine
+
+    reset_engine()
+
+    app = create_app()
+    with app.test_client() as client:
+        response = client.get("/healthz")
+        assert response.status_code == 200
+
+
+@pytest.mark.requires_db
+def test_readyz_readiness_route(integration_db):
+    """Test that /readyz returns 200 when DB + alembic + scheduler are ready."""
+    from src.admin.app import create_app
+    from src.core.database.database_session import reset_engine
+
+    reset_engine()
+
+    app = create_app()
+    with app.test_client() as client:
+        response = client.get("/readyz")
+        assert response.status_code == 200
+
+
+@pytest.mark.requires_db
+def test_health_db_route(integration_db):
+    """Test that /health/db returns 200 when DB is reachable."""
+    from src.admin.app import create_app
+    from src.core.database.database_session import reset_engine
+
+    reset_engine()
+
+    app = create_app()
+    with app.test_client() as client:
+        response = client.get("/health/db")
+        assert response.status_code == 200
+
+
+@pytest.mark.requires_db
+def test_health_pool_route(integration_db):
+    """Test that /health/pool returns 200 with connection pool stats."""
+    from src.admin.app import create_app
+    from src.core.database.database_session import reset_engine
+
+    reset_engine()
+
+    app = create_app()
+    with app.test_client() as client:
+        response = client.get("/health/pool")
+        assert response.status_code == 200
+
+
 if __name__ == "__main__":
     print("Testing health routes in refactored app...")
     test_health_routes_in_refactored_app(None)

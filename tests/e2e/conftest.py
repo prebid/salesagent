@@ -75,13 +75,14 @@ def docker_services_e2e(request):
 
         print(f"✓ Using ports: Server={mcp_port} (MCP+A2A+Admin), Postgres={postgres_port}")
 
-        # Wait for server to be ready. /health is proxied to the upstream
-        # (not returned by nginx directly), so this confirms the app is serving.
+        # Wait for server to be ready. /readyz is proxied to the upstream
+        # (not returned by nginx directly), so this confirms the app is serving
+        # AND the DB/alembic/scheduler readiness gates have passed.
         max_wait = 60
         start_time = time.time()
         for _ in range(max_wait // 2):
             try:
-                response = requests.get(f"http://localhost:{mcp_port}/health", timeout=2)
+                response = requests.get(f"http://localhost:{mcp_port}/readyz", timeout=2)
                 if response.status_code == 200:
                     elapsed = int(time.time() - start_time)
                     print(f"✓ Server is healthy ({elapsed}s)")
@@ -169,7 +170,7 @@ def docker_services_e2e(request):
         server_ready = False
 
         print(f"Waiting for server (max {max_wait}s)...")
-        print(f"  Health: http://localhost:{mcp_port}/health")
+        print(f"  Health: http://localhost:{mcp_port}/readyz")
 
         while time.time() - start_time < max_wait:
             elapsed = int(time.time() - start_time)
@@ -190,11 +191,12 @@ def docker_services_e2e(request):
                 except:
                     pass
 
-            # Check server health. /health is proxied to upstream, so it
-            # confirms the FastAPI app is actually serving (not just nginx).
+            # Check server readiness. /readyz is proxied to upstream, so it
+            # confirms the FastAPI app is actually serving AND DB/alembic/scheduler
+            # readiness gates have passed (not just nginx).
             if not server_ready:
                 try:
-                    response = requests.get(f"http://localhost:{mcp_port}/health", timeout=2)
+                    response = requests.get(f"http://localhost:{mcp_port}/readyz", timeout=2)
                     if response.status_code == 200:
                         print(f"✓ Server is ready (after {elapsed}s)")
                         server_ready = True

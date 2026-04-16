@@ -93,7 +93,7 @@ independently without conflicting with other worktrees:
 ```bash
 docker compose up -d
 docker compose ps          # Verify services started
-curl -f http://localhost:$(grep CONDUCTOR_PORT .env | cut -d= -f2)/health
+curl -f http://localhost:$(grep CONDUCTOR_PORT .env | cut -d= -f2)/readyz
 docker compose down
 ```
 This verifies migrations, nginx, and the MCP server all work. For most

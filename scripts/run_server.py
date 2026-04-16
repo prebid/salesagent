@@ -44,7 +44,20 @@ def main():
     import uvicorn
 
     try:
-        uvicorn.run("src.app:app", host=host, port=port, log_level="info")
+        # proxy_headers=True + forwarded_allow_ips are REQUIRED behind nginx/Fly edge:
+        # - request.client.host returns real client IP (for SlowAPI rate limiting, audit logs)
+        # - request.url.scheme returns "https" (for OAuth redirect URI generation, CSRF Origin
+        #   validation, HSTS emission by SecurityHeadersMiddleware)
+        # FORWARDED_ALLOW_IPS env var overrides default "*" for edge-exposed deployments
+        # (set to nginx's CIDR range or single IP in production behind untrusted networks).
+        uvicorn.run(
+            "src.app:app",
+            host=host,
+            port=port,
+            log_level="info",
+            proxy_headers=True,
+            forwarded_allow_ips=os.environ.get("FORWARDED_ALLOW_IPS", "*"),
+        )
     except KeyboardInterrupt:
         print("\nServer stopped.")
         sys.exit(0)

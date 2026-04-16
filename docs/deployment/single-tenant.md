@@ -83,7 +83,7 @@ cp .env.template .env
 docker compose up -d
 
 # Verify
-curl http://localhost:8000/health
+curl http://localhost:8000/healthz
 ```
 
 ## Services and Ports
@@ -95,7 +95,7 @@ All services are accessible through port 8000 via nginx:
 | Admin UI | http://localhost:8000/admin |
 | MCP Server | http://localhost:8000/mcp/ |
 | A2A Server | http://localhost:8000/a2a |
-| Health Check | http://localhost:8000/health |
+| Health Check | http://localhost:8000/healthz |
 
 ## Docker Management
 
@@ -156,7 +156,7 @@ See [SSO Setup Guide](../user-guide/sso-setup.md) for detailed provider-specific
 
 ```bash
 # Health check
-curl http://localhost:8000/health
+curl http://localhost:8000/healthz
 
 # PostgreSQL check
 docker compose exec postgres pg_isready

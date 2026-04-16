@@ -25,8 +25,18 @@ class TestCoreRoutes:
         assert response.status_code in [200, 302]
 
     def test_health_endpoint(self, admin_client):
-        """Test /health returns 200."""
+        """Test /health returns 200 (alias kept for backwards compatibility)."""
         response = admin_client.get("/health")
+        assert response.status_code == 200
+
+    def test_healthz_endpoint(self, admin_client):
+        """Test /healthz liveness probe returns 200 (no DB check)."""
+        response = admin_client.get("/healthz")
+        assert response.status_code == 200
+
+    def test_readyz_endpoint(self, admin_client):
+        """Test /readyz readiness probe returns 200 (DB + alembic + scheduler)."""
+        response = admin_client.get("/readyz")
         assert response.status_code == 200
 
     def test_health_config_endpoint(self, admin_client):

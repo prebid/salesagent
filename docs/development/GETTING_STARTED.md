@@ -28,7 +28,7 @@ make setup
 5. Checks for tox (optional, used by the test runner)
 6. Starts Docker services (`docker compose up -d`)
 7. Waits for database migrations to complete
-8. Verifies health check at `http://localhost:8000/health`
+8. Verifies health check at `http://localhost:8000/healthz`
 
 When complete, services are running at **http://localhost:8000**:
 
@@ -37,7 +37,7 @@ When complete, services are running at **http://localhost:8000**:
 | Admin UI | http://localhost:8000/admin/ |
 | MCP Server | http://localhost:8000/mcp/ |
 | A2A Server | http://localhost:8000/a2a |
-| Health Check | http://localhost:8000/health |
+| Health Check | http://localhost:8000/healthz |
 
 **Test login:** Click "Log in to Dashboard" on the login page (password: `test123`).
 
@@ -63,7 +63,7 @@ uvx pre-commit install
 docker compose up -d
 
 # 6. Verify health
-curl http://localhost:8000/health
+curl http://localhost:8000/healthz
 ```
 
 Migrations run automatically on startup via the `db-init` container. Docker Compose builds from local source, so code changes are reflected immediately.
