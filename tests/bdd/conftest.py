@@ -821,20 +821,16 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "_SyntheticError, spec expects structured AdCPError with suggestion"
             ),
             "T-UC-006-ext-f-rest": (
-                "SPEC-PRODUCTION GAP: error_code is CREATIVE_VALIDATION_FAILED, "
-                "spec expects CREATIVE_FORMAT_UNKNOWN"
+                "SPEC-PRODUCTION GAP: error_code is CREATIVE_VALIDATION_FAILED, spec expects CREATIVE_FORMAT_UNKNOWN"
             ),
             "T-UC-006-ext-f-mcp": (
-                "SPEC-PRODUCTION GAP: error_code is CREATIVE_VALIDATION_FAILED, "
-                "spec expects CREATIVE_FORMAT_UNKNOWN"
+                "SPEC-PRODUCTION GAP: error_code is CREATIVE_VALIDATION_FAILED, spec expects CREATIVE_FORMAT_UNKNOWN"
             ),
             "T-UC-006-ext-g-rest": (
-                "SPEC-PRODUCTION GAP: error_code is CREATIVE_VALIDATION_FAILED, "
-                "spec expects CREATIVE_AGENT_UNREACHABLE"
+                "SPEC-PRODUCTION GAP: error_code is CREATIVE_VALIDATION_FAILED, spec expects CREATIVE_AGENT_UNREACHABLE"
             ),
             "T-UC-006-ext-g-mcp": (
-                "SPEC-PRODUCTION GAP: error_code is CREATIVE_VALIDATION_FAILED, "
-                "spec expects CREATIVE_AGENT_UNREACHABLE"
+                "SPEC-PRODUCTION GAP: error_code is CREATIVE_VALIDATION_FAILED, spec expects CREATIVE_AGENT_UNREACHABLE"
             ),
             "T-UC-006-ext-h-rest": (
                 "SPEC-PRODUCTION GAP: production returns plain-string errors[] via "
@@ -996,8 +992,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # FIXME(salesagent-afq): _impl doesn't echo attribution_window in response
             "T-UC-004-attr-supported": ("attribution_window echo not implemented in _impl", True),
             "T-UC-004-attr-unsupported": ("attribution_window platform default not implemented in _impl", True),
-            "T-UC-004-attr-echo": ("attribution_window model field not populated in response", True),
-            "T-UC-004-attr-omitted": ("attribution_window platform default not implemented in _impl", True),
+            # T-UC-004-attr-echo: resolved — vvx9 + ral2 fixed enum→str handling
+            # T-UC-004-attr-omitted: resolved — vvx9 + ral2 fixed enum→str handling
             "T-UC-004-attr-campaign-valid": ("attribution_window campaign window not implemented in _impl", True),
             # campaign unit interval validation: _impl doesn't validate attribution_window
             "T-UC-004-attr-campaign-invalid": (

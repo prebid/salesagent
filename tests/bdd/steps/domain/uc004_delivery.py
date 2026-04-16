@@ -16,6 +16,7 @@ import hmac
 import json
 import re
 from datetime import datetime
+from enum import Enum
 from typing import Any
 
 import httpx
@@ -2298,20 +2299,21 @@ def then_attribution_has_model(ctx: dict) -> None:
     aw = resp_dict.get("attribution_window")
     assert aw is not None, "Response missing attribution_window"
     assert "model" in aw, f"Attribution window missing required 'model' field, keys: {list(aw.keys())}"
-    model = aw["model"]
-    assert model is not None, "Attribution window model should not be None (required field)"
+    raw_model = aw["model"]
+    assert raw_model is not None, "Attribution window model should not be None (required field)"
+    model = raw_model.value if isinstance(raw_model, Enum) else raw_model
     assert isinstance(model, str) and len(model) > 0, (
-        f"Expected model to be a non-empty string, got {type(model).__name__}: {model!r}"
+        f"Expected model to be a non-empty string, got {type(raw_model).__name__}: {raw_model!r}"
     )
     # Verify the model echoes the applied or default value (the echo invariant)
     applied_model = ctx.get("applied_attribution_model")
     platform_default = ctx.get("platform_default_model")
     if applied_model:
-        assert model == applied_model, f"Model doesn't echo applied value: expected '{applied_model}', got '{model}'"
+        expected = applied_model.value if isinstance(applied_model, Enum) else applied_model
+        assert model == expected, f"Model doesn't echo applied value: expected '{expected}', got '{model}'"
     elif platform_default:
-        assert model == platform_default, (
-            f"Model doesn't match platform default: expected '{platform_default}', got '{model}'"
-        )
+        expected = platform_default.value if isinstance(platform_default, Enum) else platform_default
+        assert model == expected, f"Model doesn't match platform default: expected '{expected}', got '{model}'"
 
 
 @then("the response should include attribution_window with the seller's platform default model")
@@ -2329,9 +2331,10 @@ def then_attribution_default_model(ctx: dict) -> None:
         "Response missing attribution_window — seller should echo platform default when buyer omits the field"
     )
     aw_dict = aw if isinstance(aw, dict) else (aw.model_dump() if hasattr(aw, "model_dump") else aw)
-    model = aw_dict.get("model")
-    assert model is not None, f"attribution_window missing required 'model' field, got: {aw_dict}"
-    assert isinstance(model, str) and len(model) > 0, f"Expected model to be a non-empty string, got: {model!r}"
+    raw_model = aw_dict.get("model")
+    assert raw_model is not None, f"attribution_window missing required 'model' field, got: {aw_dict}"
+    model = raw_model.value if isinstance(raw_model, Enum) else raw_model
+    assert isinstance(model, str) and len(model) > 0, f"Expected model to be a non-empty string, got: {raw_model!r}"
 
 
 @then("the response should include attribution_window reflecting campaign-length window")
