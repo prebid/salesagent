@@ -26,6 +26,33 @@ from src.core.database.models import AuthorizedProperty, PropertyTag
 logger = logging.getLogger(__name__)
 
 
+_SUBDOMAIN_PREFIXES = ("www.", "m.", "mobile.")
+
+
+def _normalize_domain(domain: str) -> str:
+    """Strip common subdomain prefixes and lowercase for comparison.
+
+    Handles variants like ``www.example.com``, ``m.example.com``, and
+    ``mobile.example.com`` so they all compare equal to ``example.com``.
+    """
+    domain = domain.strip().lower()
+    for prefix in _SUBDOMAIN_PREFIXES:
+        if domain.startswith(prefix):
+            domain = domain[len(prefix) :]
+            break  # Only strip one prefix layer
+    return domain
+
+
+def _domains_match(publisher_domain: str, domain_identifiers: list[str]) -> bool:
+    """Check whether *publisher_domain* matches any value in *domain_identifiers*.
+
+    Comparison is done on normalized domains so that ``www.example.com``
+    matches ``example.com`` and vice-versa.
+    """
+    normalized_publisher = _normalize_domain(publisher_domain)
+    return any(_normalize_domain(d) == normalized_publisher for d in domain_identifiers)
+
+
 class PropertyDiscoveryService:
     """Service for discovering properties from publisher adagents.json files.
 
@@ -219,8 +246,8 @@ class PropertyDiscoveryService:
                             if not domain_identifiers:
                                 # No domain identifier (e.g., mobile_app) - keep it
                                 filtered.append(prop)
-                            elif domain in domain_identifiers:
-                                # Domain matches this publisher
+                            elif _domains_match(domain, domain_identifiers):
+                                # Domain matches this publisher (normalized comparison)
                                 filtered.append(prop)
                             else:
                                 logger.debug(
