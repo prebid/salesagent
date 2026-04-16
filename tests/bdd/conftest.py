@@ -1330,7 +1330,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-026-inv-201-3",
             "T-UC-026-inv-201-4",
             "T-UC-026-inv-201-5",
-            "T-UC-026-inv-089-2",
+            # Graduated: T-UC-026-inv-089-2 (t8iq: catalogs now echoed, default pkg fields added)
             # Graduated: T-UC-026-inv-089-3 (all 4 transports pass)
             # Graduated to _UC026_PARTITION_SELECTIVE (x2l0): keyword boundary/partition
             # tags now mostly pass — only REST update dispatch + specific cross-transport

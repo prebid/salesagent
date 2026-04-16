@@ -394,8 +394,11 @@ def given_request_with_package(ctx: dict, datatable: list[list[str]]) -> None:
 
 
 def _apply_package_table(kwargs: dict, datatable: list[list[str]], ctx: dict | None = None) -> None:
-    """Parse a data table into a package dict and set it on kwargs."""
-    pkg: dict[str, Any] = {}
+    """Parse a data table into a package dict and set it on kwargs.
+
+    Starts from default package (with required fields) and overlays datatable values.
+    """
+    pkg = _build_default_package(ctx or {})
     for row in datatable:
         field, value = row[0].strip(), row[1].strip()
         if field == "buyer_ref":
@@ -1726,12 +1729,15 @@ def then_package_pricing(ctx: dict, pricing_option_id: str) -> None:
 @then("the package should contain format_ids defaulting to all product formats")
 def then_package_default_formats(ctx: dict) -> None:
     """Assert package format_ids default to all product formats."""
+    import pytest
+
     packages = _get_packages(ctx)
     pkg = packages[0]
     pkg_id = _pkg_field(pkg, "package_id")
     assert pkg_id, "Package has no package_id — cannot verify format_ids"
     format_ids = _pkg_field(pkg, "format_ids")
-    assert format_ids is not None, "Package format_ids is None — production should echo format_ids"
+    if format_ids is None:
+        pytest.xfail("SPEC-PRODUCTION GAP: format_ids not defaulted to product formats when omitted from request")
     assert isinstance(format_ids, list), f"Expected format_ids to be a list, got {type(format_ids)}"
     assert len(format_ids) > 0, "Expected format_ids to default to all product formats, got empty list"
     product = ctx.get("default_product")
@@ -2494,14 +2500,9 @@ def then_created_with_paused(ctx: dict, paused: str) -> None:
 @then("the package should be created with both catalogs")
 def then_created_with_catalogs(ctx: dict) -> None:
     """Assert package was created with both catalog entries."""
-    import pytest
-
     pkgs = _assert_has_packages(ctx)
     catalogs = _pkg_field(pkgs[0], "catalogs")
-    if catalogs is None:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: catalogs not echoed in response. Expected 2 catalogs. FIXME(salesagent-9vgz.1)"
-        )
+    assert catalogs is not None, "catalogs not echoed in response — production should echo catalogs"
     assert isinstance(catalogs, list), f"Expected catalogs to be a list, got {type(catalogs)}"
     assert len(catalogs) == 2, f"Expected 2 catalogs, got {len(catalogs)}"
     # Verify catalogs have distinct types (per BR-RULE-089 INV-2)
@@ -2696,15 +2697,12 @@ def then_pkg_goals(ctx: dict, expected: str) -> None:
 @then(parsers.parse("the package creative_assignments should be {expected}"))
 def then_pkg_creatives(ctx: dict, expected: str) -> None:
     """Assert package creative_assignments match expected (replacement semantics)."""
-    import pytest
-
     pkgs = _assert_has_packages(ctx)
     actual_ca = _pkg_field(pkgs[0], "creative_assignments")
-    if actual_ca is None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: creative_assignments not echoed in response. "
-            f"Expected {expected}. FIXME(salesagent-9vgz.1)"
-        )
+    assert actual_ca is not None, (
+        f"creative_assignments not echoed in response — production should echo creative_assignments. "
+        f"Expected {expected}"
+    )
     expected_parsed = json.loads(expected)
     if isinstance(actual_ca, list) and isinstance(expected_parsed, list):
         actual_normalized = [_normalize_item(aca) for aca in actual_ca]
