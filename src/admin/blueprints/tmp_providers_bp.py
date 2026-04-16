@@ -25,6 +25,12 @@ from src.core.security.url_validator import check_url_ssrf
 
 logger = logging.getLogger(__name__)
 
+# Valid uid_type values per AdCP spec (uid-type enum).
+VALID_UID_TYPES = frozenset([
+    "uid2", "rampid", "id5", "euid", "pairid",
+    "maid", "hashed_email", "publisher_first_party", "other",
+])
+
 # Create Blueprint
 tmp_providers_bp = Blueprint("tmp_providers", __name__)
 
@@ -134,6 +140,29 @@ def add_tmp_provider(tenant_id):
             if not name:
                 flash("Provider name is required", "error")
                 return redirect(url_for("tmp_providers.add_tmp_provider", tenant_id=tenant_id))
+
+            # At least one of context_match or identity_match must be true
+            if not context_match and not identity_match:
+                flash("Provider must support at least one of context_match or identity_match", "error")
+                return redirect(url_for("tmp_providers.add_tmp_provider", tenant_id=tenant_id))
+
+            # Per AdCP spec: countries and uid_types MUST be non-empty when identity_match is true
+            if identity_match:
+                if not countries:
+                    flash("Countries are required when identity_match is enabled (ISO 3166-1 alpha-2 codes)", "error")
+                    return redirect(url_for("tmp_providers.add_tmp_provider", tenant_id=tenant_id))
+                if not uid_types:
+                    flash("UID types are required when identity_match is enabled (e.g. uid2, publisher_first_party)", "error")
+                    return redirect(url_for("tmp_providers.add_tmp_provider", tenant_id=tenant_id))
+                # Validate uid_type values against the AdCP enum
+                invalid_types = [u for u in uid_types if u not in VALID_UID_TYPES]
+                if invalid_types:
+                    flash(
+                        f"Invalid uid_type(s): {', '.join(invalid_types)}. "
+                        f"Valid values: {', '.join(sorted(VALID_UID_TYPES))}",
+                        "error",
+                    )
+                    return redirect(url_for("tmp_providers.add_tmp_provider", tenant_id=tenant_id))
 
             provider = TMPProvider(
                 tenant_id=tenant_id,
@@ -245,6 +274,37 @@ def edit_tmp_provider(tenant_id, provider_id):
                 return redirect(
                     url_for("tmp_providers.edit_tmp_provider", tenant_id=tenant_id, provider_id=provider_id)
                 )
+
+            # At least one of context_match or identity_match must be true
+            if not new_context_match and not new_identity_match:
+                flash("Provider must support at least one of context_match or identity_match", "error")
+                return redirect(
+                    url_for("tmp_providers.edit_tmp_provider", tenant_id=tenant_id, provider_id=provider_id)
+                )
+
+            # Per AdCP spec: countries and uid_types MUST be non-empty when identity_match is true
+            if new_identity_match:
+                if not new_countries:
+                    flash("Countries are required when identity_match is enabled (ISO 3166-1 alpha-2 codes)", "error")
+                    return redirect(
+                        url_for("tmp_providers.edit_tmp_provider", tenant_id=tenant_id, provider_id=provider_id)
+                    )
+                if not new_uid_types:
+                    flash("UID types are required when identity_match is enabled (e.g. uid2, publisher_first_party)", "error")
+                    return redirect(
+                        url_for("tmp_providers.edit_tmp_provider", tenant_id=tenant_id, provider_id=provider_id)
+                    )
+                # Validate uid_type values against the AdCP enum
+                invalid_types = [u for u in new_uid_types if u not in VALID_UID_TYPES]
+                if invalid_types:
+                    flash(
+                        f"Invalid uid_type(s): {', '.join(invalid_types)}. "
+                        f"Valid values: {', '.join(sorted(VALID_UID_TYPES))}",
+                        "error",
+                    )
+                    return redirect(
+                        url_for("tmp_providers.edit_tmp_provider", tenant_id=tenant_id, provider_id=provider_id)
+                    )
 
             repo.update_fields(
                 provider_id,
