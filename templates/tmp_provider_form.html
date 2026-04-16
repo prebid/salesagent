@@ -117,6 +117,57 @@ block content %}
     </div>
 
     <div class="form-group">
+      <label for="countries">Countries</label>
+      <input
+        type="text"
+        id="countries"
+        name="countries"
+        class="form-control"
+        value="{{ provider.countries if provider else '' }}"
+        placeholder="e.g. US,GB,DE"
+      />
+      <small class="form-text text-muted">
+        ISO 3166-1 alpha-2 country codes (comma-separated). <strong>Required</strong>
+        when Identity Match is enabled — the router uses these for
+        country-partitioned identity routing.
+      </small>
+    </div>
+
+    <div class="form-group">
+      <label for="uid_types">UID Types</label>
+      <input
+        type="text"
+        id="uid_types"
+        name="uid_types"
+        class="form-control"
+        value="{{ provider.uid_types if provider else '' }}"
+        placeholder="e.g. uid2,id5,rampid"
+      />
+      <small class="form-text text-muted">
+        Identity types this provider can resolve (comma-separated). <strong>Required</strong>
+        when Identity Match is enabled. Values: <code>uid2</code>, <code>rampid</code>,
+        <code>id5</code>, <code>euid</code>, <code>pairid</code>, <code>maid</code>,
+        <code>hashed_email</code>, <code>publisher_first_party</code>, <code>other</code>.
+      </small>
+    </div>
+
+    <div class="form-group">
+      <label for="properties">Properties</label>
+      <input
+        type="text"
+        id="properties"
+        name="properties"
+        class="form-control"
+        value="{{ provider.properties if provider else '' }}"
+        placeholder="e.g. prop-uuid-1,prop-uuid-2"
+      />
+      <small class="form-text text-muted">
+        Property RIDs this provider serves (comma-separated). Leave empty to
+        serve all properties.
+      </small>
+    </div>
+
+    <div class="form-group">
       <label for="timeout_ms">Timeout (ms)</label>
       <input
         type="number"
@@ -133,6 +184,45 @@ block content %}
         production; 200ms is appropriate for local/staging environments.
       </small>
     </div>
+
+    <div class="form-group">
+      <label for="priority">Priority</label>
+      <input
+        type="number"
+        id="priority"
+        name="priority"
+        class="form-control"
+        value="{{ provider.priority if provider else 0 }}"
+        min="0"
+        style="max-width: 200px"
+      />
+      <small class="form-text text-muted">
+        Provider ordering for merge conflict resolution. Lower values = higher
+        priority. Default: 0.
+      </small>
+    </div>
+
+    {% if provider %}
+    <div class="form-group">
+      <label for="status">Status</label>
+      <select
+        id="status"
+        name="status"
+        class="form-control"
+        style="max-width: 200px"
+      >
+        <option value="active" {% if provider.status == 'active' %}selected{% endif %}>Active</option>
+        <option value="inactive" {% if provider.status == 'inactive' %}selected{% endif %}>Inactive</option>
+        <option value="draining" {% if provider.status == 'draining' %}selected{% endif %}>Draining</option>
+      </select>
+      <small class="form-text text-muted">
+        <strong>Active</strong>: TMP Router will route to this provider.
+        <strong>Draining</strong>: Provider is being phased out — router may
+        still route but with lower priority.
+        <strong>Inactive</strong>: Router will not route to this provider.
+      </small>
+    </div>
+    {% endif %}
 
     <div style="display: flex; gap: 1rem; margin-top: 2rem">
       <button type="submit" class="btn btn-primary">

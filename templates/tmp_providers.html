@@ -113,8 +113,10 @@ Sales Agent Admin{% endblock %} {% block content %}
         </td>
         <td>{{ provider.timeout_ms }} ms</td>
         <td>
-          {% if provider.is_active %}
+          {% if provider.status == 'active' %}
           <span style="color: #059669; font-weight: 600">✓ Active</span>
+          {% elif provider.status == 'draining' %}
+          <span style="color: #d97706; font-weight: 600">⏳ Draining</span>
           {% else %}
           <span style="color: #9ca3af">Inactive</span>
           {% endif %}
@@ -132,7 +134,7 @@ Sales Agent Admin{% endblock %} {% block content %}
             >
               Health
             </button>
-            {% if provider.is_active %}
+            {% if provider.status == 'active' %}
             <button
               onclick="deactivateProvider('{{ provider.provider_id }}', '{{ provider.name }}')"
               class="btn btn-warning btn-sm"

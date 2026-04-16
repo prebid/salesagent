@@ -5,6 +5,9 @@ fans out to during ad selection. Each provider evaluates context signals
 and/or identity signals against their synced package set and returns scored
 offers. The TMP Router calls all active providers in parallel within the
 configured latency budget, then merges results for the publisher-side join.
+
+The Sales Agent exposes active registrations via ``GET /tmp/providers``
+so the router can poll for discovery — it never reads the DB directly.
 """
 
 import logging
@@ -17,6 +20,7 @@ from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
 from src.core.database.models import TMPProvider, Tenant
+from src.core.database.repositories.tmp_provider import TMPProviderRepository
 from src.core.security.url_validator import check_url_ssrf
 
 logger = logging.getLogger(__name__)
@@ -36,8 +40,8 @@ def list_tmp_providers(tenant_id):
                 flash("Tenant not found", "error")
                 return redirect(url_for("core.index"))
 
-            stmt = select(TMPProvider).filter_by(tenant_id=tenant_id).order_by(TMPProvider.name)
-            providers = session.scalars(stmt).all()
+            repo = TMPProviderRepository(session, tenant_id)
+            providers = repo.list_all()
 
             providers_list = []
             for p in providers:
@@ -48,8 +52,12 @@ def list_tmp_providers(tenant_id):
                         "endpoint": p.endpoint,
                         "context_match": p.context_match,
                         "identity_match": p.identity_match,
+                        "countries": p.countries or [],
+                        "uid_types": p.uid_types or [],
+                        "properties": p.properties or [],
                         "timeout_ms": p.timeout_ms,
-                        "is_active": p.is_active,
+                        "priority": p.priority,
+                        "status": p.status,
                         "created_at": p.created_at,
                     }
                 )
@@ -102,7 +110,16 @@ def add_tmp_provider(tenant_id):
             endpoint = request.form.get("endpoint", "").strip()
             context_match = request.form.get("context_match") == "on"
             identity_match = request.form.get("identity_match") == "on"
+            countries_raw = request.form.get("countries", "").strip()
+            uid_types_raw = request.form.get("uid_types", "").strip()
+            properties_raw = request.form.get("properties", "").strip()
             timeout_ms = int(request.form.get("timeout_ms", "50"))
+            priority = int(request.form.get("priority", "0"))
+
+            # Parse comma-separated lists
+            countries = [c.strip().upper() for c in countries_raw.split(",") if c.strip()] or None
+            uid_types = [u.strip() for u in uid_types_raw.split(",") if u.strip()] or None
+            properties_list = [p.strip() for p in properties_raw.split(",") if p.strip()] or None
 
             if not endpoint:
                 flash("Endpoint URL is required", "error")
@@ -124,9 +141,14 @@ def add_tmp_provider(tenant_id):
                 endpoint=endpoint,
                 context_match=context_match,
                 identity_match=identity_match,
+                countries=countries,
+                uid_types=uid_types,
+                properties=properties_list,
                 timeout_ms=timeout_ms,
+                priority=priority,
             )
-            session.add(provider)
+            repo = TMPProviderRepository(session, tenant_id)
+            repo.create(provider)
             session.commit()
 
             flash(f"TMP provider '{name}' added successfully", "success")
@@ -150,8 +172,8 @@ def edit_tmp_provider(tenant_id, provider_id):
                 flash("Tenant not found", "error")
                 return redirect(url_for("core.index"))
 
-            stmt = select(TMPProvider).filter_by(provider_id=provider_id, tenant_id=tenant_id)
-            provider = session.scalars(stmt).first()
+            repo = TMPProviderRepository(session, tenant_id)
+            provider = repo.get_by_id(provider_id)
             if not provider:
                 flash("TMP provider not found", "error")
                 return redirect(url_for("tmp_providers.list_tmp_providers", tenant_id=tenant_id))
@@ -162,8 +184,12 @@ def edit_tmp_provider(tenant_id, provider_id):
                 "endpoint": provider.endpoint,
                 "context_match": provider.context_match,
                 "identity_match": provider.identity_match,
+                "countries": ",".join(provider.countries or []),
+                "uid_types": ",".join(provider.uid_types or []),
+                "properties": ",".join(provider.properties or []),
                 "timeout_ms": provider.timeout_ms,
-                "is_active": provider.is_active,
+                "priority": provider.priority,
+                "status": provider.status,
             }
 
             return render_template(
@@ -178,41 +204,64 @@ def edit_tmp_provider(tenant_id, provider_id):
     # POST — update TMP provider
     try:
         with get_db_session() as session:
-            stmt = select(TMPProvider).filter_by(provider_id=provider_id, tenant_id=tenant_id)
-            provider = session.scalars(stmt).first()
+            repo = TMPProviderRepository(session, tenant_id)
+            provider = repo.get_by_id(provider_id)
             if not provider:
                 flash("TMP provider not found", "error")
                 return redirect(url_for("tmp_providers.list_tmp_providers", tenant_id=tenant_id))
 
-            provider.endpoint = request.form.get("endpoint", "").strip()
-            provider.name = request.form.get("name", "").strip()
-            provider.context_match = request.form.get("context_match") == "on"
-            provider.identity_match = request.form.get("identity_match") == "on"
-            provider.timeout_ms = int(request.form.get("timeout_ms", "50"))
+            new_endpoint = request.form.get("endpoint", "").strip()
+            new_name = request.form.get("name", "").strip()
+            new_context_match = request.form.get("context_match") == "on"
+            new_identity_match = request.form.get("identity_match") == "on"
+            new_countries_raw = request.form.get("countries", "").strip()
+            new_uid_types_raw = request.form.get("uid_types", "").strip()
+            new_properties_raw = request.form.get("properties", "").strip()
+            new_timeout_ms = int(request.form.get("timeout_ms", "50"))
+            new_priority = int(request.form.get("priority", "0"))
+            new_status = request.form.get("status", "active").strip()
 
-            if not provider.endpoint:
+            # Parse comma-separated lists
+            new_countries = [c.strip().upper() for c in new_countries_raw.split(",") if c.strip()] or None
+            new_uid_types = [u.strip() for u in new_uid_types_raw.split(",") if u.strip()] or None
+            new_properties = [p.strip() for p in new_properties_raw.split(",") if p.strip()] or None
+
+            if not new_endpoint:
                 flash("Endpoint URL is required", "error")
                 return redirect(
                     url_for("tmp_providers.edit_tmp_provider", tenant_id=tenant_id, provider_id=provider_id)
                 )
 
-            is_safe, ssrf_error = check_url_ssrf(provider.endpoint)
+            is_safe, ssrf_error = check_url_ssrf(new_endpoint)
             if not is_safe:
-                logger.warning("[SECURITY] TMP provider edit rejected unsafe URL %r: %s", provider.endpoint, ssrf_error)
+                logger.warning("[SECURITY] TMP provider edit rejected unsafe URL %r: %s", new_endpoint, ssrf_error)
                 flash(f"Endpoint URL is not allowed: {ssrf_error}", "error")
                 return redirect(
                     url_for("tmp_providers.edit_tmp_provider", tenant_id=tenant_id, provider_id=provider_id)
                 )
 
-            if not provider.name:
+            if not new_name:
                 flash("Provider name is required", "error")
                 return redirect(
                     url_for("tmp_providers.edit_tmp_provider", tenant_id=tenant_id, provider_id=provider_id)
                 )
 
+            repo.update_fields(
+                provider_id,
+                name=new_name,
+                endpoint=new_endpoint,
+                context_match=new_context_match,
+                identity_match=new_identity_match,
+                countries=new_countries,
+                uid_types=new_uid_types,
+                properties=new_properties,
+                timeout_ms=new_timeout_ms,
+                priority=new_priority,
+                status=new_status,
+            )
             session.commit()
 
-            flash(f"TMP provider '{provider.name}' updated successfully", "success")
+            flash(f"TMP provider '{new_name}' updated successfully", "success")
             return redirect(url_for("tmp_providers.list_tmp_providers", tenant_id=tenant_id))
 
     except Exception as e:
@@ -226,15 +275,14 @@ def edit_tmp_provider(tenant_id, provider_id):
 @tmp_providers_bp.route("/<provider_id>/deactivate", methods=["POST"])
 @require_tenant_access()
 def deactivate_tmp_provider(tenant_id, provider_id):
-    """Soft-deactivate a TMP provider (set is_active=false)."""
+    """Soft-deactivate a TMP provider (set status='inactive')."""
     try:
         with get_db_session() as session:
-            stmt = select(TMPProvider).filter_by(provider_id=provider_id, tenant_id=tenant_id)
-            provider = session.scalars(stmt).first()
+            repo = TMPProviderRepository(session, tenant_id)
+            provider = repo.deactivate(provider_id)
             if not provider:
                 return jsonify({"error": "TMP provider not found"}), 404
 
-            provider.is_active = False
             session.commit()
 
             return jsonify({"success": True, "message": f"TMP provider '{provider.name}' deactivated"})
@@ -250,13 +298,14 @@ def delete_tmp_provider(tenant_id, provider_id):
     """Hard-delete a TMP provider."""
     try:
         with get_db_session() as session:
-            stmt = select(TMPProvider).filter_by(provider_id=provider_id, tenant_id=tenant_id)
-            provider = session.scalars(stmt).first()
+            repo = TMPProviderRepository(session, tenant_id)
+            # Get name before deleting for the response message
+            provider = repo.get_by_id(provider_id)
             if not provider:
                 return jsonify({"error": "TMP provider not found"}), 404
 
             provider_name = provider.name
-            session.delete(provider)
+            repo.delete(provider_id)
             session.commit()
 
             return jsonify({"success": True, "message": f"TMP provider '{provider_name}' deleted successfully"})
@@ -272,8 +321,8 @@ def health_check_tmp_provider(tenant_id, provider_id):
     """HTTP GET to provider.endpoint/health — returns JSON status."""
     try:
         with get_db_session() as session:
-            stmt = select(TMPProvider).filter_by(provider_id=provider_id, tenant_id=tenant_id)
-            provider = session.scalars(stmt).first()
+            repo = TMPProviderRepository(session, tenant_id)
+            provider = repo.get_by_id(provider_id)
             if not provider:
                 return jsonify({"error": "TMP provider not found"}), 404
 
@@ -295,3 +344,58 @@ def health_check_tmp_provider(tenant_id, provider_id):
     except Exception as e:
         logger.error(f"Error checking TMP provider health: {e}", exc_info=True)
         return jsonify({"error": "Error checking provider health"}), 500
+
+
+# ------------------------------------------------------------------
+# Discovery endpoint — unauthenticated, polled by the Go TMP Router
+# ------------------------------------------------------------------
+
+
+@tmp_providers_bp.route("/discovery", methods=["GET"])
+def discover_tmp_providers():
+    """Return active TMP providers for a tenant as JSON.
+
+    The Go TMP Router polls this endpoint to discover which buyer-side
+    agents to fan out to. No admin authentication required.
+
+    Query parameters:
+        tenant_id: Required. The tenant whose providers to list.
+
+    Returns:
+        JSON array of active provider objects.
+    """
+    tenant_id = request.args.get("tenant_id")
+    if not tenant_id:
+        return jsonify({"error": "tenant_id query parameter is required"}), 400
+
+    try:
+        with get_db_session() as session:
+            repo = TMPProviderRepository(session, tenant_id)
+            providers = repo.list_active()
+
+            result = []
+            for p in providers:
+                entry: dict = {
+                    "provider_id": p.provider_id,
+                    "name": p.name,
+                    "endpoint": p.endpoint,
+                    "context_match": p.context_match,
+                    "identity_match": p.identity_match,
+                    "timeout_ms": p.timeout_ms,
+                    "priority": p.priority,
+                    "status": p.status,
+                }
+                # Conditional fields per provider-registration.json schema
+                if p.countries:
+                    entry["countries"] = p.countries
+                if p.uid_types:
+                    entry["uid_types"] = p.uid_types
+                if p.properties:
+                    entry["properties"] = p.properties
+                result.append(entry)
+
+            return jsonify(result)
+
+    except Exception as e:
+        logger.error(f"Error in TMP provider discovery: {e}", exc_info=True)
+        return jsonify({"error": "Error fetching TMP providers"}), 500

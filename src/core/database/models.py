@@ -1296,12 +1296,11 @@ class TMPProvider(Base):
     """Buyer-side TMP provider endpoint registration.
 
     Each tenant can register one or more TMP providers (buyer-side agents that
-    implement the Trusted Match Protocol). The Go TMP Router reads these rows
-    at startup and refreshes every 30 seconds to discover which endpoints to
-    fan out context and identity match requests to.
+    implement the Trusted Match Protocol). The Sales Agent exposes these
+    registrations via a REST endpoint (``GET /tmp/providers``). The router polls
+    that endpoint — it never reads from this table directly.
 
-    The Sales Agent never calls the TMP Router — it only stores provider
-    registrations that the router reads directly from this table.
+    Schema alignment: ``provider-registration.json`` (AdCP spec PR #2210).
     """
 
     __tablename__ = "tmp_providers"
@@ -1320,8 +1319,14 @@ class TMPProvider(Base):
     endpoint: Mapped[str] = mapped_column(String(500), nullable=False)
     context_match: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     identity_match: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Conditional: MUST be present and non-empty when identity_match is true.
+    countries: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
+    uid_types: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
+    # Optional: property RIDs this provider serves. When absent, serves all properties.
+    properties: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
     timeout_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=50)
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -1332,7 +1337,7 @@ class TMPProvider(Base):
 
     __table_args__ = (
         Index("idx_tmp_providers_tenant", "tenant_id"),
-        Index("idx_tmp_providers_active", "is_active"),
+        Index("idx_tmp_providers_status", "status"),
     )
 
 
