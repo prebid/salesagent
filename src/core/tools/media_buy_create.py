@@ -3526,12 +3526,12 @@ async def _create_media_buy_impl(
                     pricing_option_id=package.pricing_option_id,
                     pacing=package.pacing,
                     targeting_overlay=package.targeting_overlay,
-                    impressions=getattr(package, "impressions", None),
+                    impressions=package.impressions,
                     creative_assignments=package.creative_assignments,
-                    format_ids=getattr(package, "format_ids", None),
-                    format_ids_to_provide=getattr(package, "format_ids", None),
-                    catalogs=getattr(package, "catalogs", None),
-                    optimization_goals=getattr(package, "optimization_goals", None),
+                    format_ids=package.format_ids,
+                    format_ids_to_provide=package.format_ids,
+                    catalogs=package.catalogs,
+                    optimization_goals=package.optimization_goals,
                 )
             )
 
