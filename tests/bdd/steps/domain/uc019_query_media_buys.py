@@ -1188,6 +1188,9 @@ def when_query_status_filter_array(ctx: dict, statuses: str) -> None:
     """Send get_media_buys with a status_filter array."""
     import json
 
+    if statuses.startswith("as empty array"):
+        _dispatch_query(ctx, status_filter=[])
+        return
     parsed = json.loads(statuses.replace("'", '"'))
     _dispatch_query(ctx, status_filter=parsed)
 
@@ -1223,7 +1226,7 @@ def when_query_invalid_params(ctx: dict) -> None:
 @when(parsers.parse('the Buyer Agent sends a get_media_buys request with account_id "{account_id}"'))
 def when_query_with_account(ctx: dict, account_id: str) -> None:
     """Send get_media_buys with account_id filter (ext-e)."""
-    _dispatch_query(ctx, account_id=account_id)
+    _dispatch_query(ctx, account={"account_id": account_id})
 
 
 @when(parsers.parse("the Buyer Agent sends a get_media_buys request with invalid status filter"))
