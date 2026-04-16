@@ -7,7 +7,6 @@ This module contains all database-related functionality including:
 - Database session handling and context management
 
 Key components:
-- db_config.py: Database configuration and connection setup
 - database.py: Core database utilities and initialization
 - database_schema.py: Schema definitions and table creation
 - database_session.py: Session management and context handlers

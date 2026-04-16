@@ -9,6 +9,7 @@ This service:
 """
 
 import logging
+import os
 from datetime import UTC, date, datetime
 from typing import Any, cast
 
@@ -16,11 +17,10 @@ from sqlalchemy import create_engine, or_, select
 from sqlalchemy.orm import Session, joinedload, scoped_session, sessionmaker
 
 from src.adapters.gam_orders_discovery import GAMOrdersDiscovery, LineItem, Order
-from src.core.database.db_config import DatabaseConfig
 from src.core.database.models import GAMLineItem, GAMOrder
 
 # Create database session factory
-engine = create_engine(DatabaseConfig.get_connection_string())
+engine = create_engine(os.environ["DATABASE_URL"])
 SessionLocal = sessionmaker(bind=engine)
 # Use scoped_session for thread-local sessions
 db_session = scoped_session(SessionLocal)

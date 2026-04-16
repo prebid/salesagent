@@ -9,6 +9,7 @@ This service:
 """
 
 import logging
+import os
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -18,11 +19,10 @@ from sqlalchemy.orm import Session, scoped_session, sessionmaker
 from src.adapters.gam_inventory_discovery import (
     GAMInventoryDiscovery,
 )
-from src.core.database.db_config import DatabaseConfig
 from src.core.database.models import GAMInventory, Product, ProductInventoryMapping
 
 # Create database session factory
-engine = create_engine(DatabaseConfig.get_connection_string())
+engine = create_engine(os.environ["DATABASE_URL"])
 SessionLocal = sessionmaker(bind=engine)
 # Use scoped_session for thread-local sessions
 db_session = scoped_session(SessionLocal)

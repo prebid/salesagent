@@ -535,19 +535,17 @@ def mcp_server(integration_db):
     # Set up environment for the server (use PostgreSQL, not SQLite)
     # Get PostgreSQL connection details from current DATABASE_URL
     postgres_url = os.environ.get("DATABASE_URL", "")
-    if not postgres_url or not postgres_url.startswith("postgresql://"):
+    if not postgres_url:
         raise RuntimeError("mcp_server fixture requires PostgreSQL DATABASE_URL")
 
-    import re
+    from sqlalchemy.engine import make_url
+    from sqlalchemy.exc import ArgumentError
 
-    pattern = r"postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)"
-    match = re.match(pattern, postgres_url)
-    if match:
-        user, password, host, port_str, _ = match.groups()
-        postgres_port = int(port_str)
-        server_db_url = f"postgresql://{user}:{password}@{host}:{postgres_port}/{db_name}"
-    else:
-        raise RuntimeError(f"Failed to parse DATABASE_URL: {postgres_url}")
+    try:
+        pg_url = make_url(postgres_url)
+    except ArgumentError as exc:
+        raise RuntimeError(f"Failed to parse DATABASE_URL: {postgres_url}") from exc
+    server_db_url = str(pg_url.set(database=db_name))
 
     env = os.environ.copy()
     env["ADCP_SALES_PORT"] = str(port)
@@ -769,7 +767,9 @@ def migration_db():
     cur.close()
     conn.close()
 
-    db_url = f"postgresql://{user}:{password}@{host}:{port}/{db_name}"
+    from sqlalchemy.engine import URL
+
+    db_url = str(URL.create("postgresql", username=user, password=password, host=host, port=port, database=db_name))
     engine = create_engine(db_url, echo=False)
 
     yield engine, db_url

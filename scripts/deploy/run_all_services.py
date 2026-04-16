@@ -60,30 +60,28 @@ def check_database_health():
     """Check if database is accessible."""
     print("🔍 Checking database connectivity...")
 
-    # Import here to avoid issues if database modules aren't available
-    try:
-        from src.core.database.db_config import DatabaseConfig, get_db_connection
-    except ImportError as e:
-        print(f"❌ Failed to import database modules: {e}")
-        sys.exit(1)
-
     # Show parsed connection info (without password)
     db_url = os.environ.get("DATABASE_URL", "")
     print(f"DATABASE_URL set: {bool(db_url)}")
 
     if db_url:
         try:
-            config = DatabaseConfig.get_db_config()
-            print(f"Parsed host: {config.get('host', 'NOT SET')}")
-            print(f"Parsed port: {config.get('port', 'NOT SET')}")
-            print(f"Parsed database: {config.get('database', 'NOT SET')}")
+            from sqlalchemy.engine import make_url
+
+            url_obj = make_url(db_url)
+            print(f"Parsed host: {url_obj.host or 'NOT SET'}")
+            print(f"Parsed port: {url_obj.port or 'NOT SET'}")
+            print(f"Parsed database: {url_obj.database or 'NOT SET'}")
         except Exception as e:
             print(f"⚠️ Could not parse database config: {e}")
 
     try:
-        conn = get_db_connection()
-        cursor = conn.execute("SELECT 1")
-        cursor.fetchone()
+        import psycopg2
+
+        conn = psycopg2.connect(db_url)
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
+        cur.fetchone()
         conn.close()
         print("✅ Database connection successful")
     except Exception as e:
@@ -130,9 +128,11 @@ def check_schema_issues():
     print("🔍 Checking for known schema issues...")
 
     try:
-        from src.core.database.db_config import get_db_connection
+        import psycopg2
 
-        conn = get_db_connection()
+        db_url = os.environ.get("DATABASE_URL", "")
+        conn = psycopg2.connect(db_url)
+        cur = conn.cursor()
         issues = []
 
         # Check for commonly missing columns
@@ -142,14 +142,15 @@ def check_schema_issues():
         ]
 
         for table, column in checks:
-            cursor = conn.execute(
-                f"""
+            cur.execute(
+                """
                 SELECT column_name
                 FROM information_schema.columns
-                WHERE table_name = '{table}' AND column_name = '{column}'
-            """
+                WHERE table_name = %s AND column_name = %s
+                """,
+                (table, column),
             )
-            if not cursor.fetchone():
+            if not cur.fetchone():
                 issues.append(f"Missing column: {table}.{column}")
 
         if issues:
