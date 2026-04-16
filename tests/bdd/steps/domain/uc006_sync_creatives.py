@@ -1391,6 +1391,27 @@ def given_assignments_to_package_only_accepts(ctx: dict, accepted_format: str) -
     ctx["product_only_accepts"] = accepted_format
 
 
+@given("assignments referencing a non-existent package_id")
+def given_assignments_referencing_nonexistent_package(ctx: dict) -> None:
+    """Build an assignments payload whose package_id does not exist in the tenant.
+
+    Production's _assignments.py:62-69 raises AdCPNotFoundError(recovery=
+    "correctable") when ``find_package_with_media_buy`` returns nothing
+    AND validation_mode == "strict".
+
+    Distinct from the existing "an assignment to a package that does not
+    exist" step (line 747): that step also defaults ``validation_mode`` to
+    strict, while this Gherkin pairs the assignment Given with a separate
+    ``validation_mode is "strict"`` Given. We do NOT default validation_mode
+    here to keep the steps composable.
+    """
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+    env._commit_factory_data()
+    creative_id = ctx.get("creative_id") or ctx["creatives"][-1]["creative_id"]
+    ctx["assignments"] = {creative_id: ["pkg-nonexistent-ryv4-404"]}
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # THEN steps — assignment-error operation failure (bxhz + ryv4)
 # ═══════════════════════════════════════════════════════════════════════
