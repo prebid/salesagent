@@ -917,6 +917,7 @@ class MediaBuy(Base):
     strategy_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     account_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # Relationships
     tenant = relationship("Tenant", back_populates="media_buys", overlaps="media_buys")
