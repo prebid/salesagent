@@ -1094,6 +1094,19 @@ These rules apply to every layer's Entry and Exit subsections in §4, regardless
 - [ ] Role assignments current; security reviewer available (async engine config is security-relevant).
 - [ ] Discovered items slot (empty at entry).
 
+### L5b entry preflight — hardened prerequisites (addresses database-deep-audit critical blockers)
+
+Before L5b (SessionDep alias flip) opens, ALL of the following must be verifiably closed with PR references:
+
+- [ ] **C1: statement_timeout under asyncpg.** DB engine config at `src/core/database/database_session.py` uses `connect_args={"server_settings": {"statement_timeout": "30000"}}` for asyncpg (NOT `options="-c statement_timeout=..."` which is psycopg2-only syntax and would crash under asyncpg). Regression test `tests/integration/test_statement_timeout_async.py` asserts a deliberately-slow query raises `asyncpg.QueryCanceledError` within 30s.
+- [ ] **C2: CreativeRepository.commit() atomicity.** The two internal `self._session.commit()` calls at `src/core/database/creative_repository.py:234,476` (bypassing outer UoW) are DELETED and redirected to the caller's UoW boundary. Under async concurrency these would create a partial-commit race. Regression test `tests/integration/test_creative_repository_atomicity.py` asserts no nested commits.
+- [ ] **C3: 20+ `uow.session` direct-access sites migrated.** Enumerate via `rg -n "uow\.session" src/` at L5a entry; all call sites migrated to typed repository methods or exposed through a UoW protocol. Zero direct `uow.session.scalars(...)` / `uow.session.execute(...)` remain in business logic.
+- [ ] **H1: Product @property lazy-load trap.** The 6 `@property` methods on `Product` that access relationships (`Product.inventory_profile`, `Product.tenant`, etc. at `src/core/database/models.py`) are addressed via eager-loading at every `select(Product)` site (repository returns `select(Product).options(selectinload(Product.inventory_profile), joinedload(Product.tenant))`). Verified by Spike 1 lazy-load audit.
+- [ ] **Connection budget assertion at startup.** `src/app.py` lifespan startup asserts `sum(pool_size + max_overflow for each engine) * expected_container_count < postgres_max_connections * 0.8`. Prevents H4 (60 × 2 rolling containers = 120 > max_connections=100 scenario). H4 resolution (pick ONE of pool-reduction / PgBouncer / max_connections bump / drain-then-start deploy) documented in `docs/operations/deploy-connection-budget.md`.
+- [ ] **Spike 7 `server_default` audit expected count revised.** Plan previously expected <30 columns; per database-deep-audit H7, actual is 45+ columns. Spike 7 acceptance criterion updated to "enumerate ≥45 `server_default` columns; convert to Python-side `default=` where post-commit read is load-bearing, OR add `await session.refresh(instance)` after INSERT for those columns". New regression test `tests/integration/test_expire_on_commit_fields_populated.py` lands BEFORE L5b to prove `server_default` columns are populated post-INSERT under async + `expire_on_commit=False`.
+- [ ] **pg advisory lock for multi-container Alembic safety (database-deep-audit M2).** `alembic/env.py run_migrations_online` acquires `pg_advisory_lock(<migration_epic_id>)` before running migrations and releases at end. Prevents race during rolling deploy where 2 containers both try to apply the same migration. Small edit (~0.25 day); gates L5b entry.
+- [ ] **NO-GO path naming.** If Spike 8 returns NO-GO (Spike 1 lazy-load audit fails OR >2 soft spikes fail), the release tag is `v1.99.0` or equivalent, NOT `v2.0.0`. v2.0.0 is reserved for full async shipment. L5a exit-gate checklist enforces.
+
 **L5b work items:**
 
 - [ ] One-line `SessionDep` re-alias from `Annotated[Session, Depends(get_session)]` to `Annotated[AsyncSession, Depends(get_session)]` in `src/admin/deps/db.py` (or equivalent).
@@ -1241,7 +1254,7 @@ These rules apply to every layer's Entry and Exit subsections in §4, regardless
 
 **Engineer-day estimate:** 3–4.
 
-**L5e entry criteria:** L5d1–L5d5 all merged green; `main` green.
+**L5e entry criteria:** L5d1–L5d5 all merged green; `main` green. Per-route p99 budget ±10% vs baseline entry, aggregate p99 ±5% vs `baseline-sync.json`, p50 ±10%, throughput ±5%, >20% regression on any single route blocks exit even if aggregate passes; see `execution-plan.md` L4 EXIT work item "baseline-sync.json capture (Spike 3)" — Perf criteria block — for full threshold list.
 
 **L5e bake window:**
 

@@ -517,7 +517,7 @@ make quality && ./run_all_tests.sh  # green
 3a. Register `RequestIDMiddleware` (from `src/admin/request_id.py`, created in L0) as the outermost middleware in `src/app.py`, extending the canonical stack from 9 to 10 middlewares. Runtime order becomes `RequestID → Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS`; registration is LIFO so `app.add_middleware(RequestIDMiddleware)` is the LAST `add_middleware` call in `src/app.py`. Honors inbound `X-Request-ID` (trust-upstream-if-present per 2026 Starlette practice — nginx may already set one), else generates a UUID4 hex; binds via `bind_request_id()` (work item 3) so every structlog line emitted during the request carries `request_id`; echoes `X-Request-ID` on the response. **Dependency:** must land AFTER work item 3 (structlog/bind_request_id), and BEFORE work item 13 (Spike 3 baseline capture) so `baseline-sync.json` reflects the 10-middleware stack. Update `tests/integration/test_architecture_middleware_order.py` to assert the 10-item L4+ order (replace the 9-item L2 assertion via layer-gated parametrization). See `foundation-modules.md §11.9.5` + `§cross-cutting/Middleware ordering`.
 4. Extend `pydantic-settings` for typed configuration (replaces scattered `os.environ.get()` reads).
 5. Adopt `app.state` for per-app singletons that were previously module-level globals; no async yet.
-6. Convert all admin handlers from `with get_db_session() as session:` in body to `session: SessionDep` in signature.
+6. **Convert admin handlers to repository-dep injection (NOT raw SessionDep).** Admin handlers depend on `*RepoDep` (e.g., `accounts: AccountRepoDep = Depends(get_account_repo)`), NOT on `SessionDep` directly. Enforced by `tests/unit/test_architecture_no_session_in_admin_handlers.py` (foundation-modules §11.4/§11.0.3). `SessionDep` is used internally by the `*RepoDep` factory functions and by REST/`_impl` wrappers at `src/routes/api_v1.py` and `src/core/tools/*.py`, but NOT by admin handlers. Rationale: the project's repository pattern (project-root CLAUDE.md §3) treats `_impl` and admin handlers as consumers of typed repository interfaces; direct session access in handlers bypasses the repository layer's tenant-scoping and model factory guarantees. Convert each of ~40 admin handlers from `with get_db_session() as session:` in body to `*RepoDep` parameter in signature; the repo factory owns the `get_db_session()` call.
 7. Remove UoW usage from admin handlers — repositories manage their own session lifecycle.
 8. Create lifespan-scoped engine in `src/core/database/engine.py`.
 9. **Delete `src/admin/templating.py::render()` wrapper** — handlers use `templates.TemplateResponse(request, "name.html", ctx)` via `Jinja2Templates` dependency instead.
@@ -525,6 +525,27 @@ make quality && ./run_all_tests.sh  # green
 11. Ratchet REST routes to `Annotated[T, Depends()]` form (14 signatures).
 12. Update `require_tenant_access` to check `is_active` (small pre-existing Flask bug fix; breaking change OK on v2.0 branch).
 13. **At EXIT: capture `baseline-sync.json` (Spike 3 deliverable).** Measure p50/p99 latency on 20 admin routes + 5 MCP tool calls under this final sync shape (with SessionDep, DTOs, structlog). Commit the file. L5 MUST compare against this baseline, not against pre-L4 sync.
+
+**L4 EXIT work item — baseline-sync.json capture (Spike 3):**
+Capture p50/p95/p99 latency + throughput for 20 admin routes + 5 MCP tool calls under sync admin handlers + sync adapters, 3 concurrency levels (10/50/200). Output: `tests/migration/fixtures/baseline-sync.json`. This is the FLOOR baseline — pre-async, pre-threadpool-wrap.
+
+**Baseline shape disclaimer (important):** `baseline-sync.json` is captured at L4 EXIT under the sync stack with adapters still raw sync-`def`-in-sync-handler. L5e compares production shape (async handlers + adapters wrapped in `run_in_threadpool` per Decision 1 Path B, see L5d2), which is a different shape. To split the L4→L5e delta into its components:
+
+- **L4 EXIT** captures `baseline-sync.json` (sync/sync) — establishes the floor.
+- **L5d2 EXIT** captures `baseline-l5d2.json` (async handlers + threadpool-wrapped sync adapters; post-Path-B-wrap, pre-handler-flip if phased). **NEW requirement.**
+- **L5e EXIT** captures `baseline-l5e.json` (final async shape) and compares against BOTH baselines:
+  - vs `baseline-sync.json` — total async migration delta (what production saw)
+  - vs `baseline-l5d2.json` — pure async-handler delta (isolates the SessionDep flip cost from the threadpool-wrap cost)
+
+Perf criteria (lands at L5e entry):
+- **p99 budget:** ±5% aggregate vs `baseline-sync.json`
+- **p50 budget:** ±10% aggregate vs `baseline-sync.json`
+- **Throughput:** ±5% aggregate vs `baseline-sync.json`
+- **Per-route budget:** each admin route individually ±10% p99 vs its baseline entry
+- **Escalation:** any single route regressing >20% p99 blocks L5e even if aggregate passes
+- Benchmarked at 3 concurrency levels: 10, 50, 200 req/s
+
+Write as `tests/integration/test_async_performance_parity.py` with thresholds in code (not prose). Guard fails L5e exit gate if threshold is violated.
 
 **L4 work item — pydantic-settings centralization (native-ness):**
 Extend existing `src/core/config.py` (do NOT create a new `src/core/settings.py` — per native-ness audit, two settings modules is a Flask-era regression). Consolidate the 89 `os.environ.get(...)` sites across `src/` into typed `BaseSettings` subclasses with `SettingsConfigDict(env_file=..., env_prefix=..., env_nested_delimiter="__")`. Credentials use `pydantic.SecretStr` (OAuth client_secret, DB passwords). Ratcheting guard `tests/unit/test_architecture_no_direct_env_access.py` (§11.35) seeded with current 89 sites; ratchets to 0 by L7.
@@ -541,7 +562,7 @@ Document rationale for choosing blanket `lazy="raise"` (Spike 1) over SQLAlchemy
 **Exit gate:**
 ```bash
 make quality && ./run_all_tests.sh  # green
-# All handlers use SessionDep, zero get_db_session() in handler bodies
+# All admin handlers use *RepoDep (NOT SessionDep), zero get_db_session() in handler bodies; SessionDep is confined to RepoDep factories and REST/_impl wrappers
 # DTOs used at handler/template boundary for ported routers
 # render() wrapper deleted
 # ContextManager singleton eliminated
