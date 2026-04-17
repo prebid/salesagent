@@ -261,13 +261,20 @@ def _enum_to_str(val: Any) -> str | None:
 
 
 def _serialize_governance_agents(agents: Any) -> list[dict[str, Any]] | None:
-    """Convert GovernanceAgent models to JSON-serializable dicts for DB storage."""
+    """Convert GovernanceAgent models to JSON-serializable dicts for DB storage.
+
+    Both dict and model inputs are normalized through model_dump(mode="json")
+    to ensure consistent comparison (e.g., AnyUrl → str).
+    """
+    from adcp.types.generated_poc.core.account import GovernanceAgent
+
     if agents is None:
         return None
     result: list[dict[str, Any]] = []
     for g in agents:
         if isinstance(g, dict):
-            result.append(g)
+            # Validate through model to normalize types (AnyUrl → str, etc.)
+            result.append(GovernanceAgent.model_validate(g).model_dump(mode="json"))
         elif hasattr(g, "model_dump"):
             result.append(g.model_dump(mode="json"))
         else:

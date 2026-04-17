@@ -152,6 +152,19 @@ def when_request_type_and_asset(ctx: dict, fmt_type: str, asset_types: str) -> N
         ctx["error"] = exc
 
 
+# ── Filter: asset_types + name_search combined ──────────────────────
+
+
+@when(parsers.parse('the Buyer Agent requests formats with asset_types {asset_types} and name_search "{name_search}"'))
+def when_request_asset_types_and_name_search(ctx: dict, asset_types: str, name_search: str) -> None:
+    parsed_assets = json.loads(asset_types)
+    try:
+        req = ListCreativeFormatsRequest(asset_types=parsed_assets, name_search=name_search)
+        _call(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
+
+
 # ── Filter: type only ────────────────────────────────────────────────
 
 

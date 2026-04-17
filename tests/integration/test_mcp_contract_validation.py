@@ -4,16 +4,19 @@ MCP Contract Validation Tests
 Tests that ensure MCP tools can be called with minimal required parameters,
 preventing validation errors like the 'brief' is required issue.
 
-Updated for adcp 3.9:
+Updated for adcp 3.12:
 - brand_manifest replaced by brand (BrandReference with domain field)
-- GetSignalsRequest is a regular model (no longer RootModel)
-- ActivateSignalRequest.destinations is now required
+- GetSignalsRequest uses flat countries/destinations fields (DeliverTo removed)
+- ActivateSignalRequest.destinations is required (uses Destination type)
+- buyer_ref removed from CreateMediaBuyRequest and UpdateMediaBuyRequest
+- UpdateMediaBuyRequest.media_buy_id is now required (oneOf validator removed)
+- buyer_refs removed from GetMediaBuyDeliveryRequest
 """
 
 from unittest.mock import Mock, patch
 
 import pytest
-from adcp.types import DeliverTo, PlatformDestination
+from pydantic import ValidationError
 
 from src.core.schemas import (
     ActivateSignalRequest,
@@ -76,7 +79,7 @@ class TestMCPContractValidation:
         """Test activate_signal with required fields."""
         request = ActivateSignalRequest(
             signal_agent_segment_id="test_signal_123",
-            destinations=[PlatformDestination(platform="google_ad_manager", type="platform")],
+            destinations=[{"platform": "google_ad_manager", "type": "platform"}],
         )
 
         assert request.signal_agent_segment_id == "test_signal_123"
@@ -84,13 +87,12 @@ class TestMCPContractValidation:
         assert request.media_buy_id is None
 
     def test_create_media_buy_minimal(self):
-        """Test create_media_buy with minimal required fields per AdCP v3.6.0 spec."""
+        """Test create_media_buy with minimal required fields per AdCP v3.12 spec."""
         request = CreateMediaBuyRequest(
-            buyer_ref="test_ref",
             brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
-                    buyer_ref="pkg1", product_id="prod1", budget=1000.0, pricing_option_id="default-pricing-option"
+                    product_id="prod1", budget=1000.0, pricing_option_id="default-pricing-option"
                 )
             ],
             start_time="2025-02-15T00:00:00Z",
@@ -99,7 +101,6 @@ class TestMCPContractValidation:
         )
 
         assert request.po_number == "PO-12345"
-        assert request.buyer_ref == "test_ref"
         assert len(request.packages) == 1
 
     def test_create_media_buy_get_product_ids(self):
@@ -109,18 +110,13 @@ class TestMCPContractValidation:
         """
         # Test: Multiple packages with product IDs
         request = CreateMediaBuyRequest(
-            buyer_ref="test_ref_1",
             brand={"domain": "testbrand.com"},
             po_number="PO-12345",
             packages=[
+                create_test_package_request(product_id="prod1", budget=1000.0, pricing_option_id="test_pricing"),
+                create_test_package_request(product_id="prod2", budget=1000.0, pricing_option_id="test_pricing"),
                 create_test_package_request(
-                    buyer_ref="pkg1", product_id="prod1", budget=1000.0, pricing_option_id="test_pricing"
-                ),
-                create_test_package_request(
-                    buyer_ref="pkg2", product_id="prod2", budget=1000.0, pricing_option_id="test_pricing"
-                ),
-                create_test_package_request(
-                    buyer_ref="pkg3", product_id="prod1", budget=1000.0, pricing_option_id="test_pricing"
+                    product_id="prod1", budget=1000.0, pricing_option_id="test_pricing"
                 ),  # Duplicate
             ],
             start_time="2025-02-15T00:00:00Z",
@@ -134,59 +130,42 @@ class TestMCPContractValidation:
     def test_get_signals_minimal_now_works(self):
         """Test get_signals with minimal parameters.
 
-        adcp 3.9: GetSignalsRequest is a regular model, not RootModel.
+        adcp 3.12: GetSignalsRequest uses flat countries/destinations fields.
         """
-        # Library DeliverTo requires explicit deployments and countries
         request = GetSignalsRequest(
             signal_spec="audience_automotive",
-            deliver_to=DeliverTo(
-                deployments=[PlatformDestination(platform="google_ad_manager", type="platform")],
-                countries=["US"],
-            ),
+            destinations=[{"platform": "google_ad_manager", "type": "platform"}],
+            countries=["US"],
         )
 
-        # adcp 3.9: GetSignalsRequest is a regular model, not RootModel
         assert request.signal_spec == "audience_automotive"
-        assert len(request.deliver_to.deployments) == 1
-        assert request.deliver_to.countries[0] == "US"
+        assert len(request.destinations) == 1
+        assert len(request.countries) == 1
 
     def test_get_signals_with_custom_delivery(self):
-        """Test get_signals with custom delivery requirements."""
+        """Test get_signals with multiple destinations and countries."""
         request = GetSignalsRequest(
             signal_spec="audience_luxury_automotive",
-            deliver_to=DeliverTo(
-                deployments=[
-                    PlatformDestination(platform="gam", type="platform"),
-                    PlatformDestination(platform="facebook", type="platform"),
-                ],
-                countries=["US", "CA", "UK"],
-            ),
+            destinations=[
+                {"platform": "gam", "type": "platform"},
+                {"platform": "facebook", "type": "platform"},
+            ],
+            countries=["US", "CA", "UK"],
         )
 
-        # adcp 3.9: GetSignalsRequest is a regular model, not RootModel
-        assert len(request.deliver_to.deployments) == 2
-        assert len(request.deliver_to.countries) == 3
+        assert len(request.destinations) == 2
+        assert len(request.countries) == 3
 
     def test_update_media_buy_minimal(self):
-        """Test update_media_buy identifiers (oneOf enforced in adcp 3.6.0 model)."""
-        # adcp 3.6.0 enforces oneOf at model level: exactly one of media_buy_id or buyer_ref
+        """Test update_media_buy requires media_buy_id (adcp 3.12)."""
+        # media_buy_id is required in adcp 3.12
         request = UpdateMediaBuyRequest(media_buy_id="test_buy_123")
         assert request.media_buy_id == "test_buy_123"
-        assert request.buyer_ref is None
         assert request.paused is None
 
-        # buyer_ref alone also works
-        request_br = UpdateMediaBuyRequest(buyer_ref="ref_123")
-        assert request_br.buyer_ref == "ref_123"
-        assert request_br.media_buy_id is None
-
-        # Neither identifier → validation error
-        with pytest.raises(ValueError, match="Either media_buy_id or buyer_ref is required"):
+        # Missing media_buy_id → validation error
+        with pytest.raises(ValidationError):
             UpdateMediaBuyRequest(paused=False)
-
-        # Both identifiers → validation error
-        with pytest.raises(ValueError, match="either media_buy_id or buyer_ref, not both"):
-            UpdateMediaBuyRequest(media_buy_id="buy_1", buyer_ref="ref_1")
 
     def test_get_media_buy_delivery_minimal(self):
         """Test get_media_buy_delivery with no filters."""
@@ -194,7 +173,6 @@ class TestMCPContractValidation:
 
         # All filters should be optional
         assert request.media_buy_ids is None
-        assert request.buyer_refs is None
         assert request.status_filter is None
 
 
@@ -236,7 +214,6 @@ class TestMCPToolParameterPatterns:
         # For now, document known good patterns
         consistent_patterns = {
             "media_buy_id": "Used consistently across tools",
-            "buyer_ref": "Used consistently across tools",
             "po_number": "Used consistently (not po_id or purchase_order)",
         }
 
@@ -252,13 +229,12 @@ class TestSchemaDefaultValues:
         req = GetProductsRequest(brand={"domain": "testbrand.com"})
         assert req.brief is None  # Optional, defaults to None per spec
 
-        # CreateMediaBuyRequest (with required fields per AdCP v3.6.0 spec)
+        # CreateMediaBuyRequest (with required fields per AdCP v3.12 spec)
         req = CreateMediaBuyRequest(
-            buyer_ref="test_ref",
             brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
-                    buyer_ref="pkg1", product_id="prod1", budget=1000.0, pricing_option_id="default-pricing-option"
+                    product_id="prod1", budget=1000.0, pricing_option_id="default-pricing-option"
                 )
             ],
             start_time="2025-02-15T00:00:00Z",
@@ -279,7 +255,7 @@ class TestSchemaDefaultValues:
         # Note: GetProductsRequest.brand is OPTIONAL per AdCP spec
         required_field_justifications = {
             "ActivateSignalRequest.signal_agent_segment_id": "Must specify which signal to activate",
-            "CreateMediaBuyRequest.buyer_ref": "Required per AdCP spec for tracking purchases",
+            "UpdateMediaBuyRequest.media_buy_id": "Required per AdCP 3.12 to identify the media buy",
         }
 
         # All required fields should have business justification
@@ -303,28 +279,16 @@ class TestMCPToolMinimalCalls:
         except Exception as e:
             pytest.fail(f"GetProductsRequest creation failed: {e}")
 
-        # 2. Test that library DeliverTo works with explicit values
-        try:
-            deliver_to = DeliverTo(
-                deployments=[PlatformDestination(platform="google_ad_manager", type="platform")],
-                countries=["US"],
-            )
-            assert len(deliver_to.deployments) == 1
-            assert deliver_to.countries[0] == "US"
-        except Exception as e:
-            pytest.fail(f"DeliverTo creation failed: {e}")
-
-        # 3. Test that GetSignalsRequest works with minimal params
-        # adcp 3.9: GetSignalsRequest is a regular model, not RootModel
+        # 2. Test that GetSignalsRequest works with flat countries/destinations (adcp 3.12)
         try:
             signals_request = GetSignalsRequest(
                 signal_spec="audience_automotive",
-                deliver_to=DeliverTo(
-                    deployments=[PlatformDestination(platform="google_ad_manager", type="platform")],
-                    countries=["US"],
-                ),
+                destinations=[{"platform": "google_ad_manager", "type": "platform"}],
+                countries=["US"],
             )
             assert signals_request.signal_spec == "audience_automotive"
+            assert len(signals_request.destinations) == 1
+            assert len(signals_request.countries) == 1
         except Exception as e:
             pytest.fail(f"GetSignalsRequest creation failed: {e}")
 
