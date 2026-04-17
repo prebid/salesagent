@@ -71,6 +71,8 @@ Key rules:
 
 **Work items (in order):**
 
+**L0 day-1 codemod (single commit, pre-foundation-modules, D8 #6 breaking):** `git mv src/admin/blueprints src/admin/routers`. Codemod all `from src.admin.blueprints.` imports to `from src.admin.routers.`. Verify Flask still imports cleanly. Zero behavioral change, ~5-line diff per importer (~40 importers expected). Structural guard `tests/unit/test_architecture_no_blueprints_dir.py` asserts the directory no longer exists and no imports reference it. Eliminates mixed directory state through L1c/L1d.
+
 1. Write structural guard tests FIRST (TDD): `test_templates_url_for_resolves.py`, `test_templates_no_hardcoded_admin_paths.py`, `test_architecture_admin_routes_named.py`, `test_codemod_idempotent.py`, `test_oauth_callback_routes_exact_names.py` (pins: `/admin/auth/google/callback`, `/admin/auth/oidc/callback`, `/admin/auth/gam/callback`), `test_trailing_slash_tolerance.py`, `test_architecture_no_flask_imports.py` (full allowlist), `test_architecture_handlers_use_sync_def.py` (AST guard: admin handlers must be `def`, NOT `async def` — this is the L0-L4 sync invariant; the guard has a small allowlist for the 3-4 OAuth callback handlers that require `async def` for Authlib and is swapped out for `test_architecture_admin_routes_async.py` atomically at L5b), `test_architecture_no_async_db_access.py` (no `async with get_db_session()` in admin code), `test_architecture_no_module_level_engine.py`, `test_architecture_no_direct_env_access.py`, `test_architecture_middleware_order.py`, `test_architecture_exception_handlers_complete.py`, `test_architecture_csrf_exempt_covers_adcp.py`, `test_architecture_approximated_middleware_path_gated.py`, `test_architecture_admin_routes_excluded_from_openapi.py`, `test_architecture_scheduler_lifespan_composition.py`, `test_architecture_a2a_routes_grafted.py`, `test_foundation_modules_import.py`, `test_template_context_completeness.py`, `test_architecture_form_getlist_parity.py` [§4 Wave 0, §3.5.1 SB-2/SB-3]. Every allowlist entry gets a `FIXME(salesagent-xxxx)` comment at its source location [§3.5.6 EP-5].
 1a. Add 9 AdCP boundary protective tests: `test_openapi_byte_stability.py`, `test_mcp_tool_inventory_frozen.py`, A2A agent card snapshot, `test_architecture_approximated_middleware_path_gated.py`, `test_architecture_csrf_exempt_covers_adcp.py`, `test_architecture_admin_routes_excluded_from_openapi.py`, error shape contract test, schema discovery contract test, REST response wire test. These protect the AdCP surface from accidental breakage during the migration.
 2. Create foundation modules (ALL sync `def`) — decomposed into 11 sub-items below [§4 Wave 0, §2 Blockers 1-2, §3.5.1 SB-3].
@@ -78,11 +80,11 @@ Key rules:
     **2.1** `src/admin/templates.py` (~150 LOC) — Jinja2Templates + `render()` wrapper. Passes `test_mode`, `user_role`, `user_email`, `user_authenticated`, `username`, `support_email` (from `get_support_email()`), `sales_agent_domain` (from `get_sales_agent_domain()`) as context matching Flask's `inject_context()` at `src/admin/app.py:298-330`; registers `tojson` filter with HTML-escaping; registers `from_json` and `markdown` custom Jinja2 filters from `src/admin/app.py:154-155`. See `foundation-modules.md` §11.1.
     **Done =** `from src.admin.templates import render, templates` imports cleanly; `templates.env.filters["tojson"]`, `["from_json"]`, `["markdown"]` all callable; `test_template_context_completeness.py` passes (context dict contains all 7 Flask keys).
 
-    **2.2** `src/admin/flash.py` (~70 LOC) — Flash messaging wrapping Starlette session state. `flash(request, msg, category)` writes; `get_flashed_messages(request, with_categories=False)` reads and clears. L6 later replaces this module with `app.state.flash_store`. See `foundation-modules.md` §11.2.
+    **2.2** **SUPERSEDED (D8 #4 breaking):** ~~`src/admin/flash.py`~~ **Inline FlashMessage (D8 #4 breaking, replaces src/admin/flash.py):** Do NOT create `src/admin/flash.py`. Add `src/admin/deps/messages.py` providing `MessagesDep = Annotated[MessagesHelper, Depends(get_messages)]` where `MessagesHelper` reads/writes a `list[FlashMessage]` (Pydantic-typed) on `request.session["flash"]`. Codemod ~366 Flask `flash(...)` call sites to `messages.add(...)`. Structural guard extends `tests/unit/test_architecture_no_admin_wrapper_modules.py` to cover flash.py.
     **Done =** API surface matches Flask's `flask.flash`/`get_flashed_messages` for all 366 call sites identified in frontend-deep-audit; unit test with 3 categories (success/error/info) passes round-trip.
 
-    **2.3** `src/admin/sessions.py` (~40 LOC) — Starlette `SessionMiddleware` wrapper. **`SameSite=Lax` in ALL environments** (CSRF decision — no SSE, no `SameSite=None` needed). `HttpOnly=True`. `secure=True` when scheme is https (detected post-proxy-headers). See `foundation-modules.md` §11.3.
-    **Done =** middleware installed; `request.session` dict-like in handler; round-trip test sets/reads a key; cookie flags verified via TestClient `Set-Cookie` header parse (Lax + HttpOnly + Path=/).
+    **2.3** **SUPERSEDED (D8 #4 breaking):** ~~`src/admin/sessions.py`~~ **Inline SessionMiddleware + templates (D8 #4 breaking, replaces foundation-modules sub-items for sessions.py and templating.py):** Do NOT create `src/admin/sessions.py` or `src/admin/templating.py` as standalone modules. Register `SessionMiddleware` inline in `src/app.py::build_middleware_stack()` at L1a. Attach `Jinja2Templates(directory="src/admin/templates")` to `app.state.templates` in the lifespan startup. Handlers access via `request.app.state.templates.TemplateResponse(...)`. Structural guard `tests/unit/test_architecture_no_admin_wrapper_modules.py` asserts these modules do NOT exist. `SameSite=Lax` in ALL environments. `HttpOnly=True`. `secure=True` when scheme is https (detected post-proxy-headers). `secret_key` from `SESSION_SECRET` only (no `FLASK_SECRET_KEY` dual-read per D6).
+    **Done =** middleware installed inline; `request.session` dict-like in handler; round-trip test sets/reads a key; cookie flags verified via TestClient `Set-Cookie` header parse (Lax + HttpOnly + Path=/); `tests/unit/test_architecture_no_admin_wrapper_modules.py` green.
 
     **2.4** `src/admin/csrf.py` (~120 LOC) — `CSRFOriginMiddleware` pure-ASGI Origin header validator. Allowlist seeded from `ALLOWED_ORIGINS` env var + `SALES_AGENT_DOMAIN`. Exempts `/mcp/*`, `/a2a`, `/a2a/*`, `/_internal/*`, `/static/*`. 307 on mismatch with a clear error body. NOT Double Submit Cookie — zero JavaScript or template changes. See `foundation-modules.md` §11.7 (integration code).
     **Done =** 7 Origin-scenario pytest cases green (missing Origin, matching, scheme-mismatch, port-mismatch, subdomain, null, evil); MCP/A2A paths exempted by path prefix; `test_architecture_csrf_exempt_covers_adcp.py` passes.
@@ -432,6 +434,8 @@ git grep -l "flask" src/admin/ | wc -l  # <= 2
 19. Production deploy + 48h monitoring: error rates, latency p50/p99, Docker size, cookie size [§6].
 20. Ratchet `.duplication-baseline` [§4 Wave 3].
 21. Update auto-memory `flask_to_fastapi_migration_v2.md` to reflect Flask removal milestone.
+22. **L2 work item (D6 breaking change):** Hard-remove `FLASK_SECRET_KEY` dual-read. Delete the fallback read in SessionMiddleware registration. Update `scripts/setup-dev.py:143` to write `SESSION_SECRET` only. Delete `tests/unit/test_setup_dev.py::test_flask_secret_key_*`. Add structural guard `tests/unit/test_architecture_no_flask_secret_key_reads.py` with EMPTY allowlist. Update `docs/environment.md` and v2.0 release notes.
+23. **L2 work item (D8 #7 breaking):** Convert `/_internal/*` routes to require `X-Internal-API-Key` header matching `INTERNAL_API_KEY` env var. Delete `ADCP_TESTING == 'true'` gate at `src/routes/health.py:30,51`. Update test harness to inject the header. Add `INTERNAL_API_KEY` to `.env.example`. Structural guard `tests/unit/test_architecture_internal_routes_api_key_authed.py` asserts every `/_internal/*` route depends on `require_internal_api_key`.
 
 **Files to delete:** `src/admin/app.py`, `src/admin/blueprints/`, `src/admin/server.py`, `scripts/run_admin_ui.py`.
 **Files to modify:** `src/app.py`, `pyproject.toml`, `scripts/run_server.py`, `src/admin/templating.py` (template path).
@@ -446,7 +450,7 @@ docker build .                      # succeeds
 # 48h monitoring: no 5xx spike, latency stable
 ```
 
-**What NOT to do:** Do not start test-harness modernization (L3), pattern refinement (L4), or async conversion (L5+). Do not remove `psycopg2-binary` (stays until post-v2.0 when Path B adapters and sync-bridge sunset). Do not remove `FLASK_SECRET_KEY` dual-read (L7). Do not drop nginx (post-v2.0). Do not design multi-worker scheduler (v2.2). Do not delete `render()` wrapper (deletion is L4). Do not introduce `SessionDep` (that is L4).
+**What NOT to do:** Do not start test-harness modernization (L3), pattern refinement (L4), or async conversion (L5+). Do not remove `psycopg2-binary` (stays until post-v2.0 when Path B adapters and sync-bridge sunset). Do not drop nginx (post-v2.0). Do not design multi-worker scheduler (v2.2). Do not delete `render()` wrapper (deletion is L4). Do not introduce `SessionDep` (that is L4).
 
 ---
 
@@ -894,15 +898,15 @@ make quality && ./run_all_tests.sh  # green
 
 ---
 
-## Layer 6 — Native Refinements: delete flash.py, app.state singletons, router subdir reorg, logfire (~1,500 LOC, ~3-4 days)
+## Layer 6 — Native Refinements: app.state singletons, router subdir reorg, logfire (~1,500 LOC, ~3-4 days)
 
-**Thesis:** Post-async cleanup that was not safe to do before L5. `flash.py` is replaced by an `app.state`-backed flash store; `SimpleAppCache` migrates to `app.state`; router subdirectory reorganization for navigability; `logfire` instrumentation lands (NOT `opentelemetry-sdk` — `logfire` is the chosen observability stack).
+**Thesis:** Post-async cleanup that was not safe to do before L5. `SimpleAppCache` migrates to `app.state`; router subdirectory reorganization for navigability; `logfire` instrumentation lands (NOT `opentelemetry-sdk` — `logfire` is the chosen observability stack). (Note: `flash.py` deletion moved to L0 per D8 #4 — the wrapper module was never created.)
 
 **Prerequisites:** L5e merged. All handlers async, perf within budget.
 
 **Work items (in order):**
 
-1. Delete `src/admin/flash.py`; replace with `app.state.flash_store` (dict keyed by session_id, auto-expires on read) and a thin `flash(request, msg, category)` helper that writes to it.
+1. ~~Delete `src/admin/flash.py`~~ — **superseded by D8 #4:** the flash wrapper module was never created at L0; `MessagesDep` on `request.session["flash"]` has been the canonical path since L1a. Verify no `src/admin/flash.py` exists and no code imports from it.
 2. Migrate `SimpleAppCache` from module globals to `app.state.inventory_cache` (set at lifespan startup).
 3. Reorganize `src/admin/routers/` into subdirectories by domain (e.g., `src/admin/routers/auth/`, `src/admin/routers/tenants/`, `src/admin/routers/creatives/`).
 4. Add `logfire` instrumentation: wire `logfire.configure()` in lifespan, add FastAPI auto-instrumentation, integrate with the L4 `structlog` pipeline. **Do NOT install `opentelemetry-sdk`** — `logfire` bundles its own OTLP exporter.
@@ -922,7 +926,7 @@ make quality && ./run_all_tests.sh  # green
 
 ## Layer 7 — Polish & Ship: allowlists → zero, mypy strict, docs refresh, v2.0.0 tag
 
-**Thesis:** Release readiness. Ratchet all structural-guard allowlists to zero, validate perf baseline, refresh `docs/ARCHITECTURE.md`, hard-remove `FLASK_SECRET_KEY` dual-read, tag v2.0.0.
+**Thesis:** Release readiness. Ratchet all structural-guard allowlists to zero, validate perf baseline, refresh `docs/ARCHITECTURE.md`, tag v2.0.0. (Note: `FLASK_SECRET_KEY` dual-read hard-removal moved to L2 per v2.0 breaking-change alignment.)
 
 **Prerequisites:** L6 merged.
 
@@ -930,7 +934,7 @@ make quality && ./run_all_tests.sh  # green
 
 1. Delete sync artifacts: `get_db_session` sync context manager, `scoped_session` usage (except the sync-bridge scope), residual UoW classes.
 2. Delete dead code: `database_schema.py` (confirmed orphan), `product_pricing.py` (Decision 5), dead functions in `queries.py`.
-3. Hard-remove `FLASK_SECRET_KEY` dual-read from session/config code. Delete from `scripts/setup-dev.py`, `docker-compose.yml`, `docs/`, and `tests/unit/test_setup_dev.py` (9 occurrences).
+3. ~~Hard-remove `FLASK_SECRET_KEY` dual-read~~ **moved to L2** per v2.0 breaking-change alignment with cookie rename. Verify at L7 that no `FLASK_SECRET_KEY` reads remain anywhere in `src/`, `scripts/`, `docs/`, or tests; structural guard `test_architecture_no_flask_secret_key_reads.py` (added at L2) is green with empty allowlist.
 4. Ratchet all structural guard allowlists to zero — no allowlist entries remain.
 5. Ratchet mypy strict-mode flags (per-module ratcheting baseline) — target is zero new strict errors.
 6. Final performance baseline comparison vs `baseline-sync.json` captured at L4 EXIT. No regression beyond budget.
@@ -945,7 +949,7 @@ make quality && ./run_all_tests.sh  # green
 15. Delete `feat/v2.0.0-flask-to-fastapi` branch after merge confirmation.
 
 **Files to delete:** Sync artifacts (`scoped_session` wrappers, residual UoW classes), `database_schema.py`, `product_pricing.py`, dead `queries.py` functions.
-**Files to modify:** `CLAUDE.md` (root), `pyproject.toml`, session/config modules (remove `FLASK_SECRET_KEY` dual-read), `docs/ARCHITECTURE.md`, various doc files.
+**Files to modify:** `CLAUDE.md` (root), `pyproject.toml`, `docs/ARCHITECTURE.md`, various doc files. (`FLASK_SECRET_KEY` dual-read removal moved to L2.)
 **Files to archive/delete:** `.claude/notes/flask-to-fastapi/` contents (after promoting anything worth keeping).
 
 **Exit gate:**

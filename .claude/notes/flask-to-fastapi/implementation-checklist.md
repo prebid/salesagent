@@ -114,7 +114,7 @@ Every item references the companion doc where full detail lives. Tick every box 
 - [ ] **[LAYERED 2026-04-14]** **Admin handlers use sync `def` at L0-L4, convert to `async def` with full async SQLAlchemy at L5** — per deep audit blocker #4 and the 8-layer (L0-L7) model. Canonical plan: `execution-plan.md` L5; decision history: `async-pivot-checkpoint.md`; invariants: `CLAUDE.md` critical invariant 1.
 - [ ] **Middleware order: Approximated BEFORE CSRF** (corrected) — per deep audit blocker #5; documented in `flask-to-fastapi-migration.md` §2.8 and §10.2
 - [ ] **Redirect status code: 307** (not 302) — preserves POST body per RFC 7231
-- [ ] **`FLASK_SECRET_KEY` transition: dual-read during L0-L4, hard-remove in L5+** (supersedes original user directive #5) — documented in `flask-to-fastapi-deep-audit.md` §3.4
+- [ ] **`FLASK_SECRET_KEY` transition: hard-remove at L2** (v2.0 breaking change aligned with cookie rename; supersedes prior dual-read plan). Dev onboarding reads `SESSION_SECRET` only. Release notes call out the env-var rename. See §L2 work items.
 - [ ] **Error-shape split decided:** Category 1 native `{"detail": ...}`, Category 2 legacy `{"success": false, "error": ...}` via scoped handler — documented in `flask-to-fastapi-migration.md` §2 directive #8
 - [ ] **[L5+]** **Decision 1 (adapter Path B, 2026-04-11):** adapter methods stay sync `def`; 18 call sites in `src/core/tools/*.py` + 1 in `src/admin/blueprints/operations.py:252` wrap in `await run_in_threadpool(...)`. `src/core/database/database_session.py` exports `get_sync_db_session()` alongside async `get_db_session()` (dual session factory). `AuditLogger.log_operation` splits into `_log_operation_sync` (internal) + async public wrapper. `anyio.to_thread.current_default_thread_limiter().total_tokens = 80` at lifespan startup. Structural guard `test_architecture_adapter_calls_wrapped_in_threadpool.py`. Full implementation reference: `flask-to-fastapi-foundation-modules.md` §11.14. Full target state: `async-pivot-checkpoint.md` §3 "Adapters (Decision 1 Path B)".
 - [ ] **[L5+]** **Decision 7 (ContextManager refactor, 2026-04-11):** delete `ContextManager` class + `DatabaseManager` entirely. 12 public methods become stateless `async def` module functions taking `session: AsyncSession` as first parameter. 7 production callers migrate (incl. dead `main.py:166` + module-load side effect in `mcp_context_wrapper.py:345` + `mock_ad_server.py threading.Thread → asyncio.create_task`). ~50 test patches, 20 collapsible via `tests/harness/media_buy_update.py::EXTERNAL_PATCHES` update. Validated by Spike 4.5. Structural guard `test_architecture_no_singleton_session.py`. Error-path composition gotcha: use SEPARATE `async with session_scope()` for error-logging writes (outer scope rolls back on raise). Full target state: `async-pivot-checkpoint.md` §3 "ContextManager refactor".
@@ -395,7 +395,7 @@ These refactors are strict improvements under the CURRENT `scoped_session` world
 
 - [ ] `src/admin/templating.py` (~150 LOC) — `Jinja2Templates` singleton, `_url_for` safe-lookup override pre-registered on `templates.env.globals`, `render()` wrapper with greenfield context (NO `admin_prefix`/`static_prefix`/`script_root`; only `request`, `support_email`, `sales_agent_domain`, `csrf_token`, plus handler-provided context keys)
 - [ ] `src/admin/flash.py` (~70 LOC) — `flash(request, msg)` / `get_flashed_messages(request, with_categories=False)`
-- [ ] `src/admin/sessions.py` (~40 LOC) — `build_session_middleware_kwargs()` returning `secret_key` from `SESSION_SECRET` (with dual-read of `FLASK_SECRET_KEY` for v2.0), `session_cookie='adcp_session'`, `same_site='lax'`, `https_only=True` in production
+- [ ] ~~`src/admin/sessions.py` (~40 LOC)~~ **SUPERSEDED (D8 #4 breaking):** do NOT create `src/admin/sessions.py`. `SessionMiddleware` is registered inline in `src/app.py::build_middleware_stack()` at L1a, reading `secret_key` from `SESSION_SECRET` only (no `FLASK_SECRET_KEY` dual-read — hard-removed at L2 per D6), `session_cookie='adcp_session'`, `same_site='lax'`, `https_only=True` in production.
 - [ ] `src/admin/oauth.py` (~60 LOC) — Authlib `starlette_client.OAuth` instance, Google client registered, `GOOGLE_CLIENT_NAME = "google"` constant, comment referencing OAuth URI immutability
 - [ ] `src/admin/csrf.py` (~120 LOC) — `CSRFOriginMiddleware` (pure-ASGI Origin header validation, NOT Double Submit Cookie), `_EXEMPT_PATH_PREFIXES` includes `/mcp`, `/a2a`, `/api/v1/`, `/_internal/`, `/.well-known/`, `/agent.json`, `/admin/auth/google/callback`, `/admin/auth/oidc/callback`, `/admin/auth/gam/callback`. Zero JS changes, zero template changes.
 - [ ] `src/admin/app_factory.py` (~80 LOC) — `build_admin_router()` returns `APIRouter(prefix="/admin", tags=["admin"], include_in_schema=False, redirect_slashes=True)`, empty in Wave 0
@@ -904,7 +904,7 @@ Decision 8 eliminated the SSE port; the `/tenant/{id}/events` route and `sse_sta
 
 - [ ] `CHANGELOG.md` v2.0.0 entry written with breaking changes:
   - Dependency removal list
-  - `FLASK_SECRET_KEY` → `SESSION_SECRET` (dual-read in v2.0)
+  - `FLASK_SECRET_KEY` → `SESSION_SECRET` (hard-removed at L2; dev onboarding reads `SESSION_SECRET` only)
   - Session cookie rename `session` → `adcp_session` (forced re-login)
   - Error-shape split (Category 1 native / Category 2 compat)
   - CSRF required on form POSTs
@@ -948,7 +948,8 @@ The Flask removal also removes Flask's internal WSGI proxy-header stack (`Custom
 - [ ] Structural guard `tests/unit/architecture/test_architecture_mcp_no_flask_transitive.py` is added — AST-walks imports reachable from `src/core/main.py` and asserts zero transitive Flask dependency. Verified by: guard green on current `main`; a contamination-fixture test (a deliberately Flask-importing module placed in the import graph) proves the guard fails on violations.
 - [ ] `.pre-commit-hooks/check_route_conflicts_fastapi.py` is rewritten (replacing the Flask-specific `check_route_conflicts.py`, which is deleted). Verified by: the rewritten hook fails on a fixture with two conflicting FastAPI routes; passes on current `src/admin/routers/`; the old hook file is absent from the tree.
 - [ ] Smoke tests under `tests/smoke/` are swept for `from src.admin.app import create_app` and converted. Verified by: `rg -n 'from src\.admin\.app' tests/smoke/` returns zero matches.
-- [ ] `scripts/deploy/fly-set-secrets.sh` references to `FLASK_SECRET_KEY` are inspected and resolved — either removed at L2 (if dual-read window closes here) or retained until L7 (if dual-read continues through L6). Verified by: `rg -n 'FLASK_SECRET_KEY' scripts/deploy/` is inspected; disposition is recorded in the L2 PR description.
+- [ ] `scripts/deploy/fly-set-secrets.sh` references to `FLASK_SECRET_KEY` are **removed at L2** (v2.0 hard-removal, not dual-read). Verified by: `rg -n 'FLASK_SECRET_KEY' scripts/deploy/` returns zero matches; removal commit is part of the L2 PR diff.
+- [ ] **L2 work item (D6 breaking change):** Hard-remove `FLASK_SECRET_KEY` dual-read. Delete the fallback read in SessionMiddleware registration (`src/admin/sessions.py`). Update `scripts/setup-dev.py:143` to write `SESSION_SECRET` only. Delete `tests/unit/test_setup_dev.py::test_flask_secret_key_*`. Add structural guard `tests/unit/test_architecture_no_flask_secret_key_reads.py` with EMPTY allowlist — AST-scans `src/**/*.py`, `scripts/**/*.py`, `tests/**/*.py` for `FLASK_SECRET_KEY` string literals and dict/env accesses. Update `docs/environment.md` and v2.0 release notes. Verified by: `rg -n 'FLASK_SECRET_KEY' src/ scripts/ tests/ docs/` returns zero matches at L2 exit.
 
 **Exit criteria:**
 
@@ -1281,7 +1282,7 @@ These rules apply to every layer's Entry and Exit subsections in §4, regardless
 
 - [ ] `v2.0.0` git tag applied (final release, after L5 async + L6 refinements shipped).
 - [ ] `docs/ARCHITECTURE.md` refreshed.
-- [ ] `FLASK_SECRET_KEY` dual-read hard-removed.
+- [ ] `FLASK_SECRET_KEY` hard-removal verified green (the hard-remove itself moved to L2; at L7 confirm zero reads remain anywhere in `src/`, `scripts/`, `docs/`, or tests).
 - [ ] Layer-scope commit-lint green; 7-step audit green.
 - [ ] PR squash-merged; release-please changelog entry present with all breaking changes.
 - [ ] Post-release monitoring plan active.
@@ -1821,23 +1822,22 @@ L5d5 (mop-up)          — depends on L5d3; revert L5d5 BEFORE L5d3
 
 **Allowlist-to-zero ratchet, mypy strict, v2.0.0 tag. Tag delete is destructive and may require downstream consumer coordination.**
 
-- [ ] **Trigger scenarios:** allowlist-to-zero ratchet fails at `make quality` post-merge because a shrinking allowlist exposed a violation that was missed in review; `FLASK_SECRET_KEY` hard-removal breaks a developer's local `.env` (warn but do not revert for this); mypy strict ratcheting surfaces a latent typing bug that blocks CI; v2.0.0 tag applied to a commit with a production regression found in the 48h bake.
+- [ ] **Trigger scenarios:** allowlist-to-zero ratchet fails at `make quality` post-merge because a shrinking allowlist exposed a violation that was missed in review; mypy strict ratcheting surfaces a latent typing bug that blocks CI; v2.0.0 tag applied to a commit with a production regression found in the 48h bake. (Note: `FLASK_SECRET_KEY` hard-removal moved to L2; its rollback lives in the L2 rollback procedure.)
 - [ ] **Procedure:**
   1. `git checkout main`
   2. `git revert -m 1 <L7-merge-sha> --no-edit`
-  3. Restore `FLASK_SECRET_KEY` dual-read in session/config modules
-  4. Restore allowlist entries that were shrunk to zero (copy from `git show <L7-sha>:<allowlist-path>`)
-  5. Restore mypy strict-mode relaxations (per-module ratchet rollback)
-  6. **v2.0.0 tag deletion (DESTRUCTIVE — requires downstream coordination):**
+  3. Restore allowlist entries that were shrunk to zero (copy from `git show <L7-sha>:<allowlist-path>`)
+  4. Restore mypy strict-mode relaxations (per-module ratchet rollback)
+  5. **v2.0.0 tag deletion (DESTRUCTIVE — requires downstream coordination):**
      ```bash
      # Only if tag already pushed AND downstream consumers have not yet bumped
      git tag -d v2.0.0
      git push origin :refs/tags/v2.0.0  # delete remote tag
      ```
      - If downstream consumers (docker image registry, pypi if published, release-please, downstream repos) have already pinned to `v2.0.0`, **do NOT delete the tag**. Instead publish `v2.0.1` with the fix and keep `v2.0.0` deprecated-but-present.
-  7. `make quality && ./run_all_tests.sh` — verify green
-  8. `git push origin main`
-  9. Coordinate with downstream consumers about the tag status (either deleted and to be re-tagged later, or deprecated-but-present pending `v2.0.1`)
+  6. `make quality && ./run_all_tests.sh` — verify green
+  7. `git push origin main`
+  8. Coordinate with downstream consumers about the tag status (either deleted and to be re-tagged later, or deprecated-but-present pending `v2.0.1`)
 - [ ] **Irreversible effects:** v2.0.0 tag deletion is cache-poisoning risk — any consumer that fetched the tag already has the commit pinned. Prefer `v2.0.1` forward-fix over tag deletion whenever possible. `CHANGELOG.md` v2.0.0 entry stays in the tree post-revert as historical record; update it with the revert note in the same commit.
 - [ ] **Recovery time estimate:** ~1-2 hours (revert + allowlist restoration + tag coordination + production rollback deploy).
 - [ ] **Data loss risk:** none in the repo. If production was deployed from the tagged image and the issue is a regression, standard rollback-to-previous-image applies (documented in `docs/deployment.md`).
@@ -1950,7 +1950,7 @@ This is the authoritative table of every AST-scanning / layer-scoped / meta-guar
 - [ ] Async SQLAlchemy is L5+ within v2.0; scoping kickoff needed after L2 ships (supersedes prior "separate v2.1 PR" and "already merged as Wave 4-5" plans — see async-pivot-checkpoint.md for history).
 - [ ] **L4** REST routes `Annotated[T, Depends()]` ratchet scoped (part of FastAPI-native patterns)
 - [ ] **L4** `require_tenant_access` `is_active` check scoped (breaking change OK on v2.0 branch)
-- [ ] **L7** `FLASK_SECRET_KEY` dual-read removal scoped (final cleanup)
+- [ ] **L2** `FLASK_SECRET_KEY` hard-removal scoped (v2.0 breaking change aligned with cookie rename; moved from L7)
 - [ ] **post-v2.0** nginx removal scoping kickoff scheduled (requires battle-testing)
 - [ ] **post-v2.0** `Apx-Incoming-Host` IP allowlist (security hardening) ticket filed
 - [ ] **post-v2.0** `/_internal/reset-db-pool` auth hardening ticket filed
@@ -2138,7 +2138,7 @@ These items are **intentionally NOT in scope for L0-L4**. They are referenced he
 - [ ] **Async SQLAlchemy** — L5+ within v2.0 (supersedes prior "separate v2.1 PR" and "v2.0 Waves 4-5" plans — see async-pivot-checkpoint.md for history). Convert `create_engine` → `create_async_engine`, `Session` → `AsyncSession`, all repositories to `async def`, ~100+ files affected. Detail: `async-pivot-checkpoint.md` §3 for target state; `flask-to-fastapi-migration.md` §18 for wave execution; deep audit §1.4 for Option A rationale.
 - [ ] **Drop nginx entirely** — ~30 MB image savings; uvicorn `--proxy-headers` + tiny Starlette middleware covers all nginx responsibilities. Detail: `flask-to-fastapi-deep-audit.md` §4.1.
 - [ ] **Ratchet REST routes to `Annotated[T, Depends()]`** — 14 route signatures in `src/routes/api_v1.py` currently use `= resolve_auth` default-value style. Add guard `test_architecture_rest_uses_annotated.py`. Detail: `flask-to-fastapi-deep-audit.md` §4.2.
-- [ ] **Remove `FLASK_SECRET_KEY` dual-read** — remove fallback from `src/admin/sessions.py`, remove from `scripts/setup-dev.py`, `docker-compose.yml`, `docs/deployment/environment-variables.md`, `docs/development/troubleshooting.md`, update `tests/unit/test_setup_dev.py` (9 occurrences)
+- [ ] ~~Remove `FLASK_SECRET_KEY` dual-read~~ — **moved to L2** per v2.0 breaking-change alignment with cookie rename. See Wave 3 / L2 work items for the hard-remove checkbox; this line is retained only as a historical pointer.
 - [ ] **`/_internal/reset-db-pool` auth hardening** — pre-existing weakness; endpoint is only env-var gated (`ADCP_TESTING=true`). Detail: `flask-to-fastapi-deep-audit.md` §7 R9.
 - [ ] **`require_tenant_access` `is_active` check** — pre-existing latent bug in Flask (Wave 0 `CurrentTenantDep` already filters `is_active=True`; L5+ cleans up the dead Flask helper)
 - [ ] **Structured logging (structlog / logfire) swap-in** — clean integration now that Flask is gone; `logfire` already in deps. Detail: `flask-to-fastapi-deep-audit.md` §4 opportunity list.
@@ -2147,6 +2147,20 @@ These items are **intentionally NOT in scope for L0-L4**. They are referenced he
 
 - [ ] **Multi-worker scheduler lease design** — today's webhook and media-buy-status schedulers are single-worker singletons. Multi-worker requires Postgres advisory lock OR separate scheduler container. Detail: `flask-to-fastapi-deep-audit.md` §3.1.
 - [ ] **`Apx-Incoming-Host` IP allowlist** — security hardening for the Approximated external-domain middleware. No client-side spoofing today because Fly.io terminates externally, but explicit allowlist is defensive. Detail: `flask-to-fastapi-deep-audit.md` §7 Y8.
+
+### v2.1 deferred tech debt (filed during v2.0 pre-L0)
+
+The following were considered for v2.0 and explicitly deferred to v2.1:
+
+- **Drop nginx reverse proxy for multi-tenant routing.** `TenantSubdomainMiddleware` + Starlette Host matching can replace 574 LOC of nginx .conf templating. Scope ~4-5 days + 2 days bake. Deferred: needs battle-testing; would eat sync-bridge rearchitect budget at L5d1.
+
+- **Adapter async rewrite.** `googleads==49.0.0` depends on `suds-py3` (sync SOAP); rewriting 4 adapters (GAM, Mock, Kevel, Triton) on async httpx is ~30 engineer-days of vendor-driven work. Decision 1 Path B (sync + threadpool wrap) is the v2.0 answer. File v2.1 ticket at L7.
+
+- **DatabaseConnection + fork-safety path elimination.** `scripts/deploy/run_all_services.py` PID-1 orchestrator pattern is the reason raw psycopg2 is kept (Decision 2). Rewriting to single-process uvicorn entrypoint is out of v2.0 scope. File v2.1 ticket at L7.
+
+- **Multi-worker scheduler lease design.** v2.0 ships single-worker per CLAUDE.md:133. DB-backed lease or advisory-lock scheme is a v2.1 feature (~5-8 days).
+
+- **Redis backend for SimpleAppCache.** In-process TTLCache is the v2.0 answer; `CacheBackend` Protocol preserves swap path to Redis in v2.1 without API changes at call sites.
 
 ---
 
