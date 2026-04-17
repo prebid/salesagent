@@ -1131,11 +1131,9 @@ class TestDeliveryPricingOptionLookup:
 class TestDeliveryUpgradeCompat:
     """UC-004-UPG: 3.6 upgrade schema compatibility."""
 
-    def test_buyer_ref_present_in_delivery_entries(self):
-        """UC-004-UPG-03: buyer_ref present in media_buy_deliveries.
+    def test_buyer_ref_not_in_delivery_entries(self):
+        """UC-004-UPG-03: buyer_ref removed from media_buy_deliveries (adcp 3.12).
 
-        Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/media-buy/get-media-buy-delivery-response.json
-        CONFIRMED: media_buy_deliveries[].buyer_ref is an optional string field.
         Covers: UC-004-MAIN-16
         """
         buy = _make_mock_media_buy(
@@ -1159,8 +1157,8 @@ class TestDeliveryUpgradeCompat:
         )
 
         assert len(response.media_buy_deliveries) == 1
-        # buyer_ref is optional and None when not set on ORM (removed from AdCP requests in 3.12)
-        assert response.media_buy_deliveries[0].buyer_ref is None
+        # buyer_ref removed from schema in adcp 3.12
+        assert not hasattr(response.media_buy_deliveries[0], "buyer_ref")
 
     def test_nested_serialization_model_dump(self):
         """UC-004-UPG-04: GetMediaBuyDeliveryResponse nested serialization with NestedModelSerializerMixin.

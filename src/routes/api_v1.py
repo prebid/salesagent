@@ -118,7 +118,6 @@ class SyncCreativesBody(BaseModel):
 class ListCreativesBody(BaseModel):
     media_buy_id: str | None = None
     media_buy_ids: list[str] | None = None
-    buyer_ref: str | None = None
     status: str | None = None
     format: str | None = None
     adcp_version: str = "1.0.0"
@@ -320,7 +319,6 @@ async def list_creatives(body: ListCreativesBody, identity: ResolvedIdentity = r
         response = creatives_listing_module.list_creatives_raw(
             media_buy_id=body.media_buy_id,
             media_buy_ids=body.media_buy_ids,
-            buyer_ref=body.buyer_ref,
             status=body.status,
             format=body.format,
             identity=identity,

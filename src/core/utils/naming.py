@@ -142,7 +142,6 @@ def generate_auto_name(
         generated_name = run_async_in_sync_context(
             generate_name_async(
                 agent=agent,
-                buyer_ref="",  # buyer_ref removed in adcp 3.12
                 campaign_name=None,  # Not in AdCP spec
                 brand_name=brand_name if brand_name != "N/A" else None,
                 budget_info=budget_info,

@@ -494,10 +494,10 @@ class Kevel(AdServerAdapter):
         if self.dry_run:
             self.log(f"Would call: GET {self.base_url}/campaign/{media_buy_id}")
             self.log("Would check campaign IsActive status and flight statuses")
-            return CheckMediaBuyStatusResponse(media_buy_id=media_buy_id, buyer_ref=media_buy_id, status="active")
+            return CheckMediaBuyStatusResponse(media_buy_id=media_buy_id, status="active")
         else:
             # In production, would query campaign status
-            return CheckMediaBuyStatusResponse(media_buy_id=media_buy_id, buyer_ref=media_buy_id, status="active")
+            return CheckMediaBuyStatusResponse(media_buy_id=media_buy_id, status="active")
 
     def get_media_buy_delivery(
         self, media_buy_id: str, date_range: ReportingPeriod, today: datetime

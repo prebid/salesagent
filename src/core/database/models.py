@@ -895,7 +895,6 @@ class MediaBuy(Base):
         String(50), ForeignKey("tenants.tenant_id", ondelete="CASCADE"), nullable=False
     )
     principal_id: Mapped[str] = mapped_column(String(50), nullable=False)
-    buyer_ref: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     order_name: Mapped[str] = mapped_column(String(255), nullable=False)
     advertiser_name: Mapped[str] = mapped_column(String(255), nullable=False)
     campaign_objective: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -953,12 +952,6 @@ class MediaBuy(Base):
             ["tenant_id", "account_id"],
             ["accounts.tenant_id", "accounts.account_id"],
             ondelete="SET NULL",
-        ),
-        UniqueConstraint(
-            "tenant_id",
-            "principal_id",
-            "buyer_ref",
-            name="uq_media_buys_buyer_ref",
         ),
         Index("idx_media_buys_tenant", "tenant_id"),
         Index("idx_media_buys_status", "status"),

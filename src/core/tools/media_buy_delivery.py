@@ -167,7 +167,7 @@ def _get_media_buy_delivery_impl(
     # Determine which media buys to fetch from database
     # UoW scope encompasses all code that accesses MediaBuy ORM objects to prevent
     # DetachedInstanceError — the session must stay open while we read attributes
-    # like buy.raw_request, buy.buyer_ref, buy.start_date, etc.
+    # like buy.raw_request, buy.start_date, etc.
     with MediaBuyUoW(tenant["tenant_id"]) as uow:
         assert uow.media_buys is not None
         repo = uow.media_buys
@@ -407,7 +407,6 @@ def _get_media_buy_delivery_impl(
                         package_deliveries.append(
                             PackageDelivery(
                                 package_id=package_id,
-                                buyer_ref=pkg_data.get("buyer_ref") or buy.raw_request.get("buyer_ref", None),
                                 impressions=package_impressions or 0.0,
                                 spend=package_spend or 0.0,
                                 clicks=package_clicks,
@@ -440,9 +439,6 @@ def _get_media_buy_delivery_impl(
                             else:
                                 buy_pricing_options.append({"pricing_option_id": pkg_po_id})
 
-                # Create delivery data
-                buyer_ref = buy.raw_request.get("buyer_ref", None)
-
                 # Calculate clicks and CTR (click-through rate) where applicable
 
                 clicks = 0
@@ -458,7 +454,6 @@ def _get_media_buy_delivery_impl(
                 )
                 delivery_data = MediaBuyDeliveryData(
                     media_buy_id=media_buy_id,
-                    buyer_ref=buyer_ref,
                     status=status_typed,
                     pricing_model=PricingModel(
                         "cpm"

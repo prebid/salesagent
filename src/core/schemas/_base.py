@@ -1462,18 +1462,11 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
 
 
 class CheckMediaBuyStatusRequest(SalesAgentBaseModel):
-    media_buy_id: str | None = None
-    buyer_ref: str | None = None
+    media_buy_id: str
     strategy_id: str | None = Field(
         None,
         description="Optional strategy ID for consistent simulation/testing context",
     )
-
-    def model_validate(cls, values):
-        # Ensure at least one of media_buy_id or buyer_ref is provided
-        if not values.get("media_buy_id") and not values.get("buyer_ref"):
-            raise ValueError("Either media_buy_id or buyer_ref must be provided")
-        return values
 
 
 class CheckMediaBuyStatusResponse(SalesAgentBaseModel):

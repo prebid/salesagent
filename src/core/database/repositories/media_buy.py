@@ -60,15 +60,6 @@ class MediaBuyRepository:
             )
         ).first()
 
-    def get_by_buyer_ref(self, buyer_ref: str) -> MediaBuy | None:
-        """Get a media buy by buyer reference within the tenant."""
-        return self._session.scalars(
-            select(MediaBuy).where(
-                MediaBuy.tenant_id == self._tenant_id,
-                MediaBuy.buyer_ref == buyer_ref,
-            )
-        ).first()
-
     def find_by_idempotency_key(self, idempotency_key: str, principal_id: str) -> MediaBuy | None:
         """Find an existing media buy by idempotency_key within (tenant, principal).
 
@@ -83,11 +74,11 @@ class MediaBuyRepository:
             )
         ).first()
 
-    def get_by_id_or_buyer_ref(self, identifier: str) -> MediaBuy | None:
-        """Get a media buy by ID first, then fall back to buyer_ref."""
+    def get_by_id_or_idempotency_key(self, identifier: str, principal_id: str) -> MediaBuy | None:
+        """Get a media buy by ID first, then fall back to idempotency_key."""
         result = self.get_by_id(identifier)
         if result is None:
-            result = self.get_by_buyer_ref(identifier)
+            result = self.find_by_idempotency_key(identifier, principal_id)
         return result
 
     # ------------------------------------------------------------------
@@ -99,7 +90,6 @@ class MediaBuyRepository:
         principal_id: str,
         *,
         media_buy_ids: list[str] | None = None,
-        buyer_refs: list[str] | None = None,
         statuses: list[str] | None = None,
     ) -> list[MediaBuy]:
         """Get media buys for a principal within the tenant.
@@ -112,8 +102,6 @@ class MediaBuyRepository:
         )
         if media_buy_ids is not None:
             stmt = stmt.where(MediaBuy.media_buy_id.in_(media_buy_ids))
-        if buyer_refs is not None:
-            stmt = stmt.where(MediaBuy.buyer_ref.in_(buyer_refs))
         if statuses is not None:
             stmt = stmt.where(MediaBuy.status.in_(statuses))
         return list(self._session.scalars(stmt).all())
@@ -331,7 +319,6 @@ class MediaBuyRepository:
             "media_buy_id": media_buy_id,
             "tenant_id": self._tenant_id,
             "principal_id": principal_id,
-            "buyer_ref": getattr(req, "buyer_ref", None),
             "idempotency_key": getattr(req, "idempotency_key", None),
             "order_name": order_name or getattr(req, "po_number", None) or f"Order-{media_buy_id}",
             "advertiser_name": advertiser_name,

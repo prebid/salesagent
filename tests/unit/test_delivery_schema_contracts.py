@@ -97,7 +97,6 @@ class TestDeliveryTotalsFields:
 class TestPackageDeliveryFields:
     EXPECTED_FIELDS = {
         "package_id",
-        "buyer_ref",
         "impressions",
         "spend",
         "clicks",
@@ -142,7 +141,6 @@ class TestDailyBreakdownFields:
 class TestMediaBuyDeliveryDataFields:
     EXPECTED_FIELDS = {
         "media_buy_id",
-        "buyer_ref",
         "status",
         "expected_availability",
         "is_adjusted",
