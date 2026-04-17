@@ -69,6 +69,10 @@ class Tenant(Base, JSONValidatorMixin):
     auto_approve_format_ids: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
     human_review_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     policy_settings: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    supported_billing: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)  # BR-RULE-059
+    account_approval_mode: Mapped[str | None] = mapped_column(
+        String(50), nullable=True
+    )  # BR-RULE-060: auto|credit_review|legal_review
     signals_agent_config: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     creative_review_criteria: Mapped[str | None] = mapped_column(Text, nullable=True)
     _gemini_api_key: Mapped[str | None] = mapped_column("gemini_api_key", String(500), nullable=True)
