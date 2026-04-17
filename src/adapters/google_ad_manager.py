@@ -1140,7 +1140,7 @@ class GoogleAdManager(AdServerAdapter):
                 if not isinstance(date_str, str):
                     date_str = str(date_str)
                 try:
-                    from dateutil import parser as dateutil_parser  # type: ignore[import-untyped]
+                    from dateutil import parser as dateutil_parser
 
                     date_str = dateutil_parser.parse(date_str).strftime("%Y-%m-%d")
                 except (ValueError, OverflowError) as e:

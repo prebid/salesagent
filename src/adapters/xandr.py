@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import requests
-from dateutil import parser as dateutil_parser  # type: ignore[import-untyped]
+from dateutil import parser as dateutil_parser
 
 from src.adapters.base import AdServerAdapter
 from src.core.retry_utils import api_retry
