@@ -2456,6 +2456,147 @@ def then_format_check_should_pass(ctx: dict) -> None:
         )
 
 
+# --- pzlv: assignment format compatibility boundary (BR-RULE-039) ---
+
+
+def _setup_assignment_package(
+    ctx: dict,
+    *,
+    product_format_ids: list[dict] | None,
+    product_id_in_config: bool = True,
+) -> None:
+    """Shared helper to create a media buy + package for format compatibility scenarios.
+
+    Args:
+        product_format_ids: Format IDs for the product. None means no product at all.
+        product_id_in_config: Whether to include product_id in package_config.
+    """
+    from tests.factories import MediaBuyFactory, MediaPackageFactory, ProductFactory
+
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+    tenant = ctx["tenant"]
+    principal = ctx["principal"]
+
+    media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
+    package_config: dict = {"budget": 1000.0}
+
+    if product_id_in_config and product_format_ids is not None:
+        product = ProductFactory(tenant=tenant, format_ids=product_format_ids)
+        package_config["product_id"] = product.product_id
+        ctx["product"] = product
+
+    package = MediaPackageFactory(media_buy=media_buy, package_config=package_config)
+    env._commit_factory_data()
+    ctx["media_buy"] = media_buy
+    ctx["package"] = package
+    creative_id = ctx["creatives"][-1]["creative_id"]
+    ctx["assignments"] = {creative_id: [package.package_id]}
+
+
+@given("an assignment to a package whose product accepts this format")
+def given_assignment_product_accepts_format(ctx: dict) -> None:
+    """Create a package whose product's format_ids exactly match the creative's format.
+
+    Uses the creative_format_id and DEFAULT_AGENT_URL set by the preceding
+    'a creative with a known format_id' Given step.
+    """
+    env = ctx["env"]
+    format_id = ctx["creative_format_id"]
+    agent_url = env.DEFAULT_AGENT_URL
+    _setup_assignment_package(
+        ctx,
+        product_format_ids=[{"agent_url": agent_url, "id": format_id}],
+    )
+
+
+@given("an assignment to a package whose product format has trailing slash")
+def given_assignment_product_trailing_slash(ctx: dict) -> None:
+    """Create a package whose product format agent_url has a trailing slash.
+
+    Production's normalize_url() strips trailing '/' before comparison,
+    so this should still match the creative's agent_url.
+    """
+    env = ctx["env"]
+    format_id = ctx["creative_format_id"]
+    agent_url_with_slash = env.DEFAULT_AGENT_URL + "/"
+    _setup_assignment_package(
+        ctx,
+        product_format_ids=[{"agent_url": agent_url_with_slash, "id": format_id}],
+    )
+
+
+@given("an assignment to a package whose product has empty format_ids")
+def given_assignment_product_empty_format_ids(ctx: dict) -> None:
+    """Create a package whose product has an empty format_ids list.
+
+    Per BR-RULE-039 INV-3: empty format_ids means all formats are allowed.
+    """
+    _setup_assignment_package(ctx, product_format_ids=[])
+
+
+@given("an assignment to a package with no product_id")
+def given_assignment_package_no_product_id(ctx: dict) -> None:
+    """Create a package with no product_id in its config.
+
+    Per BR-RULE-039 INV-6: format compatibility check is skipped entirely.
+    """
+    _setup_assignment_package(ctx, product_format_ids=None, product_id_in_config=False)
+
+
+@given("an assignment to a package whose product does not accept this format")
+def given_assignment_product_rejects_format(ctx: dict) -> None:
+    """Create a package whose product only accepts a different format.
+
+    The creative has format_id 'display_300x250' but the product only
+    accepts 'video_30s', causing a format mismatch.
+    """
+    env = ctx["env"]
+    agent_url = env.DEFAULT_AGENT_URL
+    _setup_assignment_package(
+        ctx,
+        product_format_ids=[{"agent_url": agent_url, "id": "video_30s"}],
+    )
+    ctx["validation_mode"] = "strict"
+
+
+@then("the assignment should match after URL normalization")
+def then_assignment_matches_after_normalization(ctx: dict) -> None:
+    """Assert the assignment succeeded despite the product URL having a trailing slash.
+
+    Production's normalize_url() strips trailing '/' from both URLs before
+    comparison, so the assignment should be created.
+    """
+    assert "error" not in ctx, f"Expected success (URL normalization) but got error: {ctx.get('error')}"
+    assigned = _get_creative_assigned_to(ctx)
+    expected = ctx["package"].package_id
+    assert expected in assigned, f"Expected {expected!r} in assigned_to after URL normalization, got {assigned}"
+
+
+@then("the assignment should be created (all formats allowed)")
+def then_assignment_created_all_formats(ctx: dict) -> None:
+    """Assert the assignment succeeded because the product has no format restrictions.
+
+    Per BR-RULE-039 INV-3: empty format_ids means all creative formats are allowed.
+    """
+    assert "error" not in ctx, f"Expected success (all formats allowed) but got error: {ctx.get('error')}"
+    assigned = _get_creative_assigned_to(ctx)
+    expected = ctx["package"].package_id
+    assert expected in assigned, f"Expected {expected!r} in assigned_to (empty format_ids), got {assigned}"
+
+
+@then("the format check should be skipped entirely")
+def then_format_check_skipped_entirely(ctx: dict) -> None:
+    """Assert the format check was skipped because the package has no product_id.
+
+    Per BR-RULE-039 INV-6: no product_id on package means format check is skipped.
+    """
+    assert "error" not in ctx, f"Expected success (no product_id) but got error: {ctx.get('error')}"
+    assigned = _get_creative_assigned_to(ctx)
+    expected = ctx["package"].package_id
+    assert expected in assigned, f"Expected {expected!r} in assigned_to (no product_id), got {assigned}"
+
+
 # --- rx9u: asset-level provenance replaces creative-level (BR-RULE-094 INV-5) ---
 
 
