@@ -5745,7 +5745,7 @@ def test_no_dependency_override_leak() -> None:
 >
 > **Layer note:** Code examples in this section show async patterns for L5+ completeness. During L0-L4, use `def` instead of `async def` and `session.scalars(stmt)` instead of `(await session.execute(stmt)).scalars()`. Both `await session.scalars(...)` and `(await session.execute(...)).scalars()` are valid on `AsyncSession` at L5+ — `await session.scalars(...)` is canonical per SQLAlchemy docs (native method since 1.4.24).
 
-> **Added 2026-04-11 under the Decision 1 deep-think resolution.** Adapters stay sync under v2.0. The 18 adapter call sites in `src/core/tools/*.py` + 1 in `src/admin/blueprints/operations.py:252` wrap their sync adapter methods in `await run_in_threadpool(...)`. This section is the canonical reference for the wrap pattern plus the dual-session-factory machinery that supports it.
+> **Added 2026-04-11 under the Decision 1 deep-think resolution; adapter-count re-verified 2026-04-17.** Adapters stay sync under v2.0. 30 `adapter.` call sites across 7 files in `src/core/tools/*.py` (media_buy_create: 16, media_buy_update: 7, capabilities: 2, media_buy_list: 2, performance: 1, media_buy_delivery: 1, products: 1) wrap their sync adapter methods in `await run_in_threadpool(...)`. The previously-claimed "+1 in `src/admin/blueprints/operations.py:252`" was NOT confirmed at 2026-04-17 re-verification — zero `adapter.` calls in that file; the file moves to `src/admin/routers/operations.py` post-L0 codemod regardless. This section is the canonical reference for the wrap pattern plus the dual-session-factory machinery that supports it.
 
 ### A. Why adapters stay sync
 
@@ -5963,7 +5963,7 @@ async def _create_media_buy_impl(
 | 9 | `src/core/tools/media_buy_create.py:??` | `adapter.orders_manager.approve_order(...)` | GAM sub-manager |
 | 10 | `src/core/tools/media_buy_create.py:??` | `adapter.creatives_manager.add_creative_assets(...)` | GAM sub-manager |
 | 11-17 | `src/core/tools/media_buy_*.py`, `src/core/tools/creative*.py` | Remaining DR/DL/signals sites | Verify in Spike 4.5 |
-| 18 | `src/admin/blueprints/operations.py:252` | `adapter.get_media_buy_delivery(...)` | Admin direct-call site |
+| ~~18~~ **[UNCONFIRMED 2026-04-17]** | ~~`src/admin/blueprints/operations.py:252`~~ — re-verification found zero `adapter.` calls in this file (post-L0 codemod path: `src/admin/routers/operations.py`) | ~~`adapter.get_media_buy_delivery(...)`~~ | Row retained for decision history; if a future `adapter.` call lands in this router, re-add with correct line number |
 
 Spike 4.5 grep-verifies the complete list and produces the exact count in `spike-decision.md`.
 
