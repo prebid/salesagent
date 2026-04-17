@@ -8478,6 +8478,56 @@ Registered in root `CLAUDE.md` structural-guards table row: `Session cookie size
 
 ---
 
+## §11.34 — Doc-Drift Linters (6 new structural guards, land at L0)
+
+The 7-step Red-Green discipline has a systemic blind spot: docs-only edits qualify for the `discipline: N/A - docs-only` escape hatch, but migration plan documents ARE the specification. Without automated enforcement, the pre-Wave-0 audit surfaced drift in 30+ locations across 11 docs.
+
+These 6 guards enforce semantic consistency across `.md` files:
+
+### `tests/unit/test_architecture_invariants_consistent.py`
+Parses the 6 invariants from `.claude/notes/flask-to-fastapi/CLAUDE.md` §Critical Invariants. Asserts root `CLAUDE.md` banner contains the same numbered list with matching substantive text. Canonical order: (1) url_for/script_root, (2) trailing slashes, (3) AdCPError Accept-aware, (4) sync def L0-L4, (5) middleware Approximated-before-CSRF, (6) OAuth URIs byte-immutable.
+
+### `tests/unit/test_architecture_oauth_uris_consistent.py`
+Whitelist. Every `.md` under `.claude/notes/flask-to-fastapi/` and `docs/` is scanned via regex `/(admin/)?auth/[^"` ]+/callback` for OAuth URI strings. Each match MUST be in the canonical set {`/admin/auth/google/callback`, `/admin/auth/oidc/callback`, `/admin/auth/gam/callback`} UNLESS the match appears within ±10 tokens of an explicit `NOT`/`REJECTED`/`FORBIDDEN` context word.
+
+### `tests/unit/test_architecture_csrf_implementation_consistent.py`
+Scans every `.md` in `.claude/notes/flask-to-fastapi/` for tokens associated with the abandoned double-submit-cookie strategy: `adcp_csrf`, `double-submit`, `XSRF-TOKEN`, `csrf_token.*cookie`. Allowlist: folder CLAUDE.md §Invariant 5 may mention `double-submit` in the rejection sentence (same NOT-context rule).
+
+### `tests/unit/test_architecture_layer_assignments_consistent.py`
+Parses the layer-timeline table in folder `CLAUDE.md` into `{label: scope}`. Scans `implementation-checklist.md` and `execution-plan.md` for each layer label; asserts scope text matches (fuzzy substring). Catches the L5d1 relabel drift class.
+
+### `tests/unit/test_architecture_spike_table_consistent.py`
+Parses the Spike Sequence table (folder CLAUDE.md §v2.0 Spike Sequence) into `{spike_id: (gate, layer)}`. Scans all 11 plan docs for string `Spike <N>` + claimed layer; asserts no conflict. Spike table is single source of truth.
+
+### `tests/unit/test_architecture_proxy_headers_in_entrypoints.py`
+Asserts every production entrypoint (`Dockerfile` CMD, `scripts/run_server.py`'s `uvicorn.run(...)` call, `fly.toml` documented process entries) contains `--proxy-headers` + `--forwarded-allow-ips='*'`. Catches entrypoint drift during L2 Flask removal.
+
+### Escape hatch tightening
+Edits under `.claude/notes/flask-to-fastapi/` NO LONGER qualify for the `discipline: N/A - docs-only` waiver. Those docs are spec; they require a doc-drift linter Red/Green pair.
+
+### Land at
+L0 as part of the structural-guard stubs work item. Each guard ships with a meta-test fixture per implementation-checklist §TI-4 proving it catches a planted violation.
+
+---
+
+## §11.35 — Native-Idiom Guards (3 new structural guards)
+
+Per the native-ness audit: 89 `os.environ.get` sites, 17 `import requests` sites, 0 Pydantic v1 `class Config:` blocks today. Guards land at:
+
+### `tests/unit/test_architecture_no_pydantic_v1_config.py` (L0 — empty allowlist)
+AST-scans every `src/**/*.py` for `class Config:` inside a Pydantic BaseModel subclass. Allowlist EMPTY at introduction. Code is already clean; guard is monotonic from day 1 to prevent regression when L1/L2/L4 land new schemas.
+
+### `tests/unit/test_architecture_no_direct_env_access.py` (L4 — ratcheting allowlist)
+AST-scans every `src/**/*.py` for `os.environ.get(...)` or `os.environ[...]` calls outside `src/core/config.py`. Allowlist seeded with the 89 current sites; ratcheting to 0 by L7.
+
+### `tests/unit/test_architecture_no_requests_library.py` (L5+ — ratcheting allowlist)
+AST-scans every `src/**/*.py` for `import requests` or `from requests import`. Allowlist seeded with the 17 current sites (mostly adapter files retained under Decision 1 Path B); ratcheting toward 0 as adapters migrate to httpx in v2.1+.
+
+### Land at
+Each guard introduced at its respective layer with a Red commit (empty stub of the guard that fails because the pattern exists) followed by a Green commit (allowlist seeded with current state; downstream PRs shrink it).
+
+---
+
 ### Critical Files for Implementation
 
 - /Users/quantum/Documents/ComputedChaos/salesagent/src/admin/app.py

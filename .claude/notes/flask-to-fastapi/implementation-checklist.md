@@ -1528,6 +1528,15 @@ Every stated v2.0 goal maps to a specific test that proves adherence. The matrix
 | 46 | `TrustedHostMiddleware` present with wildcard tenant support | `tests/integration/test_architecture_trusted_host_middleware.py` | integration behavior | L2 | L2 | — | — |
 | 47 | Outbound HTTP wrapped in retry (tenacity/stamina) | `tests/unit/test_architecture_adapter_retries_wrapped.py` | AST scan | L5 | L5 | — | — |
 | 48 | Meta: structural-guard allowlist counts monotonically decrease | `tests/unit/test_structural_guard_allowlist_monotonic.py` (meta) | per-guard baseline comparison | L0 | L0 | — | — |
+| 49 | Folder CLAUDE.md invariants mirrored in root CLAUDE.md banner | `tests/unit/test_architecture_invariants_consistent.py` | text parse + substring match | L0 | L0 | — | — |
+| 50 | OAuth URI strings across `.md` match canonical 3-URI set | `tests/unit/test_architecture_oauth_uris_consistent.py` | regex whitelist + NOT-context allowlist | L0 | L0 | — | — |
+| 51 | CSRF double-submit vocabulary forbidden in planning docs (Option A Origin-middleware only) | `tests/unit/test_architecture_csrf_implementation_consistent.py` | token scan + NOT-context allowlist | L0 | L0 | — | — |
+| 52 | Layer-timeline scope text consistent across CLAUDE.md, implementation-checklist, execution-plan | `tests/unit/test_architecture_layer_assignments_consistent.py` | table parse + fuzzy substring | L0 | L0 | — | — |
+| 53 | Spike table (CLAUDE.md §v2.0 Spike Sequence) is single source of truth for spike layer assignments | `tests/unit/test_architecture_spike_table_consistent.py` | table parse + cross-doc conflict check | L0 | L0 | — | — |
+| 54 | Production entrypoints contain `--proxy-headers` + `--forwarded-allow-ips='*'` | `tests/unit/test_architecture_proxy_headers_in_entrypoints.py` | string scan of Dockerfile/run_server.py/fly.toml | L0 | L2 | — | — |
+| 55 | No Pydantic v1 `class Config:` blocks in BaseModel subclasses | `tests/unit/test_architecture_no_pydantic_v1_config.py` | AST scan (empty allowlist) | L0 | L0 | — | — |
+| 56 | No direct `os.environ.get(...)` / `os.environ[...]` outside `src/core/config.py` | `tests/unit/test_architecture_no_direct_env_access.py` | AST scan (ratcheting from 89 sites) | L4 | L4 | L7 (zero allowlist) | — |
+| 57 | No `import requests` / `from requests import` in `src/` | `tests/unit/test_architecture_no_requests_library.py` | AST scan (ratcheting from 17 sites) | L5 | L5 | — (sunset in v2.1 adapter rewrites) | — |
 
 ### Matrix usage
 
