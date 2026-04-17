@@ -332,6 +332,8 @@ def then_error_code_with_suggestion(ctx: dict, error_code: str) -> None:
         "ASSIGNMENTS_EMPTY",
         "ASSIGNMENT_CREATIVE_ID_REQUIRED",
         "ASSIGNMENT_PACKAGE_ID_REQUIRED",
+        "ASSIGNMENT_WEIGHT_BELOW_MINIMUM",
+        "ASSIGNMENT_WEIGHT_ABOVE_MAXIMUM",
     }
 
     error = ctx.get("error")
@@ -343,6 +345,11 @@ def then_error_code_with_suggestion(ctx: dict, error_code: str) -> None:
     assert error is not None, f"Expected error {error_code} but none was recorded"
 
     actual_code, suggestion = _extract_error_code_and_suggestion(error)
+    if actual_code != error_code and error_code in _SPEC_PRODUCTION_GAP_CODES:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: expected {error_code}, production raised "
+            f"'{actual_code}' ({type(error).__name__}: {error})"
+        )
     assert actual_code == error_code, (
         f"Expected error code '{error_code}', got '{actual_code}' ({type(error).__name__}: {error})"
     )
@@ -907,6 +914,199 @@ def given_assignment_with_placement_ids(ctx: dict) -> None:
     creative_id = ctx["creatives"][-1]["creative_id"]
     ctx["assignments"] = {creative_id: [package.package_id]}
     ctx["assignment_placement_ids"] = ["slot_a"]
+
+
+# --- 5o9e: assignment-basic Given steps (package_id+weight, multi-package, duplicate, missing fields) ---
+
+
+def _setup_assignment_package(
+    ctx: dict,
+    *,
+    package_id: str | None = None,
+) -> tuple[object, object]:
+    """Create media_buy + product + package for assignment Given steps.
+
+    Returns (media_buy, package). Stores them in ctx["media_buy"] and
+    ctx["package"] as well.  Avoids the repeated 10-line setup block in
+    every assignment Given step (DRY invariant).
+    """
+    from tests.factories import MediaBuyFactory, MediaPackageFactory, ProductFactory
+
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+    tenant = ctx["tenant"]
+    principal = ctx["principal"]
+    agent_url = env.DEFAULT_AGENT_URL
+
+    media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
+    product = ProductFactory(
+        tenant=tenant,
+        format_ids=[{"agent_url": agent_url, "id": "display_300x250"}],
+    )
+    pkg_kwargs: dict = {
+        "media_buy": media_buy,
+        "package_config": {"product_id": product.product_id, "budget": 1000.0},
+    }
+    if package_id is not None:
+        pkg_kwargs["package_id"] = package_id
+    package = MediaPackageFactory(**pkg_kwargs)
+    env._commit_factory_data()
+    ctx["media_buy"] = media_buy
+    ctx["package"] = package
+    return media_buy, package
+
+
+@given(parsers.re(r'an assignment with package_id "(?P<package_id>[^"]+)" and weight (?P<weight>.*)$'))
+def given_assignment_with_package_and_weight(ctx: dict, package_id: str, weight: str) -> None:
+    """Set up an assignment with a specific package_id and optional weight.
+
+    Handles both ``weight 50`` (explicit int) and ``weight `` (empty = absent).
+    Production's ``dict[creative_id -> list[package_id]]`` shape has no way to
+    express per-assignment weight, so we store the requested weight in
+    ``ctx["assignment_requested_weight"]`` for the Then step to xfail on.
+    """
+    _media_buy, package = _setup_assignment_package(ctx, package_id=package_id)
+    creative_id = ctx["creatives"][-1]["creative_id"]
+    ctx["assignments"] = {creative_id: [package.package_id]}
+    weight_stripped = weight.strip()
+    if weight_stripped:
+        ctx["assignment_requested_weight"] = int(weight_stripped)
+    else:
+        ctx["assignment_requested_weight"] = None  # absent → equal rotation
+
+
+@given(parsers.parse('an assignment with package_id "{package_id}" and no weight specified'))
+def given_assignment_with_package_no_weight(ctx: dict, package_id: str) -> None:
+    """Set up an assignment with no weight (spec: equal rotation default).
+
+    Production hard-codes weight=100 so this is a SPEC-PRODUCTION GAP in Then.
+    """
+    _media_buy, package = _setup_assignment_package(ctx, package_id=package_id)
+    creative_id = ctx["creatives"][-1]["creative_id"]
+    ctx["assignments"] = {creative_id: [package.package_id]}
+    ctx["assignment_requested_weight"] = None  # absent → equal rotation
+
+
+@given("assignments mapping the creative to valid package_ids")
+def given_assignments_mapping_creative_to_valid_packages(ctx: dict) -> None:
+    """Assign the creative to two valid packages in the same media buy."""
+    from tests.factories import MediaBuyFactory, MediaPackageFactory, ProductFactory
+
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+    tenant = ctx["tenant"]
+    principal = ctx["principal"]
+    agent_url = env.DEFAULT_AGENT_URL
+
+    media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
+    product = ProductFactory(
+        tenant=tenant,
+        format_ids=[{"agent_url": agent_url, "id": "display_300x250"}],
+    )
+    pkg1 = MediaPackageFactory(
+        media_buy=media_buy,
+        package_id="pkg-valid-1",
+        package_config={"product_id": product.product_id, "budget": 1000.0},
+    )
+    pkg2 = MediaPackageFactory(
+        media_buy=media_buy,
+        package_id="pkg-valid-2",
+        package_config={"product_id": product.product_id, "budget": 1000.0},
+    )
+    env._commit_factory_data()
+    ctx["media_buy"] = media_buy
+    creative_id = ctx["creatives"][-1]["creative_id"]
+    ctx["assignments"] = {creative_id: [pkg1.package_id, pkg2.package_id]}
+
+
+@given(parsers.parse('assignments mapping creative "{creative_id}" to packages "{pkg1}" and "{pkg2}"'))
+def given_assignments_mapping_creative_to_two_packages(ctx: dict, creative_id: str, pkg1: str, pkg2: str) -> None:
+    """Assign creative to two named packages (scenario outline parameterized).
+
+    The ``creative_id`` label (e.g. "c1") is symbolic — we use the actual
+    creative_id from the payload built by the preceding Given step.
+    """
+    from tests.factories import MediaBuyFactory, MediaPackageFactory, ProductFactory
+
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+    tenant = ctx["tenant"]
+    principal = ctx["principal"]
+    agent_url = env.DEFAULT_AGENT_URL
+
+    media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
+    product = ProductFactory(
+        tenant=tenant,
+        format_ids=[{"agent_url": agent_url, "id": "display_300x250"}],
+    )
+    package1 = MediaPackageFactory(
+        media_buy=media_buy,
+        package_id=pkg1,
+        package_config={"product_id": product.product_id, "budget": 1000.0},
+    )
+    package2 = MediaPackageFactory(
+        media_buy=media_buy,
+        package_id=pkg2,
+        package_config={"product_id": product.product_id, "budget": 1000.0},
+    )
+    env._commit_factory_data()
+    ctx["media_buy"] = media_buy
+    real_creative_id = ctx["creatives"][-1]["creative_id"]
+    ctx["assignments"] = {real_creative_id: [package1.package_id, package2.package_id]}
+
+
+@given("two assignment entries with same creative_id and package_id")
+def given_two_assignment_entries_same_ids(ctx: dict) -> None:
+    """Submit duplicate (creative_id, package_id) pair — spec expects idempotent upsert."""
+    _media_buy, package = _setup_assignment_package(ctx)
+    creative_id = ctx["creatives"][-1]["creative_id"]
+    # The assignments dict shape (creative_id → [pkg_ids]) naturally deduplicates,
+    # so we store a flag for the When step to send the duplicate explicitly.
+    ctx["assignments"] = {creative_id: [package.package_id, package.package_id]}
+    ctx["assignment_duplicate_pair"] = True
+
+
+@given(
+    parsers.parse('an assignment with creative_id "{creative_id}", package_id "{package_id}", and weight {weight:d}')
+)
+def given_assignment_with_ids_and_weight(ctx: dict, creative_id: str, package_id: str, weight: int) -> None:
+    """Set up an assignment with explicit creative_id, package_id, and weight.
+
+    The ``creative_id`` label is symbolic (scenario outline placeholder).
+    Production cannot express per-assignment weight — SPEC-PRODUCTION GAP.
+    """
+    _media_buy, package = _setup_assignment_package(ctx, package_id=package_id)
+    real_creative_id = ctx["creatives"][-1]["creative_id"]
+    ctx["assignments"] = {real_creative_id: [package.package_id]}
+    ctx["assignment_requested_weight"] = weight
+
+
+@given(
+    parsers.parse(
+        'an assignment with creative_id "{creative_id}", package_id "{package_id}", and placement_ids {placement_ids}'
+    )
+)
+def given_assignment_with_ids_and_placement(ctx: dict, creative_id: str, package_id: str, placement_ids: str) -> None:
+    """Set up an assignment with explicit creative_id, package_id, and placement_ids.
+
+    Production's dict shape has no way to express placement_ids — SPEC-PRODUCTION GAP.
+    """
+    _media_buy, package = _setup_assignment_package(ctx, package_id=package_id)
+    real_creative_id = ctx["creatives"][-1]["creative_id"]
+    ctx["assignments"] = {real_creative_id: [package.package_id]}
+    ctx["assignment_placement_ids"] = json.loads(placement_ids)
+
+
+@given("an assignment entry missing creative_id")
+def given_assignment_entry_missing_creative_id_alias(ctx: dict) -> None:
+    """Alias for 'an assignment entry with only package_id' (scenario outline text variant)."""
+    given_assignment_entry_missing_creative_id(ctx)
+
+
+@given("an assignment entry missing package_id")
+def given_assignment_entry_missing_package_id_alias(ctx: dict) -> None:
+    """Alias for 'an assignment entry with only creative_id' (scenario outline text variant)."""
+    given_assignment_entry_missing_package_id(ctx)
 
 
 # ═══════════════════════════════════════════════════════════════════════

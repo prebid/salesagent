@@ -154,12 +154,22 @@ def when_request_products(ctx: dict) -> None:
 
 @then("the response contains at least one product")
 def then_has_products(ctx: dict) -> None:
-    """Assert the response has at least one product."""
+    """Assert the response has at least one product with required AdCP fields populated."""
     assert "error" not in ctx, f"Request failed: {ctx.get('error')}"
     response = ctx["response"]
-    assert response.products is not None, "Response has no products"
-    assert len(response.products) >= 1, f"Expected >= 1 product, got {len(response.products)}"
-    ctx["first_product"] = response.products[0]
+    assert response.products, "Response has no products"
+    first = response.products[0]
+    # Element-level: verify required AdCP Product fields are populated
+    assert first.product_id, f"First product missing product_id: {first.product_id!r}"
+    assert first.name, f"First product missing name: {first.name!r}"
+    assert first.description is not None, "First product missing description"
+    assert first.publisher_properties, "First product missing publisher_properties"
+    pp0 = first.publisher_properties[0]
+    assert pp0 is not None, "First publisher_property entry is None"
+    assert first.pricing_options, "First product missing pricing_options"
+    po0 = first.pricing_options[0]
+    assert po0.pricing_model is not None, "First pricing_option missing pricing_model"
+    ctx["first_product"] = first
 
 
 @then(parsers.parse('the first product publisher_properties selection_type is "{expected}"'))
