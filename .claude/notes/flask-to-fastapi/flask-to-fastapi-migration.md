@@ -1330,8 +1330,8 @@ resolver, which combines `root_path` + route `path`) — never
 
 Replaces 58-LOC `@app.before_request redirect_external_domain_admin`. **Pure
 ASGI** (Starlette #1729). Lives outside `UnifiedAuth` in the canonical stack
-`Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS`
-(L2 shape, 9 middlewares; L4+ prepends `RequestID` as the new outermost for 10 total). Hard invariant: must
+`Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → LegacyAdminRedirect → Session → CSRF → RestCompat → CORS`
+(L2 shape, 10 middlewares including `LegacyAdminRedirect` from L1c per D1; L4+ prepends `RequestID` as the new outermost for 11 total — see §11.36 canonical progression L1a=7 → L1c=8 → L2=10 → L4+=11). Hard invariant: must
 run BEFORE `CSRFOriginMiddleware` so external-domain POSTs are redirected before
 CSRF rejection — see notes/CLAUDE.md invariant 2. `SecurityHeadersMiddleware` (§11.28) lands in the same L2 PR.
 
@@ -1697,7 +1697,7 @@ AccountRepoDep = Annotated[AccountRepository, Depends(get_account_repo)]
     name="admin_accounts_list_accounts",  # ← admin_<blueprint>_<endpoint> greenfield convention
     response_class=HTMLResponse,
 )
-async def list_accounts(              # ← async def end-to-end with full async SQLAlchemy (pivoted 2026-04-11)
+async def list_accounts(              # ← async def end-to-end with full async SQLAlchemy (pivoted 2026-04-11; SUPERSEDED 2026-04-14 — see §L5 layering)
     tenant_id: Annotated[str, "Path()"],
     request: Request,
     tenant: CurrentTenantDep,
@@ -1732,7 +1732,7 @@ from fastapi import Form
     name="admin_accounts_create_account_form",
     response_class=HTMLResponse,
 )
-async def create_account_form(  # async def end-to-end (pivoted 2026-04-11)
+async def create_account_form(  # async def end-to-end (pivoted 2026-04-11; SUPERSEDED 2026-04-14 — see §L5 layering)
     tenant_id: Annotated[str, "Path()"], request: Request, tenant: CurrentTenantDep,
 ) -> HTMLResponse:
     return render(request, "create_account.html", {"tenant_id": tenant_id, "edit_mode": False})

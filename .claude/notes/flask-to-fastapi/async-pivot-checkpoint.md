@@ -331,7 +331,7 @@ result = await run_in_threadpool(adapter.create_media_buy, request, packages, ..
 - `async def log_operation(...)` — async public wrapper, calls `await run_in_threadpool(self._log_operation_sync, ...)`. Called by `_impl` functions.
 - 30 `_impl` call sites update to `await audit_logger.log_operation(...)`; adapter call sites use `self.audit_logger._log_operation_sync(...)`.
 
-**Threadpool tune:** `anyio.to_thread.current_default_thread_limiter().total_tokens = 80` at lifespan startup (default 40 is too low for burst adapter load). Env-override via `ADCP_THREADPOOL_SIZE`.
+**Threadpool tune:** `anyio.to_thread.current_default_thread_limiter().total_tokens = 80` at lifespan startup (default 40 is too low for burst adapter load). Env-override via `ADCP_THREADPOOL_TOKENS` (canonical; `ADCP_THREADPOOL_SIZE` was the historical draft name, superseded by `foundation-modules.md §11.14.F`).
 
 **Structural guard:** `tests/unit/test_architecture_adapter_calls_wrapped_in_threadpool.py` — AST-walks `src/core/tools/`, `src/admin/blueprints/`, `src/admin/routers/`, `src/core/helpers/` for adapter method calls inside `async def` bodies. Each must be the first argument to a `run_in_threadpool(...)` call. `src/services/background_sync_service.py` is allowlisted (already in sync-bridge thread).
 
