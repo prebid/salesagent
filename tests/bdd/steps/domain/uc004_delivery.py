@@ -1040,9 +1040,30 @@ def when_partition_status_filter(ctx: dict, partition_value: str) -> None:
 
 @when(parsers.re(r'the Buyer Agent requests delivery metrics at status_filter boundary "(?P<boundary_value>[^"]+)"'))
 def when_boundary_status_filter(ctx: dict, boundary_value: str) -> None:
-    """Boundary test: status_filter value."""
-    ctx.setdefault("request_params", {})["status_filter"] = [boundary_value]
-    dispatch_request(ctx, status_filter=[boundary_value])
+    """Boundary test: status_filter value.
+
+    Handles special boundary values from the Gherkin examples table:
+    - ``(field absent)`` → omit status_filter entirely (test default behavior)
+    - JSON arrays like ``["active", "paused"]`` → parse to list
+    - Single enum values like ``canceled`` → wrap in list
+    """
+    value = boundary_value.strip()
+
+    if value in ("(field absent)", "(omitted)", "(not provided)"):
+        dispatch_request(ctx)
+        return
+
+    try:
+        parsed = json.loads(value)
+        if isinstance(parsed, list):
+            status_filter = parsed
+        else:
+            status_filter = [parsed]
+    except (json.JSONDecodeError, TypeError):
+        status_filter = [value]
+
+    ctx.setdefault("request_params", {})["status_filter"] = status_filter
+    dispatch_request(ctx, status_filter=status_filter)
 
 
 @when(parsers.re(r'the Buyer Agent requests delivery metrics with date range "(?P<partition>[^"]+)"'))
