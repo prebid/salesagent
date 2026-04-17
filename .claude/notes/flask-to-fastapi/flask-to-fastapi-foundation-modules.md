@@ -1499,6 +1499,122 @@ Rationale: prevents post-migration drift back to lazy-by-default relationships t
 
 ---
 
+## 11.0.9 `active_sync_tasks_lifespan` + nested lifespan composition (B8 mitigation)
+
+> **[L5d1 — D3 async rearchitect; LOAD-BEARING shutdown ordering]** Fixes the B8 concern that naive `combine_lifespans(database, http_client, active_sync_tasks)` ordering races `engine.dispose()` against in-flight checkpoint writes on cancellation.
+
+### A. The ordering invariant
+
+Shutdown order MUST be (LIFO via nested `async with`):
+
+1. **MCP scheduler** stops first — stops ENQUEUEING new sync tasks
+2. **active_sync_tasks drain** — cancel + await with 30s timeout, all in-flight tasks get a clean shutdown window to write their last `sync_checkpoint` row
+3. **http_client close** — in-flight HTTP reqs get cancelled after tasks done
+4. **Database engine dispose** — ALL sessions closed LAST
+
+### B. Canonical composition (required shape, not suggested)
+
+```python
+# src/app.py — L2+ shape; full lifespan composition
+
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
+from fastapi import FastAPI
+from fastmcp.utilities.lifespan import combine_lifespans
+
+DRAIN_TIMEOUT_SEC = 30.0
+
+
+@asynccontextmanager
+async def database_lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """OUTERMOST app lifespan — nests everything else inside so db_engine
+    disposes LAST after all sessions are closed."""
+    app.state.db_engine = make_engine(settings.database_url)
+    app.state.db_sessionmaker = make_sessionmaker(app.state.db_engine)
+    try:
+        yield
+    finally:
+        await app.state.db_engine.dispose()
+
+
+@asynccontextmanager
+async def http_client_lifespan(app: FastAPI) -> AsyncIterator[None]:
+    app.state.http_client_sync = make_sync_client()
+    app.state.http_client = make_async_client()
+    try:
+        yield
+    finally:
+        await app.state.http_client.aclose()
+        app.state.http_client_sync.close()
+
+
+@asynccontextmanager
+async def active_sync_tasks_lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """D3 background sync tasks; drains BEFORE http_client closes and db disposes."""
+    app.state.active_sync_tasks = {}  # dict[str, asyncio.Task]
+    try:
+        yield
+    finally:
+        tasks = list(app.state.active_sync_tasks.values())
+        if not tasks:
+            return
+        for t in tasks:
+            t.cancel()
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=True),
+                timeout=DRAIN_TIMEOUT_SEC,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "active_sync_tasks_drain_timed_out timeout_sec=%s — "
+                "checkpoint state for still-running tasks may be stale on next start",
+                DRAIN_TIMEOUT_SEC,
+            )
+
+
+@asynccontextmanager
+async def app_lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Composite app lifespan — nested for EXPLICIT shutdown order.
+
+    Enter:  database → http_client → active_sync_tasks → MCP
+    Exit:   MCP → active_sync_tasks → http_client → database
+    """
+    async with database_lifespan(app):
+        async with http_client_lifespan(app):
+            async with active_sync_tasks_lifespan(app):
+                yield
+
+
+# Composed with MCP lifespan — `combine_lifespans` is LIFO on shutdown:
+#   arg-position 0 (app_lifespan) enters first, exits LAST
+#   arg-position 1 (mcp_app.lifespan) enters second, exits FIRST
+# So MCP stops first → task drain → http close → db dispose. Correct.
+app = FastAPI(
+    ...,
+    lifespan=combine_lifespans(app_lifespan, mcp_app.lifespan),
+)
+```
+
+### C. Structural guard
+
+`tests/unit/test_architecture_lifespan_shutdown_order.py` — two-part guard:
+
+1. **AST scan**: `src/app.py::app_lifespan` must contain nested `async with` in exact order `[database_lifespan, http_client_lifespan, active_sync_tasks_lifespan]`. Flat composition via `combine_lifespans(database, http_client, active_sync_tasks)` fails because LIFO is not guaranteed across all `AsyncExitStack` implementations.
+2. **Observed-order integration test**: instrument each lifespan to record enter/exit; assert exit order is the reverse of enter order.
+
+### D. Failure modes if ordering wrong
+
+- **Reversed**: `engine.dispose()` fires before `active_sync_tasks` cancel — in-flight `session.commit()` crashes on disposed engine; last checkpoint write LOST; on restart tenant's GAM sync replays the partial page (~30s wasted work).
+- **MCP inside app_lifespan**: MCP enqueues a new sync task AFTER task drain begins; that task has no checkpoint path; ungraceful exit.
+- **Tasks outside app_lifespan**: same symptom as above.
+
+### E. D3 task registry
+
+`app.state.active_sync_tasks: dict[str, asyncio.Task]` keyed by `f"{tenant_id}:{sync_kind}"`. Registered by `install_background_sync(app)` in `database_lifespan` startup. Each `asyncio.create_task(...)` replaces the pre-D3 `threading.Thread(target=...)` worker.
+
+---
+
 ## §D8-native — Greenfield messaging, sessions, templating (replaces §11.1/§11.2/§11.3)
 
 > **[AUTHORITATIVE per D8 #4, 2026-04-16]** This section documents the canonical greenfield design for the three wrapper modules Flask-isomorphic stubs would have created. §11.1/§11.2/§11.3 below retain the original wrapper-module designs for historical reference only — DO NOT implement them. Structural guard `tests/unit/test_architecture_no_admin_wrapper_modules.py` asserts `src/admin/flash.py`, `src/admin/sessions.py`, `src/admin/templating.py` do NOT exist.
@@ -2428,6 +2544,76 @@ class TestGetFlashedMessages:
 - **Empty bucket after pop:** We reassign to `[]` rather than `del`, because some routes call `get_flashed_messages` twice per render (defensive) and `del` would raise on the second call unless guarded.
 - **JSON serialization:** Starlette's SessionMiddleware uses `json.dumps`. Tuples become lists on round-trip, hence the list-of-list storage and normalization on read.
 - **Cross-request leaks:** Flash messages survive until read. If a user hits a route that doesn't render a template with `get_flashed_messages`, the messages persist to the next request. This is correct behavior but surprises testers.
+
+---
+
+## 11.3.1 `src/admin/auth/principal.py` — detached-POJO admin identity (B15 mitigation)
+
+> **[L1a foundation; L1c activates at LegacyAdminRedirect registration]** Load-bearing POJO that prevents `DetachedInstanceError` when `LegacyAdminRedirectMiddleware` (D1 2026-04-16) reads `request.state.principal.tenant_id` AFTER the `UnifiedAuthMiddleware` session has closed.
+
+### A. Rationale
+
+`LegacyAdminRedirect` runs inside `UnifiedAuth` (per D1) and reads `.tenant_id` on whatever object UnifiedAuth stashed at `request.state.principal`. If that object is a raw ORM `User` instance, `.tenant_id` on a detached ORM instance triggers a lazy load on a closed session → `DetachedInstanceError`. Principal is the canonical detached POJO — frozen dataclass, zero Mapped[] fields, zero `relationship()` attrs, zero SQLAlchemy Base inheritance.
+
+### B. Module
+
+```python
+# src/admin/auth/principal.py
+"""Fully-detached admin identity. B15 mitigation.
+
+All fields are primitives or frozenset — no ORM, no DB-backed relationships.
+UnifiedAuthMiddleware constructs this from an ORM query at request entry,
+closes the session immediately, and stashes the detached POJO on
+request.state.principal. Downstream middleware (LegacyAdminRedirect) and
+handlers read principal.tenant_id / principal.available_tenants without
+risking DetachedInstanceError.
+"""
+from __future__ import annotations
+from dataclasses import dataclass
+from typing import Literal
+
+Role = Literal["super_admin", "tenant_admin", "tenant_user", "test"]
+
+
+@dataclass(frozen=True, slots=True)
+class Principal:
+    user_email: str
+    role: Role
+    tenant_id: str                    # current-tenant ID (from session)
+    available_tenants: frozenset[str] # tenant IDs user CAN access
+    is_test_user: bool = False
+
+    def __post_init__(self) -> None:
+        if self.user_email != self.user_email.lower():
+            object.__setattr__(self, "user_email", self.user_email.lower())
+
+    @property
+    def is_super_admin(self) -> bool:
+        return self.role == "super_admin"
+```
+
+### C. Dep alias
+
+```python
+# src/admin/deps/auth.py
+from src.admin.auth.principal import Principal
+
+PrincipalDep = Annotated[Principal, Depends(get_principal)]
+```
+
+`get_principal(request: Request) -> Principal` reads `request.state.principal` (stashed by `UnifiedAuthMiddleware`). If unset, raise `AdminRedirect(url="/admin/login")`.
+
+### D. Structural guard
+
+`tests/unit/test_architecture_principal_is_detached.py` asserts:
+
+- `src/admin/auth/principal.py` defines class `Principal`
+- Principal is `@dataclass(frozen=True, slots=True)` — NOT an ORM Base subclass
+- No field has `Mapped[]` annotation or `relationship()` default
+- No import of `src.core.database.models` or `sqlalchemy.orm` in the module
+- Required fields `{user_email, role, tenant_id, available_tenants}` present
+
+Seeds at L1a with empty allowlist — Principal design is a correctness invariant, not a ratcheting guard.
 
 ---
 
@@ -3478,7 +3664,9 @@ class TestTenantClientCache:
 
 ## 11.6.1 OIDC `form_post` transit cookie
 
-> **[L1b]** Sub-section under §11.6. Resolves the SG-5 CSRF/OIDC cookie-attachment edge case. Pure-ASGI; no Flask dependencies; lands with the OIDC router port in L1b.
+> **[L1b; REVISED 2026-04-17 per B7 mitigation]** Sub-section under §11.6. Resolves the SG-5 CSRF/OIDC cookie-attachment edge case. Pure-ASGI; no Flask dependencies; lands with the OIDC router port in L1b.
+>
+> **B7 MITIGATION — per-flow cookie naming:** the transit cookie name is `oauth_transit_<12-hex-flow-id>` where `flow_id = blake2s(state, digest_size=6).hexdigest()` (deterministic, non-reversible, 48 bits of entropy). Pre-B7 the cookie had a FIXED name `oauth_transit`; opening OIDC login in two concurrent tabs caused tab 2's cookie to overwrite tab 1's, silently failing tab 1's state validation (indistinguishable from CSRF attack in logs). Per-flow naming means each tab carries its own cookie. On callback, `finish_oauth_flow(request, state_from_callback)` derives the flow_id from the inbound `state` query param and reads the matching cookie. Salt bumped from `oauth_transit_v1` to `oauth_transit_v2` to invalidate any pre-migration cookies. See Agent δ B7 patch for full implementation; structural guard `tests/unit/test_architecture_oauth_transit_flow_id_scoped.py` asserts `TRANSIT_COOKIE_PREFIX` exists and no fixed `TRANSIT_COOKIE` constant remains.
 
 ### A. Background
 
@@ -4304,6 +4492,108 @@ app.add_middleware(RequestIDMiddleware)                        # added at L4, ou
 1. **Unit:** per-branch coverage (matching Origin, mismatched, null, missing with Referer, missing both, safe method, exempt path, wildcard suffix, normalization). See §B.
 2. **Integration:** `tests/integration/test_csrf_origin_end_to_end.py` — real Starlette app with Session + Approximated + CSRF in canonical order; assert cross-origin POST is 403 AND same-origin POST is 200; assert wildcard-tenant POST is 200.
 3. **Staging smoke:** Playwright walk of admin UI with middleware live; any working-in-Flask fetch must still work (zero template/JS changes).
+
+---
+
+## 11.8.1 `src/admin/middleware/edge_rate_limit.py` (B6 mitigation — pre-Approximated rate limit)
+
+> **[L1a — SECURITY regression fix]** Addresses the B6 pre-L0 audit finding that slowapi's per-handler decorators never fire for external-domain POSTs because `ApproximatedExternalDomainMiddleware` 307-redirects before handlers run. External attackers could spam `POST /admin/login` at wire speed, burning DB queries and edge CPU.
+
+### A. Placement
+
+**OUTERMOST middleware — registered LAST in the reverse-order add_middleware chain**, so it receives the first request after uvicorn's ASGI plumbing, before FlyHeaders/Approximated/TrustedHost/SecurityHeaders/UnifiedAuth/LegacyAdminRedirect/Session/CSRF/RestCompat/CORS.
+
+Runtime order becomes (L1a=8): `EdgeRateLimit → Fly → ExternalDomain → UnifiedAuth → Session → CSRF → RestCompat → CORS`. `MIDDLEWARE_STACK_VERSION=1` expected count bumps 7 → 8. Full stack ladder post-B6: L1a=8, L1c=9, L2=11, L4+=12. (This revises the pre-B6 ladder of 7/8/10/11 documented in CLAUDE.md Invariant 5; the B6 mitigation adds one layer throughout.)
+
+### B. Design (pure-ASGI middleware)
+
+```python
+# src/admin/middleware/edge_rate_limit.py (~90 LOC)
+"""Edge rate limiter — bounds ALL inbound traffic before any other
+middleware touches it. B6 mitigation.
+
+Two buckets per IP:
+  - global: 120 req/min per IP across all paths
+  - admin_post: 10 POST/min per IP on /admin/* (bounds login-enumeration attacks)
+"""
+from __future__ import annotations
+import os, time
+from collections import OrderedDict
+from typing import Any
+
+GLOBAL_LIMIT_PER_MIN = int(os.environ.get("ADCP_EDGE_GLOBAL_LIMIT_PER_MIN", "120"))
+ADMIN_POST_LIMIT_PER_MIN = int(os.environ.get("ADCP_EDGE_ADMIN_POST_LIMIT_PER_MIN", "10"))
+WINDOW_SEC = 60.0
+IP_CACHE_MAX = 8192  # FIFO-evict beyond this
+
+
+class EdgeRateLimitMiddleware:
+    def __init__(self, app: Any) -> None:
+        self.app = app
+        self._global: "OrderedDict[str, list[float]]" = OrderedDict()
+        self._admin_post: "OrderedDict[str, list[float]]" = OrderedDict()
+
+    def _check_and_record(self, bucket, ip: str, limit: int) -> bool:
+        now = time.monotonic()
+        cutoff = now - WINDOW_SEC
+        timestamps = [t for t in bucket.get(ip, []) if t > cutoff]
+        if len(timestamps) >= limit:
+            bucket[ip] = timestamps
+            bucket.move_to_end(ip)
+            return False
+        timestamps.append(now)
+        bucket[ip] = timestamps
+        bucket.move_to_end(ip)
+        while len(bucket) > IP_CACHE_MAX:
+            bucket.popitem(last=False)
+        return True
+
+    async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        path: str = scope.get("path", "")
+        # Health/ready probes MUST bypass (orchestrators poll every 10s)
+        if path in ("/healthz", "/readyz", "/metrics") or path.startswith("/_internal/"):
+            await self.app(scope, receive, send)
+            return
+        # Uvicorn --proxy-headers ensures scope['client'] is the real IP
+        client = scope.get("client")
+        ip = client[0] if client and client[0] else "0.0.0.0"
+        # Global bucket (cheap reject)
+        if not self._check_and_record(self._global, ip, GLOBAL_LIMIT_PER_MIN):
+            await self._respond_429(send)
+            return
+        # Admin-POST bucket (stricter, specific to login/OAuth POSTs)
+        if scope.get("method") == "POST" and (path == "/admin" or path.startswith("/admin/")):
+            if not self._check_and_record(self._admin_post, ip, ADMIN_POST_LIMIT_PER_MIN):
+                await self._respond_429(send)
+                return
+        await self.app(scope, receive, send)
+
+    async def _respond_429(self, send: Any, retry_after: int = 60) -> None:
+        body = b'{"detail":"Rate limit exceeded at edge"}'
+        await send({
+            "type": "http.response.start",
+            "status": 429,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode("latin-1")),
+                (b"retry-after", str(retry_after).encode("latin-1")),
+            ],
+        })
+        await send({"type": "http.response.body", "body": body})
+```
+
+### C. Structural guard
+
+`tests/unit/test_architecture_edge_rate_limit_outermost.py` — asserts `EdgeRateLimitMiddleware` is the FIRST entry in `app.user_middleware` (outermost at runtime). Prevents a future refactor from re-exposing the B6 bypass by inserting another middleware outside Edge.
+
+Bounded-memory invariants (IP cache ≤ 8192, per-bucket list trimmed per request) verified at runtime via `/health/pool` extension or a separate `/_internal/rate_limit_stats` endpoint.
+
+### D. v2.1 Redis migration
+
+Process-local memory backend is sufficient for v2.0 single-worker invariant (matches slowapi `memory://`). v2.1 swaps to a Redis-backed counter alongside slowapi once multi-worker deploys are supported. `CacheBackend` Protocol (§11.15 SimpleAppCache) establishes the pattern.
 
 ---
 
