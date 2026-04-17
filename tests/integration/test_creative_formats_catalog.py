@@ -136,20 +136,17 @@ class TestFullCatalogNoFilters:
             assert fmt.format_id.id is not None
             assert str(fmt.format_id.agent_url).rstrip("/") == AGENT_URL
             assert fmt.name is not None
-            assert fmt.type is not None
 
         # Verify specific format details
         fmt_by_id = {f.format_id.id: f for f in result.payload.formats}
 
         display_fmt = fmt_by_id["display_banner"]
         assert display_fmt.name == "Standard Display Banner"
-        assert display_fmt.type == "display"
         assert display_fmt.assets is not None
         assert len(display_fmt.assets) == 1
 
         video_fmt = fmt_by_id["video_midroll"]
         assert video_fmt.name == "Mid-roll Video"
-        assert video_fmt.type == "video"
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
     def test_empty_catalog_returns_empty_formats(self, integration_db, transport):
@@ -208,7 +205,5 @@ class TestFullCatalogNoFilters:
         assert result.is_success
         assert len(result.payload.formats) == 5
 
-        returned_types = {f.type for f in result.payload.formats}
-        assert "display" in returned_types
-        assert "video" in returned_types
-        assert "audio" in returned_types
+        returned_names = {f.name for f in result.payload.formats}
+        assert len(returned_names) == 5  # All 5 formats returned

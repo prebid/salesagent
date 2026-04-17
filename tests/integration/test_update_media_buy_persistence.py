@@ -114,7 +114,6 @@ def test_update_media_buy_with_database_persisted_buy(test_tenant_setup):
             tenant_id=tenant_id,
             principal_id=principal_id,
             media_buy_id=media_buy_id,
-            buyer_ref="original_ref",
             order_name="Test Order",
             advertiser_name="Test Advertiser",
             status="active",
@@ -170,7 +169,7 @@ def test_update_media_buy_requires_context():
 
 @pytest.mark.requires_db
 def test_update_media_buy_requires_media_buy_id(test_tenant_setup):
-    """Test update_media_buy raises error when buyer_ref lookup fails."""
+    """Test update_media_buy raises error when media_buy_id is missing."""
     # Use valid authentication from fixture (required after auth ordering fix)
     identity = _make_identity(
         tenant_id=test_tenant_setup["tenant_id"],
@@ -178,9 +177,7 @@ def test_update_media_buy_requires_media_buy_id(test_tenant_setup):
         token=test_tenant_setup["token"],
     )
 
-    # Note: When media_buy_id is None and buyer_ref is provided,
-    # we try to look it up in the database. If not found, we raise ValueError.
-    # This tests the buyer_ref lookup path when the media buy doesn't exist.
-    with pytest.raises(ValueError, match="Media buy with buyer_ref 'nonexistent_ref' not found"):
-        req = UpdateMediaBuyRequest(buyer_ref="nonexistent_ref")
+    # media_buy_id that doesn't exist should raise ValueError
+    with pytest.raises(ValueError, match="not found"):
+        req = UpdateMediaBuyRequest(media_buy_id="nonexistent_ref")
         _update_media_buy_impl(req=req, identity=identity)

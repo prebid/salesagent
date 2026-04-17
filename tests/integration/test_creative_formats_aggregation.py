@@ -26,14 +26,13 @@ def _make_format(
     format_id: str,
     name: str,
     *,
-    type: str | None = "display",
     is_standard: bool = True,
+    **kwargs,
 ) -> Format:
     """Helper to create a Format from a specific agent URL."""
     return Format(
         format_id=FormatId(agent_url=agent_url, id=format_id),
         name=name,
-        type=type,
         is_standard=is_standard,
     )
 
@@ -141,20 +140,17 @@ class TestMultiAgentAggregation:
             DEFAULT_AGENT_URL,
             "display_728x90",
             "Leaderboard",
-            type="display",
         )
         video_format = _make_format(
             CUSTOM_AGENT_URL,
             "video_preroll",
             "Pre-roll Video",
-            type="video",
             is_standard=False,
         )
         audio_format = _make_format(
             "https://audio-agent.example.com",
             "audio_companion",
             "Audio Companion",
-            type="audio",
             is_standard=False,
         )
 
@@ -165,10 +161,6 @@ class TestMultiAgentAggregation:
             result = env.call_via(transport)
 
         assert result.is_success
-        types = {f.type for f in result.payload.formats}
-        assert "display" in types
-        assert "video" in types
-        assert "audio" in types
         assert len(result.payload.formats) == 3
 
 

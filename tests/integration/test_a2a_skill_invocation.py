@@ -369,7 +369,6 @@ class TestA2ASkillInvocation:
                 "brand": {"domain": "testbrand.com"},
                 "packages": [
                     {
-                        "buyer_ref": f"pkg_{sample_products[0]}",
                         "product_id": sample_products[0],  # Use product_id per AdCP spec
                         "budget": 10000.0,  # Float only per AdCP v2.2.0, currency from pricing_option
                         "pricing_option_id": "cpm_usd_fixed",  # Required in adcp 2.5.0
@@ -394,10 +393,9 @@ class TestA2ASkillInvocation:
 
             # Extract response data
             artifact_data = validator.extract_adcp_payload_from_a2a_artifact(result.artifacts[0])
-            # Per AdCP spec, CreateMediaBuyResponse has buyer_ref, media_buy_id, packages, etc.
+            # Per AdCP spec, CreateMediaBuyResponse has media_buy_id, packages, etc.
             # No 'success' field in the spec - that's a protocol-level field
             assert "media_buy_id" in artifact_data
-            assert "buyer_ref" in artifact_data
 
             # Verify packages are properly serialized (this would have caught the bug!)
             assert "packages" in artifact_data
@@ -438,7 +436,6 @@ class TestA2ASkillInvocation:
                 "brand": {"domain": "testbrand.com"},
                 "packages": [
                     {
-                        "buyer_ref": f"pkg_{sample_products[0]}",
                         "product_id": sample_products[0],
                         "budget": 10000.0,
                         "pricing_option_id": "cpm_usd_fixed",
@@ -700,7 +697,6 @@ class TestA2ASkillInvocation:
                 media_buy_id="mb_test_123",
                 tenant_id=sample_tenant["tenant_id"],
                 principal_id=sample_principal["principal_id"],
-                buyer_ref="test_buyer_ref",
                 status="active",
                 order_name="Test Campaign",
                 advertiser_name="Test Brand",
@@ -733,7 +729,6 @@ class TestA2ASkillInvocation:
             mock_adapter = MagicMock()
             mock_adapter.update_media_buy.return_value = UpdateMediaBuySuccessResponse(
                 media_buy_id="mb_test_123",
-                buyer_ref="test_buyer_ref",
                 affected_packages=[],  # adcp 2.5.0 field (replaces packages/errors)
             )
             mock_get_adapter.return_value = mock_adapter

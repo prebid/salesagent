@@ -173,7 +173,6 @@ async def test_trigger_report_fails_gracefully_no_webhook(integration_db):
             media_buy_id="mb_no_webhook",
             tenant_id=tenant_id,
             principal_id=principal_id,
-            buyer_ref="ref_no_webhook",
             order_name="Test Order No Webhook",
             advertiser_name="Test Advertiser",
             start_date=datetime.now(UTC),

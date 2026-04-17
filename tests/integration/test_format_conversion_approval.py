@@ -33,7 +33,6 @@ def create_media_package(
     product_id: str,
     budget: float,
     tenant_id: str,
-    buyer_ref: str = "pkg_buyer_ref",
     pricing_option_id: str = "pricing_opt_1",
 ):
     """Helper function to create MediaPackage record (required for execute_approved_media_buy).
@@ -49,7 +48,6 @@ def create_media_package(
             package_config={
                 # AdCP PackageRequest fields only - package_id is internal
                 "product_id": product_id,
-                "buyer_ref": buyer_ref,
                 "budget": budget,
                 "pricing_option_id": pricing_option_id,
             },
@@ -218,7 +216,6 @@ class TestFormatConversionApproval:
                 end_time=now + timedelta(days=7),
                 status="pending_approval",
                 raw_request={
-                    "buyer_ref": "test_buyer_ref",
                     "brand": {"domain": "testbrand.com"},
                     "start_time": (now + timedelta(days=1)).isoformat(),
                     "end_time": (now + timedelta(days=7)).isoformat(),
@@ -226,7 +223,6 @@ class TestFormatConversionApproval:
                         {
                             # package_id is internal, not in AdCP PackageRequest spec
                             "product_id": product_id,
-                            "buyer_ref": "pkg_1_buyer_ref",
                             "budget": 1000.0,
                             "pricing_option_id": "pricing_opt_1",
                         }
@@ -322,7 +318,6 @@ class TestFormatConversionApproval:
                 end_time=now + timedelta(days=7),
                 status="pending_approval",
                 raw_request={
-                    "buyer_ref": "test_buyer_ref",
                     "brand": {"domain": "testbrand.com"},
                     "start_time": (now + timedelta(days=1)).isoformat(),
                     "end_time": (now + timedelta(days=7)).isoformat(),
@@ -330,7 +325,6 @@ class TestFormatConversionApproval:
                         {
                             # package_id is internal, not in AdCP PackageRequest spec
                             "product_id": product_id,
-                            "buyer_ref": "pkg_1_buyer_ref",
                             "budget": 1000.0,
                             "pricing_option_id": "pricing_opt_1",
                         }
@@ -425,7 +419,6 @@ class TestFormatConversionApproval:
                 end_time=now + timedelta(days=7),
                 status="pending_approval",
                 raw_request={
-                    "buyer_ref": "test_buyer_ref",
                     "brand": {"domain": "testbrand.com"},
                     "start_time": (now + timedelta(days=1)).isoformat(),
                     "end_time": (now + timedelta(days=7)).isoformat(),
@@ -433,7 +426,6 @@ class TestFormatConversionApproval:
                         {
                             # package_id is internal, not in AdCP PackageRequest spec
                             "product_id": product_id,
-                            "buyer_ref": "pkg_1_buyer_ref",
                             "budget": 1000.0,
                             "pricing_option_id": "pricing_opt_1",
                         }
@@ -527,7 +519,6 @@ class TestFormatConversionApproval:
                 end_time=now + timedelta(days=7),
                 status="pending_approval",
                 raw_request={
-                    "buyer_ref": "test_buyer_ref",
                     "brand": {"domain": "testbrand.com"},
                     "start_time": (now + timedelta(days=1)).isoformat(),
                     "end_time": (now + timedelta(days=7)).isoformat(),
@@ -535,7 +526,6 @@ class TestFormatConversionApproval:
                         {
                             # package_id is internal, not in AdCP PackageRequest spec
                             "product_id": product_id,
-                            "buyer_ref": "pkg_1_buyer_ref",
                             "budget": 1000.0,
                             "pricing_option_id": "pricing_opt_1",
                         }
@@ -632,7 +622,6 @@ class TestFormatConversionApproval:
                 end_time=now + timedelta(days=7),
                 status="pending_approval",
                 raw_request={
-                    "buyer_ref": "test_buyer_ref",
                     "brand": {"domain": "testbrand.com"},
                     "start_time": (now + timedelta(days=1)).isoformat(),
                     "end_time": (now + timedelta(days=7)).isoformat(),
@@ -640,7 +629,6 @@ class TestFormatConversionApproval:
                         {
                             # package_id is internal, not in AdCP PackageRequest spec
                             "product_id": product_id,
-                            "buyer_ref": "pkg_1_buyer_ref",
                             "budget": 1000.0,
                             "pricing_option_id": "pricing_opt_1",
                         }
@@ -735,7 +723,6 @@ class TestFormatConversionApproval:
                 end_time=now + timedelta(days=7),
                 status="pending_approval",
                 raw_request={
-                    "buyer_ref": "test_buyer_ref",
                     "brand": {"domain": "testbrand.com"},
                     "start_time": (now + timedelta(days=1)).isoformat(),
                     "end_time": (now + timedelta(days=7)).isoformat(),
@@ -743,7 +730,6 @@ class TestFormatConversionApproval:
                         {
                             # package_id is internal, not in AdCP PackageRequest spec
                             "product_id": product_id,
-                            "buyer_ref": "pkg_1_buyer_ref",
                             "budget": 1500.0,
                             "pricing_option_id": "pricing_opt_1",
                         }
@@ -837,7 +823,6 @@ class TestFormatConversionApproval:
                 end_time=now + timedelta(days=7),
                 status="pending_approval",
                 raw_request={
-                    "buyer_ref": "test_buyer_ref",
                     "brand": {"domain": "testbrand.com"},
                     "start_time": (now + timedelta(days=1)).isoformat(),
                     "end_time": (now + timedelta(days=7)).isoformat(),
@@ -845,7 +830,6 @@ class TestFormatConversionApproval:
                         {
                             # package_id is internal, not in AdCP PackageRequest spec
                             "product_id": product_id,
-                            "buyer_ref": "pkg_1_buyer_ref",
                             "budget": 1000.0,
                             "pricing_option_id": "pricing_opt_1",
                         }
@@ -934,7 +918,6 @@ class TestFormatConversionApproval:
                 end_time=now + timedelta(days=7),
                 status="pending_approval",
                 raw_request={
-                    "buyer_ref": "test_buyer_ref",
                     "brand": {"domain": "testbrand.com"},
                     "start_time": (now + timedelta(days=1)).isoformat(),
                     "end_time": (now + timedelta(days=7)).isoformat(),
@@ -942,7 +925,6 @@ class TestFormatConversionApproval:
                         {
                             # package_id is internal, not in AdCP PackageRequest spec
                             "product_id": product_id,
-                            "buyer_ref": "pkg_1_buyer_ref",
                             "budget": 1000.0,
                             "pricing_option_id": "pricing_opt_1",
                         }
@@ -1047,7 +1029,6 @@ class TestFormatConversionApproval:
                 end_time=now + timedelta(days=7),
                 status="pending_approval",
                 raw_request={
-                    "buyer_ref": "test_buyer_ref",
                     "brand": {"domain": "testbrand.com"},
                     "start_time": (now + timedelta(days=1)).isoformat(),
                     "end_time": (now + timedelta(days=7)).isoformat(),
@@ -1055,7 +1036,6 @@ class TestFormatConversionApproval:
                         {
                             # package_id is internal, not in AdCP PackageRequest spec
                             "product_id": product_id,
-                            "buyer_ref": "pkg_1_buyer_ref",
                             "budget": 2000.0,
                             "pricing_option_id": "pricing_opt_1",
                         }
@@ -1144,7 +1124,6 @@ class TestFormatConversionApproval:
                 end_time=now + timedelta(days=7),
                 status="pending_approval",
                 raw_request={
-                    "buyer_ref": "test_buyer_ref",
                     "brand": {"domain": "testbrand.com"},
                     "start_time": (now + timedelta(days=1)).isoformat(),
                     "end_time": (now + timedelta(days=7)).isoformat(),
@@ -1152,7 +1131,6 @@ class TestFormatConversionApproval:
                         {
                             # package_id is internal, not in AdCP PackageRequest spec
                             "product_id": product_id,
-                            "buyer_ref": "pkg_1_buyer_ref",
                             "budget": 1000.0,
                             "pricing_option_id": "pricing_opt_1",
                         }

@@ -72,7 +72,6 @@ class TestCreativeAgentLiveConnection:
             assert fmt.format_id.id is not None, "format_id.id required"
             assert fmt.format_id.agent_url is not None, "format_id.agent_url required"
             assert fmt.name is not None, "name required"
-            assert fmt.type is not None, "type required"
 
 
 class TestDisplayImageFormat:

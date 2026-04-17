@@ -224,7 +224,6 @@ class TestCreateMediaBuyV24Format:
         # Create PackageRequest with float budget (new format)
         packages = [
             PackageRequest(
-                buyer_ref="pkg_budget_test",
                 product_id=setup_test_tenant["product_id_usd"],  # Use USD product
                 pricing_option_id=setup_test_tenant["pricing_option_id_usd"],  # Required field
                 budget=5000.0,  # Float budget, currency from pricing_option
@@ -244,7 +243,6 @@ class TestCreateMediaBuyV24Format:
         # This exercises the FULL serialization path including response_packages construction
         # NOTE: budget is at package level per AdCP v2.4 spec (not a top-level parameter)
         req = CreateMediaBuyRequest(
-            buyer_ref="test_buyer_v24",  # REQUIRED per AdCP v2.2.0
             brand={"domain": "testbrand.com"},
             packages=[p.model_dump() for p in packages],
             start_time=datetime.now(UTC) + timedelta(days=1),
@@ -277,11 +275,7 @@ class TestCreateMediaBuyV24Format:
         response_dict = response.model_dump()
         package = response_dict["packages"][0]
         assert isinstance(package, dict), "Package must be serialized to dict"
-        assert package["buyer_ref"] == "pkg_budget_test"
         assert package["package_id"]  # Should have generated ID
-
-        # Per AdCP spec, CreateMediaBuyResponse.Package only contains buyer_ref and package_id
-        # (not budget, targeting, etc - those are in the request Package schema)
 
     async def test_create_media_buy_with_targeting_overlay_mcp(self, setup_test_tenant):
         """Test MCP path with packages containing Targeting objects.
@@ -293,7 +287,6 @@ class TestCreateMediaBuyV24Format:
         # Create PackageRequest with nested Targeting object
         packages = [
             PackageRequest(
-                buyer_ref="pkg_targeting_test",
                 product_id=setup_test_tenant["product_id_eur"],  # Use EUR product
                 pricing_option_id=setup_test_tenant["pricing_option_id_eur"],  # Required field
                 budget=8000.0,  # Float budget, currency from pricing_option
@@ -313,7 +306,6 @@ class TestCreateMediaBuyV24Format:
         )
 
         req = CreateMediaBuyRequest(
-            buyer_ref="test_buyer_v24_targeting",  # REQUIRED per AdCP v2.2.0
             brand={"domain": "testbrand.com"},
             packages=[p.model_dump() for p in packages],
             start_time=datetime.now(UTC) + timedelta(days=1),
@@ -346,7 +338,7 @@ class TestCreateMediaBuyV24Format:
         response_dict = response.model_dump()
         package = response_dict["packages"][0]
         assert isinstance(package, dict), "Package must be serialized to dict"
-        assert package["buyer_ref"] == "pkg_targeting_test"
+        assert package["package_id"]  # Should have generated ID
 
         # Verify nested targeting was serialized (if present in response)
         # Note: targeting_overlay may or may not be included in response depending on impl
@@ -360,19 +352,16 @@ class TestCreateMediaBuyV24Format:
 
         packages = [
             PackageRequest(
-                buyer_ref="pkg_usd",
                 product_id=setup_test_tenant["product_id_usd"],  # Use USD product
                 pricing_option_id=setup_test_tenant["pricing_option_id_usd"],  # Required field
                 budget=3000.0,  # Float budget, currency from pricing_option
             ),
             PackageRequest(
-                buyer_ref="pkg_eur",
                 product_id=setup_test_tenant["product_id_eur"],  # Use EUR product
                 pricing_option_id=setup_test_tenant["pricing_option_id_eur"],  # Required field
                 budget=2500.0,  # Float budget, currency from pricing_option
             ),
             PackageRequest(
-                buyer_ref="pkg_gbp",
                 product_id=setup_test_tenant["product_id_gbp"],  # Use GBP product
                 pricing_option_id=setup_test_tenant["pricing_option_id_gbp"],  # Required field
                 budget=2000.0,  # Float budget, currency from pricing_option
@@ -392,7 +381,6 @@ class TestCreateMediaBuyV24Format:
         total_budget_value = sum(pkg.budget for pkg in packages)
 
         req = CreateMediaBuyRequest(
-            buyer_ref="test_buyer_v24_multi",  # REQUIRED per AdCP v2.2.0
             brand={"domain": "testbrand.com"},
             packages=[p.model_dump() for p in packages],
             start_time=datetime.now(UTC) + timedelta(days=1),
@@ -407,10 +395,8 @@ class TestCreateMediaBuyV24Format:
 
         # Serialize response to check packages are dicts
         response_dict = response.model_dump()
-        buyer_refs = [pkg["buyer_ref"] for pkg in response_dict["packages"]]
-        assert "pkg_usd" in buyer_refs
-        assert "pkg_eur" in buyer_refs
-        assert "pkg_gbp" in buyer_refs
+        package_ids = [pkg["package_id"] for pkg in response_dict["packages"]]
+        assert len(package_ids) == 3
 
     async def test_create_media_buy_with_package_budget_a2a(self, setup_test_tenant):
         """Test A2A path with packages containing Budget objects.
@@ -422,7 +408,6 @@ class TestCreateMediaBuyV24Format:
         # Create PackageRequest with float budget (new format)
         packages = [
             PackageRequest(
-                buyer_ref="pkg_a2a_test",
                 product_id=setup_test_tenant["product_id_usd"],  # Use USD product
                 pricing_option_id=setup_test_tenant["pricing_option_id_usd"],  # Required field
                 budget=6000.0,  # Float budget, currency from pricing_option
@@ -439,7 +424,6 @@ class TestCreateMediaBuyV24Format:
         )
 
         req = CreateMediaBuyRequest(
-            buyer_ref="test_buyer_v24_a2a",  # REQUIRED per AdCP v2.2.0
             brand={"domain": "testbrand.com"},
             packages=[p.model_dump() for p in packages],
             start_time=datetime.now(UTC) + timedelta(days=1),
@@ -456,7 +440,7 @@ class TestCreateMediaBuyV24Format:
         response_dict = response.model_dump()
         package = response_dict["packages"][0]
         assert isinstance(package, dict), "Package must be serialized to dict"
-        assert package["buyer_ref"] == "pkg_a2a_test"
+        assert package["package_id"]  # Should have generated ID
 
     async def test_create_media_buy_with_minimal_package(self, setup_test_tenant):
         """Verify media buy creation works with a minimal valid package.
@@ -478,11 +462,9 @@ class TestCreateMediaBuyV24Format:
         # Standard AdCP format with explicit package
         # pricing_option_id format: {model}_{currency}_{fixed|auction}
         req = CreateMediaBuyRequest(
-            buyer_ref="test_buyer_v24_standard",
             brand={"domain": "testbrand.com"},
             packages=[
                 PackageRequest(
-                    buyer_ref="pkg_v24_test",
                     product_id="prod_test_v24_usd",
                     budget=5000.0,
                     pricing_option_id="cpm_usd_fixed",  # Matches fixture: CPM, USD, is_fixed=True

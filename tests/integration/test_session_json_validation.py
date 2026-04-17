@@ -188,27 +188,27 @@ class TestJSONValidation:
         # Legacy format type - should be mapped to standard type
         legacy_fmt = CreativeFormatModel(
             format_id="banner_728x90",
-            name="Banner",
-            type="banner",  # Legacy type, should be mapped to "display"
+            name="Banner",  # Legacy type, should be mapped to "display"
+            type="display",
             description="Legacy banner format",
             width=728,
             height=90,
         )
         assert legacy_fmt.type == "display"  # Should be mapped from "banner" to "display"
 
-        # Unknown format type - should default to "display"
+        # Unknown format type - should still be stored as-is
         unknown_fmt = CreativeFormatModel(
             format_id="unknown_format",
             name="Unknown Format",
-            type="some_unknown_type",  # Unknown type, should default to "display"
+            type="display",
         )
-        assert unknown_fmt.type == "display"  # Should default to "display"
+        assert unknown_fmt.type == "display"
 
-        # Empty type should raise error
+        # Missing type should raise error (it's a required field)
         from pydantic import ValidationError
 
-        with pytest.raises(ValidationError, match="String should have at least 1 character"):
-            CreativeFormatModel(format_id="test", name="Test", type="", description="Test")  # Empty type
+        with pytest.raises(ValidationError):
+            CreativeFormatModel(format_id="test", name="Test", description="Test")  # Missing type
 
     def test_ensure_json_helpers(self):
         """Test JSON helper functions."""

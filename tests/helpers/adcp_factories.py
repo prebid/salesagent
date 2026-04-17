@@ -415,7 +415,6 @@ def create_test_package(
 
 def create_test_package_request(
     product_id: str = "test_product",
-    buyer_ref: str | None = None,
     budget: float | None = None,
     pricing_option_id: str = "test_pricing_option",
     **kwargs,
@@ -424,7 +423,6 @@ def create_test_package_request(
 
     Args:
         product_id: Product ID for the package (REQUIRED per adcp PackageRequest)
-        buyer_ref: Buyer reference for the package (REQUIRED per adcp PackageRequest)
         budget: Budget allocation (REQUIRED per adcp PackageRequest)
         pricing_option_id: Pricing option ID (REQUIRED per adcp PackageRequest)
         **kwargs: Additional optional fields (creative_ids, format_ids, targeting_overlay, etc.)
@@ -439,7 +437,6 @@ def create_test_package_request(
         # Custom package request
         pkg_request = create_test_package_request(
             product_id="prod_video",
-            buyer_ref="buyer_pkg_001",
             budget=5000.0,
             creative_ids=["creative_1", "creative_2"]
         )
@@ -587,7 +584,6 @@ def create_test_pricing_option(pricing_model: str = "cpm", currency: str = "USD"
 
 
 def create_test_media_buy_request_dict(
-    buyer_ref: str = "test_buyer_ref",
     product_ids: list[str] | None = None,
     total_budget: float = 10000.0,
     start_time: str | None = None,
@@ -604,7 +600,6 @@ def create_test_media_buy_request_dict(
     As of adcp 3.6.0, brand_manifest is replaced by brand (BrandReference with required domain).
 
     Args:
-        buyer_ref: Buyer reference identifier
         product_ids: List of product IDs to create packages from. Defaults to ["test_product"]
                      Note: Creates one package per product_id. Use packages kwarg for custom package structure.
         total_budget: Total budget for the campaign (divided equally among packages)
@@ -624,7 +619,6 @@ def create_test_media_buy_request_dict(
 
         # Custom request with multiple products (creates multiple packages)
         request = create_test_media_buy_request_dict(
-            buyer_ref="buyer_001",
             product_ids=["prod_1", "prod_2"],
             total_budget=50000.0,
             start_time="2025-11-01T00:00:00Z",
@@ -685,7 +679,6 @@ def create_test_media_buy_request_dict(
 
 def create_test_media_buy_dict(
     media_buy_id: str = "test_media_buy_001",
-    buyer_ref: str = "test_buyer_ref",
     status: str = "active",
     promoted_offering: str = "Test Product",
     total_budget: float = 10000.0,
@@ -698,7 +691,6 @@ def create_test_media_buy_dict(
 
     Args:
         media_buy_id: Media buy identifier
-        buyer_ref: Buyer reference identifier
         status: Media buy status ("active", "paused", "completed", etc.)
         promoted_offering: What is being promoted
         total_budget: Total budget for the campaign
@@ -721,7 +713,6 @@ def create_test_media_buy_dict(
         packages = [
             {
                 "package_id": "test_package",
-                "buyer_ref": "test_package_ref",
                 "status": "active",
                 "products": ["test_product"],
                 "budget": total_budget,
@@ -730,7 +721,6 @@ def create_test_media_buy_dict(
 
     return {
         "media_buy_id": media_buy_id,
-        "buyer_ref": buyer_ref,
         "status": status,
         "promoted_offering": promoted_offering,
         "total_budget": total_budget,
@@ -740,7 +730,6 @@ def create_test_media_buy_dict(
 
 
 def create_test_package_request_dict(
-    buyer_ref: str = "test_package_ref",
     product_id: str = "test_product",
     pricing_option_id: str = "cpm_option_1",
     budget: float = 10000.0,
@@ -749,7 +738,6 @@ def create_test_package_request_dict(
     """Create a test package request dict for use in media buy requests.
 
     Args:
-        buyer_ref: Package reference identifier (REQUIRED per AdCP PackageRequest)
         product_id: Product ID for the package (REQUIRED per AdCP PackageRequest)
         pricing_option_id: Pricing option ID (REQUIRED per AdCP PackageRequest)
         budget: Package budget (REQUIRED per AdCP PackageRequest)
@@ -760,7 +748,6 @@ def create_test_package_request_dict(
 
     Example:
         pkg = create_test_package_request_dict(
-            buyer_ref="pkg_001",
             product_id="prod_1",
             pricing_option_id="cpm_option_1",
             budget=25000.0,
@@ -768,7 +755,6 @@ def create_test_package_request_dict(
         )
     """
     return {
-        "buyer_ref": buyer_ref,
         "product_id": product_id,
         "pricing_option_id": pricing_option_id,
         "budget": budget,

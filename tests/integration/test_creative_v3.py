@@ -525,7 +525,6 @@ class TestFormatCompatibility:
                 budget=5000.0,
                 start_date=datetime.now(UTC).date(),
                 end_date=(datetime.now(UTC) + timedelta(days=30)).date(),
-                buyer_ref="buyer_fmt",
                 raw_request={"packages": [{"package_id": "pkg_video", "paused": False}]},
             )
             session.add(mb)
@@ -637,7 +636,6 @@ class TestMediaBuyStatusTransition:
                 budget=5000.0,
                 start_date=datetime.now(UTC).date(),
                 end_date=(datetime.now(UTC) + timedelta(days=30)).date(),
-                buyer_ref="buyer_mb_status",
                 approved_at=datetime.now(UTC),
                 raw_request={"packages": [{"package_id": "pkg_draft", "paused": False}]},
             )

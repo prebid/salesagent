@@ -88,12 +88,12 @@ def principal_b(tenant_b):
 def seed_data(tenant_a, tenant_b, principal_a, principal_b):
     """Seed two tenants with media buys and packages for isolation testing.
 
-    Tenant A: mb_a1 (draft, buyer_ref=ref_a1, 2 packages), mb_a2 (active)
-    Tenant B: mb_b1 (draft, buyer_ref=ref_b1, 1 package)
+    Tenant A: mb_a1 (draft, 2 packages), mb_a2 (active)
+    Tenant B: mb_b1 (draft, 1 package)
     """
     with get_db_session() as session:
         # Tenant A media buys
-        mb_a1 = make_media_buy(tenant_a, principal_a, "mb_a1", buyer_ref="ref_a1", status="draft")
+        mb_a1 = make_media_buy(tenant_a, principal_a, "mb_a1", status="draft")
         mb_a2 = make_media_buy(tenant_a, principal_a, "mb_a2", status="active")
         session.add_all([mb_a1, mb_a2])
         session.flush()
@@ -104,7 +104,7 @@ def seed_data(tenant_a, tenant_b, principal_a, principal_b):
         session.add_all([pkg_a1_1, pkg_a1_2])
 
         # Tenant B media buys
-        mb_b1 = make_media_buy(tenant_b, principal_b, "mb_b1", buyer_ref="ref_b1", status="draft")
+        mb_b1 = make_media_buy(tenant_b, principal_b, "mb_b1", status="draft")
         session.add(mb_b1)
         session.flush()
 
@@ -175,49 +175,6 @@ class TestGetById:
             assert result is None
 
 
-class TestGetByBuyerRef:
-    """get_by_buyer_ref scopes by tenant."""
-
-    def test_finds_by_buyer_ref_own_tenant(self, seed_data):
-        from src.core.database.repositories import MediaBuyRepository
-
-        with get_db_session() as session:
-            repo = MediaBuyRepository(session, seed_data["tenant_a"])
-            result = repo.get_by_buyer_ref("ref_a1")
-            assert result is not None
-            assert result.buyer_ref == "ref_a1"
-
-    def test_does_not_find_other_tenant_buyer_ref(self, seed_data):
-        from src.core.database.repositories import MediaBuyRepository
-
-        with get_db_session() as session:
-            repo = MediaBuyRepository(session, seed_data["tenant_a"])
-            result = repo.get_by_buyer_ref("ref_b1")
-            assert result is None
-
-
-class TestGetByIdOrBuyerRef:
-    """get_by_id_or_buyer_ref tries media_buy_id first, then buyer_ref."""
-
-    def test_finds_by_id(self, seed_data):
-        from src.core.database.repositories import MediaBuyRepository
-
-        with get_db_session() as session:
-            repo = MediaBuyRepository(session, seed_data["tenant_a"])
-            result = repo.get_by_id_or_buyer_ref("mb_a1")
-            assert result is not None
-            assert result.media_buy_id == "mb_a1"
-
-    def test_falls_back_to_buyer_ref(self, seed_data):
-        from src.core.database.repositories import MediaBuyRepository
-
-        with get_db_session() as session:
-            repo = MediaBuyRepository(session, seed_data["tenant_a"])
-            result = repo.get_by_id_or_buyer_ref("ref_a1")
-            assert result is not None
-            assert result.buyer_ref == "ref_a1"
-
-
 class TestGetByPrincipal:
     """get_by_principal returns only the specified principal's media buys."""
 
@@ -248,15 +205,6 @@ class TestGetByPrincipal:
             results = repo.get_by_principal(seed_data["principal_a"], media_buy_ids=["mb_a1"])
             assert len(results) == 1
             assert results[0].media_buy_id == "mb_a1"
-
-    def test_buyer_refs_filter(self, seed_data):
-        from src.core.database.repositories import MediaBuyRepository
-
-        with get_db_session() as session:
-            repo = MediaBuyRepository(session, seed_data["tenant_a"])
-            results = repo.get_by_principal(seed_data["principal_a"], buyer_refs=["ref_a1"])
-            assert len(results) == 1
-            assert results[0].buyer_ref == "ref_a1"
 
 
 # ---------------------------------------------------------------------------
@@ -472,7 +420,6 @@ class TestIdempotencyKeyLookup:
         mock_req = MagicMock()
         mock_req.model_dump.return_value = {"test": True}
         mock_req.po_number = None
-        mock_req.buyer_ref = None
         mock_req.idempotency_key = idem_key
 
         from datetime import datetime

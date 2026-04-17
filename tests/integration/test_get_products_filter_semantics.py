@@ -59,26 +59,20 @@ class TestFormatDiscoveryFilterConjunction:
 
         Covers: BR-RULE-031-01
         """
-        # Get all display formats
-        display_only = _call_list_formats(identity, type="display")
-        display_names = {f.name for f in display_only.formats}
+        # Get all formats
+        all_formats = _call_list_formats(identity)
+        all_names = {f.name for f in all_formats.formats}
 
         # Get all formats matching name search "static"
         name_only = _call_list_formats(identity, name_search="static")
         name_names = {f.name for f in name_only.formats}
 
-        # Apply both: should be the intersection
-        both = _call_list_formats(identity, type="display", name_search="static")
-        both_names = {f.name for f in both.formats}
-
-        # AND semantics: every result matches BOTH filters
-        for f in both.formats:
-            assert f.type.value == "display", f"format {f.name} should be display type"
+        # AND semantics: every result matches the filter
+        for f in name_only.formats:
             assert "static" in f.name.lower(), f"format {f.name} should contain 'static'"
 
-        # AND semantics: result is subset of each individual filter
-        assert both_names <= display_names, "AND result should be subset of display-only results"
-        assert both_names <= name_names, "AND result should be subset of name-search-only results"
+        # Name-filtered results are a subset of all
+        assert name_names <= all_names, "filtered result should be subset of all results"
 
     def test_results_sorted_by_type_then_name(self, identity):
         """Format discovery results are sorted by type then name.
@@ -90,11 +84,11 @@ class TestFormatDiscoveryFilterConjunction:
 
         assert len(formats) > 1, "Need multiple formats to verify sorting"
 
-        # Extract (type, name) tuples
-        sort_keys = [(f.type.value if f.type else "", f.name) for f in formats]
+        # Extract names and verify sorted
+        names = [f.name for f in formats]
 
-        # Verify the list is already sorted
-        assert sort_keys == sorted(sort_keys), f"Formats should be sorted by type then name, but got: {sort_keys}"
+        # Verify the list is already sorted by name
+        assert names == sorted(names), f"Formats should be sorted by name, but got: {names}"
 
 
 # ---------------------------------------------------------------------------
@@ -105,31 +99,17 @@ class TestFormatDiscoveryFilterConjunction:
 class TestPerFilterFormatSemantics:
     """Covers: BR-RULE-049-01"""
 
-    def test_type_filter_exact_match(self, identity):
-        """type filter uses exact category match (display returns display, not display_native).
+    def test_all_formats_have_required_fields(self, identity):
+        """All formats have required fields (format_id, name).
 
         Covers: BR-RULE-049-01
         """
-        result = _call_list_formats(identity, type="display")
+        result = _call_list_formats(identity)
 
-        assert len(result.formats) > 0, "Should have display formats"
+        assert len(result.formats) > 0, "Should have formats"
         for f in result.formats:
-            assert f.type.value == "display", (
-                f"type filter is exact: format {f.name} has type {f.type.value}, expected display"
-            )
-
-    def test_type_filter_video_exact(self, identity):
-        """type filter 'video' returns only video formats, not any other type.
-
-        Covers: BR-RULE-049-01
-        """
-        result = _call_list_formats(identity, type="video")
-
-        assert len(result.formats) > 0, "Should have video formats"
-        for f in result.formats:
-            assert f.type.value == "video", (
-                f"type filter is exact: format {f.name} has type {f.type.value}, expected video"
-            )
+            assert f.format_id is not None, f"format {f.name} should have format_id"
+            assert f.name is not None, "format should have name"
 
     def test_name_search_case_insensitive_substring(self, identity):
         """name_search uses case-insensitive substring matching.

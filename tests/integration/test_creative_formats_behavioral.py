@@ -33,15 +33,14 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 def _make_format(
     format_id: str,
     name: str,
-    type: str | None = "display",
     renders: list | None = None,
     assets: list | None = None,
+    **kwargs,
 ) -> Format:
     """Helper to create a Format object with minimal boilerplate."""
     return Format(
         format_id=FormatId(agent_url=DEFAULT_AGENT_URL, id=format_id),
         name=name,
-        type=type,
         is_standard=True,
         renders=renders,
         assets=assets,
@@ -79,8 +78,8 @@ class TestFormatsFiltering:
         """Covers: UC-005-MAIN-MCP-01 — no filters returns entire catalog."""
         formats = [
             _make_format("d1", "Display Banner"),
-            _make_format("v1", "Video Pre-roll", type="video"),
-            _make_format("n1", "Native Feed", type="native"),
+            _make_format("v1", "Video Pre-roll"),
+            _make_format("n1", "Native Feed"),
         ]
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
@@ -88,33 +87,33 @@ class TestFormatsFiltering:
             response = env.call_impl()
         assert len(response.formats) == 3
 
-    def test_type_filter_returns_matching(self, integration_db):
-        """Covers: UC-005-MAIN-MCP-05 — type=video returns only video formats."""
+    def test_name_search_filter_returns_matching(self, integration_db):
+        """Covers: UC-005-MAIN-MCP-05 — name_search returns matching formats."""
         formats = [
-            _make_format("d1", "Display Banner", type="display"),
-            _make_format("v1", "Video Pre-roll", type="video"),
-            _make_format("n1", "Native Feed", type="native"),
+            _make_format("d1", "Display Banner"),
+            _make_format("v1", "Video Pre-roll"),
+            _make_format("n1", "Native Feed"),
         ]
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
             env.set_registry_formats(formats)
-            req = ListCreativeFormatsRequest(type="video")
+            req = ListCreativeFormatsRequest(name_search="Video")
             response = env.call_impl(req=req)
         assert len(response.formats) == 1
         assert response.formats[0].name == "Video Pre-roll"
 
-    def test_native_type_filter(self, integration_db):
-        """Covers: UC-005-MAIN-MCP-05 — type=native returns only native formats."""
+    def test_name_search_multiple_matches(self, integration_db):
+        """Covers: UC-005-MAIN-MCP-05 — name_search with multiple matches."""
         formats = [
-            _make_format("d1", "Display Banner", type="display"),
-            _make_format("n1", "Native Feed", type="native"),
-            _make_format("v1", "Video Pre-roll", type="video"),
-            _make_format("n2", "Native Recommendation", type="native"),
+            _make_format("d1", "Display Banner"),
+            _make_format("n1", "Native Feed"),
+            _make_format("v1", "Video Pre-roll"),
+            _make_format("n2", "Native Recommendation"),
         ]
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
             env.set_registry_formats(formats)
-            req = ListCreativeFormatsRequest(type="native")
+            req = ListCreativeFormatsRequest(name_search="Native")
             response = env.call_impl(req=req)
         assert len(response.formats) == 2
         names = {f.name for f in response.formats}
@@ -141,61 +140,50 @@ class TestFormatsFiltering:
 
 
 class TestFormatsSort:
-    """Formats sorted by (type.value, name)."""
+    """Formats sorted by name."""
 
-    def test_sort_order_type_then_name(self, integration_db):
-        """Covers: T-UC-005-inv10 — display before video, alpha within type."""
+    def test_sort_order_by_name(self, integration_db):
+        """Covers: T-UC-005-inv10 — formats sorted alphabetically by name."""
         formats = [
-            _make_format("v_zebra", "Zebra Ad", type="video"),
-            _make_format("d_alpha", "Alpha Banner", type="display"),
-            _make_format("v_alpha", "Alpha Video", type="video"),
-            _make_format("d_zebra", "Zebra Banner", type="display"),
+            _make_format("v_zebra", "Zebra Ad"),
+            _make_format("d_alpha", "Alpha Banner"),
+            _make_format("v_alpha", "Alpha Video"),
+            _make_format("d_zebra", "Zebra Banner"),
         ]
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
             env.set_registry_formats(formats)
             response = env.call_impl()
         names = [f.name for f in response.formats]
-        assert names == [
-            "Alpha Banner",
-            "Zebra Banner",
-            "Alpha Video",
-            "Zebra Ad",
-        ]
+        assert names == sorted(names)
 
-    def test_sort_order_across_three_types(self, integration_db):
-        """Covers: T-UC-005-inv10 — sort holds across display < native < video."""
+    def test_sort_order_across_all_formats(self, integration_db):
+        """Covers: T-UC-005-inv10 — sort holds across all formats."""
         formats = [
-            _make_format("n1", "Native B", type="native"),
-            _make_format("d1", "Display A", type="display"),
-            _make_format("v1", "Video C", type="video"),
-            _make_format("n2", "Native A", type="native"),
-            _make_format("d2", "Display B", type="display"),
+            _make_format("n1", "Native B"),
+            _make_format("d1", "Display A"),
+            _make_format("v1", "Video C"),
+            _make_format("n2", "Native A"),
+            _make_format("d2", "Display B"),
         ]
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
             env.set_registry_formats(formats)
             response = env.call_impl()
         names = [f.name for f in response.formats]
-        assert names == [
-            "Display A",
-            "Display B",
-            "Native A",
-            "Native B",
-            "Video C",
-        ]
+        assert names == sorted(names)
 
     def test_sort_preserves_after_filtering(self, integration_db):
-        """Covers: T-UC-005-inv10 — sort maintained after type filter."""
+        """Covers: T-UC-005-inv10 — sort maintained after name_search filter."""
         formats = [
-            _make_format("v2", "Zebra Video", type="video"),
-            _make_format("v1", "Alpha Video", type="video"),
-            _make_format("d1", "Display Ad", type="display"),
+            _make_format("v2", "Zebra Video"),
+            _make_format("v1", "Alpha Video"),
+            _make_format("d1", "Display Ad"),
         ]
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
             env.set_registry_formats(formats)
-            req = ListCreativeFormatsRequest(type="video")
+            req = ListCreativeFormatsRequest(name_search="Video")
             response = env.call_impl(req=req)
         names = [f.name for f in response.formats]
         assert names == ["Alpha Video", "Zebra Video"]
@@ -225,7 +213,6 @@ class TestFormatsAssetTypes:
         fmt = Format(
             format_id=FormatId(agent_url=DEFAULT_AGENT_URL, id="native_carousel"),
             name="Native Carousel",
-            type="native",
             is_standard=True,
             assets=[group_asset],
         )
@@ -250,7 +237,6 @@ class TestFormatsAssetTypes:
         fmt = Format(
             format_id=FormatId(agent_url=DEFAULT_AGENT_URL, id="text_only"),
             name="Text Only Native",
-            type="native",
             is_standard=True,
             assets=[group_asset],
         )
@@ -275,7 +261,6 @@ class TestFormatsAssetTypes:
         fmt = Format(
             format_id=FormatId(agent_url=DEFAULT_AGENT_URL, id="mixed"),
             name="Mixed Format",
-            type="display",
             is_standard=True,
             assets=[individual, group],
         )
@@ -389,16 +374,16 @@ class TestFormatsEdgeCases:
             response = env.call_impl()
         assert response.formats == []
 
-    def test_type_filter_no_match_returns_empty(self, integration_db):
-        """Covers: T-UC-005-edge-02 — type=audio with no audio formats returns empty."""
+    def test_name_search_no_match_returns_empty(self, integration_db):
+        """Covers: T-UC-005-edge-02 — name_search with no matches returns empty."""
         formats = [
-            _make_format("d1", "Display Banner", type="display"),
-            _make_format("d2", "Display Rectangle", type="display"),
+            _make_format("d1", "Display Banner"),
+            _make_format("d2", "Display Rectangle"),
         ]
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
             env.set_registry_formats(formats)
-            req = ListCreativeFormatsRequest(type="audio")
+            req = ListCreativeFormatsRequest(name_search="nonexistent_xyz")
             response = env.call_impl(req=req)
         assert response.formats == []
 
@@ -406,8 +391,8 @@ class TestFormatsEdgeCases:
         """Covers: T-UC-005-edge-03 — empty string name_search treated as no filter."""
         formats = [
             _make_format("d1", "Alpha Display"),
-            _make_format("v1", "Beta Video", type="video"),
-            _make_format("n1", "Gamma Native", type="native"),
+            _make_format("v1", "Beta Video"),
+            _make_format("n1", "Gamma Native"),
         ]
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
