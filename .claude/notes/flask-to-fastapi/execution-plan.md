@@ -421,6 +421,7 @@ git grep -l "flask" src/admin/ | wc -l  # <= 2
 9. Remove Flask deps from `pyproject.toml` (`flask`, `flask-caching`, `flask-socketio`, `python-socketio`, `simple-websocket`, `waitress`, `a2wsgi`, `types-waitress`), run `uv lock` [§4 Wave 3].
 10. Rewrite `.pre-commit-hooks/check_route_conflicts.py` — currently imports Flask `create_app()` and inspects `app.url_map`. Must be rewritten for FastAPI router introspection [§4 Wave 3].
 11. Update `.pre-commit-hooks/check_hardcoded_urls.py` — currently enforces `scriptRoot` as correct pattern. Must enforce `url_for()` instead.
+11a. **Pre-commit glob update (L2, same PR as Flask removal):** `.pre-commit-config.yaml:33` regex `^(templates/.*\.html|static/.*\.js)$` becomes a no-op after the L2 `git mv templates/ → src/admin/templates/` and `git mv static/ → src/admin/static/`. Update the regex in the SAME PR to `^src/admin/(templates/.*\.html|static/.*\.js)$`. During the L0→L2 window, a transitional regex `^(templates/.*\.html|static/.*\.js|src/admin/templates/.*\.html|src/admin/static/.*\.js)$` covers both old and new paths so the hook stays effective.
 12. Two cache structural guards: `test_architecture_no_flask_caching_imports.py`, `test_architecture_inventory_cache_uses_module_helpers.py` [§1.2 Decision 6].
 13. Flask imports allowlist: EMPTY [§4 Wave 3].
 14. Write `CHANGELOG.md` v2.0.0-rc1 entry (breaking changes list) [§4 Wave 3].
