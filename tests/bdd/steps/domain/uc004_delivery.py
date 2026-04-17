@@ -1237,18 +1237,21 @@ def then_empty_deliveries(ctx: dict) -> None:
 
 @then("the delivery data should include impressions, spend, and clicks")
 def then_has_metrics(ctx: dict) -> None:
-    """Assert delivery data includes core metrics."""
+    """Assert delivery data includes core metrics with actual numeric values."""
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
-    assert len(deliveries) > 0, "No delivery data to check"
+    assert deliveries, "No delivery data to check"
     d = deliveries[0]
-    totals = getattr(d, "totals", None)
+    assert d.media_buy_id is not None, "First delivery missing media_buy_id"
+    totals = d.totals
     assert totals is not None, "Delivery data missing totals"
     assert isinstance(totals.impressions, (int, float)), (
         f"Expected numeric impressions, got {type(totals.impressions).__name__}"
     )
+    assert totals.impressions >= 0, f"Impressions should be non-negative, got {totals.impressions}"
     assert isinstance(totals.spend, (int, float)), f"Expected numeric spend, got {type(totals.spend).__name__}"
+    assert totals.spend >= 0, f"Spend should be non-negative, got {totals.spend}"
     # clicks is optional per schema but step text claims it should be included
     assert totals.clicks is not None, "Totals missing clicks (step expects impressions, spend, and clicks)"
     assert isinstance(totals.clicks, (int, float)), f"Expected numeric clicks, got {type(totals.clicks).__name__}"
@@ -1260,18 +1263,22 @@ def then_has_packages(ctx: dict) -> None:
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
-    assert len(deliveries) > 0, "No delivery data to check"
+    assert deliveries, "No delivery data to check"
     d = deliveries[0]
-    packages = getattr(d, "by_package", None)
+    assert d.media_buy_id is not None, "First delivery missing media_buy_id"
+    packages = d.by_package
     assert packages is not None, "Delivery data missing by_package"
-    assert len(packages) > 0, "Package breakdown is empty"
+    assert packages, "Package breakdown is empty"
     # Validate each package has required content: package_id and metrics
     # PackageDelivery has impressions/spend directly (not nested under totals)
     for i, pkg in enumerate(packages):
-        pkg_id = getattr(pkg, "package_id", None)
-        assert pkg_id is not None, f"Package [{i}] missing package_id"
-        pkg_impressions = getattr(pkg, "impressions", None)
-        assert isinstance(pkg_impressions, (int, float)), f"Package [{i}] (id={pkg_id}) impressions is not numeric"
+        assert pkg.package_id is not None, f"Package [{i}] missing package_id"
+        assert isinstance(pkg.impressions, (int, float)), (
+            f"Package [{i}] (id={pkg.package_id}) impressions is not numeric: {pkg.impressions!r}"
+        )
+        assert isinstance(pkg.spend, (int, float)), (
+            f"Package [{i}] (id={pkg.package_id}) spend is not numeric: {pkg.spend!r}"
+        )
 
 
 @then("the response should include the reporting period start and end dates")
@@ -1305,10 +1312,10 @@ def then_has_mb_status(ctx: dict, status: str) -> None:
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
-    assert len(deliveries) > 0, "No delivery data to check"
+    assert deliveries, "No delivery data to check"
     d = deliveries[0]
-    actual_status = getattr(d, "status", None)
-    assert actual_status == status, f"Expected status '{status}', got '{actual_status}'"
+    assert d.media_buy_id is not None, "First delivery missing media_buy_id"
+    assert d.status == status, f"Expected status '{status}', got '{d.status}'"
 
 
 @then("the response should include aggregated totals across both media buys")
@@ -1994,17 +2001,18 @@ def then_no_delivery_attempt(ctx: dict) -> None:
 
 @then(parsers.parse('the response packages should include "{field}" breakdown arrays'))
 def then_packages_include_breakdown(ctx: dict, field: str) -> None:
-    """Assert package breakdowns include the named field as a non-empty list."""
+    """Assert package breakdowns include the named field as a non-empty list with valid entries."""
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
-    assert len(deliveries) > 0, "No delivery data"
+    assert deliveries, "No delivery data"
     breakdown_key = f"by_{field}" if not field.startswith("by_") else field
-    total_packages = 0
+    checked = 0
     for d_idx, delivery in enumerate(deliveries):
+        assert delivery.media_buy_id is not None, f"Delivery[{d_idx}] missing media_buy_id"
         packages = getattr(delivery, "by_package", None) or []
         for p_idx, pkg in enumerate(packages):
-            total_packages += 1
+            checked += 1
             pkg_dict = pkg.model_dump() if hasattr(pkg, "model_dump") else pkg.__dict__
             assert breakdown_key in pkg_dict, (
                 f"Delivery[{d_idx}] package[{p_idx}] missing '{breakdown_key}', fields: {list(pkg_dict.keys())}"
@@ -2013,11 +2021,21 @@ def then_packages_include_breakdown(ctx: dict, field: str) -> None:
             assert isinstance(breakdown, list), (
                 f"Expected '{breakdown_key}' to be a list, got {type(breakdown).__name__}"
             )
-            assert len(breakdown) > 0, (
+            assert breakdown, (
                 f"Delivery[{d_idx}] package[{p_idx}]: '{breakdown_key}' is empty — "
                 f"dimension '{field}' was not populated"
             )
-    assert total_packages > 0, "No packages found across any delivery"
+            # Each breakdown entry should be a dict with at least one metric
+            first_entry = breakdown[0]
+            entry_dict = (
+                first_entry
+                if isinstance(first_entry, dict)
+                else (first_entry.model_dump() if hasattr(first_entry, "model_dump") else first_entry.__dict__)
+            )
+            assert isinstance(entry_dict, dict), (
+                f"Delivery[{d_idx}] package[{p_idx}]: '{breakdown_key}' entry is not a dict: {type(first_entry).__name__}"
+            )
+    assert checked, "No packages found across any delivery"
 
 
 @then(parsers.parse('the response packages should NOT include "{field}" breakdown arrays'))
@@ -2026,45 +2044,53 @@ def then_packages_exclude_breakdown(ctx: dict, field: str) -> None:
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
-    assert len(deliveries) > 0, "No delivery data"
+    assert deliveries, "No delivery data"
     breakdown_key = f"by_{field}" if not field.startswith("by_") else field
-    total_packages = 0
+    checked = 0
     for d_idx, delivery in enumerate(deliveries):
+        assert delivery.media_buy_id is not None, f"Delivery[{d_idx}] missing media_buy_id"
         packages = getattr(delivery, "by_package", None) or []
         for p_idx, pkg in enumerate(packages):
-            total_packages += 1
+            checked += 1
             pkg_dict = pkg.model_dump() if hasattr(pkg, "model_dump") else pkg.__dict__
             breakdown = pkg_dict.get(breakdown_key)
             assert breakdown is None or breakdown == [], (
                 f"Delivery[{d_idx}] package[{p_idx}] should NOT include '{breakdown_key}' but got: {breakdown!r}"
             )
-    assert total_packages > 0, "No packages found across any delivery"
+    assert checked, "No packages found across any delivery"
 
 
 @then(parsers.parse('the response packages should include "{field}" with at most {n:d} entries'))
 def then_packages_limited(ctx: dict, field: str, n: int) -> None:
-    """Assert breakdown has at most n entries (step text: 'at most')."""
+    """Assert breakdown has 1..n entries (step text: 'at most') with valid structure."""
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
-    assert len(deliveries) > 0, "No delivery data"
+    assert deliveries, "No delivery data"
     breakdown_key = f"by_{field}" if not field.startswith("by_") else field
-    total_packages = 0
+    checked = 0
     for d_idx, delivery in enumerate(deliveries):
+        assert delivery.media_buy_id is not None, f"Delivery[{d_idx}] missing media_buy_id"
         packages = getattr(delivery, "by_package", None) or []
         for p_idx, pkg in enumerate(packages):
-            total_packages += 1
+            checked += 1
             pkg_dict = pkg.model_dump() if hasattr(pkg, "model_dump") else pkg.__dict__
             breakdown = pkg_dict.get(breakdown_key, [])
-            assert len(breakdown) <= n, (
-                f"Delivery[{d_idx}] package[{p_idx}]: expected at most {n} entries "
-                f"in '{breakdown_key}', got {len(breakdown)}"
+            count = len(breakdown)
+            assert 1 <= count <= n, (
+                f"Delivery[{d_idx}] package[{p_idx}]: expected 1..{n} entries in '{breakdown_key}', got {count}"
             )
-            assert len(breakdown) > 0, (
-                f"Delivery[{d_idx}] package[{p_idx}]: '{breakdown_key}' is empty — "
-                f"expected non-empty with at most {n} entries"
+            # Verify first entry is a dict with content
+            first_entry = breakdown[0]
+            entry_dict = (
+                first_entry
+                if isinstance(first_entry, dict)
+                else (first_entry.model_dump() if hasattr(first_entry, "model_dump") else first_entry.__dict__)
             )
-    assert total_packages > 0, "No packages found across any delivery"
+            assert isinstance(entry_dict, dict), (
+                f"Delivery[{d_idx}] package[{p_idx}]: '{breakdown_key}' entry is not a dict"
+            )
+    assert checked, "No packages found across any delivery"
 
 
 def _find_field_in_response(resp: object, field: str) -> tuple[object, str]:
@@ -2124,36 +2150,38 @@ def then_field_false(ctx: dict, field: str) -> None:
 
 @then(parsers.parse('the response packages should include "{field}"'))
 def then_packages_include_field(ctx: dict, field: str) -> None:
-    """Assert packages include the named field (non-None)."""
+    """Assert packages include the named field with a non-None value."""
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
-    assert len(deliveries) > 0, "No delivery data"
-    total_packages = 0
+    assert deliveries, "No delivery data"
+    checked = 0
     for d_idx, delivery in enumerate(deliveries):
+        assert delivery.media_buy_id is not None, f"Delivery[{d_idx}] missing media_buy_id"
         packages = getattr(delivery, "by_package", None) or []
         for p_idx, pkg in enumerate(packages):
-            total_packages += 1
+            checked += 1
             pkg_dict = pkg.model_dump() if hasattr(pkg, "model_dump") else pkg.__dict__
             assert field in pkg_dict and pkg_dict[field] is not None, (
                 f"Delivery[{d_idx}] package[{p_idx}] missing or None '{field}', fields: {list(pkg_dict.keys())}"
             )
-    assert total_packages > 0, "No packages found across any delivery"
+    assert checked, "No packages found across any delivery"
 
 
 @then(parsers.parse('the response packages should include "{f1}" and "{f2}" breakdowns'))
 def then_packages_include_two(ctx: dict, f1: str, f2: str) -> None:
     """Assert packages include both named breakdowns with populated content.
 
-    Not just key existence — verifies each breakdown is a non-empty list,
-    proving the dimension was actually computed and populated.
+    Not just key existence — verifies each breakdown is a non-empty list
+    with valid dict entries, proving the dimension was actually computed.
     """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
-    assert len(deliveries) > 0, "No delivery data"
+    assert deliveries, "No delivery data"
+    assert deliveries[0].media_buy_id is not None, "First delivery missing media_buy_id"
     packages = getattr(deliveries[0], "by_package", None) or []
-    assert len(packages) > 0, "No packages in delivery"
+    assert packages, "No packages in delivery"
     pkg = packages[0]
     pkg_dict = pkg.model_dump() if hasattr(pkg, "model_dump") else pkg.__dict__
     key1 = f"by_{f1}" if not f1.startswith("by_") else f1
@@ -2164,7 +2192,15 @@ def then_packages_include_two(ctx: dict, f1: str, f2: str) -> None:
         assert isinstance(breakdown, list), (
             f"Expected '{key}' to be a list, got {type(breakdown).__name__}: {breakdown!r}"
         )
-        assert len(breakdown) > 0, f"'{key}' breakdown is empty — dimension '{label}' was not populated"
+        assert breakdown, f"'{key}' breakdown is empty — dimension '{label}' was not populated"
+        # Verify first entry is a dict with content
+        first_entry = breakdown[0]
+        entry_dict = (
+            first_entry
+            if isinstance(first_entry, dict)
+            else (first_entry.model_dump() if hasattr(first_entry, "model_dump") else first_entry.__dict__)
+        )
+        assert isinstance(entry_dict, dict), f"'{key}' entry is not a dict: {type(first_entry).__name__}"
 
 
 @then(parsers.parse('the response packages should NOT include "{field}"'))
@@ -2173,17 +2209,18 @@ def then_packages_exclude_field(ctx: dict, field: str) -> None:
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
-    assert len(deliveries) > 0, "No delivery data"
-    total_packages = 0
+    assert deliveries, "No delivery data"
+    checked = 0
     for d_idx, delivery in enumerate(deliveries):
+        assert delivery.media_buy_id is not None, f"Delivery[{d_idx}] missing media_buy_id"
         packages = getattr(delivery, "by_package", None) or []
         for p_idx, pkg in enumerate(packages):
-            total_packages += 1
+            checked += 1
             pkg_dict = pkg.model_dump() if hasattr(pkg, "model_dump") else pkg.__dict__
             assert field not in pkg_dict or pkg_dict[field] is None, (
                 f"Delivery[{d_idx}] package[{p_idx}] should NOT include '{field}'"
             )
-    assert total_packages > 0, "No packages found across any delivery"
+    assert checked, "No packages found across any delivery"
 
 
 @then(parsers.parse('the response geo breakdown should use classification system "{system}"'))
@@ -2192,14 +2229,15 @@ def then_geo_system(ctx: dict, system: str) -> None:
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
-    assert len(deliveries) > 0, "No delivery data"
+    assert deliveries, "No delivery data"
     found_geo = False
     for delivery in deliveries:
+        assert delivery.media_buy_id is not None, "Delivery missing media_buy_id"
         packages = getattr(delivery, "by_package", None) or []
         for pkg in packages:
             pkg_dict = pkg.model_dump() if hasattr(pkg, "model_dump") else pkg.__dict__
             by_geo = pkg_dict.get("by_geo")
-            if by_geo and isinstance(by_geo, list) and len(by_geo) > 0:
+            if by_geo and isinstance(by_geo, list) and by_geo:
                 found_geo = True
                 for entry in by_geo:
                     entry_dict = (

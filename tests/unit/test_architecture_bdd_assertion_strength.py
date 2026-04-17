@@ -57,16 +57,6 @@ _GETATTR_EXISTENCE_ALLOWLIST: set[str] = {
 _COUNT_ONLY_ALLOWLIST: set[str] = {
     # FIXME(salesagent-beq4): replace count-only check with element-level assertion
     "bdd/steps/generic/then_error.py:184 then_error_invalid_params",
-    "bdd/steps/domain/uc004_delivery.py:1239 then_has_metrics",
-    "bdd/steps/domain/uc004_delivery.py:1258 then_has_packages",
-    "bdd/steps/domain/uc004_delivery.py:1303 then_has_mb_status",
-    "bdd/steps/domain/uc004_delivery.py:1996 then_packages_include_breakdown",
-    "bdd/steps/domain/uc004_delivery.py:2024 then_packages_exclude_breakdown",
-    "bdd/steps/domain/uc004_delivery.py:2045 then_packages_limited",
-    "bdd/steps/domain/uc004_delivery.py:2126 then_packages_include_field",
-    "bdd/steps/domain/uc004_delivery.py:2145 then_packages_include_two",
-    "bdd/steps/domain/uc004_delivery.py:2171 then_packages_exclude_field",
-    "bdd/steps/domain/uc004_delivery.py:2190 then_geo_system",
     "bdd/steps/domain/uc011_accounts.py:1438 then_all_accounts_echo_brand",
     "bdd/steps/domain/uc011_accounts.py:1705 then_has_accounts_array",
     "bdd/steps/domain/uc011_accounts.py:1813 then_all_accounts_action",
