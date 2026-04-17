@@ -236,6 +236,39 @@ def _ensure_tenant_principal(ctx: dict, env: object) -> None:
     ensure_tenant_principal(ctx, env)
 
 
+def _ensure_tenant_principal_from_db(ctx: dict, env: object) -> None:
+    """Like _ensure_tenant_principal, but resolve existing DB rows first.
+
+    When a prior Given step (e.g., ``the Buyer is authenticated as principal "X"``)
+    triggers ``_ensure_default_data_for_auth``, the tenant and principal are
+    created in the DB but not stored in ctx. Calling ``setup_default_data()``
+    again would fail with a duplicate-key error. This helper checks the DB first.
+    """
+    if "tenant" in ctx:
+        return
+
+    session = getattr(env, "_session", None)
+    if session is not None:
+        from sqlalchemy import select
+
+        from src.core.database.models import Principal, Tenant
+
+        tenant = session.scalars(select(Tenant).filter_by(tenant_id=env._tenant_id)).first()
+        if tenant is not None:
+            principal = session.scalars(
+                select(Principal).filter_by(
+                    principal_id=env._principal_id,
+                    tenant_id=env._tenant_id,
+                )
+            ).first()
+            if principal is not None:
+                ctx["tenant"] = tenant
+                ctx["principal"] = principal
+                return
+
+    _ensure_tenant_principal(ctx, env)
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # THEN steps — account-specific assertions
 # ═══════════════════════════════════════════════════════════════════════
@@ -1932,6 +1965,148 @@ def given_creative_already_exists(ctx: dict) -> None:
         format="display_300x250",
     )
     env._commit_factory_data()
+
+
+@given("the creative already exists with identical data")
+def given_creative_already_exists_identical(ctx: dict) -> None:
+    """Pre-seed the creative in the DB with data identical to the payload.
+
+    Sync should detect no change and produce action="unchanged".
+    Same as ``given_creative_already_exists`` — the production code compares
+    payload vs DB row; identical data means action="unchanged".
+    """
+    from tests.factories import CreativeFactory
+
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+    tenant = ctx["tenant"]
+    principal = ctx["principal"]
+    creative_payload = ctx["creatives"][-1]
+    creative_id = creative_payload["creative_id"]
+    format_id = creative_payload["format_id"]["id"]
+    CreativeFactory(
+        tenant=tenant,
+        principal=principal,
+        creative_id=creative_id,
+        name=creative_payload["name"],
+        agent_url=env.DEFAULT_AGENT_URL,
+        format=format_id,
+        data=creative_payload,
+    )
+    env._commit_factory_data()
+
+
+@given("a creative that does not exist in the library")
+def given_creative_not_in_library(ctx: dict) -> None:
+    """Set up a creative payload for a creative that has no DB row.
+
+    Similar to ``given_creative_does_not_exist`` but uses different wording
+    (INV-3 scenario). Ensures tenant/principal exist and builds a payload.
+
+    When preceded by ``the Buyer is authenticated as principal "..."``
+    the tenant may already exist in the DB (created by harness
+    ``_ensure_default_data_for_auth``) but not in ctx. We resolve from
+    the DB to avoid a duplicate-key error.
+    """
+    env = ctx["env"]
+    _ensure_tenant_principal_from_db(ctx, env)
+    creative_payload = {
+        "creative_id": "creative-new-no-db-001",
+        "name": "Brand New Creative",
+        "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
+        "assets": {
+            "image": {
+                "url": "https://example.com/banner.png",
+                "width": 300,
+                "height": 250,
+            },
+        },
+    }
+    ctx.setdefault("creatives", []).append(creative_payload)
+
+
+@given('a creative with name "" and a known format_id')
+def given_creative_with_empty_name(ctx: dict) -> None:
+    """Set up a creative payload with an empty name — triggers CREATIVE_NAME_EMPTY.
+
+    ``parsers.parse`` cannot match empty strings between quotes, so this
+    literal step handles the ``name=""`` case explicitly.
+    """
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+    creative_payload = {
+        "creative_id": "creative-empty-name-001",
+        "name": "",
+        "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
+        "assets": {
+            "image": {
+                "url": "https://example.com/banner.png",
+                "width": 300,
+                "height": 250,
+            },
+        },
+    }
+    ctx.setdefault("creatives", []).append(creative_payload)
+    ctx["creative_format_id"] = "display_300x250"
+
+
+@given(parsers.parse('a creative with name "{name}" but no format_id'))
+def given_creative_with_name_no_format(ctx: dict, name: str) -> None:
+    """Set up a creative payload with a name but no format_id — triggers CREATIVE_FORMAT_REQUIRED."""
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+    creative_payload = {
+        "creative_id": f"creative-no-fmt-{name.lower().replace(' ', '-')}-001",
+        "name": name,
+        "format_id": None,
+        "assets": {
+            "image": {
+                "url": "https://example.com/banner.png",
+                "width": 300,
+                "height": 250,
+            },
+        },
+    }
+    ctx.setdefault("creatives", []).append(creative_payload)
+
+
+@given("a creative with format_id but an empty name")
+def given_creative_format_id_empty_name(ctx: dict) -> None:
+    """Set up a creative with a valid format_id but empty name — boundary case."""
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+    creative_payload = {
+        "creative_id": "creative-fmt-empty-name-001",
+        "name": "",
+        "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
+        "assets": {
+            "image": {
+                "url": "https://example.com/banner.png",
+                "width": 300,
+                "height": 250,
+            },
+        },
+    }
+    ctx.setdefault("creatives", []).append(creative_payload)
+    ctx["creative_format_id"] = "display_300x250"
+
+
+@given("a creative with invalid schema structure")
+def given_creative_invalid_schema(ctx: dict) -> None:
+    """Set up a creative payload with invalid schema — triggers CREATIVE_VALIDATION_FAILED.
+
+    Has a format_id (to avoid CREATIVE_FORMAT_REQUIRED) but provides assets
+    in the wrong structure (string instead of dict) to trigger schema validation.
+    """
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+    creative_payload = {
+        "creative_id": "creative-invalid-schema-001",
+        "name": "Invalid Schema Creative",
+        "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
+        "assets": "not-a-valid-assets-structure",
+    }
+    ctx.setdefault("creatives", []).append(creative_payload)
 
 
 def _get_sync_creative_result(ctx: dict) -> object:
