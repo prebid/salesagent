@@ -284,13 +284,13 @@ Pre-existing parallel `scoped_session` registries in `src/services/gam_orders_se
 
 **Severity:** 🚨 BLOCKER (one-line fix in the plan)
 
-**Canonical middleware order (outermost runtime → innermost runtime, L2 shape, 9 middlewares):**
+**Canonical middleware order (outermost runtime → innermost runtime, L2 shape, 10 middlewares — includes `LegacyAdminRedirect` from L1c per D1 2026-04-16):**
 
 ```
-Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS
+Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → LegacyAdminRedirect → Session → CSRF → RestCompat → CORS
 ```
 
-(L4+ adds `RequestID` as the new outermost middleware — runtime becomes `RequestID → Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS` (10 middlewares). L1a, pre-TrustedHost and pre-SecurityHeaders, omits both.)
+(Canonical stack growth per CLAUDE.md Invariant 5 and `flask-to-fastapi-foundation-modules.md` §11.36: **L1a = 7** (Fly, ExternalDomain, UnifiedAuth, Session, CSRF, RestCompat, CORS); **L1c = 8** (adds `LegacyAdminRedirect` INSIDE `UnifiedAuth`); **L2 = 10** (adds `TrustedHost` + `SecurityHeaders`); **L4+ = 11** (adds `RequestID` outermost, runtime becomes `RequestID → Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → LegacyAdminRedirect → Session → CSRF → RestCompat → CORS`).)
 
 This is the authoritative stack. It is shared across `flask-to-fastapi-foundation-modules.md` §11.8 and `§Cross-cutting/Middleware ordering`, and `async-audit/agent-e-ideal-state-gaps.md` §9. Registered in `src/app.py` via `app.add_middleware(...)` in **REVERSE** order (LIFO — last call is outermost).
 
@@ -597,16 +597,19 @@ The `IntegrationEnv.get_rest_client()` sets `app.dependency_overrides[_require_a
 
 Plan says "hard-required rename, no fallback". Shipping v2.0 with the rename **breaks `scripts/setup-dev.py` for every new contributor** and fails `test_setup_dev.py`.
 
-**Revised plan directive (supersedes user-confirmed decision #5):** keep a transition period where both names are accepted for v2.0:
+> **[SUPERSEDED 2026-04-14]** The dual-read transition plan below is SUPERSEDED. Canonical policy per CLAUDE.md §Migration conventions and `flask-to-fastapi-migration.md` §2.8 post-audit plan-defaults: **`FLASK_SECRET_KEY` is hard-removed at L2** (same PR as Flask removal), NOT dual-read with deferred L7 cleanup. v2.0 is a major release already breaking the session-cookie name (`session` → `adcp_session`); co-locating the env-var rename in the same PR eliminates the dual-read window. Dev onboarding reads `SESSION_SECRET` only. Failure mode: startup `KeyError: SESSION_SECRET` — the exact signal a dev needs to update their `.env`. Same-PR updates: `scripts/setup-dev.py`, `docker-compose.yml`, `tests/unit/test_setup_dev.py` (9 occurrences), `docs/environment.md`. Structural guard `tests/unit/test_architecture_no_flask_secret_key_reads.py` with EMPTY allowlist lands in the same L2 PR.
+
+**Superseded dual-read recipe (HISTORICAL, do NOT implement):**
 ```python
+# SUPERSEDED — do not implement. L2 hard-removes FLASK_SECRET_KEY in a single PR.
 SESSION_SECRET = os.environ.get("SESSION_SECRET") or os.environ.get("FLASK_SECRET_KEY")
 if not SESSION_SECRET:
     raise RuntimeError("SESSION_SECRET env var required (FLASK_SECRET_KEY deprecated)")
 ```
 
-Atomic cleanup in L7 (final polish): remove the fallback, remove `FLASK_SECRET_KEY` from `setup-dev.py`, `docker-compose.yml`, `docs`, and `test_setup_dev.py`.
+Atomic cleanup at L2 (same PR as Flask removal): remove all `FLASK_SECRET_KEY` references from `setup-dev.py`, `docker-compose.yml`, docs, and `test_setup_dev.py`. No L7 dual-read-removal step needed because dual-read was never implemented.
 
-**Reason to revise:** the user's "hard-required" directive was made before verifying the propagation cost. The fallback is 3 lines and preserves dev ergonomics without any security compromise.
+**Reason for supersession:** v2.0 is already a breaking release (cookie rename `session` → `adcp_session` at L1a; env rename aligns with the same user communication gate). The 3-line "fallback preserves ergonomics" argument was outweighed by the drift risk of leaving two environment-variable paths in the codebase for 8+ layers. Release notes call out the env-var rename alongside the cookie-rename gate announcement.
 
 ### 3.5 `jsonify(datetime)` format difference Flask vs FastAPI
 

@@ -245,7 +245,7 @@ All `src/core/tools/*.py` `_impl` functions become `async def`. Some already are
 
 ### Driver change
 
-> **⚠️ CORRECTED 2026-04-11 (Decisions 1/2/9):** `psycopg2-binary` is **RETAINED** alongside `asyncpg`, NOT removed. Three sync paths require it: Decision 1 Path B sync session factory, Decision 2 pre-fork orchestrator health check, Decision 9 sync-bridge. `types-psycopg2` also RETAINED. Removal deferred to Phase 4+ within v2.0.
+> **⚠️ CORRECTED 2026-04-11 (Decisions 1/2/9); NARROWED 2026-04-16 (D3):** `psycopg2-binary` is **RETAINED** alongside `asyncpg`, NOT removed. Post-D3: **two** sync paths require it — Decision 1 Path B sync session factory and Decision 2 pre-fork orchestrator health check. (Pre-D3 a third path — Decision 9 sync-bridge — was cited; under D3 2026-04-16 the sync-bridge is superseded by an async rearchitect of `background_sync_service.py`, eliminating the third retention rationale.) `types-psycopg2` also RETAINED. Full removal deferred to post-v2.0.
 
 `pyproject.toml`:
 - **KEEP** `psycopg2-binary>=2.9.9` (retained per D1/D2/D9)
@@ -355,7 +355,9 @@ result = await run_in_threadpool(adapter.create_media_buy, request, packages, ..
 
 > [SUPERSEDED 2026-04-14 — Spike 4.5 is now at L4 entry]
 
-### Background sync sync-bridge (Decision 9, 2026-04-11 resolution)
+### Background sync sync-bridge (Decision 9, 2026-04-11 resolution) [SUPERSEDED 2026-04-16 by D3]
+
+> **[SUPERSEDED 2026-04-16 by D3]** The entire subsection below describes the 2026-04-11 Option B sync-bridge resolution of Decision 9. D3 (2026-04-16) supersedes this with an **async rearchitect**: `src/services/background_sync_service.py` rearchitects to `asyncio.create_task` + checkpoint-per-GAM-page (each GAM-page ~30s opens its own short-lived `async with get_db_session()`, writes progress to `sync_checkpoint` row, commits, closes). `src/services/background_sync_db.py` is **NEVER WRITTEN** under D3. The content below is historical and retained for traceability. Canonical post-D3 reference: `implementation-checklist.md §L5d1`, `flask-to-fastapi-execution-details.md criterion 27`, `CLAUDE.md §9` (decision 9 entry with D3 resolution).
 
 **New module: `src/services/background_sync_db.py` (~200 LOC).** Runs the multi-hour GAM inventory sync jobs via a SEPARATE sync psycopg2 engine, kept distinct from the dual engines in `database_session.py`. The service keeps its current `threading.Thread` shape; converting to `asyncio.create_task` would pin async-pool connections for hours, triggering `pool_recycle=3600` mid-session and Fly.io TCP keepalive expiry.
 
@@ -568,7 +570,9 @@ Still applies (deep audit §3.1). Async doesn't fix this. Still v2.0 single-work
 
 > [SUPERSEDED 2026-04-14 — Spike 4.5 is now at L4 entry]
 
-### Risk #7.5 — Background sync service long session (added 2026-04-11, resolved by Decision 9)
+### Risk #7.5 — Background sync service long session (added 2026-04-11, resolved by Decision 9) [SUPERSEDED 2026-04-16 by D3]
+
+> **[SUPERSEDED 2026-04-16 by D3]** The Decision 9 Option B sync-bridge resolution described below is superseded by D3 async rearchitect. Canonical resolution: `CLAUDE.md §9` (decision entry), `implementation-checklist.md §L5d1`, `flask-to-fastapi-execution-details.md criterion 27`. Historical content below preserved for traceability.
 
 **Severity: HIGH (hours-long session incompatible with async pool).** `src/services/background_sync_service.py::_run_sync_thread` spawns `threading.Thread(daemon=True)` workers that open `get_db_session()` and hold it across multi-hour wall-clock GAM inventory syncs. Under `async_sessionmaker`:
 - `pool_recycle=3600` rotates connections after 1 hour → open session hits `DisconnectionError`

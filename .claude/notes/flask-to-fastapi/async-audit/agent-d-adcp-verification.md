@@ -532,10 +532,12 @@ All preserved byte-for-byte. No async impact.
 
 **Verdict: PASS (critical invariant — must be enforced)**
 
-**Paths (byte-immutable):**
+**Paths (byte-immutable — per FE-3 audit correction 2026-04-11 / CLAUDE.md Invariant 6):**
 - `/admin/auth/google/callback`
-- `/admin/auth/oidc/{tenant_id}/callback`
-- `/auth/gam/callback`
+- `/admin/auth/oidc/callback` (NO `{tenant_id}` segment — tenant context lives in the session; verified at `src/admin/blueprints/oidc.py:209,215`)
+- `/admin/auth/gam/callback` (WITH `/admin` prefix — route in `src/admin/blueprints/auth.py:931,959`)
+
+**Previously reported (pre-FE-3 correction, now SUPERSEDED):** `/admin/auth/oidc/{tenant_id}/callback` and `/auth/gam/callback`. These were the original v2.0-plan strings that the frontend deep-audit corrected on 2026-04-11. Guard: `tests/unit/test_oauth_redirect_uris_immutable.py`.
 
 **Source of truth:** Google Cloud Console + per-tenant OIDC provider config. These paths are registered externally — changing them by one character causes `redirect_uri_mismatch` and breaks login.
 

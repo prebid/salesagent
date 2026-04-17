@@ -30,7 +30,7 @@
 | 5 | `expire_on_commit=False` — DB-default fields (`created_at`, `server_default`) stale post-commit | **M** | Partial — needs regression tests on insert flows | 0.5–1 day | N/A — must set `expire_on_commit=False` for async, not optional |
 | 6 | Connection pool saturation under load (asyncpg pool vs SQLAlchemy pool, max_size tuning) | **M** | Yes, benchmark harness | 1 day benchmark + tune | Yes — grow pool; if not enough, fall back to PgBouncer transaction pooling |
 | 7 | MCP scheduler ticks wired to async DB under `combine_lifespans` | **M** | Yes, lifespan alive-tick test + existing scheduler-composition guard | 0.5 day | Partial — schedulers can live in `run_in_threadpool` block; reduces concurrency but works |
-| **7.5** | **Background sync long-session multi-hour failure (Decision 9, 2026-04-11)** | **H** | Yes, Spike 5.5 (4 test cases: lazy-init/dispose, MVCC bidirectional, 5-async + 1-sync no-deadlock, post-dispose leaks ≤1) | 0.5 day Spike + ~200 LOC sync-bridge module | **Soft** — fallback Option A (asyncio task + per-page session checkpoint), suboptimal but viable. Sunset target v2.1+. See deep dive after Risk #7. |
+| **7.5** | **Background sync long-session multi-hour failure (Decision 9 → D3 2026-04-16)** | **H** | Yes, Spike 5.5 (post-D3, 4 test cases: 4-hour sync, concurrent multi-tenant, cancellation, resume from `sync_checkpoint`) | 0.5 day Spike + ~170 LOC async rearchitect (D3 supersedes pre-D3 ~200 LOC sync-bridge module) | **Soft** — fallback to pre-D3 Option B sync-bridge if Spike 5.5 fails; file v2.1 sunset ticket. See deep dive after Risk #7 (marked [SUPERSEDED 2026-04-16 by D3]). |
 | 8 | A2A handler async-DB conversion + SDK async contract | **L** | Yes (A2A TestClient test suite) | 0.5 day | Yes — per-handler sync escape via `asyncio.to_thread` |
 | 9 | Middleware state propagation (CSRF, Approximated, ProxyHeaders, Unified auth) | **L** | Already enforced by middleware ordering tests | 0 days (already async) | N/A — no change |
 | 10 | Performance regression under low concurrency / warm-path latency | **M** | Yes, benchmark harness (pre/post) | 1 day benchmark | Partial — tune `pool_size` + reduce `await` fan-out; full rollback fallback exists |
@@ -972,7 +972,9 @@ If scheduler async conversion creates connection leaks or shutdown hangs:
 
 ### Risk #7.5 — Background sync long-session multi-hour failure
 
-**Severity: HIGH** | **Added 2026-04-11 (Decision 9 deep-think)** | **Resolved by sync-bridge**
+> **[SUPERSEDED 2026-04-16 by D3]** The entire analysis below describes the 2026-04-11 Option B sync-bridge resolution. Under D3 (2026-04-16) the resolution is **async rearchitect** (`asyncio.create_task` + per-GAM-page short-lived sessions + `sync_checkpoint` row). The failure modes described here still apply to any naïve async conversion that holds a single long `AsyncSession`; D3 avoids them by making every session short-lived. This historical analysis is retained for traceability. Canonical post-D3 reference: `implementation-checklist.md §L5d1` + `flask-to-fastapi-execution-details.md criterion 27`.
+
+**Severity: HIGH** | **Added 2026-04-11 (Decision 9 deep-think)** | **Resolved by sync-bridge (SUPERSEDED 2026-04-16 by D3 async rearchitect)**
 
 #### A. Root cause
 
