@@ -75,9 +75,9 @@ _DISPATCH_IN_THEN_ALLOWLIST: set[str] = {
     "bdd/steps/domain/uc002_nfr.py:316 then_response_within_sla",
     "bdd/steps/domain/uc002_nfr.py:360 then_budget_validated_against_min_order",
     # FIXME(GH-TBD): Split into When (re-dispatch with decoy) + Then (assert isolation)
-    "bdd/steps/domain/uc011_accounts.py:502 then_accounts_are_agent_scoped",
+    "bdd/steps/domain/uc011_accounts.py:772 then_accounts_are_agent_scoped",
     # FIXME(GH-TBD): Split into When (unfiltered request) + Then (assert same set)
-    "bdd/steps/domain/uc011_accounts.py:747 then_result_set_identical",
+    "bdd/steps/domain/uc011_accounts.py:1017 then_result_set_identical",
 }
 
 _ASSERT_ON_REQUEST_ALLOWLIST: set[str] = set()

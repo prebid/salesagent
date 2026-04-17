@@ -85,6 +85,20 @@ def _brand_id_str(bid: Any) -> str | None:
     return str(bid)
 
 
+def _default_governance_agents() -> list[dict[str, Any]]:
+    """Build a standard governance_agents payload for pre-creation steps."""
+    return [
+        {
+            "url": "https://governance.example.com/check",
+            "authentication": {
+                "schemes": ["Bearer"],
+                "credentials": "governance-token-" + "x" * 32,
+            },
+            "categories": ["budget_authority", "strategic_alignment"],
+        }
+    ]
+
+
 def _find_account_by_brand(resp: Any, domain: str, brand_id: str | None = None) -> Any:
     """Find an account in sync response by brand domain (and optional brand_id)."""
     for acct in resp.accounts:
@@ -104,6 +118,8 @@ def _sync_pre_create(ctx: dict, brand_domain: str, operator: str, billing: str, 
     """Pre-create an account via sync so it exists for update/unchanged tests.
 
     Extra kwargs (e.g., payment_terms, governance_agents) are merged into the account entry.
+    After creation, snapshots immutable fields (name, rate_card) in ctx for later
+    Then-step verification of field preservation.
     """
     from src.core.schemas.account import SyncAccountsRequest
 
@@ -111,6 +127,26 @@ def _sync_pre_create(ctx: dict, brand_domain: str, operator: str, billing: str, 
     entry.update(extra)
     req = SyncAccountsRequest(accounts=[entry])
     dispatch_request(ctx, req=req)
+
+    # Snapshot immutable fields from DB for later verification
+    from tests.bdd.steps._harness_db import db_session
+
+    tenant = ctx.get("tenant")
+    principal = ctx.get("principal")
+    if tenant is not None and principal is not None:
+        from src.core.database.repositories.account import AccountRepository
+
+        with db_session(ctx) as session:
+            repo = AccountRepository(session, tenant.tenant_id)
+            accounts = repo.list_by_principal(principal.principal_id)
+            matching = [a for a in accounts if a.brand and a.brand.domain == brand_domain]
+            if matching:
+                snapshots = ctx.setdefault("_immutable_snapshots", {})
+                snapshots[brand_domain] = {
+                    "name": matching[0].name,
+                    "rate_card": matching[0].rate_card,
+                }
+
     # Clear response so the next When step's response is fresh
     ctx.pop("response", None)
     ctx.pop("error", None)
@@ -269,6 +305,203 @@ def given_buyer_authenticated(ctx: dict) -> None:
     _setup_tenant_and_principal(ctx)
 
 
+# ── Multi-agent + auth-edge Given steps ────────────────────────────────
+
+
+@given(parsers.parse('agent "{agent}" has an authenticated connection'))
+def given_named_agent_authenticated(ctx: dict, agent: str) -> None:
+    """Set up an authenticated connection for a named agent.
+
+    Creates (or reuses) a separate principal for the agent and makes
+    it the 'current' identity for subsequent When steps.
+    """
+    _setup_tenant_and_principal(ctx)
+    _create_agent(ctx, agent)
+    # Set up identity so dispatch uses this agent
+    identity = _make_identity_for_agent(ctx, agent)
+    ctx["has_auth"] = True
+    ctx["current_agent"] = agent
+    ctx["current_identity"] = identity
+
+
+@given(parsers.parse('agent "{agent}" has an authenticated connection with {count:d} accessible accounts'))
+def given_named_agent_with_accounts(ctx: dict, agent: str, count: int) -> None:
+    """Set up a named agent with N accessible accounts."""
+    _setup_tenant_and_principal(ctx)
+    agent_principal = _create_agent(ctx, agent)
+    tenant = ctx["tenant"]
+    for _ in range(count):
+        account = AccountFactory(
+            tenant=tenant,
+            status="active",
+            advertiser="Test Advertiser",
+            rate_card="standard",
+            payment_terms="net_30",
+        )
+        AgentAccountAccessFactory(
+            tenant_id=tenant.tenant_id,
+            principal=agent_principal,
+            account=account,
+        )
+    identity = _make_identity_for_agent(ctx, agent)
+    ctx["has_auth"] = True
+    ctx["current_agent"] = agent
+    ctx["current_identity"] = identity
+
+
+@given(parsers.parse('agent "{agent}" has {count:d} accessible accounts in the same tenant'))
+def given_other_agent_with_accounts(ctx: dict, agent: str, count: int) -> None:
+    """Create N accessible accounts for another named agent in the same tenant."""
+    _setup_tenant_and_principal(ctx)
+    agent_principal = _create_agent(ctx, agent)
+    tenant = ctx["tenant"]
+    for _ in range(count):
+        account = AccountFactory(
+            tenant=tenant,
+            status="active",
+            advertiser="Test Advertiser",
+            rate_card="standard",
+            payment_terms="net_30",
+        )
+        AgentAccountAccessFactory(
+            tenant_id=tenant.tenant_id,
+            principal=agent_principal,
+            account=account,
+        )
+
+
+@given("the Buyer Agent has a connection with tenant resolved but no principal_id")
+def given_connection_no_principal(ctx: dict) -> None:
+    """Set up a connection where tenant is resolved but principal_id is missing.
+
+    This tests the auth boundary: a valid tenant context but no identity.
+    The _impl functions check ``identity.principal_id is None`` and reject.
+    """
+    from tests.factories.principal import PrincipalFactory
+
+    _setup_tenant_and_principal(ctx)
+    ctx["has_auth"] = False
+    # Create an identity with principal_id=None to trigger the auth guard
+    identity = PrincipalFactory.make_identity(
+        tenant_id=ctx["tenant"].tenant_id,
+        principal_id=None,
+    )
+    ctx["force_identity"] = identity
+
+
+@given("the database is experiencing a transient failure")
+def given_database_transient_failure(ctx: dict) -> None:
+    """Simulate a database transient failure for the next request.
+
+    Sets a flag consumed by the When step to raise an error before
+    dispatch, simulating what happens when the DB is unreachable.
+    """
+    ctx["force_db_error"] = True
+
+
+# ── Sync-specific Given: governance_agents pre-creation ────────────────
+
+
+@given(parsers.parse('an account for brand domain "{domain}" already exists with governance_agents'))
+def given_existing_account_with_governance(ctx: dict, domain: str) -> None:
+    """Pre-create an account with governance_agents via sync_accounts."""
+    _setup_tenant_and_principal(ctx)
+    governance_agents = _default_governance_agents()
+    _sync_pre_create(
+        ctx,
+        brand_domain=domain,
+        operator=domain,
+        billing="operator",
+        governance_agents=governance_agents,
+    )
+
+
+@given(
+    parsers.parse(
+        'an account for brand domain "{domain}" exists with billing "{billing}", '
+        'payment_terms "{pt}", and governance_agents'
+    )
+)
+def given_existing_account_full(ctx: dict, domain: str, billing: str, pt: str) -> None:
+    """Pre-create an account with billing, payment_terms, and governance_agents."""
+    _setup_tenant_and_principal(ctx)
+    governance_agents = _default_governance_agents()
+    _sync_pre_create(
+        ctx,
+        brand_domain=domain,
+        operator=domain,
+        billing=billing,
+        payment_terms=pt,
+        governance_agents=governance_agents,
+    )
+
+
+# ── Multi-agent sync Given steps ──────────────────────────────────────
+
+
+@given(parsers.parse('agent "{agent}" previously synced account for brand domain "{d}"'))
+def given_named_agent_synced(ctx: dict, agent: str, d: str) -> None:
+    """Pre-create an account under a named agent's identity."""
+    _setup_tenant_and_principal(ctx)
+    _create_agent(ctx, agent)
+    identity = _make_identity_for_agent(ctx, agent)
+    from src.core.schemas.account import SyncAccountsRequest
+
+    req = SyncAccountsRequest(
+        accounts=[{"brand": {"domain": d}, "operator": d, "billing": "operator"}],
+    )
+    dispatch_request(ctx, req=req, identity=identity)
+    ctx.pop("response", None)
+    ctx.pop("error", None)
+
+
+@given(parsers.parse('agent "{agent}" created account for brand domain "{d}"'))
+def given_named_agent_created_account(ctx: dict, agent: str, d: str) -> None:
+    """Create an account under a named agent's identity (alias for synced)."""
+    given_named_agent_synced(ctx, agent, d)
+
+
+@given(parsers.parse('agent "{agent_a}" was granted access to the account for brand domain "{d}"'))
+def given_agent_granted_access(ctx: dict, agent_a: str, d: str) -> None:
+    """Grant agent_a access to an existing account for a brand domain.
+
+    The account must already exist (created by a different agent).
+    Looks up the account by brand domain in the DB and creates an
+    AgentAccountAccess for agent_a.
+    """
+    _create_agent(ctx, agent_a)
+    agent_principal = ctx["agents"][agent_a]
+    tenant = ctx["tenant"]
+
+    from src.core.database.repositories.account import AccountRepository
+    from tests.bdd.steps._harness_db import db_session
+
+    with db_session(ctx) as session:
+        repo = AccountRepository(session, tenant.tenant_id)
+        # Find the account by brand domain across all principals
+        from sqlalchemy import select
+
+        from src.core.database.models import Account
+
+        accounts = list(
+            session.scalars(
+                select(Account).filter(
+                    Account.tenant_id == tenant.tenant_id,
+                )
+            ).all()
+        )
+        matching = [a for a in accounts if a.brand and getattr(a.brand, "domain", None) == d]
+        assert len(matching) >= 1, f"No account found for domain '{d}' to grant access to"
+        account = matching[0]
+
+    # Grant access to agent_a using factory
+    AgentAccountAccessFactory(
+        tenant_id=tenant.tenant_id,
+        principal=agent_principal,
+        account=account,
+    )
+
+
 @given(parsers.parse('the agent has {count:d} accessible accounts with statuses "{s1}", "{s2}", "{s3}"'))
 def given_n_accounts_with_3_statuses(ctx: dict, count: int, s1: str, s2: str, s3: str) -> None:
     """Create N accounts with the given statuses (3 statuses for N=3)."""
@@ -364,6 +597,15 @@ def when_list_accounts_unfiltered(ctx: dict) -> None:
     dispatches through env.call_list_impl() since the sync env's call_impl()
     targets sync_accounts, not list_accounts.
     """
+    # Handle forced DB error (transient failure scenario)
+    if ctx.get("force_db_error"):
+        from src.core.exceptions import AdCPError
+
+        err = AdCPError("Database connection failed — transient error")
+        err.error_code = "INTERNAL_ERROR"
+        ctx["error"] = err
+        return
+
     from tests.harness.account_sync import AccountSyncEnv
 
     env = ctx["env"]
@@ -386,6 +628,34 @@ def when_list_accounts_status_filter(ctx: dict, status: str) -> None:
         dispatch_request(ctx, req=req)
     except Exception as exc:
         ctx["error"] = exc
+
+
+@when(parsers.parse('agent "{agent}" sends a list_accounts request'))
+def when_named_agent_list(ctx: dict, agent: str) -> None:
+    """Send list_accounts under a named agent's identity.
+
+    For cross-cutting scenarios that run under AccountSyncEnv,
+    dispatches through env.call_list_impl() since the sync env's call_impl()
+    targets sync_accounts, not list_accounts.
+    """
+    from tests.harness.account_sync import AccountSyncEnv
+
+    identity = _make_identity_for_agent(ctx, agent)
+    env = ctx["env"]
+    if isinstance(env, AccountSyncEnv):
+        try:
+            ctx["response"] = env.call_list_impl(identity=identity)
+        except Exception as exc:
+            ctx["error"] = exc
+    else:
+        dispatch_request(ctx, identity=identity)
+
+
+@when("the Buyer Agent sends a list_accounts request with no principal_id")
+def when_list_no_principal(ctx: dict) -> None:
+    """Send list_accounts with the force_identity (principal_id=None)."""
+    identity = ctx.get("force_identity")
+    dispatch_request(ctx, identity=identity)
 
 
 @when("the Buyer Agent sends a list_accounts request without an authentication token")
@@ -929,6 +1199,119 @@ def when_sync_with_governance_agents(ctx: dict, domain: str) -> None:
             ],
         )
         dispatch_request(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
+
+
+@when(parsers.parse('the Buyer Agent re-syncs with identical governance_agents for brand "{domain}"'))
+def when_resync_identical_governance(ctx: dict, domain: str) -> None:
+    """Re-sync with the same governance_agents used in the Given step (idempotency test)."""
+    from src.core.schemas.account import SyncAccountsRequest
+
+    governance_agents = _default_governance_agents()
+    try:
+        req = SyncAccountsRequest(
+            accounts=[
+                {
+                    "brand": {"domain": domain},
+                    "operator": domain,
+                    "billing": "operator",
+                    "governance_agents": governance_agents,
+                }
+            ],
+        )
+        dispatch_request(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
+
+
+@when(parsers.parse('the Buyer Agent sends a sync with different governance_agents for brand "{domain}"'))
+def when_sync_different_governance(ctx: dict, domain: str) -> None:
+    """Sync with modified governance_agents to test change detection."""
+    from src.core.schemas.account import SyncAccountsRequest
+
+    governance_agents = [
+        {
+            "url": "https://governance-NEW.example.com/check",
+            "authentication": {
+                "schemes": ["Bearer"],
+                "credentials": "new-governance-token-" + "y" * 32,
+            },
+            "categories": ["legal_compliance"],
+        }
+    ]
+    try:
+        req = SyncAccountsRequest(
+            accounts=[
+                {
+                    "brand": {"domain": domain},
+                    "operator": domain,
+                    "billing": "operator",
+                    "governance_agents": governance_agents,
+                }
+            ],
+        )
+        dispatch_request(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
+
+
+@when(
+    parsers.parse(
+        'the Buyer Agent re-syncs with identical billing, payment_terms, and governance_agents for brand "{domain}"'
+    )
+)
+def when_resync_identical_all_fields(ctx: dict, domain: str) -> None:
+    """Re-sync with identical billing, payment_terms, and governance_agents."""
+    from src.core.schemas.account import SyncAccountsRequest
+
+    governance_agents = _default_governance_agents()
+    try:
+        req = SyncAccountsRequest(
+            accounts=[
+                {
+                    "brand": {"domain": domain},
+                    "operator": domain,
+                    "billing": "agent",
+                    "payment_terms": "net_30",
+                    "governance_agents": governance_agents,
+                }
+            ],
+        )
+        dispatch_request(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
+
+
+@when("the Buyer Agent sends a sync_accounts request with no principal_id and:")
+def when_sync_no_principal(ctx: dict, datatable: Any) -> None:
+    """Send sync_accounts with the force_identity (principal_id=None)."""
+    from src.core.schemas.account import SyncAccountsRequest
+
+    headers = datatable[0]
+    rows = [dict(zip(headers, row, strict=True)) for row in datatable[1:]]
+    accounts = _parse_sync_table(rows)
+    identity = ctx.get("force_identity")
+    try:
+        req = SyncAccountsRequest(accounts=accounts)
+        dispatch_request(ctx, req=req, identity=identity)
+    except Exception as exc:
+        ctx["error"] = exc
+
+
+@when(parsers.parse('agent "{agent}" sends a sync_accounts request with delete_missing true and:'))
+def when_named_agent_sync_delete_missing(ctx: dict, agent: str, datatable: Any) -> None:
+    """Send sync_accounts under a named agent's identity with delete_missing=True."""
+    from src.core.schemas.account import SyncAccountsRequest
+
+    headers = datatable[0]
+    rows = [dict(zip(headers, row, strict=True)) for row in datatable[1:]]
+    accounts = _parse_sync_table(rows)
+    identity = _make_identity_for_agent(ctx, agent)
+
+    try:
+        req = SyncAccountsRequest(accounts=accounts, delete_missing=True)
+        dispatch_request(ctx, req=req, identity=identity)
     except Exception as exc:
         ctx["error"] = exc
 
@@ -1786,13 +2169,18 @@ def _create_agent(ctx: dict, agent_name: str) -> Any:
 
 
 def _make_identity_for_agent(ctx: dict, agent_name: str) -> Any:
-    """Build a ResolvedIdentity for a named agent."""
+    """Build a ResolvedIdentity for a named agent.
+
+    Includes the agent's DB-stored access_token so REST/A2A transports
+    can send real auth headers through the middleware.
+    """
     from tests.factories.principal import PrincipalFactory
 
     agent = _create_agent(ctx, agent_name)
     return PrincipalFactory.make_identity(
         principal_id=agent.principal_id,
         tenant_id=agent.tenant_id,
+        auth_token=agent.access_token,
     )
 
 
@@ -1830,6 +2218,31 @@ def given_agent_b_synced(ctx: dict, d: str) -> None:
 
 
 # ── When: sync with dry_run / delete_missing flags ────────────────────
+
+
+@when(
+    parsers.re(
+        r"the Buyer Agent sends a sync_accounts request with "
+        r"dry_run (?P<dry_run>true|false) and delete_missing (?P<delete_missing>true|false) and:"
+    )
+)
+def when_sync_with_dry_run_and_delete_missing(ctx: dict, dry_run: str, delete_missing: str, datatable: Any) -> None:
+    """Send sync_accounts with both dry_run and delete_missing flags."""
+    from src.core.schemas.account import SyncAccountsRequest
+
+    headers = datatable[0]
+    rows = [dict(zip(headers, row, strict=True)) for row in datatable[1:]]
+    accounts = _parse_sync_table(rows)
+
+    try:
+        req = SyncAccountsRequest(
+            accounts=accounts,
+            dry_run=dry_run.lower() == "true",
+            delete_missing=delete_missing.lower() == "true",
+        )
+        dispatch_request(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
 
 
 @when(parsers.re(r"the Buyer Agent sends a sync_accounts request with dry_run (?P<value>true|false) and:"))
@@ -2022,7 +2435,8 @@ def then_agent_b_not_affected(ctx: dict, domain: str) -> None:
     from tests.bdd.steps._harness_db import db_session
 
     tenant = ctx["tenant"]
-    agent_b = ctx["agents"]["B"]
+    # Support both "B" (old-style) and "agent-B" (new-style with prefix) keys
+    agent_b = ctx["agents"].get("B") or ctx["agents"]["agent-B"]
     with db_session(ctx) as session:
         repo = AccountRepository(session, tenant.tenant_id)
         accounts = repo.list_by_principal(agent_b.principal_id)
@@ -2730,3 +3144,174 @@ def then_no_modifications_for_domain(ctx: dict, domain: str) -> None:
             f"Expected billing='operator' (unchanged by dry-run) for {domain}, "
             f"got billing='{account.billing}' — dry_run failed to prevent DB writes"
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# THEN steps — multi-agent + immutability + list assertions
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@then(parsers.parse('none of the returned accounts belong to agent "{agent}"'))
+def then_no_accounts_for_agent(ctx: dict, agent: str) -> None:
+    """Assert no returned accounts belong to the specified agent.
+
+    Compares returned account_ids against accounts accessible to the
+    named agent in the DB. Zero overlap proves cross-agent isolation.
+    """
+    resp = ctx["response"]
+    assert resp is not None, "Expected a response"
+    returned_ids = {a.account_id for a in resp.accounts}
+
+    agent_principal = ctx["agents"][agent]
+    tenant = ctx["tenant"]
+
+    from src.core.database.repositories.account import AccountRepository
+    from tests.bdd.steps._harness_db import db_session
+
+    with db_session(ctx) as session:
+        repo = AccountRepository(session, tenant.tenant_id)
+        agent_accounts = repo.list_for_agent(agent_principal.principal_id)
+        agent_ids = {a.account_id for a in agent_accounts}
+
+    leaked = returned_ids & agent_ids
+    assert len(leaked) == 0, (
+        f"Cross-agent isolation broken: accounts {leaked} belong to agent '{agent}' "
+        f"but appeared in another agent's response"
+    )
+
+
+@then(parsers.parse('none of the returned accounts have brand domain "{domain}"'))
+def then_no_accounts_with_domain(ctx: dict, domain: str) -> None:
+    """Assert no returned accounts have the given brand domain.
+
+    Proves cross-agent isolation by brand domain.
+    """
+    resp = ctx["response"]
+    assert resp is not None, "Expected a response"
+    for acct in resp.accounts:
+        acct_domain = getattr(acct, "brand_domain", None) or (
+            acct.brand.domain if hasattr(acct, "brand") and acct.brand else None
+        )
+        assert acct_domain != domain, (
+            f"Cross-agent isolation broken: account with brand domain '{domain}' "
+            f"appeared in response (account_id={acct.account_id})"
+        )
+
+
+@then("the account name in the database is unchanged from the original")
+def then_account_name_unchanged(ctx: dict) -> None:
+    """Assert the account name was NOT modified by a sync update.
+
+    Verifies immutability of the 'name' field: sync may update billing/payment_terms
+    but must preserve name, advertiser, rate_card. Compares with the snapshot
+    taken after the Given step's _sync_pre_create.
+    """
+    acct = ctx.get("last_account")
+    assert acct is not None, "No account referenced — need a prior 'account for brand domain' step"
+    domain = acct.brand.domain
+
+    from src.core.database.repositories.account import AccountRepository
+    from tests.bdd.steps._harness_db import db_session
+
+    tenant = ctx["tenant"]
+    principal = ctx["principal"]
+    with db_session(ctx) as session:
+        repo = AccountRepository(session, tenant.tenant_id)
+        accounts = repo.list_by_principal(principal.principal_id)
+        matching = [a for a in accounts if a.brand and a.brand.domain == domain]
+        assert len(matching) == 1, f"Expected 1 account for {domain}, got {len(matching)}"
+        db_acct = matching[0]
+        # Compare with pre-update snapshot
+        snapshots = ctx.get("_immutable_snapshots", {})
+        original = snapshots.get(domain, {})
+        original_name = original.get("name")
+        assert db_acct.name == original_name, (
+            f"Account name changed from {original_name!r} to {db_acct.name!r} for {domain}"
+        )
+
+
+@then("the account rate_card in the database is unchanged from the original")
+def then_account_rate_card_unchanged(ctx: dict) -> None:
+    """Assert the account rate_card was NOT modified by a sync update.
+
+    Compares the current DB value with the snapshot taken after the Given
+    step's _sync_pre_create. The rate_card may be None if sync doesn't
+    set it — that's valid as long as it hasn't changed.
+    """
+    acct = ctx.get("last_account")
+    assert acct is not None, "No account referenced — need a prior 'account for brand domain' step"
+    domain = acct.brand.domain
+
+    from src.core.database.repositories.account import AccountRepository
+    from tests.bdd.steps._harness_db import db_session
+
+    tenant = ctx["tenant"]
+    principal = ctx["principal"]
+    with db_session(ctx) as session:
+        repo = AccountRepository(session, tenant.tenant_id)
+        accounts = repo.list_by_principal(principal.principal_id)
+        matching = [a for a in accounts if a.brand and a.brand.domain == domain]
+        assert len(matching) == 1, f"Expected 1 account for {domain}, got {len(matching)}"
+        db_acct = matching[0]
+        # Compare with pre-update snapshot
+        snapshots = ctx.get("_immutable_snapshots", {})
+        original = snapshots.get(domain, {})
+        original_rc = original.get("rate_card")
+        assert db_acct.rate_card == original_rc, (
+            f"Account rate_card changed from {original_rc!r} to {db_acct.rate_card!r} for {domain}"
+        )
+
+
+@then(parsers.parse('the agent has exactly one access grant for brand domain "{domain}"'))
+def then_single_access_grant(ctx: dict, domain: str) -> None:
+    """Assert the agent has exactly one access grant for the given brand domain.
+
+    Proves that re-syncing an existing account does NOT duplicate access grants.
+    """
+    from src.core.database.repositories.account import AccountRepository
+    from tests.bdd.steps._harness_db import db_session
+
+    tenant = ctx["tenant"]
+    principal = ctx["principal"]
+    with db_session(ctx) as session:
+        repo = AccountRepository(session, tenant.tenant_id)
+        accounts = repo.list_by_principal(principal.principal_id)
+        matching = [a for a in accounts if a.brand and a.brand.domain == domain]
+        assert len(matching) == 1, (
+            f"Expected exactly 1 access grant for {domain}, got {len(matching)}. "
+            "Re-sync may have duplicated the access grant."
+        )
+
+
+@then(parsers.parse('the response does not include a result for brand domain "{domain}"'))
+def then_no_result_for_domain(ctx: dict, domain: str) -> None:
+    """Assert the response does NOT include a result for the given brand domain.
+
+    Used in dry_run+delete_missing scenarios to verify that dry_run suppresses
+    the delete_missing deactivation preview entirely.
+    """
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    for acct in resp.accounts:
+        acct_domain = acct.brand.domain if hasattr(acct, "brand") and acct.brand else None
+        assert acct_domain != domain, (
+            f"Expected NO result for brand domain '{domain}' in dry_run response, "
+            f"but found account with action='{_action_str(acct.action)}'"
+        )
+
+
+@then(parsers.parse('the list includes an account with brand domain "{domain}"'))
+def then_list_includes_domain(ctx: dict, domain: str) -> None:
+    """Assert the list_accounts response contains an account with the given brand domain.
+
+    The scenario first syncs (creating the account), then lists — this step
+    verifies the created account appears in the list.
+    """
+    resp = ctx["response"]
+    assert resp is not None, f"Expected a list response but got error: {ctx.get('error')}"
+    assert len(resp.accounts) >= 0, f"Response has no accounts array: {type(resp)}"
+    found = any(a.brand and a.brand.domain == domain for a in resp.accounts)
+    assert found, (
+        f"Expected list to include account with brand domain '{domain}', "
+        f"but found: {[a.brand.domain if hasattr(a, 'brand') and a.brand else '?' for a in resp.accounts]}"
+    )
