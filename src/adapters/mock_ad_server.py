@@ -1,6 +1,9 @@
+import logging
 import random
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from src.core.schemas import Snapshot
@@ -684,7 +687,7 @@ class MockAdServer(AdServerAdapter):
                         tenant_gemini_key = tenant_obj.gemini_api_key
         except Exception:
             # Database not available (e.g., in unit tests) - use default template
-            pass
+            logger.debug("Could not load tenant config from DB, using defaults", exc_info=True)
 
         # Build context and apply template
         context = build_order_name_context(request, packages, start_time, end_time, tenant_gemini_key=tenant_gemini_key)

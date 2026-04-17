@@ -2184,7 +2184,7 @@ def delete_product(tenant_id, product_id):
         try:
             db_session.rollback()
         except Exception:
-            pass
+            logger.debug("Rollback failed during error handling", exc_info=True)
 
         # More specific error handling
         error_message = str(e)

@@ -146,7 +146,7 @@ class AuditLogger:
                         if tenant:
                             tenant_name = tenant.name
                 except Exception:
-                    pass
+                    audit_logger.debug("Could not load tenant name for Slack context", exc_info=True)
 
             # Send notification based on criteria
             should_notify = False
@@ -226,7 +226,7 @@ class AuditLogger:
                             if tenant:
                                 tenant_config = serialize_tenant_to_dict(tenant)
                     except Exception:
-                        pass
+                        audit_logger.debug("Could not load tenant config for Slack context", exc_info=True)
 
                 slack_notifier = get_slack_notifier(tenant_config=tenant_config)
                 slack_notifier.notify_audit_log(
@@ -299,7 +299,7 @@ class AuditLogger:
                             tenant_name = tenant.name
                             tenant_config = serialize_tenant_to_dict(tenant)
                 except Exception:
-                    pass
+                    audit_logger.debug("Could not load tenant for security violation Slack context", exc_info=True)
 
             slack_notifier = get_slack_notifier(tenant_config=tenant_config)
             slack_notifier.notify_audit_log(

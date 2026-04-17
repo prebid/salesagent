@@ -42,43 +42,8 @@ _ACCEPTABLE_EXCEPTION_TYPES = frozenset(
 
 # Known violations — allowlist must only shrink, never grow.
 # Format: (relative_path_from_src, line_number)
-# Each entry must have a FIXME(#1078) comment at the source location.
-_KNOWN_VIOLATIONS: set[tuple[str, int]] = {
-    # FIXME(#1078): a2a protocol error formatting — needs structured error response
-    ("a2a_server/adcp_a2a_server.py", 609),
-    # FIXME(#1078): GAM date parsing — silent row drop (H5 location 1, partial fix)
-    ("adapters/google_ad_manager.py", 1152),
-    # FIXME(#1078): mock adapter template rendering fallback
-    ("adapters/mock_ad_server.py", 685),
-    # FIXME(#1078): admin product form — silent field parse error
-    ("admin/blueprints/products.py", 2186),
-    # FIXME(#1078): tenant list — silent iteration skip
-    ("admin/blueprints/tenants.py", 51),
-    # FIXME(#1078): audit logger — tenant name lookup for Slack context (3 locations)
-    ("core/audit_logger.py", 148),
-    ("core/audit_logger.py", 228),
-    ("core/audit_logger.py", 301),
-    # FIXME(#1078): auth header fallback — transport boundary (reviewed as by-design M8)
-    ("core/auth.py", 101),
-    # FIXME(#1078): MCP auth middleware — header extraction fallback
-    ("core/mcp_auth_middleware.py", 61),
-    # FIXME(#1078): request compat — best-effort schema matching
-    ("core/request_compat.py", 55),
-    ("core/request_compat.py", 252),
-    # FIXME(#1078): testing hooks — cleanup during test teardown
-    ("core/testing_hooks.py", 167),
-    # FIXME(#1078): tool error logging — serialization fallback
-    ("core/tool_error_logging.py", 54),
-    # FIXME(#1078): transport helpers — header extraction fallback (2 locations)
-    ("core/transport_helpers.py", 72),
-    ("core/transport_helpers.py", 95),
-    # FIXME(#1078): background sync — periodic task error isolation
-    ("services/background_sync_service.py", 225),
-    # FIXME(#1078): protocol webhook — delivery failure isolation
-    ("services/protocol_webhook_service.py", 51),
-    # FIXME(#1078): slack notifier — notification delivery isolation
-    ("services/slack_notifier.py", 648),
-}
+# All 19 pre-existing violations were fixed in this PR. Allowlist is empty.
+_KNOWN_VIOLATIONS: set[tuple[str, int]] = set()
 
 
 def _is_broad_exception_handler(handler: ast.ExceptHandler) -> bool:

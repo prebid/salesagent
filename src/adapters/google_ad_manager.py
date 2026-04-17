@@ -1150,7 +1150,7 @@ class GoogleAdManager(AdServerAdapter):
                     elif len(date_str) == 10 and date_str[4] == "-" and date_str[7] == "-":
                         pass  # Already in correct format
                 except Exception:
-                    # If parsing fails, skip this row
+                    logger.warning("Failed to parse date '%s', skipping row", date_str, exc_info=True)
                     continue
 
                 if date_str not in daily_metrics:

@@ -223,7 +223,7 @@ def _run_sync_thread(
                     try:
                         os.unlink(temp_keyfile)
                     except Exception:
-                        pass
+                        logger.debug("Could not delete temp keyfile %s", temp_keyfile, exc_info=True)
             else:  # OAuth
                 oauth2_client = oauth2.GoogleRefreshTokenClient(
                     client_id=os.environ.get("GAM_OAUTH_CLIENT_ID"),

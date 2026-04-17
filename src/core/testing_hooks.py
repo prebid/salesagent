@@ -13,6 +13,7 @@ This module handles all testing headers and provides isolated test execution:
 - X-Simulated-Spend: Track simulated spending without real money
 """
 
+import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import Enum
@@ -21,6 +22,8 @@ from typing import TYPE_CHECKING, Any
 from fastmcp.server.context import Context
 from fastmcp.server.dependencies import get_http_headers
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from src.core.tool_context import ToolContext
@@ -165,7 +168,7 @@ class AdCPTestContext(BaseModel):
         try:
             headers = get_http_headers()
         except Exception:
-            pass  # Will try fallback below
+            logger.debug("get_http_headers() unavailable in testing hooks", exc_info=True)
 
         # If get_http_headers() returned empty dict or None, try context.meta fallback
         # This is necessary for sync tools where get_http_headers() may not work
