@@ -352,6 +352,30 @@ Every structural guard starts with one of three allowlist strategies:
 | `test_architecture_handlers_use_annotated.py` (L1/L2, §11.22) | Empty + bootstrap |
 | `test_architecture_dto_config.py` (L4, §11.23) | Empty + bootstrap |
 | `test_architecture_no_direct_os_environ.py` (L4, §11.19) | Captured baseline → shrink |
+| **Pre-L0 audit mitigation guards (Agents β/γ/δ/ζ — 2026-04-17)** | |
+| `test_architecture_no_admin_wrapper_modules.py` (L0, D8 #4 / Agent β) — asserts `src/admin/flash.py`, `src/admin/sessions.py`, `src/admin/templating.py` do NOT exist AND no imports from them in src/ or tests/ | Empty + bootstrap (meta-guard) |
+| `test_architecture_migration_docs_no_wrapper_imports.py` (L0, D8 #4 / Agent β meta-guard) — scans `.claude/notes/flask-to-fastapi/*.md` for live imports of deleted wrapper modules outside explicitly-labeled historical blocks | Empty + bootstrap |
+| `test_architecture_messages_dep_coverage.py` (L1a, D8 #4 / Agent β) — every POST handler returning `RedirectResponse` (302/303/307) either takes `messages: MessagesDep` OR is allowlisted | Empty + bootstrap |
+| `test_architecture_oauth_callback_threadpool_wrap.py` (L1b, CLAUDE.md Invariant 4 / Agent γ C10) — AST-scans the 3 OAuth callback bodies; every DB-touching call inside `async def` is wrapped in `run_in_threadpool(...)` | Empty + bootstrap (retires at L5b alongside `handlers_use_sync_def`) |
+| `test_architecture_no_threadpool_wrap_on_async_helpers.py` (L5c+, Agent γ / Agent ζ Q4) — AST-scans for `run_in_threadpool(name, ...)` where `name` resolves to an `async def` function; prevents threadpool wrap from surviving after helpers convert to async | Empty + bootstrap |
+| `test_architecture_edge_rate_limit_outermost.py` (L1a, B6 / Agent δ) — asserts `EdgeRateLimitMiddleware` is FIRST entry in `app.user_middleware` (outermost at runtime); prevents refactor from re-exposing slowapi bypass | Empty + bootstrap |
+| `test_architecture_oauth_transit_flow_id_scoped.py` (L1b, B7 / Agent δ) — asserts `TRANSIT_COOKIE_PREFIX` + `_state_to_flow_id` exist; forbids fixed `TRANSIT_COOKIE` constant | Empty + bootstrap |
+| `test_architecture_lifespan_shutdown_order.py` (L5d1, B8 / Agent δ) — AST-scan `src/app.py::app_lifespan` for nested `async with` in order `[database, http_client, active_sync_tasks]`; plus observed-order integration test | Empty + bootstrap |
+| `test_architecture_sync_handlers_no_async_client.py` (L1a, B9 / Agent δ) — AST-scans sync `def` handlers for `app.state.http_client` (async) refs; sync handlers must use `http_client_sync` | Empty + bootstrap |
+| `test_architecture_no_flask_in_app_py.py` (L2, B10 / Agent δ) — asserts zero references to `admin_wsgi`, `_install_admin_mounts`, `WSGIMiddleware`, `a2wsgi`, `from src.admin.app import create_app`, `flask_admin_app` in `src/app.py` | Empty + bootstrap |
+| `test_architecture_a2a_routes_grafted.py` (L1a; strengthened at L6, B11 / Agent δ) — asserts A2A agent-card paths registered at module scope + `_replace_routes()` call has `# LOAD-BEARING` comment OR is deleted (post-L6) | Empty + bootstrap |
+| `test_architecture_no_route_list_mutation.py` (L6, B11 / Agent ζ L6-NEW-3) — asserts no `app.router.routes = ...` or `.insert/.append/.extend` in src/app.py; prevents route-list mutation pattern | Empty + bootstrap |
+| `test_architecture_single_worker_invariant.py` (L0 extended, B12 / Agent δ) — extended to scan Python + `fly*.toml` + `docker-compose*.yml` for `workers>=2` or `UVICORN_WORKERS>=2` directives | Empty + bootstrap |
+| `test_architecture_trusted_hosts_cover_platform.py` (L2, B13 / Agent δ) — asserts `trusted_hosts` includes Fly.io platform hostnames (`*.fly.dev`, `*.internal`, `fly-local-6pn`) | Empty + bootstrap (verified empirically by Spike 6.5 at L2 entry) |
+| `test_architecture_principal_is_detached.py` (L1a, B15 / Agent δ) — asserts `src/admin/auth/principal.py::Principal` is `@dataclass(frozen=True, slots=True)`; no Mapped[] fields; no ORM imports; required fields {user_email, role, tenant_id, available_tenants} present | Empty + bootstrap |
+| **Phase F L6/L7 greenfield-completion guards (Agent ζ — 2026-04-17)** | |
+| `test_architecture_tenant_scoped_router_deps.py` (L6, L6-NEW-2) — 14 tenant-scoped routers declare `require_tenant_access` via router-level `dependencies=[...]`, not per-handler `Depends()` | Empty + bootstrap |
+| `test_architecture_default_response_class_is_orjson.py` (L6, L6-NEW-4) — `FastAPI()` constructor has `default_response_class=ORJSONResponse` kwarg | Empty + bootstrap |
+| `test_architecture_no_render_wrapper.py` (L7, L7-NEW-1) — `src/admin/templating.py::render` function does NOT exist; no `from src.admin.templating import render` in `src/` | Empty + bootstrap |
+| `test_architecture_no_migration_fingerprints.py` (L7, L7-NEW-3) — `tests/migration/fixtures/fingerprints/` directory deleted; `fingerprint.py`, `test_response_fingerprints.py`, `dual_stack_client.py` all deleted | Empty + bootstrap |
+| `test_architecture_route_naming_convention.py` (L7, L7-NEW-5) — admin route names use `<feature>.<action>` dotted form; no `name="admin_..."` prefix | Empty + bootstrap |
+| `test_architecture_no_cookie_debug_hooks.py` (L7, L7-NEW-6) — no `SESSION_DEBUG`, `log_auth_cookies`, or `def log_*_cookies` in src/ | Empty + bootstrap |
+| `test_architecture_single_error_template.py` (L7, L7-NEW-7) — `src/admin/templates/` contains `error.html` + optional `error_partial.html` only; no per-status 401/403/404/500/502.html | Empty + bootstrap |
 
 ---
 
