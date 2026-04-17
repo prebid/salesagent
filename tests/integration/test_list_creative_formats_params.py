@@ -105,7 +105,11 @@ def test_filtering_by_format_ids(integration_db):
 
 
 def test_filtering_combined(integration_db):
-    """Test that multiple filters work together."""
+    """Test that multiple filters work together.
+
+    The type filter was removed in adcp 3.12, so min_width=500
+    now returns all formats with width >= 500 regardless of type.
+    """
     formats = [
         _fmt(
             "display_300x250",
@@ -129,8 +133,9 @@ def test_filtering_combined(integration_db):
         req = ListCreativeFormatsRequest(min_width=500)
         response = env.call_impl(req=req)
 
-    assert len(response.formats) == 1
-    assert response.formats[0].name == "Display 728x90"
+    assert len(response.formats) == 2
+    names = {f.name for f in response.formats}
+    assert names == {"Display 728x90", "Video 16:9"}
 
 
 def test_filtering_by_is_responsive(integration_db):
@@ -330,11 +335,13 @@ def test_new_filters_combined_with_existing(integration_db):
         TenantFactory(tenant_id="test_tenant")
         env.set_registry_formats(formats)
 
-        # Combine type + dimension
+        # Combine dimension filter (type filter removed in adcp 3.12)
         req = ListCreativeFormatsRequest(min_width=500)
         response = env.call_impl(req=req)
-        assert len(response.formats) == 1
-        assert response.formats[0].name == "Display 728x90"
+        assert len(response.formats) == 2
+        names = [f.name for f in response.formats]
+        assert "Display 728x90" in names
+        assert "Video 16:9" in names
 
         # Combine name_search + dimension
         req = ListCreativeFormatsRequest(name_search="display", max_width=400)

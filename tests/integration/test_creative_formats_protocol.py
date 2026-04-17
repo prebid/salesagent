@@ -65,33 +65,34 @@ class TestCombinedFilters:
     """Covers: UC-005-MAIN-MCP-16 -- multiple filters applied conjunctively."""
 
     def test_combined_type_asset_dimension_filters(self, integration_db):
-        """UC-005-MAIN-MCP-16: type=display + asset_types=[image] + max_width=728.
+        """UC-005-MAIN-MCP-16: asset_types=[image] + max_width=728.
 
-        Given diverse formats, only display formats with image assets and
+        Given diverse formats, only formats with image assets and
         at least one render width <= 728 are returned.
+        The type filter was removed in adcp 3.12.
         """
-        # Display with image, width 300 -- SHOULD MATCH
+        # Image asset, width 300 -- SHOULD MATCH
         display_small_image = _make_format(
             "d_small",
             "Small Display Banner",
             renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
             assets=[Assets(item_type="individual", asset_id="hero_image", required=True)],
         )
-        # Display with image, width 970 -- should NOT match (too wide)
+        # Image asset, width 970 -- should NOT match (too wide)
         display_wide_image = _make_format(
             "d_wide",
             "Wide Display Billboard",
             renders=[Renders(role="primary", dimensions=Dimensions(width=970, height=250))],
             assets=[Assets(item_type="individual", asset_id="billboard_image", required=True)],
         )
-        # Display with video asset, width 300 -- should NOT match (wrong asset type)
+        # Video asset, width 300 -- should NOT match (wrong asset type)
         display_video = _make_format(
             "d_video",
             "Display Video Unit",
             renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
             assets=[Assets5(item_type="individual", asset_id="hero_video", required=True)],
         )
-        # Video with image, width 300 -- should NOT match (wrong type)
+        # Image asset, width 300 -- SHOULD MATCH (type filter no longer applies)
         video_image = _make_format(
             "v_image",
             "Video Companion",
@@ -111,8 +112,9 @@ class TestCombinedFilters:
             )
             response = env.call_impl(req=req)
 
-        assert len(response.formats) == 1
-        assert response.formats[0].format_id.id == "d_small"
+        assert len(response.formats) == 2
+        returned_ids = {f.format_id.id for f in response.formats}
+        assert returned_ids == {"d_small", "v_image"}
 
     def test_combined_filters_via_mcp(self, integration_db):
         """UC-005-MAIN-MCP-16: same combined filter logic through MCP wrapper."""
@@ -169,12 +171,12 @@ class TestCombinedFilters:
 
     def test_all_filters_conjunctive_empty_result(self, integration_db):
         """UC-005-MAIN-MCP-16: if no format matches all filters, result is empty."""
-        # Video format -- fails type=display filter
+        # Video asset format -- fails asset_types=["image"] filter
         only_video = _make_format(
             "v1",
             "Video Only",
             renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
-            assets=[Assets(item_type="individual", asset_id="vid", required=True)],
+            assets=[Assets5(item_type="individual", asset_id="vid", required=True)],
         )
 
         with CreativeFormatsEnv() as env:

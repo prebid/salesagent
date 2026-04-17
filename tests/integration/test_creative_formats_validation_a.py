@@ -198,23 +198,19 @@ class TestInvalidFormatCategoryEnum:
         """
         with pytest.raises(ValidationError):
             ListCreativeFormatsRequest(type="display")
-        for value in valid_values:
-            assert value in error_msg, f"Error should mention valid value '{value}'. Full error: {error_msg}"
 
-    def test_valid_type_enum_via_mcp_works(self, integration_db):
-        """UC-005-EXT-B-01: MCP wrapper correctly handles FormatCategory enum.
+    def test_valid_filters_via_mcp_works(self, integration_db):
+        """UC-005-EXT-B-01: MCP wrapper correctly handles valid filter parameters.
 
-        FastMCP coerces string inputs to FormatCategory enums before calling
-        the wrapper. Verify the wrapper handles a real enum without error.
-        Invalid strings never reach the wrapper (FastMCP rejects them).
+        The type filter was removed in adcp 3.12. Verify the MCP wrapper
+        handles remaining valid filters (e.g., name_search) without error.
         """
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
 
-            # Pass a real enum — the wrapper's type.value should work
-            response = env.call_mcp(type="audio")
+            # Pass a valid filter — name_search for nonexistent name → empty result
+            response = env.call_mcp(name_search="nonexistent_format_xyz")
 
-        # Audio filter on a catalog with no audio formats → empty result
         assert isinstance(response, ListCreativeFormatsResponse)
         assert len(response.formats) == 0
 

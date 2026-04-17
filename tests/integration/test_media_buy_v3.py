@@ -302,7 +302,7 @@ class TestCreateMediaBuyManualApproval:
         assert result.status == "submitted"
 
         with get_db_session() as session:
-            mb = session.scalars(select(MediaBuy).where(MediaBuy.media_buy_id == result.media_buy_id)).first()
+            mb = session.scalars(select(MediaBuy).where(MediaBuy.media_buy_id == result.response.media_buy_id)).first()
             assert mb is not None, "Media buy record should exist in DB"
             assert mb.raw_request is not None, "raw_request should be stored"
 
@@ -337,7 +337,7 @@ class TestCreateMediaBuyManualApproval:
         result = await _create_media_buy_impl(req=req, identity=identity)
         assert result.status == "submitted"
 
-        media_buy_id = result.media_buy_id
+        media_buy_id = result.response.media_buy_id
 
         success, error = execute_approved_media_buy(
             media_buy_id=media_buy_id,
@@ -378,7 +378,7 @@ class TestCreateMediaBuyAdapterAtomicity:
         assert result.status == "completed", f"Expected completed, got {result.status}. Response: {result.response}"
 
         with get_db_session() as session:
-            mb = session.scalars(select(MediaBuy).where(MediaBuy.media_buy_id == result.media_buy_id)).first()
+            mb = session.scalars(select(MediaBuy).where(MediaBuy.media_buy_id == result.response.media_buy_id)).first()
             assert mb is not None, "Media buy should be persisted in DB"
             assert mb.media_buy_id is not None
             # Mock adapter flow results in pending_activation (creatives not yet approved)
