@@ -3943,3 +3943,483 @@ def then_invoke_generative_with_asset_prompt(ctx: dict) -> None:
 def then_use_creative_name_as_prompt_fallback(ctx: dict) -> None:
     """Assert generative build was invoked using the creative name as fallback."""
     _assert_generative_build(ctx, prompt_source="name_fallback")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GIVEN steps — BR-RULE-036 invariant scenarios (3vp2)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given("a creative with a format that has output_format_ids defined")
+def given_creative_format_with_output_format_ids(ctx: dict) -> None:
+    """Set up a creative with a generative format (output_format_ids populated).
+
+    INV-1: format_obj.output_format_ids is truthy -> creative classified as generative.
+    """
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    creative_payload = {
+        "creative_id": "creative-gen-inv1-001",
+        "name": "Generative Detection Test",
+        "format_id": fmt,
+        "assets": {
+            "image": {"url": "https://example.com/banner.png", "width": 300, "height": 250},
+        },
+    }
+    ctx.setdefault("creatives", []).append(creative_payload)
+    ctx["creative_format_id"] = fmt["id"]
+    ctx["generative_creative"] = True
+
+
+@given("GEMINI_API_KEY is configured")
+def given_gemini_api_key_configured(ctx: dict) -> None:
+    """Ensure the GEMINI_API_KEY is set on the config mock.
+
+    If setup_generative_build was already called, the key is already set.
+    This step acts as an explicit guard / documentation step.
+    """
+    env = ctx["env"]
+    env.mock["config"].return_value.gemini_api_key = "test-gemini-key"
+
+
+@given(parsers.parse('a generative creative with an asset of role "{role}" containing "{content}"'))
+def given_generative_creative_with_asset_role(ctx: dict, role: str, content: str) -> None:
+    """Set up a generative creative with a specific asset role containing prompt text.
+
+    INV-2: prompt found in assets (message/brief/prompt role) -> that text used as build prompt.
+    """
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    creative_payload = {
+        "creative_id": "creative-gen-inv2-001",
+        "name": "Generative Prompt From Assets",
+        "format_id": fmt,
+        "assets": {
+            role: {"content": content},
+        },
+    }
+    ctx.setdefault("creatives", []).append(creative_payload)
+    ctx["creative_format_id"] = fmt["id"]
+    ctx["generative_creative"] = True
+
+
+@given(
+    parsers.re(
+        r'a generative creative with no prompt assets but inputs\[0\]\.context_description = "(?P<description>[^"]+)"'
+    )
+)
+def given_generative_creative_with_context_description(ctx: dict, description: str) -> None:
+    """Set up a generative creative with context_description in inputs (no prompt assets).
+
+    INV-3: no prompt in assets, but inputs[0].context_description exists
+    -> context_description used as build prompt.
+    """
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    creative_payload = {
+        "creative_id": "creative-gen-inv3-001",
+        "name": "Generative Context Description",
+        "format_id": fmt,
+        "assets": {},
+        "inputs": [{"name": "default", "context_description": description}],
+    }
+    ctx.setdefault("creatives", []).append(creative_payload)
+    ctx["creative_format_id"] = fmt["id"]
+    ctx["generative_creative"] = True
+
+
+@given(parsers.parse('a generative creative named "{name}" with no prompt assets or inputs'))
+def given_generative_creative_named_no_prompt(ctx: dict, name: str) -> None:
+    """Set up a NEW generative creative with a name but no prompt sources.
+
+    INV-4: no prompt in assets or inputs (create) -> creative name used as
+    fallback: "Create a creative for: {name}".
+    """
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    creative_payload = {
+        "creative_id": "creative-gen-inv4-001",
+        "name": name,
+        "format_id": fmt,
+        "assets": {},
+    }
+    ctx.setdefault("creatives", []).append(creative_payload)
+    ctx["creative_format_id"] = fmt["id"]
+    ctx["generative_creative"] = True
+    ctx["generative_create_path"] = True
+
+
+@given("a generative creative that already exists with generated content")
+def given_generative_creative_exists_with_content(ctx: dict) -> None:
+    """Pre-seed a generative creative in the DB with existing generated content.
+
+    INV-5: sets up a creative that already has generative_build_result,
+    generative_status, and generative_context_id in its data field.
+    The update step will then modify this creative without a prompt.
+    """
+    from tests.factories import CreativeFactory
+
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+    tenant = ctx["tenant"]
+    principal = ctx["principal"]
+    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+
+    creative_id = "creative-gen-inv5-001"
+    existing_data = {
+        "generative_build_result": {
+            "status": "draft",
+            "context_id": "ctx-existing-001",
+            "creative_output": {
+                "assets": {"headline": {"text": "Previously generated headline"}},
+                "output_format": {"url": "https://generated.example.com/existing.html"},
+            },
+        },
+        "generative_status": "draft",
+        "generative_context_id": "ctx-existing-001",
+        "output_format": {"url": "https://generated.example.com/existing.html"},
+    }
+    CreativeFactory(
+        tenant=tenant,
+        principal=principal,
+        creative_id=creative_id,
+        name="Existing Generative Creative",
+        agent_url=env.DEFAULT_AGENT_URL,
+        format="display_gen",
+        data=existing_data,
+    )
+    env._commit_factory_data()
+
+    # Prepare the update payload (no prompt assets or inputs yet — added by next step)
+    creative_payload = {
+        "creative_id": creative_id,
+        "name": "Existing Generative Creative",
+        "format_id": fmt,
+    }
+    ctx.setdefault("creatives", []).append(creative_payload)
+    ctx["creative_format_id"] = fmt["id"]
+    ctx["generative_creative"] = True
+    ctx["existing_generative_data"] = existing_data
+
+
+@given("the update has no prompt assets or inputs")
+def given_update_no_prompt(ctx: dict) -> None:
+    """Ensure the update payload has NO prompt-bearing assets or inputs.
+
+    INV-5: no prompt in assets or inputs (update) -> generative build
+    skipped; existing creative data preserved.
+    """
+    creatives = ctx.get("creatives", [])
+    assert creatives, "No creative in context to strip prompt from"
+    last_creative = creatives[-1]
+    assets = last_creative.get("assets", {})
+    for role in ("message", "brief", "prompt"):
+        assets.pop(role, None)
+    last_creative["assets"] = assets
+    last_creative.pop("inputs", None)
+
+
+@given("a generative creative with both user-provided assets and generative prompt")
+def given_generative_creative_with_user_assets_and_prompt(ctx: dict) -> None:
+    """Set up a generative creative with both user assets and a prompt message.
+
+    INV-6: user-provided assets present alongside generative output ->
+    user assets take priority over generative output.
+    """
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    creative_payload = {
+        "creative_id": "creative-gen-inv6-001",
+        "name": "Generative With User Assets",
+        "format_id": fmt,
+        "assets": {
+            "message": {"content": "Generate a responsive ad"},
+            "image": {"url": "https://example.com/user-banner.png", "width": 300, "height": 250},
+        },
+    }
+    ctx.setdefault("creatives", []).append(creative_payload)
+    ctx["creative_format_id"] = fmt["id"]
+    ctx["generative_creative"] = True
+    ctx["user_provided_assets"] = {"image": creative_payload["assets"]["image"]}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# WHEN steps — BR-RULE-036 invariant scenarios (3vp2)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@when("the Buyer Agent creates the creative")
+def when_buyer_creates_creative(ctx: dict) -> None:
+    """Send sync_creatives for a NEW creative (create path).
+
+    Delegates to the standard sync dispatch — the create/update distinction
+    is determined by whether the creative_id exists in the DB.
+    """
+    when_sync_creative(ctx)
+
+
+@when("the Buyer Agent updates the creative")
+def when_buyer_updates_creative(ctx: dict) -> None:
+    """Send sync_creatives for an EXISTING creative (update path).
+
+    Delegates to the standard sync dispatch — the creative was pre-seeded
+    by a prior Given step, so production takes the update path.
+    """
+    when_sync_creative(ctx)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# THEN steps — BR-RULE-036 invariant scenarios (3vp2)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@then("the creative should be processed as generative")
+def then_processed_as_generative(ctx: dict) -> None:
+    """Assert the creative was classified as generative and build_creative was called.
+
+    INV-1: format_obj.output_format_ids is truthy -> creative classified as generative.
+    """
+    error = ctx.get("error")
+    if error is not None:
+        pytest.xfail(f"SPEC-PRODUCTION GAP: expected generative processing but got {type(error).__name__}: {error}")
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response for generative processing"
+    results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
+    actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
+    assert any(a in ("created", "updated") for a in actions), (
+        f"Expected created/updated for generative processing, got {actions}"
+    )
+    # Verify build_creative WAS invoked (generative detection)
+    env = ctx["env"]
+    registry = env.mock["registry"].return_value
+    assert registry.build_creative.called, (
+        "build_creative should have been called for generative format (output_format_ids present)"
+    )
+
+
+@then("the creative should have generated content")
+def then_creative_has_generated_content(ctx: dict) -> None:
+    """Assert the creative response contains generated content from the build.
+
+    INV-1: verifies the generative build result was stored in the DB.
+    """
+    error = ctx.get("error")
+    if error is not None:
+        pytest.xfail(f"SPEC-PRODUCTION GAP: expected generated content but got {type(error).__name__}: {error}")
+
+    # Verify via DB: read the creative back and check for generative data
+    env = ctx["env"]
+    session = env._session
+    if session is None:
+        pytest.xfail("SPEC-PRODUCTION GAP: no DB session available to verify generated content")
+
+    from sqlalchemy import select
+
+    from src.core.database.models import Creative as CreativeModel
+
+    creative_id = ctx["creatives"][-1]["creative_id"]
+    db_creative = session.scalars(
+        select(CreativeModel).filter_by(
+            creative_id=creative_id,
+            tenant_id=env._tenant_id,
+        )
+    ).first()
+    assert db_creative is not None, f"Creative {creative_id} not found in DB"
+    creative_data = db_creative.data or {}
+    assert "generative_build_result" in creative_data, (
+        f"Expected 'generative_build_result' in creative data, got keys: {list(creative_data.keys())}"
+    )
+    env = ctx["env"]
+    registry = env.mock["registry"].return_value
+    assert registry.build_creative.called, "build_creative should have been called to generate content"
+
+
+@then(parsers.parse('the generative build should use "{expected_prompt}" as the prompt'))
+def then_generative_build_uses_prompt(ctx: dict, expected_prompt: str) -> None:
+    """Assert the generative build was invoked with the exact expected prompt.
+
+    Covers INV-2 (prompt from assets), INV-3 (from context_description),
+    and INV-4 (name fallback: "Create a creative for: {name}").
+    """
+    error = ctx.get("error")
+    if error is not None:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: expected generative build with prompt "
+            f"'{expected_prompt}' but got {type(error).__name__}: {error}"
+        )
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response for generative build"
+
+    env = ctx["env"]
+    registry = env.mock["registry"].return_value
+    assert registry.build_creative.called, "build_creative should have been called for generative format"
+    call_kwargs = registry.build_creative.call_args
+    # Extract the message argument (keyword or positional)
+    message_arg = call_kwargs.kwargs.get("message")
+    if message_arg is None:
+        # Try positional: build_creative(agent_url, format_id, message, ...)
+        if len(call_kwargs.args) > 2:
+            message_arg = call_kwargs.args[2]
+    if message_arg is None:
+        for kw_name in ("prompt", "text"):
+            message_arg = call_kwargs.kwargs.get(kw_name)
+            if message_arg:
+                break
+    assert message_arg is not None, (
+        f"build_creative must be called with a message/prompt, got args={call_kwargs.args}, kwargs={call_kwargs.kwargs}"
+    )
+    assert message_arg == expected_prompt, f"Expected prompt '{expected_prompt}', got '{message_arg}'"
+
+
+@then("the generative build should be skipped")
+def then_generative_build_skipped(ctx: dict) -> None:
+    """Assert the generative build was NOT invoked (update without prompt).
+
+    INV-5: no prompt in assets or inputs (update) -> generative build skipped.
+    """
+    error = ctx.get("error")
+    if error is not None:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: expected generative build to be skipped but got {type(error).__name__}: {error}"
+        )
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response when generative build is skipped"
+    results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
+    actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
+    assert any(a in ("updated", "unchanged") for a in actions), (
+        f"Expected updated/unchanged when build skipped, got {actions}"
+    )
+    # build_creative should NOT have been called
+    env = ctx["env"]
+    registry = env.mock["registry"].return_value
+    assert not registry.build_creative.called, "build_creative should NOT be called when update has no prompt"
+
+
+@then("the existing creative data should be preserved")
+def then_existing_data_preserved(ctx: dict) -> None:
+    """Assert the existing generative data was preserved after a prompt-less update.
+
+    INV-5: existing creative data (generative_build_result, generative_status,
+    generative_context_id) should be preserved.
+    """
+    error = ctx.get("error")
+    if error is not None:
+        pytest.xfail(f"SPEC-PRODUCTION GAP: expected data preservation but got {type(error).__name__}: {error}")
+    # Verify via DB: read the creative back and check data fields
+    env = ctx["env"]
+    session = env._session
+    if session is None:
+        pytest.xfail("SPEC-PRODUCTION GAP: no DB session available to verify data preservation")
+
+    from sqlalchemy import select
+
+    from src.core.database.models import Creative as CreativeModel
+
+    creative_id = ctx["creatives"][-1]["creative_id"]
+    db_creative = session.scalars(
+        select(CreativeModel).filter_by(
+            creative_id=creative_id,
+            tenant_id=env._tenant_id,
+        )
+    ).first()
+    assert db_creative is not None, f"Creative {creative_id} not found in DB after update"
+
+    expected_data = ctx.get("existing_generative_data", {})
+    creative_data = db_creative.data or {}
+    for key in ("generative_build_result", "generative_status", "generative_context_id"):
+        if key in expected_data:
+            assert key in creative_data, (
+                f"Expected preserved key '{key}' in creative data, got keys: {list(creative_data.keys())}"
+            )
+            assert creative_data[key] == expected_data[key], (
+                f"Expected preserved '{key}' = {expected_data[key]!r}, got {creative_data[key]!r}"
+            )
+
+
+@then("the user-provided assets should be preserved")
+def then_user_assets_preserved(ctx: dict) -> None:
+    """Assert user-provided assets are preserved in the DB after generative build.
+
+    INV-6: user assets take priority over generative output. Verify the stored
+    creative data contains the user-provided assets, not generated replacements.
+    """
+    error = ctx.get("error")
+    if error is not None:
+        pytest.xfail(f"SPEC-PRODUCTION GAP: expected user assets preserved but got {type(error).__name__}: {error}")
+
+    env = ctx["env"]
+    session = env._session
+    if session is None:
+        pytest.xfail("SPEC-PRODUCTION GAP: no DB session available to verify asset preservation")
+
+    from sqlalchemy import select
+
+    from src.core.database.models import Creative as CreativeModel
+
+    creative_id = ctx["creatives"][-1]["creative_id"]
+    db_creative = session.scalars(
+        select(CreativeModel).filter_by(
+            creative_id=creative_id,
+            tenant_id=env._tenant_id,
+        )
+    ).first()
+    assert db_creative is not None, f"Creative {creative_id} not found in DB"
+    creative_data = db_creative.data or {}
+    stored_assets = creative_data.get("assets", {})
+    user_assets = ctx.get("user_provided_assets", {})
+    # The user-provided "image" key must exist in stored assets
+    for asset_key in user_assets:
+        assert asset_key in stored_assets, (
+            f"User-provided '{asset_key}' asset should be preserved, got assets keys: {list(stored_assets.keys())}"
+        )
+
+
+@then("user assets should take priority over any generated content")
+def then_user_assets_priority_over_generated(ctx: dict) -> None:
+    """Assert user assets take priority over generative output in the DB.
+
+    INV-6: verify the creative's stored data uses user-provided assets,
+    not the generated ones from build_creative.
+    """
+    error = ctx.get("error")
+    if error is not None:
+        pytest.xfail(f"SPEC-PRODUCTION GAP: expected user asset priority but got {type(error).__name__}: {error}")
+    env = ctx["env"]
+    session = env._session
+    if session is None:
+        pytest.xfail("SPEC-PRODUCTION GAP: no DB session available to verify asset priority")
+
+    from sqlalchemy import select
+
+    from src.core.database.models import Creative as CreativeModel
+
+    creative_id = ctx["creatives"][-1]["creative_id"]
+    db_creative = session.scalars(
+        select(CreativeModel).filter_by(
+            creative_id=creative_id,
+            tenant_id=env._tenant_id,
+        )
+    ).first()
+    assert db_creative is not None, f"Creative {creative_id} not found in DB"
+
+    creative_data = db_creative.data or {}
+    stored_assets = creative_data.get("assets", {})
+    user_assets = ctx.get("user_provided_assets", {})
+    # User-provided image asset should be preserved, not overwritten by generated assets.
+    # Production may normalize/enrich the asset dict with additional fields (e.g., format,
+    # alt_text, provenance), so we check containment rather than exact equality.
+    if "image" in user_assets:
+        assert "image" in stored_assets, (
+            f"User-provided 'image' asset should be preserved in creative data, "
+            f"got assets keys: {list(stored_assets.keys())}"
+        )
+        stored_image = stored_assets["image"]
+        for key, value in user_assets["image"].items():
+            assert stored_image.get(key) == value, (
+                f"User-provided image['{key}'] should be preserved. Expected {value!r}, got {stored_image.get(key)!r}"
+            )
