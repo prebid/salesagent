@@ -353,6 +353,8 @@ result = await run_in_threadpool(adapter.create_media_buy, request, packages, ..
 
 **Validated by:** pre-Wave-0 Spike 4.5 (0.5-1 day, soft blocker). Fail action: refactor becomes dedicated Wave 4a sub-phase PR, not a gate failure.
 
+> [SUPERSEDED 2026-04-14 — Spike 4.5 is now at L4 entry]
+
 ### Background sync sync-bridge (Decision 9, 2026-04-11 resolution)
 
 **New module: `src/services/background_sync_db.py` (~200 LOC).** Runs the multi-hour GAM inventory sync jobs via a SEPARATE sync psycopg2 engine, kept distinct from the dual engines in `database_session.py`. The service keeps its current `threading.Thread` shape; converting to `asyncio.create_task` would pin async-pool connections for hours, triggering `pool_recycle=3600` mid-session and Fly.io TCP keepalive expiry.
@@ -563,6 +565,8 @@ Still applies (deep audit §3.1). Async doesn't fix this. Still v2.0 single-work
 **Mitigation:** Decision 7 refactor (stateless module functions taking `session: AsyncSession`, delete `DatabaseManager`). See §3 "ContextManager refactor" for the full shape.
 
 **Validated by:** Spike 4.5 (pre-Wave-0, 0.5-1 day soft blocker).
+
+> [SUPERSEDED 2026-04-14 — Spike 4.5 is now at L4 entry]
 
 ### Risk #7.5 — Background sync service long session (added 2026-04-11, resolved by Decision 9)
 

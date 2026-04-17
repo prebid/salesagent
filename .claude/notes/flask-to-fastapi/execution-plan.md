@@ -715,7 +715,7 @@ wc -l "$OUT"
 3. **Spike 3 (already captured at L4 EXIT):** Re-run perf measurement against `baseline-sync.json` to validate the capture pipeline is reproducible before mid-L5 comparisons.
 4. **Spike 4:** Convert `tests/harness/_base.py` + 5 representative tests; verify xdist + factory-boy work.
 5. **Spike 4.25:** Factory-boy async shim validation per `foundation-modules.md` §11.13.1(D) recipe. 8 edge-case tests. Pass: all green, no `MissingGreenlet`. **Fail = STOP L5 and re-analyze.**
-6. **Spike 4.5:** ContextManager refactor smoke test (validates the L4 refactor is ready for async conversion at L5c — the sync version landed at L4).
+6. ~~Spike 4.5~~ **Ran at L4 ENTRY per CLAUDE.md §v2.0 Spike Sequence; spike-decision.md references the L4-entry record.** L5a still enumerates Spike 4.5 status to confirm no regression was introduced by the sync-baseline capture at L4 EXIT, but this is a recap, not an execution item.
 7. **Spike 5:** Scheduler alive-tick — convert 2 scheduler tick bodies; observe container logs.
 8. **Spike 5.5:** Two-engine coexistence — prove async asyncpg + sync psycopg2 engines coexist in one process (Decision 9 validation).
 9. **Spike 6:** Alembic async — rewrite `alembic/env.py`; run upgrade/downgrade roundtrip. Fallback: keep env.py sync.

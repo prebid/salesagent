@@ -311,7 +311,7 @@ Spike 8 is NOT a technical spike — it is the formal decision gate at L5a end. 
 3. **Spike 3 — Performance baseline**: capture sync latency on 20 admin routes + 5 MCP tool calls as `baseline-sync.json` at the **L4 EXIT** (not L5a entry) — the async flip at L5b must be measurable against a baseline that already reflects the L4 pattern refinement (DTO boundary, structlog, SessionDep as sync alias). **Under Path B (Decision 1), the baseline includes adapter `run_in_threadpool` wraps** — L5 benchmark parity measurements must NOT compare sync baseline vs "bare async" but vs "async + threadpool-wrapped adapters" since that is the v2.0 production shape.
 4. **Spike 4 — Test harness**: convert `tests/harness/_base.py` + 5 representative tests; verify xdist + factory-boy work.
 5. **Spike 4.25 — Factory async-shim validation** (soft blocker, Decision 3): create `tests/factories/_async_shim.py` per §11.13.1(D) recipe; temporarily flip `TenantFactory` to `AsyncSQLAlchemyModelFactory` base; run 8 edge-case tests. Pass: all 8 green, no `MissingGreenlet`. Fail action (HARD): recipe has a bug → STOP Wave 4 and re-analyze; reconsider polyfactory.
-6. **Spike 4.5 — ContextManager refactor smoke test** (soft blocker, Decision 7): rewrite `src/core/context_manager.py` as stateless async module functions, delete `DatabaseManager`, convert smallest caller end-to-end. Pass: refactor size <400 LOC AND <15 files AND <50 test patches AND error-path composition test proves outer `session_scope()` rollback does NOT wipe error-logging writes. Fail action (SOFT): refactor gets a dedicated L4 sub-phase PR.
+6. **Spike 4.5 — ContextManager refactor smoke test** (soft blocker, Decision 7, **runs at L4 ENTRY — gates the Decision 7 refactor before the L4 PR lands**): rewrite `src/core/context_manager.py` as stateless module functions (sync at L4, converted to `async def` at L5c), delete `DatabaseManager`, convert smallest caller end-to-end. Pass: refactor size <400 LOC AND <15 files AND <50 test patches AND error-path composition test proves outer `session_scope()` rollback does NOT wipe error-logging writes. Fail action (SOFT): refactor gets a dedicated L4 sub-phase PR; NOT a hard gate on L5a entry.
 7. **Spike 5 — Scheduler alive-tick**: convert 2 scheduler tick bodies; observe container logs.
 8. **Spike 5.5 — Two-engine coexistence** (soft blocker, Decision 9): prove async asyncpg engine + sync psycopg2 engine coexist. 4 test cases. Pass: all 4 green. Fail action (SOFT): revert to Option A — document in `spike-decision.md`.
 9. **Spike 6 — Alembic async**: rewrite `alembic/env.py`; run upgrade/downgrade roundtrip. Fallback: keep env.py sync.
@@ -390,7 +390,7 @@ These are intentionally sequenced AFTER Flask removal (L0-L2). They are part of 
 - **Sync `SessionDep` + DTO boundary + structlog + pydantic-settings extension + `app.state` singletons + `render()` deletion + ContextManager refactor** — L4 (FastAPI-native patterns, still sync; perf baseline `baseline-sync.json` captured at L4 EXIT)
 - **REST routes ratchet to `Annotated[...]` form** — L4 (part of SessionDep + Annotated consistency)
 - **`require_tenant_access` to check `is_active`** — L4 (small fix, breaking change OK on v2.0 branch)
-- **Pre-L5 spike sequence (1, 2, 3, 4, 4.25, 4.5, 5, 5.5, 6, 7)** — L5a entry (Spike 3 baseline capture actually lands at L4 EXIT as noted above)
+- **Pre-L5 spike sequence (1, 2, 4, 4.25, 5, 5.5, 6, 7)** — L5a entry. **Spike 3 lands at L4 EXIT** (sync baseline capture; see L4 work item 13). **Spike 4.5 lands at L4 ENTRY** (gates Decision 7 ContextManager refactor; L4 work item 10 depends on pass). Neither gates L5a entry.
 - **Async SQLAlchemy conversion** — L5b (SessionDep alias flip) → L5c (3-router pilot) → L5d1-L5d5 (sync-bridge, adapter Path-B wrap, bulk routers, SSE deletion, mop-up) → L5e (final sweep). See `async-pivot-checkpoint.md` for reference material.
 - **Native refinements (delete `flash.py`, `app.state` for `SimpleAppCache`, router subdir reorg, `logfire` instrumentation — NOT `opentelemetry-sdk`)** — L6
 - **Hard-remove `FLASK_SECRET_KEY` dual-read, allowlists → zero, perf baseline comparison vs `baseline-sync.json`, mypy strict ratcheting, `docs/ARCHITECTURE.md` refresh, v2.0.0 tag** — L7 (final cleanup and ship)
@@ -451,7 +451,7 @@ Legacy "Wave" section headings predate the 8-layer rename. Translation:
 | L5a   | 5–7                      | 10 technical + 1 decision gate (11 items); lazy-load audit is HARD GATE for L5b |
 | L5b   | 1–2                      | SessionDep alias flip + engine refactor |
 | L5c   | 3–5                      | 3-router async pilot + async test harness adoption |
-| L5d1  | 2–3                      | ContextManager refactor finalization |
+| L5d1  | 2–3                      | Sync-bridge for `background_sync_service.py` (Decision 9) |
 | L5d2  | 3–4                      | Adapter Path-B threadpool wrap |
 | L5d3  | 8–12                     | Bulk router + repository async conversion (~300 repo methods, ~2400 LOC) |
 | L5d4  | 1–2                      | SSE deletion |
