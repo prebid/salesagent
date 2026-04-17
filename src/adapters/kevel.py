@@ -487,10 +487,6 @@ class Kevel(AdServerAdapter):
         """Checks the status of a media buy on Kevel."""
         self.log(f"Kevel.check_media_buy_status for media buy '{media_buy_id}'", dry_run_prefix=False)
 
-        # Note: buyer_ref would need to be retrieved from database or passed as parameter
-        # For now using media_buy_id as placeholder until interface is updated
-        buyer_ref = media_buy_id
-
         if self.dry_run:
             self.log(f"Would call: GET {self.base_url}/campaign/{media_buy_id}")
             self.log("Would check campaign IsActive status and flight statuses")
