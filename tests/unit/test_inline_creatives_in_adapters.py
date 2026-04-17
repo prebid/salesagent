@@ -46,14 +46,12 @@ class TestInlineCreativesInAdapters:
         # Per AdCP v2.2.0: budget removed from top-level (now at package level)
         # adcp 3.6.0: brand_manifest → brand (BrandReference with domain field)
         return CreateMediaBuyRequest(
-            buyer_ref="test_buyer_ref",
             brand={"domain": "example.com"},
             start_time=datetime.now(UTC),
             end_time=datetime.now(UTC) + timedelta(days=30),
             packages=[
                 PackageRequest(
                     product_id="prod_test_123",
-                    buyer_ref="pkg_buyer_ref",
                     budget=10000,
                     pricing_option_id="test_pricing",
                     format_ids=[FormatId(agent_url="https://creative.test", id="display_300x250")],

@@ -135,20 +135,12 @@ class TestListCreativesPluralFilters:
         assert hasattr(request.filters, "media_buy_ids")
         assert request.filters.media_buy_ids == ["mb_1", "mb_2", "mb_3"]
 
-    def test_creative_filters_accepts_plural_buyer_refs(self):
-        """Test CreativeFilters accepts buyer_refs plural filter."""
+    def test_creative_filters_buyer_refs_removed(self):
+        """buyer_refs removed from CreativeFilters in adcp 3.12."""
         from adcp.types import CreativeFilters as LibraryCreativeFilters
 
-        from src.core.schemas import ListCreativesRequest
-
-        filters = LibraryCreativeFilters(
-            buyer_refs=["ref_1", "ref_2", "ref_3"],
-        )
-        request = ListCreativesRequest(filters=filters)
-
-        assert request.filters is not None
-        assert hasattr(request.filters, "buyer_refs")
-        assert request.filters.buyer_refs == ["ref_1", "ref_2", "ref_3"]
+        # buyer_refs is no longer a field on CreativeFilters
+        assert "buyer_refs" not in LibraryCreativeFilters.model_fields
 
     def test_creative_filters_accepts_both_media_buy_ids_and_buyer_refs(self):
         """Test CreativeFilters accepts both filter types together."""
@@ -252,13 +244,7 @@ class TestUpdateMediaBuyCreativeAssignments:
                     "creative_id": "new_c1",
                     "name": "New Creative",
                     "format_id": {"agent_url": "https://example.com/", "id": "display_300x250"},
-                    "assets": {
-                        "banner": {
-                            "url": "https://example.com/banner.png",
-                            "width": 300,
-                            "height": 250,
-                        }
-                    },
+                    "assets": {"banner": {"url": "https://example.com/banner.png", "width": 300, "height": 250}},
                     "weight": 75,
                     "placement_ids": ["pl_1"],
                 },
@@ -306,7 +292,7 @@ class TestAdCP25SchemaCompliance:
 
         # Should have plural fields
         assert "media_buy_ids" in fields, "CreativeFilters should have media_buy_ids (plural)"
-        assert "buyer_refs" in fields, "CreativeFilters should have buyer_refs (plural)"
+        # buyer_refs removed from CreativeFilters in adcp 3.12
 
 
 # ============================================================================

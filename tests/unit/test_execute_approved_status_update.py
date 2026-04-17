@@ -28,18 +28,10 @@ def _make_mock_media_buy():
     mb.budget = Decimal("5000.00")
     mb.currency = "USD"
     mb.raw_request = {
-        "buyer_ref": "test-buyer",
         "brand": {"domain": "testbrand.com"},
         "start_time": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
         "end_time": (datetime.now(UTC) + timedelta(days=8)).isoformat(),
-        "packages": [
-            {
-                "product_id": "prod_1",
-                "pricing_option_id": "po_1",
-                "buyer_ref": "pkg-1",
-                "budget": 5000.0,
-            }
-        ],
+        "packages": [{"product_id": "prod_1", "pricing_option_id": "po_1", "budget": 5000.0}],
     }
     return mb
 
@@ -60,12 +52,7 @@ def _make_mock_package():
     pkg = MagicMock()
     pkg.package_id = "pkg_001"
     pkg.media_buy_id = "mb_test_001"
-    pkg.package_config = {
-        "product_id": "prod_1",
-        "name": "Test Package",
-        "budget": 5000.0,
-        "pricing_model": "CPM",
-    }
+    pkg.package_config = {"product_id": "prod_1", "name": "Test Package", "budget": 5000.0, "pricing_model": "CPM"}
     return pkg
 
 
@@ -75,13 +62,7 @@ def _make_mock_product():
     product.product_id = "prod_1"
     product.name = "Test Product"
     product.delivery_type = "non_guaranteed"
-    product.format_ids = [
-        {
-            "agent_url": "https://example.com/formats",
-            "format_id": "fmt_1",
-            "id": "fmt_1",
-        }
-    ]
+    product.format_ids = [{"agent_url": "https://example.com/formats", "format_id": "fmt_1", "id": "fmt_1"}]
 
     # Set up pricing option
     pricing_option = MagicMock()
@@ -118,7 +99,6 @@ class TestExecuteApprovedStatusUpdate:
 
         adapter_response = CreateMediaBuySuccess(
             media_buy_id="mb_test_001",
-            buyer_ref="test-buyer",
             packages=[],
         )
 

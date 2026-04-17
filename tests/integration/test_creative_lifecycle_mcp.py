@@ -158,7 +158,6 @@ class TestCreativeLifecycleMCP:
                 budget=5000.0,
                 start_date=get_utc_now().date(),
                 end_date=(get_utc_now() + timedelta(days=30)).date(),
-                buyer_ref="buyer_ref_123",
                 raw_request={
                     "test": True,
                     "packages": [
@@ -229,7 +228,6 @@ class TestCreativeLifecycleMCP:
         self.test_tenant_id = "creative_test"
         self.test_principal_id = "test_advertiser"
         self.test_media_buy_id = "test_media_buy_1"
-        self.test_buyer_ref = "buyer_ref_123"
 
     @pytest.fixture
     def mock_context(self):
@@ -883,13 +881,6 @@ class TestCreativeLifecycleMCP:
         creative_id = creative.get("creative_id") if isinstance(creative, dict) else creative.creative_id
         assert creative_id == "assignment_test_1"
 
-        # Filter by buyer_ref - should also work
-        response = core_list_creatives_tool(buyer_ref=self.test_buyer_ref, identity=identity)
-        assert len(response.creatives) == 1
-        creative = response.creatives[0]
-        creative_id = creative.get("creative_id") if isinstance(creative, dict) else creative.creative_id
-        assert creative_id == "assignment_test_1"
-
     def test_sync_creatives_authentication_required(self, sample_creatives):
         """Test sync_creatives requires proper authentication."""
         core_sync_creatives_tool, _ = self._import_mcp_tools()
@@ -983,7 +974,6 @@ class TestCreativeLifecycleMCP:
         packages = [
             PackageRequest(
                 product_id="prod_1",
-                buyer_ref="pkg_ref_3",
                 budget=1000.0,
                 creative_ids=["validate_test_no_url"],
                 pricing_option_id="price_1",
@@ -1082,11 +1072,9 @@ class TestCreativeLifecycleMCP:
             mock_adapter_instance.get_supported_pricing_models.return_value = {"cpm", "vcpm", "cpc", "flat_rate"}
             mock_adapter_instance.validate_media_buy_request.return_value = []
             mock_adapter_instance.create_media_buy.return_value = CreateMediaBuySuccess(
-                buyer_ref="test_buyer",
                 media_buy_id="test_buy_123",
                 packages=[
                     Package(
-                        buyer_ref="pkg_1",
                         package_id="pkg_123",
                         product_id="prod_1",
                         paused=False,  # adcp 2.12.0+: replaced 'status' with 'paused'
@@ -1137,7 +1125,6 @@ class TestCreativeLifecycleMCP:
 
             packages = [
                 PackageRequest(
-                    buyer_ref="pkg_1",
                     product_id="prod_1",
                     pricing_option_id="cpm_usd_auction",  # Required by adcp 2.5.0
                     budget=5000.0,  # Float budget, currency from pricing_option
@@ -1148,7 +1135,6 @@ class TestCreativeLifecycleMCP:
 
             # Call create_media_buy with packages containing creative_ids
             response = await create_media_buy_raw(
-                buyer_ref="test_buyer",
                 brand={"domain": "testbrand.com"},
                 packages=packages,
                 start_time=datetime.now(UTC) + timedelta(days=1),

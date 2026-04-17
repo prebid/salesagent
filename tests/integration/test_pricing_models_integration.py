@@ -286,11 +286,9 @@ async def test_create_media_buy_with_cpm_fixed_pricing(setup_tenant_with_pricing
     """Test creating media buy with fixed CPM pricing."""
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
-        buyer_ref="test_buyer",
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
-                buyer_ref="pkg_1",
                 product_id="prod_cpm_fixed",
                 pricing_option_id="cpm_usd_fixed",  # Format: {model}_{currency}_{fixed|auction}
                 budget=10000.0,
@@ -323,11 +321,9 @@ async def test_create_media_buy_with_cpm_auction_pricing(setup_tenant_with_prici
     """Test creating media buy with auction CPM pricing."""
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
-        buyer_ref="test_buyer",
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
-                buyer_ref="pkg_1",
                 product_id="prod_cpm_auction",
                 pricing_option_id="cpm_usd_auction",  # Format: {model}_{currency}_{fixed|auction}
                 bid_price=15.0,  # Above floor of 8.0
@@ -361,11 +357,9 @@ async def test_create_media_buy_auction_bid_below_floor_fails(setup_tenant_with_
     """Test that auction bid below floor price fails."""
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
-        buyer_ref="test_buyer",
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
-                buyer_ref="pkg_1",
                 product_id="prod_cpm_auction",
                 pricing_option_id="cpm_usd_auction",  # Format: {model}_{currency}_{fixed|auction}
                 bid_price=5.0,  # Below floor of 8.0
@@ -398,11 +392,9 @@ async def test_create_media_buy_with_cpcv_pricing(setup_tenant_with_pricing_prod
     """Test creating media buy with CPCV pricing."""
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
-        buyer_ref="test_buyer",
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
-                buyer_ref="pkg_1",
                 product_id="prod_cpcv",
                 pricing_option_id="cpcv_usd_fixed",  # Format: {model}_{currency}_{fixed|auction}
                 budget=8000.0,  # Above min spend of 5000
@@ -435,11 +427,9 @@ async def test_create_media_buy_below_min_spend_fails(setup_tenant_with_pricing_
     """Test that budget below min_spend_per_package fails."""
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
-        buyer_ref="test_buyer",
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
-                buyer_ref="pkg_1",
                 product_id="prod_cpcv",
                 pricing_option_id="cpcv_usd_fixed",  # Format: {model}_{currency}_{fixed|auction}
                 budget=3000.0,  # Below min spend of 5000
@@ -471,11 +461,9 @@ async def test_create_media_buy_multi_pricing_choose_cpp(setup_tenant_with_prici
     """Test creating media buy choosing CPP from multi-pricing product."""
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
-        buyer_ref="test_buyer",
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
-                buyer_ref="pkg_1",
                 product_id="prod_multi",
                 pricing_option_id="cpp_usd_fixed",  # Format: {model}_{currency}_{fixed|auction}
                 budget=15000.0,  # Above min spend of 10000
@@ -508,11 +496,9 @@ async def test_create_media_buy_invalid_pricing_model_fails(setup_tenant_with_pr
     """Test that requesting unavailable pricing model fails."""
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
-        buyer_ref="test_buyer",
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
-                buyer_ref="pkg_1",
                 product_id="prod_cpm_fixed",  # Only offers CPM
                 pricing_option_id="cpcv_usd_fixed",  # Requesting CPCV (should fail)
                 budget=10000.0,

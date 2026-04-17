@@ -20,7 +20,6 @@ from adcp.types.generated_poc.core.format import (
     Assets14,
 )
 from adcp.types.generated_poc.enums.asset_content_type import AssetContentType
-from adcp.types.generated_poc.enums.format_category import FormatCategory
 from adcp.utils.format_assets import get_format_assets
 
 # TypeVar for Format to preserve subclass type through backward compatibility function
@@ -207,7 +206,6 @@ def _list_creative_formats_impl(
                         fmt = Format(
                             format_id=format_id,
                             name=str(template["name"]),
-                            type=FormatCategory.display,
                             description=str(template["description"]) if template.get("description") else None,
                             assets=assets_list if assets_list else None,
                             is_standard=False,
@@ -228,9 +226,6 @@ def _list_creative_formats_impl(
         logger.debug(f"Could not get adapter formats: {e}")
 
     # Apply filters from request
-    if req.type:
-        formats = [f for f in formats if f.type == req.type]
-
     if req.format_ids:
         # Filter to only the specified format IDs
         # Extract the 'id' field from each FormatId object
@@ -339,9 +334,9 @@ def _list_creative_formats_impl(
             requested = {fmt.id for fmt in req_ids}
             formats = [f for f in formats if getattr(f, attr) and {fid.id for fid in getattr(f, attr)} & requested]
 
-    # Sort formats by type and name for consistent ordering
-    # Use .value to convert enum to string for sorting (enums don't support < comparison)
-    formats.sort(key=lambda f: (f.type.value if f.type is not None else "", f.name))
+    # Sort formats by name for consistent ordering
+    # (type field removed in adcp 3.12)
+    formats.sort(key=lambda f: f.name or "")
 
     # Ensure backward compatibility: populate both assets and assets_required
     # This allows old clients (using assets_required) and new clients (using assets) to work
@@ -422,7 +417,7 @@ def _list_creative_formats_impl(
             "total_count": total_count,
             "standard_formats": len([f for f in page_formats if f.is_standard]),
             "custom_formats": len([f for f in page_formats if not f.is_standard]),
-            "format_types": list({f.type.value for f in page_formats if f.type is not None}),
+            "format_count_standard": len([f for f in page_formats if f.is_standard]),
         },
     )
 
@@ -442,7 +437,6 @@ def _list_creative_formats_impl(
 
 
 async def list_creative_formats(
-    type: FormatCategory | None = None,
     format_ids: list[FormatId] | None = None,
     is_responsive: bool | None = None,
     name_search: str | None = None,
@@ -460,7 +454,6 @@ async def list_creative_formats(
     FastMCP automatically validates and coerces JSON inputs to Pydantic models.
 
     Args:
-        type: Filter by format type (audio, video, display)
         format_ids: Filter by FormatId objects
         is_responsive: Filter for responsive formats (True/False)
         name_search: Search formats by name (case-insensitive partial match)
@@ -478,12 +471,10 @@ async def list_creative_formats(
     try:
         # Coerce raw strings to enums at the transport boundary (Pattern #5).
         # FastMCP normally coerces, but direct callers may pass raw strings.
-        type_str = (type if isinstance(type, FormatCategory) else FormatCategory(type)).value if type else None
         asset_types_strs = (
             [at.value if isinstance(at, AssetContentType) else str(at) for at in asset_types] if asset_types else None
         )
         req = ListCreativeFormatsRequest(
-            type=type_str,
             format_ids=format_ids,
             is_responsive=is_responsive,
             name_search=name_search,

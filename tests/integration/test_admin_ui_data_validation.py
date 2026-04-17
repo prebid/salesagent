@@ -311,7 +311,6 @@ class TestDashboardDataValidation:
                     tenant_id=tenant_id,
                     media_buy_id=f"test_mb_dashboard_{i}",
                     principal_id=principal.principal_id,
-                    buyer_ref=f"buyer_ref_dashboard_{i}",
                     order_name=f"Test Order Dashboard {i}",
                     advertiser_name="Test Advertiser",
                     budget=Decimal("1000.00"),
@@ -370,7 +369,6 @@ class TestMediaBuysDataValidation:
                 tenant_id=tenant_id,
                 media_buy_id="test_mb_duplicate_check",
                 principal_id="test_principal_mb",
-                buyer_ref="test_ref_duplicate_check",
                 order_name="Test Order Duplicate Check",
                 advertiser_name="Test Advertiser",
                 budget=Decimal("5000.00"),
@@ -379,7 +377,6 @@ class TestMediaBuysDataValidation:
                 end_date=date.today() + timedelta(days=30),
                 status="live",
                 raw_request={
-                    "buyer_ref": "test_ref",
                     "packages": [
                         {"package_id": "pkg1"},
                         {"package_id": "pkg2"},
@@ -432,7 +429,6 @@ class TestMediaBuysDataValidation:
                     tenant_id=tenant_id,
                     media_buy_id=f"test_mb_{status}",
                     principal_id="test_principal_status",
-                    buyer_ref=f"buyer_ref_{status}",
                     order_name=f"Test Order {status}",
                     advertiser_name="Test Advertiser",
                     budget=Decimal("1000.00"),
@@ -440,7 +436,7 @@ class TestMediaBuysDataValidation:
                     start_date=date.today(),
                     end_date=date.today() + timedelta(days=30),
                     status=status,
-                    raw_request={"buyer_ref": f"ref_{status}"},
+                    raw_request={"status_ref": f"ref_{status}"},
                 )
                 db_session.add(media_buy)
             db_session.commit()

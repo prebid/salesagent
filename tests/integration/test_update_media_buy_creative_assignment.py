@@ -65,7 +65,6 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
             media_buy_id="test_buy_123",
             tenant_id="test_tenant",
             principal_id="test_principal",
-            buyer_ref="buyer_ref_123",
             order_name="Test Order",
             advertiser_name="Test Advertiser",
             start_date="2025-11-01",
@@ -145,7 +144,6 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
     assert response.media_buy_id == "test_buy_123"
     # buyer_ref is empty because the request uses media_buy_id (oneOf constraint)
     # and the response reflects req.buyer_ref which is None
-    assert response.buyer_ref == ""
     assert response.affected_packages is not None
     assert len(response.affected_packages) == 1
 
@@ -226,7 +224,6 @@ def test_update_media_buy_replaces_creatives(integration_db):
             media_buy_id="test_buy_456",
             tenant_id="test_tenant",
             principal_id="test_principal",
-            buyer_ref="buyer_ref_456",
             order_name="Test Order",
             advertiser_name="Test Advertiser",
             start_date="2025-11-01",
@@ -401,7 +398,6 @@ def test_update_media_buy_rejects_missing_creatives(integration_db):
             media_buy_id="test_buy_789",
             tenant_id="test_tenant",
             principal_id="test_principal",
-            buyer_ref="buyer_ref_789",
             order_name="Test Order",
             advertiser_name="Test Advertiser",
             start_date="2025-11-01",
@@ -518,7 +514,6 @@ def test_creative_assignments_with_weights(integration_db):
             media_buy_id="test_buy_weights",
             tenant_id="test_tenant",
             principal_id="test_principal",
-            buyer_ref="buyer_ref_weights",
             order_name="Test Order",
             advertiser_name="Test Advertiser",
             start_date="2025-11-01",
@@ -663,7 +658,6 @@ def test_creative_assignments_replaces_all(integration_db):
             media_buy_id="test_buy_replace",
             tenant_id="test_tenant",
             principal_id="test_principal",
-            buyer_ref="buyer_ref_replace",
             order_name="Test Order",
             advertiser_name="Test Advertiser",
             start_date="2025-11-01",

@@ -108,11 +108,9 @@ async def test_create_media_buy_with_profile_based_product(sample_tenant):
         ctx = _make_context(sample_tenant["tenant_id"], principal.principal_id)
 
         req = CreateMediaBuyRequest(
-            buyer_ref="test_buyer_profile",
             brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
-                    buyer_ref="pkg_profile",
                     product_id=product.product_id,
                     pricing_option_id="cpm_usd_fixed",
                     budget=150.0,
@@ -199,11 +197,9 @@ async def test_create_media_buy_with_profile_formats(sample_tenant):
         # Create media buy - should succeed or return structured error, not crash
         try:
             req = CreateMediaBuyRequest(
-                buyer_ref="test_buyer_format",
                 brand={"domain": "testbrand.com"},
                 packages=[
                     create_test_package_request(
-                        buyer_ref="pkg_format",
                         product_id=product.product_id,
                         pricing_option_id="cpm_usd_fixed",
                         budget=150.0,
@@ -288,11 +284,9 @@ async def test_multiple_products_same_profile_in_media_buy(sample_tenant):
 
         # Use only the first product (AdCP spec: package has singular product_id)
         req = CreateMediaBuyRequest(
-            buyer_ref="test_buyer_shared",
             brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
-                    buyer_ref=f"pkg_shared_{i}",
                     product_id=products[i].product_id,
                     pricing_option_id="cpm_usd_fixed",
                     budget=150.0,
@@ -396,11 +390,9 @@ async def test_media_buy_reflects_profile_updates(sample_tenant):
         ctx = _make_context(sample_tenant["tenant_id"], principal.principal_id)
 
         req = CreateMediaBuyRequest(
-            buyer_ref="test_buyer_updates",
             brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
-                    buyer_ref="pkg_updates",
                     product_id=product.product_id,
                     pricing_option_id="cpm_usd_fixed",
                     budget=150.0,

@@ -118,12 +118,10 @@ async def test_geo_overlap_rejected_through_full_path(targeting_tenant):
     """Same country in include and exclude → validation error via real wiring."""
     start, end = _future_dates()
     request = CreateMediaBuyRequest(
-        buyer_ref="buyer_overlap",
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
                 product_id="prod_display",
-                buyer_ref="pkg_overlap",
                 budget=5000.0,
                 pricing_option_id="cpm_usd_fixed",
                 targeting_overlay={
@@ -149,12 +147,10 @@ async def test_geo_metro_overlap_rejected_through_full_path(targeting_tenant):
     """Same metro DMA in include and exclude → validation error via real wiring."""
     start, end = _future_dates()
     request = CreateMediaBuyRequest(
-        buyer_ref="buyer_metro",
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
                 product_id="prod_display",
-                buyer_ref="pkg_metro",
                 budget=5000.0,
                 pricing_option_id="cpm_usd_fixed",
                 targeting_overlay={

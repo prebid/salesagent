@@ -72,7 +72,6 @@ class TestCreativeAgentLiveConnection:
             assert fmt.format_id.id is not None, "format_id.id required"
             assert fmt.format_id.agent_url is not None, "format_id.agent_url required"
             assert fmt.name is not None, "name required"
-            assert fmt.type is not None, "type required"
 
 
 class TestDisplayImageFormat:
@@ -87,16 +86,16 @@ class TestDisplayImageFormat:
         assert "display_image" in format_ids, f"display_image not found in formats. Available: {format_ids[:20]}..."
 
     @pytest.mark.asyncio
-    async def test_display_image_has_correct_type(self, registry):
-        """Verify display_image has type 'display'."""
+    async def test_display_image_has_expected_structure(self, registry):
+        """Verify display_image has required fields (format_id, name)."""
         formats = await registry.list_all_formats(tenant_id=None)
 
         display_image = next((fmt for fmt in formats if fmt.format_id.id == "display_image"), None)
         assert display_image is not None, "display_image format not found"
 
-        # Type might be enum or string
-        type_value = display_image.type.value if hasattr(display_image.type, "value") else str(display_image.type)
-        assert type_value == "display", f"Expected type 'display', got '{type_value}'"
+        # Verify required fields are populated
+        assert display_image.format_id is not None
+        assert display_image.name is not None
 
     @pytest.mark.asyncio
     async def test_can_get_display_image_by_id(self, registry):

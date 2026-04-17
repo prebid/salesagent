@@ -122,20 +122,18 @@ class TestCreateMediaBuyRoundtrip:
         3. Pass through apply_testing_hooks (THIS ADDS EXTRA FIELDS)
         4. Filter and reconstruct CreateMediaBuySuccess(**filtered_data)
 
-        Without the fix at main.py:3747-3760, step 4 would fail with:
-        "1 validation error for CreateMediaBuySuccess: buyer_ref Field required"
+        Without the fix at main.py:3747-3760, step 4 would fail with validation errors
+        if extra fields are injected by testing hooks.
         """
         # Step 1: Create a valid CreateMediaBuySuccess (simulates what adapter returns)
         # NOTE: status and adcp_version are protocol fields (added by ProtocolEnvelope), not domain fields
         # NOTE: media_buy_id starts with "test_" to prevent testing hooks from adding another "test_" prefix
         # NOTE: CreateMediaBuySuccess.packages requires package_id and status (AdCP 2.9.0+)
         original_response = CreateMediaBuySuccess(
-            buyer_ref="test-buyer-ref-123",
             media_buy_id="test_mb_12345",
             packages=[
                 {
                     "package_id": "pkg_1",
-                    "buyer_ref": "pkg_test",
                     "paused": False,  # adcp 2.12.0+: replaced 'status' with 'paused'
                 }
             ],
@@ -144,9 +142,8 @@ class TestCreateMediaBuyRoundtrip:
         # Step 2: Convert to dict (as main.py does)
         response_data = original_response.model_dump_internal()
 
-        # Verify original data has buyer_ref
-        assert "buyer_ref" in response_data
-        assert response_data["buyer_ref"] == "test-buyer-ref-123"
+        # Verify original data has expected fields
+        assert response_data["media_buy_id"] == "test_mb_12345"
 
         # Step 3: Apply testing hooks with various options enabled
         testing_ctx = TestingContext(
@@ -172,8 +169,7 @@ class TestCreateMediaBuyRoundtrip:
         assert hooks_result.debug_info is not None, "debug_mode=True should produce debug_info"
 
         # Verify original response data is UNCHANGED (hooks don't mutate data)
-        assert "buyer_ref" in response_data
-        assert response_data["buyer_ref"] == "test-buyer-ref-123"
+        assert response_data["media_buy_id"] == "test_mb_12345"
         assert "is_test" not in response_data, "hooks should not inject fields into response data"
         assert "dry_run" not in response_data, "hooks should not inject fields into response data"
 
@@ -181,7 +177,6 @@ class TestCreateMediaBuyRoundtrip:
         reconstructed_response = CreateMediaBuySuccess(**response_data)
 
         # Step 5: Verify reconstruction succeeded
-        assert reconstructed_response.buyer_ref == "test-buyer-ref-123"
         assert reconstructed_response.media_buy_id == "test_mb_12345"
         assert len(reconstructed_response.packages) == 1
 
@@ -195,7 +190,6 @@ class TestCreateMediaBuyRoundtrip:
         # Create response (domain fields only - status/adcp_version are protocol fields)
         # NOTE: packages is required in adcp v1.2.1
         original_response = CreateMediaBuySuccess(
-            buyer_ref="baseline-test",
             media_buy_id="mb_baseline",
             packages=[],  # Required field, can be empty
         )
@@ -205,7 +199,6 @@ class TestCreateMediaBuyRoundtrip:
         reconstructed = CreateMediaBuySuccess(**response_data)
 
         # Should work perfectly without testing hooks
-        assert reconstructed.buyer_ref == "baseline-test"
         assert reconstructed.media_buy_id == "mb_baseline"
 
     def test_testing_hooks_fields_are_excluded_from_reconstruction(self, setup_test_tenant):
@@ -218,7 +211,6 @@ class TestCreateMediaBuyRoundtrip:
         # NOTE: media_buy_id starts with "test_" to prevent testing hooks from adding another "test_" prefix
         # NOTE: packages is required in adcp v1.2.1
         original_response = CreateMediaBuySuccess(
-            buyer_ref="filter-test",
             media_buy_id="test_mb_filter",
             packages=[],  # Required field, can be empty
         )
@@ -248,5 +240,4 @@ class TestCreateMediaBuyRoundtrip:
         assert "test_session_id" not in response_dict
 
         # Verify required fields still present
-        assert "buyer_ref" in response_dict
-        assert response_dict["buyer_ref"] == "filter-test"
+        assert response_dict["media_buy_id"] == "test_mb_filter"

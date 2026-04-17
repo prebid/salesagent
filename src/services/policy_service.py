@@ -67,7 +67,7 @@ class PolicySettings:
     default_measurement_provider: str | None = None
 
     # Naming conventions
-    order_name_template: str = "{campaign_name|brand_name} - {buyer_ref} - {date_range}"
+    order_name_template: str = "{campaign_name|brand_name} - {media_buy_id} - {date_range}"
     line_item_name_template: str = "{order_name} - {product_name}"
 
     # Approval workflow

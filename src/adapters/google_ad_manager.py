@@ -634,8 +634,7 @@ class GoogleAdManager(AdServerAdapter):
         base_order_name = apply_naming_template(order_name_template, context)
 
         # Add unique identifier to prevent duplicate order names
-        # Use media_buy_id if available (from buyer_ref), otherwise timestamp
-        unique_suffix = request.buyer_ref or f"mb_{int(datetime.now(UTC).timestamp())}"
+        unique_suffix = f"mb_{int(datetime.now(UTC).timestamp())}"
         full_order_name = f"{base_order_name} [{unique_suffix}]"
 
         # Truncate to GAM's 255-character limit while preserving the unique suffix
@@ -988,7 +987,6 @@ class GoogleAdManager(AdServerAdapter):
         status = self.orders_manager.get_order_status(media_buy_id)
 
         return CheckMediaBuyStatusResponse(
-            buyer_ref="",
             media_buy_id=media_buy_id,
             status=status.lower(),  # Would need to be retrieved from database
         )
@@ -1307,7 +1305,6 @@ class GoogleAdManager(AdServerAdapter):
     def update_media_buy(
         self,
         media_buy_id: str,
-        buyer_ref: str,
         action: str,
         package_id: str | None,
         budget: int | None,
@@ -1336,7 +1333,6 @@ class GoogleAdManager(AdServerAdapter):
                 # Manual approval success - no errors
                 return UpdateMediaBuySuccess(
                     media_buy_id=media_buy_id,
-                    buyer_ref=buyer_ref,
                     affected_packages=[],  # List of package_ids affected by update
                     implementation_date=today,
                 )
@@ -1365,7 +1361,6 @@ class GoogleAdManager(AdServerAdapter):
                     # Activation workflow created - success (no errors)
                     return UpdateMediaBuySuccess(
                         media_buy_id=media_buy_id,
-                        buyer_ref=buyer_ref,
                         affected_packages=[],
                         implementation_date=today,
                         workflow_step_id=step_id,
@@ -1496,7 +1491,6 @@ class GoogleAdManager(AdServerAdapter):
 
             return UpdateMediaBuySuccess(
                 media_buy_id=media_buy_id,
-                buyer_ref=buyer_ref,
                 affected_packages=[],  # Required by AdCP spec
                 implementation_date=today,
             )
@@ -1577,7 +1571,6 @@ class GoogleAdManager(AdServerAdapter):
                     # Return affected package with paused state
                     affected_package = AffectedPackage(
                         package_id=package_id,
-                        buyer_ref=buyer_ref or package_id,
                         paused=is_pause,  # True if paused, False if resumed
                         changes_applied=None,
                         buyer_package_ref=None,
@@ -1585,7 +1578,6 @@ class GoogleAdManager(AdServerAdapter):
 
                     return UpdateMediaBuySuccess(
                         media_buy_id=media_buy_id,
-                        buyer_ref=buyer_ref,
                         affected_packages=[affected_package],
                         implementation_date=today,
                     )
@@ -1643,7 +1635,6 @@ class GoogleAdManager(AdServerAdapter):
                     affected_packages_list = [
                         AffectedPackage(
                             package_id=pkg.package_id,
-                            buyer_ref=buyer_ref or pkg.package_id,
                             paused=is_pause,  # True if paused, False if resumed
                             changes_applied=None,
                             buyer_package_ref=None,
@@ -1653,7 +1644,6 @@ class GoogleAdManager(AdServerAdapter):
 
                     return UpdateMediaBuySuccess(
                         media_buy_id=media_buy_id,
-                        buyer_ref=buyer_ref,
                         affected_packages=affected_packages_list,
                         implementation_date=today,
                     )
@@ -1661,7 +1651,6 @@ class GoogleAdManager(AdServerAdapter):
             # Should not reach here - both pause/resume branches return above
             return UpdateMediaBuySuccess(
                 media_buy_id=media_buy_id,
-                buyer_ref=buyer_ref,
                 affected_packages=[],
                 implementation_date=today,
             )

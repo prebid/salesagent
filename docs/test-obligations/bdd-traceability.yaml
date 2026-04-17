@@ -2427,18 +2427,6 @@ mappings:
       upstream_refs: ["BR-RULE-031"]
       business_rules: ["BR-RULE-031"]
       status: mapped
-    - adcp_scenario_id: "T-UC-005-inv-049-1-holds"
-      adcp_feature: "BR-UC-005-discover-creative-formats.feature"
-      obligation_id: "UC-005-MAIN-MCP-05"
-      upstream_refs: ["BR-RULE-049"]
-      business_rules: ["BR-RULE-049"]
-      status: mapped
-    - adcp_scenario_id: "T-UC-005-inv-049-1-violated"
-      adcp_feature: "BR-UC-005-discover-creative-formats.feature"
-      obligation_id: "UC-005-MAIN-MCP-05"
-      upstream_refs: ["BR-RULE-049"]
-      business_rules: ["BR-RULE-049"]
-      status: mapped
     - adcp_scenario_id: "T-UC-005-inv-049-2-holds"
       adcp_feature: "BR-UC-005-discover-creative-formats.feature"
       obligation_id: "UC-005-MAIN-MCP-06"
@@ -2655,12 +2643,6 @@ mappings:
       upstream_refs: ["BR-UC-005-ext-b"]
       business_rules: []
       status: mapped
-    - adcp_scenario_id: "T-UC-005-partition-type-filter"
-      adcp_feature: "BR-UC-005-discover-creative-formats.feature"
-      obligation_id: "UC-005-MAIN-MCP-05"
-      upstream_refs: ["BR-UC-005", "BR-RULE-049"]
-      business_rules: []
-      status: mapped
     - adcp_scenario_id: "T-UC-005-partition-format-ids"
       adcp_feature: "BR-UC-005-discover-creative-formats.feature"
       obligation_id: "UC-005-MAIN-MCP-06"
@@ -2712,12 +2694,6 @@ mappings:
     - adcp_scenario_id: "T-UC-005-partition-input-fmtids"
       adcp_feature: "BR-UC-005-discover-creative-formats.feature"
       obligation_id: "UC-005-MAIN-MCP-20"
-      upstream_refs: ["BR-UC-005", "BR-RULE-049"]
-      business_rules: []
-      status: mapped
-    - adcp_scenario_id: "T-UC-005-boundary-type-filter"
-      adcp_feature: "BR-UC-005-discover-creative-formats.feature"
-      obligation_id: "UC-005-MAIN-MCP-05"
       upstream_refs: ["BR-UC-005", "BR-RULE-049"]
       business_rules: []
       status: mapped

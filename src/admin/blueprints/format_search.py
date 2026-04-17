@@ -34,7 +34,6 @@ def search_formats():
     """
     query = request.args.get("q", "")
     tenant_id = request.args.get("tenant_id")
-    type_filter = request.args.get("type")
 
     if not query or len(query) < 2:
         return jsonify({"error": "Query must be at least 2 characters"}), 400
@@ -47,9 +46,7 @@ def search_formats():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            formats = loop.run_until_complete(
-                registry.search_formats(query=query, tenant_id=tenant_id, type_filter=type_filter)
-            )
+            formats = loop.run_until_complete(registry.search_formats(query=query, tenant_id=tenant_id))
         finally:
             loop.close()
 
@@ -63,7 +60,6 @@ def search_formats():
                 "agent_url": fmt.agent_url,
                 "format_id": format_id_str,
                 "name": fmt.name,
-                "type": str(fmt.type),  # Handle Type enum
                 "category": fmt.category,
                 "description": fmt.description,
                 "is_standard": fmt.is_standard,
@@ -91,14 +87,12 @@ def list_all_formats():
 
     Query parameters:
         tenant_id: Optional tenant ID for tenant-specific agents
-        type: Optional format type filter
         force_refresh: Force refresh cache (default: false)
 
     Returns:
         JSON array of all formats grouped by agent
     """
     tenant_id = request.args.get("tenant_id")
-    type_filter = request.args.get("type")
     force_refresh = request.args.get("force_refresh", "false").lower() == "true"
 
     try:
@@ -113,10 +107,6 @@ def list_all_formats():
             )
         finally:
             loop.close()
-
-        # Filter by type if requested
-        if type_filter:
-            formats = [f for f in formats if f.type == type_filter]
 
         # Group by agent_url
         by_agent = {}
@@ -148,7 +138,6 @@ def list_all_formats():
                 {
                     "format_id": format_id_value,  # Nested object, not flattened string
                     "name": fmt.name,
-                    "type": str(fmt.type),  # Handle Type enum
                     "category": fmt.category,
                     "description": fmt.description,
                     "is_standard": fmt.is_standard,

@@ -123,7 +123,6 @@ class DeliveryPollMixin:
     def call_impl(
         self,
         media_buy_ids: list[str] | None = None,
-        buyer_refs: list[str] | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
         status_filter: list[str] | None = None,
@@ -139,11 +138,12 @@ class DeliveryPollMixin:
         raw_identity = extra.pop("identity", _no_identity)
         identity = self.identity if raw_identity is _no_identity else raw_identity  # type: ignore[attr-defined]
 
+        # buyer_refs removed from GetMediaBuyDeliveryRequest in adcp 3.12
+        extra.pop("buyer_refs", None)
+
         kwargs: dict[str, Any] = {}
         if media_buy_ids is not None:
             kwargs["media_buy_ids"] = media_buy_ids
-        if buyer_refs is not None:
-            kwargs["buyer_refs"] = buyer_refs
         if start_date is not None:
             kwargs["start_date"] = start_date
         if end_date is not None:

@@ -31,9 +31,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from adcp import ADCPMultiAgentClient, PlatformDestination
+from adcp import ADCPMultiAgentClient
 from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPError, ADCPTimeoutError
-from adcp.types import DeliverTo
 
 from src.core.exceptions import AdCPAdapterError
 from src.core.schemas import GetSignalsRequest
@@ -158,20 +157,7 @@ class SignalsAgentRegistry:
             # Map our old 'brief' parameter to 'signal_spec'
             signal_spec = brief
 
-            # Build deliver_to (required in new schema)
-            # Per AdCP spec v2.9.0, deliver_to requires countries and deployments arrays
-            # deployments requires at least 1 item - use a generic "all platforms" deployment
-            deliver_to = DeliverTo(
-                countries=["US"],  # Default to US; empty list is not allowed per adcp 3.6.0 MinLen(1)
-                deployments=[
-                    PlatformDestination(
-                        type="platform",  # Generic platform destination
-                        platform="all",  # All platforms
-                    )
-                ],
-            )
-
-            # Create typed request (adcp 3.9: GetSignalsRequest is a plain BaseModel)
+            # Create typed request (adcp 3.12: countries/destinations are flat on request, not via DeliverTo)
             request = GetSignalsRequest(
                 signal_spec=signal_spec,
             )

@@ -71,7 +71,7 @@ wheels = [
 
 [[package]]
 name = "adcp"
-version = "3.10.0"
+version = "3.12.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "a2a-sdk" },
@@ -81,9 +81,9 @@ dependencies = [
     { name = "pydantic" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/23/9d/eb1890c05451b0d27e0b55213c77ad4194455a101fa6c0bff86f05f0f255/adcp-3.10.0.tar.gz", hash = "sha256:86ad404b4c173a87a958acce22866830f298677f10387cc1b001640615141daf", size = 430568, upload-time = "2026-03-17T00:45:25.962Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d3/77/27fea571a7022cd2acf922ca62d3f5d3e2e51a2cdd8e3c8dd0396b9b9db4/adcp-3.12.0.tar.gz", hash = "sha256:55b340ba67cde6bdc164ddc72c84454cb7bbe8ffbc2f1e9333726bfd87200975", size = 501580, upload-time = "2026-04-16T02:43:43.763Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e3/61/aaeee441dc78404ff763cd9b8d22c1d4066981c77e8aef23135d3a3c4be2/adcp-3.10.0-py3-none-any.whl", hash = "sha256:19dd7f40979cf935ecf79b619fe01174057b284ea1ea63d1529173542baca8a7", size = 574989, upload-time = "2026-03-17T00:45:24.807Z" },
+    { url = "https://files.pythonhosted.org/packages/80/f8/e33ddb3b7094a37f038f7010d88ed61c4306bacd97d32b14fb35fd188049/adcp-3.12.0-py3-none-any.whl", hash = "sha256:854d4dc8afe39cc2fadba7c03fe6fd966d5838ea6d94dc47e148079e7f03a41a", size = 635027, upload-time = "2026-04-16T02:43:41.848Z" },
 ]
 
 [[package]]
@@ -194,11 +194,11 @@ requires-dist = [
     { name = "a2a-cli", specifier = ">=0.2.0" },
     { name = "a2a-sdk", extras = ["http-server"], specifier = ">=0.3.19" },
     { name = "a2wsgi", specifier = ">=1.10.0" },
-    { name = "adcp", specifier = ">=3.10.0" },
+    { name = "adcp", specifier = ">=3.12.0" },
     { name = "aiohttp", specifier = ">=3.9.0" },
     { name = "alembic", specifier = ">=1.13.0" },
     { name = "allure-pytest", marker = "extra == 'ui-tests'", specifier = "==2.13.5" },
-    { name = "authlib", specifier = ">=1.6.7" },
+    { name = "authlib", specifier = ">=1.6.11" },
     { name = "babel", specifier = ">=2.17.0" },
     { name = "beautifulsoup4", specifier = ">=4.12.0" },
     { name = "cryptography", specifier = ">=46.0.7" },
@@ -533,14 +533,14 @@ wheels = [
 
 [[package]]
 name = "authlib"
-version = "1.6.9"
+version = "1.6.11"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/af/98/00d3dd826d46959ad8e32af2dbb2398868fd9fd0683c26e56d0789bd0e68/authlib-1.6.9.tar.gz", hash = "sha256:d8f2421e7e5980cc1ddb4e32d3f5fa659cfaf60d8eaf3281ebed192e4ab74f04", size = 165134, upload-time = "2026-03-02T07:44:01.998Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/28/10/b325d58ffe86815b399334a101e63bc6fa4e1953921cb23703b48a0a0220/authlib-1.6.11.tar.gz", hash = "sha256:64db35b9b01aeccb4715a6c9a6613a06f2bd7be2ab9d2eb89edd1dfc7580a38f", size = 165359, upload-time = "2026-04-16T07:22:50.279Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/53/23/b65f568ed0c22f1efacb744d2db1a33c8068f384b8c9b482b52ebdbc3ef6/authlib-1.6.9-py2.py3-none-any.whl", hash = "sha256:f08b4c14e08f0861dc18a32357b33fbcfd2ea86cfe3fe149484b4d764c4a0ac3", size = 244197, upload-time = "2026-03-02T07:44:00.307Z" },
+    { url = "https://files.pythonhosted.org/packages/57/2f/55fca558f925a51db046e5b929deb317ddb05afed74b22d89f4eca578980/authlib-1.6.11-py2.py3-none-any.whl", hash = "sha256:c8687a9a26451c51a34a06fa17bb97cb15bba46a6a626755e2d7f50da8bff3e3", size = 244469, upload-time = "2026-04-16T07:22:48.413Z" },
 ]
 
 [[package]]

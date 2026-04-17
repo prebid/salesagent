@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import pytest
 from adcp.types.generated_poc.core.format import Assets, Assets5, Dimensions, Renders
-from adcp.types.generated_poc.enums.format_category import FormatCategory
 
 from src.core.schemas import Format, FormatId, ListCreativeFormatsResponse
 from tests.factories import TenantFactory
@@ -25,7 +24,7 @@ ALL_TRANSPORTS = [Transport.IMPL, Transport.A2A, Transport.MCP, Transport.REST]
 def _make_format(
     format_id: str,
     name: str,
-    type: FormatCategory = FormatCategory.display,
+    type: str | None = "display",
     renders: list | None = None,
     assets: list | None = None,
 ) -> Format:
@@ -58,21 +57,21 @@ class TestFullCatalogNoFilters:
             _make_format(
                 "display_300x250",
                 "Medium Rectangle",
-                type=FormatCategory.display,
+                type="display",
                 renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
                 assets=[Assets(item_type="individual", asset_id="hero_image", required=True)],
             ),
             _make_format(
                 "video_preroll_15s",
                 "Pre-roll 15s",
-                type=FormatCategory.video,
+                type="video",
                 renders=[Renders(role="primary", dimensions=Dimensions(width=640, height=360))],
                 assets=[Assets5(item_type="individual", asset_id="video_file", required=True)],
             ),
             _make_format(
                 "audio_companion",
                 "Audio Companion Banner",
-                type=FormatCategory.audio,
+                type="audio",
             ),
         ]
 
@@ -99,7 +98,7 @@ class TestFullCatalogNoFilters:
             _make_format(
                 "display_banner",
                 "Standard Display Banner",
-                type=FormatCategory.display,
+                type="display",
                 renders=[Renders(role="primary", dimensions=Dimensions(width=728, height=90))],
                 assets=[
                     Assets(
@@ -112,7 +111,7 @@ class TestFullCatalogNoFilters:
             _make_format(
                 "video_midroll",
                 "Mid-roll Video",
-                type=FormatCategory.video,
+                type="video",
                 assets=[
                     Assets5(
                         item_type="individual",
@@ -137,20 +136,17 @@ class TestFullCatalogNoFilters:
             assert fmt.format_id.id is not None
             assert str(fmt.format_id.agent_url).rstrip("/") == AGENT_URL
             assert fmt.name is not None
-            assert fmt.type is not None
 
         # Verify specific format details
         fmt_by_id = {f.format_id.id: f for f in result.payload.formats}
 
         display_fmt = fmt_by_id["display_banner"]
         assert display_fmt.name == "Standard Display Banner"
-        assert display_fmt.type == FormatCategory.display
         assert display_fmt.assets is not None
         assert len(display_fmt.assets) == 1
 
         video_fmt = fmt_by_id["video_midroll"]
         assert video_fmt.name == "Mid-roll Video"
-        assert video_fmt.type == FormatCategory.video
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
     def test_empty_catalog_returns_empty_formats(self, integration_db, transport):
@@ -171,7 +167,7 @@ class TestFullCatalogNoFilters:
             _make_format(
                 "sole_format",
                 "The Only Format",
-                type=FormatCategory.display,
+                type="display",
                 renders=[Renders(role="primary", dimensions=Dimensions(width=320, height=50))],
             ),
         ]
@@ -194,11 +190,11 @@ class TestFullCatalogNoFilters:
         included when no filters are applied.
         """
         formats = [
-            _make_format("display_leaderboard", "Leaderboard 728x90", type=FormatCategory.display),
-            _make_format("display_mrec", "Medium Rectangle", type=FormatCategory.display),
-            _make_format("video_preroll", "Pre-roll 30s", type=FormatCategory.video),
-            _make_format("video_outstream", "Outstream Video", type=FormatCategory.video),
-            _make_format("audio_spot", "Audio Spot 15s", type=FormatCategory.audio),
+            _make_format("display_leaderboard", "Leaderboard 728x90", type="display"),
+            _make_format("display_mrec", "Medium Rectangle", type="display"),
+            _make_format("video_preroll", "Pre-roll 30s", type="video"),
+            _make_format("video_outstream", "Outstream Video", type="video"),
+            _make_format("audio_spot", "Audio Spot 15s", type="audio"),
         ]
 
         with CreativeFormatsEnv() as env:
@@ -209,7 +205,5 @@ class TestFullCatalogNoFilters:
         assert result.is_success
         assert len(result.payload.formats) == 5
 
-        returned_types = {f.type for f in result.payload.formats}
-        assert FormatCategory.display in returned_types
-        assert FormatCategory.video in returned_types
-        assert FormatCategory.audio in returned_types
+        returned_names = {f.name for f in result.payload.formats}
+        assert len(returned_names) == 5  # All 5 formats returned

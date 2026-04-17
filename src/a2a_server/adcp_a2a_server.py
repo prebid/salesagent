@@ -1466,7 +1466,7 @@ class AdCPRequestHandler(RequestHandler):
                 params.setdefault("targeting_overlay", params.pop("custom_targeting"))
             # Set A2A defaults for optional fields
             params.setdefault("po_number", f"A2A-{uuid.uuid4().hex[:8]}")
-            params.setdefault("buyer_ref", f"A2A-{identity.principal_id}")
+            # buyer_ref removed in adcp 3.12
 
             # Validate required AdCP parameters (packages is optional in model but required by spec)
             required_params = ["brand", "packages", "start_time", "end_time"]
@@ -1505,7 +1505,6 @@ class AdCPRequestHandler(RequestHandler):
             response = await core_create_media_buy_tool(
                 brand=params.get("brand"),
                 po_number=req.po_number,
-                buyer_ref=req.buyer_ref,
                 packages=params["packages"],  # Required — validated above
                 start_time=params.get("start_time"),
                 end_time=params.get("end_time"),
@@ -1590,7 +1589,6 @@ class AdCPRequestHandler(RequestHandler):
             # Call core function with optional parameters (fixing original validation bug)
             response = core_list_creatives_tool(
                 media_buy_id=parameters.get("media_buy_id"),
-                buyer_ref=parameters.get("buyer_ref"),
                 status=parameters.get("status"),
                 format=parameters.get("format"),
                 tags=parameters.get("tags", []),
@@ -1760,7 +1758,6 @@ class AdCPRequestHandler(RequestHandler):
             from src.core.schemas import ListCreativeFormatsRequest
 
             req = ListCreativeFormatsRequest(
-                type=parameters.get("type"),
                 format_ids=parameters.get("format_ids"),
                 output_format_ids=parameters.get("output_format_ids"),
                 input_format_ids=parameters.get("input_format_ids"),
@@ -1870,20 +1867,15 @@ class AdCPRequestHandler(RequestHandler):
                 if isinstance(legacy_updates, dict) and "packages" in legacy_updates:
                     params["packages"] = legacy_updates["packages"]
 
-            # Require at least one identifier
-            if "media_buy_id" not in params and "buyer_ref" not in params:
-                raise ServerError(
-                    InvalidParamsError(
-                        message="Missing required parameter: one of 'media_buy_id' or 'buyer_ref' is required"
-                    )
-                )
+            # media_buy_id is required
+            if "media_buy_id" not in params:
+                raise ServerError(InvalidParamsError(message="Missing required parameter: 'media_buy_id'"))
 
             # Validate top-level fields via typed model (packages validated by _raw
             # which handles legacy formats with extra fields like 'status')
             try:
                 req = UpdateMediaBuyRequest(
                     media_buy_id=params.get("media_buy_id"),
-                    buyer_ref=params.get("buyer_ref"),
                     paused=params.get("paused"),
                     start_time=params.get("start_time"),
                     end_time=params.get("end_time"),
@@ -1895,7 +1887,6 @@ class AdCPRequestHandler(RequestHandler):
             # Call core function with validated fields + raw nested structures and identity
             response = core_update_media_buy_tool(
                 media_buy_id=req.media_buy_id or "",
-                buyer_ref=req.buyer_ref,
                 paused=req.paused,
                 start_time=params.get("start_time"),
                 end_time=params.get("end_time"),
@@ -1938,7 +1929,6 @@ class AdCPRequestHandler(RequestHandler):
 
         Per AdCP spec, all parameters are optional:
         - media_buy_ids (plural, per AdCP v1.6.0 spec) or media_buy_id (singular, legacy)
-        - buyer_refs: Filter by buyer reference IDs
         - status_filter: Filter by status (active, pending, paused, completed, failed, all)
         - start_date: Start date for reporting period (YYYY-MM-DD)
         - end_date: End date for reporting period (YYYY-MM-DD)
@@ -1964,7 +1954,6 @@ class AdCPRequestHandler(RequestHandler):
             # (e.g., status_filter str→MediaBuyStatus, date str→date)
             response = core_get_media_buy_delivery_tool(
                 media_buy_ids=req.media_buy_ids,
-                buyer_refs=req.buyer_refs,
                 status_filter=params.get("status_filter"),
                 start_date=params.get("start_date"),
                 end_date=params.get("end_date"),
@@ -2111,7 +2100,6 @@ class AdCPRequestHandler(RequestHandler):
                     "brand": {"domain": "example.com"},
                     "packages": [
                         {
-                            "buyer_ref": "pkg_1",
                             "product_id": "video_premium",
                             "budget": 10000.0,  # Budget is per package (required)
                             "pricing_option_id": "cpm-fixed",

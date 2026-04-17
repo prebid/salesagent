@@ -49,7 +49,6 @@ def build_adcp_media_buy_request(
     start_time: str | datetime,
     end_time: str | datetime,
     promoted_offering: str = "Test Campaign Product",  # For backward compat, converted to brand
-    buyer_ref: str | None = None,
     targeting_overlay: dict[str, Any] | None = None,
     currency: str = "USD",
     pacing: str = "even",
@@ -69,7 +68,6 @@ def build_adcp_media_buy_request(
         start_time: Campaign start (ISO 8601 string or datetime)
         end_time: Campaign end (ISO 8601 string or datetime)
         promoted_offering: DEPRECATED - Use brand instead. Auto-converted if provided.
-        buyer_ref: Optional buyer reference (generated if not provided)
         targeting_overlay: Optional targeting parameters
         currency: Currency code (default: USD)
         pacing: Budget pacing strategy (default: even)
@@ -94,10 +92,6 @@ def build_adcp_media_buy_request(
     if isinstance(end_time, datetime):
         end_time = end_time.isoformat()
 
-    # Generate buyer_ref if not provided
-    if buyer_ref is None:
-        buyer_ref = generate_buyer_ref()
-
     # Convert promoted_offering to brand if needed (backward compatibility)
     if brand is None and promoted_offering:
         brand = {"domain": "testbrand.com"}
@@ -106,11 +100,9 @@ def build_adcp_media_buy_request(
     # Note: ALL budgets are plain numbers per spec (currency from pricing_option_id)
     # Per AdCP spec: Package requires product_id (singular) and pricing_option_id
     request: dict[str, Any] = {
-        "buyer_ref": buyer_ref,
         "brand": brand,  # AdCP 3.6.0: BrandReference with domain
         "packages": [
             {
-                "buyer_ref": generate_buyer_ref("pkg"),
                 "product_id": (
                     product_ids[0] if len(product_ids) == 1 else product_ids[0]
                 ),  # AdCP spec: singular product_id
@@ -253,44 +245,26 @@ def build_creative(
 
 
 def build_update_media_buy_request(
-    media_buy_id: str | None = None,
-    buyer_ref: str | None = None,
+    media_buy_id: str,
     active: bool | None = None,
     budget: dict[str, Any] | None = None,
     packages: list[dict[str, Any]] | None = None,
     webhook_url: str | None = None,
 ) -> dict[str, Any]:
     """
-    Build a valid AdCP V2.3 update_media_buy request.
-
-    Note: Either media_buy_id OR buyer_ref must be provided (AdCP oneOf constraint).
+    Build a valid AdCP update_media_buy request.
 
     Args:
-        media_buy_id: Media buy ID to update
-        buyer_ref: Buyer reference to update (alternative to media_buy_id)
+        media_buy_id: Media buy ID to update (required)
         active: Optional active status update
         budget: Optional budget update
         packages: Optional package updates
         webhook_url: Optional webhook for async notifications
 
     Returns:
-        Valid AdCP V2.3 UpdateMediaBuyRequest dict
-
-    Raises:
-        ValueError: If neither or both media_buy_id and buyer_ref provided
+        Valid AdCP UpdateMediaBuyRequest dict
     """
-    if not media_buy_id and not buyer_ref:
-        raise ValueError("Either media_buy_id or buyer_ref must be provided")
-    if media_buy_id and buyer_ref:
-        raise ValueError("Cannot provide both media_buy_id and buyer_ref (oneOf constraint)")
-
-    request: dict[str, Any] = {}
-
-    # Add identifier (oneOf)
-    if media_buy_id:
-        request["media_buy_id"] = media_buy_id
-    else:
-        request["buyer_ref"] = buyer_ref
+    request: dict[str, Any] = {"media_buy_id": media_buy_id}
 
     # Add optional fields
     if active is not None:

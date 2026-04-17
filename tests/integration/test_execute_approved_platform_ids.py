@@ -69,7 +69,6 @@ def pending_media_buy_with_package(integration_db):
             tenant=tenant,
             principal=principal,
             media_buy_id="mb_approval_test",
-            buyer_ref="approval-test-buyer",
             order_name="Approval Test Order",
             advertiser_name="Test Advertiser",
             currency="USD",
@@ -79,7 +78,6 @@ def pending_media_buy_with_package(integration_db):
             end_time=end,
             status="pending_approval",
             raw_request={
-                "buyer_ref": "approval-test-buyer",
                 "brand": {"domain": "testbrand.com"},
                 "start_time": start.isoformat(),
                 "end_time": end.isoformat(),
@@ -87,7 +85,6 @@ def pending_media_buy_with_package(integration_db):
                     {
                         "product_id": "guaranteed_display",
                         "pricing_option_id": "po_1",
-                        "buyer_ref": "pkg-1",
                         "budget": 5000.0,
                     }
                 ],
@@ -161,7 +158,6 @@ def pending_media_buy_with_two_packages(integration_db):
             tenant=tenant,
             principal=principal,
             media_buy_id="mb_multi_pkg_test",
-            buyer_ref="multi-pkg-buyer",
             order_name="Multi Package Order",
             advertiser_name="Test Advertiser",
             currency="USD",
@@ -171,7 +167,6 @@ def pending_media_buy_with_two_packages(integration_db):
             end_time=end,
             status="pending_approval",
             raw_request={
-                "buyer_ref": "multi-pkg-buyer",
                 "brand": {"domain": "testbrand.com"},
                 "start_time": start.isoformat(),
                 "end_time": end.isoformat(),
@@ -179,13 +174,11 @@ def pending_media_buy_with_two_packages(integration_db):
                     {
                         "product_id": "guaranteed_display",
                         "pricing_option_id": "po_1",
-                        "buyer_ref": "pkg-1",
                         "budget": 3000.0,
                     },
                     {
                         "product_id": "guaranteed_display",
                         "pricing_option_id": "po_1",
-                        "buyer_ref": "pkg-2",
                         "budget": 2000.0,
                     },
                 ],
@@ -248,7 +241,6 @@ class TestExecuteApprovedPlatformIds:
         # Build adapter response with _platform_line_item_ids attached
         adapter_response = CreateMediaBuySuccess(
             media_buy_id=media_buy_id,
-            buyer_ref="approval-test-buyer",
             packages=[],
         )
         # This is how GAM/Broadstreet adapters attach the mapping
@@ -306,7 +298,6 @@ class TestExecuteApprovedPlatformIdsEdgeCases:
 
         adapter_response = CreateMediaBuySuccess(
             media_buy_id=media_buy_id,
-            buyer_ref="multi-pkg-buyer",
             packages=[],
         )
         object.__setattr__(
@@ -338,7 +329,6 @@ class TestExecuteApprovedPlatformIdsEdgeCases:
 
         adapter_response = CreateMediaBuySuccess(
             media_buy_id=media_buy_id,
-            buyer_ref="approval-test-buyer",
             packages=[],
         )
         object.__setattr__(
@@ -358,7 +348,6 @@ class TestExecuteApprovedPlatformIdsEdgeCases:
 
         adapter_response = CreateMediaBuySuccess(
             media_buy_id=media_buy_id,
-            buyer_ref="approval-test-buyer",
             packages=[],
         )
         object.__setattr__(adapter_response, "_platform_line_item_ids", {})
@@ -384,7 +373,6 @@ class TestExecuteApprovedPlatformIdsEdgeCases:
 
         adapter_response = CreateMediaBuySuccess(
             media_buy_id=media_buy_id,
-            buyer_ref="approval-test-buyer",
             packages=[],
         )
         # Don't set _platform_line_item_ids at all

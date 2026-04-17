@@ -478,7 +478,6 @@ class MockAdServer(AdServerAdapter):
                 return CreateMediaBuySuccess(
                     media_buy_id="pending",  # Placeholder for pending manual approval
                     creative_deadline=None,
-                    buyer_ref=request.buyer_ref or "unknown",
                     packages=[],  # No packages yet - operation not complete
                 )
 
@@ -598,7 +597,6 @@ class MockAdServer(AdServerAdapter):
         # The workflow_step_id (from step['step_id']) will track this pending operation
         # Client can poll the step or wait for webhook notification when complete
         return CreateMediaBuySuccess(
-            buyer_ref=request.buyer_ref or "unknown",
             media_buy_id="pending",  # Placeholder for async processing in progress
             creative_deadline=None,
             packages=[],  # No packages yet - operation not complete
@@ -798,7 +796,6 @@ class MockAdServer(AdServerAdapter):
                 "id": media_buy_id,
                 "name": order_name,
                 "po_number": request.po_number,
-                "buyer_ref": request.buyer_ref,
                 "packages": packages,
                 "total_budget": total_budget,
                 "start_time": start_time,
@@ -1045,9 +1042,9 @@ class MockAdServer(AdServerAdapter):
         else:
             status = "delivering"
 
-        # Get buyer_ref from stored media buy data
-        buyer_ref = buy.get("buyer_ref", buy.get("po_number", "unknown"))
-        return CheckMediaBuyStatusResponse(media_buy_id=media_buy_id, buyer_ref=buyer_ref, status=status)
+        # Get buyer_ref from stored media buy data (legacy, may not exist for new buys)
+
+        return CheckMediaBuyStatusResponse(media_buy_id=media_buy_id, status=status)
 
     def get_media_buy_delivery(
         self, media_buy_id: str, date_range: ReportingPeriod, today: datetime
@@ -1300,7 +1297,6 @@ class MockAdServer(AdServerAdapter):
     def update_media_buy(
         self,
         media_buy_id: str,
-        buyer_ref: str,
         action: str,
         package_id: str | None,
         budget: int | None,
@@ -1334,7 +1330,6 @@ class MockAdServer(AdServerAdapter):
 
         return UpdateMediaBuySuccess(
             media_buy_id=media_buy_id,
-            buyer_ref=buyer_ref,
             affected_packages=[],
             implementation_date=today,
         )

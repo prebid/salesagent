@@ -54,13 +54,16 @@ def given_media_buy_with_status(ctx: dict, mb_id: str, owner: str, status: str) 
 
 @given(parsers.parse('a media buy "{mb_id}" owned by "{owner}" with buyer_ref "{buyer_ref}"'))
 def given_media_buy_with_buyer_ref(ctx: dict, mb_id: str, owner: str, buyer_ref: str) -> None:
-    """Create a media buy with a buyer reference."""
+    """Create a media buy with a buyer reference.
+
+    buyer_ref was removed from the MediaBuy model in adcp 3.12.
+    The step still accepts the parameter for Gherkin compatibility but ignores it.
+    """
     ctx.setdefault("media_buys", {})[mb_id] = {
         "media_buy_id": mb_id,
         "owner": owner,
-        "buyer_ref": buyer_ref,
     }
-    _ensure_media_buy_in_db(ctx, mb_id, owner, buyer_ref=buyer_ref)
+    _ensure_media_buy_in_db(ctx, mb_id, owner)
 
 
 @given(parsers.parse('a media buy "{mb_id}" owned by "{owner}"'))
@@ -419,12 +422,8 @@ def when_request_with_media_buy_ids(ctx: dict, ids_json: str) -> None:
 
 @when(parsers.parse("the Buyer Agent requests delivery metrics with buyer_refs {refs_json}"))
 def when_request_with_buyer_refs(ctx: dict, refs_json: str) -> None:
-    """Request with buyer_refs list."""
-    if refs_json == "[]":
-        dispatch_request(ctx, buyer_refs=[])
-    else:
-        buyer_refs = _parse_json_list(refs_json)
-        dispatch_request(ctx, buyer_refs=buyer_refs)
+    """buyer_refs removed in adcp 3.12 — delegate to no-identifiers step."""
+    when_request_no_identifiers(ctx)
 
 
 @when(parsers.re(r'the Buyer Agent requests delivery metrics with status_filter "(?P<filter_value>[^"]+)"'))
@@ -1545,7 +1544,6 @@ def _ensure_media_buy_in_db(
     mb_id: str,
     owner: str,
     status: str = "active",
-    buyer_ref: str | None = None,
 ) -> None:
     """Create a media buy in the test database using factories.
 
@@ -1577,8 +1575,6 @@ def _ensure_media_buy_in_db(
         "media_buy_id": mb_id,
         "status": status,
     }
-    if buyer_ref:
-        mb_kwargs["buyer_ref"] = buyer_ref
 
     MediaBuyFactory(**mb_kwargs)
 
@@ -1588,12 +1584,16 @@ def _parse_request_params(params_str: str) -> dict[str, Any]:
 
     Handles formats like:
     - media_buy_ids=["mb-001"]
-    - buyer_refs=["ref-001"]
-    - media_buy_ids=["mb-001"] buyer_refs=["ref-001"]
+    - media_buy_ids=["mb-001"] status_filter=["active"]
+
+    Note: buyer_refs was removed from GetMediaBuyDeliveryRequest in adcp 3.12.
+    Any buyer_refs= parsed from Gherkin are silently dropped.
     """
     kwargs: dict[str, Any] = {}
     for match in re.finditer(r'(\w+)=(\[.+?\]|"[^"]*"|[^\s]+)', params_str):
         key, value = match.group(1), match.group(2)
+        if key == "buyer_refs":
+            continue  # Removed in adcp 3.12
         if value.startswith("["):
             kwargs[key] = json.loads(value)
         elif value.startswith('"'):

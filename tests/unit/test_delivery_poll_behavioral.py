@@ -395,46 +395,35 @@ class TestBuyerRefResolution:
     Covers: UC-004-MAIN-02
     """
 
-    def test_buyer_refs_resolve_media_buys(self):
-        """buyer_refs resolve media buys when media_buy_ids absent.
+    def test_media_buy_ids_resolve_media_buys(self):
+        """media_buy_ids resolve media buys (buyer_refs removed in adcp 3.12).
 
         Covers: UC-004-MAIN-02
         """
         from tests.harness.delivery_poll_unit import DeliveryPollEnv
 
         with DeliveryPollEnv() as env:
-            env.add_buy(media_buy_id="mb_100", buyer_ref="my_campaign_1")
+            env.add_buy(media_buy_id="mb_100")
             env.set_adapter_response("mb_100", impressions=5000, spend=250.0)
 
-            response = env.call_impl(buyer_refs=["my_campaign_1"])
+            response = env.call_impl(media_buy_ids=["mb_100"])
 
             assert len(response.media_buy_deliveries) == 1
             assert response.media_buy_deliveries[0].media_buy_id == "mb_100"
 
-            # Verify repo was called with buyer_refs
-            uow_instance = env.mock["uow"].return_value
-            uow_instance.media_buys.get_by_principal.assert_called_once_with(
-                "test_principal", buyer_refs=["my_campaign_1"]
-            )
-
-    # test_full_impl_returns_delivery_via_buyer_ref — migrated to integration
-
-    def test_buyer_refs_ignored_when_media_buy_ids_present(self):
-        """media_buy_ids takes precedence over buyer_refs per INV-2 rule.
+    def test_media_buy_ids_used_for_fetch(self):
+        """media_buy_ids is the identifier for delivery requests (adcp 3.12).
 
         Covers: UC-004-MAIN-02
         """
         from tests.harness.delivery_poll_unit import DeliveryPollEnv
 
         with DeliveryPollEnv() as env:
-            env.add_buy(media_buy_id="mb_300", buyer_ref="my_campaign_1")
+            env.add_buy(media_buy_id="mb_300")
             env.set_adapter_response("mb_300", impressions=5000, spend=250.0)
 
-            response = env.call_impl(media_buy_ids=["mb_300"], buyer_refs=["my_campaign_1"])
+            response = env.call_impl(media_buy_ids=["mb_300"])
 
-            # media_buy_ids takes precedence — repo called with media_buy_ids, not buyer_refs
-            uow_instance = env.mock["uow"].return_value
-            uow_instance.media_buys.get_by_principal.assert_called_once_with("test_principal", media_buy_ids=["mb_300"])
             assert len(response.media_buy_deliveries) == 1
 
 
@@ -597,10 +586,7 @@ def _make_media_buy_delivery_response(
         MediaBuyDeliveryData,
     )
 
-    rp = {
-        "start": datetime(2025, 1, 1, tzinfo=UTC),
-        "end": datetime(2025, 1, 31, tzinfo=UTC),
-    }
+    rp = {"start": datetime(2025, 1, 1, tzinfo=UTC), "end": datetime(2025, 1, 31, tzinfo=UTC)}
     deliveries = [
         MediaBuyDeliveryData(
             media_buy_id=f"mb_{i:03d}",
@@ -629,10 +615,7 @@ def _make_creative_delivery_response(
 
     from src.core.schemas.delivery import CreativeDeliveryData
 
-    rp = {
-        "start": datetime(2025, 1, 1, tzinfo=UTC),
-        "end": datetime(2025, 1, 31, tzinfo=UTC),
-    }
+    rp = {"start": datetime(2025, 1, 1, tzinfo=UTC), "end": datetime(2025, 1, 31, tzinfo=UTC)}
     creatives = [CreativeDeliveryData(creative_id=f"cr_{i:03d}") for i in range(creative_count)]
     return GetCreativeDeliveryResponse(
         reporting_period=rp,

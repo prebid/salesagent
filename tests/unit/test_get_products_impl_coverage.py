@@ -93,9 +93,7 @@ def _standard_patches(mock_uow, principal=None, convert_fn=None):
         ),
         patch(
             "src.services.dynamic_pricing_service.DynamicPricingService",
-            **{
-                "return_value.enrich_products_with_pricing.side_effect": lambda products, **kw: products,
-            },
+            **{"return_value.enrich_products_with_pricing.side_effect": lambda products, **kw: products},
         ),
     ]
 
@@ -344,7 +342,7 @@ class TestFilterBranches:
         Product.format_ids are FormatId objects. The filter dispatches through
         isinstance(format_id, FormatId) and looks up the format type via
         get_format_by_id. The format type is added to product_format_types as
-        a string, but req.filters.format_types contains FormatCategory enum
+        a string, but req.filters.format_ids contains FormatCategory enum
         values. Since FormatCategory is not a str enum, the comparison always
         fails. This documents the current behavior.
         """
@@ -355,7 +353,7 @@ class TestFilterBranches:
 
         result = await self._run_with_products_and_filters(
             [product],
-            {"format_types": ["display"]},
+            {"format_ids": [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_standard"}]},
             extra_patches=[
                 patch("src.core.schemas.get_format_by_id", return_value=format_obj),
             ],
@@ -373,7 +371,7 @@ class TestFilterBranches:
 
         result = await self._run_with_products_and_filters(
             [product],
-            {"format_types": ["display"]},
+            {"format_ids": [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_standard"}]},
             extra_patches=[
                 patch("src.core.schemas.get_format_by_id", return_value=format_obj),
             ],

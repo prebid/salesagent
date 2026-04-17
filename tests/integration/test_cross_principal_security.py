@@ -89,7 +89,6 @@ class TestCrossPrincipalSecurity:
                 tenant_id="security_test_tenant",
                 media_buy_id="media_buy_a",
                 principal_id="advertiser_a",
-                buyer_ref="buyer_ref_a",
                 order_name="Security Test Order A",
                 advertiser_name="Advertiser A",
                 start_date=date.today(),
@@ -98,7 +97,6 @@ class TestCrossPrincipalSecurity:
                 currency="USD",
                 status="active",
                 raw_request={
-                    "buyer_ref": "buyer_ref_a",
                     "packages": [],
                     "budget": {"total": 1000.0, "currency": "USD"},
                 },
@@ -178,7 +176,6 @@ class TestCrossPrincipalSecurity:
             media_buy = session.scalars(stmt).first()
 
             assert media_buy.principal_id == "advertiser_a", "Media buy ownership changed!"
-            assert media_buy.buyer_ref == "buyer_ref_a", "Media buy buyer_ref was modified!"
 
     def test_get_media_buy_delivery_cannot_see_other_principals_data(self):
         """Test that get_media_buy_delivery only returns data for owned media buys.

@@ -37,8 +37,6 @@ logger = logging.getLogger(__name__)
 def _list_creatives_impl(
     media_buy_id: str | None = None,
     media_buy_ids: list[str] | None = None,
-    buyer_ref: str | None = None,
-    buyer_refs: list[str] | None = None,
     status: str | None = None,
     format: str | None = None,
     tags: list[str] | None = None,
@@ -65,8 +63,6 @@ def _list_creatives_impl(
     Args:
         media_buy_id: Filter by single media buy ID (optional, backward compat)
         media_buy_ids: Filter by multiple media buy IDs (AdCP 2.5, optional)
-        buyer_ref: Filter by single buyer reference (optional, backward compat)
-        buyer_refs: Filter by multiple buyer references (AdCP 2.5, optional)
         status: Filter by creative status (pending, approved, rejected) (optional)
         format: Filter by creative format (optional)
         tags: Filter by tags (optional)
@@ -135,18 +131,12 @@ def _list_creatives_impl(
     if search:
         filters_dict["name_contains"] = search
 
-    # Build media_buy_ids and buyer_refs filter arrays
+    # Build media_buy_ids filter array
     effective_media_buy_ids = list(media_buy_ids) if media_buy_ids else []
     if media_buy_id and media_buy_id not in effective_media_buy_ids:
         effective_media_buy_ids.append(media_buy_id)
     if effective_media_buy_ids:
         filters_dict["media_buy_ids"] = effective_media_buy_ids
-
-    effective_buyer_refs = list(buyer_refs) if buyer_refs else []
-    if buyer_ref and buyer_ref not in effective_buyer_refs:
-        effective_buyer_refs.append(buyer_ref)
-    if effective_buyer_refs:
-        filters_dict["buyer_refs"] = effective_buyer_refs
 
     # Merge structured filters with flat params (flat params take precedence)
     if filters:
@@ -213,7 +203,6 @@ def _list_creatives_impl(
             created_before=created_before_dt,
             search=search,
             media_buy_ids=effective_media_buy_ids or None,
-            buyer_refs=effective_buyer_refs or None,
             sort_by=sort_by,
             sort_order=valid_sort_order,
             offset=offset,
@@ -316,8 +305,6 @@ def _list_creatives_impl(
     if req.filters:
         if req.filters.media_buy_ids:
             filters_applied.append(f"media_buy_ids={','.join(req.filters.media_buy_ids)}")
-        if req.filters.buyer_refs:
-            filters_applied.append(f"buyer_refs={','.join(req.filters.buyer_refs)}")
         if req.filters.statuses:
             filters_applied.append(f"statuses={','.join(str(s) for s in req.filters.statuses)}")
         if req.filters.format_ids:
@@ -389,8 +376,6 @@ def _list_creatives_impl(
 async def list_creatives(
     media_buy_id: str = None,
     media_buy_ids: list[str] = None,
-    buyer_ref: str = None,
-    buyer_refs: list[str] = None,
     status: str = None,
     format: str = None,
     tags: list[str] = None,
@@ -422,8 +407,6 @@ async def list_creatives(
     Args:
         media_buy_id: Filter by single media buy ID (backward compat)
         media_buy_ids: Filter by multiple media buy IDs (AdCP 2.5)
-        buyer_ref: Filter by single buyer reference (backward compat)
-        buyer_refs: Filter by multiple buyer references (AdCP 2.5)
 
     Returns:
         ToolResult with ListCreativesResponse data
@@ -436,8 +419,6 @@ async def list_creatives(
     response = _list_creatives_impl(
         media_buy_id=media_buy_id,
         media_buy_ids=media_buy_ids,
-        buyer_ref=buyer_ref,
-        buyer_refs=buyer_refs,
         status=status,
         format=format,
         tags=tags,
@@ -462,8 +443,6 @@ async def list_creatives(
 def list_creatives_raw(
     media_buy_id: str = None,
     media_buy_ids: list[str] = None,
-    buyer_ref: str = None,
-    buyer_refs: list[str] = None,
     status: str = None,
     format: str = None,
     tags: list[str] = None,
@@ -490,8 +469,6 @@ def list_creatives_raw(
     Args:
         media_buy_id: Filter by single media buy ID (backward compat)
         media_buy_ids: Filter by multiple media buy IDs (AdCP 2.5)
-        buyer_ref: Filter by single buyer reference (backward compat)
-        buyer_refs: Filter by multiple buyer references (AdCP 2.5)
         status: Filter by status (optional)
         format: Filter by creative format (optional)
         tags: Filter by creative group tags (optional)
@@ -522,8 +499,6 @@ def list_creatives_raw(
     return _list_creatives_impl(
         media_buy_id=media_buy_id,
         media_buy_ids=media_buy_ids,
-        buyer_ref=buyer_ref,
-        buyer_refs=buyer_refs,
         status=status,
         format=format,
         tags=tags,

@@ -84,16 +84,14 @@ def when_send_a2a(ctx: dict) -> None:
 
 @when(parsers.parse('the Buyer Agent sends a list_creative_formats task via A2A with type filter "{type_filter}"'))
 def when_send_a2a_type_filter(ctx: dict, type_filter: str) -> None:
-    _call_via(ctx, "a2a", req=ListCreativeFormatsRequest(type=type_filter))
+    # type filter removed in adcp 3.12 — delegate to unfiltered
+    when_send_a2a_no_filters(ctx)
 
 
 @when(parsers.parse('the Buyer Agent sends a list_creative_formats task via A2A with type "{type_value}"'))
 def when_send_a2a_type_value(ctx: dict, type_value: str) -> None:
-    try:
-        req = ListCreativeFormatsRequest(type=type_value)
-        _call_via(ctx, "a2a", req=req)
-    except Exception as exc:
-        ctx["error"] = exc
+    # type filter removed in adcp 3.12 — delegate to unfiltered
+    when_send_a2a_no_filters(ctx)
 
 
 # ── MCP transport ────────────────────────────────────────────────────
@@ -111,11 +109,8 @@ def when_call_mcp(ctx: dict) -> None:
 
 @when(parsers.parse('the Buyer Agent calls list_creative_formats MCP tool with type "{type_value}"'))
 def when_call_mcp_type(ctx: dict, type_value: str) -> None:
-    try:
-        req = ListCreativeFormatsRequest(type=type_value)
-        _call_via(ctx, "mcp", req=req)
-    except Exception as exc:
-        ctx["error"] = exc
+    # type filter removed in adcp 3.12 — delegate to unfiltered
+    when_call_mcp_no_filters(ctx)
 
 
 # ── Generic format request (transport-agnostic) ──────────────────────
@@ -147,9 +142,24 @@ def when_send_request_invalid_dimensions(ctx: dict) -> None:
 
 @when(parsers.parse('the Buyer Agent requests formats with type "{fmt_type}" and asset_types {asset_types}'))
 def when_request_type_and_asset(ctx: dict, fmt_type: str, asset_types: str) -> None:
+    # type filter was removed from ListCreativeFormatsRequest in adcp 3.12;
+    # only asset_types filter is applied
     parsed_assets = json.loads(asset_types)
     try:
-        req = ListCreativeFormatsRequest(type=fmt_type, asset_types=parsed_assets)
+        req = ListCreativeFormatsRequest(asset_types=parsed_assets)
+        _call(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
+
+
+# ── Filter: asset_types + name_search combined ──────────────────────
+
+
+@when(parsers.parse('the Buyer Agent requests formats with asset_types {asset_types} and name_search "{name_search}"'))
+def when_request_asset_types_and_name_search(ctx: dict, asset_types: str, name_search: str) -> None:
+    parsed_assets = json.loads(asset_types)
+    try:
+        req = ListCreativeFormatsRequest(asset_types=parsed_assets, name_search=name_search)
         _call(ctx, req=req)
     except Exception as exc:
         ctx["error"] = exc
@@ -160,11 +170,8 @@ def when_request_type_and_asset(ctx: dict, fmt_type: str, asset_types: str) -> N
 
 @when(parsers.parse('the Buyer Agent requests formats with type filter "{fmt_type}"'))
 def when_request_type_filter(ctx: dict, fmt_type: str) -> None:
-    try:
-        req = ListCreativeFormatsRequest(type=fmt_type)
-        _call(ctx, req=req)
-    except Exception as exc:
-        ctx["error"] = exc
+    # type filter was removed from ListCreativeFormatsRequest in adcp 3.12
+    _call(ctx)
 
 
 # ── Filter: format_ids ───────────────────────────────────────────────
@@ -270,15 +277,12 @@ def when_request_input_format_ids(ctx: dict, filter_value: str) -> None:
 
 
 def _partition_type(ctx: dict, partition: str) -> None:
-    """Map type partition label to filter and call harness."""
-    if partition == "omitted":
-        _call(ctx)
-        return
-    try:
-        req = ListCreativeFormatsRequest(type=partition)
-        _call(ctx, req=req)
-    except Exception as exc:
-        ctx["error"] = exc
+    """Map type partition label to filter and call harness.
+
+    type filter was removed from ListCreativeFormatsRequest in adcp 3.12.
+    All partitions now dispatch an unfiltered request.
+    """
+    _call(ctx)
 
 
 def _partition_format_ids(ctx: dict, partition: str) -> None:

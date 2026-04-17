@@ -154,7 +154,6 @@ def test_combined_campaign_and_package_update(standard_mocks):
     # Adapter returns success for package budget update
     standard_mocks["adapter_instance"].update_media_buy.return_value = UpdateMediaBuySuccess(
         media_buy_id="mb_combined",
-        buyer_ref="",
         affected_packages=[],
     )
 
@@ -204,7 +203,6 @@ def test_combined_campaign_and_package_update(standard_mocks):
     # The adapter should have been called for package budget update
     standard_mocks["adapter_instance"].update_media_buy.assert_called_once_with(
         media_buy_id="mb_combined",
-        buyer_ref=ANY,
         action="update_package_budget",
         package_id="pkg_A",
         budget=ANY,
@@ -224,7 +222,6 @@ def test_multi_package_update_processes_all_packages(standard_mocks):
     # Adapter returns success for each update_package_budget call
     standard_mocks["adapter_instance"].update_media_buy.return_value = UpdateMediaBuySuccess(
         media_buy_id="mb_multi",
-        buyer_ref="",
         affected_packages=[],
     )
 
@@ -271,28 +268,13 @@ def test_multi_package_update_processes_all_packages(standard_mocks):
 
 
 def test_buyer_ref_positive_resolution(standard_mocks):
-    """When buyer_ref provided, DB lookup resolves to correct media_buy_id,
-    and update proceeds successfully."""
-    _setup_db_session(standard_mocks)
+    """buyer_ref removed from UpdateMediaBuyRequest in adcp 3.12.
+    Now media_buy_id is the sole identifier."""
+    from pydantic import ValidationError
 
-    # The buyer_ref lookup returns a media buy with the resolved ID
-    mock_media_buy = MagicMock()
-    mock_media_buy.media_buy_id = "mb_resolved_123"
-    standard_mocks["uow_instance"].media_buys.get_by_buyer_ref.return_value = mock_media_buy
-
-    identity = _make_identity()
-    # Use buyer_ref instead of media_buy_id (no packages, no budget = empty update)
-    req = UpdateMediaBuyRequest(buyer_ref="buyer_ref_abc")
-    result = _update_media_buy_impl(req=req, identity=identity)
-
-    assert isinstance(result, UpdateMediaBuySuccess)
-    # The resolved media_buy_id should be used in the response
-    assert result.media_buy_id == "mb_resolved_123"
-
-    # _verify_principal should have been called with the resolved ID and identity
-    standard_mocks["verify_principal"].assert_called_once_with(
-        "mb_resolved_123", identity, standard_mocks["uow_instance"].media_buys
-    )
+    # buyer_ref is no longer accepted on UpdateMediaBuyRequest
+    with pytest.raises(ValidationError, match="buyer_ref"):
+        UpdateMediaBuyRequest(buyer_ref="buyer_ref_abc")
 
 
 # ---------------------------------------------------------------------------
@@ -307,7 +289,6 @@ def test_main_flow_package_budget_update(standard_mocks):
     # Adapter returns success
     standard_mocks["adapter_instance"].update_media_buy.return_value = UpdateMediaBuySuccess(
         media_buy_id="mb_main",
-        buyer_ref="",
         affected_packages=[],
     )
 
@@ -558,10 +539,7 @@ def test_package_not_found_returns_error(standard_mocks):
     req = UpdateMediaBuyRequest(
         media_buy_id="mb_pkg_nf",
         packages=[
-            {
-                "package_id": "pkg_nonexistent",
-                "targeting_overlay": {"include_segment": [{"segment_id": "seg_1"}]},
-            }
+            {"package_id": "pkg_nonexistent", "targeting_overlay": {"include_segment": [{"segment_id": "seg_1"}]}}
         ],
     )
     result = _update_media_buy_impl(req=req, identity=identity)
@@ -587,7 +565,6 @@ def test_pause_completes_workflow_step(standard_mocks):
     # Configure adapter to return success for pause
     mock_result = UpdateMediaBuySuccess(
         media_buy_id="mb_pause",
-        buyer_ref="buyer_pause",
         affected_packages=[],
     )
     standard_mocks["adapter_instance"].update_media_buy.return_value = mock_result
@@ -873,7 +850,7 @@ class TestUC003MainObligations:
         mock_session.scalars.return_value = mock_scalars
 
         standard_mocks["adapter_instance"].update_media_buy.return_value = UpdateMediaBuySuccess(
-            media_buy_id="mb_no_max", buyer_ref="", affected_packages=[]
+            media_buy_id="mb_no_max", affected_packages=[]
         )
 
         identity = _make_identity()
@@ -898,7 +875,7 @@ class TestUC003MainObligations:
         mock_session.scalars.return_value = mock_scalars
 
         standard_mocks["adapter_instance"].update_media_buy.return_value = UpdateMediaBuySuccess(
-            media_buy_id="mb_adapter", buyer_ref="", affected_packages=[]
+            media_buy_id="mb_adapter", affected_packages=[]
         )
 
         identity = _make_identity()
@@ -926,7 +903,7 @@ class TestUC003MainObligations:
         mock_session.scalars.return_value = mock_scalars
 
         standard_mocks["adapter_instance"].update_media_buy.return_value = UpdateMediaBuySuccess(
-            media_buy_id="mb_persist", buyer_ref="", affected_packages=[]
+            media_buy_id="mb_persist", affected_packages=[]
         )
 
         identity = _make_identity()
@@ -1693,12 +1670,7 @@ class TestUC003UpdateTargetingOverlay:
         identity = _make_identity()
         req = UpdateMediaBuyRequest(
             media_buy_id="mb_targeting",
-            packages=[
-                {
-                    "package_id": "pkg_1",
-                    "targeting_overlay": {"geo": {"include": ["US"]}},
-                }
-            ],
+            packages=[{"package_id": "pkg_1", "targeting_overlay": {"geo": {"include": ["US"]}}}],
         )
         result = _update_media_buy_impl(req=req, identity=identity)
 
@@ -1723,10 +1695,7 @@ class TestUC003UpdateTargetingOverlay:
         req = UpdateMediaBuyRequest(
             media_buy_id="mb_no_validate",
             packages=[
-                {
-                    "package_id": "pkg_1",
-                    "targeting_overlay": {"unknown_field": "value", "conflicting_geo": True},
-                }
+                {"package_id": "pkg_1", "targeting_overlay": {"unknown_field": "value", "conflicting_geo": True}}
             ],
         )
         result = _update_media_buy_impl(req=req, identity=identity)
@@ -1749,12 +1718,7 @@ class TestUC003UpdateTargetingOverlay:
         identity = _make_identity()
         req = UpdateMediaBuyRequest(
             media_buy_id="mb_target_no_adapter",
-            packages=[
-                {
-                    "package_id": "pkg_1",
-                    "targeting_overlay": {"geo": {"include": ["US"]}},
-                }
-            ],
+            packages=[{"package_id": "pkg_1", "targeting_overlay": {"geo": {"include": ["US"]}}}],
         )
         result = _update_media_buy_impl(req=req, identity=identity)
 
@@ -2087,51 +2051,31 @@ class TestUC003ExtH:
     """Missing package ID obligations."""
 
     def test_package_update_without_package_id(self, standard_mocks):
-        """Package budget update without package_id returns missing_package_id.
+        """Package update without package_id rejected at schema level in adcp 3.12.
 
         Covers: UC-003-EXT-H-01
         """
-        mock_session = _setup_db_session(standard_mocks)
-        standard_mocks["uow_instance"].media_buys.get_by_id.return_value = _make_mock_media_buy("mb_no_pkg")
-        mock_cl = _make_mock_currency_limit(max_daily=100000)
-        mock_scalars = MagicMock()
-        mock_scalars.first.return_value = mock_cl
-        mock_session.scalars.return_value = mock_scalars
+        from pydantic import ValidationError
 
-        identity = _make_identity()
-        req = UpdateMediaBuyRequest(
-            media_buy_id="mb_no_pkg",
-            packages=[{"budget": 5000.0}],  # No package_id
-        )
-        result = _update_media_buy_impl(req=req, identity=identity)
-
-        assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "missing_package_id"
+        with pytest.raises(ValidationError, match="package_id"):
+            UpdateMediaBuyRequest(
+                media_buy_id="mb_no_pkg",
+                packages=[{"budget": 5000.0}],  # No package_id
+            )
 
     def test_buyer_ref_at_package_level_gap(self, standard_mocks):
-        """Package-level buyer_ref may not be implemented (gap G38).
+        """Package-level buyer_ref removed in adcp 3.12.
 
         Covers: UC-003-EXT-H-02
         """
-        mock_session = _setup_db_session(standard_mocks)
-        standard_mocks["uow_instance"].media_buys.get_by_id.return_value = _make_mock_media_buy("mb_buyer_ref_pkg")
-        mock_cl = _make_mock_currency_limit(max_daily=100000)
-        mock_scalars = MagicMock()
-        mock_scalars.first.return_value = mock_cl
-        mock_session.scalars.return_value = mock_scalars
+        from pydantic import ValidationError
 
-        identity = _make_identity()
-        # Package without package_id (gap G38: buyer_ref at package level not supported)
-        # Schema forbids extra fields, so we can only omit package_id
-        req = UpdateMediaBuyRequest(
-            media_buy_id="mb_buyer_ref_pkg",
-            packages=[{"budget": 5000.0}],  # No package_id
-        )
-        result = _update_media_buy_impl(req=req, identity=identity)
-
-        # Current behavior: missing_package_id (package-level identification requires package_id)
-        assert isinstance(result, UpdateMediaBuyError)
-        assert result.errors[0].code == "missing_package_id"
+        # package_id is now required, cannot omit it
+        with pytest.raises(ValidationError, match="package_id"):
+            UpdateMediaBuyRequest(
+                media_buy_id="mb_buyer_ref_pkg",
+                packages=[{"budget": 5000.0}],  # No package_id
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -2390,12 +2334,7 @@ class TestUC003ExtL:
         identity = _make_identity()
         req = UpdateMediaBuyRequest(
             media_buy_id="mb_wrong_pkg",
-            packages=[
-                {
-                    "package_id": "pkg_99",
-                    "targeting_overlay": {"geo": {"include": ["US"]}},
-                }
-            ],
+            packages=[{"package_id": "pkg_99", "targeting_overlay": {"geo": {"include": ["US"]}}}],
         )
         result = _update_media_buy_impl(req=req, identity=identity)
 
@@ -2415,10 +2354,7 @@ class TestUC003ExtL:
         req = UpdateMediaBuyRequest(
             media_buy_id="mb_no_pkg_exist",
             packages=[
-                {
-                    "package_id": "pkg_nonexistent",
-                    "targeting_overlay": {"include_segment": [{"segment_id": "s1"}]},
-                }
+                {"package_id": "pkg_nonexistent", "targeting_overlay": {"include_segment": [{"segment_id": "s1"}]}}
             ],
         )
         result = _update_media_buy_impl(req=req, identity=identity)

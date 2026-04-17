@@ -8,7 +8,7 @@ Supports variable substitution with fallback syntax:
 - {date_range} - Formatted date range (e.g., "Oct 7-14, 2025")
 - {month_year} - Month and year (e.g., "Oct 2025")
 - {brand_name} - Brand from brand reference
-- {buyer_ref} - Buyer's reference ID
+- {media_buy_id} - Media buy identifier
 - {auto_name} - AI-generated name from full context (requires AI configuration)
 - {product_name} - Product name (for line items)
 - {package_count} - Number of packages in order
@@ -142,7 +142,6 @@ def generate_auto_name(
         generated_name = run_async_in_sync_context(
             generate_name_async(
                 agent=agent,
-                buyer_ref=request.buyer_ref,
                 campaign_name=None,  # Not in AdCP spec
                 brand_name=brand_name if brand_name != "N/A" else None,
                 budget_info=budget_info,
@@ -256,14 +255,13 @@ def build_order_name_context(
     brand_name = _extract_brand_name(request)
 
     # campaign_name is no longer on CreateMediaBuyRequest per AdCP spec
-    # Use brand_name or generate from buyer_ref as fallback
-    campaign_name = brand_name or f"Campaign {request.buyer_ref}"
+    # Use brand_name as campaign name
+    campaign_name = brand_name or "Campaign"
 
     return {
         "campaign_name": campaign_name,
         "brand_name": brand_name or "N/A",
         "promoted_offering": brand_name or "N/A",  # Backward compatibility alias
-        "buyer_ref": request.buyer_ref,
         "auto_name": auto_name,
         "date_range": format_date_range(start_time, end_time),
         "month_year": format_month_year(start_time),

@@ -285,15 +285,8 @@ class CreativeAssignment(SalesAgentBaseModel):
 class AddCreativeAssetsRequest(SalesAgentBaseModel):
     """Request to add creative assets to a media buy (AdCP spec compliant)."""
 
-    media_buy_id: str | None = None
-    buyer_ref: str | None = None
+    media_buy_id: str
     assets: list[Creative]  # Renamed from 'creatives' to match spec
-
-    def model_validate(cls, values):
-        # Ensure at least one of media_buy_id or buyer_ref is provided
-        if not values.get("media_buy_id") and not values.get("buyer_ref"):
-            raise ValueError("Either media_buy_id or buyer_ref must be provided")
-        return values
 
     # Backward compatibility
     @property
@@ -589,7 +582,7 @@ class ListCreativesResponse(NestedModelSerializerMixin, LibraryListCreativesResp
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
     # Override with local subtypes (each extends its library counterpart)
-    query_summary: QuerySummary = Field(..., description="Summary of the query that was executed")  # type: ignore[assignment]
+    query_summary: QuerySummary = Field(..., description="Summary of the query that was executed")
     pagination: Pagination = Field(..., description="Pagination information for navigating results")
     creatives: list[Creative] = Field(..., description="Array of creative assets")  # type: ignore[assignment]
 

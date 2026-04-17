@@ -64,7 +64,6 @@ class TestListCreativeFormatsE2E:
             for fmt in formats:
                 assert "format_id" in fmt, f"Format missing 'format_id': {sorted(fmt.keys())}"
                 assert "name" in fmt, f"Format missing 'name': {sorted(fmt.keys())}"
-                assert "type" in fmt, f"Format missing 'type': {sorted(fmt.keys())}"
 
                 # format_id should be a dict with 'id' and 'agent_url' per AdCP spec
                 fid = fmt["format_id"]

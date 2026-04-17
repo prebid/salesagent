@@ -72,15 +72,7 @@ def _build_jsonrpc(skill: str, params: dict | None = None, request_id: str | Non
             "message": {
                 "messageId": str(uuid.uuid4()),
                 "role": "user",
-                "parts": [
-                    {
-                        "kind": "data",
-                        "data": {
-                            "skill": skill,
-                            "parameters": params or {},
-                        },
-                    }
-                ],
+                "parts": [{"kind": "data", "data": {"skill": skill, "parameters": params or {}}}],
             }
         },
     }
@@ -127,10 +119,7 @@ def client():
 @pytest.fixture
 def auth_headers():
     """Headers with a valid Bearer token."""
-    return {
-        "Authorization": "Bearer test-transport-token",
-        "Content-Type": "application/json",
-    }
+    return {"Authorization": "Bearer test-transport-token", "Content-Type": "application/json"}
 
 
 @pytest.fixture
@@ -218,12 +207,7 @@ class TestA2AJsonRpcProtocol:
 
     def test_invalid_method_returns_error(self, client, auth_headers):
         """Unknown JSON-RPC method should return method-not-found error."""
-        payload = {
-            "jsonrpc": "2.0",
-            "id": "test-1",
-            "method": "nonexistent/method",
-            "params": {},
-        }
+        payload = {"jsonrpc": "2.0", "id": "test-1", "method": "nonexistent/method", "params": {}}
         response = client.post("/a2a", json=payload, headers=auth_headers)
         body = response.json()
         assert "error" in body, "Unknown method should return JSON-RPC error"
@@ -255,13 +239,7 @@ class TestA2AJsonRpcProtocol:
             "jsonrpc": "2.0",
             "id": 42,
             "method": "message/send",
-            "params": {
-                "message": {
-                    "messageId": "msg-1",
-                    "role": "user",
-                    "parts": [{"kind": "text", "text": "hello"}],
-                }
-            },
+            "params": {"message": {"messageId": "msg-1", "role": "user", "parts": [{"kind": "text", "text": "hello"}]}},
         }
         response = client.post("/a2a", json=payload, headers=auth_headers)
         # Should not crash with TypeError
@@ -307,7 +285,6 @@ class TestA2AResponseShape:
 
         mock_impl.return_value = CreateMediaBuySuccessResponse(
             media_buy_id="mb-test-1",
-            buyer_ref="buyer-ref-1",
             packages=[],
         )
 
@@ -315,7 +292,7 @@ class TestA2AResponseShape:
             "create_media_buy",
             {
                 "brand": {"domain": "testbrand.com"},
-                "packages": [{"buyer_ref": "pkg1", "product_id": "p1", "budget": 1000.0, "pricing_option_id": "cpm"}],
+                "packages": [{"product_id": "p1", "budget": 1000.0, "pricing_option_id": "cpm"}],
                 "start_time": "2026-03-01T00:00:00Z",
                 "end_time": "2026-03-31T00:00:00Z",
             },
@@ -326,7 +303,7 @@ class TestA2AResponseShape:
         if "result" in body:
             data = _extract_artifact_data(body["result"])
             assert "media_buy_id" in data, "create_media_buy response must have 'media_buy_id'"
-            assert "buyer_ref" in data, "create_media_buy response must have 'buyer_ref'"
+            # buyer_ref removed from CreateMediaBuySuccess in adcp 3.12
 
     def test_error_format_is_jsonrpc(self, client, auth_headers):
         """Error responses must use JSON-RPC error envelope, not {success: false}."""
@@ -389,7 +366,6 @@ class TestA2AResponseShape:
 
         mock_impl.return_value = UpdateMediaBuySuccessResponse(
             media_buy_id="mb-test-1",
-            buyer_ref="buyer-ref-1",
             affected_packages=[],
         )
 

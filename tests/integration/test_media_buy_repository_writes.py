@@ -99,7 +99,7 @@ class TestCreateMediaBuy:
     def test_roundtrip_create_and_read_back(self, tenant_a, principal_a):
         """Create via repository, read back, verify all fields match."""
         with MediaBuyUoW(tenant_a) as uow:
-            mb = make_media_buy(tenant_a, principal_a, "mb_create_1", buyer_ref="ref_create_1")
+            mb = make_media_buy(tenant_a, principal_a, "mb_create_1")
             result = uow.media_buys.create(mb)
             assert result is mb
 
@@ -111,7 +111,6 @@ class TestCreateMediaBuy:
             assert fetched.media_buy_id == "mb_create_1"
             assert fetched.tenant_id == tenant_a
             assert fetched.principal_id == principal_a
-            assert fetched.buyer_ref == "ref_create_1"
             assert fetched.order_name == "Order mb_create_1"
             assert fetched.status == "draft"
 

@@ -215,7 +215,6 @@ class TestCreativeAssignmentPrincipalIdManualApproval:
             packages=[
                 {
                     "product_id": "guaranteed_display",
-                    "buyer_ref": "approval-pkg-1",
                     "budget": 5000.0,
                     "pricing_option_id": "cpm_usd_fixed",
                     "creative_ids": ca_creatives,
@@ -271,7 +270,6 @@ class TestCreativeAssignmentPrincipalIdAutoApprove:
             packages=[
                 {
                     "product_id": "guaranteed_display",
-                    "buyer_ref": "auto-pkg-1",
                     "budget": 5000.0,
                     "pricing_option_id": "cpm_usd_fixed",
                     "creative_ids": ca_creatives,
@@ -328,7 +326,6 @@ class TestCreativeAssignmentPrincipalIdUpdate:
             packages=[
                 {
                     "product_id": "guaranteed_display",
-                    "buyer_ref": "update-pkg-1",
                     "budget": 5000.0,
                     "pricing_option_id": "cpm_usd_fixed",
                 }

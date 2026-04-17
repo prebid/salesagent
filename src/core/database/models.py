@@ -98,7 +98,7 @@ class Tenant(Base, JSONValidatorMixin):
 
     # Naming templates (business rules - shared across all adapters)
     order_name_template: Mapped[str | None] = mapped_column(
-        String(500), nullable=True, server_default="{campaign_name|brand_name} - {buyer_ref} - {date_range}"
+        String(500), nullable=True, server_default="{campaign_name|brand_name} - {media_buy_id} - {date_range}"
     )
     line_item_name_template: Mapped[str | None] = mapped_column(
         String(500), nullable=True, server_default="{order_name} - {product_name}"
@@ -895,7 +895,6 @@ class MediaBuy(Base):
         String(50), ForeignKey("tenants.tenant_id", ondelete="CASCADE"), nullable=False
     )
     principal_id: Mapped[str] = mapped_column(String(50), nullable=False)
-    buyer_ref: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     order_name: Mapped[str] = mapped_column(String(255), nullable=False)
     advertiser_name: Mapped[str] = mapped_column(String(255), nullable=False)
     campaign_objective: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -917,6 +916,7 @@ class MediaBuy(Base):
     strategy_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     account_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # Relationships
     tenant = relationship("Tenant", back_populates="media_buys", overlaps="media_buys")
@@ -952,12 +952,6 @@ class MediaBuy(Base):
             ["tenant_id", "account_id"],
             ["accounts.tenant_id", "accounts.account_id"],
             ondelete="SET NULL",
-        ),
-        UniqueConstraint(
-            "tenant_id",
-            "principal_id",
-            "buyer_ref",
-            name="uq_media_buys_buyer_ref",
         ),
         Index("idx_media_buys_tenant", "tenant_id"),
         Index("idx_media_buys_status", "status"),

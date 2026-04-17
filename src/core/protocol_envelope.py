@@ -20,7 +20,7 @@ Architecture:
 
 Usage:
     # In MCP tool:
-    domain_response = CreateMediaBuyResponse(buyer_ref="...", packages=[...])
+    domain_response = CreateMediaBuyResponse(media_buy_id="...", packages=[...])
     envelope = ProtocolEnvelope.wrap(
         payload=domain_response,
         status="completed",
@@ -135,7 +135,7 @@ class ProtocolEnvelope(BaseModel):
             ProtocolEnvelope wrapping the payload
 
         Example:
-            >>> response = CreateMediaBuyResponse(buyer_ref="ref123", packages=[...])
+            >>> response = CreateMediaBuyResponse(media_buy_id="mb_123", packages=[...])
             >>> envelope = ProtocolEnvelope.wrap(
             ...     payload=response,
             ...     status="completed",

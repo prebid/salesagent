@@ -21,10 +21,7 @@ from tests.helpers.adcp_factories import create_test_media_buy_request_dict
 
 def _make_push_notification_config_dict() -> dict[str, Any]:
     """Create push_notification_config as a raw dict (A2A transport format)."""
-    return {
-        "url": "https://example.com/webhook",
-        "authentication": {"credentials": "a" * 32, "schemes": ["Bearer"]},
-    }
+    return {"url": "https://example.com/webhook", "authentication": {"credentials": "a" * 32, "schemes": ["Bearer"]}}
 
 
 def _mock_create_result() -> CreateMediaBuyResult:
@@ -76,7 +73,6 @@ class TestMCPForwardsPushNotificationConfig:
             # we only care that _impl received push_notification_config.
             try:
                 await create_media_buy(
-                    buyer_ref=req_dict["buyer_ref"],
                     brand=req_dict["brand"],
                     packages=req_dict["packages"],
                     start_time=req_dict["start_time"],
@@ -122,7 +118,6 @@ class TestA2AForwardsPushNotificationConfig:
             return_value=mock_result,
         ) as mock_impl:
             await create_media_buy_raw(
-                buyer_ref=req_dict["buyer_ref"],
                 brand=req_dict["brand"],
                 packages=req_dict["packages"],
                 start_time=req_dict["start_time"],

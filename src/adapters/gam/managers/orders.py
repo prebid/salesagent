@@ -499,14 +499,18 @@ class GAMOrdersManager:
                         raise ValueError(error_msg)
 
                     # Check if format type is supported by product
-                    # Convert enum to string for comparison (adcp 2.5.0 uses Type enum)
-                    format_type_str = (
-                        format_obj.type.value
-                        if format_obj.type is not None and hasattr(format_obj.type, "value")
-                        else str(format_obj.type)
-                        if format_obj.type is not None
-                        else ""
+                    # adcp 3.12: Format.type removed. Infer from format_id string.
+                    fid_str = (
+                        format_obj.format_id.id if hasattr(format_obj.format_id, "id") else str(format_obj.format_id)
                     )
+                    if "video" in fid_str:
+                        format_type_str = "video"
+                    elif "native" in fid_str:
+                        format_type_str = "native"
+                    elif "audio" in fid_str:
+                        format_type_str = "audio"
+                    else:
+                        format_type_str = "display"
                     if format_type_str not in supported_format_types:
                         error_msg = (
                             f"Format '{format_display}' (type: {format_type_str}) is not supported by product {package.package_id}. "
@@ -561,7 +565,8 @@ class GAMOrdersManager:
                             requirements = format_obj.requirements or {}
                             width = requirements.get("width")
                             height = requirements.get("height")
-                            creative_size_type = "NATIVE" if format_obj.type == "native" else "PIXEL"
+                            # Infer creative size type from format_id name since Format.type was removed in adcp 3.12
+                            creative_size_type = "NATIVE" if "native" in format_id_str.lower() else "PIXEL"
 
                         # Check FormatId parameters (AdCP 2.5 parameterized formats)
                         # The buyer can specify width/height directly in the FormatId object
@@ -596,7 +601,7 @@ class GAMOrdersManager:
                             placeholder["creativeSizeType"] = creative_size_type
 
                             # Log video-specific info
-                            if format_obj.type == "video":
+                            if "video" in format_id_str.lower():
                                 aspect_ratio = (
                                     format_obj.requirements.get("aspect_ratio", "unknown")
                                     if format_obj.requirements

@@ -408,27 +408,6 @@ class TestListMediaBuyFilter:
         assert ids == {"c_buy1", "c_buy2"}
 
 
-class TestListBuyerRefFilter:
-    """Buyer ref filter exercises lines 145, 147."""
-
-    def test_buyer_ref_returns_matching(self, integration_db):
-        """Spec: list_creatives buyer_ref filters via assignment→media_buy join."""
-        with CreativeListEnv() as env:
-            tenant = TenantFactory(tenant_id="test_tenant")
-            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
-
-            c1 = CreativeFactory(tenant=tenant, principal=principal, creative_id="c_ref_match")
-            CreativeFactory(tenant=tenant, principal=principal, creative_id="c_no_ref")
-
-            mb = MediaBuyFactory(tenant=tenant, buyer_ref="buyer-abc")
-            CreativeAssignmentFactory(creative=c1, media_buy=mb)
-
-            response = env.call_impl(buyer_ref="buyer-abc")
-
-        assert len(response.creatives) == 1
-        assert response.creatives[0].creative_id == "c_ref_match"
-
-
 class TestListStructuredFilters:
     """Structured CreativeFilters merge exercises line 151."""
 
@@ -580,19 +559,6 @@ class TestListQuerySummary:
             response = env.call_impl(tags=["tag1"])
 
         assert any("tags=" in f for f in response.query_summary.filters_applied)
-
-    def test_filters_applied_includes_buyer_refs(self, integration_db):
-        """Spec: list_creatives query_summary.filters_applied lists buyer_refs."""
-        with CreativeListEnv() as env:
-            tenant = TenantFactory(tenant_id="test_tenant")
-            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
-            c1 = CreativeFactory(tenant=tenant, principal=principal, creative_id="c_1")
-            mb = MediaBuyFactory(tenant=tenant, buyer_ref="buyer-qs")
-            CreativeAssignmentFactory(creative=c1, media_buy=mb)
-
-            response = env.call_impl(buyer_refs=["buyer-qs"])
-
-        assert any("buyer_refs" in f for f in response.query_summary.filters_applied)
 
 
 # ---------------------------------------------------------------------------
