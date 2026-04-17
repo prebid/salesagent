@@ -11,8 +11,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 # Import types from adcp library - use public API when available
-from adcp import BrandManifest, Format, Property
+from adcp import Format, Property
 from adcp.types import CreativeAsset, FormatId, Product
+from adcp.types.generated_poc.brand import Brand
 
 # Import Package and PackageRequest from our schemas (they extend adcp library)
 from src.core.schemas import Package, PackageRequest, url
@@ -444,14 +445,11 @@ def create_test_package_request(
         )
     """
     # Set defaults for required fields if not provided
-    if buyer_ref is None:
-        buyer_ref = f"buyer_pkg_{product_id}"
     if budget is None:
         budget = 1000.0
 
     return PackageRequest(
         product_id=product_id,
-        buyer_ref=buyer_ref,
         budget=budget,
         pricing_option_id=pricing_option_id,
         **kwargs,
@@ -493,34 +491,40 @@ def create_test_creative_asset(
     return CreativeAsset(creative_id=creative_id, name=name, format_id=format_id, assets=assets, **kwargs)
 
 
-def create_test_brand_manifest(
+def create_test_brand(
     name: str = "Test Brand",
     tagline: str | None = None,
     **kwargs,
-) -> BrandManifest:
-    """Create a test BrandManifest object.
+) -> Brand:
+    """Create a test Brand object (adcp 3.12 — replaces BrandManifest).
 
     Args:
-        name: Brand name (required by library BrandManifest)
+        name: Brand name
         tagline: Optional brand tagline
-        **kwargs: Additional optional fields (tone, industry, url, etc.)
+        **kwargs: Additional optional fields
 
     Returns:
-        AdCP-compliant BrandManifest object
+        AdCP-compliant Brand object
 
     Example:
-        brand = create_test_brand_manifest(
+        brand = create_test_brand(
             name="Acme Corp",
             tagline="Best widgets in the world",
-            industry="technology"
         )
     """
-    manifest_kwargs: dict[str, Any] = {"name": name}
+    brand_kwargs: dict[str, Any] = {
+        "id": kwargs.pop("id", "brand_test"),
+        "names": [{"en": name}],
+    }
     if tagline:
-        manifest_kwargs["tagline"] = tagline
-    manifest_kwargs.update(kwargs)
+        brand_kwargs["tagline"] = tagline
+    brand_kwargs.update(kwargs)
 
-    return BrandManifest(**manifest_kwargs)
+    return Brand(**brand_kwargs)
+
+
+# Backward compat alias
+create_test_brand_manifest = create_test_brand
 
 
 def create_test_cpm_pricing_option(
@@ -652,9 +656,8 @@ def create_test_media_buy_request_dict(
     # Build request dict with AdCP-compliant PackageRequest structure
     # One package per product_id (per AdCP spec, each package has one product_id)
     packages = []
-    for idx, product_id in enumerate(product_ids, 1):
+    for product_id in product_ids:
         package = {
-            "buyer_ref": f"{buyer_ref}_pkg_{idx}",
             "product_id": product_id,
             "pricing_option_id": pricing_option_id,
             "budget": per_package_budget,
@@ -662,12 +665,10 @@ def create_test_media_buy_request_dict(
         packages.append(package)
 
     request = {
-        "buyer_ref": buyer_ref,
         "brand": brand,
         "packages": packages,
         "start_time": start_time,
         "end_time": end_time,
-        "budget": total_budget,  # Top-level budget
     }
 
     # Handle targeting_overlay specially (goes in all packages, not top-level)

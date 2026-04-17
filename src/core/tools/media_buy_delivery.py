@@ -183,13 +183,6 @@ def _get_media_buy_delivery_impl(
                     not_found_errors.append(
                         Error(code="media_buy_not_found", message=f"Media buy {requested_id} not found")
                     )
-        elif req.buyer_refs:
-            found_buyer_refs = {buy.buyer_ref for _, buy in target_media_buys if buy.buyer_ref}
-            for requested_ref in req.buyer_refs:
-                if requested_ref not in found_buyer_refs:
-                    not_found_errors.append(
-                        Error(code="media_buy_not_found", message=f"Buyer ref {requested_ref} not found")
-                    )
 
         pricing_option_ids: list[Any] = []
         for _, buy in target_media_buys:
@@ -586,7 +579,6 @@ def _get_media_buy_delivery_impl(
 
 async def get_media_buy_delivery(
     media_buy_ids: list[str] | None = None,
-    buyer_refs: list[str] | None = None,
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
@@ -603,7 +595,6 @@ async def get_media_buy_delivery(
 
     Args:
         media_buy_ids: Array of publisher media buy IDs to get delivery data for (optional)
-        buyer_refs: Array of buyer reference IDs to get delivery data for (optional)
         status_filter: Filter by status - single status or array of MediaBuyStatus enums (optional)
         start_date: Start date for reporting period in YYYY-MM-DD format (optional)
         end_date: End date for reporting period in YYYY-MM-DD format (optional)
@@ -632,7 +623,6 @@ async def get_media_buy_delivery(
     try:
         req = GetMediaBuyDeliveryRequest(
             media_buy_ids=media_buy_ids,
-            buyer_refs=buyer_refs,
             status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
             start_date=start_date,
             end_date=end_date,
@@ -651,7 +641,6 @@ async def get_media_buy_delivery(
 
 def get_media_buy_delivery_raw(
     media_buy_ids: list[str] | None = None,
-    buyer_refs: list[str] | None = None,
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
@@ -667,7 +656,6 @@ def get_media_buy_delivery_raw(
 
     Args:
         media_buy_ids: Array of publisher media buy IDs to get delivery data for (optional)
-        buyer_refs: Array of buyer reference IDs to get delivery data for (optional)
         status_filter: Filter by status - single status or array of MediaBuyStatus enums (optional)
         start_date: Start date for reporting period in YYYY-MM-DD format (optional)
         end_date: End date for reporting period in YYYY-MM-DD format (optional)
@@ -699,7 +687,6 @@ def get_media_buy_delivery_raw(
     # Create request object
     req = GetMediaBuyDeliveryRequest(
         media_buy_ids=media_buy_ids,
-        buyer_refs=buyer_refs,
         status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
         start_date=start_date,
         end_date=end_date,
@@ -777,17 +764,15 @@ def _get_target_media_buys(
     # When specific IDs/refs are provided without an explicit status_filter,
     # return all matching buys regardless of status. The "active" default only
     # applies when browsing (no specific IDs).
-    has_explicit_ids = bool(req.media_buy_ids or req.buyer_refs)
+    has_explicit_ids = bool(req.media_buy_ids)
     if has_explicit_ids and not req.status_filter:
         filter_statuses = list(valid_internal_statuses)
     else:
         filter_statuses = _resolve_delivery_status_filter(req.status_filter, valid_internal_statuses, _to_internal)
 
-    # Preserve if/elif/else precedence: media_buy_ids takes priority over buyer_refs
+    # Fetch media buys by IDs or all for principal
     if req.media_buy_ids:
         fetched_buys = repo.get_by_principal(principal_id, media_buy_ids=req.media_buy_ids)
-    elif req.buyer_refs:
-        fetched_buys = repo.get_by_principal(principal_id, buyer_refs=req.buyer_refs)
     else:
         fetched_buys = repo.get_by_principal(principal_id)
 

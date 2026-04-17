@@ -8,7 +8,6 @@ Covers:
 from __future__ import annotations
 
 import pytest
-from adcp.types.generated_poc.enums.format_category import FormatCategory
 
 from src.core.schemas import Format, FormatId, ListCreativeFormatsRequest
 from tests.factories import TenantFactory
@@ -29,7 +28,7 @@ REQ_TRANSPORTS = [Transport.IMPL, Transport.A2A]
 def _fmt(
     fmt_id: str,
     name: str,
-    type: FormatCategory = FormatCategory.display,
+    type: str | None = "display",
     **kwargs,
 ) -> Format:
     """Shorthand for creating a Format object."""
@@ -57,11 +56,11 @@ class TestSortingByTypeThenName:
     """
 
     MIXED_FORMATS = [
-        _fmt("z_audio", "Z Audio Spot", type=FormatCategory.audio),
-        _fmt("a_display", "A Display Banner", type=FormatCategory.display),
-        _fmt("m_video", "M Video Pre-roll", type=FormatCategory.video),
-        _fmt("b_display", "B Display Skyscraper", type=FormatCategory.display),
-        _fmt("a_audio", "A Audio Intro", type=FormatCategory.audio),
+        _fmt("z_audio", "Z Audio Spot", type="audio"),
+        _fmt("a_display", "A Display Banner", type="display"),
+        _fmt("m_video", "M Video Pre-roll", type="video"),
+        _fmt("b_display", "B Display Skyscraper", type="display"),
+        _fmt("a_audio", "A Audio Intro", type="audio"),
     ]
 
     # Expected order: audio(A, Z) → display(A, B) → video(M)
@@ -143,11 +142,11 @@ class TestTypeFilter:
     """
 
     ALL_FORMATS = [
-        _fmt("display_banner", "Display Banner", type=FormatCategory.display),
-        _fmt("display_sky", "Display Skyscraper", type=FormatCategory.display),
-        _fmt("video_pre", "Video Pre-roll", type=FormatCategory.video),
-        _fmt("video_mid", "Video Mid-roll", type=FormatCategory.video),
-        _fmt("audio_spot", "Audio Spot", type=FormatCategory.audio),
+        _fmt("display_banner", "Display Banner", type="display"),
+        _fmt("display_sky", "Display Skyscraper", type="display"),
+        _fmt("video_pre", "Video Pre-roll", type="video"),
+        _fmt("video_mid", "Video Mid-roll", type="video"),
+        _fmt("audio_spot", "Audio Spot", type="audio"),
     ]
 
     @pytest.mark.parametrize("transport", REQ_TRANSPORTS)
@@ -163,7 +162,7 @@ class TestTypeFilter:
         assert result.is_success
         assert len(result.payload.formats) == 2
         types = {f.type for f in result.payload.formats}
-        assert types == {FormatCategory.video}
+        assert types == {"video"}
 
     def test_filter_video_via_mcp(self, integration_db):
         """UC-005-MAIN-MCP-05: type=video returns only video formats (MCP)."""
@@ -171,12 +170,12 @@ class TestTypeFilter:
             TenantFactory(tenant_id="test_tenant")
             env.set_registry_formats(self.ALL_FORMATS)
 
-            result = env.call_via(Transport.MCP, type=FormatCategory.video)
+            result = env.call_via(Transport.MCP, type="video")
 
         assert result.is_success
         assert len(result.payload.formats) == 2
         types = {f.type for f in result.payload.formats}
-        assert types == {FormatCategory.video}
+        assert types == {"video"}
 
     @pytest.mark.parametrize("transport", REQ_TRANSPORTS)
     def test_filter_display_only(self, integration_db, transport):
@@ -191,7 +190,7 @@ class TestTypeFilter:
         assert result.is_success
         assert len(result.payload.formats) == 2
         types = {f.type for f in result.payload.formats}
-        assert types == {FormatCategory.display}
+        assert types == {"display"}
 
     def test_filter_display_via_mcp(self, integration_db):
         """UC-005-MAIN-MCP-05: type=display returns only display formats (MCP)."""
@@ -199,12 +198,12 @@ class TestTypeFilter:
             TenantFactory(tenant_id="test_tenant")
             env.set_registry_formats(self.ALL_FORMATS)
 
-            result = env.call_via(Transport.MCP, type=FormatCategory.display)
+            result = env.call_via(Transport.MCP, type="display")
 
         assert result.is_success
         assert len(result.payload.formats) == 2
         types = {f.type for f in result.payload.formats}
-        assert types == {FormatCategory.display}
+        assert types == {"display"}
 
     @pytest.mark.parametrize("transport", REQ_TRANSPORTS)
     def test_filter_audio_only(self, integration_db, transport):
@@ -218,7 +217,7 @@ class TestTypeFilter:
 
         assert result.is_success
         assert len(result.payload.formats) == 1
-        assert result.payload.formats[0].type == FormatCategory.audio
+        assert result.payload.formats[0].type == "audio"
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS)
     def test_no_filter_returns_all(self, integration_db, transport):
@@ -244,8 +243,8 @@ class TestTypeFilter:
 
         assert result.is_success
         for fmt in result.payload.formats:
-            assert fmt.type != FormatCategory.display
-            assert fmt.type != FormatCategory.audio
+            assert fmt.type != "display"
+            assert fmt.type != "audio"
 
     @pytest.mark.parametrize("transport", REQ_TRANSPORTS)
     def test_filter_results_still_sorted(self, integration_db, transport):

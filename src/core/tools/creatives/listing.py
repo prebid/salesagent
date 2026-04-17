@@ -316,8 +316,6 @@ def _list_creatives_impl(
     if req.filters:
         if req.filters.media_buy_ids:
             filters_applied.append(f"media_buy_ids={','.join(req.filters.media_buy_ids)}")
-        if req.filters.buyer_refs:
-            filters_applied.append(f"buyer_refs={','.join(req.filters.buyer_refs)}")
         if req.filters.statuses:
             filters_applied.append(f"statuses={','.join(str(s) for s in req.filters.statuses)}")
         if req.filters.format_ids:

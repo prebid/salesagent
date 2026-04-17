@@ -27,11 +27,7 @@ def mock_principal():
 @pytest.fixture
 def mock_config():
     """Create mock adapter config."""
-    return {
-        "api_key": "test_api_key",
-        "network_id": "net_123",
-        "default_advertiser_id": "adv_default",
-    }
+    return {"api_key": "test_api_key", "network_id": "net_123", "default_advertiser_id": "adv_default"}
 
 
 class TestBroadstreetAdapterInit:
@@ -157,7 +153,6 @@ class TestBroadstreetAdapterCreateMediaBuy:
 
         # Create a minimal valid request using MagicMock to avoid schema complexity
         request = MagicMock()
-        request.buyer_ref = "buyer_123"
         request.po_number = "PO-001"
 
         # Create package with implementation config
@@ -167,7 +162,6 @@ class TestBroadstreetAdapterCreateMediaBuy:
         package.name = "Test Package"
         package.budget = 10000
         package.impressions = 100000
-        package.buyer_ref = "buyer_pkg_1"
         package.implementation_config = {
             "targeted_zone_ids": ["zone_1", "zone_2"],
             "automation_mode": "automatic",  # Skip workflow for this test
@@ -181,7 +175,6 @@ class TestBroadstreetAdapterCreateMediaBuy:
         )
 
         assert isinstance(result, CreateMediaBuySuccess)
-        assert result.buyer_ref == "buyer_123"
         assert result.media_buy_id.startswith("bs_")
         assert len(result.packages) == 1
         assert result.packages[0].package_id == "pkg_1"
@@ -200,7 +193,6 @@ class TestBroadstreetAdapterCreateMediaBuy:
 
         # Create a minimal valid request using MagicMock
         request = MagicMock()
-        request.buyer_ref = "buyer_123"
         request.po_number = "PO-001"
 
         # Package without zones
@@ -210,7 +202,6 @@ class TestBroadstreetAdapterCreateMediaBuy:
         package.name = "Test Package"
         package.budget = 10000
         package.impressions = 100000
-        package.buyer_ref = "buyer_pkg_1"
         package.implementation_config = {}  # No zones
 
         result = adapter.create_media_buy(
@@ -246,12 +237,7 @@ class TestBroadstreetAdapterCreatives:
                 "format": "display",
                 "media_url": "https://example.com/banner.jpg",
             },
-            {
-                "creative_id": "creative_2",
-                "name": "Test HTML",
-                "format": "html",
-                "html": "<div>Test Ad</div>",
-            },
+            {"creative_id": "creative_2", "name": "Test HTML", "format": "html", "html": "<div>Test Ad</div>"},
         ]
 
         results = adapter.add_creative_assets(
@@ -286,9 +272,7 @@ def _make_mock_db_package(package_id="pkg_1", media_buy_id="bs_12345", ad_ids=No
     pkg = MagicMock()
     pkg.package_id = package_id
     pkg.media_buy_id = media_buy_id
-    pkg.package_config = {
-        "broadstreet_advertisement_ids": ad_ids or ["ad_100", "ad_200"],
-    }
+    pkg.package_config = {"broadstreet_advertisement_ids": ad_ids or ["ad_100", "ad_200"]}
     return pkg
 
 
@@ -326,7 +310,6 @@ class TestBroadstreetAdapterUpdates:
         with _mock_db_session(db_pkgs):
             result = adapter.update_media_buy(
                 media_buy_id="bs_12345",
-                buyer_ref="buyer_123",
                 action="pause_media_buy",
                 package_id=None,
                 budget=None,
@@ -353,7 +336,6 @@ class TestBroadstreetAdapterUpdates:
         with _mock_db_session(db_pkgs):
             result = adapter.update_media_buy(
                 media_buy_id="bs_12345",
-                buyer_ref="buyer_123",
                 action="resume_media_buy",
                 package_id=None,
                 budget=None,
@@ -378,7 +360,6 @@ class TestBroadstreetAdapterUpdates:
         with _mock_db_session([]):
             result = adapter.update_media_buy(
                 media_buy_id="bs_12345",
-                buyer_ref="buyer_123",
                 action="pause_media_buy",
                 package_id=None,
                 budget=None,
@@ -404,7 +385,6 @@ class TestBroadstreetAdapterUpdates:
         with _mock_db_session(db_pkgs):
             result = adapter.update_media_buy(
                 media_buy_id="bs_12345",
-                buyer_ref="buyer_123",
                 action="pause_package",
                 package_id="pkg_1",
                 budget=None,
@@ -428,7 +408,6 @@ class TestBroadstreetAdapterUpdates:
 
         result = adapter.update_media_buy(
             media_buy_id="bs_12345",
-            buyer_ref="buyer_123",
             action="unsupported_action",
             package_id=None,
             budget=None,

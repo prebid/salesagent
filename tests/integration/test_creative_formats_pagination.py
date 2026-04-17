@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import pytest
 from adcp.types.generated_poc.core.pagination_request import PaginationRequest
-from adcp.types.generated_poc.enums.format_category import FormatCategory
 
 from src.core.schemas import Format, FormatId, ListCreativeFormatsRequest
 from tests.factories import TenantFactory
@@ -24,7 +23,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 def _make_format(
     format_id: str,
     name: str,
-    type: FormatCategory = FormatCategory.display,
+    type: str | None = "display",
 ) -> Format:
     """Helper to create a Format object with minimal boilerplate."""
     return Format(

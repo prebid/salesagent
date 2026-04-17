@@ -23,7 +23,6 @@ from adcp.types.generated_poc.core.format import (
     Renders,
 )
 from adcp.types.generated_poc.enums.asset_content_type import AssetContentType
-from adcp.types.generated_poc.enums.format_category import FormatCategory
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 
@@ -44,7 +43,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 def _make_format(
     format_id: str,
     name: str,
-    type: FormatCategory = FormatCategory.display,
+    type: str | None = "display",
     renders: list | None = None,
     assets: list | None = None,
 ) -> Format:
@@ -77,7 +76,7 @@ class TestCombinedFilters:
         display_small_image = _make_format(
             "d_small",
             "Small Display Banner",
-            type=FormatCategory.display,
+            type="display",
             renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
             assets=[Assets(item_type="individual", asset_id="hero_image", required=True)],
         )
@@ -85,7 +84,7 @@ class TestCombinedFilters:
         display_wide_image = _make_format(
             "d_wide",
             "Wide Display Billboard",
-            type=FormatCategory.display,
+            type="display",
             renders=[Renders(role="primary", dimensions=Dimensions(width=970, height=250))],
             assets=[Assets(item_type="individual", asset_id="billboard_image", required=True)],
         )
@@ -93,7 +92,7 @@ class TestCombinedFilters:
         display_video = _make_format(
             "d_video",
             "Display Video Unit",
-            type=FormatCategory.display,
+            type="display",
             renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
             assets=[Assets5(item_type="individual", asset_id="hero_video", required=True)],
         )
@@ -101,7 +100,7 @@ class TestCombinedFilters:
         video_image = _make_format(
             "v_image",
             "Video Companion",
-            type=FormatCategory.video,
+            type="video",
             renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
             assets=[Assets(item_type="individual", asset_id="companion_image", required=True)],
         )
@@ -127,14 +126,14 @@ class TestCombinedFilters:
         display_match = _make_format(
             "d_match",
             "Matching Display",
-            type=FormatCategory.display,
+            type="display",
             renders=[Renders(role="primary", dimensions=Dimensions(width=728, height=90))],
             assets=[Assets(item_type="individual", asset_id="banner_image", required=True)],
         )
         display_no_match = _make_format(
             "d_nomatch",
             "Non-Matching Display",
-            type=FormatCategory.display,
+            type="display",
             renders=[Renders(role="primary", dimensions=Dimensions(width=970, height=250))],
             assets=[Assets(item_type="individual", asset_id="wide_image", required=True)],
         )
@@ -144,7 +143,7 @@ class TestCombinedFilters:
             env.set_registry_formats([display_match, display_no_match])
 
             response = env.call_mcp(
-                type=FormatCategory.display,
+                type="display",
                 asset_types=[AssetContentType.image],
                 max_width=728,
             )
@@ -157,14 +156,14 @@ class TestCombinedFilters:
         display_match = _make_format(
             "d_a2a_match",
             "A2A Display Match",
-            type=FormatCategory.display,
+            type="display",
             renders=[Renders(role="primary", dimensions=Dimensions(width=320, height=50))],
             assets=[Assets(item_type="individual", asset_id="mobile_image", required=True)],
         )
         audio_format = _make_format(
             "a_nomatch",
             "Audio Ad",
-            type=FormatCategory.audio,
+            type="audio",
         )
 
         with CreativeFormatsEnv() as env:
@@ -187,7 +186,7 @@ class TestCombinedFilters:
         only_video = _make_format(
             "v1",
             "Video Only",
-            type=FormatCategory.video,
+            type="video",
             renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
             assets=[Assets(item_type="individual", asset_id="vid", required=True)],
         )
@@ -225,7 +224,7 @@ class TestMcpToolResultWrapping:
 
         formats = [
             _make_format("display_300", "Medium Rectangle"),
-            _make_format("video_15s", "Pre-roll 15s", type=FormatCategory.video),
+            _make_format("video_15s", "Pre-roll 15s", type="video"),
         ]
 
         with CreativeFormatsEnv() as env:
@@ -282,7 +281,7 @@ class TestMcpToolResultWrapping:
 
         formats = [
             _make_format("fmt_a", "Format A"),
-            _make_format("fmt_b", "Format B", type=FormatCategory.video),
+            _make_format("fmt_b", "Format B", type="video"),
         ]
 
         with CreativeFormatsEnv() as env:
@@ -320,7 +319,7 @@ class TestFullCatalogViaA2A:
         formats = [
             _make_format("display_300x250", "Medium Rectangle"),
             _make_format("display_728x90", "Leaderboard"),
-            _make_format("video_preroll", "Pre-roll 15s", type=FormatCategory.video),
+            _make_format("video_preroll", "Pre-roll 15s", type="video"),
         ]
 
         with CreativeFormatsEnv() as env:
@@ -356,7 +355,7 @@ class TestFullCatalogViaA2A:
         assert result_fmt.format_id.id == "display_standard"
         assert str(result_fmt.format_id.agent_url).rstrip("/") == DEFAULT_AGENT_URL
         assert result_fmt.name == "Standard Display"
-        assert result_fmt.type == FormatCategory.display
+        assert result_fmt.type == "display"
 
     def test_a2a_empty_catalog_returns_empty_formats(self, integration_db):
         """UC-005-MAIN-REST-01: empty registry returns empty formats list, not error."""
@@ -373,7 +372,7 @@ class TestFullCatalogViaA2A:
         """UC-005-MAIN-REST-01: A2A and _impl return identical results."""
         formats = [
             _make_format("d1", "Display One"),
-            _make_format("v1", "Video One", type=FormatCategory.video),
+            _make_format("v1", "Video One", type="video"),
         ]
 
         with CreativeFormatsEnv() as env:

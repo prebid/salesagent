@@ -39,14 +39,7 @@ from src.core.schemas.product import ProductFilters
 
 
 class TestDeliveryStatusEnum:
-    EXPECTED_MEMBERS = {
-        "delivering",
-        "not_delivering",
-        "completed",
-        "budget_exhausted",
-        "flight_ended",
-        "goal_met",
-    }
+    EXPECTED_MEMBERS = {"delivering", "not_delivering", "completed", "budget_exhausted", "flight_ended", "goal_met"}
 
     def test_has_all_six_members(self):
         actual = {m.value for m in DeliveryStatus}
@@ -247,10 +240,7 @@ class TestGetMediaBuyDeliveryRequestFields:
 def _make_delivery_response(**overrides):
     """Build a minimal GetMediaBuyDeliveryResponse for testing."""
     defaults = {
-        "reporting_period": {
-            "start": "2025-01-01T00:00:00Z",
-            "end": "2025-01-31T23:59:59Z",
-        },
+        "reporting_period": {"start": "2025-01-01T00:00:00Z", "end": "2025-01-31T23:59:59Z"},
         "currency": "USD",
         "aggregated_totals": {"impressions": 1000, "spend": 5.0, "media_buy_count": 1},
         "media_buy_deliveries": [
@@ -391,7 +381,6 @@ class TestUpgradeLegacyFormatIds:
 
         pkg = PackageRequest(
             budget=1000,
-            buyer_ref="ref_1",
             pricing_option_id="po_1",
             product_id="prod_1",
             format_ids=[self.LEGACY_FORMAT_ID],
@@ -422,7 +411,6 @@ class TestUpgradeLegacyFormatIds:
         fmt = FormatId(agent_url="https://example.com/agent", id="fmt_video")
         pkg = PackageRequest(
             budget=1000,
-            buyer_ref="ref_1",
             pricing_option_id="po_1",
             product_id="prod_1",
             format_ids=[fmt],

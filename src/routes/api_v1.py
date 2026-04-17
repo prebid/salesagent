@@ -71,7 +71,6 @@ class GetProductsBody(BaseModel):
 
 
 class CreateMediaBuyBody(BaseModel):
-    buyer_ref: str
     brand: dict[str, Any] | None = None  # adcp 3.6.0: BrandReference with domain field
     packages: list[dict[str, Any]] = []
     start_time: str | None = None
@@ -96,7 +95,6 @@ class UpdateMediaBuyBody(BaseModel):
 
 class GetMediaBuyDeliveryBody(BaseModel):
     media_buy_ids: list[str] | None = None
-    buyer_refs: list[str] | None = None
     status_filter: Any = None
     start_date: str | None = None
     end_date: str | None = None
@@ -228,7 +226,6 @@ async def create_media_buy(body: CreateMediaBuyBody, identity: ResolvedIdentity 
     """Create a new media buy (auth required)."""
     try:
         response = await media_buy_create_module.create_media_buy_raw(
-            buyer_ref=body.buyer_ref,
             brand=body.brand,
             packages=body.packages,
             start_time=body.start_time,
@@ -283,7 +280,6 @@ async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, identity: Resolv
 
         response = media_buy_delivery_module.get_media_buy_delivery_raw(
             media_buy_ids=body.media_buy_ids,
-            buyer_refs=body.buyer_refs,
             status_filter=body.status_filter,
             start_date=body.start_date,
             end_date=body.end_date,

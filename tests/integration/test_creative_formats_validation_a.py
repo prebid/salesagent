@@ -9,7 +9,6 @@ Covers:
 from __future__ import annotations
 
 import pytest
-from adcp.types import FormatCategory
 from pydantic import ValidationError
 
 from src.adapters.broadstreet.config_schema import BROADSTREET_TEMPLATES
@@ -62,7 +61,7 @@ class TestAdapterFormatsViaA2A:
                     id="display_300x250",
                 ),
                 name="Display 300x250",
-                type=FormatCategory.display,
+                type="display",
                 is_standard=True,
             )
             env.set_registry_formats([standard_format])
@@ -125,7 +124,7 @@ class TestAdapterFormatsViaA2A:
 
             # Format metadata
             assert fmt.name is not None and len(fmt.name) > 0
-            assert fmt.type == FormatCategory.display
+            assert fmt.type == "display"
             # is_standard is exclude=True (internal-only) — not visible through A2A serialization
 
             # Assets must be present (regression guard)
@@ -160,7 +159,7 @@ class TestAdapterFormatsViaA2A:
                     id="display_300x250",
                 ),
                 name="Display 300x250",
-                type=FormatCategory.display,
+                type="display",
                 is_standard=True,
             )
             env.set_registry_formats([standard_format])
@@ -228,19 +227,19 @@ class TestInvalidFormatCategoryEnum:
             TenantFactory(tenant_id="test_tenant")
 
             # Pass a real enum — the wrapper's type.value should work
-            response = env.call_mcp(type=FormatCategory.audio)
+            response = env.call_mcp(type="audio")
 
         # Audio filter on a catalog with no audio formats → empty result
         assert isinstance(response, ListCreativeFormatsResponse)
         assert len(response.formats) == 0
 
     def test_each_valid_category_accepted(self, integration_db):
-        """UC-005-EXT-B-01 (positive counterpart): all valid FormatCategory values are accepted.
+        """UC-005-EXT-B-01 (positive counterpart): all valid format category values are accepted.
 
-        Ensures the validation correctly accepts valid enum values.
+        Ensures the validation correctly accepts valid string values.
         """
-        for category in FormatCategory:
-            req = ListCreativeFormatsRequest(type=category.value)
+        for category in ["audio", "display", "native", "video"]:
+            req = ListCreativeFormatsRequest(type=category)
             assert req.type == category
 
 

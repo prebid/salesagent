@@ -494,10 +494,10 @@ class Kevel(AdServerAdapter):
         if self.dry_run:
             self.log(f"Would call: GET {self.base_url}/campaign/{media_buy_id}")
             self.log("Would check campaign IsActive status and flight statuses")
-            return CheckMediaBuyStatusResponse(media_buy_id=media_buy_id, buyer_ref=buyer_ref, status="active")
+            return CheckMediaBuyStatusResponse(media_buy_id=media_buy_id, buyer_ref=media_buy_id, status="active")
         else:
             # In production, would query campaign status
-            return CheckMediaBuyStatusResponse(media_buy_id=media_buy_id, buyer_ref=buyer_ref, status="active")
+            return CheckMediaBuyStatusResponse(media_buy_id=media_buy_id, buyer_ref=media_buy_id, status="active")
 
     def get_media_buy_delivery(
         self, media_buy_id: str, date_range: ReportingPeriod, today: datetime
@@ -604,7 +604,6 @@ class Kevel(AdServerAdapter):
     def update_media_buy(
         self,
         media_buy_id: str,
-        buyer_ref: str,
         action: str,
         package_id: str | None,
         budget: int | None,
@@ -643,11 +642,9 @@ class Kevel(AdServerAdapter):
                 self.log("  Payload: {'IsActive': false}")
                 return UpdateMediaBuySuccess(
                     media_buy_id=media_buy_id,
-                    buyer_ref=buyer_ref,
                     affected_packages=[
                         AffectedPackage(
                             package_id=package_id,
-                            buyer_ref=buyer_ref or package_id,
                             paused=True,
                             changes_applied=None,
                             buyer_package_ref=None,
@@ -661,11 +658,9 @@ class Kevel(AdServerAdapter):
                 self.log("  Payload: {'IsActive': true}")
                 return UpdateMediaBuySuccess(
                     media_buy_id=media_buy_id,
-                    buyer_ref=buyer_ref,
                     affected_packages=[
                         AffectedPackage(
                             package_id=package_id,
-                            buyer_ref=buyer_ref or package_id,
                             paused=False,
                             changes_applied=None,
                             buyer_package_ref=None,
@@ -687,7 +682,6 @@ class Kevel(AdServerAdapter):
 
             return UpdateMediaBuySuccess(
                 media_buy_id=media_buy_id,
-                buyer_ref=buyer_ref,
                 affected_packages=[],  # List of package_ids affected by update
                 implementation_date=today,
             )
@@ -731,11 +725,9 @@ class Kevel(AdServerAdapter):
                     # Return affected package with paused state
                     return UpdateMediaBuySuccess(
                         media_buy_id=media_buy_id,
-                        buyer_ref=buyer_ref,
                         affected_packages=[
                             AffectedPackage(
                                 package_id=package_id,
-                                buyer_ref=buyer_ref or package_id,
                                 paused=not is_resume,
                                 changes_applied=None,
                                 buyer_package_ref=None,
@@ -781,7 +773,6 @@ class Kevel(AdServerAdapter):
 
                 return UpdateMediaBuySuccess(
                     media_buy_id=media_buy_id,
-                    buyer_ref=buyer_ref,
                     affected_packages=[],
                     implementation_date=today,
                 )

@@ -6,6 +6,7 @@ All classes are re-exported from src.core.schemas for backward compatibility.
 
 from typing import Any
 
+from adcp.types import Catalog as LibraryCatalog
 from adcp.types import GetProductsResponse as LibraryGetProductsResponse
 from adcp.types import GetProductsWholesaleRequest as LibraryGetProductsRequest
 from adcp.types import Placement as LibraryPlacement
@@ -13,7 +14,6 @@ from adcp.types import Product as LibraryProduct
 from adcp.types import ProductCard as LibraryProductCard
 from adcp.types import ProductCardDetailed as LibraryProductCardDetailed
 from adcp.types import ProductFilters as LibraryFilters
-from adcp.types import PromotedProducts as LibraryPromotedProducts
 from pydantic import ConfigDict, Field, model_validator
 
 from src.core.config import get_pydantic_extra_mode
@@ -242,7 +242,7 @@ class GetProductsRequest(LibraryGetProductsRequest):
     )
 
     # Internal-only fields (not in AdCP spec)
-    product_selectors: LibraryPromotedProducts | None = Field(
+    product_selectors: LibraryCatalog | None = Field(
         None,
         description="Selectors to filter the brand manifest product catalog for product discovery",
         exclude=True,

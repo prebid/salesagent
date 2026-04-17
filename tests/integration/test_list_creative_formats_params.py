@@ -9,7 +9,6 @@ Refactored from raw ToolContext + manual patches to harness pattern.
 from __future__ import annotations
 
 import pytest
-from adcp.types import FormatCategory
 from adcp.types.generated_poc.core.format import (
     Assets,
     Assets5,
@@ -47,7 +46,7 @@ def test_list_creative_formats_request_with_all_params():
         min_width=640,
         max_height=480,
     )
-    assert req.type == FormatCategory.video or req.type.value == "video"
+    assert req.type == "video"
     assert len(req.format_ids) == 2
     assert req.format_ids[0].id == "video_16x9"
     assert req.format_ids[1].id == "video_4x3"
@@ -60,7 +59,7 @@ def test_list_creative_formats_request_with_all_params():
 AGENT_URL = "https://creative.adcontextprotocol.org"
 
 
-def _fmt(fmt_id: str, name: str, type: FormatCategory = FormatCategory.display, **kwargs) -> Format:
+def _fmt(fmt_id: str, name: str, type: str | None = "display", **kwargs) -> Format:
     """Shorthand for creating a Format object."""
     return Format(
         format_id=FormatId(agent_url=AGENT_URL, id=fmt_id),
@@ -74,7 +73,7 @@ def _fmt(fmt_id: str, name: str, type: FormatCategory = FormatCategory.display, 
 def test_filtering_by_type(integration_db):
     """Test that type filter works correctly."""
     formats = [
-        _fmt("video_16x9", "Video 16:9", type=FormatCategory.video),
+        _fmt("video_16x9", "Video 16:9", type="video"),
         _fmt("display_300x250", "Display 300x250"),
     ]
     with CreativeFormatsEnv() as env:
@@ -92,7 +91,7 @@ def test_filtering_by_format_ids(integration_db):
     formats = [
         _fmt("display_300x250", "Display 300x250"),
         _fmt("display_728x90", "Display 728x90"),
-        _fmt("video_16x9", "Video 16:9", type=FormatCategory.video),
+        _fmt("video_16x9", "Video 16:9", type="video"),
     ]
     target_ids = [
         FormatId(agent_url=AGENT_URL, id="display_300x250"),
@@ -125,7 +124,7 @@ def test_filtering_combined(integration_db):
         _fmt(
             "video_16x9",
             "Video 16:9",
-            type=FormatCategory.video,
+            type="video",
             renders=[Renders(role="primary", dimensions=Dimensions(width=640, height=360))],
         ),
     ]
@@ -216,7 +215,7 @@ def test_filtering_by_asset_types(integration_db):
         _fmt(
             "video_player",
             "Video Player",
-            type=FormatCategory.video,
+            type="video",
             assets=[Assets5(asset_id="video", asset_type="video", item_type="individual", required=True)],
         ),
         _fmt(
@@ -319,7 +318,7 @@ def test_new_filters_combined_with_existing(integration_db):
         _fmt(
             "video_16x9",
             "Video 16:9",
-            type=FormatCategory.video,
+            type="video",
             renders=[Renders(role="primary", dimensions=Dimensions(width=640, height=360))],
             assets=[Assets5(asset_id="video", asset_type="video", item_type="individual", required=True)],
         ),

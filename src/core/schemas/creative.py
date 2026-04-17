@@ -589,7 +589,7 @@ class ListCreativesResponse(NestedModelSerializerMixin, LibraryListCreativesResp
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
     # Override with local subtypes (each extends its library counterpart)
-    query_summary: QuerySummary = Field(..., description="Summary of the query that was executed")  # type: ignore[assignment]
+    query_summary: QuerySummary = Field(..., description="Summary of the query that was executed")
     pagination: Pagination = Field(..., description="Pagination information for navigating results")
     creatives: list[Creative] = Field(..., description="Array of creative assets")  # type: ignore[assignment]
 

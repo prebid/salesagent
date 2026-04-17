@@ -62,7 +62,7 @@ class GetMediaBuyDeliveryRequest(LibraryGetMediaBuyDeliveryRequest):
 
     Examples:
     - Single buy: media_buy_ids=["buy_123"]
-    - Multiple buys: buyer_refs=["ref_123", "ref_456"]
+    - Multiple buys: media_buy_ids=["buy_123", "buy_456"]
     - All active buys: status_filter="active"
     - All buys: status_filter="all"
     - Date range: start_date="2025-01-01", end_date="2025-01-31"

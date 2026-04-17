@@ -57,7 +57,6 @@ def test_mock_ad_server_create_media_buy(sample_packages, mocker):
     # Per AdCP v2.2.0: packages with budget are required
     packages = [
         PackageRequest(
-            buyer_ref="pkg_ref_1",
             product_id="pkg_1",
             budget=5000.0,
             pricing_option_id="test_pricing",
@@ -69,8 +68,7 @@ def test_mock_ad_server_create_media_buy(sample_packages, mocker):
     ]
 
     request = CreateMediaBuyRequest(
-        brand={"domain": "sports.example.com"},
-        buyer_ref="ref_12345",  # Required per AdCP spec
+        brand={"domain": "sports.example.com"},  # Required per AdCP spec
         packages=packages,  # AdCP v2.2.0: packages required
         start_time=start_time,
         end_time=end_time,
@@ -84,8 +82,6 @@ def test_mock_ad_server_create_media_buy(sample_packages, mocker):
 
     # Assert
     assert response.media_buy_id == "buy_PO-12345"
-    # buyer_ref should echo back the request buyer_ref per AdCP spec
-    assert response.buyer_ref == "ref_12345"
 
     # Check the internal state of the mock server
     internal_buy = adapter._media_buys.get("buy_PO-12345")

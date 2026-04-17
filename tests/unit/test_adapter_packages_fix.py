@@ -34,11 +34,10 @@ def sample_request():
     end_time = start_time + timedelta(days=30)
     # adcp 3.6.0: brand_manifest → brand (BrandReference with domain field)
     return CreateMediaBuyRequest(
-        buyer_ref="test_buyer_ref_123",
         brand={"domain": "testbrand.com"},
         packages=[
-            create_test_package_request(product_id="prod_123", buyer_ref="buyer_pkg_001"),
-            create_test_package_request(product_id="prod_456", buyer_ref="buyer_pkg_002"),
+            create_test_package_request(product_id="prod_123"),
+            create_test_package_request(product_id="prod_456"),
         ],
         start_time=start_time,
         end_time=end_time,
@@ -74,10 +73,7 @@ class TestKevelAdapterPackages:
     def test_kevel_returns_packages_with_package_ids(self, mock_principal, sample_request, sample_packages):
         """Kevel adapter must return packages with package_id for each package."""
         # Arrange
-        config = {
-            "api_key": "test_key",
-            "base_url": "https://api.kevel.com",
-        }
+        config = {"api_key": "test_key", "base_url": "https://api.kevel.com"}
 
         # Mock principal to return advertiser ID
         mock_principal.get_adapter_id = Mock(return_value="123")
@@ -112,8 +108,7 @@ class TestKevelAdapterPackages:
         expected_ids = {pkg.package_id for pkg in sample_packages}
         assert returned_ids == expected_ids, f"Package IDs don't match. Got {returned_ids}, expected {expected_ids}"
 
-        # Assert - buyer_ref must be present
-        assert response.buyer_ref == sample_request.buyer_ref, "Kevel must return buyer_ref"
+        # buyer_ref removed from CreateMediaBuySuccess in adcp 3.12
 
     def test_kevel_live_mode_returns_packages_with_flight_ids(self, mock_principal, sample_request, sample_packages):
         """Kevel adapter in live mode must return packages with platform_line_item_id."""
@@ -175,10 +170,7 @@ class TestTritonAdapterPackages:
     def test_triton_returns_packages_with_package_ids(self, mock_principal, sample_request, sample_packages):
         """Triton adapter must return packages with package_id for each package."""
         # Arrange
-        config = {
-            "api_key": "test_key",
-            "base_url": "https://api.tritondigital.com",
-        }
+        config = {"api_key": "test_key", "base_url": "https://api.tritondigital.com"}
 
         # Mock principal to return advertiser ID
         mock_principal.get_adapter_id = Mock(return_value="123")
@@ -213,8 +205,7 @@ class TestTritonAdapterPackages:
         expected_ids = {pkg.package_id for pkg in sample_packages}
         assert returned_ids == expected_ids, f"Package IDs don't match. Got {returned_ids}, expected {expected_ids}"
 
-        # Assert - buyer_ref must be present
-        assert response.buyer_ref == sample_request.buyer_ref, "Triton must return buyer_ref"
+        # buyer_ref removed from CreateMediaBuySuccess in adcp 3.12
 
     def test_triton_live_mode_returns_packages_with_flight_ids(self, mock_principal, sample_request, sample_packages):
         """Triton adapter in live mode must return packages with platform_line_item_id."""
@@ -350,5 +341,4 @@ class TestXandrAdapterPackages:
             expected_ids = {pkg.package_id for pkg in sample_packages}
             assert returned_ids == expected_ids, f"Package IDs don't match. Got {returned_ids}, expected {expected_ids}"
 
-            # Assert - buyer_ref must be present
-            assert response.buyer_ref == sample_request.buyer_ref, "Xandr must return buyer_ref"
+            # buyer_ref removed from CreateMediaBuySuccess in adcp 3.12

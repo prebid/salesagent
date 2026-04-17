@@ -56,7 +56,6 @@ WEAK_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/unit/test_creative_coverage_gaps.py", "test_slack_notification_for_rejected_creative"),
     ("tests/unit/test_creative_repository.py", "test_creates_and_flushes"),
     ("tests/unit/test_creative_repository.py", "test_creates_assignment"),
-    ("tests/unit/test_delivery.py", "test_media_buy_ids_only"),
     ("tests/unit/test_external_domain_routing.py", "test_index_route_external_domain_with_tenant"),
     ("tests/unit/test_gam_creative_rotation.py", "test_lica_payload_excludes_weight_when_default"),
     ("tests/unit/test_gam_creative_rotation.py", "test_lica_payload_includes_weight_when_non_default"),

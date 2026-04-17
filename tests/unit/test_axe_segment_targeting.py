@@ -44,14 +44,11 @@ def test_targeting_axe_segments_are_optional():
 def test_package_targeting_overlay_supports_axe_segments():
     """Test that Package.targeting_overlay supports AXE segment targeting."""
     package = PackageRequest(
-        buyer_ref="test_buyer",  # Required per AdCP spec
+        # Required per AdCP spec
         product_id="prod_123",  # Required per AdCP spec
         budget=1000.0,  # Required per AdCP spec
         pricing_option_id="pricing_1",  # Required per AdCP spec
-        targeting_overlay={
-            "geo_countries": ["US"],
-            "axe_include_segment": "x8dj3k",
-        },
+        targeting_overlay={"geo_countries": ["US"], "axe_include_segment": "x8dj3k"},
     )
 
     # Verify targeting overlay is present
@@ -69,12 +66,11 @@ def test_create_media_buy_request_with_axe_segments():
 
     request = CreateMediaBuyRequest(
         brand={"domain": "example.com"},
-        buyer_ref="buyer_test_001",
         start_time=datetime(2025, 1, 15, 0, 0, 0, tzinfo=UTC),
         end_time=datetime(2025, 2, 15, 23, 59, 59, tzinfo=UTC),
         packages=[
             PackageRequest(
-                buyer_ref="test_buyer",  # Required per AdCP spec
+                # Required per AdCP spec
                 product_id="prod_123",  # Required per AdCP spec
                 budget=1000.0,  # Required per AdCP spec
                 pricing_option_id="pricing_1",  # Required per AdCP spec

@@ -300,7 +300,7 @@ def _account_fields_changed(db_account: DBAccount, entry: Any) -> dict[str, Any]
     # Compare governance_agents (JSON field)
     # Both sides must be serialized to dicts for comparison — db_account.governance_agents
     # is hydrated to list[GovernanceAgent] by JSONType, while incoming is already serialized.
-    incoming_gov = _serialize_governance_agents(entry.governance_agents)
+    incoming_gov = _serialize_governance_agents(getattr(entry, "governance_agents", None))
     db_gov = _serialize_governance_agents(db_account.governance_agents)
     if db_gov != incoming_gov:
         changes["governance_agents"] = incoming_gov
@@ -557,7 +557,7 @@ async def _sync_accounts_impl(
                 # Create new account
                 billing_val = _enum_to_str(entry.billing)
                 payment_terms_val = _enum_to_str(entry.payment_terms)
-                governance_agents_val = _serialize_governance_agents(entry.governance_agents)
+                governance_agents_val = _serialize_governance_agents(getattr(entry, "governance_agents", None))
 
                 account_id = _generate_account_id()
                 account_name = _generate_account_name(brand_domain, operator, brand_id)

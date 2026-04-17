@@ -344,7 +344,6 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 push_config = step.request_data.get("push_notification_config") or {} if step.request_data else {}
                 media_buy_data = {
                     "principal_id": media_buy.principal_id,
-                    "buyer_ref": media_buy.buyer_ref,
                     "push_notification_url": push_config.get("url"),
                 }
 
@@ -470,7 +469,6 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
 
                         create_media_buy_approved_result = CreateMediaBuySuccessResponse(
                             media_buy_id=media_buy_id,
-                            buyer_ref=media_buy_data["buyer_ref"],
                             packages=[Package(package_id=x.package_id) for x in all_packages],
                             context={},  # TODO: @yusuf - please fix this, like we've fixed in the creative approval
                         )
@@ -561,7 +559,6 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
 
                     create_media_buy_rejected_result = CreateMediaBuySuccessResponse(
                         media_buy_id=media_buy_id,
-                        buyer_ref=media_buy_data["buyer_ref"],
                         packages=[Package(package_id=x.package_id) for x in all_packages],
                         context={},  # TODO: @yusuf - please fix this, like we've fixed in the creative approval
                     )

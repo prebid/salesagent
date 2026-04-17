@@ -19,7 +19,6 @@ from adcp.types.generated_poc.core.format import (
     Renders,
     Responsive,
 )
-from adcp.types.generated_poc.enums.format_category import FormatCategory
 
 from src.core.exceptions import AdCPAuthenticationError
 from src.core.schemas import Format, FormatId, ListCreativeFormatsRequest
@@ -34,7 +33,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 def _make_format(
     format_id: str,
     name: str,
-    type: FormatCategory = FormatCategory.display,
+    type: str | None = "display",
     renders: list | None = None,
     assets: list | None = None,
 ) -> Format:
@@ -80,8 +79,8 @@ class TestFormatsFiltering:
         """Covers: UC-005-MAIN-MCP-01 — no filters returns entire catalog."""
         formats = [
             _make_format("d1", "Display Banner"),
-            _make_format("v1", "Video Pre-roll", type=FormatCategory.video),
-            _make_format("n1", "Native Feed", type=FormatCategory.native),
+            _make_format("v1", "Video Pre-roll", type="video"),
+            _make_format("n1", "Native Feed", type="native"),
         ]
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
@@ -92,9 +91,9 @@ class TestFormatsFiltering:
     def test_type_filter_returns_matching(self, integration_db):
         """Covers: UC-005-MAIN-MCP-05 — type=video returns only video formats."""
         formats = [
-            _make_format("d1", "Display Banner", type=FormatCategory.display),
-            _make_format("v1", "Video Pre-roll", type=FormatCategory.video),
-            _make_format("n1", "Native Feed", type=FormatCategory.native),
+            _make_format("d1", "Display Banner", type="display"),
+            _make_format("v1", "Video Pre-roll", type="video"),
+            _make_format("n1", "Native Feed", type="native"),
         ]
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
@@ -107,10 +106,10 @@ class TestFormatsFiltering:
     def test_native_type_filter(self, integration_db):
         """Covers: UC-005-MAIN-MCP-05 — type=native returns only native formats."""
         formats = [
-            _make_format("d1", "Display Banner", type=FormatCategory.display),
-            _make_format("n1", "Native Feed", type=FormatCategory.native),
-            _make_format("v1", "Video Pre-roll", type=FormatCategory.video),
-            _make_format("n2", "Native Recommendation", type=FormatCategory.native),
+            _make_format("d1", "Display Banner", type="display"),
+            _make_format("n1", "Native Feed", type="native"),
+            _make_format("v1", "Video Pre-roll", type="video"),
+            _make_format("n2", "Native Recommendation", type="native"),
         ]
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
@@ -147,10 +146,10 @@ class TestFormatsSort:
     def test_sort_order_type_then_name(self, integration_db):
         """Covers: T-UC-005-inv10 — display before video, alpha within type."""
         formats = [
-            _make_format("v_zebra", "Zebra Ad", type=FormatCategory.video),
-            _make_format("d_alpha", "Alpha Banner", type=FormatCategory.display),
-            _make_format("v_alpha", "Alpha Video", type=FormatCategory.video),
-            _make_format("d_zebra", "Zebra Banner", type=FormatCategory.display),
+            _make_format("v_zebra", "Zebra Ad", type="video"),
+            _make_format("d_alpha", "Alpha Banner", type="display"),
+            _make_format("v_alpha", "Alpha Video", type="video"),
+            _make_format("d_zebra", "Zebra Banner", type="display"),
         ]
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
@@ -167,11 +166,11 @@ class TestFormatsSort:
     def test_sort_order_across_three_types(self, integration_db):
         """Covers: T-UC-005-inv10 — sort holds across display < native < video."""
         formats = [
-            _make_format("n1", "Native B", type=FormatCategory.native),
-            _make_format("d1", "Display A", type=FormatCategory.display),
-            _make_format("v1", "Video C", type=FormatCategory.video),
-            _make_format("n2", "Native A", type=FormatCategory.native),
-            _make_format("d2", "Display B", type=FormatCategory.display),
+            _make_format("n1", "Native B", type="native"),
+            _make_format("d1", "Display A", type="display"),
+            _make_format("v1", "Video C", type="video"),
+            _make_format("n2", "Native A", type="native"),
+            _make_format("d2", "Display B", type="display"),
         ]
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
@@ -189,9 +188,9 @@ class TestFormatsSort:
     def test_sort_preserves_after_filtering(self, integration_db):
         """Covers: T-UC-005-inv10 — sort maintained after type filter."""
         formats = [
-            _make_format("v2", "Zebra Video", type=FormatCategory.video),
-            _make_format("v1", "Alpha Video", type=FormatCategory.video),
-            _make_format("d1", "Display Ad", type=FormatCategory.display),
+            _make_format("v2", "Zebra Video", type="video"),
+            _make_format("v1", "Alpha Video", type="video"),
+            _make_format("d1", "Display Ad", type="display"),
         ]
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
@@ -226,7 +225,7 @@ class TestFormatsAssetTypes:
         fmt = Format(
             format_id=FormatId(agent_url=DEFAULT_AGENT_URL, id="native_carousel"),
             name="Native Carousel",
-            type=FormatCategory.native,
+            type="native",
             is_standard=True,
             assets=[group_asset],
         )
@@ -251,7 +250,7 @@ class TestFormatsAssetTypes:
         fmt = Format(
             format_id=FormatId(agent_url=DEFAULT_AGENT_URL, id="text_only"),
             name="Text Only Native",
-            type=FormatCategory.native,
+            type="native",
             is_standard=True,
             assets=[group_asset],
         )
@@ -276,7 +275,7 @@ class TestFormatsAssetTypes:
         fmt = Format(
             format_id=FormatId(agent_url=DEFAULT_AGENT_URL, id="mixed"),
             name="Mixed Format",
-            type=FormatCategory.display,
+            type="display",
             is_standard=True,
             assets=[individual, group],
         )
@@ -393,8 +392,8 @@ class TestFormatsEdgeCases:
     def test_type_filter_no_match_returns_empty(self, integration_db):
         """Covers: T-UC-005-edge-02 — type=audio with no audio formats returns empty."""
         formats = [
-            _make_format("d1", "Display Banner", type=FormatCategory.display),
-            _make_format("d2", "Display Rectangle", type=FormatCategory.display),
+            _make_format("d1", "Display Banner", type="display"),
+            _make_format("d2", "Display Rectangle", type="display"),
         ]
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
@@ -407,8 +406,8 @@ class TestFormatsEdgeCases:
         """Covers: T-UC-005-edge-03 — empty string name_search treated as no filter."""
         formats = [
             _make_format("d1", "Alpha Display"),
-            _make_format("v1", "Beta Video", type=FormatCategory.video),
-            _make_format("n1", "Gamma Native", type=FormatCategory.native),
+            _make_format("v1", "Beta Video", type="video"),
+            _make_format("n1", "Gamma Native", type="native"),
         ]
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")

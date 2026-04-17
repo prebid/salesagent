@@ -18,16 +18,8 @@ from src.core.schemas import CreateMediaBuyRequest
 def _make_minimal_request() -> CreateMediaBuyRequest:
     """Build a minimal CreateMediaBuyRequest for testing."""
     return CreateMediaBuyRequest(
-        buyer_ref="test-buyer",
         brand={"domain": "testbrand.com"},
-        packages=[
-            {
-                "product_id": "prod_1",
-                "buyer_ref": "pkg-1",
-                "budget": 5000.0,
-                "pricing_option_id": "po_1",
-            }
-        ],
+        packages=[{"product_id": "prod_1", "budget": 5000.0, "pricing_option_id": "po_1"}],
         start_time=(datetime.now(UTC) + timedelta(days=1)).isoformat(),
         end_time=(datetime.now(UTC) + timedelta(days=8)).isoformat(),
     )
@@ -87,7 +79,8 @@ class TestMediaBuyRepositoryCreateFromRequest:
         assert isinstance(result.raw_request, dict), (
             f"raw_request should be dict, got {type(result.raw_request).__name__}"
         )
-        assert "buyer_ref" in result.raw_request
+        # buyer_ref removed from CreateMediaBuyRequest in adcp 3.12
+        assert "brand" in result.raw_request
 
     def test_create_from_request_injects_package_ids(self):
         """When package_id_map is provided, package_ids must be injected into serialized packages."""

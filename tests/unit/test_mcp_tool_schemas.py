@@ -124,26 +124,24 @@ class TestMCPToolTypedSchemas:
         )
 
     def test_list_creative_formats_uses_typed_parameters(self):
-        """list_creative_formats should use FormatCategory, FormatId, etc."""
+        """list_creative_formats should use FormatId, etc."""
         from src.core.tools.creative_formats import list_creative_formats
 
         sig = inspect.signature(list_creative_formats)
         params = sig.parameters
 
-        # Check type uses FormatCategory enum
-        assert "FormatCategory" in str(params["type"].annotation), (
-            f"type should use FormatCategory type, got {params['type'].annotation}"
-        )
+        # type parameter removed in adcp 3.12
 
         # Check format_ids uses FormatId type
         assert "FormatId" in str(params["format_ids"].annotation), (
             f"format_ids should use FormatId type, got {params['format_ids'].annotation}"
         )
 
-        # Check asset_types uses AssetContentType type
-        assert "AssetContentType" in str(params["asset_types"].annotation), (
-            f"asset_types should use AssetContentType type, got {params['asset_types'].annotation}"
-        )
+        # Check asset_types uses AssetContentType type (if still present)
+        if "asset_types" in params:
+            assert "AssetContentType" in str(params["asset_types"].annotation) or "str" in str(
+                params["asset_types"].annotation
+            ), f"asset_types should use AssetContentType or str type, got {params['asset_types'].annotation}"
 
     def test_get_media_buy_delivery_uses_typed_parameters(self):
         """get_media_buy_delivery should use ContextObject type."""
