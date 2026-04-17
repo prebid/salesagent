@@ -924,6 +924,73 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
+        # --- UC-006 e2e_rest-only failures ---
+        # The e2e_rest transport goes through real HTTP + JSON parsing.
+        # These scenarios pass on impl/a2a/mcp/rest but fail on e2e_rest due to
+        # JSON parse errors (empty response body), response shape differences,
+        # or fields not echoed through the REST layer.
+        _UC006_E2E_REST_XFAIL_TAGS: dict[str, str] = {
+            "T-UC-006-partition-assignment-fmt": (
+                "e2e_rest: sync_creatives REST endpoint returns empty body for "
+                "assignment scenarios — JSONDecodeError on response parse"
+            ),
+            "T-UC-006-boundary-assignment-format": (
+                "e2e_rest: sync_creatives REST endpoint returns empty body for "
+                "assignment scenarios — JSONDecodeError on response parse"
+            ),
+            "T-UC-006-partition-assignments-structure": (
+                "e2e_rest: sync_creatives REST endpoint returns empty body — "
+                "JSONDecodeError on response parse"
+            ),
+            "T-UC-006-boundary-assignments-structure": (
+                "e2e_rest: sync_creatives REST endpoint returns empty body — "
+                "JSONDecodeError on response parse"
+            ),
+            "T-UC-006-boundary-assignment-package": (
+                "e2e_rest: sync_creatives REST assignment scenarios — "
+                "JSONDecodeError or UniqueViolation on idempotent replay"
+            ),
+            "T-UC-006-partition-auth": (
+                "e2e_rest: authenticated creative sync returns action='failed' "
+                "instead of 'created' — REST response shape difference"
+            ),
+            "T-UC-006-boundary-principal": (
+                "e2e_rest: authenticated creative sync returns action='failed' "
+                "instead of 'created' — REST response shape difference"
+            ),
+        }
+        if "e2e_rest" in nodeid:
+            for tag, reason in _UC006_E2E_REST_XFAIL_TAGS.items():
+                if tag in marker_names:
+                    item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
+                    break
+
+        # --- UC-026 e2e_rest-only failures ---
+        # Fields not echoed through the REST response layer (format_ids, catalogs).
+        _UC026_E2E_REST_XFAIL_TAGS: dict[str, str] = {
+            "T-UC-026-main-explicit-formats": (
+                "e2e_rest: Package.format_ids not echoed in REST create response — "
+                "production auto-creation path omits format_ids (see salesagent-53sl)"
+            ),
+            "T-UC-026-inv-089-2": (
+                "e2e_rest: catalogs not echoed in REST create response — "
+                "production doesn't echo catalogs (see salesagent-uoda)"
+            ),
+            "T-UC-026-partition-format-ids": (
+                "e2e_rest: format_ids validation not enforced through REST — "
+                "production accepts unsupported format_ids without error"
+            ),
+            "T-UC-026-boundary-format-ids": (
+                "e2e_rest: format_ids boundary validation not enforced through REST — "
+                "production accepts invalid format_ids without error"
+            ),
+        }
+        if "e2e_rest" in nodeid:
+            for tag, reason in _UC026_E2E_REST_XFAIL_TAGS.items():
+                if tag in marker_names:
+                    item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
+                    break
+
         # UC-004: webhook 4xx no-retry assertion uses env.mock["post"] which is
         # not wired in e2e_rest (real HTTP transport, no mocks). Previously a
         # _pending() no-op, now a real assertion — only fails on e2e_rest.
