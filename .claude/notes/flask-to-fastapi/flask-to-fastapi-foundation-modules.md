@@ -9120,7 +9120,7 @@ L0 as part of the structural-guard stubs work item. Each guard ships with a meta
 
 ## §11.35 — Native-Idiom Guards (3 new structural guards)
 
-Per the native-ness audit: 89 `os.environ.get` sites, 17 `import requests` sites, 0 Pydantic v1 `class Config:` blocks today. Guards land at:
+Per the native-ness audit (re-verified 2026-04-17): 107 `os.environ.get` sites (was "89" — previous count stale), 17 `import requests` sites, 0 Pydantic v1 `class Config:` blocks today. Guards land at:
 
 ### `tests/unit/test_architecture_no_pydantic_v1_config.py` (L0 — empty allowlist)
 AST-scans every `src/**/*.py` for `class Config:` inside a Pydantic BaseModel subclass. Allowlist EMPTY at introduction. Code is already clean; guard is monotonic from day 1 to prevent regression when L1/L2/L4 land new schemas.
