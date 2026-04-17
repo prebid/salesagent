@@ -8500,7 +8500,7 @@ Parses the layer-timeline table in folder `CLAUDE.md` into `{label: scope}`. Sca
 Parses the Spike Sequence table (folder CLAUDE.md §v2.0 Spike Sequence) into `{spike_id: (gate, layer)}`. Scans all 11 plan docs for string `Spike <N>` + claimed layer; asserts no conflict. Spike table is single source of truth.
 
 ### `tests/unit/test_architecture_proxy_headers_in_entrypoints.py`
-Asserts every production entrypoint (`Dockerfile` CMD, `scripts/run_server.py`'s `uvicorn.run(...)` call, `fly.toml` documented process entries) contains `--proxy-headers` + `--forwarded-allow-ips='*'`. Catches entrypoint drift during L2 Flask removal.
+Asserts the canonical entrypoint `scripts/run_server.py` contains `proxy_headers=True` + `forwarded_allow_ips='*'` as kwargs to `uvicorn.run(...)`. `Dockerfile` CMD and `scripts/deploy/run_all_services.py` are asserted to invoke `scripts/run_server.py` (inheritance path, not duplicated flag placement) per migration.md §11.8. Catches entrypoint drift during L2 Flask removal.
 
 ### Escape hatch tightening
 Edits under `.claude/notes/flask-to-fastapi/` NO LONGER qualify for the `discipline: N/A - docs-only` waiver. Those docs are spec; they require a doc-drift linter Red/Green pair.
@@ -8525,6 +8525,58 @@ AST-scans every `src/**/*.py` for `import requests` or `from requests import`. A
 
 ### Land at
 Each guard introduced at its respective layer with a Red commit (empty stub of the guard that fails because the pattern exists) followed by a Green commit (allowlist seeded with current state; downstream PRs shrink it).
+
+---
+
+## §11.36 — Middleware Stack Versioning (supersedes "Empty + bootstrap" guard strategy)
+
+The middleware stack grows L1a=7 → L1c=8 (LegacyAdminRedirect, per D1) → L2=10 (TrustedHost + SecurityHeaders) → L4+=11 (RequestID). An empty+bootstrap guard would force last-minute edits on every mid-layer middleware change; a version-keyed assertion makes the layer transition explicit in code.
+
+### Implementation pattern (lands in L1a with initial version=1)
+
+```python
+# src/app_constants.py
+MIDDLEWARE_STACK_VERSION = 1  # L1a=1, L1c=2, L2=3, L4=4
+
+EXPECTED_STACKS: dict[int, list[str]] = {
+    1: [  # L1a — 7 middlewares
+        "CORSMiddleware", "RestCompatMiddleware", "CSRFOriginMiddleware",
+        "SessionMiddleware", "UnifiedAuthMiddleware",
+        "ApproximatedExternalDomainMiddleware", "FlyHeadersMiddleware",
+    ],
+    2: [  # L1c — 8 middlewares (adds LegacyAdminRedirect INSIDE UnifiedAuth)
+        "CORSMiddleware", "RestCompatMiddleware", "CSRFOriginMiddleware",
+        "SessionMiddleware", "LegacyAdminRedirectMiddleware",
+        "UnifiedAuthMiddleware",
+        "ApproximatedExternalDomainMiddleware", "FlyHeadersMiddleware",
+    ],
+    3: [  # L2 — 10 middlewares (adds SecurityHeaders + TrustedHost)
+        "CORSMiddleware", "RestCompatMiddleware", "CSRFOriginMiddleware",
+        "SessionMiddleware", "LegacyAdminRedirectMiddleware",
+        "UnifiedAuthMiddleware", "SecurityHeadersMiddleware",
+        "TrustedHostMiddleware",
+        "ApproximatedExternalDomainMiddleware", "FlyHeadersMiddleware",
+    ],
+    4: [  # L4+ — 11 middlewares (adds RequestID outermost)
+        "CORSMiddleware", "RestCompatMiddleware", "CSRFOriginMiddleware",
+        "SessionMiddleware", "LegacyAdminRedirectMiddleware",
+        "UnifiedAuthMiddleware", "SecurityHeadersMiddleware",
+        "TrustedHostMiddleware",
+        "ApproximatedExternalDomainMiddleware", "FlyHeadersMiddleware",
+        "RequestIDMiddleware",
+    ],
+}
+```
+
+### Guard
+
+`tests/integration/test_architecture_middleware_order.py` reads `MIDDLEWARE_STACK_VERSION` from `src.app_constants` and asserts `[m.cls.__name__ for m in app.user_middleware] == EXPECTED_STACKS[VERSION]`. Bumping the version is an explicit, reviewable diff in every layer PR that changes the stack.
+
+Note: Starlette stores middleware in `app.user_middleware` in REVERSE added order (outermost last). The guard's canonical list is the OUTERMOST-TO-INNERMOST runtime order; the guard normalizes by reversing `app.user_middleware` before comparison.
+
+### Lands at
+
+L1a introduces the constant + guard with VERSION=1. L1c bumps to VERSION=2 in the same PR that adds `LegacyAdminRedirectMiddleware`. L2 bumps to VERSION=3 in the same PR that adds `SecurityHeadersMiddleware` + `TrustedHostMiddleware`. L4 bumps to VERSION=4 in the same PR that adds `RequestIDMiddleware`.
 
 ---
 

@@ -522,6 +522,7 @@ These refactors are strict improvements under the CURRENT `scoped_session` world
 - [ ] `SESSION_SECRET` live in staging secret store
 - [ ] Playwright smoke run against the empty admin router confirms `get_admin_client()` infra is sound
 - [ ] Authlib starlette_client happy-path spike completed on staging (assumption #8 verification from execution-details Part 2)
+- [ ] **L1a single-PR requirement:** `SessionMiddleware` registration in `src/app.py` MUST co-commit with the port of `get_session_cookie_domain()` (today at `src/admin/app.py` and `src/core/domain_config.py`). If `SessionMiddleware(domain=None)` lands without the domain-calculation helper, every tenant subdomain gets its own isolated session cookie and SSO breaks across subdomains the moment Flask's cookie-domain calculation goes away. L1a PR is REJECTED at review if `grep -n 'session_cookie_domain' src/` does not return a hit in the same PR diff as `app.add_middleware(SessionMiddleware, ...)`.
 
 **Routers ported:**
 
@@ -541,9 +542,24 @@ These refactors are strict improvements under the CURRENT `scoped_session` world
 - [ ] 7. `CORSMiddleware` (already present, innermost)
 - [ ] Registration in `src/app.py` is in **REVERSE** order (LIFO — innermost added first): `CORS`, `RestCompat`, `CSRF`, `Session`, `UnifiedAuth`, `ApproximatedExternalDomain`, `FlyHeaders`
 - [ ] `tests/integration/test_middleware_ordering.py` exists and is green — inspects `app.user_middleware` and asserts the sequence matches canonical order
-- [ ] Note: `TrustedHostMiddleware` AND `SecurityHeadersMiddleware` land at L2 (9-middleware stack). `RequestIDMiddleware` lands at L4 (10-middleware stack). See `foundation-modules.md` §cross-cutting/Middleware ordering for the L1a (7) / L2 (9) / L4+ (10) progressive shapes.
+- [ ] Note: `LegacyAdminRedirectMiddleware` lands at L1c (8-middleware stack, per D1 2026-04-16). `TrustedHostMiddleware` AND `SecurityHeadersMiddleware` land at L2 (10-middleware stack). `RequestIDMiddleware` lands at L4 (11-middleware stack). See `foundation-modules.md` §11.36 for the versioned `MIDDLEWARE_STACK_VERSION` assertion guard covering L1a=1 (7) → L1c=2 (8) → L2=3 (10) → L4+=4 (11).
 
-**Middleware stack — canonical L2 runtime order (outermost → innermost, 9 middlewares, adds TrustedHost + SecurityHeaders):**
+**Middleware stack — canonical L1c runtime order (outermost → innermost, 8 middlewares, adds LegacyAdminRedirect INSIDE UnifiedAuth):**
+
+> # WARNING: add_middleware calls in src/app.py are REVERSE of this runtime order (LIFO).
+
+- [ ] 1. `FlyHeadersMiddleware`
+- [ ] 2. `ApproximatedExternalDomainMiddleware`
+- [ ] 3. `UnifiedAuthMiddleware`
+- [ ] 4. `LegacyAdminRedirectMiddleware` (new at L1c per D1 — INSIDE UnifiedAuth so `request.state.identity.tenant_id` is populated; OUTSIDE SessionMiddleware so session is hydrated)
+- [ ] 5. `SessionMiddleware`
+- [ ] 6. `CSRFOriginMiddleware`
+- [ ] 7. `RestCompatMiddleware`
+- [ ] 8. `CORSMiddleware`
+- [ ] Registration in `src/app.py` LIFO: `CORS`, `RestCompat`, `CSRF`, `Session`, `LegacyAdminRedirect`, `UnifiedAuth`, `ApproximatedExternalDomain`, `FlyHeaders`
+- [ ] `src/app_constants.py::MIDDLEWARE_STACK_VERSION` bumped from 1 to 2 in the same PR; `tests/integration/test_architecture_middleware_order.py` asserts 8-middleware L1c sequence per §11.36
+
+**Middleware stack — canonical L2 runtime order (outermost → innermost, 10 middlewares, adds TrustedHost + SecurityHeaders):**
 
 > # WARNING: add_middleware calls in src/app.py are REVERSE of this runtime order (LIFO).
 
@@ -552,14 +568,15 @@ These refactors are strict improvements under the CURRENT `scoped_session` world
 - [ ] 3. `TrustedHostMiddleware` (new at L2 — reject non-allowed hosts before security-header injection)
 - [ ] 4. `SecurityHeadersMiddleware` (new at L2 per §11.28 — inside TrustedHost, outside UnifiedAuth)
 - [ ] 5. `UnifiedAuthMiddleware`
-- [ ] 6. `SessionMiddleware`
-- [ ] 7. `CSRFOriginMiddleware`
-- [ ] 8. `RestCompatMiddleware`
-- [ ] 9. `CORSMiddleware`
-- [ ] Registration in `src/app.py` is **REVERSE** (LIFO — innermost added first): `CORS`, `RestCompat`, `CSRF`, `Session`, `UnifiedAuth`, `SecurityHeaders`, `TrustedHost`, `ApproximatedExternalDomain`, `FlyHeaders`
-- [ ] `tests/integration/test_middleware_ordering.py` updated to assert 9-middleware L2 sequence
+- [ ] 6. `LegacyAdminRedirectMiddleware`
+- [ ] 7. `SessionMiddleware`
+- [ ] 8. `CSRFOriginMiddleware`
+- [ ] 9. `RestCompatMiddleware`
+- [ ] 10. `CORSMiddleware`
+- [ ] Registration in `src/app.py` is **REVERSE** (LIFO — innermost added first): `CORS`, `RestCompat`, `CSRF`, `Session`, `LegacyAdminRedirect`, `UnifiedAuth`, `SecurityHeaders`, `TrustedHost`, `ApproximatedExternalDomain`, `FlyHeaders`
+- [ ] `src/app_constants.py::MIDDLEWARE_STACK_VERSION` bumped from 2 to 3 in the same PR; `tests/integration/test_architecture_middleware_order.py` asserts 10-middleware L2 sequence per §11.36
 
-**Middleware stack — canonical L4+ runtime order (outermost → innermost, 10 middlewares, adds RequestID outermost):**
+**Middleware stack — canonical L4+ runtime order (outermost → innermost, 11 middlewares, adds RequestID outermost):**
 
 > # WARNING: add_middleware calls in src/app.py are REVERSE of this runtime order (LIFO). Each add_middleware line below is annotated with its runtime position.
 
@@ -569,12 +586,13 @@ These refactors are strict improvements under the CURRENT `scoped_session` world
 - [ ] 4. `TrustedHostMiddleware`
 - [ ] 5. `SecurityHeadersMiddleware`
 - [ ] 6. `UnifiedAuthMiddleware`
-- [ ] 7. `SessionMiddleware`
-- [ ] 8. `CSRFOriginMiddleware`
-- [ ] 9. `RestCompatMiddleware`
-- [ ] 10. `CORSMiddleware`
-- [ ] Registration LIFO: `CORS`, `RestCompat`, `CSRF`, `Session`, `UnifiedAuth`, `SecurityHeaders`, `TrustedHost`, `ApproximatedExternalDomain`, `FlyHeaders`, `RequestID`
-- [ ] `tests/integration/test_middleware_ordering.py` updated to assert 10-middleware L4+ sequence
+- [ ] 7. `LegacyAdminRedirectMiddleware`
+- [ ] 8. `SessionMiddleware`
+- [ ] 9. `CSRFOriginMiddleware`
+- [ ] 10. `RestCompatMiddleware`
+- [ ] 11. `CORSMiddleware`
+- [ ] Registration LIFO: `CORS`, `RestCompat`, `CSRF`, `Session`, `LegacyAdminRedirect`, `UnifiedAuth`, `SecurityHeaders`, `TrustedHost`, `ApproximatedExternalDomain`, `FlyHeaders`, `RequestID`
+- [ ] `src/app_constants.py::MIDDLEWARE_STACK_VERSION` bumped from 3 to 4 in the same PR; `tests/integration/test_architecture_middleware_order.py` asserts 11-middleware L4+ sequence per §11.36
 
 **Blockers fixed in Wave 1:**
 
@@ -878,7 +896,7 @@ Decision 8 eliminated the SSE port; the `/tenant/{id}/events` route and `sse_sta
 - [ ] `tests/integration/test_session_cookie_size.py` — cookie-size budget guard per §11.33 with `MAX_COOKIE_BYTES = 3_584`. Two tests: `test_session_cookie_minimal_user`, `test_session_cookie_heavy_user`.
 - [ ] `heavy_tenant_session_client` fixture added to `tests/integration/conftest.py` per §11.33.D.
 - [ ] Add `Session cookie size budget | tests/integration/test_session_cookie_size.py` row to root `CLAUDE.md` structural-guards table.
-- [ ] Cross-ref root `CLAUDE.md` Critical Invariant #2 updated to reference 9-middleware L2 / 10-middleware L4+ stack and note `SecurityHeadersMiddleware` position.
+- [ ] Cross-ref root `CLAUDE.md` Critical Invariant #2 updated to reference `MIDDLEWARE_STACK_VERSION` (foundation-modules §11.36): L1a=7 → L1c=8 (LegacyAdminRedirect per D1) → L2=10 (TrustedHost + SecurityHeaders) → L4+=11 (RequestID outermost). Note `SecurityHeadersMiddleware` position (INSIDE `TrustedHost`, OUTSIDE `UnifiedAuth`).
 
 **Pre-commit + CI:**
 

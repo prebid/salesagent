@@ -1290,6 +1290,17 @@ The 3 consumer sites migrate:
 
 ### 11.8 Proxy headers — uvicorn `--proxy-headers`
 
+**Uvicorn `--proxy-headers --forwarded-allow-ips='*'` canonical placement — one source of truth for production parity.**
+
+- **Dockerfile CMD:** NOT responsible for these flags. The container entrypoint execs `scripts/run_server.py`, which invokes `uvicorn.run(app, proxy_headers=True, forwarded_allow_ips='*', ...)` as Python kwargs.
+- **`scripts/run_server.py`:** canonical home. `uvicorn.run(...)` kwargs `proxy_headers=True`, `forwarded_allow_ips='*'`.
+- **`scripts/deploy/run_all_services.py`:** passes the flags via `subprocess.Popen([sys.executable, "scripts/run_server.py", ...])` — inherits from run_server.py.
+- **`fly.toml`:** process entry runs the same `scripts/run_server.py`; flags inherited.
+
+Verify with `rg -n 'proxy_headers|--proxy-headers' Dockerfile scripts/ fly.toml 2>/dev/null | wc -l` at L2 exit — expected 1 hit (the `uvicorn.run()` call in `scripts/run_server.py`) plus any documentation comments.
+
+Implementation-checklist §L2 exit criteria verifies. Structural guard `tests/unit/test_architecture_proxy_headers_in_entrypoints.py` (§11.34) asserts the canonical entrypoint contains the flag.
+
 ```bash
 uvicorn src.app:app --proxy-headers --forwarded-allow-ips='*'
 ```
