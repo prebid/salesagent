@@ -461,7 +461,7 @@ docker build .                      # succeeds
 # 48h monitoring: no 5xx spike, latency stable
 ```
 
-**What NOT to do:** Do not start test-harness modernization (L3), pattern refinement (L4), or async conversion (L5+). Do not remove `psycopg2-binary` (stays until post-v2.0 when Path B adapters and sync-bridge sunset). Do not drop nginx (post-v2.0). Do not design multi-worker scheduler (v2.2). Do not delete `render()` wrapper (deletion is L4). Do not introduce `SessionDep` (that is L4).
+**What NOT to do:** Do not start test-harness modernization (L3), pattern refinement (L4), or async conversion (L5+). Do not remove `psycopg2-binary` (retained narrowly for D1 Path B adapter wrap + D2 fork-safety; D3 2026-04-16 eliminated the sync-bridge retention rationale, so full sunset awaits post-v2.0 adapter async rewrite). Do not drop nginx (post-v2.0). Do not design multi-worker scheduler (v2.2). Do not create `src/admin/templating.py` or `src/admin/flash.py` or `src/admin/sessions.py` (D8 #4 — see `foundation-modules.md §D8-native`). Do not introduce `SessionDep` (that is L4).
 
 ---
 
@@ -577,7 +577,7 @@ make quality && ./run_all_tests.sh  # green
 
 ---
 
-## Layer 5 — Async Conversion: SessionDep alias flip + mechanical await conversion + adapter Path-B wrap + sync-bridge + SSE deletion
+## Layer 5 — Async Conversion: SessionDep alias flip + mechanical await conversion + adapter Path-B wrap + background_sync async rearchitect (D3) + SSE deletion
 
 **Thesis:** `SessionDep` re-aliased from `Session` to `AsyncSession` — a one-line flip at L5b — then mechanical `await` conversion of ~60 commit sites and ~200 `scalars`/`execute` call sites across the router surface. The layer is split into sub-PRs for review tractability.
 
@@ -603,7 +603,7 @@ Before L5a opens, enumerate every sync DB call site in the repository and classi
 # Buckets:
 #   convert       — sync code that becomes async in L5c-L5e
 #   threadpool    — sync code that stays sync, wrapped in await run_in_threadpool(...) at L5d2
-#   sync-bridge   — sync code that stays sync with its own engine (Decision 9 — background_sync_service.py only)
+#   async-rearchitect   — sync code being rearchitected to asyncio.create_task + checkpoint-per-GAM-page at L5d1 (D3 2026-04-16, background_sync_service.py only — supersedes 2026-04-11 Option B sync-bridge)
 #   delete        — sync code that is being deleted (e.g., SSE /events route per Decision 8)
 
 OUT=tests/migration/fixtures/l5-sync-inventory.txt
@@ -613,19 +613,21 @@ mkdir -p tests/migration/fixtures
   echo "# Format: <bucket> <file>:<line> <snippet>"
   echo ""
 
-  # Bucket: sync-bridge — Decision 9
+  # Bucket: async-rearchitect — D3 (2026-04-16, supersedes 2026-04-11 Option B sync-bridge)
   rg -n 'get_db_session\(\)' src/services/background_sync_service.py \
-    | sed 's/^/sync-bridge /'
+    | sed 's/^/async-rearchitect /'
 
   # Bucket: delete — Decision 8 (SSE route)
   rg -n 'EventSourceResponse|StreamingResponse.*text/event-stream' src/admin/blueprints/activity_stream.py \
     | sed 's/^/delete /'
 
   # Bucket: threadpool — Path B adapter call sites (Decision 1)
-  # 18 call sites in src/core/tools/*.py + 1 in src/admin/blueprints/operations.py
+  # 30 adapter. call sites in src/core/tools/*.py across 7 files (re-verified 2026-04-17)
+  # operations.py "+1" was not confirmed at 2026-04-17 re-verification; post-L0 codemod moves blueprints/ -> routers/
   rg -n '\.(create_media_buy|update_media_buy|pause|resume|update_creatives|upload_creative_assets)\(' \
-    src/core/tools/ src/admin/blueprints/operations.py \
-    --type py \
+    src/core/tools/ \
+    src/admin/routers/operations.py src/admin/blueprints/operations.py \
+    --type py 2>/dev/null \
     | sed 's/^/threadpool /'
 
   # Bucket: convert — everything else (the bulk of L5c-L5e work)
@@ -633,8 +635,10 @@ mkdir -p tests/migration/fixtures
   rg -n 'with get_db_session\(\)|session\.scalars\(|session\.execute\(|session\.commit\(\)|session\.flush\(\)' \
     src/ \
     --glob '!src/services/background_sync_service.py' \
+    --glob '!src/admin/routers/activity_stream.py' \
     --glob '!src/admin/blueprints/activity_stream.py' \
     --glob '!src/core/tools/' \
+    --glob '!src/admin/routers/operations.py' \
     --glob '!src/admin/blueprints/operations.py' \
     --type py \
     | sed 's/^/convert /'
@@ -737,7 +741,7 @@ wc -l "$OUT"
        assert not new_sites, f"New sync DB sites added after L4 EXIT: {sorted(new_sites)}"
    ```
 
-   This helper replicates the bash script's enumeration in Python so the guard can run as part of `make quality` without requiring a shell script. The classification (into convert/threadpool/sync-bridge/delete buckets) remains bash-only — the guard only asserts non-growth of the `convert` bucket + no-new-site invariant.
+   This helper replicates the bash script's enumeration in Python so the guard can run as part of `make quality` without requiring a shell script. The classification (into convert/threadpool/async-rearchitect/delete buckets — where `async-rearchitect` replaces the pre-D3 `sync-bridge` bucket per D3 2026-04-16) remains bash-only — the guard only asserts non-growth of the `convert` bucket + no-new-site invariant.
 
 5. **Expected order-of-magnitude.** An earlier draft included an illustrative breakdown ("~280 repository sites, ~68 admin handler sites..."). That breakdown was synthetic and would mislead anyone reading it as an exact count. Replace with: **"Expected order-of-magnitude: ~200-400 sync sites. Exact count captured at L4 EXIT and written as the first line of `l5-sync-inventory.txt`."** The exact count IS the artifact; do not pre-commit a number in the plan.
 
@@ -749,7 +753,7 @@ wc -l "$OUT"
 
 - [ ] Every `convert` bucket entry is now `async def` + `await`, verified by mypy strict
 - [ ] Every `threadpool` bucket entry is wrapped in `await run_in_threadpool(...)`
-- [ ] Every `sync-bridge` entry imports `get_sync_db_session` from the dedicated module
+- [ ] Every `async-rearchitect` entry uses `asyncio.create_task` + short-lived `async with get_db_session()` per GAM-page batch with `sync_checkpoint` row resume (D3 pattern; supersedes the pre-D3 `sync-bridge` bucket which required importing `get_sync_db_session` from a dedicated module)
 - [ ] Every `delete` entry is no longer in the tree
 - [ ] `test_architecture_no_new_sync_sites_post_l4.py` retires (deleted, not allowlist-emptied)
 - [ ] `l5-sync-inventory.txt` deleted from `tests/migration/fixtures/` (no longer needed)
@@ -769,11 +773,11 @@ wc -l "$OUT"
 5. **Spike 4.25:** Factory-boy async shim validation per `foundation-modules.md` §11.13.1(D) recipe. 8 edge-case tests. Pass: all green, no `MissingGreenlet`. **Fail = STOP L5 and re-analyze.**
 6. ~~Spike 4.5~~ **Ran at L4 ENTRY per CLAUDE.md §v2.0 Spike Sequence; spike-decision.md references the L4-entry record.** L5a still enumerates Spike 4.5 status to confirm no regression was introduced by the sync-baseline capture at L4 EXIT, but this is a recap, not an execution item.
 7. **Spike 5:** Scheduler alive-tick — convert 2 scheduler tick bodies; observe container logs.
-8. **Spike 5.5:** Two-engine coexistence — prove async asyncpg + sync psycopg2 engines coexist in one process (Decision 9 validation).
+8. **Spike 5.5:** Checkpoint-session viability (D3 rearchitect 2026-04-16; supersedes two-engine coexistence spike) — prove the async sessionmaker pool sustains high per-tick checkpoint session churn without `QueuePool limit` errors. 4 test cases: (a) 4-hour sync with per-page short-lived sessions; (b) 3 concurrent multi-tenant syncs; (c) cancellation via `task.cancel()` cleanly closes in-flight sessions; (d) resume from persisted checkpoint after container restart. Fail action (SOFT): revert to pre-D3 Option B sync-bridge (retain psycopg2-binary; file v2.1 sunset ticket). See CLAUDE.md §v2.0 Spike Sequence row 5.5 and `foundation-modules.md §11.29`.
 9. **Spike 6:** Alembic async — rewrite `alembic/env.py`; run upgrade/downgrade roundtrip. Fallback: keep env.py sync.
 10. **Spike 7:** `server_default` audit — grep + categorize columns; confirm <30 to rewrite.
 11. Establish async `dependency_overrides` test patterns (async generator overrides, `.pop()` teardown, scope alignment).
-12. Add 10+ new structural guards: `test_architecture_factory_inherits_async_base.py`, `test_architecture_factory_no_post_generation.py`, `test_architecture_factory_in_all_factories.py`, `test_architecture_adapter_calls_wrapped_in_threadpool.py`, `test_architecture_sync_bridge_scope.py`, `test_architecture_no_sse_handlers.py`, and others.
+12. Add 10+ new structural guards: `test_architecture_factory_inherits_async_base.py`, `test_architecture_factory_no_post_generation.py`, `test_architecture_factory_in_all_factories.py`, `test_architecture_adapter_calls_wrapped_in_threadpool.py`, `test_architecture_no_threading_thread_for_db_work.py` (D3 — AST-scans `src/` for `threading.Thread(target=...)` whose target body touches `get_db_session` or `session.`; allowlist EMPTY; supersedes the pre-D3 planned `test_architecture_sync_bridge_scope.py` which is deleted from plan), `test_architecture_no_sse_handlers.py`, and others.
 
 **Exit gate:**
 ```bash
@@ -1011,13 +1015,13 @@ make quality && ./run_all_tests.sh  # green
 
 **Work items (in order):**
 
-1. Delete sync artifacts: `get_db_session` sync context manager, `scoped_session` usage (except the sync-bridge scope), residual UoW classes.
+1. Delete sync artifacts: `get_db_session` sync context manager, any remaining `scoped_session` references (D2 retired the primary `scoped_session` at L0; D3 eliminated the would-be sync-bridge's separate registry at L5d1), residual UoW classes.
 2. Delete dead code: `database_schema.py` (confirmed orphan), `product_pricing.py` (Decision 5), dead functions in `queries.py`.
 3. ~~Hard-remove `FLASK_SECRET_KEY` dual-read~~ **moved to L2** per v2.0 breaking-change alignment with cookie rename. Verify at L7 that no `FLASK_SECRET_KEY` reads remain anywhere in `src/`, `scripts/`, `docs/`, or tests; structural guard `test_architecture_no_flask_secret_key_reads.py` (added at L2) is green with empty allowlist.
 4. Ratchet all structural guard allowlists to zero — no allowlist entries remain.
 5. Ratchet mypy strict-mode flags (per-module ratcheting baseline) — target is zero new strict errors.
 6. Final performance baseline comparison vs `baseline-sync.json` captured at L4 EXIT. No regression beyond budget.
-7. Refresh `docs/ARCHITECTURE.md` with the post-v2.0 architecture (admin FastAPI, MCP, A2A, async DB, sync-bridge).
+7. Refresh `docs/ARCHITECTURE.md` with the post-v2.0 architecture (admin FastAPI, MCP, A2A, async DB on asyncpg; `background_sync_service` runs on `asyncio.create_task` + checkpoint-per-GAM-page per D3 — no separate sync-bridge engine).
 8. Archive `.claude/notes/flask-to-fastapi/` — promote critical patterns to `docs/`.
 9. Remove migration breadcrumb from root `CLAUDE.md`.
 10. Write `CHANGELOG.md` v2.0.0 final entry (full breaking changes list — includes async handler signatures and driver change from L5).

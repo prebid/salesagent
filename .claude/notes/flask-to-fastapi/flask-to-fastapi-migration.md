@@ -49,7 +49,7 @@ Flask contributes:
 
 **Why this is worth doing:**
 - Eliminates ~11,000 LOC of boilerplate by using declarative FastAPI patterns
-- Removes ~75 MB from Docker image (Flask + flask-socketio + waitress + a2wsgi). **Note (Decision 9, 2026-04-11):** `flask-caching` is replaced rather than deleted — see §11.7 correction. `psycopg2-binary` + `libpq5` are retained (Docker savings adjust from ~80 MB to ~75 MB) for the Decision 1 sync-session factory, Decision 2 pre-uvicorn health checks, and Decision 9 sync-bridge supporting `background_sync_service.py`. Their full removal is a post-v2.0 sunset item.
+- Removes ~75 MB from Docker image (Flask + flask-socketio + waitress + a2wsgi). **Note (Decision 9 / D3, 2026-04-16):** `flask-caching` is replaced rather than deleted — see §11.7 correction. `psycopg2-binary` + `libpq5` are retained (Docker savings adjust from ~80 MB to ~75 MB) **narrowly** for the Decision 1 sync-session factory (adapter Path B) and Decision 2 pre-uvicorn health checks. They are **no longer retained for background_sync** — D3 supersedes the 2026-04-11 Option B sync-bridge with an async rearchitect, so `src/services/background_sync_db.py` is never written. psycopg2-binary full removal remains a post-v2.0 sunset item once Path B adapters go async and `run_all_services.py` is replaced by a proper process supervisor.
 - Unifies auth/session/middleware across all transports (MCP/A2A/REST/admin share one stack)
 - Eliminates the WSGI↔ASGI bridge overhead
 - Eliminates the scoped_session interleaving latent bug in `src/routes/api_v1.py` as a side effect of the full-async conversion (see async-pivot-checkpoint.md §4 Risk #15)
@@ -64,9 +64,9 @@ Flask contributes:
 1. **Template strategy: Option B (FastAPI-native codemod).** Templates become `url_for('flat_route_name')`, native `flash()`, `request.url_for(...)`. No backward-compat shim retained in v2.0.
 2. **Breaking changes welcome** provided code reads as modern FastAPI-native (Annotated deps, Pydantic v2, lifespan context managers, Starlette middleware patterns, declarative forms).
 3. **Session cookie hard cutover:** one forced re-login at deploy is acceptable.
-4. **URL prefix stays `/admin/`** (bookmarks, docs, runbooks all reference it; zero benefit to moving to root).
+4. **[SUPERSEDED 2026-04-16 by D1]** ~~URL prefix stays `/admin/`.~~ Canonical admin mount is `/tenant/{tenant_id}/...` per D1 2026-04-16 (per-tenant subdomain form `https://<tenant>.sales-agent.example.com/...` is path-rewritten to the canonical form by `TenantSubdomainMiddleware`). Operator bookmarks under `/admin/<feature>/<rest>` keep working via a pure-ASGI `LegacyAdminRedirectMiddleware` (~60 LOC, lands at L1c) that 308-redirects to `/tenant/<session.tenant_id>/<feature>/<rest>` using the session tenant resolved by `UnifiedAuthMiddleware`. Exceptions (stay at `/admin/*` — byte-immutable per OAuth URI invariant 6 and pre-auth constraints): `/admin/auth/*`, `/admin/login`, `/admin/logout`, `/admin/public/*`, and the static mount. See CLAUDE.md §Critical Invariants "Multi-tenant canonical URL routing (D1)" and `foundation-modules.md §11.36` for the full pattern. `docs`, runbooks, and bookmarks have been updated in the L1c PR.
 5. **`SESSION_SECRET` env var hard-required, `KeyError` at startup, no `secrets.token_hex()` fallback.** The old dev-mode fallback was a security smell anyway.
-6. **[LAYERED 2026-04-14] Sync SQLAlchemy for admin handlers through L4, async in L5.** L0-L4 admin handlers are sync `def` with `with get_db_session() as session:` using the existing `scoped_session` + `Session` infrastructure (driver stays `psycopg2-binary`). L4 introduces sync `SessionDep = Annotated[Session, Depends(get_session)]`; **L5b** re-aliases `SessionDep` to `AsyncSession` (1-file flip) and introduces `asyncpg`; **L5c-L5e** mechanically convert ~60 commit sites and ~200 `scalars`/`execute` call sites to `await`. MCP and A2A handlers remain `async def` unchanged throughout. See `execution-plan.md` for per-layer canonical patterns.
+6. **[LAYERED 2026-04-14, REFINED 2026-04-16 per D2] Sync SQLAlchemy for admin handlers through L4, async in L5.** L0-L4 admin handlers are sync `def` with `with get_db_session() as session:` using a bare `sessionmaker` (driver stays `psycopg2-binary`). **Decision D2 (2026-04-16) retires `scoped_session` entirely at L0** — `src/core/database/database_session.py` is rewritten in the L0 PR to drop the thread-local registry; each `with get_db_session()` yields a fresh `Session` from a bare `sessionmaker`. Thread-reuse safety in FastAPI's AnyIO threadpool follows from the absence of thread-local state, not from `scoped_session`. Enforced by `tests/unit/test_architecture_no_scoped_session.py`. L4 introduces sync `SessionDep = Annotated[Session, Depends(get_session)]`; **L5b** re-aliases `SessionDep` to `AsyncSession` (1-file flip) and introduces `asyncpg`; **L5c-L5e** mechanically convert ~60 commit sites and ~200 `scalars`/`execute` call sites to `await`. MCP and A2A handlers remain `async def` unchanged throughout. See `execution-plan.md` for per-layer canonical patterns and CLAUDE.md Invariant 4 for the canonical statement.
 7. **CSRF: Option A — SameSite=Lax session cookie + `CSRFOriginMiddleware` (~70 LOC pure-ASGI Origin header validation).** See CLAUDE.md invariant 5 and `flask-to-fastapi-foundation-modules.md` §11.7 for the authoritative implementation.
 8. **Error-shape split** (refined post AdCP safety audit):
    - **Category 1** (internal admin UI AJAX endpoints called by our own JavaScript — e.g. `change_account_status`, `src/admin/blueprints/api.py` dashboard AJAX, `src/admin/blueprints/format_search.py` format picker, **and `src/adapters/gam_reporting_api.py`** which is admin-session-authed) → native FastAPI `{"detail": "..."}`. We update our own JS in the same PR.
@@ -131,10 +131,10 @@ The first-order audit (§2.7) verified AdCP protocol safety. A subsequent **deep
 
 5. 🚨 **Middleware ordering bug — CSRF must run AFTER Approximated, not before.** An earlier draft placed `CSRFOriginMiddleware` OUTSIDE `ApproximatedExternalDomainMiddleware`. Failure scenario: external-domain user POSTs to `/admin/tenant/t1/accounts/create` via Approximated. CSRF fires first, Origin header doesn't match allowed origins, CSRF returns 403, redirect never runs. The entire external-domain onboarding flow breaks. **Fix:** the canonical stack places ExternalDomain OUTSIDE CSRF:
    ```
-   Canonical runtime order (outermost → innermost, L2 shape, 9 middlewares):
-   Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS
+   Canonical runtime order (outermost → innermost, L2 shape, 10 middlewares — includes LegacyAdminRedirect from L1c per D1):
+   Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → LegacyAdminRedirect → Session → CSRF → RestCompat → CORS
    ```
-   (L4+ adds `RequestID` as the new outermost middleware. See `flask-to-fastapi-foundation-modules.md` §cross-cutting/Middleware ordering for the L1a (6) / L2 (9) / L4-L6 (10) progressive shapes. `SecurityHeadersMiddleware` lands in the same L2 PR as `TrustedHostMiddleware` — see §11.28.)
+   (Canonical stack growth per CLAUDE.md Invariant 5 and foundation-modules.md §11.36: L1a=7 → L1c=8 (adds `LegacyAdminRedirectMiddleware` INSIDE `UnifiedAuthMiddleware`) → L2=10 (adds `TrustedHostMiddleware` + `SecurityHeadersMiddleware`) → L4+=11 (adds `RequestIDMiddleware` outermost). `SecurityHeadersMiddleware` (§11.28) lands in the same L2 PR as `TrustedHostMiddleware`. See `flask-to-fastapi-foundation-modules.md` §cross-cutting/Middleware ordering for the per-layer shapes.)
 
    Registered in `src/app.py` via `add_middleware` in **REVERSE** order (LIFO — innermost added first):
    ```python
@@ -142,11 +142,13 @@ The first-order audit (§2.7) verified AdCP protocol safety. A subsequent **deep
    app.add_middleware(RestCompatMiddleware)
    app.add_middleware(CSRFOriginMiddleware, ...)
    app.add_middleware(SessionMiddleware, **session_kwargs)
+   app.add_middleware(LegacyAdminRedirectMiddleware)              # added at L1c (D1) — inside UnifiedAuth
    app.add_middleware(UnifiedAuthMiddleware)
+   app.add_middleware(SecurityHeadersMiddleware, https_only=settings.https_only)  # added at L2 (§11.28)
    app.add_middleware(TrustedHostMiddleware, allowed_hosts=...)   # added at L2
    app.add_middleware(ApproximatedExternalDomainMiddleware)
    app.add_middleware(FlyHeadersMiddleware)
-   app.add_middleware(RequestIDMiddleware)                        # added at L4/L6, outermost
+   app.add_middleware(RequestIDMiddleware)                        # added at L4, outermost
    ```
    Also: switch the Approximated redirect from 302 to **307** (preserves POST body per RFC 7231 §6.4.7).
 
@@ -967,9 +969,13 @@ a2a_app.add_routes_to_app(app, ...)
 app.mount("/mcp", mcp_app)
 
 # Middleware (add_middleware is LIFO; outermost registered last).
-# Canonical runtime order (outermost → innermost, L4/L6 shape, 10 middlewares):
-# RequestID → Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS
-# See foundation-modules §cross-cutting/Middleware ordering for L1a (6) and L2 (9) progressive shapes.
+# Canonical runtime order (outermost → innermost, L4+ shape, 11 middlewares):
+# RequestID → Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → LegacyAdminRedirect → Session → CSRF → RestCompat → CORS
+# See foundation-modules §cross-cutting/Middleware ordering and §11.36 for layer-by-layer shapes:
+#   L1a = 7  → Fly, ExternalDomain, UnifiedAuth, Session, CSRF, RestCompat, CORS
+#   L1c = 8  → L1a + LegacyAdminRedirect (INSIDE UnifiedAuth per D1 2026-04-16)
+#   L2  = 10 → L1c + TrustedHost + SecurityHeaders
+#   L4+ = 11 → L2  + RequestID (outermost)
 # Registration order is REVERSE of runtime order (innermost added first).
 # Hard invariant (notes/CLAUDE.md #2): ExternalDomain runs BEFORE CSRF so
 # external-domain POSTs get 307-redirected instead of CSRF-rejected.
@@ -1907,6 +1913,9 @@ Delete Flask blueprint files. **Delete dead code:** `src/services/gam_inventory_
 
 ### Wave 4 — Async database layer (~7,000-10,000 LOC, pivoted 2026-04-11)
 
+> **SUPERSEDED 2026-04-14 — see `execution-plan.md` Layers 5a-5e.** The content below is a pre-layering scope snapshot. L5's sub-layering (L5b SessionDep alias flip → L5c 3-router pilot → L5d1-L5d5 → L5e) is the current canonical plan. D3 2026-04-16 further superseded the "sync-bridge" component of this scope with an async rearchitect (`asyncio.create_task` + checkpoint-per-GAM-page). Retained for historical traceability only.
+
+
 - Driver swap: remove `psycopg2-binary` + `types-psycopg2`, add `asyncpg>=0.30.0`
 - `src/core/database/database_session.py`: `create_engine` → `create_async_engine`, `scoped_session(sessionmaker(...))` → `async_sessionmaker(_engine, class_=AsyncSession, expire_on_commit=False)`
 - `get_db_session()` becomes an `@asynccontextmanager` yielding `AsyncSession`
@@ -1998,7 +2007,7 @@ Eight waves imply safety via backward-compat seams — exactly what the user rej
 1. **FastAPI 0.128 / Starlette 0.50 ABI-stable** for migration duration. Pin exact versions during Wave 2.
 2. **`Annotated[T, Depends()]` is canonical 2026 FastAPI idiom.**
 3. **Full async SQLAlchemy in v2.0** (pivoted 2026-04-11). `create_async_engine` + `async_sessionmaker` + `AsyncSession`. Pre-Wave-0 lazy-loading audit spike (see `async-pivot-checkpoint.md` Risk #1) gates the absorption. Benchmark async vs. the pre-migration sync baseline to quantify the latency profile change; acceptable range is net-neutral to ~5% improvement under moderate concurrency.
-4. **Admin handlers `async def` end-to-end with `SessionDep` + repository DI as the primary pattern.** Handlers declare `session: SessionDep` (or a repository-factory dep like `AccountRepoDep` that chains through `SessionDep`) and let the DI layer own session lifetime; `async with get_db_session() as db:` remains valid as a transitional fallback for non-request contexts (schedulers, CLI, background jobs). Structural guard `test_architecture_admin_handlers_async.py` asserts every handler is `async def`; sibling guard asserts DB access uses `async with get_db_session()` / `await session.execute(...)` where it occurs. `run_in_threadpool` remains valid for non-DB blocking operations only and is never used for DB access.
+4. **[CORRECTED 2026-04-14 — pivot reversed] Admin handlers sync `def` through L0-L4; `async def` end-to-end at L5+.** **L0-L4:** handlers are sync `def` with `with get_db_session() as session:` (Decision D2 bare `sessionmaker`, no `scoped_session`). L4 introduces sync `SessionDep = Annotated[Session, Depends(get_session)]`. Structural guard at L0-L4 is `test_architecture_handlers_use_sync_def.py`. **L5+:** `SessionDep` re-aliases to `AsyncSession` at L5b (1-file flip); L5c pilot + L5d bulk conversion flip handlers to `async def` with `async with get_db_session() as db:`. Structural guard at L5+ is `test_architecture_admin_handlers_async.py` (replaces sync-def guard at L5b atomic swap). `run_in_threadpool` remains valid for non-DB blocking operations only and is never used for DB access. Exception at L1-L4: OAuth callback handlers may be `async def` per Authlib requirement; sync DB helpers called from those bodies MUST wrap in `await run_in_threadpool(_sync_helper, ...)` — see `worked-examples.md §4.1.1` for the canonical pattern.
 5. **Starlette `SessionMiddleware` sufficient** (payloads <3.5KB).
 6. **`SESSION_SECRET` set in every deploy.** Hard `KeyError` at startup.
 7. **Admins tolerate one forced re-login** at cutover.
@@ -2035,7 +2044,7 @@ Eight waves imply safety via backward-compat seams — exactly what the user rej
 ## 17. All 15 Debatable Surfaces (resolved + counterarguments)
 
 1. **Module layout: `src/admin/` (chosen) vs `src/web/admin/` vs `src/routes/admin/`** — `src/web/admin/` signals presentation layer; `src/routes/admin/` mirrors REST. Counter: both cause import churn for marginal gain. **Chosen: keep `src/admin/`, rewrite contents.**
-2. **Sync vs async SQLAlchemy** — async unlocks `async with` UoW natively. Counter: touches 100+ files, triples scope. **Pivoted 2026-04-11: full async absorbed into v2.0.** Rationale: a greenfield FastAPI 2026 team writes fully async code end-to-end; the sync+`run_in_threadpool` compromise was a scope-reduction hack; going fully async eliminates the async follow-on entirely and fixes the pre-existing `src/routes/api_v1.py` scoped_session latent bug as a side effect. See `async-pivot-checkpoint.md` §§1-5 for the full rationale, 2nd/3rd order risks, and revised scope (~16,600-18,000 LOC per Agent A scope audit, 5-6 waves, pre-Wave-0 lazy-loading audit required).
+2. **Sync vs async SQLAlchemy** — async unlocks `async with` UoW natively. Counter: touches 100+ files, triples scope. **Pivoted 2026-04-11: full async absorbed into v2.0; sequenced 2026-04-14 across L5a-L5e (L0-L4 ship sync; see `execution-plan.md`).** Rationale: a greenfield FastAPI 2026 team writes fully async code end-to-end; the sync+`run_in_threadpool` compromise was a scope-reduction hack; going fully async eliminates the async follow-on entirely and fixes the pre-existing `src/routes/api_v1.py` scoped_session latent bug as a side effect. See `async-pivot-checkpoint.md` §§1-5 (archived historical reference) for the full rationale, 2nd/3rd order risks. Post-2026-04-14 layering splits this work across L5a (spikes) → L5b (alias flip) → L5c (pilot) → L5d1-5 (sub-PRs per domain) → L5e (final sweep).
 3. ~~**CSRF library**~~ **RESOLVED → roll-your-own Double Submit Cookie (~100 LOC).** Zero external dep.
 4. **`SessionMiddleware` cookie vs Redis server-side** — Redis if payloads grow. Counter: payloads stay under 4KB. **Chosen: signed cookies.**
 5. **`BaseHTTPMiddleware` vs pure ASGI** — `BaseHTTPMiddleware` easier but Starlette #1729. **Chosen: pure ASGI.**
