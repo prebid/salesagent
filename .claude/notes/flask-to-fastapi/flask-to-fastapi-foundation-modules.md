@@ -1364,7 +1364,7 @@ async def run_gam_sync(tenant_id: str) -> SyncReport:
 
 Each phase commits independently. If phase 2 fails, phase 1's writes are already committed — which is usually what you want for a long-running job, because partial progress is better than losing everything and restarting from the beginning of phase 1.
 
-Decision #9 in the folder `CLAUDE.md` open-decisions list asks "how should background_sync_service handle long jobs" — Option A is this phase-per-session refactor; Option B is the sync-bridge fallback (run the whole job under `run_in_threadpool` with the sync psycopg2 path, kept on life-support just for this one service). Option A is strongly preferred because it keeps the codebase on one driver.
+Decision #9 in the folder `CLAUDE.md` open-decisions list asks "how should background_sync_service handle long jobs". Pre-D3 the proposed answer was Option B sync-bridge (separate sync psycopg2 engine at `src/services/background_sync_db.py`). **D3 (2026-04-16) supersedes that with Option A — this phase-per-session async refactor.** Each GAM-page (~30s) opens its own short-lived `async with get_db_session()`, writes progress to a `sync_checkpoint` row, commits, closes. The `threading.Thread` workers become `asyncio.create_task(...)` on the event loop. This keeps the codebase on one driver (asyncpg) and eliminates `src/services/background_sync_db.py` from the plan entirely. Fallback on Spike 5.5 failure: revert to pre-D3 Option B sync-bridge and file v2.1 sunset ticket.
 
 ### H. Interaction with `src/core/main.py::lifespan_context`
 
@@ -5897,10 +5897,14 @@ def get_sync_db_session() -> Iterator[Session]:
     `src/services/media_buy_*.py`. Allowlist: `src/adapters/`,
     `src/core/audit_logger.py`.
 
-    This sync factory is SEPARATE from `src/services/background_sync_db.py`
-    (Decision 9 sync-bridge), which has its own engine with different pool
-    sizing + 600s statement timeout for multi-hour GAM syncs. The two sync
-    engines coexist; each serves a different consumer.
+    This sync factory serves ONLY adapter code inside run_in_threadpool
+    worker threads (Decision 1 Path B). It is NOT used by
+    `src/services/background_sync_service.py` — per D3 (2026-04-16) that
+    service rearchitects to `asyncio.create_task` + per-GAM-page short-lived
+    `async with get_db_session()`, so the v2.0 codebase has exactly one sync
+    factory (Path B) and one async factory (main request path). The
+    previously-planned Decision 9 Option B sync-bridge engine
+    (`src/services/background_sync_db.py`) was NEVER WRITTEN under D3.
     """
     session = _sync_sessionmaker()
     try:
@@ -6101,7 +6105,7 @@ Monitoring: the `/health/pool` endpoint (L5+ acceptance) exposes the current thr
 
 `tests/unit/test_architecture_adapter_calls_wrapped_in_threadpool.py` — full content in §3 of the Decision 1 analysis. AST-walks `src/core/tools/`, `src/admin/blueprints/`, `src/admin/routers/`, `src/core/helpers/` for method calls matching `adapter.METHOD(...)`, `self.adapter.METHOD(...)`, `adapter.submanager.METHOD(...)` inside `async def` bodies. Each such call must be the first argument to a `run_in_threadpool(...)` call expression.
 
-**Allowlist:** `src/services/background_sync_service.py` (Decision 9 sync-bridge thread — adapter calls already in sync context, no wrap needed). `src/services/` other services (`delivery_webhook_scheduler.py`, `media_buy_status_scheduler.py`) do not call adapters directly; grep-verified.
+**Allowlist:** EMPTY. Under D3 (2026-04-16), `src/services/background_sync_service.py` runs inside `asyncio.create_task` on the event loop and does not call adapters directly (adapter calls go through `_impl` functions). `src/services/` other services (`delivery_webhook_scheduler.py`, `media_buy_status_scheduler.py`) do not call adapters directly either; grep-verified. (Pre-D3 this allowlist carried `background_sync_service.py` under the Option B sync-bridge thread model; post-D3 no carve-out is needed.)
 
 **Ratcheting:** the guard's allowlist starts empty after Wave 4b lands. New violations fail the build immediately.
 
@@ -6118,9 +6122,9 @@ Adapters running inside `run_in_threadpool` worker threads hold sync `Session` i
 
 - **`mock_ad_server.py` uses `time.sleep()` for latency simulation.** Under Path B this still works — the sleep happens inside the worker thread, not on the event loop, so it doesn't block other requests. No conversion to `asyncio.sleep()` needed. The Decision 7 refactor of `mock_ad_server.py::complete_after_delay` IS still required (that's a `threading.Thread` background task, not a wrapped adapter call — the thread becomes `asyncio.create_task`).
 - **Kwargs in `run_in_threadpool`.** Use `functools.partial` wrapper (see §D) or refactor the adapter method to take positional args.
-- **Sync-vs-async engine pool math.** 15+25 (async) + 5+10 (sync adapter) + 2+3 (sync-bridge from Decision 9) = 60 peak connections. PG default `max_connections=100` has headroom. Production deploys that raise `max_connections` should document the new async/sync split.
-- **Threadpool capacity vs concurrent requests.** 80 workers is sized for ~80 concurrent adapter-invoking requests. Admin UI traffic typically ≤10 concurrent; MCP tool call concurrent load can spike higher. Monitor `anyio.to_thread.current_default_thread_limiter().borrowed_tokens` via `/health/pool` and raise `ADCP_THREADPOOL_SIZE` if it saturates.
-- **`application_name` in `pg_stat_activity`.** The async engine connections show `application_name='adcp-salesagent'`; Path B sync connections show `application_name='adcp-salesagent-sync'`; Decision 9 sync-bridge connections show `application_name='adcp-salesagent-sync-bridge'`. Three distinct labels make debugging stale connections easy.
+- **Sync-vs-async engine pool math (post-D3).** 15+25 (async) + 5+10 (sync adapter) = 55 peak connections. PG default `max_connections=100` has 45 headroom. (Pre-D3 the calculation included "+2+3 (sync-bridge from Decision 9)" for 60 peak; under D3 the sync-bridge engine is never created — arithmetic: 40 + 15 + 0 = 55.) Production deploys that raise `max_connections` should document the new async/sync split.
+- **Threadpool capacity vs concurrent requests.** 80 workers is sized for ~80 concurrent adapter-invoking requests. Admin UI traffic typically ≤10 concurrent; MCP tool call concurrent load can spike higher. Monitor `anyio.to_thread.current_default_thread_limiter().borrowed_tokens` via `/health/pool` and raise `ADCP_THREADPOOL_TOKENS` (canonical env name; `ADCP_THREADPOOL_SIZE` is the deprecated older draft name per §11.14.F) if it saturates.
+- **`application_name` in `pg_stat_activity` (post-D3).** The async engine connections show `application_name='adcp-salesagent'`; Path B sync connections show `application_name='adcp-salesagent-sync'`. Two distinct labels post-D3 (pre-D3 plan included a third `adcp-salesagent-sync-bridge` for the Option B sync-bridge; under D3 that engine is never created). Debugging stale connections uses the two-label split.
 - **Post-v2.0 sunset path.** If `googleads` releases an async variant and the 4 `requests`-based adapters are ported to `httpx.AsyncClient`, each adapter converts individually to `async def`, the wrap at the `_impl` caller becomes `await adapter.method(...)` instead of `await run_in_threadpool(adapter.method, ...)`, and eventually the sync factory in `database_session.py` + psycopg2 dep + libpq can all be deleted. Structural guard allowlist adjusts as each adapter completes.
 
 ---
@@ -7817,7 +7821,7 @@ Every request that reaches an admin handler can, under worst-case conditions, co
 | AnyIO threadpool | `src/app.py::lifespan` (§11.14.F) | 80 tokens (`ADCP_THREADPOOL_TOKENS`) | Sync handlers + adapter `run_in_threadpool` wrap. Default anyio=40 is too low for admin OAuth bursts. |
 | Sync DB engine — admin | `src/core/database/engine.py` (L5b sync-side; L0-L4 whole-codebase) | `pool_size=40, max_overflow=40` → 80 peak | **Revised from 20+30 = 50** to match threadpool tokens under the Path-B worst case (see §C). |
 | Async DB engine (L5+) | `src/core/database/engine.py` (L5b async-side) | `pool_size=20, max_overflow=30` → 50 peak | Async request path does not multiply connections per threadpool token; 50 is sufficient for 200+ req/s. |
-| Sync-bridge engine (Decision 9) | `src/services/background_sync_db.py` | `pool_size=10, max_overflow=5` → 15 peak | Multi-hour GAM inventory sync jobs. Narrow pool; long-lived connections. |
+| ~~Sync-bridge engine (Decision 9)~~ | **[DELETED per D3 2026-04-16]** | ~~`pool_size=10, max_overflow=5` → 15 peak~~ | The Option B sync-bridge engine was never written. Under D3, `background_sync_service.py` runs on the main async engine via `asyncio.create_task` + per-GAM-page short-lived `async with get_db_session()`. Sessions commit every ~30s, always << `pool_recycle=3600`. |
 | httpx client — shared | `src/core/http.py` (§11.18) | `max_connections=100, max_keepalive_connections=20` | Outbound HTTP (webhooks, JWKS fetch, OAuth token exchange). |
 
 ### B. The worst-case walkthrough — 80 concurrent GAM-calling admin requests
@@ -7837,26 +7841,30 @@ An older draft suggested `DB pool = threadpool_tokens / 2` on the theory that "e
 **Corrected invariant:** for Path B with adapter-side audit logging, budget `2 × threadpool_tokens` DB connections. This drives the revised admin pool:
 
 - **Old:** `pool_size=20, max_overflow=30` → 50 peak → saturates at ~25 concurrent adapter-calling requests
-- **New:** `pool_size=40, max_overflow=40` → 80 peak (per request path) + sync-bridge 15 = **95 total**, staying under PG default `max_connections=100` with 5-connection headroom for psql debugging + alembic runs
+- **New (post-D3):** `pool_size=40, max_overflow=40` → 80 peak (per request path) + 0 (sync-bridge deleted per D3) = **80 total**, staying under PG default `max_connections=100` with 20-connection headroom for psql debugging + alembic runs. (Pre-D3 this calculation was "80 + 15 sync-bridge = 95 total"; D3 recovers the 15 connections for the async engine or headroom.)
 
-Sync-bridge stays `pool_size=10, max_overflow=5` because background_sync_service runs at most 1 tenant sync at a time (single-thread executor).
+The sync-bridge engine is never created under D3 — `background_sync_service.py` runs on the main async engine with short-lived per-GAM-page sessions (~30s).
 
 ### D. Verifying PostgreSQL `max_connections`
 
 Peak per uvicorn worker under L0-L4 (no async engine yet):
 
 ```
-80 (admin sync) + 15 (sync-bridge) + 5 (alembic buffer) = 100 connections
+80 (admin sync) + 5 (alembic buffer) = 85 connections
 ```
+
+(Pre-D3: 80 + 15 sync-bridge + 5 = 100. Under D3 the sync-bridge engine is never created.)
 
 Peak per uvicorn worker under L5+ (async engine added):
 
 ```
-80 (admin sync during adapter wraps) + 50 (async request path during non-adapter work) +
-15 (sync-bridge) + 5 (alembic) = 150 connections
+80 (admin sync during adapter wraps) + 50 (async request path during non-adapter work, includes background_sync async tasks) +
+5 (alembic) = 135 connections
 ```
 
-The 150 figure assumes a pathological mix; in practice sync and async paths don't both saturate simultaneously because a single request is on one path at a time — but during rolling deploys both engines are briefly active.
+(Pre-D3: 80 + 50 + 15 + 5 = 150. Under D3, background_sync runs on the 50-peak async pool via per-GAM-page short-lived sessions — no dedicated engine needed.)
+
+The 135 figure assumes a pathological mix; in practice sync and async paths don't both saturate simultaneously because a single request is on one path at a time — but during rolling deploys both engines are briefly active.
 
 **For production** set `max_connections=250` on Postgres to accommodate 1 uvicorn worker with headroom. For multi-worker deploys see §G.
 
@@ -7896,7 +7904,7 @@ This caps the adapter-specific thread consumption without shrinking the overall 
 Rule of thumb: add a second uvicorn worker when a single worker's threadpool stays >80% saturated for 5+ minutes. Each worker has its own process-memory state and its own DB pool — N workers = N × pool sizing:
 
 - 4 workers × 80 admin peak = 320 connections demanded
-- 4 workers × 15 sync-bridge = 60 connections demanded (assuming every worker runs background sync, which is wrong — pin sync-bridge to worker-0 only, so stays at 15 total)
+- 4 workers × 0 sync-bridge = 0 connections demanded (post-D3 the sync-bridge engine is deleted; background_sync runs on each worker's async engine. Single-worker concurrent syncs cap per-worker demand at ~5 active short-lived sessions, which absorb into the 50-peak async pool. In practice, pin background_sync to worker-0 only to avoid duplicate syncs per tenant.)
 - 4 workers × 20 alembic headroom = 80 connections headroom (loose)
 
 Verify PG `max_connections ≥ 400`. Fly.io Postgres standard plan default is 256 — upgrade to 1GB plan (`max_connections=400`) before going to 4 workers.
