@@ -452,12 +452,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     strict=True,
                 )
             )
-        # FIXME(salesagent-9d5): UC-006 REST — account resolution through CreativeSyncEnv
-        # REST route for sync_creatives exists but account kwarg may not be
-        # forwarded at the route level (SyncCreativesBody doesn't have account field)
-        if is_rest and any(t.startswith("T-UC-006") for t in marker_names) and "account" in marker_names:
-            item.add_marker(pytest.mark.xfail(reason="REST route doesn't forward account param", strict=False))
-
         # Transport-specific xfails: in-process REST harness stub drops all filter params.
         # E2E_REST is NOT affected — Docker's REST endpoint implements the filters, so
         # applying this strict xfail there would cause XPASS(strict) failures.
