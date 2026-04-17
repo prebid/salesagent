@@ -699,6 +699,181 @@ class TestGoogleOAuthLogin:
 
 ---
 
+### 4.1.1 Canonical threadpool-wrap pattern for async-def OAuth callbacks (L0-L4)
+
+> **Authoritative per CLAUDE.md Invariant 4 footnote. Canonical pattern for every async-def OAuth callback handler through L4.**
+>
+> **Why this exists:** CLAUDE.md Invariant 4 mandates sync `def` admin handlers through L0-L4 — FastAPI auto-offloads them to the AnyIO threadpool so DB work does not block the event loop. OAuth callbacks are the one exception: Authlib's Starlette integration (`authlib.integrations.starlette_client.OAuth`) requires `async def` handlers because its `authorize_access_token(request)` and `parse_id_token(...)` methods are coroutines that await an `httpx.AsyncClient`. Because the callback body runs on the event loop, any sync DB helper it calls **MUST** be wrapped `await run_in_threadpool(_sync_helper, ...)` — directly calling `with get_db_session()` inside an async-def body is FORBIDDEN because it blocks every concurrent request for the duration of the DB hit.
+
+#### Module layout
+
+Split the callback into two files:
+
+- `src/admin/routers/_oauth_helpers.py` — sync module-level functions that touch the DB.
+- `src/admin/routers/auth.py` — async-def callback handlers that wrap each helper in `await run_in_threadpool(...)`.
+
+#### `src/admin/routers/_oauth_helpers.py` (L0-L4)
+
+```python
+"""Sync DB helpers called from async-def OAuth callbacks via run_in_threadpool.
+
+Rationale: L0-L4 admin code uses sync SQLAlchemy with `with get_db_session() as db:`
+(Decision D2 — bare sessionmaker, no scoped_session). FastAPI-auto-threadpool
+protection does not apply inside an explicit `async def` body — Authlib's OAuth
+flow forces async-def, so these helpers MUST be invoked via run_in_threadpool to
+avoid blocking the event loop.
+
+At L5b, SessionDep re-aliases to AsyncSession. These helpers become `async def`
+with `async with get_db_session() as db:` and the run_in_threadpool wraps at
+call sites are deleted. Callback signatures stay `async def`.
+"""
+from __future__ import annotations
+
+from sqlalchemy import select
+
+from src.core.database.database_session import get_db_session
+from src.core.database.models import Tenant, User
+
+
+def _enumerate_tenants_for_user_sync(email: str) -> list[dict]:
+    """Return the tenants an authenticated user has access to.
+
+    Called from async-def OAuth callbacks via:
+        available = await run_in_threadpool(_enumerate_tenants_for_user_sync, email)
+    """
+    with get_db_session() as db:
+        stmt = (
+            select(Tenant)
+            .join(User, User.tenant_id == Tenant.tenant_id)
+            .filter(User.email == email, Tenant.is_active.is_(True))
+        )
+        rows = db.scalars(stmt).all()
+        return [
+            {"id": t.tenant_id, "name": t.name, "subdomain": t.subdomain}
+            for t in rows
+        ]
+
+
+def _detect_tenant_from_host_sync(hostname: str | None) -> dict | None:
+    """Resolve a subdomain-style tenant lookup from the request hostname.
+
+    Called from async-def OAuth callbacks via:
+        detected = await run_in_threadpool(_detect_tenant_from_host_sync, request.url.hostname)
+    """
+    if not hostname:
+        return None
+    subdomain = hostname.split(".")[0]
+    with get_db_session() as db:
+        stmt = select(Tenant).filter_by(subdomain=subdomain, is_active=True)
+        row = db.scalar(stmt)
+        if row is None:
+            return None
+        return {"id": row.tenant_id, "name": row.name, "subdomain": row.subdomain}
+```
+
+#### `src/admin/routers/auth.py` — async callback that wraps each helper
+
+```python
+from starlette.concurrency import run_in_threadpool
+from fastapi import APIRouter, Request
+from fastapi.responses import RedirectResponse
+
+from src.admin.oauth import oauth
+from src.admin.routers._oauth_helpers import (
+    _detect_tenant_from_host_sync,
+    _enumerate_tenants_for_user_sync,
+)
+
+router = APIRouter(
+    redirect_slashes=False,   # OAuth callbacks byte-immutable per Invariant 6 + B14
+    include_in_schema=False,
+    tags=["admin-auth"],
+)
+
+
+@router.get("/auth/google/callback", name="admin_auth_google_callback")
+async def google_callback(request: Request) -> RedirectResponse:
+    """Google OAuth callback. async def is REQUIRED by Authlib integration.
+
+    Any DB access inside this body MUST wrap a sync helper in run_in_threadpool —
+    a bare `with get_db_session()` call would block every concurrent request
+    for the duration of the query.
+    """
+    # 1. Authlib token exchange — async by library requirement.
+    token = await oauth.google.authorize_access_token(request)
+    email = token["userinfo"]["email"]
+
+    # 2. DB helpers — each MUST wrap in run_in_threadpool.
+    available_tenants = await run_in_threadpool(
+        _enumerate_tenants_for_user_sync, email,
+    )
+    detected = await run_in_threadpool(
+        _detect_tenant_from_host_sync, request.url.hostname,
+    )
+
+    # 3. Session write is sync — Starlette SessionMiddleware mutates request.session
+    #    as a plain dict in-place; no DB call, no await needed.
+    request.session["user_email"] = email
+    request.session["available_tenants"] = available_tenants
+
+    # 4. Redirect — RedirectResponse is a sync construction. Status 303 per RFC 7231
+    #    for POST→GET. (307 preserves method — wrong after OAuth token exchange.)
+    target_tenant = (detected or (available_tenants[0] if available_tenants else None))
+    if target_tenant is None:
+        return RedirectResponse(
+            str(request.url_for("admin_auth_login")) + "?error=no_tenant",
+            status_code=303,
+        )
+    return RedirectResponse(
+        request.url_for("admin_tenant_dashboard", tenant_id=target_tenant["id"]),
+        status_code=303,
+    )
+```
+
+#### Hard rules
+
+- **FORBIDDEN** — calling `with get_db_session() as db:` directly inside the async-def callback body. This blocks every concurrent request for the DB duration (~2-20 ms per query; under 50 concurrent logins that is 100-1000 ms of head-of-line blocking on the event loop).
+- **FORBIDDEN** — passing the `Request` object or a `Session` into a `run_in_threadpool` target. The helper must be self-contained and receive primitives only (str email, str hostname, etc.).
+- **CORRECT** — one sync helper per DB-visit, each wrapped in `await run_in_threadpool(_sync_helper, *primitive_args)`.
+- **CORRECT** — session writes (`request.session["k"] = v`) are sync dict mutations and run inline on the event loop thread; no wrap needed.
+
+#### L5+ evolution (single-file diff)
+
+At L5b the `SessionDep` alias flips to `AsyncSession` and these helpers become `async def`:
+
+```python
+# src/admin/routers/_oauth_helpers.py — L5+ shape (1:1 signature match)
+async def _enumerate_tenants_for_user_sync(email: str) -> list[dict]:  # name retained for grep-stability; rename at L5e
+    async with get_db_session() as db:
+        stmt = (
+            select(Tenant)
+            .join(User, User.tenant_id == Tenant.tenant_id)
+            .filter(User.email == email, Tenant.is_active.is_(True))
+        )
+        rows = (await db.scalars(stmt)).all()
+        return [{"id": t.tenant_id, "name": t.name, "subdomain": t.subdomain} for t in rows]
+```
+
+At the same PR, `auth.py` call sites drop the `run_in_threadpool` wrap:
+
+```python
+# BEFORE (L0-L4):
+available_tenants = await run_in_threadpool(_enumerate_tenants_for_user_sync, email)
+
+# AFTER (L5+):
+available_tenants = await _enumerate_tenants_for_user_sync(email)
+```
+
+The callback signature (`async def google_callback(request: Request) -> RedirectResponse:`) is unchanged across the L5b flip. The work is a mechanical `run_in_threadpool(_fn, *args)` → `await _fn(*args)` sweep plus `def`→`async def` / `with`→`async with` / `session.scalars(stmt)` → `(await session.scalars(stmt))` on the helper body. Scope: ~3 helpers per OAuth callback × 3 callbacks (Google, OIDC, GAM) = ~9 helper conversions + ~9 call-site unwrap edits, part of L5d3 bulk conversion.
+
+#### Structural guard enforcement
+
+- **L0-L4:** `test_architecture_handlers_use_sync_def.py` — asserts every admin handler is sync `def` **except** the L1 OAuth callback exception allowlist (the three Authlib-driven callbacks: `admin_auth_google_callback`, `admin_auth_oidc_callback`, `admin_auth_gam_callback`). The allowlist is byte-pinned and must match the OAuth-URI immutable set per Invariant 6.
+- **L0-L4:** `tests/unit/test_architecture_oauth_callback_threadpool_wrap.py` (NEW guard, L1 SEED / L1 ENFORCE) — AST-scans the three OAuth callback bodies and asserts every DB-touching call (`get_db_session`, helper call into `_oauth_helpers`) inside `async def` is wrapped in `run_in_threadpool(...)`. Zero allowlist. Retires atomically at L5b alongside `handlers_use_sync_def`.
+- **L5+:** `test_architecture_admin_handlers_async.py` replaces the sync-def guard; `test_architecture_admin_async_db_access.py` asserts DB access is `async with` / `await`.
+
+---
+
 ## Example 4.2 — Per-tenant OIDC (dynamic OAuth client registration)
 
 Target file: `src/admin/blueprints/oidc.py` (431 LOC, 7 routes). We port `/auth/oidc/login/<tenant_id>` (initiate) and `/auth/oidc/callback` (receive). The tenant-configuration routes (`/tenant/<id>/config` GET/POST and `/enable`, `/disable`) are §13-style CRUD endpoints and are straightforward.
