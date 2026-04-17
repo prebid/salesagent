@@ -89,7 +89,7 @@ Every item references the companion doc where full detail lives. Tick every box 
 - [ ] v1.99.0 git tag plan documented (last-known-good Flask-era release, tagged before Wave 3 merges)
 - [ ] **Spike 4.5 and Spike 5.5 are NOT pre-Wave-0 items.** Per CLAUDE.md canonical spike sequence (10 technical spikes + 1 decision gate): **Spike 4.5 runs at L4 entry** (ContextManager stateless refactor smoke test — validates Decision 7 before the L4 refactor PR lands); **Spike 5.5 runs at L5a entry** (two-engine coexistence — validates Decision 9 before async conversion starts). See L4 and L5a entry-criteria sections for full acceptance criteria. Verified by: neither spike gates §1.1 pre-Wave-0 entry; L4 entry-criteria lists Spike 4.5; L5a entry-criteria lists Spike 5.5. **Spikes 1 and 2 also run at L5a entry** (lazy-load audit + driver compat — they depend on L4's DTO boundary + SessionDep alias being in place). Neither blocks pre-Wave-0 or L0 entry.
 - [ ] **Agent F pre-Wave-0 hard gate items completed (non-code surface inventory, corrected 2026-04-11):**
-  - [ ] **`psycopg2-binary` RETAINED** — partial reversal of Agent F F1.1.1 per Decisions 1 (Path B sync factory), 2 (pre-uvicorn health checks), 9 (sync-bridge). **[L5+ — asyncpg not in L0-L4]** `asyncpg>=0.30.0,<0.32` added alongside (not replacing). `types-psycopg2` also retained. **Fallback:** `psycopg[binary,pool]>=3.2.0` if Spike 2 (driver compat) fails — see `CLAUDE.md` pre-Wave-0 spike sequence.
+  - [ ] **`psycopg2-binary` RETAINED** — partial reversal of Agent F F1.1.1 per Decisions 1 (Path B sync factory) and 2 (pre-uvicorn health checks). (Pre-D3 plan also cited Decision 9 sync-bridge as a third retention rationale; under D3 2026-04-16 the sync-bridge is superseded by an async rearchitect, so D1+D2 alone are sufficient.) **[L5+ — asyncpg not in L0-L4]** `asyncpg>=0.30.0,<0.32` added alongside (not replacing). `types-psycopg2` also retained. **Fallback:** `psycopg[binary,pool]>=3.2.0` if Spike 2 (driver compat) fails — see `CLAUDE.md` pre-Wave-0 spike sequence.
   - [ ] **[L5+ — not needed for sync admin tests]** `[tool.pytest.ini_options]` added to `pyproject.toml` with `asyncio_mode = "auto"` (F1.7.1, F8.2.1)
   - [ ] `DATABASE_URL` rewriter (`sslmode` → `ssl`) landed (F1.5.1)
   - [ ] **`DatabaseConnection` KEPT** (partial reversal of F1.4.1) per Audit 06 Decision 2 OVERRULE, REFINED 2026-04-11. **Real rationale: fork safety, NOT loop collision.** `run_all_services.py` is PID 1 sync orchestrator that forks uvicorn into a child subprocess via `subprocess.Popen` at `:231`, so parent/child have independent Python interpreters. Using SQLAlchemy `get_sync_db_session()` here would duplicate pooled asyncpg/psycopg connections into the child fork → PG socket corruption (canonical SQLAlchemy fork-safety bug). Raw `psycopg2.connect()` + close-before-fork is the only safe shape.
@@ -118,7 +118,7 @@ Every item references the companion doc where full detail lives. Tick every box 
 - [ ] **Error-shape split decided:** Category 1 native `{"detail": ...}`, Category 2 legacy `{"success": false, "error": ...}` via scoped handler — documented in `flask-to-fastapi-migration.md` §2 directive #8
 - [ ] **[L5+]** **Decision 1 (adapter Path B, 2026-04-11):** adapter methods stay sync `def`; 18 call sites in `src/core/tools/*.py` + 1 in `src/admin/blueprints/operations.py:252` wrap in `await run_in_threadpool(...)`. `src/core/database/database_session.py` exports `get_sync_db_session()` alongside async `get_db_session()` (dual session factory). `AuditLogger.log_operation` splits into `_log_operation_sync` (internal) + async public wrapper. `anyio.to_thread.current_default_thread_limiter().total_tokens = 80` at lifespan startup. Structural guard `test_architecture_adapter_calls_wrapped_in_threadpool.py`. Full implementation reference: `flask-to-fastapi-foundation-modules.md` §11.14. Full target state: `async-pivot-checkpoint.md` §3 "Adapters (Decision 1 Path B)".
 - [ ] **[L5+]** **Decision 7 (ContextManager refactor, 2026-04-11):** delete `ContextManager` class + `DatabaseManager` entirely. 12 public methods become stateless `async def` module functions taking `session: AsyncSession` as first parameter. 7 production callers migrate (incl. dead `main.py:166` + module-load side effect in `mcp_context_wrapper.py:345` + `mock_ad_server.py threading.Thread → asyncio.create_task`). ~50 test patches, 20 collapsible via `tests/harness/media_buy_update.py::EXTERNAL_PATCHES` update. Validated by Spike 4.5. Structural guard `test_architecture_no_singleton_session.py`. Error-path composition gotcha: use SEPARATE `async with session_scope()` for error-logging writes (outer scope rolls back on raise). Full target state: `async-pivot-checkpoint.md` §3 "ContextManager refactor".
-- [ ] **[L5+]** **Decision 9 (background_sync sync-bridge, 2026-04-11):** new `src/services/background_sync_db.py` module with separate sync psycopg2 engine (pool 2+3, statement_timeout=600s, `application_name='adcp-salesagent-sync-bridge'`). Background threads stay sync. `psycopg2-binary` + `libpq5` + `libpq-dev` all retained in `pyproject.toml` + `Dockerfile` (partial reversal of Agent F F1.1.1/F1.2.1). Wave 3 flask-caching correction bundled: 3 consumer sites (inventory.py:874, :1133, background_sync_service.py:472), SimpleAppCache replacement required before deletion, closes `from flask import current_app` ImportError at line 472. Validated by Spike 5.5. Structural guard `test_architecture_sync_bridge_scope.py` with ratcheting allowlist. Sunset v2.1+. Full target state: `async-pivot-checkpoint.md` §3 "Background sync sync-bridge".
+- [ ] **[L5+]** **Decision 9 / D3 (background_sync async rearchitect, 2026-04-16 supersedes 2026-04-11 Option B sync-bridge):** `src/services/background_sync_service.py` rearchitects to `asyncio.create_task` + checkpoint-per-GAM-page. Each GAM-page (~30s) opens its own short-lived `async with get_db_session()`, writes progress to a `sync_checkpoint` row, commits, closes. Resume logic reads checkpoint and continues from next cursor on next tick. `threading.Thread` workers become `asyncio.create_task(...)` in the lifespan, registered on `app.state.active_sync_tasks: dict[str, asyncio.Task]`, cancellable on shutdown. Session lifetime is always << `pool_recycle=3600`; no sync-bridge engine needed. `src/services/background_sync_db.py` is NOT created (never written). `psycopg2-binary` + `libpq5` + `libpq-dev` narrowing: retained ONLY for Decision 2 fork-safety (`db_config.py`) — NOT for this service. Wave 3 flask-caching correction still bundled: 3 consumer sites (inventory.py:874, :1133, background_sync_service.py:472), SimpleAppCache replacement required before deletion, closes `from flask import current_app` ImportError at line 472 (post-D3, site 472 runs inside an async task rather than a `threading.Thread`, but uses the module-global `get_app_cache()` helper unchanged). Validated by Spike 5.5 (checkpoint-session viability). Structural guard `test_architecture_sync_bridge_scope.py` is deleted from plan; replacement guard `test_architecture_no_threading_thread_for_db_work.py` (empty allowlist) introduced. Fallback on Spike 5.5 failure: revert to pre-D3 Option B sync-bridge. Full target state: `async-pivot-checkpoint.md` §3 "Background sync sync-bridge" (marked SUPERSEDED 2026-04-16).
 - [ ] **[L5+]** **Decision 3 (factory-boy async shim, refined 2026-04-11):** custom `AsyncSQLAlchemyModelFactory` overrides `_save` (not `_create`), `sqlalchemy_session_persistence = None`, `session.add(instance)` directly (no `sync_session.add`), NO `flush()` call. 3 bugs fixed from Audit 06 recipe. Wave 4b-4c hard cliff: all 166 integration tests must flip async BEFORE factory base classes flip. New Spike 4.25 (0.5 day, soft blocker). 3 structural guards: `test_architecture_factory_inherits_async_base.py`, `test_architecture_factory_no_post_generation.py`, `test_architecture_factory_in_all_factories.py`. Full recipe: `foundation-modules.md` §11.13.1 (D).
 - [ ] **Decision 4 (queries.py convert-and-prune, refined 2026-04-11):** 6 functions (not 7), zero production callers, 3 dead functions → delete + allowlist cleanup. 3 live functions → async conversion. Test file `test_creative_review_model.py` converts to async. Net: ~−100 LOC. Move to `CreativeRepository` deferred to L5+ within v2.0 (Option 4B).
 - [ ] **Decision 5 (database_schema.py + product_pricing.py DELETE, refined 2026-04-11):** `database_schema.py` confirmed orphan → delete Wave 5. `product_pricing.py` has 1 caller already eager-loading, inspect-guard defeated by unconditional log at line 43 → DELETE entirely in Wave 4, inline conversion at single caller as `AdminPricingOptionView` Pydantic DTO. Supersedes Audit 06 SUBSTITUTE (RuntimeError prescription was technically ineffective).
@@ -167,7 +167,7 @@ Full detail in `flask-to-fastapi-deep-audit.md` §1.
   - [ ] Pre-Wave-0 lazy-loading audit spike completed and approved (Risk #1 in `async-pivot-checkpoint.md` §4) — enumerates every `relationship()` access site and classifies as safe / eager-loadable / requires-rewrite
   - [ ] `src/core/database/database_session.py` converted: `create_engine` → `create_async_engine`, `scoped_session(sessionmaker(...))` → `async_sessionmaker(_engine, class_=AsyncSession, expire_on_commit=False)`
   - [ ] `get_db_session()` is an `@asynccontextmanager` yielding `AsyncSession`
-  - [ ] Driver addition: `asyncpg>=0.30.0,<0.32` added alongside (NOT replacing) `psycopg2-binary` + `types-psycopg2` in `pyproject.toml` — psycopg2 RETAINED per Decisions 1 (Path B sync adapter factory), 2 (pre-fork orchestrator health check), and 9 (sync-bridge for background sync). Removal deferred to L5+ within v2.0+.
+  - [ ] Driver addition: `asyncpg>=0.30.0,<0.32` added alongside (NOT replacing) `psycopg2-binary` + `types-psycopg2` in `pyproject.toml` — psycopg2 RETAINED per Decisions 1 (Path B sync adapter factory) and 2 (pre-fork orchestrator health check). (Pre-D3 plan also cited Decision 9 sync-bridge; under D3 2026-04-16 the sync-bridge is superseded by an async rearchitect, so D1+D2 alone are sufficient.) Removal deferred to L5+ within v2.0+.
   - [ ] `alembic/env.py` stays sync with psycopg2 (supersedes prior "async adapter" plan — see Section 1.1 Spike 6 correction and async-pivot-checkpoint.md for history). `postgresql+asyncpg://` URL rewriting is applied ONLY at async engine construction in `database_session.py`, NOT in Alembic.
   - [ ] All repository classes use `async def` methods with `(await session.execute(select(...))).scalars().first()` pattern
   - [ ] All UoW classes implement `async def __aenter__` / `async def __aexit__` — OR deleted entirely under the Agent E idiom upgrade (FastAPI DI request-scoped session IS the unit of work; see `async-pivot-checkpoint.md` §3)
@@ -247,14 +247,14 @@ Three rounds of parallel Opus subagent verification (14 agents total) audited th
 
 - [ ] **[L5+]** **LB-1 [HIGH, Spike 2 + Wave 4a]: `asyncpg` bypasses `json_serializer` parameter.** `database_session.py:114,130` passes `json_serializer=_pydantic_json_serializer` to `create_engine`. asyncpg uses its own native JSONB codec that ignores this. Pydantic types fail with `TypeError` on JSONB write. **Fix:** Register custom asyncpg JSONB codec via `asyncpg.Connection.set_type_codec()` at engine-level `connect` event. Add `test_jsonb_roundtrip_asyncpg.py` to Spike 2 criteria.
 - [ ] **[L5+]** **LB-2 [HIGH, Wave 4a]: `statement_timeout` event listener crashes under asyncpg.** `database_session.py:139-144` uses `dbapi_conn.cursor()` which doesn't exist on asyncpg connections. **Fix:** Replace with `connect_args={"server_settings": {"statement_timeout": "30000"}}` on async engine. Already corrected in `async-pivot-checkpoint.md` code block (2026-04-12).
-- [ ] **[L5+]** **LB-3 [MEDIUM, Wave 4b]: `bulk_insert_mappings` / `bulk_update_mappings` removed in `AsyncSession`.** `gam_inventory_service.py:98,104,734,739`. **Fix:** Rewrite to Core `insert().values()` pattern. These are inside the sync-bridge scope (Decision 9), so they stay sync but must use `get_sync_db_session()`, not the async session.
+- [ ] **[L5+]** **LB-3 [MEDIUM, Wave 4b]: `bulk_insert_mappings` / `bulk_update_mappings` removed in `AsyncSession`.** `gam_inventory_service.py:98,104,734,739`. **Fix:** Rewrite to async Core `insert().values()` pattern (`await session.execute(insert(Table).values([...]))`). Post-D3 these sites are INSIDE the background_sync async rearchitect scope — they run inside the per-GAM-page `async with get_db_session()` block, use the async session, and commit per page.
 
 ### 3.5.3 Scope gaps (not previously in any wave — now added)
 
 - [ ] **SG-1 [CRITICAL, Wave 2c + Wave 3]: `gam_inventory_service.py` has 8 Flask routes NOT in any wave scope.** `src/services/gam_inventory_service.py:1484-1680` — `create_inventory_endpoints(app)` registers 8 `@app.route()` decorators directly on the Flask app (called from `src/admin/app.py:391`). These live in `src/services/`, not `src/admin/blueprints/`, so they are missed by the Wave 2 "22 blueprints" scope. **Fix:** Port to `src/admin/routers/inventory_api.py` in Wave 2c. Delete `create_inventory_endpoints()` in Wave 3.
 - [ ] **SG-2 [CRITICAL, Wave 3]: `atexit` handlers incompatible with async shutdown.** `src/services/webhook_delivery_service.py:185` and `src/services/delivery_simulator.py:45` register `atexit.register(self._shutdown)`. Under uvicorn, `atexit` fires AFTER the event loop is closed. **Fix:** Move to FastAPI lifespan post-yield block in Wave 3.
 - [ ] **SG-3 [HIGH, Wave 2c]: `register_ui_routes(app: Flask)` adapter interface not addressed.** `src/adapters/base.py:481`, `google_ad_manager.py:1694`, `mock_ad_server.py:1346` take a Flask `app` object. **Fix:** Change interface to accept `APIRouter` in Wave 2c; re-home content into `src/admin/routers/adapters.py`.
-- [ ] **[L0-L4: document risk only. L5+: mandatory fix.]** **SG-4 [HIGH, Wave 4]: GAM services have private `scoped_session` instances.** `gam_inventory_service.py` and `gam_orders_service.py` create their own module-level `scoped_session` bypassing `database_session.py`. **Fix:** Migrate to centralized `get_sync_db_session()` (Decision 9 sync-bridge) in Wave 4. Add structural guard `test_architecture_no_private_scoped_session.py`.
+- [ ] **[L0-L4: document risk only. L5+: mandatory fix.]** **SG-4 [HIGH, Wave 4]: GAM services have private `scoped_session` instances.** `gam_inventory_service.py` and `gam_orders_service.py` create their own module-level `scoped_session` bypassing `database_session.py`. **Fix:** post-D3, these services are reached from the async rearchitected `background_sync_service` — migrate to per-call `async with get_db_session()` (same pattern used by the rest of the async codebase) in Wave 4. Add structural guard `test_architecture_no_private_scoped_session.py`.
 - [x] **SG-5 [HIGH, L1b]: RESOLVED pending L1b implementation — separate `oauth_transit` cookie handles form_post cross-origin POST.** `src/admin/app.py:117` currently sets `SESSION_COOKIE_SAMESITE = "None"`. OIDC providers using `response_mode=form_post` send cross-origin POSTs — `SameSite=Lax` on the session cookie blocks it. **Resolution:** per `foundation-modules.md §11.6.1`, a separate `oauth_transit` cookie is set with `SameSite=None; Secure; HttpOnly` and `path="/admin/auth/"`, 10-minute max_age, carrying `{state, nonce, code_verifier}` across the IdP round-trip. The admin session cookie stays `SameSite=Lax` (no CSRF posture weakening). Sub-items tracked here:
   - [ ] **Audit tenant OIDC configs** — list tenants whose `OIDCConfig.response_mode` is `form_post` vs `query` (most default to `query`; SG-5 affects only the `form_post` subset, but the fix ships for all tenants so any provider can be flipped without re-deploy).
   - [ ] **Implement `src/admin/oauth_transit.py`** — ~60 LOC per `foundation-modules.md §11.6.1` Section C. Signed + timed via `itsdangerous.URLSafeTimedSerializer`.
@@ -302,7 +302,7 @@ Every structural guard starts with one of three allowlist strategies:
 
 - **Empty + bootstrap**: no existing violations; guard is green from day 1; any new violation fails CI.
 - **Captured baseline → shrink**: pre-existing violations captured as FIXME-commented allowlist; allowlist count monotonically decreases over migration; ratchets to zero by L7.
-- **Frozen allowlist**: scope-limited exception (e.g., sync-bridge module only); allowlist entries must stay fixed; net-new additions rejected.
+- **Frozen allowlist**: scope-limited exception (e.g., an architectural carve-out for a specific module or pattern); allowlist entries must stay fixed; net-new additions rejected.
 
 | Guard | Strategy |
 |-------|----------|
@@ -345,7 +345,7 @@ Every structural guard starts with one of three allowlist strategies:
 | `test_architecture_no_sse_handlers.py` (activated L5a; enforced L5d4 per Decision 8) | Empty + bootstrap |
 | `test_architecture_no_singleton_session.py` (L4, Decision 7) | Empty + bootstrap |
 | `test_architecture_no_flask_caching_imports.py` (L3, Decision 6) | Empty + bootstrap |
-| `test_architecture_sync_bridge_scope.py` (L4, Decision 9) | Frozen allowlist (`background_sync_service.py`) |
+| `test_architecture_no_threading_thread_for_db_work.py` (L5d1, D3 2026-04-16) | Empty + bootstrap (supersedes deleted `test_architecture_sync_bridge_scope.py`) |
 | `test_architecture_no_module_scope_create_app.py` (L2) | Empty + bootstrap |
 | `test_architecture_admin_handlers_async.py` (L5b+) | Captured full allowlist at L5b → monotonic drain through L5c–L5e → empty at L5e exit |
 | `test_architecture_middleware_order.py` (L0) | Empty + bootstrap |
@@ -393,9 +393,11 @@ These refactors are strict improvements under the CURRENT `scoped_session` world
 
 **Files created — all 11 foundation modules plus supporting infra:**
 
-- [ ] `src/admin/templating.py` (~150 LOC) — `Jinja2Templates` singleton, `_url_for` safe-lookup override pre-registered on `templates.env.globals`, `render()` wrapper with greenfield context (NO `admin_prefix`/`static_prefix`/`script_root`; only `request`, `support_email`, `sales_agent_domain`, `csrf_token`, plus handler-provided context keys)
-- [ ] `src/admin/flash.py` (~70 LOC) — `flash(request, msg)` / `get_flashed_messages(request, with_categories=False)`
-- [ ] ~~`src/admin/sessions.py` (~40 LOC)~~ **SUPERSEDED (D8 #4 breaking):** do NOT create `src/admin/sessions.py`. `SessionMiddleware` is registered inline in `src/app.py::build_middleware_stack()` at L1a, reading `secret_key` from `SESSION_SECRET` only (no `FLASK_SECRET_KEY` dual-read — hard-removed at L2 per D6), `session_cookie='adcp_session'`, `same_site='lax'`, `https_only=True` in production.
+- [ ] ~~`src/admin/templating.py`~~ **SUPERSEDED (D8 #4 §2.3):** do NOT create `src/admin/templating.py`. `Jinja2Templates(directory="src/admin/templates")` is bound to `app.state.templates` inside `src/app.py::lifespan` with the `_url_for` safe-lookup override and `from_json`/`markdown`/`tojson_safe` filters pre-registered before any `TemplateResponse` call. Handlers consume via `TemplatesDep` from `src/admin/deps/templates.py`. See `foundation-modules.md §D8-native` for the full design.
+- [ ] `src/admin/deps/templates.py` (~30 LOC) — `TemplatesDep = Annotated[Jinja2Templates, Depends(get_templates)]` returning `request.app.state.templates`; `BaseCtxDep = Annotated[dict, Depends(get_base_context)]` returning `{messages, support_email, sales_agent_domain, user_email, user_authenticated, user_role, test_mode}` — replaces Flask's `inject_context()` processor; NO `csrf_token` (CSRFOriginMiddleware uses Origin-header validation); NO `tenant` (handlers load on-demand via `CurrentTenantDep` to avoid N+1).
+- [ ] ~~`src/admin/flash.py`~~ **SUPERSEDED (D8 #4 §2.2):** do NOT create `src/admin/flash.py`. Message state uses `src/admin/deps/messages.py::MessagesDep` (`Annotated[Messages, Depends(get_messages)]`) with `Messages.info()` / `success()` / `warning()` / `error()` / `drain()` methods backed by `request.session["_messages"]` holding `list[FlashMessage]` (Pydantic-typed). Templates render via `{% for m in messages %}` where `messages` is supplied by `BaseCtxDep.drain()` (called exactly once per request via FastAPI dep-cache).
+- [ ] `src/admin/deps/messages.py` (~100 LOC) — `FlashMessage` Pydantic model, `MessageLevel` Enum, `Messages` class, `get_messages(request)` factory, `MessagesDep` Annotated alias. Session-backed to survive Post/Redirect/Get.
+- [ ] ~~`src/admin/sessions.py` (~40 LOC)~~ **SUPERSEDED (D8 #4 §2.3):** do NOT create `src/admin/sessions.py`. `SessionMiddleware` is registered inline in `src/app.py::build_middleware_stack()` at L1a via `app.add_middleware(SessionMiddleware, **session_middleware_kwargs())` where `session_middleware_kwargs()` is a helper function in `src/app.py` (or `src/core/settings.py` at L4). Kwargs: `secret_key` from `SESSION_SECRET` (≥32 chars, raises `SessionSecretMissingError` at startup if missing; no `FLASK_SECRET_KEY` dual-read per D6 L2), `session_cookie='adcp_session'`, `max_age=14*24*3600`, `same_site='lax'`, `https_only=True` in production, `path='/'`, `domain='.sales-agent.example.com'` in production non-single-tenant mode. Separate `oauth_transit` cookie for OIDC form_post (§11.6.1) — distinct name, distinct `SameSite=None`, path-scoped to `/admin/auth/oidc/`.
 - [ ] `src/admin/oauth.py` (~60 LOC) — Authlib `starlette_client.OAuth` instance, Google client registered, `GOOGLE_CLIENT_NAME = "google"` constant, comment referencing OAuth URI immutability
 - [ ] `src/admin/csrf.py` (~120 LOC) — `CSRFOriginMiddleware` (pure-ASGI Origin header validation, NOT Double Submit Cookie), `_EXEMPT_PATH_PREFIXES` includes `/mcp`, `/a2a`, `/api/v1/`, `/_internal/`, `/.well-known/`, `/agent.json`, `/admin/auth/google/callback`, `/admin/auth/oidc/callback`, `/admin/auth/gam/callback`. Zero JS changes, zero template changes.
 - [ ] `src/admin/app_factory.py` (~80 LOC) — `build_admin_router()` returns `APIRouter(prefix="/admin", tags=["admin"], include_in_schema=False, redirect_slashes=True)`, empty in Wave 0
@@ -537,7 +539,7 @@ These refactors are strict improvements under the CURRENT `scoped_session` world
 - [ ] 1. `FlyHeadersMiddleware` (new, outermost — header normalization)
 - [ ] 2. `ApproximatedExternalDomainMiddleware` (new, BEFORE CSRF per Blocker 5)
 - [ ] 3. `UnifiedAuthMiddleware` (already present — headers-only, no session dependency)
-- [ ] 4. `SessionMiddleware` (new, from `src/admin/sessions.py`)
+- [ ] 4. `SessionMiddleware` (new, kwargs built inline via `session_middleware_kwargs()` helper in `src/app.py::build_middleware_stack()` — D8 #4 §2.3; no `src/admin/sessions.py` module exists)
 - [ ] 5. `CSRFOriginMiddleware` (new)
 - [ ] 6. `RestCompatMiddleware` (already present)
 - [ ] 7. `CORSMiddleware` (already present, innermost)
@@ -1066,11 +1068,11 @@ These rules apply to every layer's Entry and Exit subsections in §4, regardless
 - [ ] `main` is up to date and CI is green.
 - [ ] `baseline-sync.json` present in the repo (captured at L4 EXIT).
 - [ ] Role assignments current.
-- [ ] **Spike 5.5 — Two-engine coexistence (Decision 9 validation)** scheduled for this window. Pass criteria: 4 test cases green at `tests/driver_compat/test_sync_bridge_coexistence.py` — (a) lazy-init + dispose, (b) MVCC bidirectional visibility, (c) 5 concurrent async requests + 1 sync thread no deadlock, (d) post-dispose connection leaks ≤1. Soft blocker: on fail, revert to Option A (asyncio task) — documented in `spike-decision.md`. Verified by: spike test file exists and runs as part of L5a gate.
+- [ ] **Spike 5.5 — Checkpoint-session viability (D3 validation)** scheduled for this window. Pass criteria: 4 test cases green at `tests/driver_compat/test_checkpoint_session_viability.py` — (a) single 4-hour sync with per-page short-lived sessions completes, (b) 3 concurrent multi-tenant syncs share the async pool without contention, (c) cancellation via `task.cancel()` cleanly closes any in-flight session, (d) resume from a persisted `sync_checkpoint` row after container restart. Soft blocker: on fail, revert to pre-D3 Option B sync-bridge (retain psycopg2-binary; file v2.1 sunset ticket) — documented in `spike-decision.md`. Verified by: spike test file exists and runs as part of L5a gate.
 
 **L5a work items (10 technical spikes + 1 decision gate):**
 
-- [ ] Spike 1 (lazy-load audit, HARD gate); Spike 2 (driver compat, HARD gate); Spike 4 (test-harness 5-file conversion); Spike 4.25 (factory-boy async shim); Spike 5 (scheduler alive-tick); Spike 5.5 (two-engine coexistence, listed above); Spike 6 (Alembic async evaluation); Spike 7 (GAM adapter threadpool saturation) — see CLAUDE.md canonical spike table for per-spike pass criteria.
+- [ ] Spike 1 (lazy-load audit, HARD gate); Spike 2 (driver compat, HARD gate); Spike 4 (test-harness 5-file conversion); Spike 4.25 (factory-boy async shim); Spike 5 (scheduler alive-tick); Spike 5.5 (checkpoint-session viability per D3, listed above); Spike 6 (Alembic async evaluation); Spike 7 (GAM adapter threadpool saturation) — see CLAUDE.md canonical spike table for per-spike pass criteria.
 - [ ] **Spike 8 — L5 go/no-go decision gate (HARD)**: `spike-decision.md` committed at L5a EXIT with pass/fail per technical spike, `baseline-sync.json` comparison (if any L5 experiments were run on the spike branch), resolved status of the 9 open decisions, and the final go/no-go call. Go condition: Spike 1 PASSES AND no more than 2 soft spikes fail. No-go: narrow L5 scope OR ship L0-L4 only and defer async to v2.1 (L0-L4 ships regardless).
 - [ ] Discovered items list is empty OR each item has a filed follow-up issue.
 
@@ -1163,7 +1165,7 @@ Before L5b (SessionDep alias flip) opens, ALL of the following must be verifiabl
 - [ ] PR squash-merged.
 - [ ] L5d1 entry prerequisites documented.
 
-### L5d1 — Sync-bridge for `background_sync_service.py`
+### L5d1 — `background_sync_service` async rearchitect (D3 2026-04-16, supersedes Option B sync-bridge)
 
 **Engineer-day estimate:** 2–3.
 
@@ -1171,13 +1173,16 @@ Before L5b (SessionDep alias flip) opens, ALL of the following must be verifiabl
 
 - [ ] L5c bake completed green.
 - [ ] `main` green.
-- [ ] Decision 9 validated (Spike 5.5 green at L5a).
+- [ ] D3 checkpoint-session viability validated (Spike 5.5 green at L5a).
 
 **L5d1 exit criteria:**
 
-- [ ] `src/services/background_sync_db.py` landed with separate sync psycopg2 engine.
-- [ ] `test_architecture_sync_bridge_scope.py` green with frozen allowlist (`background_sync_service.py` only).
-- [ ] Flask-caching-ImportError at line 472 closed (SimpleAppCache replacement).
+- [ ] `src/services/background_sync_service.py` rearchitected to `asyncio.create_task` + checkpoint-per-GAM-page. Each GAM-page (~30s) opens its own `async with get_db_session() as session:`, writes progress to a `sync_checkpoint` row, commits, closes.
+- [ ] `threading.Thread` workers converted to `asyncio.create_task(...)` registered on `app.state.active_sync_tasks: dict[str, asyncio.Task]`; cancellable on shutdown.
+- [ ] `sync_checkpoint` table migration landed; resume logic reads checkpoint and continues from next cursor on next tick.
+- [ ] `src/services/background_sync_db.py` is NOT created.
+- [ ] `test_architecture_no_threading_thread_for_db_work.py` green with EMPTY allowlist (AST-scans `src/` for `threading.Thread(target=...)` whose target body contains `get_db_session` or `session.`).
+- [ ] Flask-caching ImportError at `background_sync_service.py:472` closed (SimpleAppCache replacement; post-D3 site 472 is inside an async task, still reaches the cache via the module-global `get_app_cache()` helper).
 - [ ] Layer-scope commit-lint green; 7-step audit green.
 - [ ] PR squash-merged.
 
@@ -1192,7 +1197,7 @@ Before L5b (SessionDep alias flip) opens, ALL of the following must be verifiabl
 
 **L5d2 exit criteria:**
 
-- [ ] 18 adapter call sites in `src/core/tools/*.py` + 1 in `src/admin/blueprints/operations.py` (or its L2 replacement) wrapped in `await run_in_threadpool(...)`.
+- [ ] 30 `adapter.` call sites across 7 files in `src/core/tools/*.py` (verified 2026-04-17) wrapped in `await run_in_threadpool(...)`. Post-L0 codemod path is `src/admin/routers/operations.py` (pre-codemod `src/admin/blueprints/operations.py`); re-verification on 2026-04-17 did NOT confirm the previously-claimed "+1 adapter call" in that file — the file is still in scope for codemod + router-pattern alignment even if no adapter wrap is needed.
 - [ ] `test_architecture_adapter_calls_wrapped_in_threadpool.py` green with empty allowlist.
 - [ ] `anyio.to_thread.current_default_thread_limiter().total_tokens` set to `int(os.environ.get("ADCP_THREADPOOL_TOKENS", "80"))` (already at L0 per 2026-04-14 move).
 - [ ] Layer-scope commit-lint green; 7-step audit green.
@@ -1280,7 +1285,7 @@ Before L5b (SessionDep alias flip) opens, ALL of the following must be verifiabl
 
 **L6 exit criteria:**
 
-- [ ] `src/admin/flash.py` deleted; `app.state` flash store in place.
+- [ ] D8 #4 meta-guard `tests/unit/test_architecture_no_admin_wrapper_modules.py` green — no `src/admin/flash.py`, no `src/admin/sessions.py`, no `src/admin/templating.py`. `MessagesDep` (from `src/admin/deps/messages.py`) has been in use since L1a; L6 verifies absence of the wrapper modules rather than deleting them.
 - [ ] `SimpleAppCache` migrated to `app.state` singleton.
 - [ ] Router subdir reorg complete.
 - [ ] `logfire` instrumentation landed (NOT `opentelemetry-sdk`).
@@ -1556,9 +1561,9 @@ Every stated v2.0 goal maps to a specific test that proves adherence. The matrix
 | 36 | Factory async shim handles 8 edge cases | `tests/unit/test_factory_async_shim.py` (Spike 4.25) | case matrix | L5a | L5a | — | — |
 | 37 | Adapter calls wrapped in `run_in_threadpool` (Path-B) | `tests/unit/test_architecture_adapter_calls_wrapped_in_threadpool.py` | AST scan | L5a | L5d2 | — | — |
 | 38 | No singleton `ContextManager` (stateless module functions per Decision 7) | `tests/unit/test_architecture_no_singleton_session.py` | AST scan | L4 | L4 | — | — |
-| 39 | Sync-bridge scope = `background_sync_service.py` ONLY | `tests/unit/test_architecture_sync_bridge_scope.py` | AST scan (frozen allowlist) | L5a | L5a | — | — |
+| 39 | No `threading.Thread` for DB work in `src/` (D3) | `tests/unit/test_architecture_no_threading_thread_for_db_work.py` | AST scan (empty allowlist) | L5d1 | L5d1 | — | — |
 | 40 | No SSE handlers (Decision 8 deletion) | `tests/unit/test_architecture_no_sse_handlers.py` | AST scan | L5a | L5d4 | — | — |
-| 41 | Two-engine MVCC visibility (Decision 9) | `tests/integration/test_two_engine_mvcc.py` (Spike 5.5) | integration behavior | L5a | L5a | — | — |
+| 41 | Checkpoint-session viability (Decision 9 per D3 rearchitect 2026-04-16; supersedes two-engine coexistence) | `tests/integration/test_checkpoint_session_viability.py` (Spike 5.5 — 4 test cases per CLAUDE.md row 5.5) | integration behavior | L5a | L5a | — | — |
 | 42 | Async performance within ±5% at 50 req/s vs `baseline-sync.json` | `tests/integration/test_async_performance_parity.py` | benchmark compare | L4 (baseline capture) | L5e | L5e (release gate) | — |
 | 43 | No `render()` Flask-style wrapper post-L4 | `tests/unit/test_architecture_no_flask_style_render.py` | AST scan | L4 | L4 (after refactor to TemplateResponse) | — | — |
 | 44 | `httpx.AsyncClient` is singleton on `app.state` (no per-request construction in `src/`) | `tests/unit/test_architecture_httpx_singleton_in_app_state.py` | AST scan | L5 | L5 | — | — |
@@ -1801,15 +1806,15 @@ A runtime `ADCP_USE_ASYNC_SESSIONDEP` feature flag is NOT provided because it is
 L5d ships as **5 separate sub-PRs** (L5d1-L5d5) for independent revertibility. The revert dependency graph:
 
 ```
-L5d1 (sync-bridge)     — independent, revert alone
+L5d1 (background_sync async rearchitect)  — independent, revert alone
 L5d2 (adapter Path-B)  — independent, revert alone
 L5d3 (bulk routers)    — CASCADES; L5d3.1→L5d3.2→L5d3.3→L5d3.4 (topological within L5d3)
 L5d4 (SSE deletion)    — independent, revert alone
 L5d5 (mop-up)          — depends on L5d3; revert L5d5 BEFORE L5d3
 ```
 
-- [ ] **L5d1 (sync-bridge):** `git revert -m 1 <sha>`; verify `src/services/background_sync_db.py` deleted and `background_sync_service.py` imports restore to `get_db_session()`. ~30 minutes.
-- [ ] **L5d2 (adapter Path-B threadpool wrap):** `git revert -m 1 <sha>`; verify 18 adapter call sites in `src/core/tools/*.py` + 1 in `src/admin/blueprints/operations.py` no longer wrapped in `await run_in_threadpool(...)`. Structural guard `test_architecture_adapter_calls_wrapped_in_threadpool.py` reverts in same commit. ~30 minutes.
+- [ ] **L5d1 (background_sync async rearchitect):** `git revert -m 1 <sha>`; verify `src/services/background_sync_service.py` reverts to `threading.Thread` workers; `sync_checkpoint` migration reverts (downgrade); `app.state.active_sync_tasks` dict gone; `test_architecture_no_threading_thread_for_db_work.py` reverts alongside the source change. Note: revert does NOT require creating `src/services/background_sync_db.py` — that file was never written under D3. ~30 minutes.
+- [ ] **L5d2 (adapter Path-B threadpool wrap):** `git revert -m 1 <sha>`; verify 30 adapter call sites across 7 files in `src/core/tools/*.py` (re-verified 2026-04-17) in `src/admin/routers/operations.py` (post-L0 codemod path) no longer wrapped in `await run_in_threadpool(...)`. Structural guard `test_architecture_adapter_calls_wrapped_in_threadpool.py` reverts in same commit. ~30 minutes.
 - [ ] **L5d3 (bulk router conversion) — CASCADE revert:**
   ```bash
   # Topological: revert in reverse domain-group order
@@ -1844,7 +1849,7 @@ L5d5 (mop-up)          — depends on L5d3; revert L5d5 BEFORE L5d3
 
 **Delete `flash.py`, `app.state` for `SimpleAppCache`, `logfire` instrumentation, router subdir reorg. ~30-60 minutes.**
 
-- [ ] **Trigger scenarios:** `app.state.flash_store` implementation introduces a session-keyed memory leak; `SimpleAppCache` migration to `app.state` breaks background-thread access (Decision 9 sync-bridge relies on module-global `get_app_cache()`); `logfire` dashboard queries break when spans change shape; router subdirectory reorganization breaks an import path that CI missed.
+- [ ] **Trigger scenarios:** `SimpleAppCache` migration to `app.state` breaks background-task access (post-D3, `background_sync_service.py:472` still reads cache via module-global `get_app_cache()` from inside its `asyncio.create_task` — migration to `app.state` must preserve the helper fallback or the async task crashes); `logfire` dashboard queries break when spans change shape; router subdirectory reorganization breaks an import path that CI missed. (Pre-D3 trigger list also included `app.state.flash_store` memory leak — under D8 #4 no flash_store migration happens at L6, so this trigger is removed.)
 - [ ] **Procedure:**
   1. `git checkout main`
   2. `git revert -m 1 <L6-merge-sha> --no-edit`
@@ -1892,7 +1897,7 @@ This is the authoritative table of every AST-scanning / layer-scoped / meta-guar
 
 - **Empty** — guard is written with zero-entry allowlist; any violation fails immediately.
 - **Captured→shrink** — guard is written with a frozen snapshot of current violations (the "capture"); baseline shrinks monotonically via the meta-guard; new violations fail immediately.
-- **Frozen** — guard is written with a deliberately-fixed allowlist that is NOT expected to shrink (e.g., legitimate carve-outs like `background_sync_service.py` for the sync-bridge). Any addition to the allowlist requires a paired FIXME and reviewer sign-off.
+- **Frozen** — guard is written with a deliberately-fixed allowlist that is NOT expected to shrink (e.g., legitimate architectural carve-outs for a specific module or pattern). Any addition to the allowlist requires a paired FIXME and reviewer sign-off. (Pre-D3 examples included a `background_sync_service.py` carve-out for the `test_architecture_sync_bridge_scope.py` guard; post-D3 that guard is deleted and its carve-out is no longer relevant.)
 - **Meta (no allowlist)** — guard enforces invariants over OTHER guards' allowlists; has no allowlist of its own.
 
 ### Meta-guards explanation
@@ -1938,7 +1943,7 @@ This is the authoritative table of every AST-scanning / layer-scoped / meta-guar
 | `test_architecture_factory_no_post_generation` | New | L5a | `tests/unit/architecture/test_architecture_factory_no_post_generation.py` | Empty | N/A | N/A |
 | `test_architecture_factory_in_all_factories` | New | L5a | `tests/unit/architecture/test_architecture_factory_in_all_factories.py` | Empty | N/A | N/A |
 | `test_architecture_adapter_calls_wrapped_in_threadpool` | New | L5d2 | `tests/unit/architecture/test_architecture_adapter_calls_wrapped_in_threadpool.py` | Empty | N/A | N/A |
-| `test_architecture_sync_bridge_scope` | New | L5d1 | `tests/unit/architecture/test_architecture_sync_bridge_scope.py` | Frozen (`background_sync_service.py` only) | Frozen; shrinks only at v2.1+ sunset | N/A |
+| `test_architecture_no_threading_thread_for_db_work` | New | L5d1 | `tests/unit/architecture/test_architecture_no_threading_thread_for_db_work.py` | Empty | N/A | N/A |
 | `test_architecture_no_sse_handlers` | New | L5d4 | `tests/unit/architecture/test_architecture_no_sse_handlers.py` | Empty | N/A | N/A |
 | `test_architecture_async_sessionmaker_expire_on_commit` | New | L5b | `tests/unit/architecture/test_architecture_async_sessionmaker_expire_on_commit.py` | Empty | N/A | N/A |
 | `test_architecture_no_singleton_session` | New | L4 (ContextManager refactor) | `tests/unit/architecture/test_architecture_no_singleton_session.py` | Empty | N/A | N/A |
@@ -2192,7 +2197,7 @@ These items are **intentionally NOT in scope for L0-L4**. They are referenced he
 
 The following were considered for v2.0 and explicitly deferred to v2.1:
 
-- **Drop nginx reverse proxy for multi-tenant routing.** `TenantSubdomainMiddleware` + Starlette Host matching can replace 574 LOC of nginx .conf templating. Scope ~4-5 days + 2 days bake. Deferred: needs battle-testing; would eat sync-bridge rearchitect budget at L5d1.
+- **Drop nginx reverse proxy for multi-tenant routing.** `TenantSubdomainMiddleware` + Starlette Host matching can replace 574 LOC of nginx .conf templating. Scope ~4-5 days + 2 days bake. Deferred: needs battle-testing; would eat the `background_sync_service` async rearchitect budget at L5d1 (D3).
 
 - **Adapter async rewrite.** `googleads==49.0.0` depends on `suds-py3` (sync SOAP); rewriting 4 adapters (GAM, Mock, Kevel, Triton) on async httpx is ~30 engineer-days of vendor-driven work. Decision 1 Path B (sync + threadpool wrap) is the v2.0 answer. File v2.1 ticket at L7.
 
