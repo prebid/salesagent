@@ -46,13 +46,10 @@ _HASATTR_ALLOWLIST: set[str] = {
     "bdd/steps/domain/uc011_accounts.py:944 then_accounts_from_first_page",
     "bdd/steps/domain/uc011_accounts.py:1046 then_response_outcome",
     "bdd/steps/domain/uc011_accounts.py:1325 then_success_with_accounts",
-    "bdd/steps/domain/uc019_query_media_buys.py:1305 then_package_details",
 }
 
-_GETATTR_EXISTENCE_ALLOWLIST: set[str] = {
-    # FIXME(salesagent-beq4): replace getattr existence check with value comparison
-    "bdd/steps/domain/uc019_query_media_buys.py:1305 then_package_details",
-}
+_GETATTR_EXISTENCE_ALLOWLIST: set[str] = set()
+# FIXME(salesagent-beq4): all getattr-existence violations fixed
 
 _COUNT_ONLY_ALLOWLIST: set[str] = {
     # FIXME(salesagent-beq4): replace count-only check with element-level assertion
@@ -73,11 +70,6 @@ _COUNT_ONLY_ALLOWLIST: set[str] = {
     "bdd/steps/domain/uc011_accounts.py:816 then_only_status",
     "bdd/steps/domain/uc011_accounts.py:834 then_other_statuses_excluded",
     "bdd/steps/domain/uc011_accounts.py:1046 then_response_outcome",
-    "bdd/steps/domain/uc019_query_media_buys.py:1355 then_creative_approval_state",
-    "bdd/steps/domain/uc019_query_media_buys.py:1396 then_buyer_refs_for_correlation",
-    "bdd/steps/domain/uc019_query_media_buys.py:2201 then_either_status_returned",
-    "bdd/steps/domain/uc019_query_media_buys.py:2218 then_any_status_returned",
-    "bdd/steps/domain/uc019_query_media_buys.py:1305 then_package_details",
     "bdd/steps/domain/uc026_package_media_buy.py:1687 then_package_has_id",
     "bdd/steps/domain/uc026_package_media_buy.py:1730 then_package_default_formats",
     "bdd/steps/domain/uc026_package_media_buy.py:1764 then_package_formats_to_provide",

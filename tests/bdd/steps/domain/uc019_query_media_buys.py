@@ -1240,14 +1240,6 @@ def when_query_invalid_status_filter(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def _assert_pkg_field_present(pkg: Any, field: str) -> None:
-    """Assert a field is present (not None) on a package object or dict."""
-    if isinstance(pkg, dict):
-        assert field in pkg and pkg[field] is not None, f"Package missing {field}"
-    else:
-        assert getattr(pkg, field, None) is not None, f"Package missing {field}"
-
-
 def _assert_flight_dates_present(pkg: Any) -> None:
     """Assert flight date fields are present on a package.
 
@@ -1307,40 +1299,40 @@ def then_package_details(ctx: dict) -> None:
     import pytest
 
     buys = _get_media_buys(ctx)
-    assert len(buys) > 0, "No media buys in response to check"
+    assert buys, "No media buys in response to check"
     total_packages_checked = 0
     paused_gaps: list[str] = []
     for buy in buys:
-        mb_id = getattr(buy, "media_buy_id", "?")
-        packages = getattr(buy, "packages", None) or []
-        assert len(packages) > 0, (
+        mb_id = buy.media_buy_id
+        packages = buy.packages or []
+        assert packages, (
             f"Media buy '{mb_id}' has no packages — step text claims "
             "'each media buy should include package-level details' but packages list is empty"
         )
         for pkg in packages:
             total_packages_checked += 1
-            assert getattr(pkg, "package_id", None) is not None, "Package missing package_id"
-            # Step text claims: budget, bid_price, product_id, flight dates, paused
-            _assert_pkg_field_present(pkg, "product_id")
-            _assert_pkg_field_present(pkg, "budget")
-            # Verify budget is numeric when present
-            budget_val = getattr(pkg, "budget", None) if not isinstance(pkg, dict) else pkg.get("budget")
-            if budget_val is not None:
-                assert isinstance(budget_val, int | float), (
-                    f"Expected budget to be numeric, got {type(budget_val).__name__}: {budget_val!r}"
-                )
-            # bid_price may be None for fixed-price options — verify field exists
-            assert hasattr(pkg, "bid_price") or (isinstance(pkg, dict) and "bid_price" in pkg), (
-                "Package missing bid_price field"
+            assert isinstance(pkg.package_id, str) and pkg.package_id, (
+                f"Package missing or empty package_id, got {pkg.package_id!r}"
             )
+            # Step text claims: budget, bid_price, product_id, flight dates, paused
+            assert pkg.product_id is not None, f"Package {pkg.package_id} missing product_id"
+            assert pkg.budget is not None, f"Package {pkg.package_id} missing budget"
+            # Verify budget is numeric
+            assert isinstance(pkg.budget, int | float), (
+                f"Expected budget to be numeric, got {type(pkg.budget).__name__}: {pkg.budget!r}"
+            )
+            # bid_price may be None for fixed-price options — verify the field value type when present
+            if pkg.bid_price is not None:
+                assert isinstance(pkg.bid_price, int | float), (
+                    f"Expected bid_price to be numeric, got {type(pkg.bid_price).__name__}: {pkg.bid_price!r}"
+                )
             # Flight dates: step text explicitly claims these are present
             _assert_flight_dates_present(pkg)
             # paused must be a boolean, not absent — collect gaps across ALL packages
-            paused = getattr(pkg, "paused", None) if not isinstance(pkg, dict) else pkg.get("paused")
-            if paused is None:
-                paused_gaps.append(f"package {getattr(pkg, 'package_id', '?')} in {mb_id}")
-            elif not isinstance(paused, bool):
-                raise AssertionError(f"Expected paused to be bool, got {type(paused)}")
+            if pkg.paused is None:
+                paused_gaps.append(f"package {pkg.package_id} in {mb_id}")
+            else:
+                assert isinstance(pkg.paused, bool), f"Expected paused to be bool, got {type(pkg.paused)}"
     assert total_packages_checked > 0, "No packages checked despite media buys being present"
     if paused_gaps:
         pytest.xfail(
@@ -1364,24 +1356,30 @@ def then_creative_approval_state(ctx: dict) -> None:
 
     valid_statuses = {s.value for s in ApprovalStatus}
     buys = _get_media_buys(ctx)
-    assert len(buys) > 0, "No media buys in response"
+    assert buys, "No media buys in response"
     packages_checked = 0
     packages_with_approvals = 0
     for buy in buys:
-        for pkg in getattr(buy, "packages", []) or []:
+        for pkg in buy.packages or []:
             packages_checked += 1
-            approvals = getattr(pkg, "creative_approvals", None)
+            approvals = pkg.creative_approvals
             if approvals:
                 packages_with_approvals += 1
                 for approval in approvals:
-                    cid = getattr(approval, "creative_id", None)
-                    assert cid is not None, "CreativeApproval entry missing creative_id"
-                    status = getattr(approval, "approval_status", None)
-                    assert status is not None, f"CreativeApproval for '{cid}' has no approval_status"
-                    status_str = status.value if hasattr(status, "value") else str(status)
+                    assert isinstance(approval.creative_id, str) and approval.creative_id, (
+                        "CreativeApproval entry missing creative_id"
+                    )
+                    assert approval.approval_status is not None, (
+                        f"CreativeApproval for '{approval.creative_id}' has no approval_status"
+                    )
+                    status_str = (
+                        approval.approval_status.value
+                        if hasattr(approval.approval_status, "value")
+                        else str(approval.approval_status)
+                    )
                     assert status_str in valid_statuses, (
-                        f"Unexpected approval_status '{status_str}' for creative '{cid}', "
-                        f"expected one of {valid_statuses}"
+                        f"Unexpected approval_status '{status_str}' for creative "
+                        f"'{approval.creative_id}', expected one of {valid_statuses}"
                     )
     assert packages_checked > 0, "No packages found to check creative approvals on"
     # Step text says "when creatives are assigned" — verify at least one package
@@ -1400,22 +1398,16 @@ def then_buyer_refs_for_correlation(ctx: dict) -> None:
     cannot be used for correlation).
     """
     buys = _get_media_buys(ctx)
-    assert len(buys) > 0, "No media buys in response"
+    assert buys, "No media buys in response"
     for buy in buys:
-        mb_id = getattr(buy, "media_buy_id", "?")
+        mb_id = buy.media_buy_id
         # buyer_ref is a core field — must be present and non-None for correlation
-        buyer_ref = getattr(buy, "buyer_ref", None)
-        assert buyer_ref is not None, f"Missing buyer_ref on {mb_id} — cannot correlate without it"
-        assert isinstance(buyer_ref, str) and buyer_ref, (
-            f"buyer_ref on {mb_id} must be a non-empty string, got {buyer_ref!r}"
+        assert isinstance(buy.buyer_ref, str) and buy.buyer_ref, (
+            f"buyer_ref on {mb_id} must be a non-empty string, got {buy.buyer_ref!r}"
         )
         # buyer_campaign_ref must be present and non-None for correlation
-        bcr = getattr(buy, "buyer_campaign_ref", None)
-        if bcr is None and isinstance(buy, dict):
-            bcr = buy.get("buyer_campaign_ref")
-        assert bcr is not None, (
-            f"buyer_campaign_ref is None or absent on {mb_id} (type: {type(buy).__name__}) — "
-            f"step claims 'for correlation', implying a populated value"
+        assert buy.buyer_campaign_ref is not None, (
+            f"buyer_campaign_ref is None on {mb_id} — step claims 'for correlation', implying a populated value"
         )
 
 
@@ -2201,13 +2193,9 @@ def then_only_status(ctx: dict, status: str) -> None:
 def then_either_status_returned(ctx: dict) -> None:
     """Assert media buys with multiple statuses are returned."""
     buys = _get_media_buys(ctx)
-    assert len(buys) > 0, "Expected media buys returned with multi-status filter"
+    assert buys, "Expected media buys returned with multi-status filter"
     # "either status" implies at least 2 different statuses are represented
-    statuses = set()
-    for buy in buys:
-        actual = getattr(buy, "status", None)
-        actual_str = actual.value if hasattr(actual, "value") else str(actual)
-        statuses.add(actual_str)
+    statuses = {buy.status.value if hasattr(buy.status, "value") else str(buy.status) for buy in buys}
     assert len(statuses) >= 2, (
         f"Step claims 'either status are returned' but only found status(es): {statuses}. "
         f"Expected at least 2 different statuses."
@@ -2222,13 +2210,13 @@ def then_any_status_returned(ctx: dict) -> None:
     to exist (to verify completeness) and all seeded IDs to appear in response.
     """
     buys = _get_media_buys(ctx)
-    assert len(buys) > 0, "Expected media buys for all-status filter"
+    assert buys, "Expected media buys for all-status filter"
     seeded = ctx.get("seeded_media_buys", {})
     assert seeded, (
         "Step claims 'media buys in any status are returned' but no media buys "
         "were seeded — cannot verify completeness without seeded data"
     )
-    returned_ids = {getattr(b, "media_buy_id", None) for b in buys}
+    returned_ids = {b.media_buy_id for b in buys}
     for label, mb_obj in seeded.items():
         real_id = mb_obj.media_buy_id
         assert real_id in returned_ids, (
