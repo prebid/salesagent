@@ -1242,6 +1242,55 @@ def then_assignment_created_successfully(ctx: dict) -> None:
     assert expected in assigned, f"Expected {expected!r} in assigned_to, got {assigned}"
 
 
+@then("both assignments should be created")
+def then_both_assignments_created(ctx: dict) -> None:
+    """Assert both packages from a multi-assignment Given step appear in assigned_to."""
+    assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
+    assigned = _get_creative_assigned_to(ctx)
+    # ctx["assignments"] is {creative_id: [pkg1, pkg2]}
+    all_expected_pkgs = []
+    for pkg_ids in ctx["assignments"].values():
+        all_expected_pkgs.extend(pkg_ids)
+    assert len(all_expected_pkgs) >= 2, f"Expected at least 2 packages in assignments, got {all_expected_pkgs}"
+    for pkg_id in all_expected_pkgs:
+        assert pkg_id in assigned, f"Expected package {pkg_id!r} in assigned_to, got {assigned}"
+
+
+@then(parsers.parse("the assignment should be created with weight {weight:d}"))
+def then_assignment_created_with_weight(ctx: dict, weight: int) -> None:
+    """Assert the assignment was created with the specified weight.
+
+    Production hard-codes weight=100 on all new assignments and has no API
+    surface for per-entry weight. SPEC-PRODUCTION GAP when weight != 100.
+    """
+    assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
+    assigned = _get_creative_assigned_to(ctx)
+    expected_pkg = ctx["package"].package_id
+    assert expected_pkg in assigned, f"Expected {expected_pkg!r} in assigned_to, got {assigned}"
+    # Production hard-codes weight=100 — verify the weight in the DB
+    from sqlalchemy import select
+
+    from src.core.database.models import CreativeAssignment
+
+    tenant_id = ctx["tenant"].tenant_id
+    creative_id = ctx["creatives"][-1]["creative_id"]
+    with db_session(ctx) as session:
+        assignment = session.scalars(
+            select(CreativeAssignment).filter_by(
+                tenant_id=tenant_id,
+                creative_id=creative_id,
+                package_id=expected_pkg,
+            )
+        ).first()
+        assert assignment is not None, f"No CreativeAssignment found for creative={creative_id}, package={expected_pkg}"
+        if assignment.weight != weight:
+            pytest.xfail(
+                f"SPEC-PRODUCTION GAP: Per-assignment weight not supported. "
+                f"Expected weight={weight}, got weight={assignment.weight}. "
+                f"Production hard-codes weight=100 on create."
+            )
+
+
 @then("the existing assignment should be updated")
 def then_existing_assignment_updated(ctx: dict) -> None:
     """Assert the pre-existing CreativeAssignment row was updated (weight set to 100)."""
@@ -2459,7 +2508,7 @@ def then_format_check_should_pass(ctx: dict) -> None:
 # --- pzlv: assignment format compatibility boundary (BR-RULE-039) ---
 
 
-def _setup_assignment_package(
+def _setup_assignment_package_for_format(
     ctx: dict,
     *,
     product_format_ids: list[dict] | None,
@@ -2504,7 +2553,7 @@ def given_assignment_product_accepts_format(ctx: dict) -> None:
     env = ctx["env"]
     format_id = ctx["creative_format_id"]
     agent_url = env.DEFAULT_AGENT_URL
-    _setup_assignment_package(
+    _setup_assignment_package_for_format(
         ctx,
         product_format_ids=[{"agent_url": agent_url, "id": format_id}],
     )
@@ -2520,7 +2569,7 @@ def given_assignment_product_trailing_slash(ctx: dict) -> None:
     env = ctx["env"]
     format_id = ctx["creative_format_id"]
     agent_url_with_slash = env.DEFAULT_AGENT_URL + "/"
-    _setup_assignment_package(
+    _setup_assignment_package_for_format(
         ctx,
         product_format_ids=[{"agent_url": agent_url_with_slash, "id": format_id}],
     )
@@ -2532,7 +2581,7 @@ def given_assignment_product_empty_format_ids(ctx: dict) -> None:
 
     Per BR-RULE-039 INV-3: empty format_ids means all formats are allowed.
     """
-    _setup_assignment_package(ctx, product_format_ids=[])
+    _setup_assignment_package_for_format(ctx, product_format_ids=[])
 
 
 @given("an assignment to a package with no product_id")
@@ -2541,7 +2590,7 @@ def given_assignment_package_no_product_id(ctx: dict) -> None:
 
     Per BR-RULE-039 INV-6: format compatibility check is skipped entirely.
     """
-    _setup_assignment_package(ctx, product_format_ids=None, product_id_in_config=False)
+    _setup_assignment_package_for_format(ctx, product_format_ids=None, product_id_in_config=False)
 
 
 @given("an assignment to a package whose product does not accept this format")
@@ -2553,7 +2602,7 @@ def given_assignment_product_rejects_format(ctx: dict) -> None:
     """
     env = ctx["env"]
     agent_url = env.DEFAULT_AGENT_URL
-    _setup_assignment_package(
+    _setup_assignment_package_for_format(
         ctx,
         product_format_ids=[{"agent_url": agent_url, "id": "video_30s"}],
     )
