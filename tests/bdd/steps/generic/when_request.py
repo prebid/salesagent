@@ -125,7 +125,7 @@ def when_call_mcp_type(ctx: dict, type_value: str) -> None:
     parsers.re(
         r"the Buyer Agent (?:requests the format catalog"
         r"|requests all formats with no filters"
-        r"|sends a list_creative_formats request)"
+        r"|sends a list_creative_formats (?:request|task))"
     )
 )
 def when_request_unfiltered(ctx: dict) -> None:

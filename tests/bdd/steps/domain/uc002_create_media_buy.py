@@ -13,6 +13,7 @@ from __future__ import annotations
 from pytest_bdd import given, parsers, then, when
 
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
+from tests.factories.principal import PrincipalFactory
 
 
 def _maybe_init_request_kwargs(ctx: dict) -> None:
@@ -278,6 +279,68 @@ def given_account_active(ctx: dict) -> None:
         operator=f"{account_id}.com",
     )
     AgentAccountAccessFactory(tenant=tenant, principal=principal, account=account)
+
+
+def _create_account_for_other_agent(ctx: dict, **account_kwargs: object) -> None:
+    """Create an account accessible only to a different agent (not the test principal).
+
+    Sets up tenant+principal if needed, creates a second "other" principal,
+    creates the account, and grants access only to the other principal.
+    The test principal has NO access — resolve_account() should raise
+    AdCPAuthorizationError.
+    """
+    env = ctx["env"]
+    if "tenant" not in ctx:
+        tenant, principal = env.setup_default_data()
+        ctx["tenant"] = tenant
+        ctx["principal"] = principal
+    else:
+        tenant = ctx["tenant"]
+
+    other_principal = PrincipalFactory(tenant=tenant, principal_id="other_agent")
+    account = AccountFactory(tenant=tenant, **account_kwargs)
+    AgentAccountAccessFactory(tenant=tenant, principal=other_principal, account=account)
+
+
+@given("the account exists but is accessible only to a different agent")
+def given_account_other_agent_by_id(ctx: dict) -> None:
+    """Create account by ID, grant access only to a different agent."""
+    account_id = ctx.get("request_account_id", "acc_other_agent")
+    _create_account_for_other_agent(
+        ctx,
+        account_id=account_id,
+        status="active",
+        brand={"domain": "other-agent-id.com"},
+        operator="other-agent-id.com",
+    )
+
+
+@given("the natural key resolves to an account accessible only to a different agent")
+def given_account_other_agent_by_natural_key(ctx: dict) -> None:
+    """Create account by natural key, grant access only to a different agent."""
+    brand = ctx.get("request_brand", "other-agent.com")
+    operator = ctx.get("request_operator", "other-agent.com")
+    _create_account_for_other_agent(
+        ctx,
+        account_id=f"acc_natkey_{brand}",
+        status="active",
+        brand={"domain": brand},
+        operator=operator,
+    )
+
+
+@given("the sandbox account exists but is accessible only to a different agent")
+def given_sandbox_account_other_agent(ctx: dict) -> None:
+    """Create sandbox account by ID, grant access only to a different agent."""
+    account_id = ctx.get("request_account_id", "acc_sandbox_other")
+    _create_account_for_other_agent(
+        ctx,
+        account_id=account_id,
+        status="active",
+        sandbox=True,
+        brand={"domain": "sandbox-other.com"},
+        operator="sandbox-other.com",
+    )
 
 
 @given(parsers.parse("a create_media_buy request with account configuration {partition}"))
