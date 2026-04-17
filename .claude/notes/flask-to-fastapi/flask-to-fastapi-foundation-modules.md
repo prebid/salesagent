@@ -229,17 +229,17 @@ async def test_get_session_rolls_back_on_exception(client):
 
 ---
 
-## 11.0.2 `src/core/settings.py` — Pydantic Settings class (Agent E Category 15)
+## 11.0.2 `src/core/config.py` — Pydantic Settings class (Agent E Category 15)
 
-> **[L0 CANDIDATE]** Framework-agnostic. Can land in L0 or L4.
+> **[L4 — extend existing]** Framework-agnostic. Lands at L4. **Do NOT create a new `src/core/settings.py`** — per the native-ness audit, a second Settings module is a Flask-era regression. Extend the existing `src/core/config.py`, which already has `GAMOAuthConfig`, `DatabaseConfig`, `ServerConfig`, `GoogleOAuthConfig`, `SuperAdminConfig`, `AppConfig`, and `get_config()` singleton. See §11.19 for the L4 consolidation plan.
 
-> **Added 2026-04-11 under the Agent E idiom upgrade.** Every config value goes through a single `Settings` class loaded via `@lru_cache get_settings()`. No more `os.environ.get("FOO", "")` scattered throughout the codebase.
+> **Added 2026-04-11 under the Agent E idiom upgrade.** Every config value goes through a single typed `BaseSettings` subclass loaded via `@lru_cache get_config()`. No more `os.environ.get("FOO", "")` scattered throughout the codebase.
 
-### A. Implementation
+### A. Implementation (extended inside existing `src/core/config.py`)
 
 ```python
-# src/core/settings.py
-"""Pydantic-settings Settings class — one source of truth for config."""
+# src/core/config.py — add these sections alongside the existing BaseSettings groups
+"""Pydantic-settings groups — one source of truth for config."""
 from functools import lru_cache
 from typing import Literal
 
@@ -247,13 +247,14 @@ from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class Settings(BaseSettings):
-    """App-wide settings. Loaded from env, .env, or secret store."""
+class AppSettings(BaseSettings):
+    """Top-level app settings. Loaded from env, .env, or secret store."""
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
+        env_nested_delimiter="__",
     )
 
     # Environment
@@ -262,7 +263,7 @@ class Settings(BaseSettings):
     # Database
     database_url: str = Field(..., alias="DATABASE_URL")
 
-    # Sessions & CSRF (FLASK_SECRET_KEY dual-read during v2.0 per directive #5)
+    # Sessions & CSRF (FLASK_SECRET_KEY hard-removed at L2 per D6)
     session_secret: SecretStr = Field(..., alias="SESSION_SECRET", min_length=32)
 
     # CSRF (Option A: Origin header validation + SameSite=Lax session cookie)
@@ -289,15 +290,15 @@ class Settings(BaseSettings):
 
 
 @lru_cache(maxsize=1)
-def get_settings() -> Settings:
-    return Settings()
+def get_config() -> AppSettings:
+    return AppSettings()
 ```
 
 ### C. Integration
 
-- Every `os.environ.get(...)` in `src/admin/` and `src/core/` is replaced with `get_settings().field`
-- `SettingsDep = Annotated[Settings, Depends(get_settings)]` for handler DI
-- Structural guard `test_architecture_no_direct_env_access.py` enforces — only `src/core/settings.py` may read env directly
+- Every `os.environ.get(...)` in `src/admin/` and `src/core/` is replaced with `get_config().field`
+- `ConfigDep = Annotated[AppSettings, Depends(get_config)]` for handler DI
+- Structural guard `test_architecture_no_direct_env_access.py` enforces — only `src/core/config.py` may read env directly. `src/core/settings.py` MUST NOT exist.
 
 ### D. Gotchas
 

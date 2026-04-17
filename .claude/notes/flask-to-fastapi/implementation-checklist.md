@@ -504,6 +504,7 @@ These refactors are strict improvements under the CURRENT `scoped_session` world
 - [ ] `tox -e bdd` green
 - [ ] `./run_all_tests.sh` green
 - [ ] `python scripts/codemod_templates_greenfield.py --check templates/` returns exit 0 (idempotent re-run yields no diff) — enforced by `test_codemod_idempotent.py`
+- [ ] **L0 native-ness guard:** `tests/unit/test_architecture_no_pydantic_v1_config.py` landed per §11.35 with EMPTY allowlist (codebase has 0 `class Config:` blocks today); guard is monotonic from day 1.
 - [ ] Branch mergeable state verified
 - [ ] Single squashed merge commit on `main`
 
@@ -1046,6 +1047,10 @@ These rules apply to every layer's Entry and Exit subsections in §4, regardless
 - [ ] All work items green (atomic verification).
 - [ ] `baseline-sync.json` captured at L4 EXIT and committed to the repo — this is the Spike 3 deliverable and is the oracle for L5 async performance comparison. Verified by: `tests/migration/fixtures/baseline-sync.json` exists, contains latency numbers for 20 admin routes + 5 MCP tool calls; captured under the L4 production-shape config (including adapter `run_in_threadpool` wraps if Path-B is active).
 - [ ] All structural guards for this layer green with allowlists ≤ L3 exit values (monotonic).
+- [ ] **L4 native-ness: pydantic-settings centralization.** Extended existing `src/core/config.py` (NOT new `src/core/settings.py` — two settings modules is a Flask-era regression). All 89 `os.environ.get(...)` sites consolidated into typed `BaseSettings` subclasses with `SettingsConfigDict(env_nested_delimiter="__")`. Credentials use `pydantic.SecretStr`. Guard `tests/unit/test_architecture_no_direct_env_access.py` seeded with 89 sites, ratchets to 0 by L7.
+- [ ] **L4 native-ness: structlog adoption.** `structlog>=24.4.0` in `pyproject.toml`. 121 `print(` sites in `src/` replaced with `log = structlog.get_logger()` + `log.info(...)`. Pipeline: `merge_contextvars` + `TimeStamper(fmt="iso")` + `EventRenamer("message")` + `JSONRenderer()` (prod) / `ConsoleRenderer()` (dev). `RequestIDMiddleware` binds `request_id` via `structlog.contextvars.bind_contextvars(...)`. Guard `tests/unit/test_architecture_uses_structlog.py` blocks new `print(` in `src/**` (allowlist: `scripts/`, `alembic/versions/`, `src/core/cli/`).
+- [ ] **L4 native-ness: httpx lifespan-scoped AsyncClient.** `httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0), limits=httpx.Limits(max_connections=100, max_keepalive_connections=20), transport=httpx.AsyncHTTPTransport(retries=3))` attached to `app.state.http_client` in lifespan startup; closed in lifespan shutdown. Sync `app.state.http_client_sync = httpx.Client(...)` registered for adapter Path B (Decision 1). `tenacity`-based 5xx/read-timeout retry for webhook calls.
+- [ ] **L4 native-ness: AsyncAttrs decision record.** Rationale committed: blanket `lazy="raise"` (Spike 1) chosen over `AsyncAttrs` mixin because (a) fails LOUDLY vs silent extra async `SELECT`, (b) all 68 relationship access sites cataloged in Spike 1's 9-pattern cookbook, (c) `AsyncAttrs` is additive — can layer on post-v2.0.
 - [ ] Layer-scope commit-lint green.
 - [ ] 7-step Test-Before-Implement audit green.
 - [ ] PR squash-merged.
@@ -1139,6 +1144,7 @@ These rules apply to every layer's Entry and Exit subsections in §4, regardless
 
 - [ ] All 3 pilot routers converted and green.
 - [ ] async-handlers allowlist shrunk by exactly 3 router names.
+- [ ] **L5c native-ness: AsyncClient test harness.** Pilot router integration/e2e tests migrated from Starlette `TestClient` (sync) to `httpx.AsyncClient(transport=ASGITransport(app=app))` (async). Guard `tests/unit/test_architecture_no_testclient_in_async_routers.py` asserts tests importing the 3 async pilot routers use `AsyncClient`, not `TestClient`. BDD tests (pytest-bdd) remain sync via `asyncio.run()` bridge; guard `tests/unit/test_architecture_bdd_no_pytest_asyncio.py` prevents `@pytest.mark.asyncio` in BDD step files (would deadlock per Risk #3 Interaction B).
 - [ ] Layer-scope commit-lint green.
 - [ ] 7-step audit green.
 - [ ] PR squash-merged.
@@ -1556,6 +1562,9 @@ Every stated v2.0 goal maps to a specific test that proves adherence. The matrix
 | 55 | No Pydantic v1 `class Config:` blocks in BaseModel subclasses | `tests/unit/test_architecture_no_pydantic_v1_config.py` | AST scan (empty allowlist) | L0 | L0 | — | — |
 | 56 | No direct `os.environ.get(...)` / `os.environ[...]` outside `src/core/config.py` | `tests/unit/test_architecture_no_direct_env_access.py` | AST scan (ratcheting from 89 sites) | L4 | L4 | L7 (zero allowlist) | — |
 | 57 | No `import requests` / `from requests import` in `src/` | `tests/unit/test_architecture_no_requests_library.py` | AST scan (ratcheting from 17 sites) | L5 | L5 | — (sunset in v2.1 adapter rewrites) | — |
+| 58 | No `print(` in `src/**` (structlog adoption) | `tests/unit/test_architecture_uses_structlog.py` | AST scan (ratcheting from 121 sites, allowlist: `scripts/`, `alembic/versions/`, `src/core/cli/`) | L4 | L4 | — | — |
+| 59 | Async pilot routers use `httpx.AsyncClient` in tests (not `TestClient`) | `tests/unit/test_architecture_no_testclient_in_async_routers.py` | AST scan (ratcheting; allowlist seeded with pre-L5c tests that still use `TestClient`) | L5c | L5c | — | — |
+| 60 | No `@pytest.mark.asyncio` in BDD step files (would deadlock under pytest-bdd + pytest-asyncio per Risk #3 Interaction B) | `tests/unit/test_architecture_bdd_no_pytest_asyncio.py` | AST scan | L5c | L5c | — | — |
 
 ### Matrix usage
 

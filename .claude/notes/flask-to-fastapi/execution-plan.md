@@ -128,6 +128,9 @@ Key rules:
 12. Write `tests/integration/test_schemas_discovery_external_contract.py` [§3 audit action #4].
 13. Complete §1.1 prerequisites: `SESSION_SECRET` in `.env.example` and secret stores, OAuth URI docs, external consumer contract confirmation [§1.1].
 
+**L0 work item — Pydantic v2 guard (native-ness, empty allowlist):**
+Add `tests/unit/test_architecture_no_pydantic_v1_config.py` per §11.35. Allowlist EMPTY at introduction (current codebase has 0 `class Config:` blocks; guard is monotonic from day 1 to prevent L1/L2/L4 regression).
+
 **Files to create:** Foundation modules under `src/admin/`, 2 scripts, 20+ test files, golden-fixture infrastructure.
 **Files to modify:** `tests/harness/_base.py`, `pyproject.toml` (add `itsdangerous>=2.2.0`, `pydantic-settings>=2.7.0` as explicit deps — currently transitive via Flask/pydantic-ai).
 **Note:** Templates are NOT modified in L0 — codemod execution is L1a.
@@ -523,6 +526,18 @@ make quality && ./run_all_tests.sh  # green
 12. Update `require_tenant_access` to check `is_active` (small pre-existing Flask bug fix; breaking change OK on v2.0 branch).
 13. **At EXIT: capture `baseline-sync.json` (Spike 3 deliverable).** Measure p50/p99 latency on 20 admin routes + 5 MCP tool calls under this final sync shape (with SessionDep, DTOs, structlog). Commit the file. L5 MUST compare against this baseline, not against pre-L4 sync.
 
+**L4 work item — pydantic-settings centralization (native-ness):**
+Extend existing `src/core/config.py` (do NOT create a new `src/core/settings.py` — per native-ness audit, two settings modules is a Flask-era regression). Consolidate the 89 `os.environ.get(...)` sites across `src/` into typed `BaseSettings` subclasses with `SettingsConfigDict(env_file=..., env_prefix=..., env_nested_delimiter="__")`. Credentials use `pydantic.SecretStr` (OAuth client_secret, DB passwords). Ratcheting guard `tests/unit/test_architecture_no_direct_env_access.py` (§11.35) seeded with current 89 sites; ratchets to 0 by L7.
+
+**L4 work item — structlog adoption (native-ness):**
+Add `structlog>=24.4.0` to `pyproject.toml`. Replace the 121 `print(` sites across 15 files in `src/` with `log = structlog.get_logger()` + `log.info(...)` calls. Register processors: `structlog.contextvars.merge_contextvars`, `structlog.processors.TimeStamper(fmt="iso")`, `structlog.processors.EventRenamer("message")`, `structlog.processors.JSONRenderer()` (prod) / `ConsoleRenderer()` (dev). `RequestIDMiddleware` (land at L4 per middleware stack version 4) binds `request_id` via `structlog.contextvars.bind_contextvars(...)`. Structural guard `tests/unit/test_architecture_uses_structlog.py` blocks new `print(` in `src/**` with allowlist for `scripts/`, `alembic/versions/`, `src/core/cli/`.
+
+**L4 work item — httpx lifespan-scoped client (native-ness):**
+Attach `httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0), limits=httpx.Limits(max_connections=100, max_keepalive_connections=20), transport=httpx.AsyncHTTPTransport(retries=3))` to `app.state.http_client` in the lifespan startup; close it in lifespan shutdown. `request.app.state.http_client` is used for all outbound HTTP calls (webhooks, JWKS discovery, agent-card fetches). For the adapter Path B sync call sites (Decision 1), `app.state.http_client_sync = httpx.Client(...)` is also registered. `tenacity`-based 5xx/read-timeout retry for webhook calls (the `AsyncHTTPTransport(retries=...)` option is connection-retry only).
+
+**L4 work item — AsyncAttrs decision (L5+ lazy-load safety):**
+Document rationale for choosing blanket `lazy="raise"` (Spike 1) over SQLAlchemy's `AsyncAttrs` mixin for async lazy-load safety. Both are valid 2026-native idioms; blanket `lazy="raise"` was selected because: (a) it fails LOUDLY at query time rather than silently issuing an extra async `SELECT` via `awaitable_attrs`, (b) all 68 existing relationship access sites have been cataloged in Spike 1's 9-pattern cookbook; (c) `AsyncAttrs` is additive and can be layered on top post-v2.0 if specific access patterns warrant it.
+
 **Exit gate:**
 ```bash
 make quality && ./run_all_tests.sh  # green
@@ -789,6 +804,9 @@ make quality  # mypy will error on every un-await'd call site — this is expect
 4. Activate factory-boy async shim for the pilot test files.
 5. Run `ContextManager` async conversion for modules touched by pilot routers (the sync refactor landed at L4; L5c flips to `async def`).
 6. Verify performance parity against `baseline-sync.json` for the 3 pilot routes (within budget).
+
+**L5c work item — httpx.AsyncClient test harness (native-ness):**
+Migrate integration/e2e test fixtures from Starlette `TestClient` (sync) to `httpx.AsyncClient(transport=ASGITransport(app=app))` (async). `TestClient` remains for L0-L4 sync-def handlers; `AsyncClient` is required for L5c+ async-def handlers. Ratcheting guard `tests/unit/test_architecture_no_testclient_in_async_routers.py` (L5c exit) asserts tests importing routers flipped to async use `AsyncClient`, not `TestClient`. BDD tests (pytest-bdd) keep sync via `asyncio.run()` bridge; new guard `tests/unit/test_architecture_bdd_no_pytest_asyncio.py` prevents `@pytest.mark.asyncio` in BDD step files (would deadlock under Risk #3 Interaction B).
 
 **Exit gate:**
 ```bash
