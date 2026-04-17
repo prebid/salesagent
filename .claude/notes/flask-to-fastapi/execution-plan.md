@@ -314,6 +314,13 @@ def create_product(
 4. Every route decorator has `name="admin_<bp>_<endpoint>"` [§2-B1].
 5. No `adcp.types.*` as `response_model=` [§3].
 
+**L1c — Canonical tenant-prefix routing (D1 breaking):**
+1. Mount each feature router once at `/tenant/{tenant_id}/<feature>` via `include_router(router, prefix="/tenant/{tenant_id}")`. Do NOT dual-mount.
+2. Add `src/admin/middleware/legacy_admin_redirect.py` (~60 LOC, pure-ASGI). Reads `request.state.identity.tenant_id` (populated by `UnifiedAuthMiddleware`); on `/admin/<feature>/<rest>` where `<feature>` is in the feature-router set, emits 308 with `Location: /tenant/<tenant_id>/<feature>/<rest>`. Exempts `/admin/auth/*`, `/admin/login`, `/admin/logout`, `/admin/public/*`, `/admin/static/*`.
+3. Register `LegacyAdminRedirectMiddleware` in `src/app.py::build_middleware_stack()` INSIDE `UnifiedAuthMiddleware` (so `request.state.identity.tenant_id` is available) but OUTSIDE `SessionMiddleware` (so session is hydrated). This makes L1c+ stack 8 middlewares (L1a had 7; L2 will add TrustedHost + SecurityHeaders → 10).
+4. Structural guard `tests/unit/admin/test_architecture_admin_routes_single_mount.py`: AST-scans `src/app.py` and `src/admin/app_factory.py`; asserts each of the 14 feature routers is passed to `include_router()` exactly once AND the prefix is `/tenant/{tenant_id}`. Allowlist: `/admin/auth`, `/admin/public`, `/admin/static`.
+5. Integration test `tests/integration/test_admin_legacy_redirect.py`: for each feature router, assert `GET /admin/<feature>` with session → 308 Location header matches `/tenant/<tenant_id>/<feature>`.
+
 **Files to create:** 8 router files under `src/admin/routers/`.
 
 **Exit gate:**
@@ -357,7 +364,7 @@ def get_tenant_stats(
 **Work items (in order):**
 
 1. Write `test_category1_native_error_shape.py` and `test_category2_compat_error_shape.py` FIRST [§4 Wave 2 / L1c-L1d].
-2. Port HTML routers: `products.py` (audit `getlist` — 12+ sites), `tenants.py`, `gam.py`, `inventory.py`, `inventory_profiles.py`, `creatives.py` (webhook audit), `creative_agents.py`, `signals_agents.py`, `operations.py` (webhook audit), `policy.py`, `workflows.py`. All sync `def` [§4 Wave 2 / L1c-L1d]. **Each tenant-scoped HTML router MUST be registered with BOTH `/admin/*` AND `/tenant/{tenant_id}/*` prefixes** (dual-prefix routing) so that the existing `/tenant/<tenant_id>/*` URLs Flask serves via the catch-all continue to resolve once the catch-all is removed at L2. 14 blueprints require dual-prefix: tenants, accounts, creatives, users, settings, operations, products, inventory, authorized_properties, signals_agents, activity, workflows, audit_logs, gam. Write `tests/integration/test_tenant_subdomain_routing.py` in this PR — smoke-tests `/tenant/default/dashboard`, `/tenant/default/products`, `/tenant/default/creatives`, `/tenant/default/users`, `/tenant/default/settings` for 200 BEFORE the L2 catch-all deletion. See `implementation-checklist.md` Wave 2 "Tenant-scoped admin routes" block.
+2. Port HTML routers: `products.py` (audit `getlist` — 12+ sites), `tenants.py`, `gam.py`, `inventory.py`, `inventory_profiles.py`, `creatives.py` (webhook audit), `creative_agents.py`, `signals_agents.py`, `operations.py` (webhook audit), `policy.py`, `workflows.py`. All sync `def` [§4 Wave 2 / L1c-L1d]. **Each tenant-scoped HTML router is registered ONCE at the canonical `/tenant/{tenant_id}/*` prefix per D1 (2026-04-16); `/admin/*` access is served by the `LegacyAdminRedirectMiddleware` 308 redirect landed at L1c.** The existing `/tenant/<tenant_id>/*` URLs Flask serves via the catch-all continue to resolve because the canonical mount IS that prefix. Write `tests/integration/test_tenant_subdomain_routing.py` in this PR — smoke-tests `/tenant/default/dashboard`, `/tenant/default/products`, `/tenant/default/creatives`, `/tenant/default/users`, `/tenant/default/settings` for 200 BEFORE the L2 catch-all deletion. See `implementation-checklist.md` Wave 2 "Tenant-scoped admin routes" block and the L1c briefing for the single-mount + legacy-redirect architecture.
 3. Port JSON APIs: `schemas.py` (external contract — byte-identical), `tenant_management_api.py` (Cat-2), `sync_api.py` (Cat-2 + `/api/sync` mount), `gam_reporting_api.py` (Cat-1). All sync `def` [§4 Wave 2 / L1c-L1d].
 4. Implement Category-2 scoped exception handler [§4 Wave 2 / L1c-L1d].
 5. `datetime` serialization format audit [§4 Wave 2 / L1c-L1d].

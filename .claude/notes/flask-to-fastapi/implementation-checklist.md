@@ -664,11 +664,11 @@ These refactors are strict improvements under the CURRENT `scoped_session` world
 - [ ] Freeze scope confirmed: entire `src/admin/**` except `activity_stream.py`; whole `tests/integration/**` for anything touching deleted fixtures
 - [ ] Branch-lifetime budget confirmed: ≤ 7 calendar days
 
-**Tenant-scoped admin routes MUST use BOTH `/admin/*` AND `/tenant/<tenant_id>/*` prefixes:**
+**Tenant-scoped admin routes use the canonical `/tenant/{tenant_id}/*` single mount + `/admin/*` 308 redirect (D1, 2026-04-16):**
 
-- [ ] **Prerequisite — before L2 deletes the Flask catch-all.** Flask currently serves ~14 blueprints at `/tenant/<tenant_id>/*` via the catch-all `app.mount("/", admin_wsgi)` at `src/app.py:44-45`. When L2 removes the catch-all, every `/tenant/<tenant_id>/*` URL 404s unless the equivalent FastAPI router is registered with `APIRouter(prefix="/tenant/{tenant_id}", ...)` IN ADDITION to the admin prefix.
-- [ ] **Blueprints requiring dual-prefix:** tenants, accounts, creatives, users, settings, operations, products, inventory, authorized_properties, signals_agents, activity, workflows, audit_logs, gam (14 total — enumerate exact list from `src/admin/app.py` registrations).
-- [ ] **Verification:** `rg -l "register_blueprint.*url_prefix.*tenant" src/admin/app.py` should enumerate the 14 blueprints; each needs a FastAPI router counterpart with matching prefix.
+- [ ] **L1c — Single canonical tenant-prefix mount (D1 breaking):** Each of the 14 feature routers (`accounts, products, principals, users, tenants, gam, inventory, inventory_profiles, creatives, creative_agents, operations, policy, settings, workflows`) is registered ONCE via `include_router(router, prefix="/tenant/{tenant_id}")`. `/admin/<feature>/<rest>` requests receive a 308 redirect to the canonical tenant-prefix URL via `LegacyAdminRedirectMiddleware` (uses `request.state.identity.tenant_id`). No dual-mount, no route-name collision. Enforced by `tests/unit/admin/test_architecture_admin_routes_single_mount.py` + `tests/integration/test_admin_legacy_redirect.py`.
+- [ ] **Prerequisite — before L2 deletes the Flask catch-all.** Flask currently serves the feature routers at `/tenant/<tenant_id>/*` via the catch-all `app.mount("/", admin_wsgi)` at `src/app.py:44-45`. The canonical FastAPI mount at `/tenant/{tenant_id}` replaces it; `/admin/<feature>/*` bookmarks keep working via the L1c `LegacyAdminRedirectMiddleware` 308 redirect.
+- [ ] **Verification:** `rg -l "register_blueprint.*url_prefix.*tenant" src/admin/app.py` enumerates the 14 blueprints for reference; each corresponds to one FastAPI router `include_router()`-ed once at `/tenant/{tenant_id}`.
 - [ ] **Smoke test** `tests/integration/test_tenant_subdomain_routing.py` written BEFORE L2 merges (test-first discipline):
   - [ ] Request to `/tenant/default/dashboard` returns 200 (admin-authed)
   - [ ] Request to `/tenant/default/products` returns 200
@@ -801,7 +801,7 @@ Decision 8 eliminated the SSE port; the `/tenant/{id}/events` route and `sse_sta
 
 **Entry criteria:**
 
-- [ ] Wave 2 / L1c-L1d merged to `main` and stable in staging ≥ 5 business days (dual-prefix delivery for the 14 tenant-scoped blueprints was L1c-L1d work; L2 only verifies, does not own it). Verified by: `tests/integration/test_tenant_subdomain_routing.py` green in L1d CI; all 14 blueprints from §Wave 2 enumeration have matching `APIRouter(prefix="/tenant/{tenant_id}", ...)` registrations.
+- [ ] Wave 2 / L1c-L1d merged to `main` and stable in staging ≥ 5 business days (canonical `/tenant/{tenant_id}/*` single-mount delivery for the 14 tenant-scoped routers was L1c work, with `LegacyAdminRedirectMiddleware` landing in the same PR per D1; L2 only verifies, does not own it). Verified by: `tests/integration/test_tenant_subdomain_routing.py` green in L1d CI; `tests/integration/test_admin_legacy_redirect.py` green in L1c CI; all 14 feature routers from §Wave 2 enumeration have matching `include_router(..., prefix="/tenant/{tenant_id}")` registrations (once each, not twice).
 - [ ] Flask catch-all receives zero traffic in staging for 48h
 - [ ] Datadog/dashboard audit confirms no external consumer references Flask-era endpoints
 - [ ] `v1.99.0` git tag created and container image archived in registry (rollback fallback)
