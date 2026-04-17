@@ -1499,9 +1499,305 @@ Rationale: prevents post-migration drift back to lazy-by-default relationships t
 
 ---
 
+## §D8-native — Greenfield messaging, sessions, templating (replaces §11.1/§11.2/§11.3)
+
+> **[AUTHORITATIVE per D8 #4, 2026-04-16]** This section documents the canonical greenfield design for the three wrapper modules Flask-isomorphic stubs would have created. §11.1/§11.2/§11.3 below retain the original wrapper-module designs for historical reference only — DO NOT implement them. Structural guard `tests/unit/test_architecture_no_admin_wrapper_modules.py` asserts `src/admin/flash.py`, `src/admin/sessions.py`, `src/admin/templating.py` do NOT exist.
+
+### §D8-native.1 — `src/admin/deps/messages.py` (replaces §11.3 flash.py)
+
+**Storage backend:** session-backed (`request.session["_messages"]` via Starlette's signed-cookie `SessionMiddleware`), NOT app.state-backed. **Rationale:** the canonical flash pattern is Post/Redirect/Get — messages must survive a 303 redirect. App.state-backed queues are wiped between the POST response and the GET render, forcing handlers to pass the message via query-string or one-shot cookie — both worse ergonomics than a session bucket that drains on read.
+
+**Wire shape:** `list[FlashMessage]` where `FlashMessage` is a Pydantic BaseModel: `{level: MessageLevel, text: str}`. `MessageLevel` is a `str Enum` with values `info`, `success`, `warning`, `error`. Stored as serialized dicts (Starlette SessionMiddleware JSON-encodes the whole session).
+
+**API:**
+- `Messages` class with `add(level, text)`, `info(text)`, `success(text)`, `warning(text)`, `error(text)`, `drain() -> list[FlashMessage]`.
+- `add()` does the reassignment dance (`raw = list(session.get(...)); raw.append(...); session[_SESSION_KEY] = raw`) — Starlette SessionMiddleware only flags dirty on top-level key reassignment.
+- `drain()` reassigns the bucket to `[]` (NOT `del`) so double-drain is safe; normalizes legacy string entries to `FlashMessage(level=INFO, text=raw)` to survive mid-deploy cookie shape drift.
+- `get_messages(request: Request) -> Messages` dep factory; `MessagesDep = Annotated[Messages, Depends(get_messages)]`.
+
+**Full implementation:**
+
+```python
+# src/admin/deps/messages.py (~100 LOC)
+"""FastAPI dependency for transient user-facing messages across redirects.
+
+Native greenfield replacement for Flask's flash() / get_flashed_messages.
+Messages are POSTed by handlers, survive a Post/Redirect/Get round-trip in
+request.session["_messages"], and drained by the next GET handler that renders
+a template.
+"""
+from __future__ import annotations
+
+from enum import Enum
+from typing import Annotated
+
+from fastapi import Depends
+from pydantic import BaseModel
+from starlette.requests import Request
+
+
+class MessageLevel(str, Enum):
+    INFO = "info"
+    SUCCESS = "success"
+    WARNING = "warning"
+    ERROR = "error"
+
+
+class FlashMessage(BaseModel):
+    level: MessageLevel
+    text: str
+
+
+_SESSION_KEY = "_messages"
+
+
+class Messages:
+    """Per-request message helper. Constructed by get_messages() dep."""
+    __slots__ = ("_request",)
+
+    def __init__(self, request: Request) -> None:
+        self._request = request
+
+    def add(self, level: MessageLevel, text: str) -> None:
+        if not text:
+            return
+        raw = list(self._request.session.get(_SESSION_KEY, []))
+        raw.append(FlashMessage(level=level, text=text).model_dump(mode="json"))
+        self._request.session[_SESSION_KEY] = raw  # reassignment dirties session
+
+    def info(self, text: str) -> None: self.add(MessageLevel.INFO, text)
+    def success(self, text: str) -> None: self.add(MessageLevel.SUCCESS, text)
+    def warning(self, text: str) -> None: self.add(MessageLevel.WARNING, text)
+    def error(self, text: str) -> None: self.add(MessageLevel.ERROR, text)
+
+    def drain(self) -> list[FlashMessage]:
+        raw = list(self._request.session.get(_SESSION_KEY, []))
+        if not raw:
+            return []
+        self._request.session[_SESSION_KEY] = []  # reassign not del — double-drain safe
+        out: list[FlashMessage] = []
+        for entry in raw:
+            if isinstance(entry, dict):
+                try:
+                    out.append(FlashMessage.model_validate(entry))
+                except Exception:
+                    continue
+            elif isinstance(entry, str):
+                out.append(FlashMessage(level=MessageLevel.INFO, text=entry))
+        return out
+
+
+def get_messages(request: Request) -> Messages:
+    return Messages(request)
+
+
+MessagesDep = Annotated[Messages, Depends(get_messages)]
+```
+
+**Handler pattern:**
+
+```python
+@router.post("/tenant/{tenant_id}/accounts/add", name="admin_accounts_create_account")
+def create_account(
+    tenant_id: str,
+    request: Request,
+    tenant: CurrentTenantDep,
+    messages: MessagesDep,
+    name: Annotated[str, Form()],
+) -> RedirectResponse:
+    if not name.strip():
+        messages.error("Account name is required.")
+        return RedirectResponse(
+            request.url_for("admin_accounts_create_account_form", tenant_id=tenant_id),
+            status_code=303,
+        )
+    # ... repo call ...
+    messages.success(f"Account '{name}' created.")
+    return RedirectResponse(
+        request.url_for("admin_accounts_list_accounts", tenant_id=tenant_id),
+        status_code=303,
+    )
+```
+
+**Template integration:** `messages` appears in template context via `BaseCtxDep.drain()` (called exactly once per request because FastAPI dep-caches `Depends()` results). Templates consume `{% for m in messages %}<div class="alert alert-{{ m.level.value }}">{{ m.text }}</div>{% endfor %}`. NO Jinja global trampoline. NO implicit read-and-pop on render.
+
+### §D8-native.2 — Inline `SessionMiddleware` registration (replaces §11.2 sessions.py)
+
+**Registration site:** `src/app.py::build_middleware_stack(app)` via `app.add_middleware(SessionMiddleware, **session_middleware_kwargs())`. Helper `session_middleware_kwargs()` lives in `src/app.py` (or `src/core/settings.py` at L4).
+
+**Kwargs (byte-locked):**
+
+```python
+# src/app.py (inline; no src/admin/sessions.py)
+import os
+from typing import Any
+
+
+class SessionSecretMissingError(RuntimeError):
+    """Raised when SESSION_SECRET is missing or too short. Refuse to start."""
+
+
+def _require_session_secret() -> str:
+    secret = os.environ.get("SESSION_SECRET", "").strip()
+    if not secret:
+        raise SessionSecretMissingError(
+            "SESSION_SECRET env var is required. "
+            "Generate: python -c 'import secrets; print(secrets.token_urlsafe(64))'"
+        )
+    if len(secret) < 32:
+        raise SessionSecretMissingError(
+            f"SESSION_SECRET too short ({len(secret)} chars); need >=32"
+        )
+    return secret
+
+
+def _is_production() -> bool:
+    return os.environ.get("PRODUCTION", "").lower() == "true"
+
+
+def session_middleware_kwargs() -> dict[str, Any]:
+    production = _is_production()
+    kwargs: dict[str, Any] = {
+        "secret_key": _require_session_secret(),
+        "session_cookie": "adcp_session",        # byte-locked rename from Flask's "session"
+        "max_age": 14 * 24 * 3600,                # 14 days
+        "same_site": "lax",                        # D8 #4 §3; SSE deletion removed SameSite=None reason
+        "https_only": production,                  # HttpOnly is Starlette default — intentional
+        "path": "/",
+    }
+    if production and not is_single_tenant_mode():
+        domain = get_session_cookie_domain()
+        if domain:
+            kwargs["domain"] = domain              # e.g. ".sales-agent.example.com" for subdomain sharing
+    return kwargs
+```
+
+**OAuth transit coexistence:** The OIDC `form_post` flow (Invariant 6) needs a **separate** `oauth_transit_<12-hex-flow-id>` cookie for `{state, nonce, code_verifier}` because OIDC callbacks are CSRF-exempt and need `SameSite=None; Secure; HttpOnly`. Our session cookie is `SameSite=Lax`. Per-flow cookie naming prevents concurrent-tab collision (B7 mitigation). See §11.6.1 for the full design.
+
+### §D8-native.3 — `app.state.templates` + `TemplatesDep`/`BaseCtxDep` (replaces §11.1 templating.py)
+
+**Instance location:** `Jinja2Templates(directory="src/admin/templates")` bound to `app.state.templates` in `src/app.py::lifespan`. The `_url_for` safe-lookup override is pre-registered on `app.state.templates.env.globals["url_for"]` BEFORE any `TemplateResponse` call — Starlette's `Jinja2Templates._setup_env_defaults` at `starlette/templating.py:118-129` uses `setdefault`, so pre-registration wins. Custom filters (`from_json`, `markdown`, `tojson_safe`) likewise pre-registered at lifespan.
+
+**Deps:**
+
+```python
+# src/admin/deps/templates.py (~30 LOC)
+from __future__ import annotations
+from typing import Annotated, Any
+
+from fastapi import Depends
+from fastapi.templating import Jinja2Templates
+from starlette.requests import Request
+
+from src.admin.deps.messages import MessagesDep
+from src.core.domain_config import get_sales_agent_domain, get_support_email
+
+
+def get_templates(request: Request) -> Jinja2Templates:
+    """Return the app-state-bound Jinja2Templates instance."""
+    return request.app.state.templates
+
+
+TemplatesDep = Annotated[Jinja2Templates, Depends(get_templates)]
+
+
+def get_base_context(
+    request: Request,
+    messages: MessagesDep,
+) -> dict[str, Any]:
+    """Auto-merged template context — replaces Flask's inject_context() processor.
+
+    Contents: messages (drained FlashMessage list), support_email, sales_agent_domain,
+    user_email, user_name, user_authenticated, user_role, test_mode. NO csrf_token
+    (CSRFOriginMiddleware uses Origin validation). NO tenant (N+1 risk — handlers
+    load on-demand via CurrentTenantDep).
+    """
+    session = request.session
+    return {
+        "messages": messages.drain(),
+        "support_email": get_support_email(),
+        "sales_agent_domain": get_sales_agent_domain() or "example.com",
+        "user_email": session.get("user"),
+        "user_name": session.get("user_name"),
+        "user_authenticated": bool(session.get("user")),
+        "user_role": session.get("role"),
+        "test_mode": False,
+    }
+
+
+BaseCtxDep = Annotated[dict[str, Any], Depends(get_base_context)]
+```
+
+**Canonical handler form:**
+
+```python
+from src.admin.deps.auth import CurrentTenantDep
+from src.admin.deps.messages import MessagesDep
+from src.admin.deps.templates import TemplatesDep, BaseCtxDep
+
+@router.get(
+    "/tenant/{tenant_id}/accounts",
+    name="admin_accounts_list_accounts",
+    response_class=HTMLResponse,
+)
+def list_accounts(
+    tenant_id: str,
+    request: Request,
+    tenant: CurrentTenantDep,
+    templates: TemplatesDep,
+    base_ctx: BaseCtxDep,
+) -> HTMLResponse:
+    with get_db_session() as session:
+        accounts = AccountRepository(session).list_by_tenant(tenant_id)
+    return templates.TemplateResponse(
+        request,
+        "accounts_list.html",
+        {**base_ctx, "tenant": tenant, "accounts": accounts},
+    )
+```
+
+**Exception handlers (cannot accept `Depends()`):** reach into `request.app.state.templates` directly, build a minimal inline context dict (no `BaseCtxDep`). Example:
+
+```python
+@app.exception_handler(AdCPError)
+async def adcp_error_handler(request: Request, exc: AdCPError):
+    mode = _response_mode(request)   # per §11.10
+    templates = request.app.state.templates
+    if mode == "html_full":
+        return templates.TemplateResponse(
+            request, "error.html",
+            {"error": exc.message, "status_code": exc.status_code,
+             "support_email": get_support_email()},
+            status_code=exc.status_code,
+        )
+    return JSONResponse(status_code=exc.status_code,
+                       content={"detail": exc.message})
+```
+
+### §D8-native.4 — Structural guards
+
+- `tests/unit/test_architecture_no_admin_wrapper_modules.py` — asserts `src/admin/flash.py`, `src/admin/sessions.py`, `src/admin/templating.py` do NOT exist AND no `from src.admin.flash import`, `from src.admin.sessions import`, or `from src.admin.templating import render` in `src/` or `tests/`. Empty allowlist at D8 land.
+- `tests/unit/test_architecture_messages_dep_coverage.py` — every POST handler returning `RedirectResponse` with status 302/303/307 either takes `messages: MessagesDep` OR is allowlisted (empty allowlist at D8 land).
+- `tests/unit/test_architecture_templates_receive_dtos_not_orm.py` — every `templates.TemplateResponse(request, name, context)` call has context values that are primitives/Pydantic models/dict-spread from `BaseCtxDep` — never raw ORM instances.
+
+### §D8-native.5 — Test pattern
+
+Seed sessions via a `seed_session(client, **kv)` helper in `tests/harness/_base.py` that signs a cookie with the same `itsdangerous.TimestampSigner` SessionMiddleware uses. `dependency_overrides` does NOT target middleware; seed a known-empty cookie for the "no session" case.
+
+```python
+def test_post_redirect_get_preserves_message():
+    with TestClient(app) as c:
+        r1 = c.post("/make", follow_redirects=False)
+        assert r1.status_code == 303
+        r2 = c.get("/show")
+        assert 'class="alert alert-success"' in r2.text
+```
+
+---
+
 ## 11.1 `src/admin/templating.py`
 
-> **[UPDATED 2026-04-16 per D8 #4]:** This wrapper module is **NOT created as a standalone file**. See L0 briefing in `execution-plan.md` — `Jinja2Templates(directory="src/admin/templates")` is attached to `app.state.templates` in lifespan startup at L0; handlers access via `request.app.state.templates.TemplateResponse(...)`. The `render()` wrapper function is likewise not created; `Jinja2Templates` via `app.state` is the canonical path. Structural guard `tests/unit/test_architecture_no_admin_wrapper_modules.py` asserts `src/admin/templating.py` does NOT exist. The sections below document the ORIGINAL wrapper-module design for historical reference.
+> **[SUPERSEDED by D8 #4 — see §D8-native above. DO NOT implement the code below.]** This wrapper module is **NOT created as a standalone file**. See L0 briefing in `execution-plan.md` — `Jinja2Templates(directory="src/admin/templates")` is attached to `app.state.templates` in lifespan startup at L0; handlers access via `request.app.state.templates.TemplateResponse(...)` or `TemplatesDep`. The `render()` wrapper function is likewise not created. Structural guard `tests/unit/test_architecture_no_admin_wrapper_modules.py` asserts `src/admin/templating.py` does NOT exist. The sections below document the ORIGINAL wrapper-module design for historical reference.
 
 > **[L0-L2 — HISTORICAL]** This module is part of Flask removal. Use sync patterns. It stays sync through L4 and auto-converts at L5 only to the extent its callers flip to `async def` (most functions here are framework-agnostic utilities and remain sync across all layers).
 
