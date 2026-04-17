@@ -1235,7 +1235,8 @@ def add_product(tenant_id):
                         try:
                             product_kwargs["variant_ttl_days"] = int(variant_ttl_days)
                         except ValueError:
-                            pass  # Leave as None if invalid
+                            flash(f"Invalid variant TTL days: '{variant_ttl_days}' is not a number", "error")
+                            return _render_add_product_form(tenant_id, form_data=form_data)
 
                 # Create product with correct fields matching the Product model
                 product = Product(**product_kwargs)
