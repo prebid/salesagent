@@ -22,7 +22,7 @@ The **source of truth** for "am I ready to ship Wave N?" is `implementation-chec
 
 ## Ownership & Bus-Factor Policy
 
-> **Why this section exists:** A 72–110 engineer-day migration with an irreversible cut (L2) and async-conversion cliff (L5) cannot be bus-factor 1. This section assigns the named roles, defines the handoff protocol, and sets the reviewer-rotation rules that prevent single-person concentration. All `[TO BE ASSIGNED]` entries must be populated **before L0 sprint kickoff** — the assignment is itself a gate.
+> **Why this section exists:** A 72–104 engineer-day migration with an irreversible cut (L2) and async-conversion cliff (L5) cannot be bus-factor 1. This section assigns the named roles, defines the handoff protocol, and sets the reviewer-rotation rules that prevent single-person concentration. All `[TO BE ASSIGNED]` entries must be populated **before L0 sprint kickoff** — the assignment is itself a gate.
 
 ### Roles
 
@@ -306,7 +306,7 @@ Pre-L5 research spikes. Each has a HARD or SOFT gate; HARD = STOP and reassess i
 | 7 | GAM adapter threadpool saturation test | SOFT | L5a | 0.5 day | Informs threadpool size + per-adapter CapacityLimiter |
 | **8** | **L5 go/no-go decision gate** (aggregates 1-7 + writes spike-decision.md) | **HARD** | **L5a EXIT** | 0.5 day | **Decision point**: proceed full async, reduce scope, OR ship L0-L4 only and defer async to v2.1 |
 
-**Total spike budget:** 5.5-8 days.
+**Total spike budget:** 7.5-9 days (corrected 2026-04-16 — previous "5.5-8" undercounted by 2 days per table-row sum).
 
 Spike 8 is NOT a technical spike — it is the formal decision gate at L5a end. This resolves the 10-vs-11 count ambiguity: **"10 technical spikes + 1 decision gate = 11 total pre-L5b work items."**
 
@@ -323,6 +323,8 @@ Spike 8 is NOT a technical spike — it is the formal decision gate at L5a end. 
 9. **Spike 6 — Alembic async**: rewrite `alembic/env.py`; run upgrade/downgrade roundtrip. Fallback: keep env.py sync.
 10. **Spike 7 — `server_default` audit**: grep + categorize columns; confirm <30 to rewrite. (In the canonical table above, row 7 is re-themed as "GAM adapter threadpool saturation test" per the 2026-04-14 canonicalization — both test series run in parallel; the `server_default` audit rolls into the Spike 1 fix inventory.)
 11. **Spike 8 — L5 go/no-go decision gate** (HARD): at L5a EXIT, commit `spike-decision.md` with: pass/fail summary per spike 1-7, `baseline-sync.json` comparison (if any L5 experiments were run on the spike branch), resolved status of the 9 open decisions (1-9), and the final go/no-go call. **Go condition:** Spike 1 PASSES AND no more than 2 soft spikes fail. **No-go condition:** Spike 1 FAILS OR more than 2 soft spikes fail — narrow L5 scope or defer async to v2.1 (L0-L4 ships regardless).
+
+**NO-GO release-tag naming rule (hard):** If Spike 8 returns NO-GO and L5+ is deferred to v2.1, the release tag is **`v1.99.0`** (or equivalent pre-v2 identifier), NOT `v2.0.0`. `v2.0.0` is reserved for the full async shipment per the user-stated v2.0 contract ("v2.0 addresses every possible issue including async"). A sync-only ship would violate the contract. This naming rule is a hard gate at L5a EXIT and is re-checked at L7 release time — mismatch blocks the tag. Structural guard is impractical (release-tag naming is a human decision), but the L5a Spike 8 checklist + L7 pre-release checklist both enforce.
 
 ---
 
@@ -465,7 +467,7 @@ Legacy "Wave" section headings predate the 8-layer rename. Translation:
 | L5e   | 3–4                      | Final async sweep + perf baseline vs L4 exit |
 | L6    | 3–4                      | flash.py, app.state cache, logfire, router subdir reorg |
 | L7    | 3–5                      | Allowlists → 0, mypy strict, docs refresh, v2.0.0 tag |
-| **Total** | **72–110 engineer-days** | Sequential baseline |
+| **Total** | **72–104 engineer-days** | Sequential baseline (sum of per-row lows / highs; corrected 2026-04-16 — previous "72–110" stated upper was off by 6 days) |
 
 **Calendar time:** 14–22 weeks with single-engineer sequencing + staging bakes (L1c 3d, L2 48h, L5b 48h, L7 1 week).
 
