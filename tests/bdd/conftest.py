@@ -939,12 +939,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "assignment scenarios — JSONDecodeError on response parse"
             ),
             "T-UC-006-partition-assignments-structure": (
-                "e2e_rest: sync_creatives REST endpoint returns empty body — "
-                "JSONDecodeError on response parse"
+                "e2e_rest: sync_creatives REST endpoint returns empty body — JSONDecodeError on response parse"
             ),
             "T-UC-006-boundary-assignments-structure": (
-                "e2e_rest: sync_creatives REST endpoint returns empty body — "
-                "JSONDecodeError on response parse"
+                "e2e_rest: sync_creatives REST endpoint returns empty body — JSONDecodeError on response parse"
             ),
             "T-UC-006-boundary-assignment-package": (
                 "e2e_rest: sync_creatives REST assignment scenarios — "
@@ -1161,20 +1159,78 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # UC-004 boundary scenarios: strict=False because some examples pass.
         # Invalid boundary values SHOULD fail validation but production doesn't validate.
         # Valid boundary values pass through fine.
+        # Graduated to selective xfail (only failing subset marked):
+        # T-UC-004-boundary-attribution, T-UC-004-boundary-daily-breakdown,
+        # T-UC-004-boundary-account, T-UC-004-boundary-status-filter,
+        # T-UC-004-boundary-resolution, T-UC-004-boundary-resolution (media_buy)
         _UC004_BOUNDARY_TAGS = {
             "T-UC-004-boundary-reporting-dims",
-            "T-UC-004-boundary-attribution",
-            "T-UC-004-boundary-daily-breakdown",
-            "T-UC-004-boundary-account",
             "T-UC-004-boundary-sampling",
-            "T-UC-004-boundary-status-filter",
-            "T-UC-004-boundary-date-range",
-            "T-UC-004-boundary-resolution",
-            "T-UC-004-boundary-ownership",
             "T-UC-004-boundary-credentials",
+            # All boundary examples fail on at least one transport:
+            "T-UC-004-boundary-date-range",
+            "T-UC-004-boundary-ownership",
         }
         if marker_names & _UC004_BOUNDARY_TAGS:
             item.add_marker(pytest.mark.xfail(reason="boundary validation partially implemented", strict=False))
+
+        # --- UC-004 boundary: selective xfail for graduated strong groups ---
+        # Only the failing subset gets xfailed; clean-pass examples graduate to PASS.
+        _UC004_BOUNDARY_SELECTIVE: list[tuple[str, set[str], str]] = [
+            # attribution_window: impl/mcp/rest valid tests + a2a invalid tests fail
+            # Clean-pass examples: both windows, model only, omitted
+            (
+                "T-UC-004-boundary-attribution",
+                {
+                    "empty object",
+                    "interval=0",
+                    "interval=1 (minimum",
+                    "model=last_click",
+                    "post_click only",
+                    "seller ignores",
+                    "unit=campaign with interval=1",
+                    "unit=campaign with interval=2",
+                    "unit=weeks",
+                },
+                "attribution_window boundary: production gaps on some transports",
+            ),
+            # delivery_account: a2a invalid + impl invalid + mcp/rest valid account_id/brand fail
+            # Clean-pass example: omitted (no account field)
+            (
+                "T-UC-004-boundary-account",
+                {
+                    "account_id present",
+                    "both account_id",
+                    "brand + operator",
+                    "empty object",
+                },
+                "delivery account boundary: production gaps on some transports",
+            ),
+            # include_package_daily_breakdown: only non_boolean fails (all transports)
+            (
+                "T-UC-004-boundary-daily-breakdown",
+                {"non-boolean", "non_boolean", "string 'true'"},
+                "include_package_daily_breakdown boundary: non-boolean validation not implemented",
+            ),
+            # media_buy_resolution: buyer_refs, partial, zero, empty array fail
+            # Clean-pass: media_buy_ids only, both provided, neither provided
+            (
+                "T-UC-004-boundary-resolution",
+                {"buyer_refs only", "empty array", "partial resolution", "zero resolution"},
+                "media_buy_resolution boundary: production gaps on some transports",
+            ),
+            # status_filter: only "failed" and "[]" fail on some transports
+            (
+                "T-UC-004-boundary-status-filter",
+                {"not in AdCP enum", "empty array, violates"},
+                "status_filter boundary: invalid enum/empty array validation not implemented",
+            ),
+        ]
+        for tag, substrings, reason in _UC004_BOUNDARY_SELECTIVE:
+            if tag in marker_names:
+                if any(s in nodeid for s in substrings):
+                    item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
+                break
 
         # UC-004 partition scenarios: adcp 3.10 changed schema validation behavior.
         # Partition tests exercise valid/invalid value ranges per field.
