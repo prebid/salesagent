@@ -1501,7 +1501,9 @@ Rationale: prevents post-migration drift back to lazy-by-default relationships t
 
 ## 11.1 `src/admin/templating.py`
 
-> **[L0-L2]** This module is part of Flask removal. Use sync patterns. It stays sync through L4 and auto-converts at L5 only to the extent its callers flip to `async def` (most functions here are framework-agnostic utilities and remain sync across all layers).
+> **[UPDATED 2026-04-16 per D8 #4]:** This wrapper module is **NOT created as a standalone file**. See L0 briefing in `execution-plan.md` — `Jinja2Templates(directory="src/admin/templates")` is attached to `app.state.templates` in lifespan startup at L0; handlers access via `request.app.state.templates.TemplateResponse(...)`. The `render()` wrapper function is likewise not created; `Jinja2Templates` via `app.state` is the canonical path. Structural guard `tests/unit/test_architecture_no_admin_wrapper_modules.py` asserts `src/admin/templating.py` does NOT exist. The sections below document the ORIGINAL wrapper-module design for historical reference.
+
+> **[L0-L2 — HISTORICAL]** This module is part of Flask removal. Use sync patterns. It stays sync through L4 and auto-converts at L5 only to the extent its callers flip to `async def` (most functions here are framework-agnostic utilities and remain sync across all layers).
 
 ### A. Implementation
 
@@ -1811,7 +1813,9 @@ class TestRenderIntegratesWithTenantDep:
 
 ## 11.2 `src/admin/sessions.py`
 
-> **[L0-L2]** This module is part of Flask removal. Use sync patterns. It stays sync through L4 and auto-converts at L5 only to the extent its callers flip to `async def` (most functions here are framework-agnostic utilities and remain sync across all layers).
+> **[UPDATED 2026-04-16 per D8 #4]:** This wrapper module is **NOT created as a standalone file**. See L0 briefing in `execution-plan.md` — `SessionMiddleware` is registered inline in `src/app.py::build_middleware_stack()` at L1a with the kwargs documented below (`session_cookie="adcp_session"`, `same_site="lax"`, `https_only` in production). Structural guard `tests/unit/test_architecture_no_admin_wrapper_modules.py` asserts `src/admin/sessions.py` does NOT exist. The sections below document the ORIGINAL wrapper-module design for historical reference.
+
+> **[L0-L2 — HISTORICAL]** This module is part of Flask removal. Use sync patterns. It stays sync through L4 and auto-converts at L5 only to the extent its callers flip to `async def` (most functions here are framework-agnostic utilities and remain sync across all layers).
 
 ### A. Implementation
 
@@ -1965,7 +1969,9 @@ class TestSessionMiddlewareKwargs:
 
 ## 11.3 `src/admin/flash.py`
 
-> **[L0-L2]** This module is part of Flask removal. Use sync patterns. It stays sync through L4 and auto-converts at L5 only to the extent its callers flip to `async def` (most functions here are framework-agnostic utilities and remain sync across all layers).
+> **[UPDATED 2026-04-16 per D8 #4]:** This wrapper module is **NOT created as a standalone file**. See L1b/L2 briefing in `execution-plan.md` — flash state uses `src/admin/deps/messages.py::MessagesDep` (`Annotated[MessagesHelper, Depends(get_messages)]`) reading/writing a `list[FlashMessage]` (Pydantic-typed) on `request.session["flash"]`. The ~366 Flask `flash(...)` call sites codemod to `messages.add(...)`. Structural guard `tests/unit/test_architecture_no_admin_wrapper_modules.py` asserts `src/admin/flash.py` does NOT exist. The sections below document the ORIGINAL wrapper-module design for historical reference.
+
+> **[L0-L2 — HISTORICAL]** This module is part of Flask removal. Use sync patterns. It stays sync through L4 and auto-converts at L5 only to the extent its callers flip to `async def` (most functions here are framework-agnostic utilities and remain sync across all layers).
 
 ### A. Implementation
 

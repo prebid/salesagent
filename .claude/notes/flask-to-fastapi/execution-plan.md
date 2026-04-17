@@ -98,7 +98,7 @@ Key rules:
     **2.7** `src/admin/request_id.py` (~30 LOC) — `RequestIDMiddleware`. Generates a UUID per request, stashes on `request.state.request_id`, echoes back as `X-Request-ID` response header; accepts inbound `X-Request-ID` if present. Used by structlog binding in L4 for trace correlation. See `foundation-modules.md` §11.9.5.
     **Done =** `X-Request-ID` echoed in response; re-request with same ID preserves it; unit test asserts both paths.
 
-    **2.8** `src/admin/unified_auth.py` (~250 LOC) — Pure-ASGI auth middleware. Replaces Flask's `require_auth` decorator. Loads session, resolves `ResolvedIdentity`, stashes on `request.state.identity`. Path-gated (public routes bypass). Returns 401 JSON or HTML 302-to-login based on Accept header. See `foundation-modules.md` §11.11.
+    **2.8** `src/admin/unified_auth.py` (~250 LOC) — Pure-ASGI auth middleware. Replaces Flask's `require_auth` decorator. Loads session, resolves `ResolvedIdentity`, stashes on `request.state.identity`. Path-gated (public routes bypass). Returns 401 JSON or HTML 302-to-login based on Accept header. Registered in the root `src/app.py` middleware stack per `foundation-modules.md` §11.36 `MIDDLEWARE_STACK_VERSION` table; the admin-side dep that consumes `request.state.identity` is documented in `foundation-modules.md` §11.4 `src/admin/deps/auth.py`.
     **Done =** authenticated request populates `request.state.identity`; unauthenticated `/admin/*` request redirects to login (HTML) or 401 (JSON); `test_architecture_no_werkzeug_imports.py` guard shrinks by this module's former Flask dependency.
 
     **2.9** `src/admin/oauth.py` (~60 LOC) — Authlib `starlette_client.OAuth()` registration for Google and per-tenant OIDC providers. Callback URI constants pinned: `/admin/auth/google/callback`, `/admin/auth/oidc/callback`, `/admin/auth/gam/callback` (byte-immutable with Google Cloud Console). See `foundation-modules.md` §11.6.
@@ -426,7 +426,7 @@ git grep -l "flask" src/admin/ | wc -l  # <= 2
 5. Delete: `src/admin/app.py`, `activity_stream.py`, `blueprints/` dir, `server.py`, `scripts/run_admin_ui.py`, dead helpers [§4 Wave 3].
 6. Modify `src/app.py`: delete Flask mount, `/a2a/` redirect shim, landing route hack, proxy refs, feature flag [§4 Wave 3].
 7. `git mv templates/ src/admin/templates/` and `static/ src/admin/static/` [§4 Wave 3].
-8. Add `--proxy-headers --forwarded-allow-ips='*'` to uvicorn in `scripts/run_server.py` AND in the Dockerfile CMD [§4 Wave 3]. Add `TrustedHostMiddleware` to `src/app.py` with the production host allowlist to replace Flask's WSGI-era `CustomProxyFix`/`FlyHeadersMiddleware` stack. Also add `SecurityHeadersMiddleware` (§11.28, ~70 LOC) positioned INSIDE `TrustedHost` and OUTSIDE `UnifiedAuth` — brings canonical stack to 9 middlewares at L2.
+8. Add `proxy_headers=True, forwarded_allow_ips='*'` kwargs to `uvicorn.run(...)` in `scripts/run_server.py` (the single canonical entrypoint per §11.8 — NOT in Dockerfile CMD). `scripts/deploy/run_all_services.py` inherits via `subprocess.Popen([sys.executable, "scripts/run_server.py", ...])`; `fly.toml` process entry runs the same script. Verify with `rg -n 'proxy_headers' scripts/ | wc -l` at L2 exit — expected 1 hit in `scripts/run_server.py`. Add `TrustedHostMiddleware` to `src/app.py` with the production host allowlist to replace Flask's WSGI-era `CustomProxyFix`/`FlyHeadersMiddleware` stack. Also add `SecurityHeadersMiddleware` (§11.28, ~70 LOC) positioned INSIDE `TrustedHost` and OUTSIDE `UnifiedAuth`. Per §11.36 `MIDDLEWARE_STACK_VERSION`, L2 bumps stack from version 2 (L1c, 8 middlewares) to version 3 (10 middlewares including the D1 `LegacyAdminRedirectMiddleware`).
 8a. Implement `src/routes/health.py` per §11.31: `/healthz` (liveness, never DB), `/readyz` (readiness, DB + alembic + scheduler), `/health/db` + `/health/pool` (diagnostic), `/admin/health` 308-redirect to `/healthz`. Update `fly.toml` http_checks → `/readyz`.
 8b. Implement `src/admin/rate_limits.py` per §11.32 (SlowAPI, memory backend, key-function prefers auth token over IP). Add `slowapi>=0.1.9` to `pyproject.toml`. Decorate `POST /admin/login` (5/min), OAuth init endpoints (20/min), MCP mount (100/min per token).
 8c. Add `tests/integration/test_session_cookie_size.py` cookie-size budget guard per §11.33 (`MAX_COOKIE_BYTES = 3_584`). Add `heavy_tenant_session_client` fixture to `tests/integration/conftest.py`.
@@ -446,6 +446,7 @@ git grep -l "flask" src/admin/ | wc -l  # <= 2
 21. Update auto-memory `flask_to_fastapi_migration_v2.md` to reflect Flask removal milestone.
 22. **L2 work item (D6 breaking change):** Hard-remove `FLASK_SECRET_KEY` dual-read. Delete the fallback read in SessionMiddleware registration. Update `scripts/setup-dev.py:143` to write `SESSION_SECRET` only. Delete `tests/unit/test_setup_dev.py::test_flask_secret_key_*`. Add structural guard `tests/unit/test_architecture_no_flask_secret_key_reads.py` with EMPTY allowlist. Update `docs/environment.md` and v2.0 release notes.
 23. **L2 work item (D8 #7 breaking):** Convert `/_internal/*` routes to require `X-Internal-API-Key` header matching `INTERNAL_API_KEY` env var. Delete `ADCP_TESTING == 'true'` gate at `src/routes/health.py:30,51`. Update test harness to inject the header. Add `INTERNAL_API_KEY` to `.env.example`. Structural guard `tests/unit/test_architecture_internal_routes_api_key_authed.py` asserts every `/_internal/*` route depends on `require_internal_api_key`.
+24. **L2 work item — explicit lifespan adoption (2026-native baseline):** Grep `src/` for `@app.on_event` (legacy pre-lifespan decorator). Replace with `@asynccontextmanager lifespan(app): yield`. Register via `FastAPI(lifespan=lifespan)`. Inside the lifespan context: initialize `app.state.db_engine`, `app.state.sessionmaker`, `app.state.templates`, `app.state.http_client` (async) + `app.state.http_client_sync`, `app.state.oauth`, `app.state.inventory_cache`, `app.state.active_sync_tasks`, plus structlog processor setup and scheduler starts. Shutdown: close engine, http clients, cancel all active async tasks, stop schedulers. Structural guard `tests/unit/test_architecture_no_on_event_handlers.py` with EMPTY allowlist prevents regression to `@app.on_event`. CLAUDE.md §2026 FastAPI-native baseline mandates the lifespan context manager.
 
 **Files to delete:** `src/admin/app.py`, `src/admin/blueprints/`, `src/admin/server.py`, `scripts/run_admin_ui.py`.
 **Files to modify:** `src/app.py`, `pyproject.toml`, `scripts/run_server.py`, `src/admin/templating.py` (template path).
@@ -559,6 +560,9 @@ Attach `httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0), limits=httpx
 **L4 work item — AsyncAttrs decision (L5+ lazy-load safety):**
 Document rationale for choosing blanket `lazy="raise"` (Spike 1) over SQLAlchemy's `AsyncAttrs` mixin for async lazy-load safety. Both are valid 2026-native idioms; blanket `lazy="raise"` was selected because: (a) it fails LOUDLY at query time rather than silently issuing an extra async `SELECT` via `awaitable_attrs`, (b) all 68 existing relationship access sites have been cataloged in Spike 1's 9-pattern cookbook; (c) `AsyncAttrs` is additive and can be layered on top post-v2.0 if specific access patterns warrant it.
 
+**L4 work item — transport-boundary preservation for admin→`_impl` calls:**
+Admin handlers that call `_impl` functions MUST construct `ResolvedIdentity` via `src/admin/deps/identity.py::AdminIdentityDep` (resolves from session cookie + tenant resolution), NOT via `resolve_identity(ctx.http.headers)` which is the MCP/A2A-side helper and would import `fastmcp` types into admin code. Structural guard `tests/unit/test_architecture_admin_impl_calls_use_admin_identity.py` AST-scans admin router files for `resolve_identity(...)` calls and asserts the source is `AdminIdentityDep`, not `ctx.http.headers`. Preserves project-root `CLAUDE.md` §5 transport-boundary invariants (zero `fastmcp`/`a2a`/`starlette`/`fastapi` imports in `_impl`).
+
 **Exit gate:**
 ```bash
 make quality && ./run_all_tests.sh  # green
@@ -646,7 +650,7 @@ wc -l "$OUT"
 |---|---|---|
 | `convert` | L5c (pilot 3 routers) + L5d3 (bulk routers + repositories) + L5d5 (mop-up `_impl`/`tools.py`/`main.py`) + L5e (final sweep) | Site becomes `async def` + `await` |
 | `threadpool` | L5d2 | Site becomes `await run_in_threadpool(sync_fn, ...)` — adapters stay sync |
-| `sync-bridge` | L5d1 | Site rewrites `get_db_session()` → `get_sync_db_session()` imported from `src/services/background_sync_db.py` |
+| `async-rearchitect` | L5d1 | Site converts to `asyncio.create_task` + short-lived `async with get_db_session()` per GAM-page batch with checkpoint resume (D3 supersedes 2026-04-11 sync-bridge) |
 | `delete` | L5d4 | Site is deleted along with dead-code SSE route |
 
 **Important path corrections (from verification audit):**
@@ -841,9 +845,9 @@ make quality && ./run_all_tests.sh  # green
 
 **Goal:** Complete the async conversion surface. Split by risk / failure domain — each sub-PR is independently revertible.
 
-#### L5d1 — Sync-bridge for background_sync_service (Decision 9)
+#### L5d1 — `background_sync_service` async rearchitect (D3 2026-04-16, supersedes Option B sync-bridge)
 
-Create `src/services/background_sync_db.py` with a separate sync psycopg2 engine and `get_sync_db_session()` factory. `background_sync_service.py` 9 `get_db_session()` imports rewrite to `get_sync_db_session()`. Structural guard `test_architecture_sync_bridge_scope.py` ratchets the allowlist to contain ONLY `background_sync_service.py`.
+Rearchitect `src/services/background_sync_service.py` as `asyncio.create_task` + checkpoint-per-GAM-page. Each GAM-page (~30s) opens its own short-lived `async with get_db_session() as session:`, writes progress to a `sync_checkpoint` row, commits, closes. Resume logic reads checkpoint and continues from next cursor on next tick. `threading.Thread` workers become `asyncio.create_task(...)` in the lifespan, registered on `app.state.active_sync_tasks: dict[str, asyncio.Task]`, cancellable on shutdown. Session lifetime is always << `pool_recycle=3600`; no sync-bridge needed. `src/services/background_sync_db.py` is NOT created (never written). New structural guard `test_architecture_no_threading_thread_for_db_work.py` (empty allowlist) — AST-scans `src/` for `threading.Thread(target=...)` whose body touches `get_db_session` or `session.`. Validated by Spike 5.5 at L5a entry (checkpoint-session viability — 4 test cases: 4-hour sync, concurrent tenants, cancellation, resume from checkpoint). If Spike 5.5 fails (SOFT), revert to pre-D3 Option B sync-bridge and file v2.1 sunset ticket.
 
 #### L5d2 — Adapter Path-B threadpool wrap (Decision 1)
 
@@ -954,7 +958,36 @@ make quality && ./run_all_tests.sh  # green
 
 1. ~~Delete `src/admin/flash.py`~~ — **superseded by D8 #4:** the flash wrapper module was never created at L0; `MessagesDep` on `request.session["flash"]` has been the canonical path since L1a. Verify no `src/admin/flash.py` exists and no code imports from it.
 2. Migrate `SimpleAppCache` from module globals to `app.state.inventory_cache` (set at lifespan startup).
-3. Reorganize `src/admin/routers/` into subdirectories by domain (e.g., `src/admin/routers/auth/`, `src/admin/routers/tenants/`, `src/admin/routers/creatives/`).
+3. **L6 work item — router subdir reorganization (canonical target structure):** Current post-L2 structure is flat: `src/admin/routers/<feature>.py` (per D8 #6 codemod). L6 reorganizes to domain-grouped subdirectories:
+
+    ```
+    src/admin/routers/
+      auth/
+        __init__.py          # re-exports `router = APIRouter(...)`
+        google.py            # GET/POST /auth/google, /auth/google/callback
+        oidc.py              # GET /auth/oidc, /auth/oidc/callback, /.well-known/oidc-*
+        gam.py               # GET /auth/gam, /auth/gam/callback
+        logout.py            # POST /logout
+      tenant/                # /tenant/{tenant_id}/* canonical prefix per D1
+        __init__.py
+        accounts.py
+        products.py
+        principals.py
+        users.py
+        creatives.py
+        creative_agents.py
+        inventory.py
+        inventory_profiles.py
+        operations.py
+        policy.py
+        settings.py
+        workflows.py
+        gam.py
+      tenants.py             # /tenant list/create (not tenant-scoped)
+      public.py              # /login, /logout, /public/*, /about
+    ```
+
+    Each subdir `__init__.py` re-exports its `router` symbol. `src/app.py` includes each via `app.include_router(router, prefix="/tenant/{tenant_id}")` or the canonical prefix per D1. Migration is mechanical: ~30 `git mv` operations + 1 import-line edit per moved file (~50 line edits total). Structural guard `tests/unit/test_architecture_router_subdirs_canonical.py` asserts every file in `src/admin/routers/` matches this structure; allowlist EMPTY after L6 exit.
 4. Add `logfire` instrumentation: wire `logfire.configure()` in lifespan, add FastAPI auto-instrumentation, integrate with the L4 `structlog` pipeline. **Do NOT install `opentelemetry-sdk`** — `logfire` bundles its own OTLP exporter.
 5. Ratchet structural guard allowlists — shrink the pre-existing-debt allowlists now that async conversion is done.
 
@@ -993,6 +1026,7 @@ make quality && ./run_all_tests.sh  # green
 13. Production deploy + 48h monitoring: error rates, latency p50/p99, Docker size, cookie size.
 14. Update auto-memory to mark migration complete.
 15. Delete `feat/v2.0.0-flask-to-fastapi` branch after merge confirmation.
+16. **L7 work item — pure-ASGI middleware discipline guard:** Add `tests/unit/test_architecture_middleware_pure_asgi.py` asserting zero `BaseHTTPMiddleware` subclasses in `src/`. Allowlist EMPTY (no genuine streaming-mutation middleware exists in v2.0). Guard monotonic from L7 forward. Prevents a future maintainer from silently regressing to `BaseHTTPMiddleware` for a logging shim and losing the pure-ASGI invariant per `CLAUDE.md` §2026-native baseline.
 
 **Files to delete:** Sync artifacts (`scoped_session` wrappers, residual UoW classes), `database_schema.py`, `product_pricing.py`, dead `queries.py` functions.
 **Files to modify:** `CLAUDE.md` (root), `pyproject.toml`, `docs/ARCHITECTURE.md`, various doc files. (`FLASK_SECRET_KEY` dual-read removal moved to L2.)

@@ -123,7 +123,7 @@ Every item references the companion doc where full detail lives. Tick every box 
 - [ ] **Decision 4 (queries.py convert-and-prune, refined 2026-04-11):** 6 functions (not 7), zero production callers, 3 dead functions → delete + allowlist cleanup. 3 live functions → async conversion. Test file `test_creative_review_model.py` converts to async. Net: ~−100 LOC. Move to `CreativeRepository` deferred to L5+ within v2.0 (Option 4B).
 - [ ] **Decision 5 (database_schema.py + product_pricing.py DELETE, refined 2026-04-11):** `database_schema.py` confirmed orphan → delete Wave 5. `product_pricing.py` has 1 caller already eager-loading, inspect-guard defeated by unconditional log at line 43 → DELETE entirely in Wave 4, inline conversion at single caller as `AdminPricingOptionView` Pydantic DTO. Supersedes Audit 06 SUBSTITUTE (RuntimeError prescription was technically ineffective).
 - [ ] **Decision 6 (flask-caching → SimpleAppCache, refined 2026-04-11):** ~90 LOC module with `cachetools.TTLCache(maxsize=1024, ttl=300)` + `threading.RLock` + `_NullAppCache` fallback + `CacheBackend` Protocol. Both inventory sites rewritten to cache dicts not Flask Response objects. `cache_key`+`cache_time_key` folded into single 2-tuple entry. 12-step strict migration order in Wave 3 PR. 2 structural guards. Full recipe: `foundation-modules.md` §11.15.
-- [ ] **Decision 8 (SSE DELETE, 2026-04-11):** `/tenant/{id}/events` SSE route is orphan code — template says "use polling", zero EventSource consumers. DELETE route + generator + rate-limit state + HEAD probe in Wave 4. Fix `api_mode=False → True` on surviving `/activity` JSON poll route. −170 LOC, −1 pip dep (`sse_starlette`). Structural guard `test_architecture_no_sse_handlers.py`.
+- [ ] **Decision 8 (SSE DELETE, 2026-04-11):** `/tenant/{id}/events` SSE route is orphan code — template says "use polling", zero EventSource consumers. DELETE route + generator + rate-limit state + HEAD probe in Wave 4. Fix `api_mode=False → True` on surviving `/activity` JSON poll route. −170 LOC. (`sse_starlette` is NOT currently in `pyproject.toml` — the "-1 pip dep" framing from the original 2026-04-11 analysis was inflated; no dep to remove.) Structural guard `test_architecture_no_sse_handlers.py`.
 - [ ] **Admin router OpenAPI: `include_in_schema=False`** — documented in `flask-to-fastapi-adcp-safety.md` §3
 - [ ] **`gam_reporting_api.py` reclassified Category 2 → Category 1** (session-cookie authed = admin-UI-only) — documented
 - [ ] **`tenant_management_api.py` route count fixed 19 → 6** in plan docs
@@ -146,7 +146,7 @@ Full detail in `flask-to-fastapi-deep-audit.md` §1.
     - [ ] Pass 1b: `{{ script_name }}/tenant/{{ tenant_id }}/settings` → `{{ url_for('admin_tenants_settings', tenant_id=tenant_id) }}` via `HARDCODED_PATH_TO_ROUTE` map
     - [ ] Pass 2: `{{ url_for('bp.endpoint', ...) }}` Flask-dotted → `{{ url_for('admin_bp_endpoint', ...) }}` via `FLASK_TO_FASTAPI_NAME` map
   - [ ] `scripts/generate_route_name_map.py` exists and produces `FLASK_TO_FASTAPI_NAME` and `HARDCODED_PATH_TO_ROUTE` from `src/admin/app.py::create_app().url_map.iter_rules()` introspection
-  - [ ] Codemod runs successfully against all 73 templates; stdout reports `"N templates processed, M rewrites applied"`
+  - [ ] Codemod runs successfully against all 74 templates (per `async-audit/frontend-deep-audit.md` FE-1 inventory; supersedes earlier 73-count estimate); stdout reports `"N templates processed, M rewrites applied"`
   - [ ] Codemod is idempotent — re-running on post-codemod templates yields zero diff (`tests/unit/admin/test_codemod_idempotent.py` green)
   - [ ] Manual audit of `add_product_gam.html` for JS-literal edge cases (15 `url_for` calls in JS template literals) — verify the `JS_TEMPLATE_LITERAL_RE` pre-pass flags them for manual review
   - [ ] Manual audit of `base.html` (7 `{{ script_name }}` references — highest-fanout template)
@@ -429,8 +429,8 @@ These refactors are strict improvements under the CURRENT `scoped_session` world
   - [ ] `g.test_mode` → `test_mode` (drop `g.` prefix, codemod Pass 0)
   - [ ] JS template literals with `{{ script_name }}` inside backticks → flagged for manual review via `JS_TEMPLATE_LITERAL_RE` pre-pass
   - [ ] Bare `"/admin/..."` / `"/static/..."` string literals in quotes → flagged for manual review via `BARE_ADMIN_RE` post-pass
-- [ ] Codemod runs to exit code 0 against all 73 templates in `/templates/`
-- [ ] Codemod stdout reports `"73 templates processed, N transformations applied"`
+- [ ] Codemod runs to exit code 0 against all 74 templates in `/templates/` (per `async-audit/frontend-deep-audit.md` FE-1 inventory)
+- [ ] Codemod stdout reports `"74 templates processed, N transformations applied"`
 - [ ] Codemod is idempotent: re-running on post-codemod templates yields zero diff
 - [ ] `git diff --stat templates/` shows changes in ≥ 40 files
 - [ ] `rg -n "url_for" templates/ | wc -l` ≥ 134 (did not drop references)
@@ -1231,7 +1231,7 @@ Before L5b (SessionDep alias flip) opens, ALL of the following must be verifiabl
 **L5d4 exit criteria:**
 
 - [ ] `/tenant/{id}/events` route + generator + rate-limit state + HEAD probe deleted.
-- [ ] `sse_starlette` removed from `pyproject.toml`.
+- [ ] Verify `sse_starlette` is NOT in `pyproject.toml` (it was never added — the planned dep from the original 2026-04-11 SSE port never landed; no removal action needed, just confirm absence).
 - [ ] `api_mode=False → True` fix on `/activity` JSON poll route landed.
 - [ ] `test_architecture_no_sse_handlers.py` green with empty allowlist.
 - [ ] Layer-scope commit-lint green; 7-step audit green.
