@@ -9,6 +9,8 @@ Tests the repository pattern with real PostgreSQL to verify:
 beads: salesagent-t735
 """
 
+from datetime import UTC
+
 import pytest
 from sqlalchemy import delete
 
@@ -398,3 +400,101 @@ class TestMediaBuyUoW:
         with get_db_session() as session:
             result = session.get(MediaBuy, "mb_uow_rollback")
             assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Idempotency key lookup (adcp 3.12)
+# ---------------------------------------------------------------------------
+
+
+class TestIdempotencyKeyLookup:
+    """Repository correctly finds media buys by idempotency_key.
+
+    Core invariant: duplicate idempotency_key within (tenant, principal) returns
+    existing media buy, never creates a second row.
+    """
+
+    def test_find_by_idempotency_key_returns_existing(self, tenant_a, principal_a):
+        """find_by_idempotency_key returns the matching media buy."""
+        from src.core.database.repositories.media_buy import MediaBuyRepository
+
+        idem_key = "test-uuid-1234567890abcdef"
+        with get_db_session() as session:
+            buy = make_media_buy(tenant_a, principal_a, "mb_idem_1", idempotency_key=idem_key)
+            session.add(buy)
+            session.commit()
+
+        with get_db_session() as session:
+            repo = MediaBuyRepository(session, tenant_a)
+            found = repo.find_by_idempotency_key(idem_key, principal_a)
+            assert found is not None
+            assert found.media_buy_id == "mb_idem_1"
+
+    def test_find_by_idempotency_key_returns_none_when_missing(self, tenant_a, principal_a):
+        """find_by_idempotency_key returns None for unknown key."""
+        from src.core.database.repositories.media_buy import MediaBuyRepository
+
+        with get_db_session() as session:
+            repo = MediaBuyRepository(session, tenant_a)
+            found = repo.find_by_idempotency_key("nonexistent-key-1234", principal_a)
+            assert found is None
+
+    def test_idempotency_key_scoped_to_tenant(self, tenant_a, tenant_b, principal_a, principal_b):
+        """Same idempotency_key in different tenants are independent."""
+        from src.core.database.repositories.media_buy import MediaBuyRepository
+
+        idem_key = "shared-uuid-1234567890ab"
+        with get_db_session() as session:
+            buy_a = make_media_buy(tenant_a, principal_a, "mb_idem_a", idempotency_key=idem_key)
+            buy_b = make_media_buy(tenant_b, principal_b, "mb_idem_b", idempotency_key=idem_key)
+            session.add(buy_a)
+            session.add(buy_b)
+            session.commit()
+
+        with get_db_session() as session:
+            repo_a = MediaBuyRepository(session, tenant_a)
+            found_a = repo_a.find_by_idempotency_key(idem_key, principal_a)
+            assert found_a is not None
+            assert found_a.media_buy_id == "mb_idem_a"
+
+            repo_b = MediaBuyRepository(session, tenant_b)
+            found_b = repo_b.find_by_idempotency_key(idem_key, principal_b)
+            assert found_b is not None
+            assert found_b.media_buy_id == "mb_idem_b"
+
+    def test_create_from_request_stores_idempotency_key(self, tenant_a, principal_a):
+        """create_from_request persists idempotency_key to the database."""
+        from unittest.mock import MagicMock
+
+        from src.core.database.repositories.media_buy import MediaBuyRepository
+
+        idem_key = "create-test-uuid-123456"
+        mock_req = MagicMock()
+        mock_req.model_dump.return_value = {"test": True}
+        mock_req.po_number = None
+        mock_req.buyer_ref = None
+        mock_req.idempotency_key = idem_key
+
+        from datetime import datetime
+
+        with get_db_session() as session:
+            repo = MediaBuyRepository(session, tenant_a)
+            buy = repo.create_from_request(
+                media_buy_id="mb_idem_create",
+                req=mock_req,
+                principal_id=principal_a,
+                advertiser_name="Test",
+                budget=1000.0,
+                currency="USD",
+                start_time=datetime(2026, 1, 1, tzinfo=UTC),
+                end_time=datetime(2026, 12, 31, tzinfo=UTC),
+            )
+            session.commit()
+            assert buy.idempotency_key == idem_key
+
+        # Verify persisted
+        with get_db_session() as session:
+            repo = MediaBuyRepository(session, tenant_a)
+            found = repo.find_by_idempotency_key(idem_key, principal_a)
+            assert found is not None
+            assert found.media_buy_id == "mb_idem_create"

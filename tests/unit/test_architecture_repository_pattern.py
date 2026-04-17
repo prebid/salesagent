@@ -242,6 +242,14 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_media_buy_repository.py", "principal_a"),
     ("tests/integration/test_media_buy_repository.py", "principal_b"),
     ("tests/integration/test_media_buy_repository.py", "seed_data"),
+    (
+        "tests/integration/test_media_buy_repository.py",
+        "test_find_by_idempotency_key_returns_existing",
+    ),  # FIXME(#1203): repo test uses make_media_buy helper
+    (
+        "tests/integration/test_media_buy_repository.py",
+        "test_idempotency_key_scoped_to_tenant",
+    ),  # FIXME(#1203): repo test uses make_media_buy helper
     # tests/integration/test_media_buy_repository_writes.py
     ("tests/integration/test_media_buy_repository_writes.py", "tenant_a"),
     ("tests/integration/test_media_buy_repository_writes.py", "tenant_b"),

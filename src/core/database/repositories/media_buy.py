@@ -69,6 +69,20 @@ class MediaBuyRepository:
             )
         ).first()
 
+    def find_by_idempotency_key(self, idempotency_key: str, principal_id: str) -> MediaBuy | None:
+        """Find an existing media buy by idempotency_key within (tenant, principal).
+
+        Per adcp 3.12 spec: if a request with the same idempotency_key and account
+        has already been processed, return the existing media buy.
+        """
+        return self._session.scalars(
+            select(MediaBuy).where(
+                MediaBuy.tenant_id == self._tenant_id,
+                MediaBuy.principal_id == principal_id,
+                MediaBuy.idempotency_key == idempotency_key,
+            )
+        ).first()
+
     def get_by_id_or_buyer_ref(self, identifier: str) -> MediaBuy | None:
         """Get a media buy by ID first, then fall back to buyer_ref."""
         result = self.get_by_id(identifier)
@@ -318,6 +332,7 @@ class MediaBuyRepository:
             "tenant_id": self._tenant_id,
             "principal_id": principal_id,
             "buyer_ref": getattr(req, "buyer_ref", None),
+            "idempotency_key": getattr(req, "idempotency_key", None),
             "order_name": order_name or getattr(req, "po_number", None) or f"Order-{media_buy_id}",
             "advertiser_name": advertiser_name,
             "budget": budget,
