@@ -241,7 +241,7 @@ class AuditLogger:
                 )
         except Exception:
             # Don't let Slack failures affect core functionality
-            pass
+            audit_logger.warning("Slack audit notification failed", exc_info=True)
 
     def log_security_violation(
         self, operation: str, principal_id: str, resource_id: str, reason: str, tenant_id: str | None = None
@@ -314,7 +314,7 @@ class AuditLogger:
             )
         except Exception:
             # Don't let Slack failures affect core functionality
-            pass
+            audit_logger.warning("Slack security violation notification failed", exc_info=True)
 
     def log_success(self, message: str):
         """Log a success message with checkmark."""
