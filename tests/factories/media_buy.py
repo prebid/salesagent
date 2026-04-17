@@ -25,7 +25,6 @@ class MediaBuyFactory(factory.alchemy.SQLAlchemyModelFactory):
     media_buy_id = Sequence(lambda n: f"mb_{n:04d}")
     tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
     principal_id = LazyAttribute(lambda o: o.principal.principal_id)
-    buyer_ref = LazyAttribute(lambda o: f"ref_{o.media_buy_id}")
     order_name = LazyAttribute(lambda o: f"Order {o.media_buy_id}")
     advertiser_name = LazyAttribute(lambda o: o.principal.name)
     budget = Decimal("10000.00")
@@ -35,7 +34,6 @@ class MediaBuyFactory(factory.alchemy.SQLAlchemyModelFactory):
     status = "pending_approval"
     raw_request = LazyAttribute(
         lambda o: {
-            "buyer_ref": o.buyer_ref,
             "packages": [{"package_id": "pkg_001", "product_id": "prod_001"}],
         }
     )

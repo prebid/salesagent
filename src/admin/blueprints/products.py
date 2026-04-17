@@ -195,8 +195,8 @@ def get_creative_formats(
 
         formats_list.append(format_dict)
 
-    # Sort by type, then name
-    formats_list.sort(key=lambda x: (x["type"], x["name"]))
+    # Sort by name (type field was removed from Format in adcp 3.12)
+    formats_list.sort(key=lambda x: x["name"])
 
     logger.info(f"get_creative_formats: Returning {len(formats_list)} formatted formats")
 

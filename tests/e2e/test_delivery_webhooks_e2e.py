@@ -190,9 +190,8 @@ class TestDailyDeliveryWebhookFlow:
         assert create_data.get("context", {}).get("e2e") == "delivery_webhook_create_media_buy"
 
         media_buy_id = create_data.get("media_buy_id")
-        buyer_ref = create_data.get("buyer_ref")
 
-        assert media_buy_id or buyer_ref  # Blueprint sanity check
+        assert media_buy_id  # Blueprint sanity check
 
         return media_buy_id, start_time, end_time
 

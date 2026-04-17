@@ -28,10 +28,14 @@ def _get_formats(ctx: dict) -> list[Any]:
 
 
 def _fmt_type_str(f: Any) -> str | None:
-    """Get format type as a string value (enum .value or str)."""
-    if f.type is None:
+    """Get format type as a string value (enum .value or str).
+
+    type was removed from Format in adcp 3.12; returns None if absent.
+    """
+    fmt_type = getattr(f, "type", None)
+    if fmt_type is None:
         return None
-    return f.type.value if hasattr(f.type, "value") else str(f.type)
+    return fmt_type.value if hasattr(fmt_type, "value") else str(fmt_type)
 
 
 def _fmt_name(f: Any) -> str | None:
