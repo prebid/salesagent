@@ -1329,52 +1329,30 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             )
 
         # --- UC-019: xfails for spec-production gaps ---
-        # Status computation relies on date-relative queries; production returns
-        # empty results when status_filter doesn't match. Creative approval mapping,
-        # snapshot propagation, and sandbox mode are not yet implemented.
+        # Graduated (k31s): status_computation active variants, default_status_filter
+        # simple variants, status_filter boundary simple variants, inv-150-2/4,
+        # inv-151-1, inv-152-1/2/3/5, inv-154-tenant, sandbox-production,
+        # snapshot available variants, principal_scoping valid variants.
         _UC019_XFAIL_TAGS: set[str] = {
-            # Status computation partition/boundary — default filter is {active}
-            # so pre-flight/post-flight buys filtered out even when media_buy_ids
-            # explicitly requested. Spec expects ID filter to bypass status filter.
-            "T-UC-019-partition-status",
-            "T-UC-019-boundary-status",
-            # Status filter scenarios — status_filter parameter partially implemented
-            "T-UC-019-partition-status-filter",
+            # Status filter invalid — all parametrizations still fail
             "T-UC-019-partition-status-filter-invalid",
-            "T-UC-019-boundary-status-filter",
             # Creative approval mapping — not implemented
             "T-UC-019-partition-approval",
             "T-UC-019-partition-approval-invalid",
             "T-UC-019-boundary-approval",
-            # Creative approval invariants — pass on impl/a2a/mcp/rest but
-            # e2e_rest fails with creative_assignments unique-constraint pollution
-            # from prior scenarios. Fixture isolation bug, not a feature gap.
-            "T-UC-019-inv-152-1",
-            "T-UC-019-inv-152-2",
-            "T-UC-019-inv-152-3",
-            "T-UC-019-inv-152-5",
-            # Snapshot scenarios — adapter snapshot API not wired
-            "T-UC-019-partition-snapshot",
-            "T-UC-019-boundary-snapshot",
+            # Invariants that still fail entirely
+            "T-UC-019-inv-150-1",
+            "T-UC-019-inv-150-3",
+            "T-UC-019-inv-150-5",
+            "T-UC-019-inv-151-4",
             "T-UC-019-inv-153-3",
             "T-UC-019-inv-153-4",
             "T-UC-019-inv-153-5",
-            # Invariants with spec-production gaps
-            "T-UC-019-inv-150-1",
-            "T-UC-019-inv-150-2",
-            "T-UC-019-inv-150-3",
-            "T-UC-019-inv-150-4",
-            "T-UC-019-inv-150-5",
-            "T-UC-019-inv-151-1",
-            "T-UC-019-inv-151-4",
-            "T-UC-019-inv-154-tenant",
             # Sandbox mode — not implemented
             "T-UC-019-sandbox-happy",
-            "T-UC-019-sandbox-production",
             "T-UC-019-sandbox-validation",
-            # Principal partition/boundary — parametrized Given text varies
+            # Principal scoping failures — all parametrizations still fail
             "T-UC-019-partition-principal-invalid",
-            "T-UC-019-boundary-principal",
             # Extension errors — error code mismatches / not implemented
             "T-UC-019-ext-a",
             "T-UC-019-ext-b",
@@ -1394,6 +1372,59 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     strict=False,
                 )
             )
+
+        # --- UC-019: parametrization-specific xfails for partially-passing scenarios ---
+        # These scenario outlines have some parametrizations that pass (graduated)
+        # and some that still fail. Only the failing variants are xfailed.
+        _UC019_PARAM_XFAIL: list[tuple[str, set[str], str]] = [
+            # Status computation: pre_flight/post_flight fail (non-active statuses)
+            (
+                "T-UC-019-partition-status",
+                {"pre_flight", "post_flight"},
+                "UC-019: non-active status computation not implemented",
+            ),
+            # Status boundary: day-before/day-after transitions fail
+            (
+                "T-UC-019-boundary-status",
+                {"day before", "day after"},
+                "UC-019: non-active status boundary transitions not implemented",
+            ),
+            # Default status filter: multi-status queries fail
+            (
+                "T-UC-019-partition-status-filter",
+                {"multiple_statuses", "all_statuses"},
+                "UC-019: multi-status filter not implemented",
+            ),
+            # Status filter boundary: complex filter variants fail
+            (
+                "T-UC-019-boundary-status-filter",
+                {"all six", "empty array", "unknown enum", "mix of valid"},
+                "UC-019: complex status filter boundary not implemented",
+            ),
+            # Snapshot: not-requested variant fails (include_snapshot=false path)
+            (
+                "T-UC-019-partition-snapshot",
+                {"snapshot_not_requested"},
+                "UC-019: snapshot_not_requested path not implemented",
+            ),
+            # Snapshot boundary: omitted/false/mixed variants fail
+            (
+                "T-UC-019-boundary-snapshot",
+                {"include_snapshot omitted", "include_snapshot explicitly false", "mixed"},
+                "UC-019: snapshot boundary omitted/false/mixed paths not implemented",
+            ),
+            # Principal boundary: no-auth variant fails
+            (
+                "T-UC-019-boundary-principal",
+                {"identity not resolved"},
+                "UC-019: AUTH_REQUIRED error path not implemented",
+            ),
+        ]
+        if any(t.startswith("T-UC-019") for t in marker_names):
+            for tag, substrings, reason in _UC019_PARAM_XFAIL:
+                if tag in marker_names and any(s in nodeid for s in substrings):
+                    item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
+                    break
 
         # --- UC-026: xfails for spec-production gaps ---
         # Transport wiring done (a3xo: MediaBuyDualEnv routes updates correctly).
