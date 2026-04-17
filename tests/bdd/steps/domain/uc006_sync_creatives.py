@@ -1260,8 +1260,15 @@ def then_uc006_result_should_be(ctx: dict, outcome: str) -> None:
         "CREATIVE_FORMAT_UNKNOWN",
         "CREATIVE_AGENT_UNREACHABLE",
         "CREATIVE_NAME_EMPTY",
+        "CREATIVE_GEMINI_KEY_MISSING",
     ):
         _assert_per_creative_failure(ctx, outcome)
+    elif outcome == "standard processing":
+        _assert_standard_processing(ctx)
+    elif outcome == "generative build with prompt":
+        _assert_generative_build(ctx, prompt_source="assets")
+    elif outcome == "generative build with name":
+        _assert_generative_build(ctx, prompt_source="name_fallback")
     else:
         raise ValueError(f"Unknown UC-006 outcome: {outcome!r}")
 
@@ -1352,10 +1359,26 @@ def then_error_includes_suggestion(ctx: dict) -> None:
     Production raises ``AdCPNotFoundError`` with ``recovery='correctable'`` for a
     missing package but does NOT currently populate a 'suggestion' detail field.
     Spec requires it — marked as SPEC-PRODUCTION GAP when absent.
+
+    Production may also return per-creative failures (action="failed" with errors[])
+    rather than a top-level error. We promote those to ctx["error"] for uniform handling.
     """
     import pytest
 
     error = ctx.get("error")
+    # Promote per-creative errors when no top-level error exists
+    if error is None:
+        resp = ctx.get("response")
+        if resp is not None:
+            results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
+            for r in results:
+                action_val = str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None)))
+                if action_val == "failed":
+                    errs = getattr(r, "errors", None) or []
+                    if errs:
+                        _promote_creative_errors_to_ctx(ctx, errs)
+                        error = ctx.get("error")
+                        break
     assert error is not None, f"Expected an error but none recorded. Response: {ctx.get('response')}"
     _, suggestion = _extract_error_code_and_suggestion(error)
     if not suggestion:
@@ -3545,6 +3568,7 @@ def given_no_gemini_api_key(ctx: dict) -> None:
 
 
 @given("a creative with a known HTTP-based format_id")
+@given("a creative with a known HTTP-registered format_id")
 def given_creative_with_known_http_format(ctx: dict) -> None:
     """Set up a creative with a known format_id backed by an HTTP agent."""
     given_creative_with_format(ctx)
@@ -3567,6 +3591,7 @@ def given_creative_with_no_format_id(ctx: dict) -> None:
 
 
 @given("a creative with a format_id unknown to all agents")
+@given("a creative with an unknown format_id")
 def given_creative_with_format_unknown_to_all(ctx: dict) -> None:
     """Set up a creative whose format_id is not registered with any agent."""
     given_creative_with_unknown_format(ctx)
@@ -3596,4 +3621,325 @@ def given_creative_empty_name_known_format(ctx: dict) -> None:
 
 
 # Format validation partition outcomes are handled by the existing
-# then_uc006_result_should_be step (line ~926) which we extend below.
+# then_uc006_result_should_be step which dispatches on outcome string.
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Helpers — generative build assertions (thm4)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _assert_standard_processing(ctx: dict) -> None:
+    """Assert creative was processed as static (no generative build invoked).
+
+    Production returns action=created/updated. The registry.build_creative
+    mock must NOT have been called.
+    """
+    error = ctx.get("error")
+    if error is not None:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: expected 'standard processing' but production raised {type(error).__name__}: {error}"
+        )
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response for 'standard processing'"
+    results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
+    actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
+    assert any(a in ("created", "updated", "unchanged") for a in actions), (
+        f"Expected created/updated/unchanged for static processing, got {actions}"
+    )
+    # Verify generative build was NOT invoked
+    env = ctx["env"]
+    registry = env.mock["registry"].return_value
+    if hasattr(registry.build_creative, "called"):
+        assert not registry.build_creative.called, (
+            "build_creative should NOT be called for static (non-generative) creatives"
+        )
+
+
+def _assert_generative_build(ctx: dict, prompt_source: str) -> None:
+    """Assert generative build was invoked with the expected prompt source.
+
+    Args:
+        prompt_source: "assets" (prompt from message asset) or
+                       "name_fallback" (prompt derived from creative name).
+    """
+    error = ctx.get("error")
+    if error is not None:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: expected 'generative build' but production raised {type(error).__name__}: {error}"
+        )
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response for generative build"
+    results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
+    actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
+    assert any(a in ("created", "updated") for a in actions), (
+        f"Expected created/updated for generative build, got {actions}"
+    )
+    # Verify build_creative WAS invoked
+    env = ctx["env"]
+    registry = env.mock["registry"].return_value
+    assert registry.build_creative.called, "build_creative should have been called for generative format"
+    # Verify prompt content
+    call_kwargs = registry.build_creative.call_args
+    message_arg = call_kwargs.kwargs.get("message") or (call_kwargs.args[2] if len(call_kwargs.args) > 2 else None)
+    if message_arg is None:
+        # Try positional or named kwarg patterns
+        for kw_name in ("message", "prompt"):
+            message_arg = call_kwargs.kwargs.get(kw_name)
+            if message_arg:
+                break
+    assert message_arg is not None, "build_creative must be called with a message/prompt"
+    if prompt_source == "assets":
+        assert "Create a creative for:" not in message_arg, (
+            f"Expected prompt from assets, but got name fallback: {message_arg!r}"
+        )
+    elif prompt_source == "name_fallback":
+        assert "Create a creative for:" in message_arg, (
+            f"Expected name fallback prompt ('Create a creative for: ...'), got: {message_arg!r}"
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GIVEN steps — generative build partition (thm4)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given("a creative with no output_format_ids")
+@given("a creative with a static format (no output_format_ids)")
+def given_creative_no_output_format_ids(ctx: dict) -> None:
+    """Set up a creative with a static format (no output_format_ids).
+
+    Uses the default registry mock which returns a format without
+    output_format_ids, so the creative is classified as static.
+    """
+    given_creative_with_format(ctx)
+    ctx["generative_creative"] = False
+
+
+@given("a creative with output_format_ids present")
+def given_creative_output_format_ids_present(ctx: dict) -> None:
+    """Set up a creative with a generative format (output_format_ids populated).
+
+    Delegates to the existing generative format setup but does NOT add
+    assets — prompt source is controlled by the next Given step.
+    """
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    creative_payload = {
+        "creative_id": "creative-generative-part-001",
+        "name": "Generative Partition Creative",
+        "format_id": fmt,
+    }
+    ctx.setdefault("creatives", []).append(creative_payload)
+    ctx["creative_format_id"] = fmt["id"]
+    ctx["generative_creative"] = True
+
+
+@given("a creative with output_format_ids present (create)")
+def given_creative_output_format_ids_present_create(ctx: dict) -> None:
+    """Set up a NEW generative creative (create path, not update).
+
+    Same as output_format_ids present but explicitly a new creative_id
+    so production takes the create path where name fallback applies.
+    """
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    creative_payload = {
+        "creative_id": "creative-generative-create-001",
+        "name": "My Summer Campaign Banner",
+        "format_id": fmt,
+    }
+    ctx.setdefault("creatives", []).append(creative_payload)
+    ctx["creative_format_id"] = fmt["id"]
+    ctx["generative_creative"] = True
+    ctx["generative_create_path"] = True
+
+
+@given("any assets")
+def given_any_assets(ctx: dict) -> None:
+    """Add generic image assets to the last creative in the list.
+
+    For static creatives, any assets suffice — this step just ensures
+    the creative payload has an assets dict.
+    """
+    creatives = ctx.get("creatives", [])
+    assert creatives, "No creative in context to add assets to"
+    last_creative = creatives[-1]
+    last_creative.setdefault("assets", {}).update(
+        {"image": {"url": "https://example.com/banner.png", "width": 300, "height": 250}}
+    )
+
+
+@given("message asset with prompt text")
+def given_message_asset_with_prompt(ctx: dict) -> None:
+    """Add a message asset with prompt text to the last creative.
+
+    Production extracts prompt from assets with role "message", "brief",
+    or "prompt" (BR-RULE-036 INV-2).
+    """
+    creatives = ctx.get("creatives", [])
+    assert creatives, "No creative in context to add message asset to"
+    last_creative = creatives[-1]
+    last_creative.setdefault("assets", {})["message"] = {"content": "Generate a banner ad for summer sale"}
+
+
+@given("no prompt assets or inputs")
+def given_no_prompt_assets_or_inputs(ctx: dict) -> None:
+    """Ensure the last creative has NO prompt-bearing assets or inputs.
+
+    Removes any message/brief/prompt assets so the create path falls
+    through to name fallback (BR-RULE-036 INV-4).
+    """
+    creatives = ctx.get("creatives", [])
+    assert creatives, "No creative in context to strip prompt from"
+    last_creative = creatives[-1]
+    assets = last_creative.get("assets", {})
+    for role in ("message", "brief", "prompt"):
+        assets.pop(role, None)
+    last_creative["assets"] = assets
+    last_creative.pop("inputs", None)
+
+
+@given("message asset but no GEMINI_API_KEY")
+def given_message_asset_no_gemini_key(ctx: dict) -> None:
+    """Add a message asset but remove the GEMINI_API_KEY from config.
+
+    Production checks gemini_api_key early in the generative path and
+    raises ValueError when missing (BR-RULE-036, INV formerly-2).
+    """
+    creatives = ctx.get("creatives", [])
+    assert creatives, "No creative in context to add message asset to"
+    last_creative = creatives[-1]
+    last_creative.setdefault("assets", {})["message"] = {"content": "Generate a banner ad for summer sale"}
+    # Remove GEMINI_API_KEY from config mock
+    env = ctx["env"]
+    env.mock["config"].return_value.gemini_api_key = None
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GIVEN steps — format validation boundary (thm4)
+#
+# Several boundary steps reuse the same text as partition steps above
+# (e.g., "a creative with a format_id whose agent is unreachable").
+# These are NOT duplicated here — pytest-bdd matches the existing
+# step definition.
+#
+# New boundary-only step texts that differ from partition equivalents:
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given("a creative with an adapter (non-HTTP) format_id")
+def given_creative_adapter_non_http_format(ctx: dict) -> None:
+    """Set up a creative with a non-HTTP adapter format_id (boundary)."""
+    given_creative_with_adapter_format(ctx)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GIVEN steps — generative build boundary (thm4)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given("a creative with a generative format and prompt in assets")
+def given_creative_generative_with_prompt(ctx: dict) -> None:
+    """Set up a generative creative with a message asset containing prompt text (boundary)."""
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    creative_payload = {
+        "creative_id": "creative-gen-prompt-001",
+        "name": "Generative With Prompt",
+        "format_id": fmt,
+        "assets": {
+            "message": {"content": "Design a responsive ad for holiday promotion"},
+        },
+    }
+    ctx.setdefault("creatives", []).append(creative_payload)
+    ctx["creative_format_id"] = fmt["id"]
+    ctx["generative_creative"] = True
+
+
+@given("a new creative with a generative format and no prompt but a name")
+def given_new_creative_generative_no_prompt_with_name(ctx: dict) -> None:
+    """Set up a NEW generative creative with a name but no prompt assets (boundary).
+
+    On the create path, production falls back to 'Create a creative for: {name}'
+    (BR-RULE-036 INV-4).
+    """
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    creative_payload = {
+        "creative_id": "creative-gen-name-fallback-001",
+        "name": "Summer Sale Banner",
+        "format_id": fmt,
+        "assets": {},
+    }
+    ctx.setdefault("creatives", []).append(creative_payload)
+    ctx["creative_format_id"] = fmt["id"]
+    ctx["generative_creative"] = True
+    ctx["generative_create_path"] = True
+
+
+@given("a creative with a generative format but GEMINI_API_KEY not configured")
+def given_creative_generative_no_gemini(ctx: dict) -> None:
+    """Set up a generative creative but with GEMINI_API_KEY removed (boundary).
+
+    Production raises ValueError when gemini_api_key is not configured
+    for a generative format.
+    """
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+    # Set up generative format but WITHOUT gemini key
+    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    # Now remove the key — setup_generative_build sets it, we override
+    env.mock["config"].return_value.gemini_api_key = None
+    creative_payload = {
+        "creative_id": "creative-gen-no-key-001",
+        "name": "Generative No Key",
+        "format_id": fmt,
+        "assets": {
+            "message": {"content": "Generate a banner ad"},
+        },
+    }
+    ctx.setdefault("creatives", []).append(creative_payload)
+    ctx["creative_format_id"] = fmt["id"]
+    ctx["generative_creative"] = True
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# THEN steps — format validation boundary (thm4)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@then("the creative should skip external format validation")
+def then_skip_external_format_validation(ctx: dict) -> None:
+    """Assert adapter (non-HTTP) format skipped external agent validation (boundary).
+
+    Delegates to the existing assertion for adapter format processing.
+    """
+    then_processed_without_external_validation(ctx)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# THEN steps — generative build boundary (thm4)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@then("the creative should be processed without generative build")
+def then_processed_without_generative_build(ctx: dict) -> None:
+    """Assert the creative was processed as static — no generative build invoked."""
+    _assert_standard_processing(ctx)
+
+
+@then("the system should invoke generative build with the asset prompt")
+def then_invoke_generative_with_asset_prompt(ctx: dict) -> None:
+    """Assert generative build was invoked using the prompt from assets."""
+    _assert_generative_build(ctx, prompt_source="assets")
+
+
+@then("the system should use the creative name as prompt fallback")
+def then_use_creative_name_as_prompt_fallback(ctx: dict) -> None:
+    """Assert generative build was invoked using the creative name as fallback."""
+    _assert_generative_build(ctx, prompt_source="name_fallback")
