@@ -160,7 +160,7 @@ async def adcp_error_handler(request: Request, exc: AdCPError) -> JSONResponse:
 4. Returns `{"error_code": "validation_error", "message": "sku is required", ...}` as JSON
 5. Browser displays raw JSON blob — terrible UX regression
 
-**Fix:** Make the handler Accept-aware. If the request is under `/admin/*` AND the `Accept` header contains `text/html`, render a Jinja `error.html` template. Otherwise return JSON.
+**Fix:** Make the handler Accept-aware. If the request path starts with `/admin/` OR `/tenant/` (both prefixes required post-D1 2026-04-16 — `/tenant/{tenant_id}/...` is the canonical admin mount and `/admin/...` is the legacy/operator-bookmark form) AND the `Accept` header contains `text/html`, render a Jinja `error.html` template. Otherwise return JSON. See `foundation-modules.md §11.10` for the canonical `_response_mode()` helper that implements `request.url.path.startswith(("/admin/", "/tenant/"))`.
 
 ```python
 @app.exception_handler(AdCPError)

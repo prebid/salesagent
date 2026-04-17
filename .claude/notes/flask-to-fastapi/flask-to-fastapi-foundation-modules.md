@@ -3984,9 +3984,9 @@ app.add_middleware(TrustedHostMiddleware, allowed_hosts=...)   # added at L2
 app.add_middleware(ApproximatedExternalDomainMiddleware)
 app.add_middleware(FlyHeadersMiddleware)
 app.add_middleware(RequestIDMiddleware)                        # added at L4, outermost
-# Outermost runtime (L4+, 10 middlewares):
-# RequestID → Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS
-# See §cross-cutting/Middleware ordering for the L1a (7) and L2 (9) progressive shapes.
+# Outermost runtime (L4+, 11 middlewares — canonical per §11.36):
+# RequestID → Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → LegacyAdminRedirect → Session → CSRF → RestCompat → CORS
+# See §cross-cutting/Middleware ordering and §11.36 for the L1a (7) → L1c (8) → L2 (10) → L4+ (11) progressive shapes.
 ```
 
 ### D. Why SameSite=Lax is sufficient paired with Origin validation
@@ -4034,9 +4034,9 @@ LOGIC:
    admin UI show whatever error page it shows).
 
 MUST run AFTER UnifiedAuth and BEFORE Session/CSRF in the middleware stack.
-Canonical L4+ order (outermost runtime → innermost runtime, 10 middlewares):
-RequestID → Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS
-See §cross-cutting/Middleware ordering for the L1a (7) and L2 (9) progressive shapes.
+Canonical L4+ order (outermost runtime → innermost runtime, 11 middlewares):
+RequestID → Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → LegacyAdminRedirect → Session → CSRF → RestCompat → CORS
+See §cross-cutting/Middleware ordering and §11.36 for the L1a (7) → L1c (8) → L2 (10) → L4+ (11) progressive shapes.
 Add via add_middleware in REVERSE order (LIFO):
 app.add_middleware(CORS); ...; app.add_middleware(RequestID).
 
@@ -4435,7 +4435,7 @@ def build_admin() -> AdminBuild:
         # ... etc, one module per Flask blueprint
     )
 
-    router = APIRouter()
+    router = APIRouter(redirect_slashes=True, include_in_schema=False, tags=["admin"])
     router.include_router(auth_router.router)
     router.include_router(tenants_router.router, prefix="/tenant")
     router.include_router(accounts_router.router, prefix="/tenant/{tenant_id}/accounts")
@@ -6712,14 +6712,19 @@ Canonical runtime order (outermost → innermost). Three progressive shapes — 
 Fly → ExternalDomain → UnifiedAuth → Session → CSRF → RestCompat → CORS → handler
 ```
 
-**L2 (Flask removal, 9 middlewares — adds TrustedHost AND SecurityHeaders):**
+**L1c (legacy-admin redirect lands, 8 middlewares — adds `LegacyAdminRedirect` INSIDE UnifiedAuth per D1):**
 ```
-Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS → handler
+Fly → ExternalDomain → UnifiedAuth → LegacyAdminRedirect → Session → CSRF → RestCompat → CORS → handler
 ```
 
-**L4+ (observability floor, 10 middlewares — adds RequestID outermost; persists through L5/L6/L7):**
+**L2 (Flask removal, 10 middlewares — adds TrustedHost AND SecurityHeaders):**
 ```
-RequestID → Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS → handler
+Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → LegacyAdminRedirect → Session → CSRF → RestCompat → CORS → handler
+```
+
+**L4+ (observability floor, 11 middlewares — adds RequestID outermost; persists through L5/L6/L7):**
+```
+RequestID → Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → LegacyAdminRedirect → Session → CSRF → RestCompat → CORS → handler
 ```
 
 Registration in `src/app.py` is in **REVERSE** order (LIFO — `add_middleware` last-added becomes outermost). L4+ canonical registration:
@@ -6729,6 +6734,7 @@ app.add_middleware(CORSMiddleware, allow_origins=...)          # innermost
 app.add_middleware(RestCompatMiddleware)
 app.add_middleware(CSRFOriginMiddleware, ...)
 app.add_middleware(SessionMiddleware, **session_kwargs)
+app.add_middleware(LegacyAdminRedirectMiddleware)              # added at L1c (D1) — inside UnifiedAuth
 app.add_middleware(UnifiedAuthMiddleware)
 app.add_middleware(SecurityHeadersMiddleware, https_only=settings.https_only)  # added at L2 (§11.28)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=...)   # added at L2
@@ -7109,13 +7115,13 @@ Per-config `trusted_hosts`:
 
 nginx already gzips responses at the edge. Adding FastAPI `GZipMiddleware` double-compresses (wastes CPU) without benefit. If/when nginx is dropped post-v2.0, re-evaluate.
 
-### Updated canonical middleware stack (L2, 9 middlewares)
+### Updated canonical middleware stack (L2, 10 middlewares)
 
 ```
-Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS
+Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → LegacyAdminRedirect → Session → CSRF → RestCompat → CORS
 ```
 
-(`TrustedHost` added between `ExternalDomain` and `SecurityHeaders` — reject non-allowed hosts before security-header injection and auth parsing. `SecurityHeaders` (§11.28) lands in the same L2 PR, INSIDE `TrustedHost` and OUTSIDE `UnifiedAuth`.) `RequestID` becomes the outermost middleware when it lands in L4+ — runtime order then (10 middlewares): `RequestID → Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS`.
+(`TrustedHost` added between `ExternalDomain` and `SecurityHeaders` — reject non-allowed hosts before security-header injection and auth parsing. `SecurityHeaders` (§11.28) lands in the same L2 PR, INSIDE `TrustedHost` and OUTSIDE `UnifiedAuth`. `LegacyAdminRedirect` landed at L1c per D1 2026-04-16, INSIDE `UnifiedAuth`.) `RequestID` becomes the outermost middleware when it lands at L4+ — runtime order then (11 middlewares): `RequestID → Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → LegacyAdminRedirect → Session → CSRF → RestCompat → CORS`.
 
 ---
 
@@ -7542,6 +7548,7 @@ app.add_middleware(CORSMiddleware, allow_origins=...)          # innermost
 app.add_middleware(RestCompatMiddleware)
 app.add_middleware(CSRFOriginMiddleware, ...)
 app.add_middleware(SessionMiddleware, **session_kwargs)
+app.add_middleware(LegacyAdminRedirectMiddleware)              # added at L1c (D1) — inside UnifiedAuth
 app.add_middleware(UnifiedAuthMiddleware)
 app.add_middleware(SecurityHeadersMiddleware, https_only=settings.https_only)  # NEW at L2
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=...)
@@ -7550,9 +7557,9 @@ app.add_middleware(FlyHeadersMiddleware)
 app.add_middleware(RequestIDMiddleware)                        # outermost at L4+
 ```
 
-**Canonical runtime order (L4+, 10 middlewares):**
+**Canonical runtime order (L4+, 11 middlewares):**
 ```
-RequestID → Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → Session → CSRF → RestCompat → CORS
+RequestID → Fly → ExternalDomain → TrustedHost → SecurityHeaders → UnifiedAuth → LegacyAdminRedirect → Session → CSRF → RestCompat → CORS
 ```
 
 ### D. Tests

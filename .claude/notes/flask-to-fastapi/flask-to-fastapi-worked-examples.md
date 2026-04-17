@@ -15,8 +15,9 @@ Appendix to §13 of `/Users/quantum/Documents/ComputedChaos/salesagent/.claude/n
 
 Conventions used below (established in §11 of the main doc):
 - `CurrentTenantDep`, `AdminUserDep`, `SuperAdminDep` → Annotated aliases from `src/admin/deps/auth.py`
-- `render(request, "tpl.html", {...})` → wrapper at `src/admin/templating.py`
-- `flash(request, msg, category)` → native utility at `src/admin/flash.py`
+- `templates.TemplateResponse(request, "tpl.html", {...})` via `TemplatesDep` (Annotated alias at `src/admin/deps/templates.py`) — `templates` comes from `request.app.state.templates` bound in `src/app.py::lifespan`. Auto-merged globals via `BaseCtxDep` (support_email, sales_agent_domain, user_*, messages). Per D8 #4 §2.3, there is NO `render()` wrapper and NO `src/admin/templating.py` module.
+- `messages.info(text)` / `messages.success(text)` / `messages.warning(text)` / `messages.error(text)` via `MessagesDep` (Annotated alias at `src/admin/deps/messages.py`). Flash bucket is a `list[FlashMessage]` on `request.session["_messages"]`; drained by `BaseCtxDep` for template rendering. Per D8 #4 §2.2, there is NO `flash()` function, NO `get_flashed_messages()` Jinja global, NO `src/admin/flash.py` module.
+- **NOTE (Phase A legacy notation):** Code examples in §§4.1-4.5 below still use `render(request, ...)` and `flash(request, ...)` for readability; these are ALIASES for the D8 #4 native patterns above. When porting, translate as follows: `render(request, "x.html", {...})` → `templates.TemplateResponse(request, "x.html", {**base_ctx, ...})` with handler signature gaining `templates: TemplatesDep, base_ctx: BaseCtxDep`; `flash(request, "msg", "error")` → `messages.error("msg")` with handler signature gaining `messages: MessagesDep`. See `foundation-modules.md §D8-native` for the full canonical design.
 - `AdminRedirect` → typed exception handled by `src/app.py` → `RedirectResponse(303)`
 - `oauth` → module-level `authlib.integrations.starlette_client.OAuth` instance at `src/admin/oauth.py`
 - All admin SQLAlchemy is sync through L0-L4: `with get_db_session() as session:` / `session.scalars(stmt).first()`. `run_in_threadpool` is used ONLY in the 3-4 OAuth callback handlers that must be `async def` for Authlib compatibility (L1 exception allowlist) — and only for DB-touching helper functions called from those handlers. MCP and A2A handlers remain async throughout. See `execution-plan.md` Layer 0 for the canonical handler pattern. Async conversion is L5+.
@@ -247,7 +248,11 @@ from src.core.domain_config import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["admin-auth"])
+router = APIRouter(
+    redirect_slashes=True,
+    include_in_schema=False,
+    tags=["admin-auth"],
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -926,7 +931,12 @@ from src.services.auth_config_service import get_tenant_redirect_uri
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/auth/oidc", tags=["admin-oidc"])
+router = APIRouter(
+    prefix="/auth/oidc",
+    redirect_slashes=True,
+    include_in_schema=False,
+    tags=["admin-oidc"],
+)
 
 
 @router.get("/login/{tenant_id}", name="admin_oidc_login")
@@ -1361,7 +1371,12 @@ from src.core.database.models import Tenant
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/tenant", tags=["admin-tenants"])
+router = APIRouter(
+    prefix="/tenant",
+    redirect_slashes=True,
+    include_in_schema=False,
+    tags=["admin-tenants"],
+)
 
 # ─── Module-level constants (verbatim) ────────────────────────────────────────
 ALLOWED_FAVICON_EXTENSIONS: frozenset[str] = frozenset({"ico", "png", "svg", "jpg", "jpeg"})
@@ -1794,7 +1809,12 @@ from src.admin.services.activity import get_recent_activities
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/tenant", tags=["admin-activity"])
+router = APIRouter(
+    prefix="/tenant",
+    redirect_slashes=True,
+    include_in_schema=False,
+    tags=["admin-activity"],
+)
 
 # ─── Rate limit (process-local; sufficient for single-node deploys) ────────
 MAX_CONNECTIONS_PER_TENANT: int = 10
@@ -2192,7 +2212,12 @@ from src.core.database.models import CurrencyLimit, Tenant
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/tenant/{tenant_id}/products", tags=["admin-products"])
+router = APIRouter(
+    prefix="/tenant/{tenant_id}/products",
+    redirect_slashes=True,
+    include_in_schema=False,
+    tags=["admin-products"],
+)
 
 
 # ─── GET: show the form ─────────────────────────────────────────────────────
