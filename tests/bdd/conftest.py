@@ -352,11 +352,11 @@ _MCP_SELECTIVE_XFAIL: list[tuple[str, set[str], str, bool]] = [
     # Invariant scenarios — "holds" genuinely fails (asserts presence);
     # "violated"/"nofield" pass vacuously (asserts absence → empty list satisfies)
     ("T-UC-005-inv-049-9-holds", set(), "MCP wrapper does not accept output_format_ids", True),
-    ("T-UC-005-inv-049-9-violated", set(), "MCP wrapper does not accept output_format_ids (vacuous pass)", False),
-    ("T-UC-005-inv-049-9-nofield", set(), "MCP wrapper does not accept output_format_ids (vacuous pass)", False),
+    # Graduated: T-UC-005-inv-049-9-violated (rczc: vacuous pass on MCP — always passes)
+    # Graduated: T-UC-005-inv-049-9-nofield (rczc: vacuous pass on MCP — always passes)
     ("T-UC-005-inv-049-10-holds", set(), "MCP wrapper does not accept input_format_ids", True),
-    ("T-UC-005-inv-049-10-violated", set(), "MCP wrapper does not accept input_format_ids (vacuous pass)", False),
-    ("T-UC-005-inv-049-10-nofield", set(), "MCP wrapper does not accept input_format_ids (vacuous pass)", False),
+    # Graduated: T-UC-005-inv-049-10-violated (rczc: vacuous pass on MCP — always passes)
+    # Graduated: T-UC-005-inv-049-10-nofield (rczc: vacuous pass on MCP — always passes)
     # MCP wrapper does not accept disclosure_positions keyword (strict=False: some variants xpass)
     (
         "T-UC-005-partition-disclosure",
@@ -641,7 +641,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-003-ext-m": "production doesn't validate placement_ids on update path",
             "T-UC-003-ext-m-unsupported": "production doesn't validate placement targeting support",
             "T-UC-003-ext-n": "production doesn't check admin privileges on update",
-            "T-UC-003-ext-o": "adapter error handling returns wrong shape on update",
+            # Graduated: T-UC-003-ext-o (rczc: adapter failure returns correct shape on all 4 transports)
             "T-UC-003-ext-p-short": "production doesn't validate idempotency key length on update",
             "T-UC-003-ext-p-long": "production doesn't validate idempotency key length on update",
             "T-UC-003-ext-q-rejected": "production doesn't reject updates to terminal-status media buys",
@@ -1463,8 +1463,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-026-inv-194-2",
             "T-UC-026-inv-195-1",
             "T-UC-026-inv-195-2",
-            "T-UC-026-inv-195-3",
-            "T-UC-026-inv-195-4",
+            # Graduated: T-UC-026-inv-195-3 (rczc: bid_price ceiling semantics pass all 4 transports)
+            # Graduated: T-UC-026-inv-195-4 (rczc: bid_price exact semantics pass all 4 transports)
             # Graduated: T-UC-026-inv-196-3 (all 4 transports pass)
             "T-UC-026-inv-197-3",
             "T-UC-026-inv-197-4",
@@ -1804,6 +1804,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {"payment_required"},
                 "payment_required status not mapped in production — filter returns empty",
             ),
+            # Graduated sync_accounts variant (rczc): only list_accounts still fails
+            (
+                "T-UC-011-ext-g-echo",
+                {"list_accounts"},
+                "context echo not implemented in list_accounts response",
+            ),
         ]
         for tag, substrings, reason in _UC011_SELECTIVE_XFAIL:
             if tag in marker_names:
@@ -1814,8 +1820,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         _UC011_XFAIL_TAGS: dict[str, str] = {
             # deactivation scoping: production doesn't scope deactivation to authenticated agent
             "T-UC-011-ext-f-scoped": "deactivation not scoped to authenticated agent — production applies globally",
-            # context echo: production doesn't echo context in operation responses
-            "T-UC-011-ext-g-echo": "context echo not implemented in list_accounts response",
+            # Graduated: T-UC-011-ext-g-echo sync_accounts variant (rczc: context echo works for sync)
+            # list_accounts variant still fails — moved to _UC011_SELECTIVE_XFAIL
             "T-UC-011-ext-g-echo-error": "context echo not implemented in sync_accounts error response",
             # validation: production returns Pydantic ValidationError without error_code field
             "T-UC-011-sync-missing-brand": "missing brand domain returns raw ValidationError, not structured error_code",
