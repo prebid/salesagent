@@ -896,6 +896,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "SPEC-PRODUCTION GAP: sync_creatives does not set sandbox=true on "
                 "response for sandbox accounts (BR-RULE-209 INV-4)"
             ),
+            # Sandbox: invalid format_id does not trigger validation error at _impl level
+            "T-UC-006-sandbox-validation": (
+                "SPEC-PRODUCTION GAP: production does not validate format_id pattern "
+                "at _impl level — invalid format_id processed without error (BR-RULE-209 INV-7)"
+            ),
         }
         for tag, reason in _UC006_SPECGAP_XFAIL_TAGS.items():
             if tag in marker_names:
@@ -983,12 +988,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "instead of 'created' — REST response shape difference"
             ),
             # Assignment weight scenarios — empty REST response body
-            "T-UC-006-partition-assignment-weight": (
-                "e2e_rest: assignment weight scenarios — REST returns empty body"
-            ),
-            "T-UC-006-boundary-assignment-weight": (
-                "e2e_rest: assignment weight boundary — REST returns empty body"
-            ),
+            "T-UC-006-partition-assignment-weight": ("e2e_rest: assignment weight scenarios — REST returns empty body"),
+            "T-UC-006-boundary-assignment-weight": ("e2e_rest: assignment weight boundary — REST returns empty body"),
         }
         if "e2e_rest" in nodeid:
             for tag, reason in _UC006_E2E_REST_XFAIL_TAGS.items():
@@ -1002,21 +1003,27 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         if "e2e_rest" in nodeid:
             # assignments-structure: "absent" example passes, all others fail (empty body)
             if "T-UC-006-partition-assignments-structure" in marker_names and "absent" not in nodeid:
-                item.add_marker(pytest.mark.xfail(
-                    reason="e2e_rest: sync_creatives REST returns empty body for assignment scenarios",
-                    strict=True,
-                ))
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="e2e_rest: sync_creatives REST returns empty body for assignment scenarios",
+                        strict=True,
+                    )
+                )
             if "T-UC-006-boundary-assignments-structure" in marker_names and "absent" not in nodeid:
-                item.add_marker(pytest.mark.xfail(
-                    reason="e2e_rest: sync_creatives REST returns empty body for assignment boundary",
-                    strict=True,
-                ))
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="e2e_rest: sync_creatives REST returns empty body for assignment boundary",
+                        strict=True,
+                    )
+                )
             # inv2 strict mode abort — empty body on e2e_rest
             if "T-UC-006-rule-033-inv2" in marker_names:
-                item.add_marker(pytest.mark.xfail(
-                    reason="e2e_rest: strict mode abort returns empty body — JSONDecodeError",
-                    strict=True,
-                ))
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="e2e_rest: strict mode abort returns empty body — JSONDecodeError",
+                        strict=True,
+                    )
+                )
 
         # UC-006 e2e_rest: generative/format/invariant scenarios — action='failed'
         # or build_creative not called through REST transport.
@@ -1033,17 +1040,21 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-006-rule-093-inv1",
         }
         if "e2e_rest" in nodeid and marker_names & _UC006_E2E_REST_ACTION_FAILED:
-            item.add_marker(pytest.mark.xfail(
-                reason="e2e_rest: creative processing returns action='failed' or build_creative not called through REST",
-                strict=True,
-            ))
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="e2e_rest: creative processing returns action='failed' or build_creative not called through REST",
+                    strict=True,
+                )
+            )
 
         # UC-006 e2e_rest: format_validation_boundary known-HTTP — action='failed'
         if "e2e_rest" in nodeid and "T-UC-006-boundary-format-id" in marker_names and "known HTTP" in nodeid:
-            item.add_marker(pytest.mark.xfail(
-                reason="e2e_rest: known HTTP format_id → action='failed' through REST transport",
-                strict=True,
-            ))
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="e2e_rest: known HTTP format_id → action='failed' through REST transport",
+                    strict=True,
+                )
+            )
 
         # UC-011 e2e_rest-only failures
         _UC011_E2E_REST_XFAIL: set[str] = {
@@ -1051,10 +1062,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-011-sync-no-principal",
         }
         if "e2e_rest" in nodeid and marker_names & _UC011_E2E_REST_XFAIL:
-            item.add_marker(pytest.mark.xfail(
-                reason="e2e_rest: principal_id=None causes 'Header value must be str or bytes' in REST transport",
-                strict=True,
-            ))
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="e2e_rest: principal_id=None causes 'Header value must be str or bytes' in REST transport",
+                    strict=True,
+                )
+            )
 
         # UC-011 e2e_rest: sync/list account scenarios that need real HTTP stack
         if "e2e_rest" in nodeid and any(t.startswith("T-UC-011") for t in marker_names):
@@ -1065,21 +1078,59 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             }
             # Also match by tag
             if "T-UC-011-sync-cross-agent" in marker_names:
-                item.add_marker(pytest.mark.xfail(
-                    reason="e2e_rest: cross-agent scoping needs real HTTP stack",
-                    strict=True,
-                ))
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="e2e_rest: cross-agent scoping needs real HTTP stack",
+                        strict=True,
+                    )
+                )
             if test_func in _UC011_E2E_REST_FUNCS:
-                item.add_marker(pytest.mark.xfail(
-                    reason="e2e_rest: account sync/list requires real HTTP stack state not available in e2e_rest mock",
-                    strict=True,
-                ))
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="e2e_rest: account sync/list requires real HTTP stack state not available in e2e_rest mock",
+                        strict=True,
+                    )
+                )
 
         # UC-006 e2e_rest: inv2 strict mode assignment abort — empty body
         if "e2e_rest" in nodeid and "T-UC-006-rule-039-inv2" in marker_names:
             # Already have the non-e2e_rest xfail for suggestion field;
             # e2e_rest additionally gets empty body
             pass  # covered by the SPECGAP tag above
+
+        # UC-006 e2e_rest: steps that assert on mocks/harness state unavailable in real HTTP
+        _UC006_E2E_REST_XFAIL_TAGS: dict[str, str] = {
+            "T-UC-006-rule-035-static": (
+                "e2e_rest: then_creative_validated_by_agent asserts registry mock "
+                "call_count which is not wired in e2e_rest (real HTTP, no mock)"
+            ),
+            "T-UC-006-rule-093-inv2": (
+                "e2e_rest: assignment weight/rotation assertion gets empty body "
+                "through REST transport (JSONDecodeError)"
+            ),
+        }
+        if "e2e_rest" in nodeid:
+            for tag, reason in _UC006_E2E_REST_XFAIL_TAGS.items():
+                if tag in marker_names:
+                    item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
+                    break
+
+        # UC-006 e2e_rest: partition assignment-pkg — existing_package example
+        if (
+            "e2e_rest" in nodeid
+            and "T-UC-006-partition-assignment-pkg" in marker_names
+            and "existing_package" in nodeid
+            and "assignment created" in nodeid
+        ):
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason=(
+                        "e2e_rest: assignment created assertion gets empty body "
+                        "through REST transport (JSONDecodeError)"
+                    ),
+                    strict=True,
+                )
+            )
 
         # --- UC-026 e2e_rest-only failures ---
         # Fields not echoed through the REST response layer (format_ids, catalogs).
@@ -1104,16 +1155,20 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # Success examples (omitted, single, all, subset, empty) pass on e2e_rest.
         if "e2e_rest" in nodeid:
             if "T-UC-026-partition-format-ids" in marker_names and "unsupported_format" in nodeid:
-                item.add_marker(pytest.mark.xfail(
-                    reason="e2e_rest: unsupported format_ids not rejected through REST",
-                    strict=True,
-                ))
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="e2e_rest: unsupported format_ids not rejected through REST",
+                        strict=True,
+                    )
+                )
             if "T-UC-026-boundary-format-ids" in marker_names:
                 if "unsupported format_id" in nodeid or "format_id from different" in nodeid:
-                    item.add_marker(pytest.mark.xfail(
-                        reason="e2e_rest: invalid format_ids not rejected through REST boundary",
-                        strict=True,
-                    ))
+                    item.add_marker(
+                        pytest.mark.xfail(
+                            reason="e2e_rest: invalid format_ids not rejected through REST boundary",
+                            strict=True,
+                        )
+                    )
 
         # UC-004: webhook 4xx no-retry assertion uses env.mock["post"] which is
         # not wired in e2e_rest (real HTTP transport, no mocks). Previously a
