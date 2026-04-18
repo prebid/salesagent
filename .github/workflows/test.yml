@@ -132,7 +132,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:15
+        image: postgres:17
         env:
           POSTGRES_USER: adcp_user
           POSTGRES_PASSWORD: test_password
@@ -193,7 +193,7 @@ jobs:
           -e POSTGRES_DB=adcp_registry \
           -e POSTGRES_USER=adcp \
           -e POSTGRES_PASSWORD=localdev \
-          postgres:16
+          postgres:17
         sleep 5
 
         docker run -d --network creative-net --name creative-agent \
