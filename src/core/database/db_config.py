@@ -2,6 +2,25 @@
 
 Production exclusively uses PostgreSQL. No SQLite support.
 This aligns with our principle: "No fallbacks - if it's in our control, make it work."
+
+DatabaseConnection retention (Agent F Audit 06 Decision 2, reaffirmed 2026-04-11):
+    This module is RETAINED intentionally. The sync raw-psycopg2 path is the only
+    fork-safe DB access pre-uvicorn. `scripts/deploy/run_all_services.py` runs as
+    PID 1 and spawns uvicorn via `subprocess.Popen([sys.executable, ...])`; using
+    SQLAlchemy's `get_db_session()` here would construct a pooled engine in the
+    parent and leak open PG sockets across the fork into the child, corrupting
+    them (the canonical SQLAlchemy fork-safety bug). Raw psycopg2 connect-query-
+    close is fork-safe because the connection is fully torn down before Popen.
+
+    Post pre-L0 PR scope cleanup (Agent F scope item D):
+        `examples/upstream_quickstart.py` migrated to `get_db_session()`.
+    Remaining callers of `get_db_connection()`:
+        - `scripts/deploy/run_all_services.py:84` (check_database_health)
+        - `scripts/deploy/run_all_services.py:135` (check_schema_issues)
+    Total: 2 files, both inside the PID-1 orchestrator. NEW code MUST NOT call
+    `get_db_connection()` — use `get_db_session()` instead. The structural guard
+    `tests/unit/test_architecture_get_db_connection_callers_allowlist.py`
+    enforces this allowlist.
 """
 
 import os
@@ -110,9 +129,19 @@ class DatabaseConnection:
         self.connection: Any | None = None
 
     def connect(self):
-        """Connect to PostgreSQL database."""
+        """Connect to PostgreSQL database.
+
+        Hardened per Agent F pre-L0 hardening scope item C:
+            - `connect_timeout`: caps the TCP handshake so a hanging DB cannot
+              brick container startup (env override: `DATABASE_CONNECT_TIMEOUT`).
+            - `options="-c statement_timeout=5000"`: caps individual statement
+              execution at 5s so the health-check SELECTs in run_all_services.py
+              cannot wedge the PID-1 orchestrator on a slow query.
+        """
         import psycopg2
         import psycopg2.extras
+
+        connect_timeout = int(os.environ.get("DATABASE_CONNECT_TIMEOUT", "10"))
 
         self.connection = psycopg2.connect(
             host=self.config["host"],
@@ -122,6 +151,8 @@ class DatabaseConnection:
             password=self.config["password"],
             sslmode=self.config["sslmode"],
             cursor_factory=psycopg2.extras.DictCursor,
+            connect_timeout=connect_timeout,
+            options="-c statement_timeout=5000",
         )
 
         return self.connection
