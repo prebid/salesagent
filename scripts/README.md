@@ -22,7 +22,6 @@ Utility scripts for setup, deployment, and operations.
 
 ### `/deploy/` - Deployment
 - `run_all_services.py` - Main Docker container entrypoint (orchestrates all services)
-- `entrypoint_admin.sh` - Admin UI container entrypoint
 - `fly-set-secrets.sh` - Set secrets for Fly.io deployment
 
 ### `/hooks/` - Pre-commit Hooks
