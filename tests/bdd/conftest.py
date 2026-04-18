@@ -557,16 +557,23 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     )
                 )
 
-        # FIXME(salesagent-vov / salesagent-qzz2): UC-019 REST/E2E_REST — REST endpoint
-        # returns Method Not Allowed for get_media_buys. Same gap applies to e2e_rest
-        # (Docker hits the same unimplemented endpoint).
-        if (is_rest or is_e2e_rest) and any(t.startswith("T-UC-019") for t in marker_names):
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="REST get_media_buys endpoint not implemented (Method Not Allowed)",
-                    strict=False,
-                )
+        # FIXME(salesagent-y20i): UC-019 REST boundary-principal — REST auth middleware
+        # returns 401 before the endpoint can produce spec-level business errors
+        # (principal_id_missing, principal_not_found). Only affects invalid-principal
+        # boundary examples; valid-principal examples pass.
+        if is_rest and "T-UC-019-boundary-principal" in marker_names:
+            _invalid_principal_patterns = (
+                "principal_id is null",
+                "principal_id is empty string",
+                "principal_id not in registry",
             )
+            if any(p in nodeid for p in _invalid_principal_patterns):
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="REST auth middleware returns 401 before business-level principal error",
+                        strict=True,
+                    )
+                )
 
         # FIXME(salesagent-9vgz.21): UC-003 idempotency-valid — MCP/A2A wrappers don't
         # accept idempotency_key param. Schema has the field but transport boundary
