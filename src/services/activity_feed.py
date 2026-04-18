@@ -35,7 +35,7 @@ class ActivityFeed:
             try:
                 asyncio.create_task(websocket.send(json.dumps(activity)))
             except Exception:
-                pass
+                logger.debug("WebSocket send failed for activity replay", exc_info=True)
 
     def remove_connection(self, tenant_id: str, websocket):
         """Remove a WebSocket connection."""
@@ -201,6 +201,7 @@ class ActivityFeed:
             else:
                 return "Just now"
         except Exception:
+            logger.debug("Failed to format time_ago", exc_info=True)
             return "Unknown"
 
 

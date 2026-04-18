@@ -744,6 +744,7 @@ class TestErrorCodeVocabularyConsistency:
         "BUDGET_EXHAUSTED",  # HTTP 422 (salesagent extension)
         "RATE_LIMIT_EXCEEDED",  # adcp-req: Rate Limiting / Quota Errors
         "ADAPTER_ERROR",  # HTTP 502 (salesagent extension)
+        "CONFIGURATION_ERROR",  # HTTP 500 — decryption/config broken (salesagent extension)
         "SERVICE_UNAVAILABLE",  # adcp-req: Service/Infrastructure Errors
     }
 

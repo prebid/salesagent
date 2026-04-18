@@ -49,8 +49,7 @@ def _normalize_localhost_for_docker(url: str) -> str:
             new_netloc = f"{userinfo}host.docker.internal{port}"
             return urlunparse(parsed._replace(netloc=new_netloc))
     except Exception:
-        # If anything goes wrong, fall back to the original URL
-        pass
+        logger.debug("Docker URL rewrite failed, using original URL", exc_info=True)
     return url
 
 
