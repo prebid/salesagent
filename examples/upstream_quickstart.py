@@ -7,7 +7,6 @@ Run this in one terminal to see the full flow.
 """
 
 import asyncio
-import json
 import os
 import subprocess
 import sys
@@ -129,28 +128,39 @@ def start_upstream_server():
 
 
 async def configure_tenant_for_mcp():
-    """Configure the default tenant to use the upstream MCP server."""
-    from src.core.database.db_config import get_db_connection
+    """Configure the default tenant to use the upstream MCP server.
+
+    Uses the SQLAlchemy ORM via `get_db_session()` — previously used the raw
+    psycopg2 `get_db_connection()` which is now reserved for PID-1 fork-safe
+    paths per Agent F Audit 06 Decision 2 (Agent F pre-L0 hardening scope
+    item D).
+
+    Stores the product_catalog config block on `Tenant.signals_agent_config`
+    (a JSONType dict column), under the `product_catalog` key.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import Tenant
 
     print("🔧 Configuring tenant to use upstream catalog...")
 
-    conn = get_db_connection()
+    with get_db_session() as session:
+        tenant = session.scalars(select(Tenant).filter_by(tenant_id="default")).first()
+        if tenant is None:
+            raise RuntimeError("Tenant 'default' not found — run init_db() first.")
 
-    # Get current config
-    cursor = conn.execute("SELECT config FROM tenants WHERE tenant_id = 'default'")
-    row = cursor.fetchone()
-    current_config = json.loads(dict(row)["config"]) if row else {}
-
-    # Add product catalog config
-    current_config["product_catalog"] = {
-        "provider": "mcp",
-        "config": {"upstream_url": "http://localhost:9000/mcp/", "tool_name": "get_products", "timeout": 10},
-    }
-
-    # Update tenant
-    conn.execute("UPDATE tenants SET config = ? WHERE tenant_id = 'default'", (json.dumps(current_config),))
-    conn.commit()
-    conn.close()
+        current_config = dict(tenant.signals_agent_config or {})
+        current_config["product_catalog"] = {
+            "provider": "mcp",
+            "config": {
+                "upstream_url": "http://localhost:9000/mcp/",
+                "tool_name": "get_products",
+                "timeout": 10,
+            },
+        }
+        tenant.signals_agent_config = current_config
+        session.commit()
 
     print("✅ Tenant configured to use upstream catalog\n")
 
