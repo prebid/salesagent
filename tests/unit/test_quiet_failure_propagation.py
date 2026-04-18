@@ -178,6 +178,44 @@ class TestDynamicPricingExceptionPropagation:
             with pytest.raises(TypeError, match="not subscriptable"):
                 await _get_products_impl(_make_request(), _make_identity())
 
+    @pytest.mark.asyncio
+    async def test_runtime_error_is_graceful(self):
+        """RuntimeError (service failure) degrades gracefully — products returned without pricing enrichment.
+
+        Covers: UC-001-MAIN-42
+        GH #1078 H4 — symmetric test for the degradation path.
+        """
+        from tests.helpers.adcp_factories import create_test_product
+
+        product = create_test_product(product_id="p1")
+        mock_uow = _mock_uow_with_products([product])
+
+        mock_pricing_cls = MagicMock()
+        mock_pricing_cls.return_value.enrich_products_with_pricing.side_effect = RuntimeError("Connection refused")
+
+        patches = [
+            patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
+            patch("src.core.tools.products.get_principal_object", return_value=None),
+            patch("src.core.tools.products.convert_product_model_to_schema", side_effect=lambda p, **kw: p),
+            patch(
+                "src.services.dynamic_products.generate_variants_for_brief",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch("src.services.dynamic_pricing_service.DynamicPricingService", mock_pricing_cls),
+        ]
+
+        import contextlib
+
+        from src.core.tools.products import _get_products_impl
+
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            result = await _get_products_impl(_make_request(), _make_identity())
+            # Should still return the static product despite pricing failure
+            assert len(result.products) == 1
+
 
 class TestAIRankingExceptionPropagation:
     """AI ranking fail-open (obligation already existed).

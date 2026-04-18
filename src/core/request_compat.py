@@ -53,7 +53,7 @@ def _translate_brand_manifest(value: Any) -> dict[str, str] | None:
         if hostname:
             return {"domain": hostname}
     except Exception:  # noqa: BLE001
-        pass
+        logger.debug("Could not parse domain from agent_url", exc_info=True)
     return None
 
 
@@ -250,6 +250,7 @@ def _strip_node(value: Any, schema: dict[str, Any], defs: dict[str, Any]) -> Any
                         best_score = score
                         best_result = candidate
                 except Exception:
+                    logger.debug("Schema candidate matching failed", exc_info=True)
                     continue
             return best_result
 
