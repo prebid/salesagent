@@ -41,6 +41,50 @@ def _pydantic_json_serializer(obj: Any) -> str:
     return pydantic_core.to_json(obj, fallback=str).decode()
 
 
+def _rewrite_sslmode_for_driver(connection_string: str) -> str:
+    """Rewrite `sslmode=` to `ssl=` ONLY when the URL targets an async driver.
+
+    Context (L5+ forward-prep, Agent F pre-L0 hardening):
+        - psycopg2 (sync, L0-L4, scheme `postgresql://` or `postgresql+psycopg2://`):
+          libpq parses `sslmode=require|disable|prefer|allow|verify-ca|verify-full`.
+          Rewriting to `ssl=` here would BREAK the sync engine at L0.
+        - asyncpg (async, L5+, scheme `postgresql+asyncpg://`): does NOT understand
+          `sslmode=` — treats it as an unknown query param and raises TypeError at
+          engine construction. asyncpg expects `ssl=true|false|...`.
+
+    Strategy: leave sync psycopg2 URLs untouched. Only when we detect an async
+    driver scheme do we rewrite `sslmode=<value>` to the asyncpg-equivalent
+    `ssl=<value>`. This function is the single choke-point for that translation
+    so it can be covered by a unit test at L5b without re-reasoning about it
+    at every engine construction site.
+
+    Mappings applied when the driver is asyncpg:
+        sslmode=require    -> ssl=true
+        sslmode=disable    -> ssl=false
+        sslmode=prefer     -> ssl=prefer   (asyncpg accepts the string form)
+        (any other value stays as sslmode= — asyncpg will surface an error,
+        which is the correct failure mode for misconfigured URLs)
+
+    Returns the URL unchanged if `sslmode=` is not present OR the URL does not
+    target an async driver.
+    """
+    if "sslmode=" not in connection_string:
+        return connection_string
+    # Only rewrite for async drivers. The sync path (psycopg2) keeps `sslmode=`
+    # so the libpq parser is happy at L0-L4. Layer 5+ flips engines to asyncpg.
+    if "+asyncpg" not in connection_string:
+        return connection_string
+
+    replacements = {
+        "sslmode=require": "ssl=true",
+        "sslmode=disable": "ssl=false",
+        "sslmode=prefer": "ssl=prefer",
+    }
+    for before, after in replacements.items():
+        connection_string = connection_string.replace(before, after)
+    return connection_string
+
+
 def _is_pgbouncer_connection(connection_string: str) -> bool:
     """Check if connection string uses PgBouncer (port 6543) or USE_PGBOUNCER is set.
 
@@ -86,6 +130,10 @@ def get_engine():
 
         if "postgresql" not in connection_string:
             raise ValueError("Only PostgreSQL is supported. Use DATABASE_URL=postgresql://...")
+
+        # Forward-prep for L5+ async engine: psycopg2 uses `sslmode=`, asyncpg uses `ssl=`.
+        # No-op for sync psycopg2 URLs at L0-L4.
+        connection_string = _rewrite_sslmode_for_driver(connection_string)
 
         # Get timeout configuration from environment
         query_timeout = int(os.environ.get("DATABASE_QUERY_TIMEOUT", "30"))  # 30s default
