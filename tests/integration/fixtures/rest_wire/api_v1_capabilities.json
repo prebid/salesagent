@@ -1,0 +1,18 @@
+{
+  "body": {
+    "adcp": {
+      "major_versions": [
+        3
+      ]
+    },
+    "supported_protocols": [
+      "media_buy"
+    ]
+  },
+  "body_keys": [
+    "adcp",
+    "supported_protocols"
+  ],
+  "content_type": "application/json",
+  "status": 200
+}

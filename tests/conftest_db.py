@@ -534,3 +534,33 @@ def inspect(engine):
     from sqlalchemy import inspect as sqlalchemy_inspect
 
     return sqlalchemy_inspect(engine)
+
+
+# ---------------------------------------------------------------------------
+# L0-02 AdCP-boundary TestClient fixture
+# ---------------------------------------------------------------------------
+# Session-scoped because src.app.app is a module-level singleton whose
+# lifespan boots the MCP StreamableHTTPSessionManager; that manager raises
+# if run() is called twice per process. Every test that needs a booted
+# FastAPI TestClient (tests/migration, tests/integration/test_error_shape_*,
+# tests/integration/test_schemas_discovery_*, tests/integration/test_rest_wire*)
+# shares this single instance.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def boot_client():
+    """Yield a fastapi.testclient.TestClient for the real app with lifespan started.
+
+    The lifespan hook installs the Flask WSGI mount (``/admin`` + root
+    fallback) which serves ``/schemas/adcp/v2.4/*``. Without entering the
+    ``TestClient`` as a context manager those routes 404.
+    """
+    os.environ.setdefault("DATABASE_URL", "postgresql://test:test@localhost:9999/test")
+
+    from fastapi.testclient import TestClient
+
+    from src.app import app
+
+    with TestClient(app) as client:
+        yield client

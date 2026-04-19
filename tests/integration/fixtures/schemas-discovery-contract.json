@@ -1,0 +1,163 @@
+{
+  "/schemas/": {
+    "content_type": "application/json",
+    "id": null,
+    "status": 200,
+    "top_level_keys": [
+      "description",
+      "protocols",
+      "schema_version"
+    ]
+  },
+  "/schemas/adcp/": {
+    "content_type": "application/json",
+    "id": null,
+    "status": 200,
+    "top_level_keys": [
+      "available_versions",
+      "current_version",
+      "description",
+      "latest_url"
+    ]
+  },
+  "/schemas/adcp/v2.4/": {
+    "content_type": "application/json",
+    "id": null,
+    "status": 200,
+    "top_level_keys": [
+      "base_url",
+      "description",
+      "schema_version",
+      "schemas",
+      "version"
+    ]
+  },
+  "/schemas/adcp/v2.4/getmediabuydelivery.json": {
+    "content_type": "application/json",
+    "id": "None/schemas/adcp/v2.4/getmediabuydelivery.json",
+    "status": 200,
+    "top_level_keys": [
+      "$defs",
+      "$id",
+      "$schema",
+      "additionalProperties",
+      "description",
+      "properties",
+      "required",
+      "title",
+      "type"
+    ]
+  },
+  "/schemas/adcp/v2.4/getproducts.json": {
+    "content_type": "application/json",
+    "id": "None/schemas/adcp/v2.4/getproducts.json",
+    "status": 200,
+    "top_level_keys": [
+      "$defs",
+      "$id",
+      "$schema",
+      "additionalProperties",
+      "description",
+      "properties",
+      "required",
+      "title",
+      "type"
+    ]
+  },
+  "/schemas/adcp/v2.4/getsignals.json": {
+    "content_type": "application/json",
+    "id": "None/schemas/adcp/v2.4/getsignals.json",
+    "status": 200,
+    "top_level_keys": [
+      "$defs",
+      "$id",
+      "$schema",
+      "additionalProperties",
+      "description",
+      "properties",
+      "required",
+      "title",
+      "type"
+    ]
+  },
+  "/schemas/adcp/v2.4/listauthorizedproperties.json": {
+    "content_type": "application/json",
+    "id": "None/schemas/adcp/v2.4/listauthorizedproperties.json",
+    "status": 200,
+    "top_level_keys": [
+      "$defs",
+      "$id",
+      "$schema",
+      "additionalProperties",
+      "description",
+      "properties",
+      "required",
+      "title",
+      "type"
+    ]
+  },
+  "/schemas/adcp/v2.4/listcreativeformats.json": {
+    "content_type": "application/json",
+    "id": "None/schemas/adcp/v2.4/listcreativeformats.json",
+    "status": 200,
+    "top_level_keys": [
+      "$defs",
+      "$id",
+      "$schema",
+      "additionalProperties",
+      "description",
+      "properties",
+      "required",
+      "title",
+      "type"
+    ]
+  },
+  "/schemas/adcp/v2.4/listcreatives.json": {
+    "content_type": "application/json",
+    "id": "None/schemas/adcp/v2.4/listcreatives.json",
+    "status": 200,
+    "top_level_keys": [
+      "$defs",
+      "$id",
+      "$schema",
+      "additionalProperties",
+      "description",
+      "properties",
+      "required",
+      "title",
+      "type"
+    ]
+  },
+  "/schemas/adcp/v2.4/synccreatives.json": {
+    "content_type": "application/json",
+    "id": "None/schemas/adcp/v2.4/synccreatives.json",
+    "status": 200,
+    "top_level_keys": [
+      "$defs",
+      "$id",
+      "$schema",
+      "additionalProperties",
+      "description",
+      "properties",
+      "required",
+      "title",
+      "type"
+    ]
+  },
+  "/schemas/adcp/v2.4/updateperformanceindex.json": {
+    "content_type": "application/json",
+    "id": "None/schemas/adcp/v2.4/updateperformanceindex.json",
+    "status": 200,
+    "top_level_keys": [
+      "$defs",
+      "$id",
+      "$schema",
+      "additionalProperties",
+      "description",
+      "properties",
+      "required",
+      "title",
+      "type"
+    ]
+  }
+}

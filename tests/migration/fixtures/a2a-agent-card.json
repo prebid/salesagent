@@ -1,0 +1,288 @@
+{
+  "additionalInterfaces": null,
+  "capabilities": {
+    "extensions": [
+      {
+        "description": "AdCP protocol version and supported domains",
+        "params": {
+          "adcp_version": "3.0.0-rc.2",
+          "protocols_supported": [
+            "media_buy"
+          ]
+        },
+        "required": null,
+        "uri": "https://adcontextprotocol.org/schemas/3.0.0-rc.2/protocols/adcp-extension.json"
+      }
+    ],
+    "pushNotifications": true,
+    "stateTransitionHistory": null,
+    "streaming": null
+  },
+  "defaultInputModes": [
+    "message"
+  ],
+  "defaultOutputModes": [
+    "message"
+  ],
+  "description": "AI agent for programmatic advertising campaigns via AdCP protocol",
+  "documentationUrl": "https://github.com/your-org/adcp-sales-agent",
+  "iconUrl": null,
+  "name": "Prebid Sales Agent",
+  "preferredTransport": "JSONRPC",
+  "protocolVersion": "1.0",
+  "provider": null,
+  "security": null,
+  "securitySchemes": null,
+  "signatures": null,
+  "skills": [
+    {
+      "description": "Get the capabilities of this AdCP sales agent including supported protocols and targeting",
+      "examples": null,
+      "id": "get_adcp_capabilities",
+      "inputModes": null,
+      "name": "get_adcp_capabilities",
+      "outputModes": null,
+      "security": null,
+      "tags": [
+        "capabilities",
+        "discovery",
+        "adcp"
+      ]
+    },
+    {
+      "description": "Browse available advertising products and inventory",
+      "examples": null,
+      "id": "get_products",
+      "inputModes": null,
+      "name": "get_products",
+      "outputModes": null,
+      "security": null,
+      "tags": [
+        "products",
+        "inventory",
+        "catalog",
+        "adcp"
+      ]
+    },
+    {
+      "description": "Create advertising campaigns with products, targeting, and budget",
+      "examples": null,
+      "id": "create_media_buy",
+      "inputModes": null,
+      "name": "create_media_buy",
+      "outputModes": null,
+      "security": null,
+      "tags": [
+        "campaign",
+        "media",
+        "buy",
+        "adcp"
+      ]
+    },
+    {
+      "description": "List all available creative formats and specifications",
+      "examples": null,
+      "id": "list_creative_formats",
+      "inputModes": null,
+      "name": "list_creative_formats",
+      "outputModes": null,
+      "security": null,
+      "tags": [
+        "creative",
+        "formats",
+        "specs",
+        "discovery",
+        "adcp"
+      ]
+    },
+    {
+      "description": "List authorized properties this agent can sell advertising for",
+      "examples": null,
+      "id": "list_authorized_properties",
+      "inputModes": null,
+      "name": "list_authorized_properties",
+      "outputModes": null,
+      "security": null,
+      "tags": [
+        "properties",
+        "authorization",
+        "publisher",
+        "adcp"
+      ]
+    },
+    {
+      "description": "List billing accounts accessible to this agent",
+      "examples": null,
+      "id": "list_accounts",
+      "inputModes": null,
+      "name": "list_accounts",
+      "outputModes": null,
+      "security": null,
+      "tags": [
+        "accounts",
+        "billing",
+        "discovery",
+        "adcp"
+      ]
+    },
+    {
+      "description": "Sync billing accounts by natural key (upsert, delete_missing, dry_run)",
+      "examples": null,
+      "id": "sync_accounts",
+      "inputModes": null,
+      "name": "sync_accounts",
+      "outputModes": null,
+      "security": null,
+      "tags": [
+        "accounts",
+        "billing",
+        "sync",
+        "upsert",
+        "adcp"
+      ]
+    },
+    {
+      "description": "Update existing media buy configuration and settings",
+      "examples": null,
+      "id": "update_media_buy",
+      "inputModes": null,
+      "name": "update_media_buy",
+      "outputModes": null,
+      "security": null,
+      "tags": [
+        "campaign",
+        "update",
+        "management",
+        "adcp"
+      ]
+    },
+    {
+      "description": "Get media buy status, creative approval state, and optional near-real-time delivery snapshots",
+      "examples": null,
+      "id": "get_media_buys",
+      "inputModes": null,
+      "name": "get_media_buys",
+      "outputModes": null,
+      "security": null,
+      "tags": [
+        "media_buy",
+        "status",
+        "creative",
+        "snapshot",
+        "monitoring",
+        "adcp"
+      ]
+    },
+    {
+      "description": "Get delivery metrics and performance data for media buys",
+      "examples": null,
+      "id": "get_media_buy_delivery",
+      "inputModes": null,
+      "name": "get_media_buy_delivery",
+      "outputModes": null,
+      "security": null,
+      "tags": [
+        "delivery",
+        "metrics",
+        "performance",
+        "monitoring",
+        "adcp"
+      ]
+    },
+    {
+      "description": "Update performance data and optimization metrics",
+      "examples": null,
+      "id": "update_performance_index",
+      "inputModes": null,
+      "name": "update_performance_index",
+      "outputModes": null,
+      "security": null,
+      "tags": [
+        "performance",
+        "optimization",
+        "metrics",
+        "adcp"
+      ]
+    },
+    {
+      "description": "Upload and manage creative assets to centralized library (AdCP spec)",
+      "examples": null,
+      "id": "sync_creatives",
+      "inputModes": null,
+      "name": "sync_creatives",
+      "outputModes": null,
+      "security": null,
+      "tags": [
+        "creative",
+        "sync",
+        "library",
+        "adcp",
+        "spec"
+      ]
+    },
+    {
+      "description": "Search and query creative library with advanced filtering (AdCP spec)",
+      "examples": null,
+      "id": "list_creatives",
+      "inputModes": null,
+      "name": "list_creatives",
+      "outputModes": null,
+      "security": null,
+      "tags": [
+        "creative",
+        "library",
+        "search",
+        "adcp",
+        "spec"
+      ]
+    },
+    {
+      "description": "Review and approve/reject creative assets (admin only)",
+      "examples": null,
+      "id": "approve_creative",
+      "inputModes": null,
+      "name": "approve_creative",
+      "outputModes": null,
+      "security": null,
+      "tags": [
+        "creative",
+        "approval",
+        "review",
+        "adcp"
+      ]
+    },
+    {
+      "description": "Check status and performance of media buys",
+      "examples": null,
+      "id": "get_media_buy_status",
+      "inputModes": null,
+      "name": "get_media_buy_status",
+      "outputModes": null,
+      "security": null,
+      "tags": [
+        "status",
+        "performance",
+        "tracking",
+        "adcp"
+      ]
+    },
+    {
+      "description": "Optimize media buy performance and targeting",
+      "examples": null,
+      "id": "optimize_media_buy",
+      "inputModes": null,
+      "name": "optimize_media_buy",
+      "outputModes": null,
+      "security": null,
+      "tags": [
+        "optimization",
+        "performance",
+        "targeting",
+        "adcp"
+      ]
+    }
+  ],
+  "supportsAuthenticatedExtendedCard": null,
+  "url": "__stable_url__",
+  "version": "1.7.0"
+}

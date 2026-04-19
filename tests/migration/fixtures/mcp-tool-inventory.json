@@ -1,0 +1,256 @@
+{
+  "complete_task": {
+    "name": "complete_task",
+    "optional_params": [
+      "error_message",
+      "identity",
+      "response_data",
+      "status"
+    ],
+    "required_params": [
+      "task_id"
+    ],
+    "return_type": "dict"
+  },
+  "create_media_buy": {
+    "name": "create_media_buy",
+    "optional_params": [
+      "brand",
+      "budget",
+      "buyer_campaign_ref",
+      "context",
+      "creatives",
+      "daily_budget",
+      "enable_creative_macro",
+      "end_date",
+      "end_time",
+      "ext",
+      "pacing",
+      "packages",
+      "po_number",
+      "product_ids",
+      "push_notification_config",
+      "reporting_webhook",
+      "required_axe_signals",
+      "start_date",
+      "start_time",
+      "strategy_id",
+      "targeting_overlay",
+      "total_budget",
+      "webhook_url"
+    ],
+    "required_params": [
+      "buyer_ref"
+    ],
+    "return_type": "<unannotated>"
+  },
+  "get_adcp_capabilities": {
+    "name": "get_adcp_capabilities",
+    "optional_params": [
+      "protocols"
+    ],
+    "required_params": [],
+    "return_type": "fastmcp.tools.base.ToolResult"
+  },
+  "get_media_buy_delivery": {
+    "name": "get_media_buy_delivery",
+    "optional_params": [
+      "account",
+      "attribution_window",
+      "buyer_refs",
+      "context",
+      "end_date",
+      "include_package_daily_breakdown",
+      "media_buy_ids",
+      "reporting_dimensions",
+      "start_date",
+      "status_filter"
+    ],
+    "required_params": [],
+    "return_type": "<unannotated>"
+  },
+  "get_media_buys": {
+    "name": "get_media_buys",
+    "optional_params": [
+      "account",
+      "buyer_refs",
+      "context",
+      "include_snapshot",
+      "media_buy_ids",
+      "status_filter"
+    ],
+    "required_params": [],
+    "return_type": "<unannotated>"
+  },
+  "get_products": {
+    "name": "get_products",
+    "optional_params": [
+      "adcp_version",
+      "brand",
+      "brief",
+      "context",
+      "filters",
+      "property_list",
+      "push_notification_config"
+    ],
+    "required_params": [],
+    "return_type": "<unannotated>"
+  },
+  "get_task": {
+    "name": "get_task",
+    "optional_params": [
+      "identity"
+    ],
+    "required_params": [
+      "task_id"
+    ],
+    "return_type": "dict"
+  },
+  "list_accounts": {
+    "name": "list_accounts",
+    "optional_params": [
+      "context",
+      "pagination",
+      "sandbox",
+      "status"
+    ],
+    "required_params": [],
+    "return_type": "<unannotated>"
+  },
+  "list_authorized_properties": {
+    "name": "list_authorized_properties",
+    "optional_params": [
+      "context",
+      "property_tags",
+      "publisher_domains",
+      "webhook_url"
+    ],
+    "required_params": [],
+    "return_type": "<unannotated>"
+  },
+  "list_creative_formats": {
+    "name": "list_creative_formats",
+    "optional_params": [
+      "asset_types",
+      "context",
+      "format_ids",
+      "is_responsive",
+      "max_height",
+      "max_width",
+      "min_height",
+      "min_width",
+      "name_search",
+      "type"
+    ],
+    "required_params": [],
+    "return_type": "<unannotated>"
+  },
+  "list_creatives": {
+    "name": "list_creatives",
+    "optional_params": [
+      "buyer_ref",
+      "buyer_refs",
+      "context",
+      "created_after",
+      "created_before",
+      "fields",
+      "filters",
+      "format",
+      "include_assignments",
+      "include_performance",
+      "include_sub_assets",
+      "limit",
+      "media_buy_id",
+      "media_buy_ids",
+      "page",
+      "pagination",
+      "search",
+      "sort",
+      "sort_by",
+      "sort_order",
+      "status",
+      "tags",
+      "webhook_url"
+    ],
+    "required_params": [],
+    "return_type": "<unannotated>"
+  },
+  "list_tasks": {
+    "name": "list_tasks",
+    "optional_params": [
+      "identity",
+      "limit",
+      "object_id",
+      "object_type",
+      "offset",
+      "status"
+    ],
+    "required_params": [],
+    "return_type": "dict"
+  },
+  "sync_accounts": {
+    "name": "sync_accounts",
+    "optional_params": [
+      "accounts",
+      "context",
+      "delete_missing",
+      "dry_run"
+    ],
+    "required_params": [],
+    "return_type": "<unannotated>"
+  },
+  "sync_creatives": {
+    "name": "sync_creatives",
+    "optional_params": [
+      "account",
+      "assignments",
+      "context",
+      "creative_ids",
+      "delete_missing",
+      "dry_run",
+      "push_notification_config",
+      "validation_mode"
+    ],
+    "required_params": [
+      "creatives"
+    ],
+    "return_type": "<unannotated>"
+  },
+  "update_media_buy": {
+    "name": "update_media_buy",
+    "optional_params": [
+      "budget",
+      "buyer_ref",
+      "context",
+      "creatives",
+      "currency",
+      "daily_budget",
+      "end_time",
+      "ext",
+      "flight_end_date",
+      "flight_start_date",
+      "media_buy_id",
+      "pacing",
+      "packages",
+      "paused",
+      "push_notification_config",
+      "reporting_webhook",
+      "start_time",
+      "targeting_overlay"
+    ],
+    "required_params": [],
+    "return_type": "<unannotated>"
+  },
+  "update_performance_index": {
+    "name": "update_performance_index",
+    "optional_params": [
+      "context",
+      "webhook_url"
+    ],
+    "required_params": [
+      "media_buy_id",
+      "performance_data"
+    ],
+    "return_type": "<unannotated>"
+  }
+}

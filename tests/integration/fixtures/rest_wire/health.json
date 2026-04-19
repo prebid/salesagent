@@ -1,0 +1,12 @@
+{
+  "body": {
+    "service": "mcp",
+    "status": "healthy"
+  },
+  "body_keys": [
+    "service",
+    "status"
+  ],
+  "content_type": "application/json",
+  "status": 200
+}

@@ -1,0 +1,11 @@
+{
+  "body": null,
+  "body_keys": [
+    "details",
+    "error_code",
+    "message",
+    "recovery"
+  ],
+  "content_type": "application/json",
+  "status": 400
+}

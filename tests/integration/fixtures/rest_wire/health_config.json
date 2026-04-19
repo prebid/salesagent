@@ -1,0 +1,16 @@
+{
+  "body": {
+    "component": "configuration",
+    "message": "All configuration validation passed",
+    "service": "mcp",
+    "status": "healthy"
+  },
+  "body_keys": [
+    "component",
+    "message",
+    "service",
+    "status"
+  ],
+  "content_type": "application/json",
+  "status": 200
+}
