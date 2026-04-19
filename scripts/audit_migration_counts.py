@@ -11,6 +11,7 @@ Reference: Agent ε numeric re-count + file:line verification (2026-04-17 audit)
 Canonical counts documented in .claude/notes/flask-to-fastapi/ docs; drift
 between this script's output and plan text should trigger a doc-patch PR.
 """
+
 from __future__ import annotations
 
 import re
@@ -82,7 +83,7 @@ def main() -> int:
     templates = [REPO / "templates"]
     static = [REPO / "static"]
     src = [REPO / "src"]
-    src_admin_blueprints = [REPO / "src" / "admin" / "blueprints"]
+    src_admin_routers = [REPO / "src" / "admin" / "routers"]
     src_admin = [REPO / "src" / "admin"]
     src_core_tools = [REPO / "src" / "core" / "tools"]
     models_py = REPO / "src" / "core" / "database" / "models.py"
@@ -108,15 +109,15 @@ def main() -> int:
         ("A3", "Template files", count_template_files(), "files under templates/"),
         (
             "A4",
-            "flash() in src/admin/blueprints",
-            count_matches(r"\bflash\s*\(", src_admin_blueprints),
-            "`\\bflash\\s*\\(` in src/admin/blueprints/",
+            "flash() in src/admin/routers",
+            count_matches(r"\bflash\s*\(", src_admin_routers),
+            "`\\bflash\\s*\\(` in src/admin/routers/",
         ),
         (
             "A5",
-            "redirect() in src/admin/blueprints",
-            count_matches(r"\bredirect\s*\(", src_admin_blueprints),
-            "`\\bredirect\\s*\\(` in src/admin/blueprints/",
+            "redirect() in src/admin/routers",
+            count_matches(r"\bredirect\s*\(", src_admin_routers),
+            "`\\bredirect\\s*\\(` in src/admin/routers/",
         ),
         ("A6", "<form> tags in templates", count_matches(r"<form\b", templates), "`<form\\b` in templates/"),
         ("A7a", "fetch() in templates", count_matches(r"fetch\s*\(", templates), "`fetch\\s*\\(` in templates/"),
@@ -124,8 +125,8 @@ def main() -> int:
         (
             "A8",
             "Blueprint .py files (incl __init__)",
-            count_files_globbed("*.py", REPO / "src" / "admin" / "blueprints"),
-            "src/admin/blueprints/*.py",
+            count_files_globbed("*.py", REPO / "src" / "admin" / "routers"),
+            "src/admin/routers/*.py",
         ),
         (
             "A9",
@@ -148,20 +149,20 @@ def main() -> int:
         (
             "A13",
             "request.form call sites",
-            count_matches(r"request\.form", src_admin_blueprints),
-            "`request\\.form` in src/admin/blueprints/",
+            count_matches(r"request\.form", src_admin_routers),
+            "`request\\.form` in src/admin/routers/",
         ),
         (
             "A14",
             "request.args call sites",
-            count_matches(r"request\.args", src_admin_blueprints),
-            "`request\\.args` in src/admin/blueprints/",
+            count_matches(r"request\.args", src_admin_routers),
+            "`request\\.args` in src/admin/routers/",
         ),
         (
             "A15",
             "request.files call sites",
-            count_matches(r"request\.files", src_admin_blueprints),
-            "`request\\.files` in src/admin/blueprints/",
+            count_matches(r"request\.files", src_admin_routers),
+            "`request\\.files` in src/admin/routers/",
         ),
         (
             "A16",
@@ -249,7 +250,7 @@ def main() -> int:
     print()
     print("| Blueprint | Routes | LOC | flash() | redirect() | request.form |")
     print("|---|---:|---:|---:|---:|---:|")
-    bp_dir = REPO / "src" / "admin" / "blueprints"
+    bp_dir = REPO / "src" / "admin" / "routers"
     if bp_dir.exists():
         for bp in sorted(bp_dir.glob("*.py")):
             if bp.name == "__init__.py":

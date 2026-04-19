@@ -301,7 +301,7 @@ class TestProductDeletion:
         product_id = "test_product_1"
 
         # Mock a database error in the product deletion module
-        with patch("src.admin.blueprints.products.get_db_session") as mock_session:
+        with patch("src.admin.routers.products.get_db_session") as mock_session:
             # Mock the context manager to raise an exception
             mock_context = mock_session.return_value.__enter__.return_value
             # SQLAlchemy 2.0 uses scalars() instead of query()

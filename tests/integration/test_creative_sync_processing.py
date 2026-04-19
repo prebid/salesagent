@@ -401,9 +401,9 @@ class TestApprovalModeUpdate:
             env.identity.tenant["approval_mode"] = "ai-powered"
 
             with (
-                patch("src.admin.blueprints.creatives._ai_review_executor", mock_executor),
-                patch("src.admin.blueprints.creatives._ai_review_lock", MagicMock()),
-                patch("src.admin.blueprints.creatives._ai_review_tasks", {}),
+                patch("src.admin.routers.creatives._ai_review_executor", mock_executor),
+                patch("src.admin.routers.creatives._ai_review_lock", MagicMock()),
+                patch("src.admin.routers.creatives._ai_review_tasks", {}),
             ):
                 result = env.call_impl(
                     creatives=[
@@ -751,9 +751,9 @@ class TestCreateAIPoweredApproval:
             env.identity.tenant["approval_mode"] = "ai-powered"
 
             with (
-                patch("src.admin.blueprints.creatives._ai_review_executor", mock_executor),
-                patch("src.admin.blueprints.creatives._ai_review_lock", MagicMock()),
-                patch("src.admin.blueprints.creatives._ai_review_tasks", {}),
+                patch("src.admin.routers.creatives._ai_review_executor", mock_executor),
+                patch("src.admin.routers.creatives._ai_review_lock", MagicMock()),
+                patch("src.admin.routers.creatives._ai_review_tasks", {}),
             ):
                 result = env.call_impl(creatives=[_creative(creative_id="c_ai_create")])
 

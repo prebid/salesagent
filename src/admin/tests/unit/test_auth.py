@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
-from src.admin.blueprints.auth import auth_bp, init_oauth
+from src.admin.routers.auth import auth_bp, init_oauth
 from src.admin.utils import is_super_admin, is_tenant_admin
 
 
@@ -28,7 +28,7 @@ class TestAuthBlueprint:
         # This just verifies the blueprint exists and can be imported
         assert auth_bp is not None
 
-    @patch("src.admin.blueprints.auth.OAuth")
+    @patch("src.admin.routers.auth.OAuth")
     def test_init_oauth_with_env_vars(self, mock_oauth):
         """Test OAuth initialization with environment variables."""
         mock_app = Mock()
@@ -42,13 +42,13 @@ class TestAuthBlueprint:
             mock_oauth.assert_called_once_with(mock_app)
             assert oauth is not None
 
-    @patch("src.admin.blueprints.auth.OAuth")
+    @patch("src.admin.routers.auth.OAuth")
     def test_init_oauth_without_config(self, mock_oauth):
         """Test OAuth initialization without configuration."""
         mock_app = Mock()
 
         with patch.dict("os.environ", {}, clear=True):
-            with patch("src.admin.blueprints.auth.os.path.exists", return_value=False):
+            with patch("src.admin.routers.auth.os.path.exists", return_value=False):
                 oauth = init_oauth(mock_app)
 
                 # Should return None when no config is available
@@ -234,9 +234,9 @@ class TestAuthIntegration:
 class TestAuthUserAutoCreation:
     """Test auto-creation of user records for authorized users."""
 
-    @patch("src.admin.blueprints.auth.get_db_session")
-    @patch("src.admin.blueprints.auth.get_user_tenant_access")
-    @patch("src.admin.blueprints.auth.ensure_user_in_tenant")
+    @patch("src.admin.routers.auth.get_db_session")
+    @patch("src.admin.routers.auth.get_user_tenant_access")
+    @patch("src.admin.routers.auth.ensure_user_in_tenant")
     def test_tenant_login_auto_creates_user_for_authorized_email(
         self, mock_ensure_user, mock_get_access, mock_get_session
     ):
@@ -271,8 +271,8 @@ class TestAuthUserAutoCreation:
         # should have records auto-created via ensure_user_in_tenant()
         assert True  # If this test structure exists, the code path is tested
 
-    @patch("src.admin.blueprints.auth.get_db_session")
-    @patch("src.admin.blueprints.auth.get_user_tenant_access")
+    @patch("src.admin.routers.auth.get_db_session")
+    @patch("src.admin.routers.auth.get_user_tenant_access")
     def test_tenant_login_rejects_unauthorized_email(self, mock_get_access, mock_get_session):
         """Test that tenant-specific login rejects unauthorized emails."""
         # Setup: Email is NOT in authorized_emails or authorized_domains
@@ -300,7 +300,7 @@ class TestAuthUserAutoCreation:
 class TestDuplicateTenantPrevention:
     """Test prevention of duplicate tenant display in selector."""
 
-    @patch("src.admin.blueprints.auth.get_db_session")
+    @patch("src.admin.routers.auth.get_db_session")
     @patch("src.admin.domain_access.get_user_tenant_access")
     def test_tenant_not_duplicated_when_in_both_domain_and_email_lists(self, mock_get_access, mock_get_session):
         """Test that a tenant is not duplicated when user has access via both domain and email."""
@@ -328,7 +328,7 @@ class TestDuplicateTenantPrevention:
         # Create test app with auth blueprint
         from flask import Flask
 
-        from src.admin.blueprints.auth import auth_bp
+        from src.admin.routers.auth import auth_bp
 
         app = Flask(__name__)
         app.config["SECRET_KEY"] = "test_secret"

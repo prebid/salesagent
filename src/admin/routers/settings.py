@@ -4,7 +4,7 @@
 - URL: /admin/settings
 - Function: tenant_management_settings()
 - The tenant_settings() function in this file is UNUSED - actual tenant settings
-  are handled by src/admin/blueprints/tenants.py::settings()
+  are handled by src/admin/routers/tenants.py::settings()
 """
 
 import logging
@@ -146,7 +146,7 @@ def update_admin_settings():
 
 
 # POST-only routes for updating tenant settings
-# GET requests for settings are handled by src/admin/blueprints/tenants.py::settings()
+# GET requests for settings are handled by src/admin/routers/tenants.py::settings()
 
 
 @settings_bp.route("/general", methods=["POST"])

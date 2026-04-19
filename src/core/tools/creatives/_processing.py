@@ -100,7 +100,7 @@ def _update_existing_creative(
         elif approval_mode == "ai-powered":
             # Submit to background AI review (async)
 
-            from src.admin.blueprints.creatives import (
+            from src.admin.routers.creatives import (
                 _ai_review_executor,
                 _ai_review_lock,
                 _ai_review_tasks,
@@ -117,7 +117,7 @@ def _update_existing_creative(
             creative_repo.flush()
 
             # Import the async function
-            from src.admin.blueprints.creatives import _ai_review_creative_async
+            from src.admin.routers.creatives import _ai_review_creative_async
 
             future = _ai_review_executor.submit(
                 _ai_review_creative_async,
@@ -793,7 +793,7 @@ def _create_new_creative(
     elif approval_mode == "ai-powered":
         # Submit to background AI review (async)
 
-        from src.admin.blueprints.creatives import (
+        from src.admin.routers.creatives import (
             _ai_review_executor,
             _ai_review_lock,
             _ai_review_tasks,
@@ -807,7 +807,7 @@ def _create_new_creative(
         task_id = f"ai_review_{db_creative.creative_id}_{uuid.uuid4().hex[:8]}"
 
         # Import the async function
-        from src.admin.blueprints.creatives import _ai_review_creative_async
+        from src.admin.routers.creatives import _ai_review_creative_async
 
         future = _ai_review_executor.submit(
             _ai_review_creative_async,

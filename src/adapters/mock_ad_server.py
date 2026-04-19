@@ -1406,7 +1406,7 @@ class MockAdServer(AdServerAdapter):
                         validation_errors = self.validate_product_config(new_config)
                         if validation_errors:
                             # Get formats for re-rendering
-                            from src.admin.blueprints.products import get_creative_formats
+                            from src.admin.routers.products import get_creative_formats
 
                             available_formats = get_creative_formats(tenant_id=tenant_id)
 
@@ -1425,7 +1425,7 @@ class MockAdServer(AdServerAdapter):
                         session.commit()
 
                         # Get formats for success page
-                        from src.admin.blueprints.products import get_creative_formats
+                        from src.admin.routers.products import get_creative_formats
 
                         available_formats = get_creative_formats(tenant_id=tenant_id)
 
@@ -1440,7 +1440,7 @@ class MockAdServer(AdServerAdapter):
                         )
 
                     # GET request - fetch available formats from creative agents
-                    from src.admin.blueprints.products import get_creative_formats
+                    from src.admin.routers.products import get_creative_formats
 
                     available_formats = get_creative_formats(tenant_id=tenant_id)
 

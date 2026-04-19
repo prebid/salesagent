@@ -15,27 +15,27 @@ class TestBlueprintSQLAlchemyImports:
 
     def test_api_blueprint_imports(self):
         """Validate api.py has required SQLAlchemy imports."""
-        from src.admin.blueprints import api
+        from src.admin.routers import api
 
         assert hasattr(api, "func"), "Missing required import: func from sqlalchemy"
         assert hasattr(api, "text"), "Missing required import: text from sqlalchemy"
 
     def test_core_blueprint_imports(self):
         """Validate core.py has required SQLAlchemy imports."""
-        from src.admin.blueprints import core
+        from src.admin.routers import core
 
         assert hasattr(core, "text"), "Missing required import: text from sqlalchemy"
 
     def test_creatives_blueprint_imports(self):
         """Validate creatives.py can be imported (all queries routed through repos)."""
-        from src.admin.blueprints import creatives
+        from src.admin.routers import creatives
 
         # creatives.py no longer uses raw select() — all queries routed through repos (salesagent-p6i)
         assert hasattr(creatives, "creatives_bp"), "Missing creatives_bp blueprint"
 
     def test_inventory_blueprint_imports(self):
         """Validate inventory.py has required SQLAlchemy imports."""
-        from src.admin.blueprints import inventory
+        from src.admin.routers import inventory
 
         # These imports were missing and caused production bug
         assert hasattr(inventory, "or_"), "Missing required import: or_ from sqlalchemy"
@@ -44,7 +44,7 @@ class TestBlueprintSQLAlchemyImports:
 
     def test_public_blueprint_imports(self):
         """Validate public.py has required SQLAlchemy imports."""
-        from src.admin.blueprints import public
+        from src.admin.routers import public
 
         assert hasattr(public, "or_"), "Missing required import: or_ from sqlalchemy"
 
@@ -85,7 +85,7 @@ class TestBlueprintBasicImports:
         - Import errors from dependencies
         - Circular import issues
         """
-        module = __import__(f"src.admin.blueprints.{blueprint_name}", fromlist=[blueprint_name])
+        module = __import__(f"src.admin.routers.{blueprint_name}", fromlist=[blueprint_name])
         assert module is not None, f"Failed to import blueprint: {blueprint_name}"
 
 
@@ -121,7 +121,7 @@ class TestBlueprintFlaskIntegration:
 
         This ensures blueprints can be properly registered with Flask app.
         """
-        module = __import__(f"src.admin.blueprints.{blueprint_name}", fromlist=[expected_bp_name])
+        module = __import__(f"src.admin.routers.{blueprint_name}", fromlist=[expected_bp_name])
         assert hasattr(module, expected_bp_name), f"Blueprint {blueprint_name} missing {expected_bp_name}"
 
         blueprint_obj = getattr(module, expected_bp_name)
@@ -135,19 +135,19 @@ class TestCriticalAPIEndpoints:
 
     def test_inventory_list_endpoint_exists(self):
         """Test inventory-list endpoint that had the import bug."""
-        from src.admin.blueprints.inventory import get_inventory_list
+        from src.admin.routers.inventory import get_inventory_list
 
         assert callable(get_inventory_list), "get_inventory_list should be callable"
 
     def test_api_health_endpoint_exists(self):
         """Test health check endpoint exists."""
-        from src.admin.blueprints.api import api_health
+        from src.admin.routers.api import api_health
 
         assert callable(api_health), "api_health should be callable"
 
     def test_auth_login_endpoint_exists(self):
         """Test login endpoint exists."""
-        from src.admin.blueprints.auth import login
+        from src.admin.routers.auth import login
 
         assert callable(login), "login should be callable"
 
@@ -171,7 +171,7 @@ class TestImportRegressionPrevention:
         from sqlalchemy import func as SQLAlchemyFunc
         from sqlalchemy import or_ as SQLAlchemyOr
 
-        from src.admin.blueprints.inventory import String, func, or_
+        from src.admin.routers.inventory import String, func, or_
 
         assert or_ is SQLAlchemyOr, "or_ import is not the correct SQLAlchemy function"
         assert String is SQLAlchemyString, "String import is not the correct SQLAlchemy type"
@@ -184,6 +184,6 @@ class TestImportRegressionPrevention:
         # public.py uses or_
         from sqlalchemy import or_ as SQLAlchemyOr
 
-        from src.admin.blueprints.public import or_ as public_or
+        from src.admin.routers.public import or_ as public_or
 
         assert public_or is SQLAlchemyOr

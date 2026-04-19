@@ -3,7 +3,7 @@
 ⚠️ ROUTING NOTICE: This file contains the ACTUAL handler for tenant settings!
 - URL: /admin/tenant/{id}/settings
 - Function: settings()
-- DO NOT confuse with src/admin/blueprints/settings.py which handles superadmin settings
+- DO NOT confuse with src/admin/routers/settings.py which handles superadmin settings
 """
 
 import json

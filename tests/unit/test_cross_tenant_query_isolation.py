@@ -173,7 +173,7 @@ class TestApproveMediaBuyTenantIsolation:
         Two raw select(MediaBuy) calls remain at lines ~328 and ~431.
         Both should be migrated to MediaBuyRepository for pattern consistency.
         """
-        source_path = ROOT / "src/admin/blueprints/operations.py"
+        source_path = ROOT / "src/admin/routers/operations.py"
         tree = ast.parse(source_path.read_text())
 
         # Find the approve_media_buy function
@@ -187,13 +187,13 @@ class TestApproveMediaBuyTenantIsolation:
 
         # Verify MediaBuyRepository is used
         source_text = ast.get_source_segment(source_path.read_text(), func_node)
-        assert "MediaBuyRepository" in source_text, (
-            "approve_media_buy() must use MediaBuyRepository for tenant-scoped MediaBuy access (salesagent-snvr)"
-        )
+        assert (
+            "MediaBuyRepository" in source_text
+        ), "approve_media_buy() must use MediaBuyRepository for tenant-scoped MediaBuy access (salesagent-snvr)"
 
         # Verify no raw select(MediaBuy) calls bypass the repository
         selects = _extract_select_calls(
-            "src/admin/blueprints/operations.py",
+            "src/admin/routers/operations.py",
             "approve_media_buy",
         )
         mediabuy_selects = [s for s in selects if s["model"] in ("MediaBuy", "MediaBuyModel")]
@@ -238,7 +238,7 @@ class TestAdminDeliveryTenantIsolation:
         which enforces tenant_id on every query by construction.
         Verify the repository is used rather than raw select() calls.
         """
-        source_path = ROOT / "src/admin/blueprints/creatives.py"
+        source_path = ROOT / "src/admin/routers/creatives.py"
         tree = ast.parse(source_path.read_text())
 
         func_node = None
@@ -252,13 +252,13 @@ class TestAdminDeliveryTenantIsolation:
 
         assert func_node is not None
         source_text = ast.get_source_segment(source_path.read_text(), func_node)
-        assert "AdminCreativeUoW" in source_text, (
-            "_call_webhook_for_creative_status must use AdminCreativeUoW for tenant-scoped access"
-        )
+        assert (
+            "AdminCreativeUoW" in source_text
+        ), "_call_webhook_for_creative_status must use AdminCreativeUoW for tenant-scoped access"
 
         # Verify no raw select(Creative) calls bypass the repository
         selects = _extract_select_calls(
-            "src/admin/blueprints/creatives.py",
+            "src/admin/routers/creatives.py",
             "_call_webhook_for_creative_status",
         )
         creative_selects = [s for s in selects if s["model"] in ("Creative", "CreativeModel")]
@@ -275,7 +275,7 @@ class TestAdminDeliveryTenantIsolation:
         Verify no raw select(Creative) calls bypass the repository.
         """
         selects = _extract_select_calls(
-            "src/admin/blueprints/creatives.py",
+            "src/admin/routers/creatives.py",
             "approve_creative",
         )
 
@@ -292,7 +292,7 @@ class TestAdminDeliveryTenantIsolation:
         which enforces tenant_id on every query by construction.
         Verify the repository is used rather than raw select() calls.
         """
-        source_path = ROOT / "src/admin/blueprints/creatives.py"
+        source_path = ROOT / "src/admin/routers/creatives.py"
         tree = ast.parse(source_path.read_text())
 
         # Find the review_creatives function
@@ -306,13 +306,13 @@ class TestAdminDeliveryTenantIsolation:
 
         # Verify tenant-scoped media buy access (via MediaBuyRepository or AdminCreativeUoW)
         source_text = ast.get_source_segment(source_path.read_text(), func_node)
-        assert "MediaBuyRepository" in source_text or "AdminCreativeUoW" in source_text, (
-            "review_creatives() must use MediaBuyRepository or AdminCreativeUoW for tenant-scoped MediaBuy access"
-        )
+        assert (
+            "MediaBuyRepository" in source_text or "AdminCreativeUoW" in source_text
+        ), "review_creatives() must use MediaBuyRepository or AdminCreativeUoW for tenant-scoped MediaBuy access"
 
         # Verify no raw select(MediaBuy) calls bypass the repository
         selects = _extract_select_calls(
-            "src/admin/blueprints/creatives.py",
+            "src/admin/routers/creatives.py",
             "review_creatives",
         )
         mediabuy_selects = [s for s in selects if s["model"] in ("MediaBuy", "MediaBuyModel")]
@@ -329,7 +329,7 @@ class TestAdminDeliveryTenantIsolation:
         Verify no raw select(Product) calls bypass the repository.
         """
         selects = _extract_select_calls(
-            "src/admin/blueprints/creatives.py",
+            "src/admin/routers/creatives.py",
             "review_creatives",
         )
 
@@ -347,7 +347,7 @@ class TestAdminDeliveryTenantIsolation:
         Verify no raw select(CreativeReview) calls bypass the repository.
         """
         selects = _extract_select_calls(
-            "src/admin/blueprints/creatives.py",
+            "src/admin/routers/creatives.py",
             "approve_creative",
         )
 
@@ -365,7 +365,7 @@ class TestAdminDeliveryTenantIsolation:
         Verify no raw select(CreativeReview) calls bypass the repository.
         """
         selects = _extract_select_calls(
-            "src/admin/blueprints/creatives.py",
+            "src/admin/routers/creatives.py",
             "reject_creative",
         )
 
@@ -389,6 +389,6 @@ class TestAdminDeliveryTenantIsolation:
         assert pricing_selects, "Expected at least one PricingOption select() call"
 
         for s in pricing_selects:
-            assert s["has_tenant_filter"], (
-                f"PricingOption query at product.py:{s['lineno']} is missing tenant_id filter. (salesagent-gcjx)"
-            )
+            assert s[
+                "has_tenant_filter"
+            ], f"PricingOption query at product.py:{s['lineno']} is missing tenant_id filter. (salesagent-gcjx)"

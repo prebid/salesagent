@@ -18,7 +18,7 @@ def test_inventory_blueprint_has_required_imports():
     the value of import validation tests for critical API endpoints.
     """
     # Import the module - this will fail if the imports are missing and code tries to use them
-    from src.admin.blueprints import inventory
+    from src.admin.routers import inventory
 
     # Verify the required SQLAlchemy functions are importable in the module's context
     assert hasattr(inventory, "or_"), "Missing required import: or_ from sqlalchemy"
@@ -28,7 +28,7 @@ def test_inventory_blueprint_has_required_imports():
 
 def test_inventory_list_function_exists():
     """Test that the get_inventory_list function exists and is callable."""
-    from src.admin.blueprints.inventory import get_inventory_list
+    from src.admin.routers.inventory import get_inventory_list
 
     assert callable(get_inventory_list), "get_inventory_list should be a callable function"
 
@@ -47,7 +47,7 @@ def test_inventory_search_documentation():
     This test exists to document the importance of import validation.
     """
     # Test passes because imports are now correct
-    from src.admin.blueprints.inventory import String, func, or_
+    from src.admin.routers.inventory import String, func, or_
 
     assert or_ is not None
     assert String is not None

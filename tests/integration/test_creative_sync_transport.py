@@ -592,9 +592,9 @@ class TestGenerativeBuildUpdatePreserve:
             assert_envelope(result2, transport)
 
             # build_creative should NOT be called again (no prompt → skip build)
-            assert registry.build_creative.call_count == build_calls_after_create, (
-                "build_creative should not be called on update without prompt"
-            )
+            assert (
+                registry.build_creative.call_count == build_calls_after_create
+            ), "build_creative should not be called on update without prompt"
 
         # Verify existing generative data is preserved in DB
         with get_db_session() as session:
@@ -1199,9 +1199,9 @@ class TestAIReviewTrigger:
             env.identity_for(transport).tenant["approval_mode"] = "ai-powered"
 
             with (
-                patch("src.admin.blueprints.creatives._ai_review_executor", mock_executor),
-                patch("src.admin.blueprints.creatives._ai_review_lock", MockMaker()),
-                patch("src.admin.blueprints.creatives._ai_review_tasks", {}),
+                patch("src.admin.routers.creatives._ai_review_executor", mock_executor),
+                patch("src.admin.routers.creatives._ai_review_lock", MockMaker()),
+                patch("src.admin.routers.creatives._ai_review_tasks", {}),
             ):
                 result = env.call_via(
                     transport,
@@ -1248,9 +1248,9 @@ class TestAIPoweredApprovalDeferredNotification:
             identity.tenant["slack_webhook_url"] = "https://hooks.slack.com/test"
 
             with (
-                patch("src.admin.blueprints.creatives._ai_review_executor", mock_executor),
-                patch("src.admin.blueprints.creatives._ai_review_lock", MockMaker()),
-                patch("src.admin.blueprints.creatives._ai_review_tasks", {}),
+                patch("src.admin.routers.creatives._ai_review_executor", mock_executor),
+                patch("src.admin.routers.creatives._ai_review_lock", MockMaker()),
+                patch("src.admin.routers.creatives._ai_review_tasks", {}),
             ):
                 result = env.call_via(
                     transport,

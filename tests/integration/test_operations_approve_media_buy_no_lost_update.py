@@ -2,7 +2,7 @@
 
 Context
 -------
-Before this refactor, `src/admin/blueprints/operations.py::approve_media_buy` held
+Before this refactor, `src/admin/routers/operations.py::approve_media_buy` held
 an outer `with get_db_session() as db_session:` block that spanned the call to
 `execute_approved_media_buy(media_buy_id, tenant_id)`. That adapter helper opens
 its own `MediaBuyUoW` and commits `media_buy.status = "active"` (see
@@ -20,7 +20,7 @@ is stale and any subsequent `media_buy.status = "scheduled"` write on the outer
 session overwrites the adapter's `"active"` commit — a classic lost update.
 
 The refactored handler uses the same close-outer-before-adapter pattern as
-`src/admin/blueprints/creatives.py::approve_creative` (lines 607-639) and the
+`src/admin/routers/creatives.py::approve_creative` (lines 607-639) and the
 sibling workflow route tested by `test_workflow_approval_no_lost_update.py`:
 
     Phase 1: open session 1 → validate + mark step approved → commit → close.
@@ -276,7 +276,7 @@ class TestApproveMediaBuyPreservesExistingBehavior:
         """The module must import without syntax or circular-import errors."""
         import importlib
 
-        module = importlib.import_module("src.admin.blueprints.operations")
+        module = importlib.import_module("src.admin.routers.operations")
         assert hasattr(module, "approve_media_buy")
         assert hasattr(module, "operations_bp")
 
@@ -285,7 +285,7 @@ class TestApproveMediaBuyPreservesExistingBehavior:
         external integrations POST to /media-buy/<media_buy_id>/approve."""
         from flask import Flask
 
-        from src.admin.blueprints.operations import operations_bp
+        from src.admin.routers.operations import operations_bp
 
         app = Flask(__name__)
         app.register_blueprint(operations_bp, url_prefix="/tenant/<tenant_id>")

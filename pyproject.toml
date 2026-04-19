@@ -210,7 +210,8 @@ ignore = [
 "src/core/tools/performance.py" = ["E402"]         # TODO(salesagent-e402-cleanup)
 "src/core/tools/products.py" = ["E402"]            # TODO(salesagent-e402-cleanup)
 "src/core/tools/signals.py" = ["E402"]             # TODO(salesagent-e402-cleanup)
-# NOTE: src/admin/blueprints/creatives.py is NOT listed here — file is slated for deletion in L2 (Flask removal)
+"src/admin/routers/creatives.py" = ["E402"]        # TODO(salesagent-e402-cleanup): placeholder function stubs above flask/admin imports — pre-existing drift exposed by L0-00 rename, cleanup in L1c/L1d port to FastAPI router
+"tests/integration/test_product_deletion.py" = ["E402"]  # TODO(salesagent-e402-cleanup): test uses Flask create_app() pre-import pattern — cleanup in L3 test harness modernization
 
 # ─── Coverage configuration ──────────────────────────────────────
 [tool.coverage.run]

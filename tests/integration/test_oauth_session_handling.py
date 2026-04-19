@@ -51,7 +51,7 @@ class TestOAuthCrossDomainLimitations:
     def test_approximated_header_processing(self):
         """Test that Approximated headers are processed correctly in auth code."""
         # Import auth module to ensure it's working and contains expected code
-        import src.admin.blueprints.auth as auth_module
+        import src.admin.routers.auth as auth_module
 
         # Verify that auth blueprint exists and can be imported
         assert hasattr(auth_module, "auth_bp")

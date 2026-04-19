@@ -10,34 +10,34 @@ from flask import Flask, request
 from markupsafe import Markup
 from werkzeug.middleware.proxy_fix import ProxyFix as WerkzeugProxyFix
 
-from src.admin.blueprints.accounts import accounts_bp
-from src.admin.blueprints.activity_stream import activity_stream_bp
-from src.admin.blueprints.adapters import adapters_bp
-from src.admin.blueprints.api import api_bp
-from src.admin.blueprints.auth import auth_bp, init_oauth
-from src.admin.blueprints.authorized_properties import authorized_properties_bp
-from src.admin.blueprints.core import core_bp
-from src.admin.blueprints.creative_agents import creative_agents_bp
-from src.admin.blueprints.creatives import creatives_bp
-from src.admin.blueprints.format_search import bp as format_search_bp
-from src.admin.blueprints.gam import gam_bp
-from src.admin.blueprints.inventory import inventory_bp
-from src.admin.blueprints.inventory_profiles import inventory_profiles_bp
-from src.admin.blueprints.oidc import oidc_bp
-from src.admin.blueprints.operations import operations_bp
-from src.admin.blueprints.policy import policy_bp
-from src.admin.blueprints.principals import principals_bp
-from src.admin.blueprints.products import products_bp
-from src.admin.blueprints.public import public_bp
-from src.admin.blueprints.publisher_partners import publisher_partners_bp
-from src.admin.blueprints.schemas import schemas_bp
-from src.admin.blueprints.settings import settings_bp, tenant_management_settings_bp
-from src.admin.blueprints.signals_agents import signals_agents_bp
+from src.admin.routers.accounts import accounts_bp
+from src.admin.routers.activity_stream import activity_stream_bp
+from src.admin.routers.adapters import adapters_bp
+from src.admin.routers.api import api_bp
+from src.admin.routers.auth import auth_bp, init_oauth
+from src.admin.routers.authorized_properties import authorized_properties_bp
+from src.admin.routers.core import core_bp
+from src.admin.routers.creative_agents import creative_agents_bp
+from src.admin.routers.creatives import creatives_bp
+from src.admin.routers.format_search import bp as format_search_bp
+from src.admin.routers.gam import gam_bp
+from src.admin.routers.inventory import inventory_bp
+from src.admin.routers.inventory_profiles import inventory_profiles_bp
+from src.admin.routers.oidc import oidc_bp
+from src.admin.routers.operations import operations_bp
+from src.admin.routers.policy import policy_bp
+from src.admin.routers.principals import principals_bp
+from src.admin.routers.products import products_bp
+from src.admin.routers.public import public_bp
+from src.admin.routers.publisher_partners import publisher_partners_bp
+from src.admin.routers.schemas import schemas_bp
+from src.admin.routers.settings import settings_bp, tenant_management_settings_bp
+from src.admin.routers.signals_agents import signals_agents_bp
 
-# from src.admin.blueprints.tasks import tasks_bp  # Disabled - tasks eliminated in favor of workflow system
-from src.admin.blueprints.tenants import tenants_bp
-from src.admin.blueprints.users import users_bp
-from src.admin.blueprints.workflows import workflows_bp
+# from src.admin.routers.tasks import tasks_bp  # Disabled - tasks eliminated in favor of workflow system
+from src.admin.routers.tenants import tenants_bp
+from src.admin.routers.users import users_bp
+from src.admin.routers.workflows import workflows_bp
 from src.core.config_loader import is_single_tenant_mode
 from src.core.domain_config import (
     get_session_cookie_domain,

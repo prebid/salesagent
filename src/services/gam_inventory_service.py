@@ -1463,7 +1463,7 @@ def create_inventory_endpoints(app):
     """Create Flask endpoints for inventory management.
 
     NOTE: These endpoints are DEPRECATED and cause route conflicts.
-    The inventory blueprint (src/admin/blueprints/inventory.py) now handles
+    The inventory blueprint (src/admin/routers/inventory.py) now handles
     all inventory routes with better implementations (caching, auth decorators, etc.)
 
     This function is kept for backward compatibility but does nothing.

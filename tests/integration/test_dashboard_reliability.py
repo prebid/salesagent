@@ -230,7 +230,7 @@ class TestLegacyCompatibility:
     @pytest.mark.requires_db
     def test_audit_log_format_compatibility(self, integration_db, test_audit_log):
         """Test that audit log format is compatible with activity stream."""
-        from src.admin.blueprints.activity_stream import format_activity_from_audit_log
+        from src.admin.routers.activity_stream import format_activity_from_audit_log
 
         # Should not raise exceptions
         activity = format_activity_from_audit_log(test_audit_log)

@@ -15,7 +15,7 @@ class TestGetOAuthConfig:
 
     def test_generic_oidc_takes_priority(self):
         """Generic OIDC config takes priority over Google config."""
-        from src.admin.blueprints.auth import get_oauth_config
+        from src.admin.routers.auth import get_oauth_config
 
         env = {
             "OAUTH_DISCOVERY_URL": "https://okta.example.com/.well-known/openid-configuration",
@@ -35,7 +35,7 @@ class TestGetOAuthConfig:
 
     def test_google_oauth_fallback(self):
         """Google OAuth is used when generic OIDC not configured."""
-        from src.admin.blueprints.auth import get_oauth_config
+        from src.admin.routers.auth import get_oauth_config
 
         env = {
             "GOOGLE_CLIENT_ID": "google-client-id",
@@ -52,7 +52,7 @@ class TestGetOAuthConfig:
 
     def test_custom_scopes(self):
         """Custom scopes are respected."""
-        from src.admin.blueprints.auth import get_oauth_config
+        from src.admin.routers.auth import get_oauth_config
 
         env = {
             "OAUTH_DISCOVERY_URL": "https://provider.example.com/.well-known/openid-configuration",
@@ -68,7 +68,7 @@ class TestGetOAuthConfig:
 
     def test_named_provider_google(self):
         """Named provider 'google' uses Google discovery URL."""
-        from src.admin.blueprints.auth import get_oauth_config
+        from src.admin.routers.auth import get_oauth_config
 
         env = {
             "OAUTH_PROVIDER": "google",
@@ -84,7 +84,7 @@ class TestGetOAuthConfig:
 
     def test_named_provider_microsoft(self):
         """Named provider 'microsoft' uses Microsoft discovery URL."""
-        from src.admin.blueprints.auth import get_oauth_config
+        from src.admin.routers.auth import get_oauth_config
 
         env = {
             "OAUTH_PROVIDER": "microsoft",
@@ -99,7 +99,7 @@ class TestGetOAuthConfig:
 
     def test_no_config_returns_none(self):
         """Returns None when no OAuth is configured."""
-        from src.admin.blueprints.auth import get_oauth_config
+        from src.admin.routers.auth import get_oauth_config
 
         with patch.dict(os.environ, {}, clear=True):
             result = get_oauth_config()
@@ -108,7 +108,7 @@ class TestGetOAuthConfig:
 
     def test_partial_generic_config_falls_through(self):
         """Partial generic config falls through to Google."""
-        from src.admin.blueprints.auth import get_oauth_config
+        from src.admin.routers.auth import get_oauth_config
 
         # Only discovery URL, no credentials
         env = {
@@ -130,7 +130,7 @@ class TestExtractUserInfo:
 
     def test_google_format(self):
         """Extract user info from Google token format."""
-        from src.admin.blueprints.auth import extract_user_info
+        from src.admin.routers.auth import extract_user_info
 
         token = {
             "userinfo": {
@@ -148,7 +148,7 @@ class TestExtractUserInfo:
 
     def test_microsoft_format_with_preferred_username(self):
         """Extract user info from Microsoft token with preferred_username."""
-        from src.admin.blueprints.auth import extract_user_info
+        from src.admin.routers.auth import extract_user_info
 
         token = {
             "userinfo": {
@@ -165,7 +165,7 @@ class TestExtractUserInfo:
 
     def test_microsoft_format_with_upn(self):
         """Extract user info from Microsoft token with UPN."""
-        from src.admin.blueprints.auth import extract_user_info
+        from src.admin.routers.auth import extract_user_info
 
         token = {
             "userinfo": {
@@ -180,7 +180,7 @@ class TestExtractUserInfo:
 
     def test_email_normalized_to_lowercase(self):
         """Email is always normalized to lowercase."""
-        from src.admin.blueprints.auth import extract_user_info
+        from src.admin.routers.auth import extract_user_info
 
         token = {
             "userinfo": {
@@ -195,7 +195,7 @@ class TestExtractUserInfo:
 
     def test_name_from_given_and_family(self):
         """Name constructed from given_name and family_name."""
-        from src.admin.blueprints.auth import extract_user_info
+        from src.admin.routers.auth import extract_user_info
 
         token = {
             "userinfo": {
@@ -211,7 +211,7 @@ class TestExtractUserInfo:
 
     def test_name_fallback_to_email_prefix(self):
         """Name falls back to email prefix when not provided."""
-        from src.admin.blueprints.auth import extract_user_info
+        from src.admin.routers.auth import extract_user_info
 
         token = {
             "userinfo": {
@@ -225,7 +225,7 @@ class TestExtractUserInfo:
 
     def test_picture_fallback_to_empty_string(self):
         """Picture falls back to empty string when not provided."""
-        from src.admin.blueprints.auth import extract_user_info
+        from src.admin.routers.auth import extract_user_info
 
         token = {
             "userinfo": {
@@ -240,7 +240,7 @@ class TestExtractUserInfo:
 
     def test_avatar_url_as_picture(self):
         """avatar_url is used as picture (GitHub style)."""
-        from src.admin.blueprints.auth import extract_user_info
+        from src.admin.routers.auth import extract_user_info
 
         token = {
             "userinfo": {
@@ -258,7 +258,7 @@ class TestExtractUserInfo:
         """User info extracted from ID token when userinfo not present."""
         import jwt
 
-        from src.admin.blueprints.auth import extract_user_info
+        from src.admin.routers.auth import extract_user_info
 
         # Create a simple JWT (unsigned for testing)
         id_token_payload = {
@@ -278,7 +278,7 @@ class TestExtractUserInfo:
 
     def test_no_user_info_returns_none(self):
         """Returns None when no user info available."""
-        from src.admin.blueprints.auth import extract_user_info
+        from src.admin.routers.auth import extract_user_info
 
         token = {}
 
@@ -288,7 +288,7 @@ class TestExtractUserInfo:
 
     def test_no_email_returns_none(self):
         """Returns None when no email claim found."""
-        from src.admin.blueprints.auth import extract_user_info
+        from src.admin.routers.auth import extract_user_info
 
         token = {
             "userinfo": {
@@ -302,7 +302,7 @@ class TestExtractUserInfo:
 
     def test_sub_as_email_fallback(self):
         """Subject claim used as email fallback."""
-        from src.admin.blueprints.auth import extract_user_info
+        from src.admin.routers.auth import extract_user_info
 
         token = {
             "userinfo": {
@@ -321,7 +321,7 @@ class TestOAuthProviderName:
 
     def test_default_is_google(self):
         """Default provider is google when not set."""
-        from src.admin.blueprints.auth import get_oauth_provider_name
+        from src.admin.routers.auth import get_oauth_provider_name
 
         with patch.dict(os.environ, {}, clear=True):
             provider = get_oauth_provider_name()
@@ -330,7 +330,7 @@ class TestOAuthProviderName:
 
     def test_provider_from_env(self):
         """Provider read from environment variable."""
-        from src.admin.blueprints.auth import get_oauth_provider_name
+        from src.admin.routers.auth import get_oauth_provider_name
 
         with patch.dict(os.environ, {"OAUTH_PROVIDER": "Okta"}, clear=True):
             provider = get_oauth_provider_name()
@@ -345,7 +345,7 @@ class TestInitOAuth:
         """OAuth initialized with generic OIDC config."""
         from unittest.mock import MagicMock
 
-        from src.admin.blueprints.auth import init_oauth
+        from src.admin.routers.auth import init_oauth
 
         env = {
             "OAUTH_DISCOVERY_URL": "https://provider.example.com/.well-known/openid-configuration",
@@ -367,7 +367,7 @@ class TestInitOAuth:
         """OAuth returns None when not configured."""
         from unittest.mock import MagicMock
 
-        from src.admin.blueprints.auth import init_oauth
+        from src.admin.routers.auth import init_oauth
 
         app = MagicMock()
         app.config = {}

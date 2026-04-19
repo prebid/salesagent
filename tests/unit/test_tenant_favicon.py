@@ -8,7 +8,7 @@ class TestFaviconUpload:
 
     def test_allowed_favicon_file_valid_extensions(self):
         """Test that valid favicon extensions are allowed."""
-        from src.admin.blueprints.tenants import _allowed_favicon_file
+        from src.admin.routers.tenants import _allowed_favicon_file
 
         assert _allowed_favicon_file("icon.ico") is True
         assert _allowed_favicon_file("icon.png") is True
@@ -21,7 +21,7 @@ class TestFaviconUpload:
 
     def test_allowed_favicon_file_invalid_extensions(self):
         """Test that invalid favicon extensions are rejected."""
-        from src.admin.blueprints.tenants import _allowed_favicon_file
+        from src.admin.routers.tenants import _allowed_favicon_file
 
         assert _allowed_favicon_file("icon.gif") is False
         assert _allowed_favicon_file("icon.bmp") is False
@@ -31,7 +31,7 @@ class TestFaviconUpload:
 
     def test_favicon_upload_dir_path(self):
         """Test that favicon upload directory path is correctly constructed."""
-        from src.admin.blueprints.tenants import _get_favicon_upload_dir
+        from src.admin.routers.tenants import _get_favicon_upload_dir
 
         upload_dir = _get_favicon_upload_dir()
         assert upload_dir.endswith("static/favicons")
@@ -39,7 +39,7 @@ class TestFaviconUpload:
 
     def test_safe_favicon_path_valid(self):
         """Test that valid tenant IDs pass path traversal check."""
-        from src.admin.blueprints.tenants import _get_favicon_upload_dir, _is_safe_favicon_path
+        from src.admin.routers.tenants import _get_favicon_upload_dir, _is_safe_favicon_path
 
         base_dir = _get_favicon_upload_dir()
         assert _is_safe_favicon_path(base_dir, "tenant_123") is True
@@ -48,7 +48,7 @@ class TestFaviconUpload:
 
     def test_safe_favicon_path_traversal_blocked(self):
         """Test that path traversal attempts are blocked."""
-        from src.admin.blueprints.tenants import _get_favicon_upload_dir, _is_safe_favicon_path
+        from src.admin.routers.tenants import _get_favicon_upload_dir, _is_safe_favicon_path
 
         base_dir = _get_favicon_upload_dir()
         assert _is_safe_favicon_path(base_dir, "../etc") is False
@@ -57,7 +57,7 @@ class TestFaviconUpload:
 
     def test_valid_favicon_url_http(self):
         """Test that HTTP/HTTPS URLs are valid."""
-        from src.admin.blueprints.tenants import _is_valid_favicon_url
+        from src.admin.routers.tenants import _is_valid_favicon_url
 
         assert _is_valid_favicon_url("https://example.com/favicon.ico") is True
         assert _is_valid_favicon_url("http://example.com/icon.png") is True
@@ -65,7 +65,7 @@ class TestFaviconUpload:
 
     def test_invalid_favicon_url_blocked(self):
         """Test that dangerous URL schemes are blocked."""
-        from src.admin.blueprints.tenants import _is_valid_favicon_url
+        from src.admin.routers.tenants import _is_valid_favicon_url
 
         assert _is_valid_favicon_url("javascript:alert(1)") is False
         assert _is_valid_favicon_url("data:image/png;base64,abc") is False

@@ -2,7 +2,7 @@
 
 from unittest.mock import Mock, patch
 
-from src.admin.blueprints.core import get_tenant_from_hostname
+from src.admin.routers.core import get_tenant_from_hostname
 
 
 class TestExternalDomainRouting:
@@ -21,7 +21,7 @@ class TestExternalDomainRouting:
                 "Apx-Incoming-Host": "sales-agent.accuweather.com",
             },
         ):
-            with patch("src.admin.blueprints.core.get_db_session") as mock_db:
+            with patch("src.admin.routers.core.get_db_session") as mock_db:
                 # Mock the database session
                 mock_session = Mock()
                 mock_db.return_value.__enter__.return_value = mock_session
@@ -59,7 +59,7 @@ class TestExternalDomainRouting:
                 "Apx-Incoming-Host": "unknown-domain.com",
             },
         ):
-            with patch("src.admin.blueprints.core.get_db_session") as mock_db:
+            with patch("src.admin.routers.core.get_db_session") as mock_db:
                 # Mock the database session
                 mock_session = Mock()
                 mock_db.return_value.__enter__.return_value = mock_session

@@ -14,7 +14,7 @@ Fix: Skip validation when valid_format_ids is empty.
 
 import pytest
 
-from src.admin.blueprints.products import _parse_format_entries
+from src.admin.routers.products import _parse_format_entries
 
 AGENT_URL = "https://creative.adcontextprotocol.org"
 

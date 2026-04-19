@@ -108,7 +108,7 @@ class TestBlueprintTenantIdValidation:
     @pytest.mark.asyncio
     async def test_call_webhook_rejects_none_tenant_id(self):
         """_call_webhook_for_creative_status with tenant_id=None must raise, not use ''."""
-        from src.admin.blueprints.creatives import _call_webhook_for_creative_status
+        from src.admin.routers.creatives import _call_webhook_for_creative_status
 
         with pytest.raises(ValueError, match="tenant_id"):
             await _call_webhook_for_creative_status(creative_id="cr_123", tenant_id=None)
@@ -116,7 +116,7 @@ class TestBlueprintTenantIdValidation:
     @pytest.mark.asyncio
     async def test_call_webhook_rejects_empty_tenant_id(self):
         """_call_webhook_for_creative_status with tenant_id='' must raise, not proceed."""
-        from src.admin.blueprints.creatives import _call_webhook_for_creative_status
+        from src.admin.routers.creatives import _call_webhook_for_creative_status
 
         with pytest.raises(ValueError, match="tenant_id"):
             await _call_webhook_for_creative_status(creative_id="cr_123", tenant_id="")

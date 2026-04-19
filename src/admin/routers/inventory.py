@@ -388,7 +388,7 @@ def sync_orders(tenant_id):
                 return jsonify({"error": "Tenant not found"}), 404
 
             # Validate GAM configuration via repository
-            from src.admin.blueprints.gam import _validate_gam_config
+            from src.admin.routers.gam import _validate_gam_config
 
             adapter_config, gam_error = _validate_gam_config(db_session, tenant_id)
             if gam_error:

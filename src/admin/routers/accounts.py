@@ -176,13 +176,16 @@ def change_status(tenant_id, account_id):
 
         allowed = _STATUS_TRANSITIONS.get(account.status, set())
         if new_status not in allowed:
-            return jsonify(
-                {
-                    "success": False,
-                    "error": f"Cannot transition from '{account.status}' to '{new_status}'. "
-                    f"Allowed: {', '.join(sorted(allowed)) if allowed else 'none (terminal state)'}.",
-                }
-            ), 400
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": f"Cannot transition from '{account.status}' to '{new_status}'. "
+                        f"Allowed: {', '.join(sorted(allowed)) if allowed else 'none (terminal state)'}.",
+                    }
+                ),
+                400,
+            )
 
         uow.accounts.update_status(account_id, new_status)
 

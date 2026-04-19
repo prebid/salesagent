@@ -90,7 +90,7 @@ class TestAIReviewCreative:
         self, mock_factory_class, mock_create_agent, mock_review_async, mock_db_session, mock_tenant, mock_creative
     ):
         """Test auto-approval when AI is confident (≥0.90)."""
-        from src.admin.blueprints.creatives import _ai_review_creative_impl
+        from src.admin.routers.creatives import _ai_review_creative_impl
 
         # Mock factory
         mock_factory = MagicMock()
@@ -119,7 +119,7 @@ class TestAIReviewCreative:
     @patch("src.services.ai.AIServiceFactory")
     def test_low_confidence_approval(self, mock_factory_class, mock_create_agent, mock_review_async, mock_db_session):
         """Test that low confidence approval requires human review."""
-        from src.admin.blueprints.creatives import _ai_review_creative_impl
+        from src.admin.routers.creatives import _ai_review_creative_impl
 
         mock_factory = MagicMock()
         mock_factory.is_ai_enabled.return_value = True
@@ -150,7 +150,7 @@ class TestAIReviewCreative:
         self, mock_factory_class, mock_create_agent, mock_review_async, mock_db_session, mock_creative
     ):
         """Test that sensitive categories always require human review."""
-        from src.admin.blueprints.creatives import _ai_review_creative_impl
+        from src.admin.routers.creatives import _ai_review_creative_impl
 
         # Mark creative as political (sensitive category)
         mock_creative.data = {"category": "political", "tags": ["election", "candidate"]}
@@ -179,7 +179,7 @@ class TestAIReviewCreative:
     @patch("src.services.ai.AIServiceFactory")
     def test_low_confidence_rejection(self, mock_factory_class, mock_create_agent, mock_review_async, mock_db_session):
         """Test that low confidence rejections require human review."""
-        from src.admin.blueprints.creatives import _ai_review_creative_impl
+        from src.admin.routers.creatives import _ai_review_creative_impl
 
         mock_factory = MagicMock()
         mock_factory.is_ai_enabled.return_value = True
@@ -205,7 +205,7 @@ class TestAIReviewCreative:
     @patch("src.services.ai.AIServiceFactory")
     def test_uncertain_rejection(self, mock_factory_class, mock_create_agent, mock_review_async, mock_db_session):
         """Test that uncertain rejections require human review."""
-        from src.admin.blueprints.creatives import _ai_review_creative_impl
+        from src.admin.routers.creatives import _ai_review_creative_impl
 
         mock_factory = MagicMock()
         mock_factory.is_ai_enabled.return_value = True
@@ -235,7 +235,7 @@ class TestAIReviewCreative:
         self, mock_factory_class, mock_create_agent, mock_review_async, mock_db_session
     ):
         """Test explicit 'REQUIRE HUMAN APPROVAL' decision."""
-        from src.admin.blueprints.creatives import _ai_review_creative_impl
+        from src.admin.routers.creatives import _ai_review_creative_impl
 
         mock_factory = MagicMock()
         mock_factory.is_ai_enabled.return_value = True
@@ -258,7 +258,7 @@ class TestAIReviewCreative:
     @patch("src.services.ai.AIServiceFactory")
     def test_missing_gemini_api_key(self, mock_factory_class, mock_db_session, mock_tenant):
         """Test behavior when AI is not configured."""
-        from src.admin.blueprints.creatives import _ai_review_creative_impl
+        from src.admin.routers.creatives import _ai_review_creative_impl
 
         mock_tenant.gemini_api_key = None
         mock_tenant.ai_config = None
@@ -277,7 +277,7 @@ class TestAIReviewCreative:
     @patch("src.services.ai.AIServiceFactory")
     def test_missing_review_criteria(self, mock_factory_class, mock_db_session, mock_tenant):
         """Test behavior when creative review criteria is not configured."""
-        from src.admin.blueprints.creatives import _ai_review_creative_impl
+        from src.admin.routers.creatives import _ai_review_creative_impl
 
         mock_tenant.creative_review_criteria = None
 
@@ -297,7 +297,7 @@ class TestAIReviewCreative:
     @patch("src.services.ai.AIServiceFactory")
     def test_api_error(self, mock_factory_class, mock_create_agent, mock_review_async, mock_db_session):
         """Test handling of AI API errors."""
-        from src.admin.blueprints.creatives import _ai_review_creative_impl
+        from src.admin.routers.creatives import _ai_review_creative_impl
 
         mock_factory = MagicMock()
         mock_factory.is_ai_enabled.return_value = True
@@ -320,7 +320,7 @@ class TestAIReviewCreative:
         self, mock_factory_class, mock_create_agent, mock_review_async, mock_db_session
     ):
         """Test confidence score exactly at 0.90 threshold."""
-        from src.admin.blueprints.creatives import _ai_review_creative_impl
+        from src.admin.routers.creatives import _ai_review_creative_impl
 
         mock_factory = MagicMock()
         mock_factory.is_ai_enabled.return_value = True
@@ -347,7 +347,7 @@ class TestAIReviewCreative:
         self, mock_factory_class, mock_create_agent, mock_review_async, mock_db_session, mock_tenant
     ):
         """Test confidence score just below 0.90 threshold."""
-        from src.admin.blueprints.creatives import _ai_review_creative_impl
+        from src.admin.routers.creatives import _ai_review_creative_impl
 
         mock_factory = MagicMock()
         mock_factory.is_ai_enabled.return_value = True
@@ -374,7 +374,7 @@ class TestAIReviewCreative:
         self, mock_factory_class, mock_create_agent, mock_review_async, mock_db_session, mock_tenant
     ):
         """Test confidence score exactly at reject threshold."""
-        from src.admin.blueprints.creatives import _ai_review_creative_impl
+        from src.admin.routers.creatives import _ai_review_creative_impl
 
         # Adjust threshold to match "low" confidence (0.3)
         mock_tenant.ai_policy["auto_reject_threshold"] = 0.30
@@ -404,7 +404,7 @@ class TestAIReviewCreative:
         self, mock_factory_class, mock_create_agent, mock_review_async, mock_db_session, mock_creative
     ):
         """Test that healthcare tag triggers human review."""
-        from src.admin.blueprints.creatives import _ai_review_creative_impl
+        from src.admin.routers.creatives import _ai_review_creative_impl
 
         # Tag-based category detection
         mock_creative.data = {"tags": ["healthcare", "wellness"], "category": None}
@@ -434,7 +434,7 @@ class TestAIReviewCreative:
         self, mock_factory_class, mock_create_agent, mock_review_async, mock_db_session, mock_creative
     ):
         """Test that financial category requires human review."""
-        from src.admin.blueprints.creatives import _ai_review_creative_impl
+        from src.admin.routers.creatives import _ai_review_creative_impl
 
         mock_creative.data = {"category": "financial", "tags": ["banking", "investment"]}
 
@@ -463,7 +463,7 @@ class TestAIReviewCreative:
         self, mock_factory_class, mock_create_agent, mock_review_async, mock_db_session, mock_creative
     ):
         """Test handling of creative with empty data field."""
-        from src.admin.blueprints.creatives import _ai_review_creative_impl
+        from src.admin.routers.creatives import _ai_review_creative_impl
 
         mock_creative.data = {}
 
@@ -486,7 +486,7 @@ class TestAIReviewCreative:
     # Edge Case: Tenant not found
     def test_tenant_not_found(self):
         """Test behavior when tenant is not found."""
-        from src.admin.blueprints.creatives import _ai_review_creative_impl
+        from src.admin.routers.creatives import _ai_review_creative_impl
 
         # Create session that returns None for tenant
         session = MagicMock()
@@ -510,7 +510,7 @@ class TestAIReviewCreative:
     @patch("src.services.ai.AIServiceFactory")
     def test_creative_not_found(self, mock_factory_class, mock_tenant):
         """Test behavior when creative is not found."""
-        from src.admin.blueprints.creatives import _ai_review_creative_impl
+        from src.admin.routers.creatives import _ai_review_creative_impl
 
         mock_factory = MagicMock()
         mock_factory.is_ai_enabled.return_value = True
@@ -551,7 +551,7 @@ class TestAIReviewCreative:
         self, mock_factory_class, mock_create_agent, mock_review_async, mock_db_session, mock_tenant
     ):
         """Test that missing ai_policy uses default thresholds."""
-        from src.admin.blueprints.creatives import _ai_review_creative_impl
+        from src.admin.routers.creatives import _ai_review_creative_impl
 
         mock_tenant.ai_policy = None  # No policy configured
 

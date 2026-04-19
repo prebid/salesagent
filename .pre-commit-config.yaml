@@ -279,19 +279,23 @@ repos:
   # Type checking with mypy - ENFORCED (0 errors in src/)
   # After achieving 100% compliance, mypy is now mandatory for all commits
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.18.2
+    rev: v1.19.1
     hooks:
       - id: mypy
         args: [--config-file=mypy.ini]
         additional_dependencies:
-          - sqlalchemy[mypy]==2.0.36
+          - sqlalchemy[mypy]>=2.0.0
           - types-requests
           - types-python-dateutil
           - types-pytz
           - types-Markdown
           - types-waitress
-          - adcp==3.2.0
-          - fastmcp
-          - alembic
+          - adcp==3.10.0  # Pinned to match resolved runtime version (pyproject.toml: adcp>=3.10.0)
+          - fastmcp>=3.2.0
+          - alembic>=1.13.0
+          - pydantic>=2.12.0
+          - a2wsgi>=1.10.0  # WSGIMiddleware typing for src/app.py admin mount
+          - fastapi>=0.100.0  # Required for app.mount() typing parity with runtime
+          - starlette>=0.50.0  # Pin matches runtime; hook was resolving to older version via fastmcp
         files: '^src/'
         exclude: '^src/adapters/google_ad_manager_original\.py$'

@@ -91,7 +91,7 @@ class TestAdminAppIntegration:
     def test_tenant_login_page(self, client):
         """Test tenant-specific login page."""
         # Need to patch in the auth blueprint where it's actually used
-        with patch("src.admin.blueprints.auth.get_db_session") as mock_get_db_session:
+        with patch("src.admin.routers.auth.get_db_session") as mock_get_db_session:
             mock_session = Mock()
             mock_get_db_session.return_value.__enter__.return_value = mock_session
 
@@ -105,7 +105,7 @@ class TestAdminAppIntegration:
 
     def test_tenant_login_page_not_found(self, client):
         """Test tenant login page for non-existent tenant."""
-        with patch("src.admin.blueprints.auth.get_db_session") as mock_get_db_session:
+        with patch("src.admin.routers.auth.get_db_session") as mock_get_db_session:
             mock_session = Mock()
             mock_get_db_session.return_value.__enter__.return_value = mock_session
             mock_session.query.return_value.filter_by.return_value.first.return_value = None
@@ -191,7 +191,9 @@ class TestTenantBlueprintIntegration:
         mock_session.query.return_value.filter_by.return_value.first.return_value = mock_tenant
         mock_session.query.return_value.filter_by.return_value.count.return_value = 0
         mock_session.query.return_value.filter_by.return_value.filter.return_value.all.return_value = []
-        mock_session.query.return_value.join.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = []
+        mock_session.query.return_value.join.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = (
+            []
+        )
 
         response = client.get("/tenant/tenant_123")
         # Will redirect due to decorator, but shows route exists

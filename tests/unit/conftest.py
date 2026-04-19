@@ -191,7 +191,7 @@ def make_auth_test_client():
         mock_tenant.auth_setup_mode = auth_setup_mode
         mock_session = MagicMock()
         mock_session.scalars.return_value.first.return_value = mock_tenant
-        with patch("src.admin.blueprints.auth.get_db_session") as mock_db:
+        with patch("src.admin.routers.auth.get_db_session") as mock_db:
             mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
             mock_db.return_value.__exit__ = MagicMock(return_value=False)
             yield client, mock_session

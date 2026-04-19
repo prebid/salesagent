@@ -95,7 +95,7 @@ class TestMockAdapterPublisherSync:
         from unittest.mock import patch
 
         from src.admin.app import create_app
-        from src.admin.blueprints.publisher_partners import sync_publisher_partners
+        from src.admin.routers.publisher_partners import sync_publisher_partners
         from src.core.config import AppConfig
 
         # Mock config to return development environment (triggers auto-verify)
@@ -105,9 +105,9 @@ class TestMockAdapterPublisherSync:
         app = create_app()
 
         with app.test_request_context():
-            with patch("src.admin.blueprints.publisher_partners.get_config", return_value=mock_config):
+            with patch("src.admin.routers.publisher_partners.get_config", return_value=mock_config):
                 with patch(
-                    "src.admin.blueprints.publisher_partners.get_tenant_url",
+                    "src.admin.routers.publisher_partners.get_tenant_url",
                     return_value="http://test.example.com",
                 ):
                     response = sync_publisher_partners(mock_tenant)
@@ -130,7 +130,7 @@ class TestMockAdapterPublisherSync:
         from unittest.mock import patch
 
         from src.admin.app import create_app
-        from src.admin.blueprints.publisher_partners import sync_publisher_partners
+        from src.admin.routers.publisher_partners import sync_publisher_partners
         from src.core.config import AppConfig
 
         mock_config = AppConfig()
@@ -139,9 +139,9 @@ class TestMockAdapterPublisherSync:
         app = create_app()
 
         with app.test_request_context():
-            with patch("src.admin.blueprints.publisher_partners.get_config", return_value=mock_config):
+            with patch("src.admin.routers.publisher_partners.get_config", return_value=mock_config):
                 with patch(
-                    "src.admin.blueprints.publisher_partners.get_tenant_url",
+                    "src.admin.routers.publisher_partners.get_tenant_url",
                     return_value="http://test.example.com",
                 ):
                     response = sync_publisher_partners(mock_tenant)
@@ -172,7 +172,7 @@ class TestMockAdapterPublisherSync:
         from unittest.mock import patch
 
         from src.admin.app import create_app
-        from src.admin.blueprints.publisher_partners import sync_publisher_partners
+        from src.admin.routers.publisher_partners import sync_publisher_partners
         from src.core.config import AppConfig
 
         mock_config = AppConfig()
@@ -181,9 +181,9 @@ class TestMockAdapterPublisherSync:
         app = create_app()
 
         with app.test_request_context():
-            with patch("src.admin.blueprints.publisher_partners.get_config", return_value=mock_config):
+            with patch("src.admin.routers.publisher_partners.get_config", return_value=mock_config):
                 with patch(
-                    "src.admin.blueprints.publisher_partners.get_tenant_url",
+                    "src.admin.routers.publisher_partners.get_tenant_url",
                     return_value="http://test.example.com",
                 ):
                     sync_publisher_partners(mock_tenant)
@@ -203,7 +203,7 @@ class TestMockAdapterPublisherSync:
         from unittest.mock import patch
 
         from src.admin.app import create_app
-        from src.admin.blueprints.publisher_partners import sync_publisher_partners
+        from src.admin.routers.publisher_partners import sync_publisher_partners
         from src.core.config import AppConfig
 
         mock_config = AppConfig()
@@ -213,9 +213,9 @@ class TestMockAdapterPublisherSync:
 
         # Run sync twice
         with app.test_request_context():
-            with patch("src.admin.blueprints.publisher_partners.get_config", return_value=mock_config):
+            with patch("src.admin.routers.publisher_partners.get_config", return_value=mock_config):
                 with patch(
-                    "src.admin.blueprints.publisher_partners.get_tenant_url",
+                    "src.admin.routers.publisher_partners.get_tenant_url",
                     return_value="http://test.example.com",
                 ):
                     sync_publisher_partners(mock_tenant)

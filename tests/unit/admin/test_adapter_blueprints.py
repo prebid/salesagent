@@ -16,7 +16,7 @@ class TestAdapterConfigEndpoint:
 
     def test_save_adapter_config_blueprint_registered(self):
         """Adapters blueprint should be importable and have routes."""
-        from src.admin.blueprints.adapters import adapters_bp
+        from src.admin.routers.adapters import adapters_bp
 
         # Blueprint should exist
         assert adapters_bp is not None

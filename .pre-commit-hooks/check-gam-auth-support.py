@@ -79,7 +79,7 @@ def check_file(file_path: str) -> list[str]:
         errors.append(
             f"{file_path}: Creates GAM client but only checks for OAuth refresh token.\n"
             f"  This file should support BOTH OAuth and service account authentication.\n"
-            f"  See src/admin/blueprints/inventory.py:get_targeting_values() for example.\n"
+            f"  See src/admin/routers/inventory.py:get_targeting_values() for example.\n"
             f"  Check for EITHER gam_refresh_token OR gam_service_account_json."
         )
 

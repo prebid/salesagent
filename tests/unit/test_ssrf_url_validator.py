@@ -211,7 +211,7 @@ class TestSignalsAgentEndpointSSRFWiring:
         """POST /signals-agents/add with host.docker.internal URL must return a redirect with error flash."""
         client = _make_signals_agent_client()
 
-        with patch("src.admin.blueprints.signals_agents.get_db_session") as mock_db:
+        with patch("src.admin.routers.signals_agents.get_db_session") as mock_db:
             _mock_db_for_signals_add(mock_db)
             with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
                 response = client.post(
@@ -233,7 +233,7 @@ class TestSignalsAgentEndpointSSRFWiring:
         """POST /signals-agents/add with a safe public URL must proceed past the SSRF check."""
         client = _make_signals_agent_client()
 
-        with patch("src.admin.blueprints.signals_agents.get_db_session") as mock_db:
+        with patch("src.admin.routers.signals_agents.get_db_session") as mock_db:
             mock_session = _mock_db_for_signals_add(mock_db)
             # Make session.add() and commit() no-ops
             mock_session.add = MagicMock()
@@ -272,7 +272,7 @@ class TestSignalsAgentEndpointSSRFWiring:
         mock_session = MagicMock()
         mock_session.scalars.return_value.first.return_value = existing_agent
 
-        with patch("src.admin.blueprints.signals_agents.get_db_session") as mock_db:
+        with patch("src.admin.routers.signals_agents.get_db_session") as mock_db:
             mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
             mock_db.return_value.__exit__ = MagicMock(return_value=False)
             with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
