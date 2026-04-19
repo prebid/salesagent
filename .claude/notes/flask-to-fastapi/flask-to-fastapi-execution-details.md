@@ -454,7 +454,7 @@ FastAPI router during the freeze.
 | Async SQLAlchemy latency profile regresses vs pre-migration sync baseline | Medium | Medium | Benchmark in CI async (Wave 4-5) vs pre-migration sync baseline (Wave 2); acceptable range is net-neutral to ~5% improvement under moderate concurrency; significantly worse signals `pool_size` tuning is needed (Risk #6 in `async-pivot-checkpoint.md` §4). Under low concurrency async has slightly higher per-request overhead; under high concurrency it wins big. |
 | Test harness `get_admin_client()` leaks state between tests when dep overrides persist | Medium | Medium | Teardown at `tests/harness/_base.py:827-832` already clears overrides; extend to also null `self._admin_client`. Integration test `test_harness_isolation.py`. |
 | Concurrent PR to `tests/integration/conftest.py` conflicts with fixture deletions | High | Low | Expected; document in freeze announcement. |
-| Datadog dashboards reference old `/admin/*/status` endpoints that now return different JSON | Medium | High — silent metric loss | Grep Datadog exports + ping platform team during Wave 2 entry criterion (assumption #18 verification). |
+| Datadog dashboards reference old `/admin/*/status` endpoints that now return different JSON | Medium | High — silent metric loss | Grep Datadog config exports for `/admin/*/status` references during Wave 2 entry (assumption #18 verification). User confirms no external consumer depends on the old JSON shape; agents do the grep sweep and report. |
 
 #### D. Rollback procedure
 
@@ -507,16 +507,16 @@ Do NOT open speculative PRs to these files during the freeze.
 - Wave 1 Playwright suite passing on staging nightly.
 - `scripts/check_coverage_parity.py` tested on Wave 1 and green.
 - `test_route_parity.py` baseline fixture captured from Wave 1 staging (JSON map of URL+method → status).
-- Platform team confirms no external consumer depends on Flask-specific category-1 JSON shapes (assumption #18).
+- Assumption #18 verified: grep of Datadog config exports, PagerDuty configs, and any internal-monitoring repo returns zero references to Flask-specific category-1 JSON shapes (`/admin/api/*`, `/admin/*/status`). User reviews the grep output and confirms; result appended to Wave 2 PR description.
 - `SESSION_SECRET` cookie-size instrumented in Wave 1 and confirmed <3.5KB over 24h of staging traffic.
-- All 22 blueprints have a designated owner who will review their replacement router.
-- Freeze announcement sent 48h before PR opens.
+- Per-router review responsibility: every replacement router has a fresh-agent review pass scheduled against its PR before merge. No router ships unreviewed.
+- Customer-comms for the `src/admin/` freeze sent 48h before PR opens (per `docs/migration/v2.0-customer-comms.md §2 (audience list)`).
 
 **Exit:**
 - All 15 Wave-2 acceptance criteria pass.
 - `git grep -l "flask" src/admin/` returns only `src/admin/app.py` and `src/admin/blueprints/activity_stream.py`.
 - Flask catch-all receives zero requests in 24h of staging traffic (monitored).
-- Datadog and dashboards confirmed green by platform team.
+- Datadog dashboards confirmed green (user checks the `admin-migration-health` dashboard; all Traffic and Migration-specific panels show expected values; confirmation recorded in Wave 2 PR description).
 - PR merged within 7 calendar days of opening.
 
 ---
@@ -956,7 +956,7 @@ uv run alembic upgrade head
 16. `pyproject.toml` version bumped to `2.0.0` (Agent F F8.4.2).
 17. `v2.0.0` git tag applied on the post-Wave-5 merge commit. Tag is GPG-signed.
 18. Auto-memory `flask_to_fastapi_migration_v2.md` updated to reflect the post-v2.0.0 state (Agent F F7.6.1).
-19. Production deploy plan approved (2 reviewers + 1 release manager sign-off).
+19. Production deploy plan approved: (a) fresh-agent review pass on the release PR, (b) `/security-review` skill pass on the release PR, (c) user confirms the deploy plan (timing, rollback procedure, bake-window availability) in the L7 PR description.
 20. Production deploy completes. Monitoring shows no regression over the first 24h post-deploy.
 21. **Decision 5 (database_schema.py DELETE):** delete `src/core/database/database_schema.py` (192 LOC, confirmed orphan — zero Python importers, stale pre-Alembic DDL). In the same commit, strip the stale docstring reference in `src/core/database/__init__.py:12` ("database_schema.py: Schema definitions and table creation"). Verify `grep -r "database_schema" src/ tests/ scripts/ alembic/ pyproject.toml` returns only historical planning notes in `.claude/notes/`.
 
@@ -991,8 +991,8 @@ uv run alembic upgrade head
 | Benchmark comparison reveals >5% p95 regression at medium concurrency | Low (after Wave 4 entry sanity check) | High — threatens v2.0.0 release date | Tune `pool_size` first, then add `selectinload` at hot paths. If still regressing, the root cause is almost certainly N+1 query explosion; run a query-count profile and fix at the repository layer. Last resort is a Wave 4+5 revert. |
 | Wave 4 left residual sync code paths that Wave 5 cleanup discovers | Medium | Low — cleanup is the point of this wave | Fix-forward. The biggest risk is that a sync path in a low-traffic code path is missed entirely and detonates in production weeks later. Mitigation: structural guards from Wave 4 catch async/sync mismatches. |
 | `psycopg2-binary` removal from `pyproject.toml` breaks a one-off script in `scripts/` that was not audited in Wave 4 | Low | Low — scripts are tooling, not runtime | Grep `import psycopg2` across `scripts/` before the removal commit. Audit 06 Decision 2 already identified `run_all_services.py::check_database_health` as a legit caller — it stays. |
-| Production deploy surfaces a `MissingGreenlet` in a rarely-hit code path (e.g., monthly GAM sync admin route) | Low | High — on-call pager | Staging soak for 5 business days before the v2.0.0 tag; staging runs include at least one monthly-GAM-sync rehearsal. Runbook `docs/async-debugging.md` gives on-call the lazy-load cookbook. |
-| CHANGELOG entry misses a breaking change that external consumers hit on upgrade | Medium | Medium | PR template checklist cross-references the 8 enumerated breaking-change categories. Release manager sign-off gates the v2.0.0 tag. |
+| Production deploy surfaces a `MissingGreenlet` in a rarely-hit code path (e.g., monthly GAM sync admin route) | Low | High — production breakage during user-monitored bake | Staging soak for 5 calendar days before the v2.0.0 tag; staging runs include at least one monthly-GAM-sync rehearsal. Runbook `docs/async-debugging.md` documents the lazy-load cookbook for post-incident diagnosis. |
+| CHANGELOG entry misses a breaking change that external consumers hit on upgrade | Medium | Medium | PR template checklist cross-references the 8 enumerated breaking-change categories. User reads the generated CHANGELOG end-to-end before the v2.0.0 tag; fresh-agent review pass on the release PR cross-checks breaking-change categories against the repo diff. |
 | Deprecation shims left from Wave 4 are not deleted because nobody remembers they exist | Medium | Low | `test_architecture_no_sync_database_session.py` (new, landed in Wave 5) AST-scans `src/` and fails if `class SessionLocal` or sync `sessionmaker(` is still present. |
 | Auto-memory `flask_to_fastapi_migration_v2.md` update is skipped | High (cultural) | Low — affects fresh-session onboarding | Agent F F7.6.1 makes this a ship-gating checklist item. Release PR description references the auto-memory update explicitly. |
 | `v2.0.0` tag applied on a commit that doesn't have the release-please conventional-commit history needed for the auto-changelog | Low | Medium | Wave 4 and Wave 5 merge commits use conventional-commit prefixes. Release-please dry-run executed pre-tag to verify the changelog draft matches the hand-finalized CHANGELOG. |
@@ -1035,7 +1035,7 @@ If v2.0.0 is tagged and deployed, and a production-blocking regression is found,
 - Wave 4 exit criteria all met including the sanity-check benchmark at ±5% parity.
 - `/health/pool`, `/health/schedulers`, `/health/db` endpoints all reporting healthy.
 - No `MissingGreenlet` / `InvalidRequestError` patterns in 3 days of staging logs.
-- Release manager committed to a v2.0.0 ship date.
+- User has scheduled a v2.0.0 ship date and confirmed availability to monitor the 1-week L7 bake window.
 
 **Exit:**
 - All 20 Wave-5 acceptance criteria pass.
@@ -1043,7 +1043,7 @@ If v2.0.0 is tagged and deployed, and a production-blocking regression is found,
 - `git grep -l "psycopg2" src/` returns zero hits (or only the explicit allowlist — deploy scripts per Audit 06 Decision 2).
 - `git grep -n "FIXME(async" src/ tests/` returns zero hits.
 - `.duplication-baseline` ratcheted to Wave 4-entry level or lower.
-- CHANGELOG v2.0.0 finalized and reviewed by release manager.
+- CHANGELOG v2.0.0 finalized; user reads it end-to-end and confirms all breaking-change categories are covered; fresh-agent review pass on the release PR cross-checks breaking-change categories against the repo diff.
 - `pyproject.toml` version is `2.0.0`.
 - `v2.0.0` git tag applied (GPG-signed).
 - Staging canary passed 48h clean.
@@ -1131,8 +1131,8 @@ Grouped by verification strategy. HIGH confidence assumptions get single-line pl
 - **Fallback:** N/A.
 
 **18. No external consumer depends on Flask-specific JSON error shape (category 1).**
-- **How:** (a) `grep -r '/admin/api/' <monitoring-configs>` — Datadog dashboards export, PagerDuty integration configs, internal-dashboards repo. (b) Platform team sync meeting before Wave 2 opens. (c) Shadow-trace staging for 48h capturing `Referer` headers on `/admin/api/*` and `/admin/*/status` routes; if external referers found, investigate.
-- **When:** Wave 2 entry. Platform team sign-off is a Wave 2 hard gate.
+- **How:** (a) `grep -r '/admin/api/' <monitoring-configs>` — Datadog dashboards export, PagerDuty integration configs, internal-dashboards repo. (b) User reviews the grep output and cross-references against known external consumers before Wave 2 opens. (c) Shadow-trace staging for 48h capturing `Referer` headers on `/admin/api/*` and `/admin/*/status` routes; if external referers found, investigate.
+- **When:** Wave 2 entry. User confirmation (after reviewing the grep + shadow-trace output) is a Wave 2 hard gate.
 - **Failure symptom:** dashboard breaks post-Wave-2; synthetic check fails.
 - **Fallback:** add the broken endpoint to the category-2 compat list and preserve its Flask-era shape.
 
@@ -1163,7 +1163,7 @@ Grouped by verification strategy. HIGH confidence assumptions get single-line pl
 - **Fallback:** switch to `SameSite=Lax` (reduces cross-site safety); or move to Redis-backed session store.
 
 **23. No monitoring parses `[SESSION_DEBUG]` log lines.**
-- **How:** `grep -r 'SESSION_DEBUG' config/datadog/ config/fly/ <internal-monitoring-repo>`. Platform team check.
+- **How:** `grep -r 'SESSION_DEBUG' config/datadog/ config/fly/ <internal-monitoring-repo>`. User reviews the grep output and confirms no monitoring consumer parses the log line.
 - **When:** Wave 0 entry.
 - **Failure symptom:** Datadog alert silently stops firing after cut.
 - **Fallback:** preserve the log line format in one module during Wave 1 as a compat bridge; remove in Wave 3.

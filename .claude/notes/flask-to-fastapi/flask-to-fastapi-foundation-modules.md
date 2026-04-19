@@ -66,6 +66,14 @@ def _build_async_url(sync_url: str) -> str:
     Agent F F1.5.1 mitigation: also rewrite `sslmode=` → `ssl=` for asyncpg's
     different TLS query-param vocabulary. The rewriter is where both URL
     differences are handled in one place.
+
+    Execution note (2026-04-18): the sslmode→ssl rewrite must be CONDITIONAL
+    on `"+asyncpg" in connection_string`. An unconditional rewrite would break
+    L0 psycopg2/libpq (psycopg2 accepts `sslmode=require`, asyncpg rejects it
+    and expects `ssl=require`). The rewriter landed at pre-L0 commit `d2399452`
+    as dead code (no asyncpg URLs in use until L5b); first exercised at L5b
+    async-engine flip. See `implementation-checklist.md §1.1` and the L5b
+    work item for the unit test (`tests/unit/test_database_url_sslmode_rewriter.py`).
     """
     if sync_url.startswith("postgresql+asyncpg://"):
         return sync_url

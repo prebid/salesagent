@@ -20,58 +20,31 @@ The **source of truth** for "am I ready to ship Wave N?" is `implementation-chec
 
 ---
 
-## Ownership & Bus-Factor Policy
+## Execution model (user + agent team)
 
-> **Why this section exists:** A 72–104 engineer-day migration with an irreversible cut (L2) and async-conversion cliff (L5) cannot be bus-factor 1. This section assigns the named roles, defines the handoff protocol, and sets the reviewer-rotation rules that prevent single-person concentration. All `[TO BE ASSIGNED]` entries must be populated **before L0 sprint kickoff** — the assignment is itself a gate.
+> **Why this section exists:** This migration is driven by a single user orchestrating a team of agents (implementation, review, refactor, evaluation). The human-team scaffolding that normally protects against bus-factor-1 (rotating reviewers, on-call handoffs, vacation blackouts) does not apply. What DOES still apply: defending against pattern drift across long layer sequences, demanding independent eyes on security-critical changes, and keeping irreversible cuts recoverable from cold context. The rules below map those concerns to agent-workflow equivalents.
 
-### Roles
+### Principles
 
-| Role | Responsibility | Assignment |
-|------|----------------|-----------:|
-| **Primary migration lead** | Drives the layer sequence, owns the rollout calendar, arbitrates layer-scope disputes, authors layer-entry gate sign-offs. | [TO BE ASSIGNED] |
-| **Backup lead** | Shadows the primary lead; authorized to run any L0-L4 layer entry/exit in the primary's absence. Escalation path for L5+ decisions when primary is unavailable. | [TO BE ASSIGNED] |
-| **Security reviewer** | Owns the CSRF/session/OAuth/rate-limit/security-headers review gates. Mandatory reviewer on L1b (OAuth cutover), L2 (SecurityHeaders + rate-limits lands), and any PR touching `src/admin/csrf.py`, `src/admin/sessions.py`, `src/admin/oauth.py`, `src/admin/rate_limits.py`, or `src/admin/middleware/security_headers.py`. | [TO BE ASSIGNED] |
-| **Incident commander** | First-responder for any production-impacting incident during the migration bake windows (L1a flag flip, L1b OAuth cutover, L2 Flask removal 48h, L5b SessionDep flip, L5c pilot bake, L5d* per-sub-PR bakes, L7 release). Owns the `admin-migration-health` dashboard (§6.5). | [TO BE ASSIGNED] |
+1. **User is the incident commander.** Agents cannot own pager duty. During bake windows (L1a flag flip, L1b OAuth cutover, L2 Flask removal, L5b alias flip, L5c/L5d*/L7 releases) the user watches the `admin-migration-health` dashboard (§6.5); agents assist with log triage and dashboard-query formulation on request.
+2. **Every layer-exit PR gets a fresh-agent review pass.** Spawn a reviewer agent with NO prior session context (cold context = independent eyes). This is the anti-drift mechanism that replaces human "no reviewer approves >3 consecutive layer PRs." Driving-agent context leakage is precisely what this guards against.
+3. **Security-critical layers get a `/security-review` skill pass.** L1b, L2, and any PR touching `src/admin/csrf.py`, `src/admin/sessions.py`, `src/admin/oauth.py`, `src/admin/rate_limits.py`, or `src/admin/middleware/security_headers.py` — invoke the `/security-review` skill before merging. This replaces the "named security reviewer signs off" gate.
+4. **Rollback runbooks must be executable from cold context.** Every rollback procedure in §5 of `implementation-checklist.md` must read like a fresh-agent briefing: exact commands, exact file paths, no "ask <person>" instructions. The docs ARE the bus-factor protection.
+5. **Handoff protocol replaced by docs.** Agent sessions are stateless. There is no "incoming lead shadows outgoing lead" — instead, `execution-plan.md` is the handoff. If a fresh agent cannot enter a layer from just the docs, the docs are the bug.
+6. **No calendar blackouts.** Agents do not take leave. The user schedules bake windows when the user is available to monitor; that is the only calendar constraint.
 
-### Bus-factor policy
+### Per-layer gates (agent-workflow form)
 
-**Minimum 2 engineers must be capable of executing a rollback at any layer.** Before entering a layer with a rollback procedure in §5, both the primary and backup must have:
-- Read the rollback section for that layer
-- Walked through the procedure in staging at least once (simulated rollback)
-- Confirmed they have the necessary credentials (container registry access, DB access, feature-flag service access)
+| Gate | When | How |
+|------|------|-----|
+| Fresh-agent review pass | Before every layer-exit merge | Spawn a reviewer agent (no session history) with the layer's PR diff + the layer's exit-gate checklist. Agent reports pass/fail per checklist item. |
+| `/security-review` skill pass | L1b, L2, any PR touching the 5 security-critical files | Invoke `/security-review` on the PR branch. Findings addressed before merge. |
+| Rollback cold-read | Before entering L1a, L1b, L2, L5b, L5c, L5d*, L7 | User (or fresh agent) reads the rollback procedure for that layer and confirms every command is executable as-written (no unresolved references, no missing credentials). |
+| Release monitoring | L1a, L1b, L2, L5b, L5c, L5d*, L7 (bake windows) | User watches `admin-migration-health` dashboard + alert rules from §6.5. Agents assist with triage on request. |
 
-If either engineer is unavailable (vacation, illness, leaving the team), the layer does not enter. Re-assign before proceeding.
+### What was removed
 
-### Handoff protocol
-
-When the primary-lead role transfers (planned or unplanned):
-
-1. **2-day minimum hand-off period.** The incoming lead shadows the outgoing lead for 2 business days before taking the lead role.
-2. **Written handoff document.** The outgoing lead writes a handoff note covering: current layer, next 3 decision points, known risks not yet mitigated, pending PRs, communication threads with reviewers/stakeholders.
-3. **Handoff log.** Every handoff is appended to `docs/development/migration-handoffs.md` with date, outgoing lead, incoming lead, layer at handoff, and link to the handoff note.
-4. **Re-ratification of assignments.** When the primary lead changes, confirm backup-lead, security-reviewer, and incident-commander assignments are still accurate; update this section if any role also changes.
-
-### Reviewer rotation
-
-**No single reviewer approves more than 3 consecutive layer PRs.** After 3 consecutive approvals by the same reviewer, a rotation is mandatory — another qualified reviewer approves the next layer PR. Rationale: fresh eyes catch pattern-drift that a reviewer steeped in the same sequence will rationalize.
-
-Exceptions: the security reviewer is exempt from rotation for security-critical layers (L1b, L2 security work) — their repeated review IS the security coverage model.
-
-### Time-off blackout windows
-
-The following layers have blackout windows during which no one on the named roles may be on scheduled leave:
-
-- **L1b** — OAuth cutover + 48h bake
-- **L2** — Flask removal + 48h bake
-- **L5d3** — Bulk async router conversion (largest single PR in L5)
-- **L5e** — Final async sweep
-- **L7** — Release layer
-
-If a blackout coincides with pre-scheduled leave, the layer entry is deferred until the blackout window is clear. Blackout windows are announced at layer planning, not at layer entry.
-
-### Assignment deadline
-
-**All roles must be populated before L0 sprint kickoff.** L0 entry gate includes a checklist item: `All Ownership & Bus-Factor Policy roles assigned in .claude/notes/flask-to-fastapi/CLAUDE.md`. The assignment PR updates this file and lists the names inline (replacing `[TO BE ASSIGNED]`).
+Prior versions of this file declared a Primary/Backup lead, a named Security Reviewer, an Incident Commander, a 2-day handoff protocol, a reviewer-rotation rule, and 5 time-off blackout windows. All of that assumed a multi-human team and is inapplicable to a user+agent workflow. The engineering concerns those roles addressed are preserved in the Principles above — just expressed as agent-workflow mechanics.
 
 ---
 

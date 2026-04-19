@@ -78,7 +78,7 @@ Every item references the companion doc where full detail lives. Tick every box 
   - [ ] `src/admin/sync_api.py` (9 routes, `X-API-Key`, duplicate mount at `/api/sync`)
   - [ ] `src/admin/blueprints/schemas.py` (`/schemas/adcp/v2.4/*`, external JSON Schema validators)
 - [ ] Feature branch `feat/v2.0.0-flask-to-fastapi` created from green main
-- [ ] Team announcement sent: `src/admin/` freeze will take effect during Wave 2 for ≤ 7 calendar days
+- [ ] Customer-comms plan for the L2 (Wave 2) Flask removal documented: downstream consumers of the admin UI (subdomain tenants, API-token holders if any admin routes they call) are notified of the ≤ 7-day `src/admin/` freeze window before the L2 PR lands. Audience list committed in `docs/migration/v2.0-customer-comms.md §2 (audience list)`.
 - [ ] Rollback window documented for each wave (see Section 5)
 - [ ] Staging environment matches production topology:
   - [ ] Fly.io proxy header behavior verified (`X-Forwarded-*` present)
@@ -89,23 +89,24 @@ Every item references the companion doc where full detail lives. Tick every box 
 - [ ] v1.99.0 git tag plan documented (last-known-good Flask-era release, tagged before Wave 3 merges)
 - [ ] **Spike 4.5 and Spike 5.5 are NOT pre-Wave-0 items.** Per CLAUDE.md canonical spike sequence (10 technical spikes + 1 decision gate): **Spike 4.5 runs at L4 entry** (ContextManager stateless refactor smoke test — validates Decision 7 before the L4 refactor PR lands); **Spike 5.5 runs at L5a entry** (two-engine coexistence — validates Decision 9 before async conversion starts). See L4 and L5a entry-criteria sections for full acceptance criteria. Verified by: neither spike gates §1.1 pre-Wave-0 entry; L4 entry-criteria lists Spike 4.5; L5a entry-criteria lists Spike 5.5. **Spikes 1 and 2 also run at L5a entry** (lazy-load audit + driver compat — they depend on L4's DTO boundary + SessionDep alias being in place). Neither blocks pre-Wave-0 or L0 entry.
 - [ ] **Agent F pre-Wave-0 hard gate items completed (non-code surface inventory, corrected 2026-04-11):**
-  - [ ] **`psycopg2-binary` RETAINED** — partial reversal of Agent F F1.1.1 per Decisions 1 (Path B sync factory) and 2 (pre-uvicorn health checks). (Pre-D3 plan also cited Decision 9 sync-bridge as a third retention rationale; under D3 2026-04-16 the sync-bridge is superseded by an async rearchitect, so D1+D2 alone are sufficient.) **[L5+ — asyncpg not in L0-L4]** `asyncpg>=0.30.0,<0.32` added alongside (not replacing). `types-psycopg2` also retained. **Fallback:** `psycopg[binary,pool]>=3.2.0` if Spike 2 (driver compat) fails — see `CLAUDE.md` pre-Wave-0 spike sequence.
-  - [ ] **[L5+ — not needed for sync admin tests]** `[tool.pytest.ini_options]` added to `pyproject.toml` with `asyncio_mode = "auto"` (F1.7.1, F8.2.1)
-  - [ ] `DATABASE_URL` rewriter (`sslmode` → `ssl`) landed (F1.5.1)
+  - [x] **`psycopg2-binary` RETAINED** — partial reversal of Agent F F1.1.1 per Decisions 1 (Path B sync factory) and 2 (pre-uvicorn health checks). (Pre-D3 plan also cited Decision 9 sync-bridge as a third retention rationale; under D3 2026-04-16 the sync-bridge is superseded by an async rearchitect, so D1+D2 alone are sufficient.) **[L5+ — asyncpg not in L0-L4]** `asyncpg>=0.30.0,<0.32` added alongside (not replacing). `types-psycopg2` also retained. **Fallback:** `psycopg[binary,pool]>=3.2.0` if Spike 2 (driver compat) fails — see `CLAUDE.md` pre-Wave-0 spike sequence. → landed commit `246067de`
+  - [x] **[L5+ — not needed for sync admin tests]** `asyncio_mode = "auto"` configured (F1.7.1, F8.2.1). Execution note (2026-04-18): already present in `pytest.ini:44` (not `pyproject.toml` as the plan originally said); no change required. → verified at `pytest.ini:44`
+  - [x] `DATABASE_URL` rewriter (`sslmode` → `ssl`) landed (F1.5.1). Execution note (2026-04-18): rewriter is CONDITIONAL — gated on `"+asyncpg" in connection_string`. An unconditional rewrite would break L0 psycopg2/libpq (psycopg2 accepts `sslmode=require`, asyncpg rejects it and expects `ssl=require`). Dead-code at L0 (no asyncpg URLs in use until L5b); first exercised at L5b async-engine flip. → landed commit `d2399452`
   - [ ] **`DatabaseConnection` KEPT** (partial reversal of F1.4.1) per Audit 06 Decision 2 OVERRULE, REFINED 2026-04-11. **Real rationale: fork safety, NOT loop collision.** `run_all_services.py` is PID 1 sync orchestrator that forks uvicorn into a child subprocess via `subprocess.Popen` at `:231`, so parent/child have independent Python interpreters. Using SQLAlchemy `get_sync_db_session()` here would duplicate pooled asyncpg/psycopg connections into the child fork → PG socket corruption (canonical SQLAlchemy fork-safety bug). Raw `psycopg2.connect()` + close-before-fork is the only safe shape.
   - [ ] **Decision 2 corrected caller list (2026-04-11):** `scripts/deploy/run_all_services.py:84,135` + `examples/upstream_quickstart.py:137`. **NOT** `init_database.py`/`init_database_ci.py` — those use SQLAlchemy `get_db_session()`, were misattributed in original Audit 06 ledger and Agent F §1.4.
-  - [ ] **Delete `scripts/deploy/entrypoint_admin.sh`** in same PR — dead shell code, unreferenced by Dockerfile/compose/fly.toml, still shell-imports psycopg2 in a subshell, calls non-existent `migrate.py`, imports `src.admin.server` (scheduled for Wave 3 deletion).
-  - [ ] **Migrate `examples/upstream_quickstart.py:137`** to `get_db_session()` (async-capable, standalone-safe). Leaves `DatabaseConnection` with exactly 2 callers in `run_all_services.py`.
-  - [ ] **Harden `DatabaseConnection.connect()`**: add `connect_timeout=10` (env-overridable via `DATABASE_CONNECT_TIMEOUT`) and `options="-c statement_timeout=5000"` to the `psycopg2.connect(...)` call. Prevents hanging DB from bricking container startup.
-  - [ ] **Structural guard #1** `tests/unit/test_architecture_no_runtime_psycopg2.py` — AST-walks every `src/**/*.py`, allowlists exactly 3 files for `import psycopg2`/`from psycopg2`: `src/core/database/db_config.py` (Decision 2 raw pre-fork path), `src/core/database/database_session.py` (Decision 1 Path B sync factory IF it explicitly imports — verify during implementation; SQLAlchemy auto-detects psycopg2 driver from URL string without an explicit import), `src/services/background_sync_db.py` (Decision 9 sync-bridge). Includes a "stale-entry" test that fails if any allowlisted file no longer imports psycopg2.
-  - [ ] **Structural guard #2** `tests/unit/test_architecture_get_db_connection_callers_allowlist.py` — AST-walks every `src/**/*.py` and `scripts/**/*.py` for `Call` nodes invoking `get_db_connection`, allowlists exactly 1 file: `scripts/deploy/run_all_services.py`. Catches the failure mode where someone adds `DatabaseConnection` inside the runtime process (fork-unsafe AND pool-uncoordinated). Excludes `db_config.py` (definition file) and `examples/`/`tests/` by directory scope.
+  - [x] **Delete `scripts/deploy/entrypoint_admin.sh`** in same PR — dead shell code, unreferenced by Dockerfile/compose/fly.toml, still shell-imports psycopg2 in a subshell, calls non-existent `migrate.py`, imports `src.admin.server` (scheduled for Wave 3 deletion). → landed commit `e877ed97`
+  - [x] **Migrate `examples/upstream_quickstart.py:137`** to `get_db_session()` (async-capable, standalone-safe). Leaves `DatabaseConnection` with exactly 2 callers in `run_all_services.py`. Execution note (2026-04-18): the example's prior raw SQL referenced a `product_catalog` column that no longer exists on the current schema (bit-rot). Executor corrected the query to read `Tenant.signals_agent_config` with a `product_catalog` JSON key, preserving the example's intent. → landed commit `7f6433c5`
+  - [x] **Harden `DatabaseConnection.connect()`**: add `connect_timeout=10` (env-overridable via `DATABASE_CONNECT_TIMEOUT`) and `options="-c statement_timeout=5000"` to the `psycopg2.connect(...)` call. Prevents hanging DB from bricking container startup. → landed commit `cd1a59a1`
+  - [x] **Structural guard #1** `tests/unit/test_architecture_no_runtime_psycopg2.py` — AST-walks every `src/**/*.py`, allowlists `import psycopg2`/`from psycopg2` imports. Execution note (2026-04-18): under D3 2026-04-16 supersession, `src/services/background_sync_db.py` is NEVER written, so the allowlist stays at 1 entry (`src/core/database/db_config.py`) through v2.0 — NOT the 3-entry allowlist originally prescribed by agent-f §F1.1.1. `src/core/database/database_session.py` does not explicitly import psycopg2 (SQLAlchemy auto-detects from URL). Includes a "stale-entry" test that fails if any allowlisted file no longer imports psycopg2. → landed commit `64cf0125`
+  - [x] **Structural guard #2** `tests/unit/test_architecture_get_db_connection_callers_allowlist.py` — AST-walks every `src/**/*.py` and `scripts/**/*.py` for `Call` nodes invoking `get_db_connection`, allowlists exactly 1 file: `scripts/deploy/run_all_services.py`. Catches the failure mode where someone adds `DatabaseConnection` inside the runtime process (fork-unsafe AND pool-uncoordinated). Excludes `db_config.py` (definition file) and `examples/`/`tests/` by directory scope. → landed commit `64cf0125`
+  - [x] **Structural guard #3 (F6.2.6)** `tests/unit/test_architecture_no_module_level_get_engine.py` — AST-scans `src/**/*.py` for module-level `get_engine()` / `create_engine()` / `create_async_engine()` calls (engine construction must be lifespan-scoped). Risk #33 mitigation per `async-audit/agent-f-nonsurface-inventory.md:980-983, 1005, 1336, 1547`. Empty allowlist today. → landed commit `64cf0125`
   - [ ] **Risk #34 (NEW, HIGH)**: `run_all_services.py:175` imports `src.core.database.database.init_db` which under async pivot opens the SQLAlchemy async engine in the parent process. Then `:231` `Popen`s uvicorn — duplicate pooled connection FDs leak into the child. Either (a) `init_db()` calls `await reset_engine()` in `finally`, OR (b) `run_all_services.py` runs init via `subprocess.run([sys.executable, "-m", "scripts.setup.init_database"])` like migrations already do at `:207`. **Strongly prefer (b)** — matches the existing migration pattern, no in-process state leak risk. Add to async-pivot-checkpoint.md §4 risk register.
   - [ ] **Spike 5.5 additional check**: verify `run_all_services.py`'s init flow does NOT eagerly hold any PG sockets in the parent process after `init_database()` returns and before `threading.Thread(target=run_mcp_server).start()`. Either grep `/proc/<pid>/fd/` for PG sockets (Linux) or run `pg_stat_activity` query and confirm zero connections from PID 1 outside of the transient `DatabaseConnection` window.
   - [ ] Alembic `env.py` stays sync with psycopg2 (supersedes prior async-env.py rewrite plan — see async-pivot-checkpoint.md for history). Alembic gains nothing from running async — migrations are serial, single-connection operations. All 161 existing migrations use sync patterns that work under the greenlet bridge. Spike 6 scope is `render_item` hook for JSONType + advisory lock for multi-container safety (~0.5 day).
   - [ ] **L0 EXIT:** CI Postgres version aligned to 17 across all workflows (F2.4.1). `.github/workflows/test.yml` currently uses PG15 (line 135) and PG16 (line 196); local dev + Fly.io production run PG17. Captures golden-fingerprint parity before L1a starts. One-line YAML bump per workflow. Agent F originally scheduled this under the L5a driver spike; moved to L0 because PG version skew distorts golden-fingerprint fixtures at L1a.
   - [ ] Dead `test-migrations` pre-commit hook removed (F2.3.1)
-  - [ ] 3 new structural guards added (F6.2.1, F6.2.5, F6.2.6)
-  - [ ] New docs `async-debugging.md` + `async-cookbook.md` drafted (F5.3.1, F5.3.2)
+  - [ ] 3 new structural guards added (F6.2.1, F6.2.5, F6.2.6). Execution note (2026-04-18): only F6.2.6 (`no_module_level_get_engine`) landed at pre-L0 (commit `64cf0125`). F6.2.1 (lazy-load `lazy="raise"` enforcement) is deferred to L5a — requires the 68-relationship Spike 1 baseline to exist before the guard can be seeded. F6.2.5 (`server_default` audit) is deferred to L4 — requires the ≥45-column baseline from Spike 7 prep.
+  - [ ] New docs `async-debugging.md` + `async-cookbook.md` drafted (F5.3.1, F5.3.2). Execution note (2026-04-18): `docs/development/async-debugging.md` (89 lines) and `docs/development/async-cookbook.md` (107 lines) exist as untracked skeletons; the background agent that drafted them was sandbox-blocked on `git add`. Will be committed in a follow-up `docs(flask-to-fastapi): draft async-debugging and async-cookbook skeletons` commit. Status: skeleton, populated at L5a per Spike 1.
   - [ ] **[L5+]** Full `asyncpg` wheel availability verified for glibc + macOS (F1.1.3)
   - [ ] Duplication baseline snapshotted at Wave 4 start (F7.4.1)
 
@@ -287,7 +288,7 @@ Three rounds of parallel Opus subagent verification (14 agents total) audited th
 - [ ] **EP-4 [All waves]: Golden-fixture characterization tests.** Before each router port, capture Flask response shapes as golden fixtures. After port, assert FastAPI matches. TDD adaptation for ports.
 - [ ] **EP-5 [All waves]: FIXME comments at source for all new allowlist entries.** Per CLAUDE.md structural guard rules: "Every allowlisted violation has a `FIXME(salesagent-xxxx)` comment at the source location."
 - [ ] **EP-6 [Wave 0]: Relationship count corrected to 68.** All doc references to "58 relationships" updated to 68 (verified by grep of `src/core/database/models.py`).
-- [ ] **EP-7 [Wave 1b]: Customer communication plan for forced re-login.** Fortune 500 clients need 48-hour advance notice, not just a team announcement.
+- [ ] **EP-7 [Wave 1b]: Customer communication plan for forced re-login.** Downstream consumers (Fortune 500 clients, API-token holders) need 48-hour advance notice per `docs/migration/v2.0-customer-comms.md §2 (audience list)`. Send-receipt linked from the Wave 1b PR description.
 
 ### 3.5.7 Code pattern corrections (from consistency audit)
 
@@ -340,7 +341,7 @@ Every structural guard starts with one of three allowlist strategies:
 | `test_templates_url_for_resolves.py` (L2) | Empty + bootstrap |
 | `test_templates_no_hardcoded_admin_paths.py` (L2) | Captured baseline → shrink |
 | `test_architecture_csrf_exempt_covers_adcp.py` (L1) | Empty + bootstrap |
-| `test_architecture_no_runtime_psycopg2.py` (L0 SEEDS / L0 ENFORCES; L7 final shrink only if background_sync sunsets) | Captured allowlist (3 sites) → shrink |
+| `test_architecture_no_runtime_psycopg2.py` (L0 SEEDS / L0 ENFORCES; L7 final shrink only if background_sync sunsets) | Captured allowlist (1 site — `db_config.py` only; D3 supersession collapses the original 3-entry allowlist to 1) → shrink |
 | `test_architecture_get_db_connection_callers_allowlist.py` | Captured allowlist (1 file) → shrink |
 | `test_architecture_no_sse_handlers.py` (activated L5a; enforced L5d4 per Decision 8) | Empty + bootstrap |
 | `test_architecture_no_singleton_session.py` (L4, Decision 7) | Empty + bootstrap |
@@ -412,8 +413,8 @@ These refactors are strict improvements under the CURRENT `scoped_session` world
 - [ ] `src/app.py:299-304` still has `a2wsgi` Flask mount (safety net)
 - [ ] Migration overview §§11, 12, 13 signed off
 - [ ] `SESSION_SECRET` defined in `.env.example` and staging secret store
-- [ ] All Ownership & Bus-Factor Policy roles assigned in `.claude/notes/flask-to-fastapi/CLAUDE.md` — primary lead, backup lead, security reviewer, incident commander. All `[TO BE ASSIGNED]` placeholders replaced with named engineers. Verified by: `rg -n 'TO BE ASSIGNED' .claude/notes/flask-to-fastapi/CLAUDE.md` returns zero matches.
-- [ ] `[TBD]` placeholders in §6.5 on-call handoff table replaced with named engineers (or explicitly deferred to later layer entry with a filed follow-up issue). Verified by: `rg -n '\[TBD\]' .claude/notes/flask-to-fastapi/implementation-checklist.md` returns zero matches OR each remaining match has a follow-up issue linked in the L0 PR description.
+- [ ] **Agent-workflow gates confirmed (replaces prior ownership-assignment gate):** the user has reviewed `.claude/notes/flask-to-fastapi/CLAUDE.md` §"Execution model (user + agent team)" and understands the four per-layer gates: fresh-agent review pass, `/security-review` skill pass, rollback cold-read, and release monitoring. Verified positively by: `rg -n 'Execution model \(user \+ agent team\)' .claude/notes/flask-to-fastapi/CLAUDE.md` returns at least one match AND `rg -n 'TO BE ASSIGNED' .claude/notes/flask-to-fastapi/CLAUDE.md` returns zero matches. (The strings "primary lead", "backup lead", and "incident commander" remain intentionally in CLAUDE.md §"Execution model" — in principle 1 naming the user as incident commander, and in the "What was removed" paragraph describing the scrubbed scaffolding — so they are NOT part of the verification check.)
+- [ ] Rollback runbooks pass the cold-read test: a freshly-spawned agent reading only `.claude/notes/flask-to-fastapi/flask-to-fastapi-execution-details.md §Rollback` and `implementation-checklist.md §5` for L1a, L1b, L2, L5b can produce the exact revert command sequence without asking for missing context. Verified by: spawn a cold-context agent with just those two sections and the L1a rollback heading; agent emits a valid command sequence matching the documented procedure.
 
 **Files created — all 11 foundation modules plus supporting infra:**
 
@@ -639,7 +640,7 @@ These refactors are strict improvements under the CURRENT `scoped_session` world
 **L1b derivative items (2026-04-15 sharpening):**
 
 - [ ] OAuth kwargs audit: every kwarg passed to `oauth.register(...)` in the legacy Flask integration (`src/admin/blueprints/auth.py`, `src/admin/blueprints/oidc.py`) is enumerated in `docs/migration/oauth-kwargs-inventory.md`, and each kwarg is verified to land identically in the Starlette `authlib.integrations.starlette_client.OAuth` wrapper. At minimum the following kwargs are enumerated: `client_kwargs.scope`, `server_metadata_url`, `access_type`, `prompt`, `hd`, `authorize_params`. Verified by: `docs/migration/oauth-kwargs-inventory.md` exists; a byte-for-byte diff of legacy-vs-new `register(...)` calls is recorded in the doc; `tests/integration/test_oauth_kwarg_parity.py` asserts the live registered client configuration matches the documented inventory.
-- [ ] Mandatory security-reviewer sign-off on L1b PR (the OAuth cutover touches `src/admin/csrf.py`, `src/admin/sessions.py`, `src/admin/oauth.py`). Verified by: the L1b GitHub PR has an approving review from the named security-reviewer role per CLAUDE.md §Ownership; reviewer name and date are recorded in `docs/development/migration-handoffs.md`.
+- [ ] `/security-review` skill pass completed on L1b PR (the OAuth cutover touches `src/admin/csrf.py`, `src/admin/sessions.py`, `src/admin/oauth.py`). Verified by: the skill run output is appended to the PR description; every finding is either resolved in the same PR or has a tracked follow-up task referenced from the PR; a fresh-agent review pass re-runs the skill as a second opinion before merge.
 
 **Foundation runtime verifications:**
 
@@ -702,10 +703,10 @@ These refactors are strict improvements under the CURRENT `scoped_session` world
 - [ ] Wave 1 Playwright suite passing on staging nightly
 - [ ] `scripts/check_coverage_parity.py` tested on Wave 1 and green
 - [ ] `tests/integration/test_route_parity.py` baseline captured from Wave 1 staging (JSON map of URL+method → status)
-- [ ] Platform team confirms no external consumer depends on Flask-specific category-1 JSON shapes (assumption #18 verification)
+- [ ] Assumption #18 verified: grep of Datadog/PagerDuty/internal-monitoring config exports for Flask-specific category-1 JSON shapes (`/admin/api/*`, `/admin/*/status`) returns zero external references. User reviews the grep output and confirms; result appended to Wave 2 PR description.
 - [ ] `SESSION_SECRET` cookie-size instrumented in Wave 1 and confirmed < 3.5KB over 24h of staging traffic (assumption #5 verification)
-- [ ] All 22 blueprints have designated owner reviewers
-- [ ] Team `src/admin/` freeze announcement sent 48h before PR opens
+- [ ] Every replacement router has a fresh-agent review pass scheduled against its PR before merge (per-router review responsibility; no router ships unreviewed).
+- [ ] Customer-comms for the `src/admin/` freeze sent 48h before PR opens (per `docs/migration/v2.0-customer-comms.md §2 (audience list)`).
 - [ ] Freeze scope confirmed: entire `src/admin/**` except `activity_stream.py`; whole `tests/integration/**` for anything touching deleted fixtures
 - [ ] Branch-lifetime budget confirmed: ≤ 7 calendar days
 
@@ -823,8 +824,8 @@ These refactors are strict improvements under the CURRENT `scoped_session` world
 
 **Operational verifications:**
 
-- [ ] Datadog dashboards confirmed green by platform team
-- [ ] No external consumer references Flask-era endpoints
+- [ ] Datadog dashboards confirmed green (user checks the `admin-migration-health` dashboard end-to-end; all Traffic and Migration-specific panels show expected values; confirmation appended to the Wave 2 PR description)
+- [ ] No external consumer references Flask-era endpoints (per the assumption #18 grep sweep above)
 
 **Exit criteria:**
 
@@ -1008,8 +1009,8 @@ The Flask removal also removes Flask's internal WSGI proxy-header stack (`Custom
 
 These rules apply to every layer's Entry and Exit subsections in §4, regardless of whether the layer is labelled by its legacy Wave header or its canonical L-name.
 
-- **Mandatory security-reviewer sign-off**: any PR touching `src/admin/csrf.py`, `src/admin/sessions.py`, `src/admin/oauth.py`, `src/admin/rate_limits.py`, or `src/admin/middleware/security_headers.py` requires sign-off by the named security-reviewer role (CLAUDE.md §Ownership) regardless of layer. Verified by: GitHub PR review approval recorded against the named role.
-- **Reviewer rotation**: no single reviewer approves more than 3 consecutive layer PRs. Verified by: `git log main --merges --pretty=format:'%H %s' --since=<L0-start>` cross-referenced against PR review records — 4th consecutive layer PR must show a different approver (exception: security reviewer on security-critical layers L1b, L2 security work).
+- **Mandatory `/security-review` skill pass**: any PR touching `src/admin/csrf.py`, `src/admin/sessions.py`, `src/admin/oauth.py`, `src/admin/rate_limits.py`, or `src/admin/middleware/security_headers.py` requires a `/security-review` skill invocation on the PR branch regardless of layer. Verified by: skill run output appended to the PR description; findings resolved or tracked as follow-up tasks.
+- **Fresh-agent review pass on every layer-exit PR**: spawn a reviewer agent with NO prior session context (cold context = independent eyes) and give it only the PR diff + the layer's exit-gate checklist. This is the anti-drift mechanism that replaces human reviewer rotation. Verified by: the reviewing agent's pass/fail report is appended to the PR description; any failures are resolved before merge. Driving-agent context bleed is precisely what this guards against.
 - **Discovered items slot**: every layer includes a "Discovered items" list in its work-items section. Layer exit is blocked unless the list is empty OR each item has a filed follow-up issue linked in the layer PR description. Verified by: PR description contains either "Discovered items: none" or a bulleted list with issue links.
 - **Rollback re-entry condition**: every layer rollback section specifies when the layer may be retried after a rollback. Verified by inspection of the rollback section; cross-referenced in §5 and §6.5 alert linkage.
 - **Alert-name linkage in rollback triggers**: every rollback trigger in §5 explicitly names the §6.5 alert that fires it (e.g., `MigrationHigh5xx`, `FlaskCatchallHit`). Verified by: `rg -n 'alert|PAGE|NOTIFY' §5-rollback-text` cross-references §6.5 alert table entries.
@@ -1020,9 +1021,8 @@ These rules apply to every layer's Entry and Exit subsections in §4, regardless
 
 **L3 entry criteria:**
 
-- [ ] L2 signed off by primary lead per §6.2 (48h bake passed; zero `FlaskCatchallHit` alerts).
+- [ ] L2 bake window passed per §6.5 (zero `FlaskCatchallHit` alerts). Verified by: bake-window observations recorded in the L2 PR description or a linked dashboard snapshot.
 - [ ] `main` is up to date and CI is green.
-- [ ] Role assignments current per CLAUDE.md §Ownership; no named-role holder on scheduled leave during this layer.
 - [ ] L2 48h bake completed: 5xx rate ≤ baseline + 0.1%; p99 latency within documented tolerance; zero `FlaskCatchallHit` alerts (see §6.5).
 
 **L3 work items:**
@@ -1040,7 +1040,7 @@ These rules apply to every layer's Entry and Exit subsections in §4, regardless
 - [ ] Layer-scope commit-lint green (no out-of-scope commits — see `foundation-modules.md` §11.27).
 - [ ] 7-step Test-Before-Implement audit bash script (CLAUDE.md §Test-Before-Implement Discipline) run against the L3 feature branch and green.
 - [ ] PR squash-merged; release-please changelog entry present.
-- [ ] L4 entry prerequisites documented as satisfied in `docs/development/migration-handoffs.md`.
+- [ ] L4 entry prerequisites documented as satisfied in the L3 PR description (checklist of L4 entry-gate items with "green" / link-to-evidence per row).
 
 ### L4 — FastAPI-native sync refinement (entry, work items, exit)
 
@@ -1048,9 +1048,8 @@ These rules apply to every layer's Entry and Exit subsections in §4, regardless
 
 **L4 entry criteria:**
 
-- [ ] L3 signed off by primary lead per §6.2.
+- [ ] L3 exit gate green per §6.5 (all L3 exit criteria ticked; fresh-agent review pass report appended to L3 PR).
 - [ ] `main` is up to date and CI is green.
-- [ ] Role assignments current; no named-role holder on leave during this layer.
 - [ ] **Spike 4.5 — ContextManager stateless refactor smoke test** passed (Decision 7 validation, 0.5–1 day). Pass criteria: refactor LOC <400 AND files touched <15 AND test patches <50 AND error-path composition test proves outer `session_scope()` rollback does NOT wipe error-logging writes. Soft blocker: on fail, ContextManager refactor gets a dedicated L4 sub-phase PR. Verified by: `spike-4.5.md` committed in the repo with pass/fail table and measurement numbers.
 - [ ] Discovered items slot (empty at entry).
 
@@ -1058,6 +1057,7 @@ These rules apply to every layer's Entry and Exit subsections in §4, regardless
 
 - [ ] `test_architecture_uses_structlog.py` guard extended: blocks `print()` in `src/**/*.py` (allowlist: `scripts/`, `alembic/versions/`, `src/core/cli/`). Verified by: guard green; `rg "^\s*print\(" src/ | rg -v "scripts/|alembic/versions/|core/cli/"` returns zero.
 - [ ] Structural guard `test_architecture_no_pydantic_v1_validators.py` added: forbids `from pydantic import validator` and `@validator(...)` usage in `src/`. Verified by: `rg "from pydantic import.*\bvalidator\b|@validator\(" src/` returns zero; guard green.
+- [ ] **Decide whether to introduce structural guard F6.2.5 for `server_default` columns** once the ≥45-column baseline is enumerated (Spike 7 prep). Deferred from pre-L0 per agent-f §F6.2.5 — the guard cannot be seeded until the `server_default` inventory exists. If introduced, test filename is `tests/unit/test_architecture_server_default_audit.py`.
 
 **L4 bake window:**
 
@@ -1066,7 +1066,7 @@ These rules apply to every layer's Entry and Exit subsections in §4, regardless
 - [ ] 5xx rate ≤ baseline + 0.1%.
 - [ ] p99 latency within documented tolerance vs pre-L4 sync baseline.
 - [ ] Auth success rate ≥ 99.5%.
-- [ ] Sign-off by incident commander recorded in `docs/development/migration-handoffs.md`.
+- [ ] Bake-window observations (5xx rate, p99 latency, auth success rate, zero PAGE alerts) recorded in the L4 PR description with dashboard timestamps or screenshots; user confirms the bake passed before merge.
 
 **L4 exit criteria:**
 
@@ -1088,15 +1088,15 @@ These rules apply to every layer's Entry and Exit subsections in §4, regardless
 
 **L5a entry criteria:**
 
-- [ ] L4 signed off by primary lead per §6.2.
+- [ ] L4 exit gate green per §6.5 (all L4 exit criteria ticked; fresh-agent review pass report appended to L4 PR).
 - [ ] `main` is up to date and CI is green.
 - [ ] `baseline-sync.json` present in the repo (captured at L4 EXIT).
-- [ ] Role assignments current.
 - [ ] **Spike 5.5 — Checkpoint-session viability (D3 validation)** scheduled for this window. Pass criteria: 4 test cases green at `tests/driver_compat/test_checkpoint_session_viability.py` — (a) single 4-hour sync with per-page short-lived sessions completes, (b) 3 concurrent multi-tenant syncs share the async pool without contention, (c) cancellation via `task.cancel()` cleanly closes any in-flight session, (d) resume from a persisted `sync_checkpoint` row after container restart. Soft blocker: on fail, revert to pre-D3 Option B sync-bridge (retain psycopg2-binary; file v2.1 sunset ticket) — documented in `spike-decision.md`. Verified by: spike test file exists and runs as part of L5a gate.
 
 **L5a work items (10 technical spikes + 1 decision gate):**
 
 - [ ] Spike 1 (lazy-load audit, HARD gate); Spike 2 (driver compat, HARD gate); Spike 4 (test-harness 5-file conversion); Spike 4.25 (factory-boy async shim); Spike 5 (scheduler alive-tick); Spike 5.5 (checkpoint-session viability per D3, listed above); Spike 6 (Alembic async evaluation); Spike 7 (GAM adapter threadpool saturation) — see CLAUDE.md canonical spike table for per-spike pass criteria.
+- [ ] **Decide whether to introduce structural guard F6.2.1 for lazy-load relationship enforcement** once the 68-relationship baseline from Spike 1 is captured. Deferred from pre-L0 per agent-f §F6.2.1 — the guard cannot be seeded until Spike 1 catalogues every relationship's canonical `lazy=` strategy. If introduced, test filename is `tests/unit/test_architecture_lazy_raise_enforced.py`.
 - [ ] **Spike 8 — L5 go/no-go decision gate (HARD)**: `spike-decision.md` committed at L5a EXIT with pass/fail per technical spike, `baseline-sync.json` comparison (if any L5 experiments were run on the spike branch), resolved status of the 9 open decisions, and the final go/no-go call. Go condition: Spike 1 PASSES AND no more than 2 soft spikes fail. No-go: narrow L5 scope OR ship L0-L4 only and defer async to v2.1 (L0-L4 ships regardless).
 - [ ] Discovered items list is empty OR each item has a filed follow-up issue.
 
@@ -1117,7 +1117,7 @@ These rules apply to every layer's Entry and Exit subsections in §4, regardless
 
 - [ ] L5a Spike 8 decision is GO.
 - [ ] `main` is up to date and CI is green.
-- [ ] Role assignments current; security reviewer available (async engine config is security-relevant).
+- [ ] `/security-review` skill has been pre-booked for the L5b PR (async engine config is security-relevant; schedule the pass to run on the L5b branch before merge).
 - [ ] Discovered items slot (empty at entry).
 
 ### L5b entry preflight — hardened prerequisites (addresses database-deep-audit critical blockers)
@@ -1139,6 +1139,7 @@ Before L5b (SessionDep alias flip) opens, ALL of the following must be verifiabl
 - [ ] Lifespan-scoped async engine created in `database_lifespan(app)`; stored on `app.state.db_engine`.
 - [ ] Guard swap per §Wave 4 "L5b guard sunset + replacement" (moved from L5c per 2026-04-15 correction): delete sync-def guard and no-async-db guard; add async-handlers guard with FULL allowlist seeded.
 - [ ] Structural guard `test_architecture_relationships_explicit_loading.py` added; all 68 existing relationships have explicit `lazy=` strategies per Spike 1 outcome; allowlist empty. Verified by: guard green; `rg "relationship\(" src/core/database/models/ | rg -v "lazy=" ` returns zero.
+- [ ] **Write the unit test for `_rewrite_sslmode_for_driver()` in `src/core/database/database_session.py`**. The rewriter landed as dead code at pre-L0 commit `d2399452` and is exercised for the first time at L5b when the async engine flips on. Test file: `tests/unit/test_database_url_sslmode_rewriter.py`. Required cases: (a) `+asyncpg` URL with `sslmode=require` rewrites to `ssl=require`; (b) `+asyncpg` URL without an sslmode param is returned unchanged; (c) plain psycopg2 URL with `sslmode=require` is returned unchanged (critical — an unconditional rewrite would break L0 psycopg2/libpq). Verified by: test file exists, all three cases green, and the guard catches a regression that drops the `"+asyncpg" in connection_string` gate.
 
 **L5b bake window:**
 
@@ -1234,7 +1235,7 @@ Before L5b (SessionDep alias flip) opens, ALL of the following must be verifiabl
 **L5d3 entry criteria:**
 
 - [ ] L5d2 merged green.
-- [ ] `main` green; no scheduled leave during blackout window (CLAUDE.md §Time-off blackout).
+- [ ] `main` green. User confirms availability to monitor the 48h bake window (this is the largest single async PR in L5; release only when user can watch the dashboard).
 
 **L5d3 bake window:**
 
@@ -1291,7 +1292,7 @@ Before L5b (SessionDep alias flip) opens, ALL of the following must be verifiabl
 - [ ] async-handlers allowlist empty at L5e exit.
 - [ ] p99 latency within ±5% vs `baseline-sync.json` (release gate).
 - [ ] DB pool saturation < 0.7 sustained.
-- [ ] Incident-commander sign-off recorded.
+- [ ] User confirms the bake window observations (p99, allowlist, pool saturation) meet the gate criteria; confirmation recorded in the L5e PR description.
 
 **L5e exit criteria:**
 
@@ -1305,7 +1306,7 @@ Before L5b (SessionDep alias flip) opens, ALL of the following must be verifiabl
 
 **Engineer-day estimate:** 3–4.
 
-**L6 entry criteria:** L5e bake completed green; `main` green; role assignments current.
+**L6 entry criteria:** L5e bake completed green; `main` green.
 
 **L6 exit criteria:**
 
@@ -1324,16 +1325,15 @@ Before L5b (SessionDep alias flip) opens, ALL of the following must be verifiabl
 **L7 entry criteria:**
 
 - [ ] L6 merged green; `main` green.
-- [ ] Role assignments current; no named-role holder on leave during blackout window.
-- [ ] All prior layer bake windows signed off in `docs/development/migration-handoffs.md`.
+- [ ] All prior layer bake windows have confirmed observations recorded in their respective PR descriptions (user-confirmed pass per §6.5 for each of L1a, L1b, L2, L4, L5b, L5c, L5d1-d5, L5e).
 
 **L7 work items (2026-04-15 sharpening):**
 
-- [ ] `docs/migration/migration-guide-v2.0.md` is written and covers breaking changes for downstream consumers of the admin UI and OAuth callbacks. Verified by: file exists; reviewed and signed off by the product owner (signoff recorded inline).
-- [ ] Post-deploy smoke verification: the login flow is walked end-to-end by 2 operators in production within 30 minutes of deploy. Verified by: signoff with operator names and timestamps recorded in `docs/development/migration-handoffs.md`.
-- [ ] Rollback rehearsal in staging is completed before L7 deploy. Verified by: rehearsal log in `docs/development/migration-handoffs.md` with date, participants, and outcome.
-- [ ] Stakeholder comms per the L1a customer-comms plan are sent. Verified by: send-receipt or message archive linked in `docs/development/migration-handoffs.md`.
-- [ ] Post-release monitoring owner and end-date are named. Verified by: the incident-commander role confirms ownership of the 48h watch; end-date is recorded in `docs/development/migration-handoffs.md`.
+- [ ] `docs/migration/migration-guide-v2.0.md` is written and covers breaking changes for downstream consumers of the admin UI and OAuth callbacks. Verified by: file exists; content reviewed against the L0-L7 decision log for accuracy; user reads the doc end-to-end and confirms no missing breaking changes before tag.
+- [ ] Post-deploy smoke verification: the login flow is walked end-to-end in production within 30 minutes of deploy. Verified by: smoke-test run output (curl transcript or browser walkthrough notes) appended to the L7 PR description with timestamp.
+- [ ] Rollback rehearsal in staging is completed before L7 deploy. Verified by: rehearsal transcript (commands run + observed outcomes) appended to the L7 PR description with date.
+- [ ] Customer-comms per the L1a customer-comms plan are sent. Verified by: send-receipt or message archive linked from the L7 PR description.
+- [ ] Post-release 48h monitoring window scheduled. Verified by: user confirms availability in the L7 PR description; end-date recorded inline. Agents assist with log triage / dashboard-query formulation on request during the window.
 - [ ] Formatter consolidation: `black` pre-commit hook removed; `ruff-format` hook (from `astral-sh/ruff-pre-commit`) added. `black` removed from `pyproject.toml` dev dependencies. Verified by: `rg -w "black" .pre-commit-config.yaml pyproject.toml` returns zero; `ruff format --check .` green across repo; single PR scope.
 
 **L7 bake window:**
@@ -1342,7 +1342,7 @@ Before L5b (SessionDep alias flip) opens, ALL of the following must be verifiabl
 - [ ] Zero PAGE-severity alerts.
 - [ ] All `Captured→shrink` allowlists empty (meta-guard `test_architecture_allowlists_empty_at_L7` green).
 - [ ] mypy strict ratcheting green.
-- [ ] Incident-commander sign-off recorded.
+- [ ] User confirms the bake-window observations pass all gate criteria; confirmation recorded in the L7 PR description before the `v2.0.0` tag lands.
 
 **L7 exit criteria:**
 
@@ -1959,8 +1959,9 @@ This is the authoritative table of every AST-scanning / layer-scoped / meta-guar
 | `test_foundation_modules_import` | New | L0 | `tests/unit/architecture/test_foundation_modules_import.py` | Empty | N/A | N/A |
 | `test_openapi_byte_stability` | New | L0 | `tests/migration/test_openapi_byte_stability.py` | Empty (byte-hash of OpenAPI snapshot) | N/A | N/A |
 | `test_mcp_tool_inventory_frozen` | New | L0 | `tests/migration/test_mcp_tool_inventory_frozen.py` | Empty | N/A | N/A |
-| `test_architecture_no_runtime_psycopg2` | New | L0 | `tests/unit/architecture/test_architecture_no_runtime_psycopg2.py` | Captured→shrink (3 import sites per Decision 2) | L7 shrinks only if background_sync_service.py sunsets | N/A |
-| `test_architecture_get_db_connection_callers_allowlist` | New | L0 | `tests/unit/architecture/test_architecture_get_db_connection_callers_allowlist.py` | Frozen (1 file: `run_all_services.py`) | Frozen; changes require Decision 2 revisit | N/A |
+| `test_architecture_no_runtime_psycopg2` | Landed pre-L0 (commit `64cf0125`) | L0 | `tests/unit/architecture/test_architecture_no_runtime_psycopg2.py` | Captured→shrink (1 import site — `db_config.py` only; under D3 2026-04-16 the 3-entry allowlist prescribed by agent-f §F1.1.1 collapses to 1 because `background_sync_db.py` is never written and `database_session.py` does not explicitly import psycopg2) | Stays at 1 through v2.0; shrink only if DatabaseConnection sunsets post-v2.0 | N/A |
+| `test_architecture_get_db_connection_callers_allowlist` | Landed pre-L0 (commit `64cf0125`) | L0 | `tests/unit/architecture/test_architecture_get_db_connection_callers_allowlist.py` | Frozen (1 file: `run_all_services.py`) | Frozen; changes require Decision 2 revisit | N/A |
+| `test_architecture_no_module_level_get_engine` (F6.2.6) | Landed pre-L0 (commit `64cf0125`) | L0 | `tests/unit/architecture/test_architecture_no_module_level_get_engine.py` | Frozen (empty); new violations fail immediately | N/A — Risk #33 mitigation; per `async-audit/agent-f-nonsurface-inventory.md:980-983, 1005, 1336, 1547` | N/A |
 | `test_architecture_dtos_at_boundary` | New | L4 | `tests/unit/architecture/test_architecture_dtos_at_boundary.py` | Captured→shrink | L7 zero | N/A |
 | `test_architecture_no_new_sync_sites_post_l4` | New | L4 EXIT | `tests/unit/architecture/test_architecture_no_new_sync_sites_post_l4.py` | Frozen inventory (snapshot captured at L4 EXIT) | Frozen until L5e; retired at L5e exit | N/A |
 | `test_architecture_factory_inherits_async_base` | New | L5a (Spike 4.25) | `tests/unit/architecture/test_architecture_factory_inherits_async_base.py` | Empty | N/A | N/A |
@@ -2032,13 +2033,13 @@ This is the authoritative table of every AST-scanning / layer-scoped / meta-guar
 
 ## Section 6.5 — Monitoring & Alert Runbook
 
-> **Who reads this:** On-call engineers during migration cutovers (L1a flag flip, L2 Flask removal, L5b SessionDep alias flip). Ops staff setting up Datadog/Grafana dashboards. PR reviewers validating that each layer has appropriate observability before entry.
+> **Who reads this:** The user during migration cutovers (L1a flag flip, L2 Flask removal, L5b SessionDep alias flip) — the user is the incident commander. Reviewer agents validating that each layer has appropriate observability before entry. Agents assisting with dashboard-query formulation and log triage on request.
 >
-> **What this covers:** The `admin-migration-health` dashboard spec, 8 alert rules with severity + action, per-layer entry-gate observability checklist, on-call handoff table, post-incident procedure, and per-layer instrumentation work items.
+> **What this covers:** The `admin-migration-health` dashboard spec, 8 alert rules with severity + action, per-layer entry-gate observability checklist, bake-window monitoring mechanics, post-incident procedure, and per-layer instrumentation work items.
 
 ### Dashboard: `admin-migration-health`
 
-Single dashboard, tab-per-concern. Lives in Datadog (or equivalent). Owned by the platform team for duration of v2.0 migration; deleted at L7 exit + 30 days.
+Single dashboard, tab-per-concern. Lives in Datadog (or equivalent). Maintained for the duration of v2.0 migration; the dashboard config is committed under `docs/deployment/dashboards/admin-migration-health.json` so any agent can re-create it from the spec. Deleted at L7 exit + 30 days.
 
 **Traffic panels:**
 - Request rate (req/s) by route prefix: `/admin`, `/mcp`, `/a2a`, `/api/v1`, `/healthz`, `/readyz`
@@ -2117,27 +2118,32 @@ Each layer entry gate requires the following observability artifacts in place BE
 **L5d3 entry:**
 - [ ] Per-repository async/sync mix panel live (detects mis-converted call sites)
 
-### On-call handoff table
+### Bake-window monitoring policy
 
-All values `[TBD]` pending assignment per §6 Ownership & Bus-Factor (see `.claude/notes/flask-to-fastapi/CLAUDE.md` Ownership section). Populate before L0 sprint kickoff.
+The user is the incident commander for every bake. Agents assist with log triage, dashboard-query formulation, and root-cause analysis on request — they do not own the pager. The user schedules each bake when the user is available to watch the dashboard; that is the only calendar constraint.
 
-| Layer | Primary on-call | Backup on-call | Pager policy | Notes |
-|-------|----------------|----------------|--------------|-------|
-| L0 | [TBD] | [TBD] | Business hours only | Pure-addition, low risk |
-| L1a | [TBD] | [TBD] | 24/7 during bake | Middleware stack goes live |
-| L1b | [TBD] | [TBD] | **24/7 + escalation to platform lead** | OAuth flip — user-visible |
-| L1c | [TBD] | [TBD] | Business hours | Low-risk HTML |
-| L1d | [TBD] | [TBD] | 24/7 during bake | High-risk HTML + APIs |
-| L2 | [TBD] | [TBD] | **24/7 + 48h bake pager** | Flask removal — irreversible |
-| L3 | [TBD] | [TBD] | Business hours | Test-harness modernization |
-| L4 | [TBD] | [TBD] | Business hours | FastAPI-native refinement |
-| L5a | [TBD] | [TBD] | Business hours | Spikes only |
-| L5b | [TBD] | [TBD] | 24/7 during bake | Async alias flip |
-| L5c | [TBD] | [TBD] | 24/7 during bake | 3-router async pilot |
-| L5d1-d5 | [TBD] | [TBD] | 24/7 during each bake | Bulk async conversion sub-PRs |
-| L5e | [TBD] | [TBD] | 24/7 during bake | Final async sweep |
-| L6 | [TBD] | [TBD] | Business hours | Native refinements |
-| L7 | [TBD] | [TBD] | **24/7 + escalation** | Release layer |
+| Layer | Bake duration | Monitoring intensity | Notes |
+|-------|---------------|---------------------|-------|
+| L0 | None (internal) | Agent review pass only | Pure-addition, low risk |
+| L1a | 24h | Active window (user watches dashboard) | Middleware stack goes live |
+| L1b | 48h | **Active window + escalation ready** | OAuth flip — user-visible |
+| L1c | 24h | Passive window (dashboard check every 4h) | Low-risk HTML |
+| L1d | 48h | Active window | High-risk HTML + APIs |
+| L2 | 48h | **Active window — irreversible cut** | Flask removal |
+| L3 | None (internal) | Agent review pass only | Test-harness modernization |
+| L4 | 24h | Passive window | FastAPI-native refinement |
+| L5a | None (spikes only) | Agent review pass only | Spikes only |
+| L5b | 48h | Active window | Async alias flip |
+| L5c | 48h | Active window | 3-router async pilot |
+| L5d1-d5 | 48h each | Active window per sub-PR | Bulk async conversion sub-PRs |
+| L5e | 48h | Active window | Final async sweep |
+| L6 | None (internal) | Agent review pass only | Native refinements |
+| L7 | 1 week | **Active window — release layer** | v2.0.0 tag |
+
+**Definitions:**
+- **Active window** — user watches the `admin-migration-health` dashboard live (or has PAGE-severity alerts routed to a channel the user is actively in). PAGE alerts trigger §5 rollback procedures within 15 minutes.
+- **Passive window** — user checks the dashboard at the intervals above; PAGE alerts route to a channel the user can respond to within 1 hour.
+- **Agent review pass only** — no production bake; merging requires the fresh-agent review pass + `make quality` green.
 
 ### Post-incident procedure
 
@@ -2230,6 +2236,10 @@ The following were considered for v2.0 and explicitly deferred to v2.1:
 - **Multi-worker scheduler lease design.** v2.0 ships single-worker per CLAUDE.md:133. DB-backed lease or advisory-lock scheme is a v2.1 feature (~5-8 days).
 
 - **Redis backend for SimpleAppCache.** In-process TTLCache is the v2.0 answer; `CacheBackend` Protocol preserves swap path to Redis in v2.1 without API changes at call sites.
+
+### Pre-existing tech debt (cataloged, not fixed in v2.0 pre-L0 PR)
+
+- **`examples/upstream_quickstart.py:258` — `adcp_proc` possibly-unbound**. Pre-existing defect verified against the pre-L0-PR start SHA `4514f54d` — NOT a regression introduced by the pre-L0 hardening PR, and not a migration blocker. File as a cleanup follow-up, NOT a gate on any layer.
 
 ---
 

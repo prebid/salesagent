@@ -342,7 +342,7 @@ make quality && tox -e integration && tox -e bdd  # green
 
 **Goal:** Port remaining 14 HTML routers (including webhook-preserving ones), 4 JSON API files with Category-2 error shape preservation. Delete Flask blueprints.
 
-**Prerequisites:** L1c merged. Team freeze announced 48h prior.
+**Prerequisites:** L1c merged. User has scheduled a 48h bake window and confirmed availability to monitor.
 
 **Knowledge to read:**
 - `flask-to-fastapi-adcp-safety.md` §1-7 — Category 1 vs 2 classification
