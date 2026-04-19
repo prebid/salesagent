@@ -494,7 +494,7 @@ These refactors are strict improvements under the CURRENT `scoped_session` world
 - [ ] `tests/unit/test_architecture_a2a_routes_grafted.py` — NEW from apps inventory. Walks `app.routes` and asserts `/a2a`, `/.well-known/agent-card.json`, `/agent.json` are top-level `Route` objects (NOT inside a `Mount`). Prevents future refactor from mounting A2A as a sub-app and breaking middleware propagation + `_replace_routes()`.
 - [ ] `tests/unit/test_foundation_modules_import.py` — smoke test that every foundation module imports cleanly
 - [ ] `tests/integration/test_schemas_discovery_external_contract.py` — contract test for `/schemas/adcp/v2.4/*` (first-order audit action #4)
-- [ ] **(total Wave 0 structural guards = 16)**
+- [ ] **(total Wave 0 structural guards = 48)** (authoritative source: `L0-implementation-plan-v2.md` §5)
 
 **L0 derivative items (2026-04-15 sharpening):**
 
