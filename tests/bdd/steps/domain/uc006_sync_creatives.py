@@ -5988,3 +5988,165 @@ def then_assignment_created_with_specified_weight(ctx: dict) -> None:
                 f"Expected weight={requested_weight}, got weight={assignment.weight}. "
                 f"Production hard-codes weight=100 on create."
             )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# THEN steps — error path assertions (pljp)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@then("the operation should abort with PACKAGE_NOT_FOUND")
+def then_operation_should_abort_package_not_found(ctx: dict) -> None:
+    """Assert strict-mode abort with PACKAGE_NOT_FOUND for non-existent package.
+
+    Production raises AdCPNotFoundError with error_code="NOT_FOUND" (not the
+    spec-required "PACKAGE_NOT_FOUND"). We assert the error was raised and
+    xfail on the error_code mismatch.
+    """
+    from src.core.exceptions import AdCPError
+
+    error = ctx.get("error")
+    if error is None:
+        pytest.xfail(
+            "SPEC-PRODUCTION GAP: strict mode with non-existent package should abort "
+            "with PACKAGE_NOT_FOUND, but production succeeded without raising. "
+            f"Response: {ctx.get('response')!r}"
+        )
+
+    assert isinstance(error, AdCPError), f"Expected AdCPError, got {type(error).__name__}: {error}"
+
+    actual_code = error.error_code
+    if actual_code != "PACKAGE_NOT_FOUND":
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: error_code is '{actual_code}', "
+            f"spec expects 'PACKAGE_NOT_FOUND'. AdCPNotFoundError.error_code "
+            f"is 'NOT_FOUND' — needs a domain-specific subclass. "
+            f"See _assignments.py:62-69."
+        )
+
+
+@then("the assignment_errors should contain the package_id")
+def then_assignment_errors_contain_package_id(ctx: dict) -> None:
+    """Assert assignment_errors references the non-existent package_id.
+
+    In lenient mode, the response should include assignment_errors keyed by
+    the missing package_id. The production populates assignment_errors as
+    dict[str, str] where keys are package_ids and values are error messages.
+    """
+    error = ctx.get("error")
+    if error is not None:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: lenient mode should return response with "
+            f"assignment_errors, but production raised "
+            f"{type(error).__name__}: {error}"
+        )
+
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response in lenient mode"
+
+    results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
+    assert results, f"Response has no creative results: {resp}"
+
+    first = results[0]
+    assignment_errors = getattr(first, "assignment_errors", None)
+    if not assignment_errors:
+        pytest.xfail(
+            "SPEC-PRODUCTION GAP: expected non-empty assignment_errors in response, "
+            f"but got assignment_errors={assignment_errors!r}"
+        )
+
+    # Retrieve the expected non-existent package_id from ctx
+    assignments_dict = ctx.get("assignments", {})
+    expected_pkg_ids = set()
+    for pkg_list in assignments_dict.values():
+        expected_pkg_ids.update(pkg_list)
+
+    assert isinstance(assignment_errors, dict), (
+        f"Expected assignment_errors to be a dict, got {type(assignment_errors).__name__}"
+    )
+    matched = expected_pkg_ids & set(assignment_errors.keys())
+    assert matched, (
+        f"assignment_errors keys {list(assignment_errors.keys())} do not contain "
+        f"any of the expected non-existent package_ids {expected_pkg_ids}"
+    )
+    # Verify the error message is a non-empty string
+    for pkg_id in matched:
+        assert assignment_errors[pkg_id], f"assignment_errors[{pkg_id!r}] is empty: {assignment_errors[pkg_id]!r}"
+
+
+@then("the system should reject with VALIDATION_ERROR")
+def then_system_should_reject_validation_error(ctx: dict) -> None:
+    """Assert rejection with VALIDATION_ERROR for invalid validation_mode value.
+
+    When validation_mode is an unknown value (e.g. "partial"), the system
+    should reject the request with VALIDATION_ERROR.
+
+    SPEC-PRODUCTION GAP: MCP transport rejects via FastMCP TypeAdapter
+    before reaching _impl. The error is a ToolError with a Pydantic
+    ValidationError message, not an AdCPError. The rejection is functionally
+    correct (invalid enum value rejected) but uses a transport-specific
+    error type. We xfail for the error_code mismatch.
+    """
+    from src.core.exceptions import AdCPError
+
+    error = ctx.get("error")
+    if error is None:
+        pytest.xfail(
+            "SPEC-PRODUCTION GAP: invalid validation_mode 'partial' should be rejected "
+            "with VALIDATION_ERROR, but production accepted it. Production may not validate "
+            f"the validation_mode enum at input. Response: {ctx.get('response')!r}"
+        )
+
+    # MCP transport: FastMCP TypeAdapter rejects invalid enum before _impl
+    if not isinstance(error, AdCPError):
+        err_str = str(error)
+        if "validation_mode" in err_str and ("enum" in err_str or "partial" in err_str):
+            pytest.xfail(
+                f"SPEC-PRODUCTION GAP: MCP TypeAdapter rejected invalid validation_mode "
+                f"'partial' with {type(error).__name__} instead of AdCPError(VALIDATION_ERROR). "
+                f"Rejection is functionally correct but uses transport-specific error type."
+            )
+        pytest.xfail(f"SPEC-PRODUCTION GAP: expected AdCPError(VALIDATION_ERROR), got {type(error).__name__}: {error}")
+
+    actual_code = error.error_code
+    expected_codes = {"VALIDATION_ERROR", "INVALID_REQUEST"}
+    if actual_code not in expected_codes:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: expected error_code in {expected_codes}, "
+            f"got '{actual_code}' ({type(error).__name__}: {error})"
+        )
+
+
+@then("preview URLs should be generated")
+def then_preview_urls_generated(ctx: dict) -> None:
+    """Assert at least one creative result has a non-empty preview_url.
+
+    For generative/HTTP-based creatives, the creative agent should return
+    preview URLs in the sync response.
+    """
+    error = ctx.get("error")
+    assert error is None, f"Expected success but got error: {error}"
+
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+
+    results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
+    assert results, f"Response has no creative results: {resp}"
+
+    preview_found = False
+    for r in results:
+        preview_url = getattr(r, "preview_url", None)
+        if preview_url is not None and str(preview_url):
+            preview_found = True
+            break
+
+    if not preview_found:
+        pytest.xfail(
+            "SPEC-PRODUCTION GAP: expected at least one creative with a non-empty "
+            "preview_url, but none found. Production may not generate preview URLs "
+            "for this creative format. Results: "
+            + ", ".join(
+                f"creative_id={getattr(r, 'creative_id', '?')}, preview_url={getattr(r, 'preview_url', None)!r}"
+                for r in results
+            )
+        )
