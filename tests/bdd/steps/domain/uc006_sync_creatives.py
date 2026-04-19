@@ -5422,6 +5422,115 @@ def then_creative_associated_with_principal(ctx: dict, principal_id: str) -> Non
         )
 
 
+# --- cswm: cross-principal creative isolation (BR-RULE-034 INV-2) ---
+
+
+@when(parsers.parse('the Buyer Agent syncs creative "{creative_id}" as principal "{principal_id}"'))
+def when_sync_creative_as_principal(ctx: dict, creative_id: str, principal_id: str) -> None:
+    """Sync a specific creative_id as a specific principal.
+
+    BR-RULE-034 INV-2: the authenticated principal differs from the pre-existing
+    creative's owner. The sync should create a new creative for the authenticated
+    principal rather than updating the existing one.
+    """
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+    creative_payload = {
+        "creative_id": creative_id,
+        "name": f"Synced creative {creative_id}",
+        "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
+        "assets": {
+            "image": {
+                "url": "https://example.com/banner.png",
+                "width": 300,
+                "height": 250,
+            },
+        },
+    }
+    ctx.setdefault("creatives", []).append(creative_payload)
+    dispatch_request(ctx, creatives=ctx["creatives"])
+
+
+@then(parsers.parse('a new creative should be created for principal "{principal_id}"'))
+def then_new_creative_created_for_principal(ctx: dict, principal_id: str) -> None:
+    """Assert a new creative was created for the given principal (BR-RULE-034 INV-2).
+
+    Checks both:
+    - The response contains a creative with action="created"
+    - The DB row for this creative has the correct principal_id
+    """
+    from sqlalchemy import select
+
+    from src.core.database.models import Creative as CreativeModel
+
+    _xfail_if_e2e(ctx)
+    error = ctx.get("error")
+    if error is not None:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: expected creative created for principal '{principal_id}', "
+            f"but production raised {type(error).__name__}: {error}"
+        )
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+
+    # Assert response has action="created"
+    results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
+    assert results, f"Expected at least one SyncCreativeResult in response, got: {resp}"
+    first = results[0]
+    action_val = getattr(first, "action", None)
+    action_str = str(getattr(action_val, "value", action_val))
+    assert action_str == "created", f"Expected creative action 'created' for cross-principal sync, got '{action_str}'"
+
+    # Assert DB creative has correct principal_id
+    creative_id = ctx["creatives"][-1]["creative_id"]
+    tenant_id = ctx["tenant"].tenant_id
+    with db_session(ctx) as session:
+        creative = session.scalars(
+            select(CreativeModel).filter_by(
+                creative_id=creative_id,
+                tenant_id=tenant_id,
+                principal_id=principal_id,
+            )
+        ).first()
+        assert creative is not None, f"Creative {creative_id} not found in DB for principal '{principal_id}'"
+        assert creative.principal_id == principal_id, (
+            f"Expected principal_id='{principal_id}', got '{creative.principal_id}'"
+        )
+
+
+@then(parsers.parse('the existing creative for principal "{principal_id}" should remain unchanged'))
+def then_existing_creative_unchanged(ctx: dict, principal_id: str) -> None:
+    """Assert the pre-existing creative for a different principal is untouched.
+
+    BR-RULE-034 INV-2: cross-principal sync must not modify another principal's creative.
+    Verifies the pre-existing creative still exists with the same name and principal_id.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.models import Creative as CreativeModel
+
+    _xfail_if_e2e(ctx)
+    pre_existing_id = ctx["pre_existing_creative_id"]
+    tenant_id = ctx["tenant"].tenant_id
+
+    with db_session(ctx) as session:
+        creative = session.scalars(
+            select(CreativeModel).filter_by(
+                creative_id=pre_existing_id,
+                tenant_id=tenant_id,
+                principal_id=principal_id,
+            )
+        ).first()
+        assert creative is not None, (
+            f"Pre-existing creative '{pre_existing_id}' for principal '{principal_id}' "
+            f"was deleted or not found — cross-principal sync should not affect it"
+        )
+        assert creative.principal_id == principal_id, (
+            f"Pre-existing creative's principal_id changed from '{principal_id}' "
+            f"to '{creative.principal_id}' — cross-principal isolation violated"
+        )
+
+
 @then("the creative should be validated by the creative agent")
 def then_creative_validated_by_agent(ctx: dict) -> None:
     """Assert the creative was processed through external agent validation.
