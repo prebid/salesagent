@@ -26,8 +26,8 @@ import pytest
 
 from tests.unit.architecture._ast_helpers import (
     FIXTURES_DIR,
-    REPO_ROOT,
     SRC,
+    find_stale_allowlist_entries,
     iter_python_files,
     read_allowlist,
     relpath,
@@ -77,15 +77,11 @@ def test_allowlist_shrinks_never_grows() -> None:
     MUST be removed from the allowlist (the list shrinks). Stale allowlist
     entries are a guard bug — they let real violations slip through.
     """
-    allowlist = read_allowlist(ALLOWLIST_FILE)
-    stale: list[str] = []
-    for rel in allowlist:
-        path = REPO_ROOT / rel
-        if not path.exists():
-            stale.append(f"{rel} (file does not exist)")
-            continue
-        if not _file_imports_flask(path):
-            stale.append(f"{rel} (no longer imports flask — remove from allowlist)")
+    stale = find_stale_allowlist_entries(
+        ALLOWLIST_FILE,
+        still_violates=_file_imports_flask,
+        removal_reason="no longer imports flask",
+    )
     assert not stale, "Stale entries in no_flask_imports.txt:\n" + "\n".join(f"  - {s}" for s in stale)
 
 

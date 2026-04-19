@@ -24,6 +24,7 @@ from tests.unit.architecture._ast_helpers import (
     FIXTURES_DIR,
     SRC,
     iter_python_files,
+    iter_route_decorator_calls,
     relpath,
 )
 
@@ -38,18 +39,13 @@ HTTP_METHODS = {"get", "post", "put", "delete", "patch", "head", "options", "api
 def _collect_route_names(tree: ast.AST, relpath_str: str) -> list[tuple[str, str, int]]:
     """Return (name, relpath, lineno) for every route decorator carrying a string ``name=``."""
     out: list[tuple[str, str, int]] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+    for _handler, deco in iter_route_decorator_calls(tree):
+        func = deco.func
+        if not isinstance(func, ast.Attribute) or func.attr not in HTTP_METHODS:
             continue
-        for deco in node.decorator_list:
-            if not isinstance(deco, ast.Call):
-                continue
-            func = deco.func
-            if not isinstance(func, ast.Attribute) or func.attr not in HTTP_METHODS:
-                continue
-            for kw in deco.keywords:
-                if kw.arg == "name" and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
-                    out.append((kw.value.value, relpath_str, deco.lineno))
+        for kw in deco.keywords:
+            if kw.arg == "name" and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+                out.append((kw.value.value, relpath_str, deco.lineno))
     return out
 
 

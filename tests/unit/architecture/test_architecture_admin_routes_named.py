@@ -25,6 +25,7 @@ from tests.unit.architecture._ast_helpers import (
     FIXTURES_DIR,
     SRC,
     iter_python_files,
+    iter_route_decorator_calls,
     relpath,
 )
 
@@ -39,18 +40,13 @@ HTTP_METHODS = {"get", "post", "put", "delete", "patch", "head", "options", "api
 
 def _iter_route_decorators(tree: ast.AST):
     """Yield (lineno, func_name, decorator_call_node) for every ``@router.<method>(...)`` decorator."""
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+    for handler, deco in iter_route_decorator_calls(tree):
+        func = deco.func
+        if not isinstance(func, ast.Attribute):
             continue
-        for deco in node.decorator_list:
-            if not isinstance(deco, ast.Call):
-                continue
-            func = deco.func
-            if not isinstance(func, ast.Attribute):
-                continue
-            if func.attr not in HTTP_METHODS:
-                continue
-            yield (deco.lineno, node.name, deco)
+        if func.attr not in HTTP_METHODS:
+            continue
+        yield (deco.lineno, handler.name, deco)
 
 
 def _has_name_kwarg(call: ast.Call) -> bool:

@@ -29,29 +29,21 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-SRC = REPO_ROOT / "src"
-TESTS = REPO_ROOT / "tests"
-SCRIPTS = REPO_ROOT / "scripts"
-FIXTURE = Path(__file__).resolve().parent / "fixtures" / "test_no_blueprints_meta_fixture.py.txt"
+from tests.unit.architecture._ast_helpers import (
+    FIXTURES_DIR,
+    REPO_ROOT,
+    SCRIPTS,
+    SRC,
+    TESTS,
+    iter_python_files,
+    relpath,
+)
+
+FIXTURE = FIXTURES_DIR / "test_no_blueprints_meta_fixture.py.txt"
 
 # FROZEN — no allowlist growth permitted. Imports of src.admin.blueprints
 # have been eliminated in the L0-00 rename commit.
 ALLOWLIST: frozenset[str] = frozenset()
-
-
-def _iter_python_files() -> list[Path]:
-    """Yield every .py under src/, tests/, scripts/ (minus __pycache__)."""
-    roots = [SRC, TESTS, SCRIPTS]
-    files: list[Path] = []
-    for root in roots:
-        if not root.exists():
-            continue
-        for p in root.rglob("*.py"):
-            if "__pycache__" in p.parts:
-                continue
-            files.append(p)
-    return files
 
 
 def _module_imports_blueprints(tree: ast.AST) -> bool:
@@ -77,10 +69,6 @@ def _file_imports_blueprints(path: Path) -> bool:
     return _module_imports_blueprints(tree)
 
 
-def _relpath(path: Path) -> str:
-    return path.relative_to(REPO_ROOT).as_posix()
-
-
 def test_blueprints_directory_does_not_exist() -> None:
     """The directory `src/admin/blueprints/` was renamed to `src/admin/routers/` in L0-00."""
     blueprints_dir = SRC / "admin" / "blueprints"
@@ -94,7 +82,7 @@ def test_blueprints_directory_does_not_exist() -> None:
 
 def test_no_src_admin_blueprints_imports() -> None:
     """No .py file under src/, tests/, scripts/ may import from src.admin.blueprints."""
-    violations = {_relpath(p) for p in _iter_python_files() if _file_imports_blueprints(p)}
+    violations = {relpath(p) for p in iter_python_files([SRC, TESTS, SCRIPTS]) if _file_imports_blueprints(p)}
     new_violations = violations - ALLOWLIST
     assert not new_violations, (
         "Imports of `src.admin.blueprints` detected. The module was renamed to "

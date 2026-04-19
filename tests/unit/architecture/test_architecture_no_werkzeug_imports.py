@@ -22,10 +22,10 @@ import pytest
 
 from tests.unit.architecture._ast_helpers import (
     FIXTURES_DIR,
-    REPO_ROOT,
     SCRIPTS,
     SRC,
     TESTS,
+    find_stale_allowlist_entries,
     iter_python_files,
     read_allowlist,
     relpath,
@@ -67,15 +67,11 @@ def test_no_new_werkzeug_imports() -> None:
 
 
 def test_allowlist_shrinks_never_grows() -> None:
-    allowlist = read_allowlist(ALLOWLIST_FILE)
-    stale: list[str] = []
-    for rel in allowlist:
-        path = REPO_ROOT / rel
-        if not path.exists():
-            stale.append(f"{rel} (file does not exist)")
-            continue
-        if not _file_imports_werkzeug(path):
-            stale.append(f"{rel} (no longer imports werkzeug — remove from allowlist)")
+    stale = find_stale_allowlist_entries(
+        ALLOWLIST_FILE,
+        still_violates=_file_imports_werkzeug,
+        removal_reason="no longer imports werkzeug",
+    )
     assert not stale, "Stale entries in no_werkzeug_imports.txt:\n" + "\n".join(f"  - {s}" for s in stale)
 
 

@@ -25,8 +25,8 @@ import pytest
 
 from tests.unit.architecture._ast_helpers import (
     FIXTURES_DIR,
-    REPO_ROOT,
     SRC,
+    find_stale_allowlist_entries,
     iter_python_files,
     read_allowlist,
     relpath,
@@ -72,15 +72,11 @@ def test_no_new_form_getlist_under_admin() -> None:
 
 
 def test_allowlist_shrinks_never_grows() -> None:
-    allowlist = read_allowlist(ALLOWLIST_FILE)
-    stale: list[str] = []
-    for rel in allowlist:
-        path = REPO_ROOT / rel
-        if not path.exists():
-            stale.append(f"{rel} (file does not exist)")
-            continue
-        if not _file_has(path):
-            stale.append(f"{rel} (no longer uses request.form.getlist — remove)")
+    stale = find_stale_allowlist_entries(
+        ALLOWLIST_FILE,
+        still_violates=_file_has,
+        removal_reason="no longer uses request.form.getlist",
+    )
     assert not stale, "Stale entries in no_form_getlist.txt:\n" + "\n".join(f"  - {s}" for s in stale)
 
 
