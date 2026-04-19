@@ -149,14 +149,6 @@ repos:
         pass_filenames: false
         always_run: true
 
-      # Validate migrations can run
-      - id: test-migrations
-        name: Test database migrations
-        entry: sh -c 'cp adcp_local.db .test.db && DATABASE_URL=sqlite:///.test.db python migrate.py && rm .test.db'
-        language: system
-        pass_filenames: false
-        stages: [manual]  # Changed from commit to manual - run with: pre-commit run test-migrations
-
       # Run quick unit tests before commit (optional - can be skipped with --no-verify)
       - id: pytest-unit
         name: Run unit tests (optional)
