@@ -1,0 +1,8 @@
+# Synthetic violator fixture for test_architecture_a2a_routes_grafted.py.
+# Emulates an app module that mounts A2A as a sub-app (Mount) instead of
+# grafting the routes onto the root app.
+from fastapi import FastAPI  # synthetic
+from starlette.routing import Mount  # synthetic
+
+app = FastAPI()
+app.router.routes.append(Mount("/a2a", app=a2a_app))  # noqa: F821

@@ -1,0 +1,9 @@
+# Synthetic violator fixture for test_architecture_csrf_exempt_covers_adcp.py.
+# Declares a CSRF_EXEMPT_PATHS tuple that MISSES several required paths
+# (`/a2a`, `/api/v1/`, `/admin/auth/oidc/callback`, `/admin/auth/gam/callback`,
+# `/agent.json`, `/.well-known/`, `/_internal/`). `.txt` extension so pytest
+# and the scanner do not pick it up as a production declaration.
+CSRF_EXEMPT_PATHS = (
+    "/mcp",
+    "/admin/auth/google/callback",
+)

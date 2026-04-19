@@ -1,0 +1,16 @@
+# Synthetic violator fixture for test_architecture_admin_route_names_unique.py.
+# Two decorators with the same `name=`. `.txt` so pytest and the scanner
+# treat it as data only.
+from fastapi import APIRouter  # synthetic
+
+router = APIRouter(prefix="/admin", include_in_schema=False)
+
+
+@router.get("/a", name="admin_dupe")
+def one():  # pragma: no cover
+    return {}
+
+
+@router.get("/b", name="admin_dupe")
+def two():  # pragma: no cover
+    return {}

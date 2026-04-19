@@ -1,0 +1,15 @@
+# Captured→shrink baseline for test_architecture_no_module_scope_create_app.py
+#
+# Test files that call `create_app()` at module scope (Flask-era pattern).
+# Retires at L2 when the Flask admin app is removed. Until then, this
+# allowlist MAY shrink but MUST NOT grow.
+#
+# One relative POSIX path per line. Blank lines and `#` comments ignored.
+# Seeded 2026-04-18 by L0-01.
+tests/admin/test_accounts_blueprint.py
+tests/admin/test_product_creation_integration.py
+tests/integration/conftest.py
+tests/integration/test_operations_approve_media_buy_no_lost_update.py
+tests/integration/test_product_deletion.py
+tests/integration/test_template_url_validation.py
+tests/integration/test_workflow_approval_no_lost_update.py

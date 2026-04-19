@@ -1,0 +1,11 @@
+# Synthetic violator fixture for test_architecture_admin_routes_named.py.
+# Route decorator without a `name=` kwarg. `.txt` so pytest and the
+# scanner skip it as production.
+from fastapi import APIRouter  # synthetic
+
+router = APIRouter(prefix="/admin", include_in_schema=False)
+
+
+@router.get("/no-name")
+def handler():  # pragma: no cover
+    return {}

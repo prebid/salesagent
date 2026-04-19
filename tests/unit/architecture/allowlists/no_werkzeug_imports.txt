@@ -1,0 +1,13 @@
+# Captured→shrink baseline for test_architecture_no_werkzeug_imports.py
+#
+# Files that currently import from `werkzeug`. This list MAY shrink but
+# MUST NOT grow. Retires entirely at L2 when Flask is removed.
+#
+# One relative POSIX path per line. Blank lines and `#` comments ignored.
+# Seeded 2026-04-18 by L0-01.
+src/admin/app.py
+src/admin/routers/authorized_properties.py
+src/admin/server.py
+tests/admin/conftest.py
+tests/admin/test_product_creation_integration.py
+tests/integration/test_template_url_validation.py

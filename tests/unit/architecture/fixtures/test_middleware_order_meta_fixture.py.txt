@@ -1,0 +1,5 @@
+# Synthetic violator fixture for test_architecture_middleware_order.py.
+# Declares MIDDLEWARE_STACK_VERSION at an arbitrary non-zero value with an
+# intentionally-mismatched middleware-stack size. `.txt` extension so pytest
+# and the scanner do not pick it up directly.
+MIDDLEWARE_STACK_VERSION = 7  # synthetic, does not match expected shape

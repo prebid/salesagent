@@ -1,0 +1,7 @@
+# Synthetic violator fixture for
+# test_architecture_scheduler_lifespan_composition.py.
+# A FastAPI(...) call with NO lifespan= kwarg. `.txt` so pytest and the
+# scanner skip it as production code.
+from fastapi import FastAPI  # synthetic
+
+app = FastAPI(title="bad app")  # missing lifespan=combine_lifespans(...)

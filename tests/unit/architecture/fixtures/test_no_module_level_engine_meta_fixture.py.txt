@@ -1,0 +1,6 @@
+# Synthetic violator fixture for test_architecture_no_module_level_engine.py.
+# Module-scope `create_engine(...)` call — the forbidden pattern. `.txt` so
+# pytest and the scanner skip it as production code.
+from sqlalchemy import create_engine  # synthetic
+
+engine = create_engine("postgresql://user:pass@localhost/db")  # noqa

@@ -1,0 +1,8 @@
+# Synthetic violator fixture — used ONLY by the meta-test in
+# test_architecture_no_flask_imports.py to prove the AST scanner
+# actually detects a `from flask import ...` statement.
+#
+# `.txt` extension on purpose so pytest collection skips it and the
+# no-flask-imports guard does not recursively flag it.
+from flask import Blueprint  # noqa: F401  (synthetic)
+import flask  # noqa: F401  (synthetic)

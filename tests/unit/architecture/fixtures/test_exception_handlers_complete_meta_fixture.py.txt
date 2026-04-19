@@ -1,0 +1,11 @@
+# Synthetic violator fixture for test_architecture_exception_handlers_complete.py.
+# Emulates an app module with only ONE exception handler registered —
+# below the L1a target of six. The scanner should count 1 from this file.
+from fastapi import FastAPI  # synthetic, not imported at runtime
+
+app = FastAPI()
+
+
+@app.exception_handler(Exception)
+async def handler(request, exc):  # pragma: no cover  (synthetic)
+    return None

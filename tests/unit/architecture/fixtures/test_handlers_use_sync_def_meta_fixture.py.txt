@@ -1,0 +1,5 @@
+# Synthetic violator fixture for test_architecture_handlers_use_sync_def.py.
+# An async handler-style function at module scope with a non-underscore name.
+# `.txt` extension so pytest skips it and the guard does not flag it.
+async def list_accounts(request):  # pragma: no cover  (synthetic)
+    return {"ok": True}

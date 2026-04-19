@@ -1,0 +1,12 @@
+# Synthetic violator fixture for
+# test_architecture_admin_routes_excluded_from_openapi.py.
+# Declares an APIRouter WITHOUT `include_in_schema=False`. `.txt` so pytest
+# and the scanner skip it as production code.
+from fastapi import APIRouter  # synthetic
+
+router = APIRouter(prefix="/admin")  # missing include_in_schema=False
+
+
+@router.get("/ping", name="admin_ping")
+def ping():  # pragma: no cover
+    return {"ok": True}

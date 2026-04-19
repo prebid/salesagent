@@ -1,0 +1,7 @@
+# Synthetic violator fixture for test_architecture_no_direct_env_access.py.
+# Two direct env-access calls — both should trip the detector. `.txt` so
+# pytest and the scanner skip it as production code.
+import os  # synthetic
+
+value_a = os.environ.get("FOO")
+value_b = os.getenv("BAR", "default")

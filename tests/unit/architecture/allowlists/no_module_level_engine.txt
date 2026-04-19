@@ -1,0 +1,11 @@
+# Captured→shrink baseline for test_architecture_no_module_level_engine.py
+#
+# Files under src/ that call `create_engine(...)` or `create_async_engine(...)`
+# at module scope. MAY shrink but MUST NOT grow. These are legacy caches
+# that bind an engine to a module import; they will be migrated to a
+# function-scope factory as part of the L0 foundation-modules work.
+#
+# One relative POSIX path per line. Blank lines and `#` comments ignored.
+# Seeded 2026-04-18 by L0-01.
+src/services/gam_inventory_service.py
+src/services/gam_orders_service.py

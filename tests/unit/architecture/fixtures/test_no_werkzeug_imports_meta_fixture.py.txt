@@ -1,0 +1,5 @@
+# Synthetic violator fixture for test_architecture_no_werkzeug_imports.py.
+# `.txt` extension so pytest skips it and the no-werkzeug guard does not
+# recursively flag it.
+from werkzeug.middleware.proxy_fix import ProxyFix  # noqa: F401  (synthetic)
+import werkzeug  # noqa: F401  (synthetic)

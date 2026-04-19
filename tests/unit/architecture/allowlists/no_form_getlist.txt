@@ -1,0 +1,12 @@
+# Captured→shrink baseline for test_architecture_form_getlist_parity.py
+#
+# Files under src/admin/ that still use `request.form.getlist(...)`
+# (Flask-era multi-value form pattern). MAY shrink but MUST NOT grow.
+# Retires at L2 when every admin router is ported to FastAPI and uses
+# `List[str] = Form(...)` instead.
+#
+# One relative POSIX path per line. Blank lines and `#` comments ignored.
+# Seeded 2026-04-18 by L0-01.
+src/admin/routers/authorized_properties.py
+src/admin/routers/inventory_profiles.py
+src/admin/routers/products.py

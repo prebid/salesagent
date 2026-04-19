@@ -1,0 +1,6 @@
+# Synthetic violator fixture for test_architecture_no_module_scope_create_app.py.
+# A module-scope `create_app()` call — the Flask-era pattern that blocks the
+# FastAPI TestClient transition. `.txt` so pytest and the scanner skip it.
+from src.admin.app import create_app  # synthetic
+
+app = create_app()  # noqa  (synthetic — module-scope side effect)

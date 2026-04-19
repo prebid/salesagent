@@ -1,0 +1,9 @@
+# Synthetic violator fixture for
+# test_architecture_approximated_middleware_path_gated.py.
+# Emulates an ApproximatedExternalDomainMiddleware whose dispatch logic
+# runs unconditionally (no path-prefix gate). `.txt` extension so pytest
+# and the scanner do not pick it up directly.
+class ApproximatedExternalDomainMiddleware:  # synthetic
+    async def dispatch(self, request, call_next):  # pragma: no cover
+        # No `if path.startswith("/admin")` or `if path.startswith("/tenant")` check.
+        return await call_next(request)

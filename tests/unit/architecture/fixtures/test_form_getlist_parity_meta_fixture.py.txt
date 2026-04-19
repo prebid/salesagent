@@ -1,0 +1,4 @@
+# Synthetic violator fixture for test_architecture_form_getlist_parity.py.
+# `.txt` so pytest and the scanner skip it.
+def handler(request):  # synthetic  # pragma: no cover
+    return request.form.getlist("field")

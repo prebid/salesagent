@@ -1,0 +1,48 @@
+# Captured→shrink baseline for test_architecture_no_flask_imports.py
+#
+# Files that currently import from `flask` or import `flask` directly.
+# This list MAY shrink but MUST NOT grow. Each file is removed as it is
+# ported to FastAPI under the Flask→FastAPI v2.0 migration (L1a → L2).
+#
+# One relative POSIX path per line. Blank lines and `#` comments ignored.
+# Seeded 2026-04-18 by L0-01.
+src/adapters/gam_inventory_discovery.py
+src/adapters/gam_reporting_api.py
+src/adapters/google_ad_manager.py
+src/adapters/mock_ad_server.py
+src/admin/app.py
+src/admin/auth_helpers.py
+src/admin/routers/accounts.py
+src/admin/routers/activity_stream.py
+src/admin/routers/adapters.py
+src/admin/routers/api.py
+src/admin/routers/auth.py
+src/admin/routers/authorized_properties.py
+src/admin/routers/core.py
+src/admin/routers/creative_agents.py
+src/admin/routers/creatives.py
+src/admin/routers/format_search.py
+src/admin/routers/gam.py
+src/admin/routers/inventory.py
+src/admin/routers/inventory_profiles.py
+src/admin/routers/oidc.py
+src/admin/routers/operations.py
+src/admin/routers/policy.py
+src/admin/routers/principals.py
+src/admin/routers/products.py
+src/admin/routers/public.py
+src/admin/routers/publisher_partners.py
+src/admin/routers/schemas.py
+src/admin/routers/settings.py
+src/admin/routers/signals_agents.py
+src/admin/routers/tenants.py
+src/admin/routers/users.py
+src/admin/routers/workflows.py
+src/admin/sync_api.py
+src/admin/tenant_management_api.py
+src/admin/tests/unit/test_auth.py
+src/admin/tests/unit/test_utils.py
+src/admin/utils/audit_decorator.py
+src/admin/utils/helpers.py
+src/services/background_sync_service.py
+src/services/gam_inventory_service.py

@@ -1,0 +1,5 @@
+# Synthetic violator fixture for test_architecture_no_async_db_access.py.
+# `.txt` extension so pytest skips it.
+async def handler():  # pragma: no cover  (synthetic)
+    async with get_db_session() as session:  # noqa: F821
+        return session
