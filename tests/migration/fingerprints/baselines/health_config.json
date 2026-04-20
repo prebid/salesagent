@@ -1,0 +1,15 @@
+{
+  "body_schema": {
+    "__type__": "object",
+    "keys": [
+      "component",
+      "message",
+      "service",
+      "status"
+    ]
+  },
+  "body_sha256": "4ccffbcde85dcb57b3a04b076d104608c359be32a70924db6b9b0b5cf28c9faa",
+  "content_type": "application/json",
+  "headers_of_interest": {},
+  "status_code": 200
+}

@@ -1,0 +1,13 @@
+{
+  "body_schema": {
+    "__type__": "object",
+    "keys": [
+      "adcp",
+      "supported_protocols"
+    ]
+  },
+  "body_sha256": "2c98ae38c71eab73a68703b7b03909e938bd433bd07d0ec62f598922654277a3",
+  "content_type": "application/json",
+  "headers_of_interest": {},
+  "status_code": 200
+}

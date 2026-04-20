@@ -1,0 +1,15 @@
+{
+  "body_schema": {
+    "__type__": "object",
+    "keys": [
+      "details",
+      "error_code",
+      "message",
+      "recovery"
+    ]
+  },
+  "body_sha256": "370588eea633244d262b95ceb7633af5859d44abc7af42a897ff97055db123b2",
+  "content_type": "application/json",
+  "headers_of_interest": {},
+  "status_code": 400
+}
