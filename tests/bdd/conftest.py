@@ -405,6 +405,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         is_a2a = "[a2a]" in nodeid or "[a2a-" in nodeid
         is_rest = "[rest]" in nodeid or "[rest-" in nodeid
         is_e2e_rest = "[e2e_rest]" in nodeid or "[e2e_rest-" in nodeid
+        is_impl = "[impl]" in nodeid or "[impl-" in nodeid
 
         # Transport-specific xfails: MCP wrappers don't accept certain filter params
         if is_mcp:
@@ -1356,17 +1357,18 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # UC-004 boundary scenarios: strict=False because some examples pass.
         # Invalid boundary values SHOULD fail validation but production doesn't validate.
         # Valid boundary values pass through fine.
-        # Graduated to selective xfail (only failing subset marked):
+        # Graduated to transport-aware selective xfail:
         # T-UC-004-boundary-attribution, T-UC-004-boundary-daily-breakdown,
-        # T-UC-004-boundary-account, T-UC-004-boundary-status-filter (transport-aware),
-        # T-UC-004-boundary-resolution (transport-aware), T-UC-004-boundary-ownership (transport-aware)
+        # T-UC-004-boundary-account, T-UC-004-boundary-status-filter,
+        # T-UC-004-boundary-resolution, T-UC-004-boundary-ownership,
+        # T-UC-004-boundary-reporting-dims, T-UC-004-boundary-sampling,
+        # T-UC-004-boundary-date-range
         _UC004_BOUNDARY_TAGS = {
-            "T-UC-004-boundary-reporting-dims",
-            "T-UC-004-boundary-sampling",
             "T-UC-004-boundary-credentials",
-            # All boundary examples fail on at least one transport:
-            "T-UC-004-boundary-date-range",
-            # Graduated: T-UC-004-boundary-ownership (impl-differs + rest-matches pass)
+            # Graduated: T-UC-004-boundary-reporting-dims (transport-aware selective below)
+            # Graduated: T-UC-004-boundary-sampling (transport-aware selective below)
+            # Graduated: T-UC-004-boundary-date-range (transport-aware selective below)
+            # Graduated: T-UC-004-boundary-ownership (transport-aware below)
         }
         if marker_names & _UC004_BOUNDARY_TAGS:
             item.add_marker(pytest.mark.xfail(reason="boundary validation partially implemented", strict=False))
@@ -1382,38 +1384,87 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     pytest.mark.xfail(reason="ownership boundary: validation gaps on some transports", strict=False)
                 )
 
+        # Graduated: T-UC-004-boundary-reporting-dims — all pass except:
+        # "metro but no system" fails on all transports;
+        # "geo without geo_level", "limit=0", "limit negative" fail on a2a only.
+        if "T-UC-004-boundary-reporting-dims" in marker_names:
+            _rdim_all_transport_fail = "geo_level=metro but no system" in nodeid
+            _rdim_a2a_only_fail = is_a2a and any(
+                s in nodeid for s in ("geo without geo_level", "limit=0 (below minimum)", "limit negative")
+            )
+            if _rdim_all_transport_fail or _rdim_a2a_only_fail:
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="reporting_dimensions boundary: validation gaps on some transports", strict=False
+                    )
+                )
+
+        # Graduated: T-UC-004-boundary-sampling — "Not provided" passes everywhere;
+        # "random"/"failures_only" pass on rest only; "Unknown string" passes on impl only.
+        if "T-UC-004-boundary-sampling" in marker_names:
+            _samp_not_rest_fail = not is_rest and any(
+                s in nodeid for s in ("random (first enum", "failures_only (last enum")
+            )
+            _samp_not_impl_fail = not is_impl and "Unknown string not in enum" in nodeid
+            if _samp_not_rest_fail or _samp_not_impl_fail:
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="sampling_method boundary: not implemented on this transport", strict=False
+                    )
+                )
+
+        # Graduated: T-UC-004-boundary-date-range — valid examples (before, omitted)
+        # pass on rest; invalid examples (equals, after) pass on impl.
+        if "T-UC-004-boundary-date-range" in marker_names:
+            _dr_valid_fail = not is_rest and any(s in nodeid for s in ("start_date before end_date", "dates omitted"))
+            _dr_invalid_fail = not is_impl and any(
+                s in nodeid for s in ("start_date equals end_date", "start_date after end_date")
+            )
+            if _dr_valid_fail or _dr_invalid_fail:
+                item.add_marker(
+                    pytest.mark.xfail(reason="date_range boundary: validation gaps on some transports", strict=False)
+                )
+
+        # Graduated: T-UC-004-boundary-attribution — invalid examples pass on impl/mcp/rest,
+        # valid examples pass on a2a. Transport-aware narrowing.
+        if "T-UC-004-boundary-attribution" in marker_names:
+            _aw_invalid = {"interval=0", "unit=weeks", "model=last_click", "unit=campaign with interval=2"}
+            _aw_valid = {
+                "empty object",
+                "post_click only",
+                "unit=campaign with interval=1",
+                "interval=1 (minimum",
+                "seller ignores",
+            }
+            _aw_is_invalid = any(s in nodeid for s in _aw_invalid)
+            _aw_is_valid = any(s in nodeid for s in _aw_valid)
+            # Invalid examples fail only on a2a; valid examples fail on impl/mcp/rest
+            if (_aw_is_invalid and is_a2a) or (_aw_is_valid and not is_a2a):
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="attribution_window boundary: production gaps on this transport", strict=False
+                    )
+                )
+
+        # Graduated: T-UC-004-boundary-account — transport-aware.
+        # "account_id present"/"brand + operator" (valid): fail on mcp/rest only.
+        # "both account_id"/"empty object" (invalid): fail on a2a only.
+        # "account_id not found" (invalid): fail on impl/a2a only.
+        # "omitted": already PASS everywhere.
+        if "T-UC-004-boundary-account" in marker_names:
+            _acc_valid_fail = (is_mcp or is_rest) and any(s in nodeid for s in ("account exists", "single match"))
+            _acc_invalid_a2a_fail = is_a2a and any(s in nodeid for s in ("both account_id", "empty object"))
+            _acc_notfound_fail = (is_impl or is_a2a) and "not found" in nodeid
+            if _acc_valid_fail or _acc_invalid_a2a_fail or _acc_notfound_fail:
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="delivery account boundary: production gaps on this transport", strict=False
+                    )
+                )
+
         # --- UC-004 boundary: selective xfail for graduated strong groups ---
         # Only the failing subset gets xfailed; clean-pass examples graduate to PASS.
         _UC004_BOUNDARY_SELECTIVE: list[tuple[str, set[str], str]] = [
-            # attribution_window: impl/mcp/rest valid tests + a2a invalid tests fail
-            # Clean-pass examples: both windows, model only, omitted
-            (
-                "T-UC-004-boundary-attribution",
-                {
-                    "empty object",
-                    "interval=0",
-                    "interval=1 (minimum",
-                    "model=last_click",
-                    "post_click only",
-                    "seller ignores",
-                    "unit=campaign with interval=1",
-                    "unit=campaign with interval=2",
-                    "unit=weeks",
-                },
-                "attribution_window boundary: production gaps on some transports",
-            ),
-            # delivery_account: a2a invalid + impl invalid + mcp/rest valid account_id/brand fail
-            # Clean-pass example: omitted (no account field)
-            (
-                "T-UC-004-boundary-account",
-                {
-                    "account_id present",
-                    "both account_id",
-                    "brand + operator",
-                    "empty object",
-                },
-                "delivery account boundary: production gaps on some transports",
-            ),
             # include_package_daily_breakdown: only non_boolean fails (all transports)
             (
                 "T-UC-004-boundary-daily-breakdown",
@@ -1511,12 +1562,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {"invalid_oneOf_both", "account_not_found", "empty_object"},
                 "delivery account validation not implemented — production accepts invalid account configs",
             ),
-            # sampling_method: not implemented in production (schema rejects, transport doesn't accept)
-            (
-                "T-UC-004-partition-sampling",
-                set(),  # ALL examples fail — schema/transport doesn't support sampling_method at all
-                "sampling_method not implemented in delivery _impl or transport wrappers",
-            ),
+            # Graduated: T-UC-004-partition-sampling (transport-aware block below)
+            # "not_provided" passes all transports; valid named methods pass on REST only.
             # status_filter: production doesn't validate unknown values or empty arrays
             (
                 "T-UC-004-partition-status-filter",
@@ -1547,6 +1594,22 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 if not substrings or any(s in nodeid for s in substrings):
                     item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
                 break
+
+        # Graduated: T-UC-004-partition-sampling — "not_provided" passes all transports;
+        # valid named methods (random, stratified, recent, failures_only) pass on REST only.
+        # Non-REST + named method → still fails; unknown_value → fails on all transports.
+        if "T-UC-004-partition-sampling" in marker_names and "not_provided" not in nodeid:
+            _samp_named = {"random", "stratified", "recent", "failures_only"}
+            _samp_is_named = any(s in nodeid for s in _samp_named)
+            if _samp_is_named and is_rest:
+                pass  # REST + named method → passes, no xfail
+            else:
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="sampling_method not implemented in delivery _impl or transport wrappers",
+                        strict=False,
+                    )
+                )
 
         # FIXME(salesagent-9vgz.80): catalog distinct type partition/boundary
         # Production accepts catalogs but never validates duplicate types or catalog_id
