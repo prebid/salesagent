@@ -309,7 +309,11 @@ def _fetch_target_media_buys(
 ) -> list[_MediaBuyData]:
     """Fetch media buys from database matching the request filters."""
     assert uow.media_buys is not None
-    filter_statuses = _resolve_status_filter(req.status_filter)
+    # Per AdCP spec: the default status filter (active-only) applies only when
+    # media_buy_ids AND buyer_refs are both omitted. When the caller specifies
+    # explicit IDs or refs, return all matching buys regardless of status.
+    has_explicit_ids = bool(req.media_buy_ids or req.buyer_refs)
+    filter_statuses = _resolve_status_filter(req.status_filter, skip_default=has_explicit_ids)
 
     buys = uow.media_buys.get_by_principal(
         principal_id,
@@ -332,16 +336,22 @@ def _fetch_target_media_buys(
             updated_at=buy.updated_at,
         )
         for buy in buys
-        if _compute_status(buy, today) in filter_statuses
+        if filter_statuses is None or _compute_status(buy, today) in filter_statuses
     ]
 
 
 def _resolve_status_filter(
     status_filter: MediaBuyStatus | Any | None,
-) -> set[MediaBuyStatus]:
-    """Resolve status_filter request field to a set of MediaBuyStatus values."""
+    *,
+    skip_default: bool = False,
+) -> set[MediaBuyStatus] | None:
+    """Resolve status_filter request field to a set of MediaBuyStatus values.
+
+    Returns None when no filtering should be applied (explicit IDs with no filter).
+    """
     if status_filter is None:
-        # Default: active only
+        if skip_default:
+            return None  # No filtering — return all statuses
         return {MediaBuyStatus.active}
 
     if isinstance(status_filter, RootModel):
