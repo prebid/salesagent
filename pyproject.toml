@@ -44,6 +44,7 @@ dependencies = [
     "babel>=2.17.0",
     "logfire>=4.16.0",
     "pydantic-ai>=0.3.0",
+    "pydantic-settings>=2.7.0",  # Flask→FastAPI L0-26: typed config module at L4
     # Security patches for transitive dependencies
     "pyjwt>=2.12.0",  # GHSA-752w-5fwx-jx9f
     "filelock>=3.20.3",  # GHSA-qmgc-5h2g-mvrw

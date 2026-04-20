@@ -295,6 +295,7 @@ repos:
           - fastmcp>=3.2.0
           - alembic>=1.13.0
           - pydantic>=2.12.0
+          - pydantic-settings>=2.7.0  # Flask→FastAPI L0-26: mypy typing for L4 Settings class
           - a2wsgi>=1.10.0  # WSGIMiddleware typing for src/app.py admin mount
           - fastapi>=0.100.0  # Required for app.mount() typing parity with runtime
           - starlette>=0.50.0  # Pin matches runtime; hook was resolving to older version via fastmcp
