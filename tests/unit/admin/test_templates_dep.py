@@ -128,9 +128,9 @@ def test_base_ctx_has_exactly_11_keys_no_more_no_less() -> None:
     request = _StubRequest()
     ctx = _call_get_base_context(request)
 
-    assert set(ctx.keys()) == EXPECTED_BASE_CTX_KEYS, (
-        f"BaseCtxDep returned keys {sorted(ctx.keys())}, " f"expected {sorted(EXPECTED_BASE_CTX_KEYS)}"
-    )
+    actual = set(ctx.keys())
+    expected = EXPECTED_BASE_CTX_KEYS
+    assert actual == expected, f"got {sorted(actual)}, want {sorted(expected)}"
 
 
 def test_base_ctx_messages_is_drained_list() -> None:

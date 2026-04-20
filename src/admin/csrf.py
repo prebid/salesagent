@@ -210,7 +210,7 @@ class CSRFOriginMiddleware:
         self.allowed_suffixes: tuple[str, ...] = tuple(s.lower() for s in allowed_origin_suffixes if s)
         if not self.allowed_origins and not self.allowed_suffixes:
             raise RuntimeError(
-                "CSRFOriginMiddleware requires at least one of " "allowed_origins or allowed_origin_suffixes"
+                "CSRFOriginMiddleware requires at least one of allowed_origins or allowed_origin_suffixes"
             )
 
     def _origin_allowed(self, normalized_origin: str) -> bool:
