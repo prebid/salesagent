@@ -1,6 +1,6 @@
 {
   "allowlist_file": "fixme_bootstrap.txt",
-  "allowlist_count": 132,
-  "committed_at": "2026-04-20",
-  "note": "Captured→shrink bootstrap of pre-existing allowlist entries without FIXMEs. See test_architecture_allowlist_fixme_coverage.py."
+  "allowlist_count": 281,
+  "committed_at": "2026-04-18",
+  "note": "Captured→shrink bootstrap of pre-existing allowlist entries without FIXMEs. See test_architecture_allowlist_fixme_coverage.py. Bumped 132 → 281 at L0-20 to absorb 149 template file:line entries added to hardcoded_admin_paths.txt — templates are non-Python artifacts and cannot carry a Python `# FIXME` comment; the L1a codemod-execution PR drops all 149 in the same commit that rewrites the templates."
 }

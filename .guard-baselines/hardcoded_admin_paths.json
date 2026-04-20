@@ -1,0 +1,6 @@
+{
+  "allowlist_file": "hardcoded_admin_paths.txt",
+  "allowlist_count": 149,
+  "committed_at": "2026-04-18",
+  "note": "Captured→shrink baseline for test_templates_no_hardcoded_admin_paths.py. Seeded at L0-20 — the L1a codemod-execution PR drops every entry as it rewrites templates/ via scripts/codemod_script_root_to_url_for.py."
+}

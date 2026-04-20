@@ -1,0 +1,6 @@
+{
+  "allowlist_file": "templates_url_for_unknown_names.txt",
+  "allowlist_count": 54,
+  "committed_at": "2026-04-18",
+  "note": "Captured→shrink baseline for test_templates_url_for_resolves.py. Seeded at L0-20 with the 54 Flask-dotted url_for names currently in templates/. The L1a codemod rewrites every dotted name to admin_<bp>_<ep> and the allowlist drops to empty in the same PR."
+}
