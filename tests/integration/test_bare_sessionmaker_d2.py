@@ -26,26 +26,74 @@ import pytest
 
 
 @pytest.mark.requires_db
-def test_each_get_db_session_yields_fresh_instance(integration_db):
-    """Two sequential get_db_session() blocks yield distinct Session objects.
+def test_module_no_longer_exposes_scoped_session_accessor(integration_db):
+    """Post-L0-03, src.core.database.database_session has no
+    `get_scoped_session()` accessor.
 
-    Under scoped_session (pre-L0-03), the registry would hand back the
-    SAME Session instance on both calls (same thread -> same registry
-    entry). Under bare sessionmaker (post-L0-03), each call constructs
-    a fresh Session, so `id()` differs.
+    The most direct semantic of D2 is the absence of the thread-local
+    registry API. Pre-L0-03 the module exposed `get_scoped_session()`
+    which returned a `scoped_session` registry; callers invoked
+    `registry.remove()` for thread-local session lifecycle. Post-L0-03
+    the accessor is deleted and only the bare `_session_factory` remains.
+
+    Note: We assert on the public ACCESSOR, not on the `_scoped_session`
+    module global — test fixtures in tests/conftest_db.py and
+    tests/fixtures/integration_db.py still write to the global during
+    engine override (harmless dead attribute), so hasattr on the global
+    is not a reliable discriminator under the test harness.
+    """
+    import src.core.database.database_session as db_module
+
+    # Force lazy initialization so the full object graph is materialized.
+    db_module.get_engine()
+
+    assert not hasattr(db_module, "get_scoped_session"), (
+        "get_scoped_session() must be deleted under Decision D2. "
+        "Its continued existence signals a scoped_session registry "
+        "still lurks in the module."
+    )
+
+    # The bare session factory must be in place and callable.
+    assert db_module._session_factory is not None
+    from sqlalchemy.orm import Session
+
+    s = db_module._session_factory()
+    try:
+        assert isinstance(s, Session)
+    finally:
+        s.close()
+
+
+@pytest.mark.requires_db
+def test_nested_get_db_session_yields_distinct_instances(integration_db):
+    """Nested `with get_db_session()` blocks on the same thread yield distinct
+    Session instances.
+
+    This is THE bug scoped_session could introduce in a nested-session
+    call site (the PRE-1/2/3 refactors eliminated all known nested call
+    sites, but the language-level guarantee was only established by D2).
+    Under scoped_session with the thread-local registry still active,
+    the inner `with` block would receive the SAME Session instance as
+    the outer — so `id(inner) == id(outer)`. Under bare sessionmaker,
+    each block gets a fresh Session with a distinct id.
+
+    Both sessions are held open simultaneously, so object-id reuse from
+    garbage collection cannot confound the identity check.
     """
     from src.core.database.database_session import get_db_session
 
-    with get_db_session() as s1:
-        id_s1 = id(s1)
-    with get_db_session() as s2:
-        id_s2 = id(s2)
-
-    assert id_s1 != id_s2, (
-        "Expected distinct Session instances from two sequential "
-        "get_db_session() calls (bare sessionmaker D2). Same id suggests "
-        "scoped_session registry is still active."
-    )
+    with get_db_session() as outer:
+        outer_id = id(outer)
+        with get_db_session() as inner:
+            inner_id = id(inner)
+            # Both sessions are alive simultaneously here.
+            assert outer_id != inner_id, (
+                "Nested get_db_session() blocks yielded the SAME Session "
+                "instance — scoped_session's thread-local registry is "
+                f"still active (id(outer)={outer_id}, id(inner)={inner_id}). "
+                "Under Decision D2 bare sessionmaker, each block must "
+                "construct a fresh Session."
+            )
 
 
 @pytest.mark.requires_db
@@ -53,26 +101,35 @@ def test_concurrent_get_db_session_in_threads_yields_independent_sessions(integr
     """Concurrent threadpool invocations get independent Session instances.
 
     FastAPI's AnyIO threadpool reuses threads across requests. Under
-    scoped_session, two requests landing on the same reused thread
-    would share a Session via the thread-local registry — a state-leak
-    bug. Under bare sessionmaker, each `with get_db_session()` block
-    constructs a fresh Session regardless of which thread it runs on.
+    bare sessionmaker, each `with get_db_session()` block constructs a
+    fresh Session regardless of which thread it runs on. We hold each
+    Session open for the duration of a barrier-rendezvous so that all
+    workers' Sessions are alive simultaneously — no object-id reuse
+    from GC can confound the identity check.
     """
+    import threading
+
     from src.core.database.database_session import get_db_session
 
+    n_workers = 5
+    barrier = threading.Barrier(n_workers)
     ids: list[int] = []
+    ids_lock = threading.Lock()
 
     def capture():
         with get_db_session() as s:
-            ids.append(id(s))
+            barrier.wait(timeout=10)
+            with ids_lock:
+                ids.append(id(s))
+            barrier.wait(timeout=10)
 
-    with ThreadPoolExecutor(max_workers=5) as pool:
-        futures = [pool.submit(capture) for _ in range(5)]
+    with ThreadPoolExecutor(max_workers=n_workers) as pool:
+        futures = [pool.submit(capture) for _ in range(n_workers)]
         for f in futures:
             f.result()
 
-    assert len(set(ids)) == 5, (
-        f"Expected 5 distinct Session ids, got {len(set(ids))}: {ids}. "
-        "Duplicate ids indicate a thread-local session registry is still "
-        "active (scoped_session) or sessions are being reused across calls."
+    assert len(set(ids)) == n_workers, (
+        f"Expected {n_workers} distinct Session ids, got {len(set(ids))}: {ids}. "
+        "Duplicate ids (with all sessions alive simultaneously) indicate "
+        "sessions are being shared across concurrent workers."
     )
