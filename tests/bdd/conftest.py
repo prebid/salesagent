@@ -1631,6 +1631,32 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                         strict=False,
                     )
                 )
+            # FIXME(salesagent-arnp): fixture injection gap — test creates
+            # principals/media buys in-process; Docker DB doesn't see them.
+            _UC019_E2E_FIXTURE_INJECTION_TAGS: set[str] = {
+                "T-UC-019-inv-154-tenant",
+            }
+            if marker_names & _UC019_E2E_FIXTURE_INJECTION_TAGS:
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="e2e_rest: fixture injection gap — test data created in-process not visible to Docker DB",
+                        strict=False,
+                    )
+                )
+            # FIXME(salesagent-ool9): creative approval data created in-process
+            # is not visible to Docker — approval assertions fail on e2e_rest.
+            _UC019_E2E_CREATIVE_APPROVAL_TAGS: set[str] = {
+                "T-UC-019-inv-152-1",
+                "T-UC-019-inv-152-2",
+                "T-UC-019-inv-152-5",
+            }
+            if marker_names & _UC019_E2E_CREATIVE_APPROVAL_TAGS:
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="e2e_rest: creative approval data created in-process not visible to Docker DB",
+                        strict=False,
+                    )
+                )
 
         # --- UC-026: xfails for spec-production gaps ---
         # Transport wiring done (a3xo: MediaBuyDualEnv routes updates correctly).
