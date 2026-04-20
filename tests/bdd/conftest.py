@@ -557,11 +557,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     )
                 )
 
-        # FIXME(salesagent-y20i): UC-019 REST boundary-principal — REST auth middleware
+        # FIXME(salesagent-y20i): UC-019 REST/E2E_REST boundary-principal — auth middleware
         # returns 401 before the endpoint can produce spec-level business errors
         # (principal_id_missing, principal_not_found). Only affects invalid-principal
         # boundary examples; valid-principal examples pass.
-        if is_rest and "T-UC-019-boundary-principal" in marker_names:
+        # E2E_REST has the same issue: no auth_token → no x-adcp-auth header →
+        # Docker's auth middleware rejects before business logic runs.
+        if (is_rest or is_e2e_rest) and "T-UC-019-boundary-principal" in marker_names:
             _invalid_principal_patterns = (
                 "principal_id is null",
                 "principal_id is empty string",
