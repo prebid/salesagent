@@ -12,12 +12,23 @@ import os
 import re
 from contextlib import asynccontextmanager
 
+import anyio.to_thread
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastmcp.utilities.lifespan import combine_lifespans
 
 from src.core.main import mcp
+
+# AnyIO threadpool-limiter default. Sync FastAPI admin handlers run in
+# this threadpool; the AnyIO default is 40 tokens, which saturates under
+# admin OAuth bursts + adapter ``run_in_threadpool`` wraps (Decision 1
+# Path B). 80 tokens with a ~2× DB-connection worst case (§11.30) sit
+# under PG ``max_connections=100``. See §11.14.F for the canonical
+# derivation. Ops override via ``ADCP_THREADPOOL_TOKENS`` env var — the
+# deprecated draft name ``ADCP_THREADPOOL_SIZE`` is intentionally NOT
+# read to avoid silent mis-configuration.
+_DEFAULT_THREADPOOL_TOKENS = 80
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +59,15 @@ def _install_admin_mounts() -> None:
 @asynccontextmanager
 async def app_lifespan(app: FastAPI):
     """FastAPI application lifespan — startup and shutdown hooks."""
+    # L0-31: raise AnyIO threadpool-limiter token count BEFORE any request
+    # is served. Default is 40 tokens (anyio upstream); 80 covers observed
+    # peak admin load including adapter ``run_in_threadpool`` wraps under
+    # Decision 1 Path B. Canonical env-var name: ``ADCP_THREADPOOL_TOKENS``
+    # (§11.14.F). See src/app.py module header for the derivation.
+    _tokens = int(os.environ.get("ADCP_THREADPOOL_TOKENS", str(_DEFAULT_THREADPOOL_TOKENS)))
+    anyio.to_thread.current_default_thread_limiter().total_tokens = _tokens
+    logger.info("threadpool_limiter_configured tokens=%d", _tokens)
+
     _install_admin_mounts()
     logger.info("FastAPI application starting up")
     yield
