@@ -388,14 +388,7 @@ _REST_XFAIL_TAGS: set[str] = {
     "T-UC-005-inv-049-6-holds",  # responsive=false filter
     "T-UC-005-inv-049-7-holds",  # name_search filter
     "T-UC-005-inv-049-7-violated",
-    "T-UC-005-inv-049-9-holds",  # output_format_ids filter
-    "T-UC-005-inv-049-9-violated",
-    "T-UC-005-inv-049-9-edge",  # output_format_ids (format without field)
-    "T-UC-005-inv-049-9-nofield",
-    "T-UC-005-inv-049-10-holds",  # input_format_ids filter
-    "T-UC-005-inv-049-10-violated",
-    "T-UC-005-inv-049-10-edge",  # input_format_ids (format without field)
-    "T-UC-005-inv-049-10-nofield",
+    # Graduated: inv-049-9 and inv-049-10 (u04y: REST now passes these filters)
     "T-UC-005-inv-031-1-holds",  # multi-filter AND combination
     "T-UC-005-inv-031-1-violated",
 }
@@ -494,12 +487,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-005-inv-049-6-holds",
             "T-UC-005-inv-049-7-holds",
             "T-UC-005-inv-049-7-violated",
-            "T-UC-005-inv-049-9-holds",
-            "T-UC-005-inv-049-9-violated",
-            "T-UC-005-inv-049-9-nofield",
-            "T-UC-005-inv-049-10-holds",
-            "T-UC-005-inv-049-10-violated",
-            "T-UC-005-inv-049-10-nofield",
+            # Graduated: inv-049-9 and inv-049-10 (u04y: no e2e_rest variants exist)
             "T-UC-005-dim-boundary",
         }
         if is_e2e_rest and (marker_names & _UC005_E2E_FIXTURE_INJECTION_TAGS):
