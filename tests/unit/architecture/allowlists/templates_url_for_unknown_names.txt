@@ -1,0 +1,70 @@
+# Captured→shrink baseline for test_templates_url_for_resolves.py
+#
+# Per CLAUDE.md Critical Invariant #1 (url_for everywhere), every
+# `{{ url_for('name') }}` call in an admin Jinja template must resolve
+# against a FastAPI admin router's `name=` kwarg. At L0 no FastAPI admin
+# routers exist (Flask blueprints still own the routes), so this allowlist
+# captures the Flask-dotted names currently present in templates/. The L1a
+# codemod (scripts/codemod_script_root_to_url_for.py, L0-20 Green) rewrites
+# every dotted name to its flat admin_<bp>_<ep> equivalent; at L1a the
+# allowlist drops to empty in the same PR.
+#
+# One name per line. Blank lines and `#` comments ignored. This allowlist
+# MAY shrink but MUST NOT grow. A stale-entry test asserts every listed
+# name still appears in some template — cleaning up as the codemod runs.
+#
+# Seeded 2026-04-18 by L0-20.
+accounts.account_detail
+accounts.create_account
+accounts.edit_account
+accounts.list_accounts
+auth.gam_authorize
+auth.select_tenant
+auth.test_auth
+authorized_properties.create_property_tag
+authorized_properties.list_property_tags
+core.index
+creative_agents.add_creative_agent
+creative_agents.edit_creative_agent
+creative_agents.list_creative_agents
+creatives.index
+creatives.list_creatives
+creatives.review_creatives
+inventory_profiles.add_inventory_profile
+inventory_profiles.edit_inventory_profile
+inventory_profiles.list_inventory_profiles
+inventory_profiles.preview_inventory_profile
+inventory.get_inventory_list
+inventory.get_inventory_tree
+inventory.inventory_browser
+inventory.targeting_browser
+oidc.login
+operations.approve_media_buy
+operations.media_buy_detail
+operations.reporting
+operations.trigger_delivery_webhook
+principals.delete_webhook
+principals.edit_principal
+principals.list_principals
+principals.register_webhook
+principals.toggle_webhook
+products.add_product
+products.edit_product
+products.list_products
+public.provision_tenant
+public.signup_onboarding
+public.signup_start
+settings.add_authorized_domain
+settings.add_authorized_email
+settings.remove_authorized_domain
+settings.remove_authorized_email
+signals_agents.add_signals_agent
+signals_agents.edit_signals_agent
+signals_agents.list_signals_agents
+tenants.dashboard
+tenants.media_buys_list
+tenants.setup_checklist
+tenants.tenant_settings
+users.add_user
+users.list_users
+users.toggle_user

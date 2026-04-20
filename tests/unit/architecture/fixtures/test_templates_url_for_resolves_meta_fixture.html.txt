@@ -1,0 +1,8 @@
+{# Synthetic meta-fixture for test_templates_url_for_resolves.py.
+   Contains url_for() calls that reference NAMES which do not exist on any
+   admin FastAPI router. The detector must flag every reference as unknown.
+   `.txt` extension so neither pytest nor the template scanner picks it up
+   directly under tests/. #}
+<a href="{{ url_for('admin_nonexistent_endpoint', tenant_id=tenant_id) }}">Broken</a>
+<form action="{{ url_for('admin_also_not_a_real_route') }}">Broken too</form>
+<script src="{{ url_for('admin_third_missing_name', foo='bar') }}"></script>

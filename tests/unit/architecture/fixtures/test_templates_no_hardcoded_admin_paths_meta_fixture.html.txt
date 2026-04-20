@@ -1,0 +1,12 @@
+{# Synthetic meta-fixture for test_templates_no_hardcoded_admin_paths.py.
+   Plants one instance of every forbidden pattern. `.txt` extension so
+   neither pytest nor the template scanner picks it up directly under
+   tests/. #}
+<a href="{{ request.script_root }}/admin/page">script_root</a>
+<a href="{{ script_root }}/admin/page">bare script_root</a>
+<a href="{{ request.script_name }}/admin/page">script_name</a>
+<a href="{{ script_name }}/admin/page">bare script_name</a>
+<a href="{{ admin_prefix }}/page">admin_prefix</a>
+<a href="{{ static_prefix }}/page">static_prefix</a>
+<img src="/admin/legacy.png">
+<link rel="stylesheet" href="/static/legacy.css">
