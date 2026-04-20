@@ -57,11 +57,10 @@ def _preserve_db(request):
 
     # Restore engine if it was reset by previous test's teardown
     if db_mod._engine is None:
-        from sqlalchemy.orm import scoped_session, sessionmaker
+        from sqlalchemy.orm import sessionmaker
 
         db_mod._engine = _lifecycle_engine
         db_mod._session_factory = sessionmaker(autocommit=False, autoflush=False, bind=_lifecycle_engine)
-        db_mod._scoped_session = scoped_session(db_mod._session_factory)
 
     yield
 
@@ -133,7 +132,7 @@ def gam_lifecycle_db(gam_service_account_json):
 
     # Create tables and seed data
     from sqlalchemy import create_engine
-    from sqlalchemy.orm import scoped_session, sessionmaker
+    from sqlalchemy.orm import sessionmaker
 
     import src.core.database.models as all_models  # noqa: F401
     from src.core.database.database_session import _pydantic_json_serializer, reset_engine
@@ -148,7 +147,6 @@ def gam_lifecycle_db(gam_service_account_json):
 
     db_session_module._engine = engine
     db_session_module._session_factory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    db_session_module._scoped_session = scoped_session(db_session_module._session_factory)
 
     import src.core.context_manager
 
@@ -705,6 +703,6 @@ class TestGAMLifecycle:
             assert update_response.workflow_step_id is not None, "Guaranteed activation should produce a workflow step"
         else:
             # Error path: activation blocked because of guaranteed items
-            assert any("guaranteed" in str(e.message).lower() for e in update_response.errors), (
-                f"Error should mention guaranteed items: {update_response.errors}"
-            )
+            assert any(
+                "guaranteed" in str(e.message).lower() for e in update_response.errors
+            ), f"Error should mention guaranteed items: {update_response.errors}"

@@ -23,7 +23,7 @@ import psycopg2
 import pytest
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 from sqlalchemy import create_engine
-from sqlalchemy.orm import scoped_session, sessionmaker
+from sqlalchemy.orm import sessionmaker
 
 _PG_URL_PATTERN = re.compile(r"postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)")
 
@@ -128,7 +128,6 @@ def make_integration_db(
 
     db_session_module._engine = engine
     db_session_module._session_factory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    db_session_module._scoped_session = scoped_session(db_session_module._session_factory)
 
     # Reset context manager singleton
     import src.core.context_manager

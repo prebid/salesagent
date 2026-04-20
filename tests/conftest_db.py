@@ -38,7 +38,7 @@ def test_database(test_database_url):
 
     # Import all models FIRST
     from sqlalchemy import create_engine
-    from sqlalchemy.orm import scoped_session, sessionmaker
+    from sqlalchemy.orm import sessionmaker
 
     from src.core.database.models import (  # noqa: F401
         AdapterConfig,
@@ -92,7 +92,6 @@ def test_database(test_database_url):
 
     db_session_module._engine = engine
     db_session_module._session_factory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    db_session_module._scoped_session = scoped_session(db_session_module._session_factory)
 
     # Initialize with test data
     from src.core.database.database import init_db
@@ -391,7 +390,7 @@ def integration_db():
     # Create the database without running migrations
     # (migrations are for production, tests create tables directly)
     from sqlalchemy import create_engine
-    from sqlalchemy.orm import scoped_session, sessionmaker
+    from sqlalchemy.orm import sessionmaker
 
     # Import ALL models first, BEFORE using Base
     # This ensures all tables are registered in Base.metadata
@@ -477,7 +476,6 @@ def integration_db():
 
     db_session_module._engine = engine
     db_session_module._session_factory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    db_session_module._scoped_session = scoped_session(db_session_module._session_factory)
 
     # Reset context manager singleton so it uses the new database session
     # This is critical because ContextManager caches a session reference

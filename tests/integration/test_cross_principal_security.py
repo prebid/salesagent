@@ -107,21 +107,9 @@ class TestCrossPrincipalSecurity:
 
             session.commit()
 
-        # CRITICAL: Clear session identity map to prevent "closed transaction" errors
-        # The fixture created objects that are now in SQLAlchemy's identity map.
-        # When _sync_creatives_impl queries for these objects in a begin_nested() savepoint,
-        # SQLAlchemy returns the cached objects which are bound to the closed fixture transaction.
-        # Solution: Get a fresh session and call expire_all() to mark all cached objects as stale.
-        from src.core.database.database_session import get_scoped_session
-
-        scoped = get_scoped_session()
-        scoped.remove()  # Clear thread-local session registry
-
-        # Now force a new session and expire everything
-        session = scoped()
-        session.expire_all()  # Mark all objects in identity map as stale
-        session.close()
-        scoped.remove()  # Clean up again
+        # Under bare sessionmaker (Decision D2, L0-03), each `with get_db_session()`
+        # yields a fresh Session with its own identity map — no cross-block leakage.
+        # The pre-D2 identity-map-clearing workaround is no longer required.
 
     def test_list_creatives_cannot_see_other_principals_creatives(self):
         """Test that list_creatives only returns the authenticated principal's creatives.
@@ -245,15 +233,7 @@ class TestCrossPrincipalSecurity:
             session.add(creative_c)
             session.commit()
 
-        # Clear session identity map (same as main fixture)
-        from src.core.database.database_session import get_scoped_session
-
-        scoped = get_scoped_session()
-        scoped.remove()
-        session = scoped()
-        session.expire_all()
-        session.close()
-        scoped.remove()
+        # Under bare sessionmaker (Decision D2, L0-03), no identity-map clearing needed.
 
         # Principal A (from first tenant) tries to access creative from second tenant
         from src.core.tools.creatives import _list_creatives_impl
