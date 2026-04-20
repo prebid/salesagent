@@ -1,0 +1,19 @@
+"""Meta-fixture for test_architecture_harness_overrides_isolated.
+
+This file is scanned by the guard as a *positive* test case — it contains
+exactly the anti-pattern the guard rejects, so the guard's regex logic can
+be verified against a known-bad input. Do NOT remove the violations.
+"""
+
+from tests.harness._base import IntegrationEnv
+
+
+def test_bad_pattern_raw_override_assignment():
+    env = IntegrationEnv()
+    with env:
+        client = env.get_admin_client()
+        # VIOLATION: raw assignment to dependency_overrides instead of
+        # using env.override_dependency(...). This bypasses the scoped
+        # cleanup guarantee and can leak across tests under xdist.
+        env.admin_app.dependency_overrides[some_dep] = lambda: "x"
+        client.get("/admin/__probe")
