@@ -168,44 +168,24 @@ not optional — failing any one means the task is NOT complete.
 make quality
 ```
 
-### Gate 2: BDD verification (MANDATORY for BDD tasks)
-
-For BDD step tasks, run the FULL BDD suite (not just `-k <your_test>`):
-```bash
-scripts/run-test.sh tests/bdd/ --no-header -q --timeout=900 -n auto --dist loadfile
-```
-
-Then run the enumerator and **paste the output**:
-```bash
-uv run python3 scripts/enumerate_bdd_issues.py .tox/bdd.json
-```
-
-**Your task is NOT done unless:**
-1. `FAIL_REGRESSION: 0` — you introduced zero new failures
-2. `XFAIL_STEP_MISSING` decreased or stayed the same — you didn't break steps
-3. The specific tests from your task description show `passed` or `xfailed`
-   (with a REAL production-gap reason), NOT `StepDefinitionNotFoundError`
-
-**Paste the enumerator summary in your completion report.** If you don't
-paste it, the task will be reopened.
-
-### Gate 2b: Full test suite (for non-BDD tasks)
+### Gate 2: Full test suite (MANDATORY)
 ```bash
 ./run_all_tests.sh
 ```
 
-This starts Docker, runs all 5 suites via tox, tears down.
+This starts Docker, runs all 5 suites (unit, integration, e2e, admin, bdd)
+via tox, and tears down. Do NOT substitute with individual pytest
+commands — `./run_all_tests.sh` is the single source of truth.
 
-### Common Gate 2 failures and what to do
+**For BDD-only iteration** (between Gate 1 and Gate 2):
+```bash
+source .test-stack.env && tox -e bdd    # Stack must be up first
+```
+Check JSON results: `test-results/` or `.tox/bdd.json`. If you see 1000+
+skips, the E2E stack isn't connected — re-source `.test-stack.env`.
 
-**"Step already exists" but StepDefinitionNotFoundError persists:**
-Your step text doesn't match the Gherkin EXACTLY. Check quotes, spacing,
-parametrize placeholders. Use `ast-grep` to find your step, then compare
-to the feature file text character by character.
-
-**Tests pass with `-k <name>` but fail in full suite:**
-Another step in the same scenario is missing or broken. Run the full
-scenario, not just your step.
+JSON results are saved to `test-results/<ddmmyy_HHmm>/`. Use those to
+review results — background processes may crash and lose terminal output.
 
 **If any test fails, your implementation has a bug. Fix it before
 committing.** You started from a clean slate — every failure is yours.
@@ -256,24 +236,11 @@ When you remove a violation, also remove it from the guard's allowlist.
 
 When you finish all atoms:
 1. Report your baseline test results (from Step 3)
-2. Report your final test results (all gates)
-3. **Paste the `enumerate_bdd_issues.py` output** (for BDD tasks)
-4. Confirm zero regressions (baseline vs final)
-5. Report: files changed, tests added, final commit hash
-
-**COMPLETION CHECKLIST (BDD tasks):**
-```
-[ ] scripts/run-test.sh tests/bdd/ ran with 0 failures from MY changes
-[ ] enumerate_bdd_issues.py output pasted below
-[ ] XFAIL_STEP_MISSING count ≤ baseline (I didn't break other steps)
-[ ] FAIL_REGRESSION = 0 (I introduced no new failures)
-[ ] My specific tests show passed or xfailed(real reason), NOT StepNotFound
-```
+2. Report your final test results (all 3 gates)
+3. Confirm zero regressions (baseline vs final)
+4. Report: files changed, tests added, integration test results, final commit hash
 
 If you get stuck: report what you tried, why it failed, and the atom/task IDs.
-
-**DO NOT close a task without the checklist above. If you close without
-pasting the enumerator output, the task WILL be reopened.**
 
 ## Cleanup
 
