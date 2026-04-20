@@ -1,5 +1,7 @@
 # Flask → FastAPI v2.0.0 Migration — Mission Briefing
 
+> **L0 STATUS: COMPLETE (2026-04-19, tip `a2d3b350`).** All 33 L0 work items landed (L0-00..L0-32). Commit range `d2841632..a2d3b350`. 48 structural guards green, 5 Category-1 golden fingerprint baselines captured. Next layer entry: **L1a**. See §L1a pre-flight gotchas below for 6 L0-learned traps before beginning L1a.
+
 > **v2.0 STRATEGIC LAYERING (2026-04-14) — Layers 0-4 use SYNC, Layers 5-7 convert to ASYNC and polish.**
 >
 > v2.0 includes the FULL migration: Flask removal (L0-L2, sync handlers), test-harness modernization (L3), FastAPI-native pattern refinement still sync (L4), async conversion (L5), native refinements (L6), polish and ship (L7). The April 11 async pivot was reversed for L0-L4 after cost-benefit analysis — sync `def` admin handlers (Option C from deep audit §1.4) are correct during Flask removal. Async SQLAlchemy is Layer 5+ within v2.0, sequenced after Flask is gone and after the sync `SessionDep` boundary exists (so async becomes a 1-file alias flip at L5b, followed by mechanical conversion of ~60 commit sites and ~200 scalars/execute sites).
@@ -17,6 +19,24 @@
 This file is the **entry point** for any Claude Code session or engineer touching this migration. The companion docs are large (1k–3k lines each); this file is the map, not the territory. If you read nothing else, read the **Critical Invariants** section below — those are the six things that are easiest to forget and most destructive to miss.
 
 The **source of truth** for "am I ready to ship Wave N?" is `implementation-checklist.md`. Everything else is context.
+
+---
+
+## L1a pre-flight gotchas (learned during L0)
+
+These are six non-obvious traps surfaced while shipping the 33 L0 work items. Read all six before starting L1a — every one has the shape "looks fine at review time, ships as a regression."
+
+**Gotcha 1 — `/metrics` shadowing:** A naïve `/metrics` handler in FastAPI will shadow Flask's. The L0-19 delegate (`src/routes/metrics.py` at commit `aefa2a4d`) MUST forward to `src.core.metrics.get_metrics_text()`; do NOT stub as a placeholder. Both the Flask legacy handler and the L0-19 FastAPI delegate emit byte-equivalent output — if the delegate is stubbed, the FastAPI path silently returns empty metrics while the Flask path keeps working, and the divergence is invisible until L2 Flask-removal.
+
+**Gotcha 2 — `request.state.identity` vs `request.session` dual-resolution:** `UnifiedAuthMiddleware` (L0-10, commit `b643f29b`) populates `request.state.identity`; legacy Flask handlers still read `request.session["user"]`. L1a deps MUST accept both during dual-stack operation; unify on `request.state.identity` by end of L1a. Do NOT silently fall back to one or the other — the dep should fail fast if both are absent.
+
+**Gotcha 3 — `admin_redirect()` open-redirect contract:** The caller validates the target URL — the helper does NOT (L0-32 commit `4a4cbbf4`, doc at commit `9e11f6b1`). L1a handlers passing user-supplied URLs to `admin_redirect()` must pre-validate against an allowlist or a host-match check. The helper intentionally does no validation so that internal constants (OAuth callback URLs, static strings) don't pay a re-validation cost, but every caller that forwards untrusted input is an open-redirect waiting to ship.
+
+**Gotcha 4 — `SessionMiddleware same_site="lax"` is load-bearing:** `CSRFOriginMiddleware`'s "no Origin + no Referer → pass" branch (L0-06 commit `7ebffb40`) is not a loophole — it relies on SameSite=Lax blocking cross-site POSTs at the cookie level, so any request that reaches the CSRF middleware without an Origin header is already same-site by construction. Do NOT flip `SameSite` to `none` (or remove the cookie attribute) without re-architecting CSRF. The OIDC callback transit cookie is the ONLY `SameSite=None` cookie in the stack and it is CSRF-exempt by path.
+
+**Gotcha 5 — Template split:** `templates/error.html` (legacy Flask-variable shape: `error_title` / `error_message` / `back_url` / `error`) vs `templates/_fastapi_error.html` (L0-14 contract: `error_code` / `message` / `status_code`). Regression fix `273ede24` restored the legacy `error.html` variable contract after L0-14 accidentally rewrote it; the FastAPI-shape partial is used ONLY by L0-14's `content_negotiation.py` handler. L1a must NOT merge these two templates — the legacy form is still rendered by Flask handlers during dual-stack, and the variable names differ.
+
+**Gotcha 6 — `/metrics` dual-provider:** Post-L0-19, `/metrics` is served by BOTH Flask (legacy `src/admin/routers/core.py:403`) AND the L0-19 FastAPI delegate — outputs are byte-equivalent. L2 Flask-removal drops the Flask path; do NOT remove the FastAPI delegate during L1a–L1d cleanup. The feature-flag routing during L1a may send metrics scrapes to either side; both must work until L2.
 
 ---
 
@@ -421,7 +441,7 @@ Legacy "Wave" section headings predate the 8-layer rename. Translation:
 
 | Layer | Estimate (engineer-days) | Notes |
 |-------|-------------------------:|-------|
-| L0    | 5–7                      | Foundation modules, 11 sub-items, structural guards, golden fingerprints |
+| L0    | 5–7 (✅ COMPLETE)        | 33 tracked work items, 48 structural guards, golden fingerprints (5 Category-1 baselines), L0-00..L0-32 |
 | L1a   | 3–4                      | Middleware stack + codemod + flag |
 | L1b   | 4–5                      | OAuth + OIDC + session cutover |
 | L1c   | 4–5                      | 8 low-risk HTML routers (parallelizable across ~3 engineers) |
