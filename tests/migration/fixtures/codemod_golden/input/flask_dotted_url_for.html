@@ -1,6 +1,7 @@
-{# Fixture input: Flask dotted `url_for('blueprint.endpoint', ...)` names. These rewrite to
-   the flat `admin_<blueprint>_<endpoint>` form per foundation-modules §11.1. The `static`
-   name (Starlette's mount name) is preserved as-is. #}
+{# Fixture input: Flask-dotted name Jinja calls (blueprint-dot-endpoint inside the first
+   positional argument of a url_for call). These rewrite to the flat
+   admin-blueprint-endpoint form per foundation-modules sect 11.1. The static name
+   (Starlette's mount name) is preserved as-is. #}
 <a href="{{ url_for('accounts.list_accounts', tenant_id=tenant_id) }}" class="btn">Accounts</a>
 <a href="{{ url_for('accounts.create_account', tenant_id=tenant_id) }}" class="btn btn-primary">New Account</a>
 <form action="{{ url_for('products.add_product', tenant_id=tenant.tenant_id) }}" method="POST">
