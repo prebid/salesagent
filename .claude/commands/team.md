@@ -83,18 +83,33 @@ Task:
 share the same working directory and branch. Ensure parallel executors touch
 non-overlapping files to avoid conflicts.
 
-### Step 5: Monitor and coordinate
-- Executors send messages when they complete tasks or get stuck
-- Messages are delivered automatically — no polling needed
-- Use SendMessage to communicate with executors by name
-- When all executors report done, review their commits on the current branch
+### Step 5: Monitor, verify each executor, iterate
 
-### Step 6: Verify and commit
-After all executors complete:
-1. Run `./run_all_tests.sh` on the combined result (NOT just `make quality` —
-   the full suite including e2e and ui is mandatory)
-2. Review JSON results in `test-results/<ddmmyy_HHmm>/` if terminal output is lost
-3. Squash or organize commits if needed
+When an executor reports "done":
+
+1. **Read the task's `## Verify` section** (from `bd show <id>`)
+2. **Ask the executor to run the verify command and paste raw output.**
+   Use SendMessage: "Run this and paste the FULL output: `<verify command>`"
+3. **Check the output yourself.** Does it match the expected result?
+   - `0 failed` where the task promised 0 failed?
+   - The specific error pattern is gone?
+   - No new regressions introduced?
+4. **If verification fails → send the executor back.**
+   "Verification failed: output shows X but expected Y. Fix and re-verify."
+5. **Only accept completion when verification passes.**
+
+If a task has no `## Verify` section, ask the executor:
+"What command proves this task is done? Run it and paste the output."
+
+**DO NOT trust self-reported success.** The executor saying "all tests pass"
+is not verification. Seeing the actual command output IS verification.
+
+### Step 6: Verify combined result
+After all executors pass individual verification:
+1. Run `./run_all_tests.sh` on the combined result
+2. Review JSON results in `test-results/<ddmmyy_HHmm>/`
+3. If any new failures appear in the combined run that weren't in individual
+   runs, identify which executor's changes caused them and send back to fix
 4. Push if the user requests it
 
 **Test Integrity — ZERO TOLERANCE**: If any test fails in the combined result,
