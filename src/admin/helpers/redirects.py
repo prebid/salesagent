@@ -31,6 +31,37 @@ Obligations asserted at the test layer
 4. Absolute URLs (``https://...``) pass through unchanged in ``Location``.
 5. Relative URLs produced by ``url_for(...)`` pass through unchanged in
    ``Location`` (the helper does NOT rewrite or validate paths).
+
+.. warning::
+
+    **Open-redirect footgun — caller responsibility.**
+
+    ``admin_redirect(url, ...)`` performs **NO URL validation**. Passing a
+    caller-controlled value straight into ``url`` opens a classic
+    open-redirect hole: an attacker crafts ``?next=https://evil.example``,
+    the handler echoes ``next`` into ``admin_redirect``, and the user is
+    bounced off-site with the admin session cookie already sent.
+
+    Callers that accept ``?next=``, ``?return_to=``, ``?redirect_to=`` or
+    any other user-controlled redirect target MUST validate the value
+    before passing it in:
+
+    - **Reject absolute/external URLs** (``http://``, ``https://``, any
+      scheme — keep only relative paths starting with ``/``).
+    - **Reject protocol-relative URLs** (values starting with ``//`` —
+      browsers treat ``//evil.example`` as ``https://evil.example``).
+    - **Reject path-traversal inputs** (``..``, backslashes, CRLF) that
+      could break out of the intended path space.
+    - **Reject non-admin-prefixed paths** in admin contexts — if the
+      caller is an admin route, refuse to redirect outside ``/admin/`` or
+      ``/tenant/...`` unless the route has an explicit cross-surface
+      reason to do so.
+
+    For L0 the helper stays permissive because its only L0-wired callers
+    produce their ``url`` from ``url_for(...)`` (a server-side route
+    name — not user input). A later layer that introduces ``?next=``
+    handling MUST add a validator (e.g. ``is_safe_admin_redirect(url)``)
+    and call it before ``admin_redirect``.
 """
 
 from __future__ import annotations
