@@ -290,6 +290,7 @@ repos:
           - types-pytz
           - types-Markdown
           - types-waitress
+          - types-cachetools>=5.5.0
           - adcp==3.10.0  # Pinned to match resolved runtime version (pyproject.toml: adcp>=3.10.0)
           - fastmcp>=3.2.0
           - alembic>=1.13.0

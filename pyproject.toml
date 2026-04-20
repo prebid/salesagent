@@ -76,6 +76,7 @@ dev = [
     "types-requests>=2.32.4.20250913",
     "types-pytz>=2025.2.0.20250809",
     "types-waitress>=3.0.1.20250801",
+    "types-cachetools>=5.5.0",
 ]
 ui-tests = [
     "playwright==1.48.0",
@@ -103,6 +104,7 @@ dev = [
     "types-requests>=2.32.4.20250913",
     "types-pytz>=2025.2.0.20250809",
     "types-waitress>=3.0.1.20250801",
+    "types-cachetools>=5.5.0",
     "pytest-json-report>=1.5.0",
     "pytest-bdd>=7.0.0",
     "semgrep>=1.50.0",

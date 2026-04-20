@@ -154,6 +154,7 @@ dev = [
     { name = "pytest-mock" },
     { name = "pytest-timeout" },
     { name = "ruff" },
+    { name = "types-cachetools" },
     { name = "types-psycopg2" },
     { name = "types-pytz" },
     { name = "types-requests" },
@@ -184,6 +185,7 @@ dev = [
     { name = "pytest-timeout" },
     { name = "ruff" },
     { name = "semgrep" },
+    { name = "types-cachetools" },
     { name = "types-psycopg2" },
     { name = "types-pytz" },
     { name = "types-requests" },
@@ -247,6 +249,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8.0" },
     { name = "simple-websocket", specifier = ">=1.1.0" },
     { name = "sqlalchemy", specifier = ">=2.0.0" },
+    { name = "types-cachetools", marker = "extra == 'dev'", specifier = ">=5.5.0" },
     { name = "types-markdown", specifier = ">=3.4.2.10" },
     { name = "types-psycopg2", marker = "extra == 'dev'", specifier = ">=2.9.21.20251012" },
     { name = "types-pytz", specifier = ">=2025.2.0.20250809" },
@@ -279,6 +282,7 @@ dev = [
     { name = "pytest-timeout", specifier = ">=2.3.1" },
     { name = "ruff", specifier = ">=0.8.0" },
     { name = "semgrep", specifier = ">=1.50.0" },
+    { name = "types-cachetools", specifier = ">=5.5.0" },
     { name = "types-psycopg2", specifier = ">=2.9.21.20251012" },
     { name = "types-pytz", specifier = ">=2025.2.0.20250809" },
     { name = "types-requests", specifier = ">=2.32.4.20250913" },
@@ -4499,6 +4503,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/85/30/ff9ede605e3bd086b4dd842499814e128500621f7951ca1e5ce84bbf61b1/typer-0.21.0.tar.gz", hash = "sha256:c87c0d2b6eee3b49c5c64649ec92425492c14488096dfbc8a0c2799b2f6f9c53", size = 106781, upload-time = "2025-12-25T09:54:53.651Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e1/e4/5ebc1899d31d2b1601b32d21cfb4bba022ae6fce323d365f0448031b1660/typer-0.21.0-py3-none-any.whl", hash = "sha256:c79c01ca6b30af9fd48284058a7056ba0d3bf5cf10d0ff3d0c5b11b68c258ac6", size = 47109, upload-time = "2025-12-25T09:54:51.918Z" },
+]
+
+[[package]]
+name = "types-cachetools"
+version = "6.2.0.20260408"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ec/61/475b0e8f4a92e5e33affcc6f4e6344c6dee540824021d22f695ea170da63/types_cachetools-6.2.0.20260408.tar.gz", hash = "sha256:0d8ae2dd5ba0b4cfe6a55c34396dd0415f1be07d0033d84781cdc4ed9c2ebc6b", size = 9854, upload-time = "2026-04-08T04:31:49.665Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/bb/7d/579f50f4f004ee93c7d1baa95339591cac1fe02f4e3fb8fc0f900ee4a80f/types_cachetools-6.2.0.20260408-py3-none-any.whl", hash = "sha256:470e0b274737feae74beed3d764885bf4664002ecc393fba3778846b13ce92cb", size = 9350, upload-time = "2026-04-08T04:31:48.826Z" },
 ]
 
 [[package]]
