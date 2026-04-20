@@ -6396,11 +6396,14 @@ def then_response_includes_assignment_errors_for_nonexistent(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def _build_creative_payload(ctx: dict, creative_id: str) -> dict:
+def _build_creative_scope_payload(ctx: dict, creative_id: str) -> dict:
     """Build a creative payload and add it to ctx["creatives"].
 
     Shared helper for creative scope Given steps. Ensures tenant/principal
     exist, then builds a minimal payload with a known format_id.
+
+    NOTE: renamed from _build_creative_payload to avoid shadowing the
+    original at line 2526 which accepts provenance= keyword.
     """
     env = ctx["env"]
     _ensure_tenant_principal_from_db(ctx, env)
@@ -6464,7 +6467,7 @@ def _preseed_creative_for_principal(ctx: dict, creative_id: str, principal_id: s
     ctx["pre_existing_principal_id"] = principal_id
 
     # Build the creative payload for the sync request
-    _build_creative_payload(ctx, creative_id)
+    _build_creative_scope_payload(ctx, creative_id)
 
 
 @given(parsers.parse('creative "{creative_id}" does not exist for this principal'))
@@ -6474,7 +6477,7 @@ def given_creative_does_not_exist_for_principal(ctx: dict, creative_id: str) -> 
     The authenticated principal has no creative with this ID. The sync
     should create a new creative (action="created").
     """
-    _build_creative_payload(ctx, creative_id)
+    _build_creative_scope_payload(ctx, creative_id)
 
 
 @given(parsers.parse('creative "{creative_id}" exists for principal {principal_id}'))
