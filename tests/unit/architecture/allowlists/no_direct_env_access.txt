@@ -106,11 +106,24 @@ src/core/database/database.py:147
 src/core/database/database.py:238
 src/core/database/database.py:29
 src/core/database/database.py:37
-src/core/database/database_session.py:101
-src/core/database/database_session.py:121
+src/core/database/database_session.py:100
+src/core/database/database_session.py:120
+src/core/database/database_session.py:138
 src/core/database/database_session.py:139
 src/core/database/database_session.py:140
-src/core/database/database_session.py:141
+# L0-05..L0-15 foundation modules — env reads for session/OAuth/cache/bootstrap values.
+# These empty at L4 when pydantic-settings centralizes env access via src.core.config.
+src/admin/cache.py:132
+src/admin/cache.py:133
+src/admin/deps/auth.py:124
+src/admin/deps/auth.py:128
+src/admin/deps/auth.py:170
+src/admin/middleware/external_domain.py:148
+src/admin/middleware/external_domain.py:151
+src/admin/oauth.py:162
+src/admin/oauth.py:163
+src/admin/oauth.py:164
+src/admin/oauth.py:186
 src/core/database/db_config.py:144
 src/core/database/db_config.py:39
 src/core/database/db_config.py:46
