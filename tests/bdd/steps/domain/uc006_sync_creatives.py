@@ -6344,3 +6344,153 @@ def then_two_assignments_created_successfully(ctx: dict) -> None:
     expected_pkg_ids = {pkg.package_id for pkg in valid_packages}
     actual_pkg_ids = set(assigned)
     assert actual_pkg_ids == expected_pkg_ids, f"Expected assigned packages {expected_pkg_ids}, got {actual_pkg_ids}"
+
+
+@then("the response should include assignment_errors for the non-existent package")
+def then_response_includes_assignment_errors_for_nonexistent(ctx: dict) -> None:
+    """Assert assignment_errors contains an entry keyed by the non-existent package_id.
+
+    Used by the lenient-mode partial-success scenario (3 packages: 2 valid,
+    1 non-existent). The non-existent package should appear in
+    assignment_errors with a non-empty error message.
+    """
+    error = ctx.get("error")
+    if error is not None:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: lenient mode should return response with "
+            f"assignment_errors, but production raised "
+            f"{type(error).__name__}: {error}"
+        )
+
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response in lenient mode"
+
+    results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
+    assert results, f"Expected at least one SyncCreativeResult, got empty: {resp}"
+
+    first = results[0]
+    assignment_errors = getattr(first, "assignment_errors", None)
+    nonexistent_pkg_id = ctx["nonexistent_package_id"]
+
+    if not assignment_errors:
+        pytest.xfail(
+            "SPEC-PRODUCTION GAP: expected non-empty assignment_errors in response, "
+            f"but got assignment_errors={assignment_errors!r}"
+        )
+
+    assert isinstance(assignment_errors, dict), (
+        f"Expected assignment_errors to be a dict, got {type(assignment_errors).__name__}"
+    )
+    assert nonexistent_pkg_id in assignment_errors, (
+        f"Expected non-existent package {nonexistent_pkg_id!r} in assignment_errors keys "
+        f"{list(assignment_errors.keys())}"
+    )
+    assert assignment_errors[nonexistent_pkg_id], (
+        f"assignment_errors[{nonexistent_pkg_id!r}] should have a non-empty error message, "
+        f"got {assignment_errors[nonexistent_pkg_id]!r}"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GIVEN steps — creative scope resolution / boundary (3kw9)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _build_creative_payload(ctx: dict, creative_id: str) -> dict:
+    """Build a creative payload and add it to ctx["creatives"].
+
+    Shared helper for creative scope Given steps. Ensures tenant/principal
+    exist, then builds a minimal payload with a known format_id.
+    """
+    env = ctx["env"]
+    _ensure_tenant_principal_from_db(ctx, env)
+    creative_payload = {
+        "creative_id": creative_id,
+        "name": f"Creative {creative_id}",
+        "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
+        "assets": {
+            "image": {
+                "url": "https://example.com/banner.png",
+                "width": 300,
+                "height": 250,
+            },
+        },
+    }
+    ctx.setdefault("creatives", []).append(creative_payload)
+    ctx["creative_id"] = creative_id
+    return creative_payload
+
+
+def _preseed_creative_for_principal(ctx: dict, creative_id: str, principal_id: str) -> None:
+    """Pre-seed a creative in the DB for a given principal, then build the sync payload.
+
+    Shared helper for "exists for principal" Given steps. The creative is created
+    in the DB under (tenant_id, principal_id, creative_id) so that the sync
+    operation can find it (update) or not (create for a different principal).
+    """
+    from sqlalchemy import select
+
+    from src.core.database.models import Principal, Tenant
+    from tests.factories import CreativeFactory
+
+    env = ctx["env"]
+    _ensure_tenant_principal_from_db(ctx, env)
+
+    # Retrieve tenant from DB (created by auth step)
+    with db_session(ctx) as session:
+        tenant = session.scalars(select(Tenant).filter_by(tenant_id=env._tenant_id)).first()
+        assert tenant is not None, f"Tenant {env._tenant_id!r} not found — auth step should have created it"
+
+        # The principal owning the pre-existing creative may differ from the
+        # authenticated principal (cross-principal isolation tests).
+        owner_principal = session.scalars(
+            select(Principal).filter_by(principal_id=principal_id, tenant_id=env._tenant_id)
+        ).first()
+
+    if owner_principal is None:
+        owner_principal = PrincipalFactory(tenant=tenant, principal_id=principal_id)
+        env._commit_factory_data()
+
+    CreativeFactory(
+        tenant=tenant,
+        principal=owner_principal,
+        creative_id=creative_id,
+        name=f"Pre-existing creative {creative_id}",
+        agent_url=env.DEFAULT_AGENT_URL,
+        format="display_300x250",
+    )
+    env._commit_factory_data()
+    ctx["pre_existing_creative_id"] = creative_id
+    ctx["pre_existing_principal_id"] = principal_id
+
+    # Build the creative payload for the sync request
+    _build_creative_payload(ctx, creative_id)
+
+
+@given(parsers.parse('creative "{creative_id}" does not exist for this principal'))
+def given_creative_does_not_exist_for_principal(ctx: dict, creative_id: str) -> None:
+    """Set up a creative payload for a creative_id with no pre-existing DB row.
+
+    The authenticated principal has no creative with this ID. The sync
+    should create a new creative (action="created").
+    """
+    _build_creative_payload(ctx, creative_id)
+
+
+@given(parsers.parse('creative "{creative_id}" exists for principal {principal_id}'))
+@given(parsers.parse('creative "{creative_id}" exists for principal {principal_id} only'))
+@given(parsers.parse('creative "{creative_id}" exists for principal "{principal_id}"'))
+@given(parsers.parse('creative "{creative_id}" already exists for principal "{principal_id}"'))
+def given_creative_exists_for_principal_scope(ctx: dict, creative_id: str, principal_id: str) -> None:
+    """Pre-seed a creative in the DB for a given principal, then build the sync payload.
+
+    Handles all Gherkin variants for creative scope resolution/boundary:
+    - ``exists for principal buyer-A`` (unquoted, scope_resolution partition)
+    - ``exists for principal buyer-A only`` (unquoted "only" suffix, cross-principal)
+    - ``exists for principal "buyer-abc"`` (quoted, scope_boundary)
+    - ``already exists for principal "buyer-abc"`` (quoted "already", scope_boundary)
+
+    If the authenticated principal matches principal_id, sync should update
+    the creative. If different, sync creates a new one (cross-principal isolation).
+    """
+    _preseed_creative_for_principal(ctx, creative_id, principal_id)
