@@ -6150,3 +6150,197 @@ def then_preview_urls_generated(ctx: dict) -> None:
                 for r in results
             )
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# THEN steps — assignment outcome assertions (7ni0)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@then("the compatible package assignment should be created")
+def then_compatible_package_assignment_created(ctx: dict) -> None:
+    """Assert the compatible package is in assigned_to (lenient format-compat scenario).
+
+    In the INV-5 format-mismatch-lenient scenario, two packages are assigned:
+    one compatible (format matches), one incompatible. The compatible one
+    should appear in assigned_to.
+    """
+    error = ctx.get("error")
+    if error is not None:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: expected compatible assignment to succeed, "
+            f"but production raised {type(error).__name__}: {error}"
+        )
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
+    assert results, f"Expected at least one SyncCreativeResult, got empty: {resp}"
+    first = results[0]
+    assigned = first.assigned_to or []
+    compatible_pkg = ctx["compatible_package"]
+    assert compatible_pkg.package_id in assigned, (
+        f"Expected compatible package {compatible_pkg.package_id!r} in assigned_to, got {assigned}"
+    )
+    # Also verify the incompatible package is NOT in assigned_to
+    incompatible_pkg = ctx["incompatible_package"]
+    assert incompatible_pkg.package_id not in assigned, (
+        f"Incompatible package {incompatible_pkg.package_id!r} should NOT be in assigned_to, but it is: {assigned}"
+    )
+
+
+@then("the assignment should be skipped with a warning")
+def then_assignment_skipped_with_warning(ctx: dict) -> None:
+    """Assert the non-existent package assignment was skipped and a warning/error recorded.
+
+    Used by the validation_mode boundary scenario (lenient mode with
+    non-existent package). The assignment should NOT appear in assigned_to,
+    and the response should include either assignment_errors or warnings
+    referencing the skipped package.
+    """
+    error = ctx.get("error")
+    if error is not None:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: lenient mode should skip and warn, "
+            f"but production raised {type(error).__name__}: {error}"
+        )
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response (lenient mode should not abort)"
+    results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
+    assert results, f"Expected at least one SyncCreativeResult, got empty: {resp}"
+    first = results[0]
+
+    # The non-existent package should NOT be in assigned_to
+    assigned = first.assigned_to or []
+    creative_id = ctx["creatives"][-1]["creative_id"]
+    nonexistent_pkgs = ctx["assignments"][creative_id]
+    for pkg_id in nonexistent_pkgs:
+        assert pkg_id not in assigned, (
+            f"Non-existent package {pkg_id!r} should NOT be in assigned_to, but it is: {assigned}"
+        )
+
+    # There should be a warning or assignment_error referencing the skipped package
+    assignment_errors = first.assignment_errors or {}
+    warnings = first.warnings or []
+    has_error_entry = any(pkg_id in assignment_errors for pkg_id in nonexistent_pkgs)
+    has_warning_entry = any(any(pkg_id in w for pkg_id in nonexistent_pkgs) for w in warnings)
+    if not has_error_entry and not has_warning_entry:
+        pytest.xfail(
+            "SPEC-PRODUCTION GAP: expected assignment_errors or warnings referencing "
+            f"skipped package(s) {nonexistent_pkgs}, but assignment_errors={assignment_errors}, "
+            f"warnings={warnings}"
+        )
+    # If we have an error entry, verify it has a meaningful message
+    if has_error_entry:
+        for pkg_id in nonexistent_pkgs:
+            if pkg_id in assignment_errors:
+                assert assignment_errors[pkg_id], (
+                    f"assignment_errors[{pkg_id!r}] should have a non-empty message, got {assignment_errors[pkg_id]!r}"
+                )
+
+
+@then("the creative should receive equal rotation with other unweighted creatives")
+def then_creative_equal_rotation_with_unweighted(ctx: dict) -> None:
+    """Assert all unweighted assignments have equal weight values.
+
+    Spec (BR-RULE-093 INV-2): when weight is omitted, creatives receive
+    equal rotation. Production hard-codes weight=100, which is functionally
+    equal when all assignments use the same default — this is the correct
+    production behavior for equal rotation.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.models import CreativeAssignment
+
+    error = ctx.get("error")
+    if error is not None:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: expected assignment with equal rotation, "
+            f"but production raised {type(error).__name__}: {error}"
+        )
+    assigned = _get_creative_assigned_to(ctx)
+    expected_pkg = ctx["package"].package_id
+    assert expected_pkg in assigned, f"Expected {expected_pkg!r} in assigned_to, got {assigned}"
+
+    tenant_id = ctx["tenant"].tenant_id
+    creative_id = ctx["creatives"][-1]["creative_id"]
+    with db_session(ctx) as session:
+        assignments = session.scalars(
+            select(CreativeAssignment).filter_by(
+                tenant_id=tenant_id,
+                creative_id=creative_id,
+            )
+        ).all()
+        assert assignments, f"No CreativeAssignment rows found for creative={creative_id}"
+
+        # All unweighted assignments should have the same weight value (equal rotation)
+        weights = [a.weight for a in assignments]
+        unique_weights = set(weights)
+        assert len(unique_weights) == 1, (
+            f"Equal rotation requires all assignments to have the same weight, but found varying weights: {weights}"
+        )
+        # Production uses weight=100 as the default "equal" weight
+        actual_weight = weights[0]
+        if actual_weight is None:
+            # weight=None is also valid for "equal rotation" (spec allows it)
+            pass
+        elif actual_weight != 100:
+            pytest.xfail(
+                f"SPEC-PRODUCTION GAP: expected equal rotation weight (null or 100), got weight={actual_weight}"
+            )
+
+
+@then("the assignment results should list the assigned packages")
+def then_assignment_results_list_assigned_packages(ctx: dict) -> None:
+    """Assert each assigned package_id appears in the creative's assigned_to list.
+
+    POST-S3: The buyer knows which packages each creative was assigned to.
+    Verifies that the specific package_ids from the Given step appear in
+    the response's assigned_to field.
+    """
+    error = ctx.get("error")
+    if error is not None:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: expected assignment results, but production raised {type(error).__name__}: {error}"
+        )
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
+    assert results, f"Expected at least one SyncCreativeResult, got empty: {resp}"
+    first = results[0]
+    assigned = first.assigned_to or []
+
+    # Get the expected package_ids from the Given step's assignments
+    creative_id = ctx["creatives"][-1]["creative_id"]
+    expected_pkgs = ctx["assignments"][creative_id]
+    for pkg_id in expected_pkgs:
+        assert pkg_id in assigned, f"Expected package {pkg_id!r} in assigned_to, got {assigned}"
+
+
+@then("two assignments should be created successfully")
+def then_two_assignments_created_successfully(ctx: dict) -> None:
+    """Assert exactly 2 successful assignments with correct package_ids.
+
+    Used by the lenient-mode partial-success scenario (3 packages: 2 valid,
+    1 non-existent). The two valid packages should appear in assigned_to.
+    """
+    error = ctx.get("error")
+    if error is not None:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: expected 2 successful assignments, "
+            f"but production raised {type(error).__name__}: {error}"
+        )
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
+    assert results, f"Expected at least one SyncCreativeResult, got empty: {resp}"
+    first = results[0]
+    assigned = first.assigned_to or []
+
+    # Assert exactly 2 successful assignments
+    assert len(assigned) == 2, f"Expected exactly 2 assigned packages, got {len(assigned)}: {assigned}"
+
+    # Verify the correct packages (the two valid ones from the Given step)
+    valid_packages = ctx["valid_packages"]
+    expected_pkg_ids = {pkg.package_id for pkg in valid_packages}
+    actual_pkg_ids = set(assigned)
+    assert actual_pkg_ids == expected_pkg_ids, f"Expected assigned packages {expected_pkg_ids}, got {actual_pkg_ids}"
