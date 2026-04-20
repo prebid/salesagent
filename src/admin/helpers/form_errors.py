@@ -14,10 +14,6 @@ This helper pins:
 
 Per ``.claude/notes/flask-to-fastapi/L0-implementation-plan-v2.md §L0-17``
 and ``implementation-checklist.md §EP-3``.
-
-**Pattern (a) stub-first** — at L0 Red this function returns ``None`` so
-semantic tests against a module-that-exists fail on content, not import.
-L0 Green replaces the stub with the real ``TemplateResponse`` impl.
 """
 
 from __future__ import annotations
@@ -45,9 +41,54 @@ def form_error_response(
     extra_context: dict[str, Any] | None = None,
     status_code: int = FORM_ERROR_STATUS,
 ) -> Any:
-    """Stub — returns ``None`` at L0 Red. Replaced at L0 Green.
+    """Render a form-error template response with a consistent contract.
 
-    Arguments are documented on the L0 Green rewrite.
+    Parameters
+    ----------
+    templates
+        The request-scoped ``Jinja2Templates`` instance (usually injected
+        via ``TemplatesDep``).
+    request
+        The current ``Request`` — Starlette needs this in the context so
+        ``url_for`` works inside the template.
+    template_name
+        Template path relative to the ``Jinja2Templates`` root, e.g.
+        ``"admin/accounts/edit.html"``.
+    error
+        Human-readable error message to render in the banner.
+    form
+        Dict of submitted form fields to echo back so the user does not
+        retype. Pass ``None`` for GET-style flows with no form input —
+        the template sees an empty dict under ``form``.
+    extra_context
+        Extra template variables (e.g. the ``tenant`` the form belongs
+        to). Merged into the base context so callers can keep one call
+        instead of constructing a full context dict.
+    status_code
+        HTTP status code — defaults to 422 per RFC 9110 §15.5.21. Callers
+        should NOT override unless a router has a documented parity
+        exception matched against Flask route fingerprints.
+
+    Returns
+    -------
+    TemplateResponse
+        A Starlette ``_TemplateResponse`` with the requested template,
+        status code, and the standard ``{request, error, form, ...}``
+        context. Callers return it directly from the route handler.
     """
-    _ = (templates, request, template_name, error, form, extra_context, status_code)
-    return None
+    context: dict[str, Any] = {
+        "error": error,
+        "form": form or {},
+    }
+    if extra_context:
+        context.update(extra_context)
+    # New-style signature (request first, context second) — the old
+    # kwargs form (name=, context=) is deprecated upstream since
+    # Starlette 0.35; using the modern form means no DeprecationWarning
+    # spam in the suite.
+    return templates.TemplateResponse(
+        request,
+        template_name,
+        context,
+        status_code=status_code,
+    )
