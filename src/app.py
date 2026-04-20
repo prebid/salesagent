@@ -265,10 +265,13 @@ async def a2a_messageid_compatibility_middleware(request: Request, call_next):
 from src.routes.api_v1 import router as api_v1_router  # noqa: E402
 from src.routes.health import debug_router as health_debug_router  # noqa: E402
 from src.routes.health import router as health_router  # noqa: E402
+from src.routes.metrics import router as metrics_router  # noqa: E402
 
 app.include_router(api_v1_router)
 app.include_router(health_router)
 app.include_router(health_debug_router)
+# L0-19 leaf-route /metrics — permitted at L0 per v2 §7.2 RATIFIED.
+app.include_router(metrics_router)
 
 # ---------------------------------------------------------------------------
 # Middleware stack (via add_middleware — outermost = last registered):
