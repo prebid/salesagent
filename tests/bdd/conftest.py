@@ -1001,20 +1001,24 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-006-partition-creative-scope",
             "T-UC-006-boundary-creative-scope",
         }:
-            item.add_marker(pytest.mark.xfail(
-                reason="e2e_rest: creative action='failed' through REST — format validation rejects without registry",
-                strict=True,
-            ))
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="e2e_rest: creative action='failed' through REST — format validation rejects without registry",
+                    strict=True,
+                )
+            )
 
         # UC-005 e2e_rest: inv9/inv10 format filter — empty response
         if "e2e_rest" in nodeid and marker_names & {
             "T-UC-005-inv-049-9-holds",
             "T-UC-005-inv-049-10-holds",
         }:
-            item.add_marker(pytest.mark.xfail(
-                reason="e2e_rest: format filter returns 0 results — e2e_rest fixture doesn't inject format registry",
-                strict=True,
-            ))
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="e2e_rest: format filter returns 0 results — e2e_rest fixture doesn't inject format registry",
+                    strict=True,
+                )
+            )
 
         # UC-006 e2e_rest: assignments-structure tags — only "single_assignment"
         # examples fail (empty body). "absent" examples pass. Use nodeid substring
@@ -1257,10 +1261,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "sort_by metric: str(SortMetric.clicks) != 'clicks' — needs .value in _impl",
                 True,
             ),
-            "T-UC-004-dim-sortby-fallback": (
-                "sort_by fallback: A2A transport drops by_placement from response — serialization gap",
-                False,
-            ),
+            # Graduated: T-UC-004-dim-sortby-fallback (impl, mcp, rest pass — only a2a still fails)
             # FIXME(salesagent-b2v): _impl only supports by_placement, not by_device_type/by_geo/truncation
             "T-UC-004-dim-supported": ("by_device_type breakdown not implemented in _impl (only by_placement)", True),
             "T-UC-004-dim-truncated": ("truncation flags (by_*_truncated) not implemented in _impl", True),
@@ -1299,6 +1300,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             if tag in marker_names:
                 item.add_marker(pytest.mark.xfail(reason=reason, strict=strict))
                 break
+
+        # Graduated: T-UC-004-dim-sortby-fallback — impl, mcp, rest pass; only a2a fails
+        if "T-UC-004-dim-sortby-fallback" in marker_names and is_a2a:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="sort_by fallback: A2A transport drops by_placement from response — serialization gap",
+                    strict=False,
+                )
+            )
 
         # UC-004 status filter: "active" works, other values may not
         _UC004_FILTER_SELECTIVE: list[tuple[str, set[str], str]] = [
@@ -1348,18 +1358,29 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # Valid boundary values pass through fine.
         # Graduated to selective xfail (only failing subset marked):
         # T-UC-004-boundary-attribution, T-UC-004-boundary-daily-breakdown,
-        # T-UC-004-boundary-account, T-UC-004-boundary-status-filter,
-        # T-UC-004-boundary-resolution, T-UC-004-boundary-resolution (media_buy)
+        # T-UC-004-boundary-account, T-UC-004-boundary-status-filter (transport-aware),
+        # T-UC-004-boundary-resolution (transport-aware), T-UC-004-boundary-ownership (transport-aware)
         _UC004_BOUNDARY_TAGS = {
             "T-UC-004-boundary-reporting-dims",
             "T-UC-004-boundary-sampling",
             "T-UC-004-boundary-credentials",
             # All boundary examples fail on at least one transport:
             "T-UC-004-boundary-date-range",
-            "T-UC-004-boundary-ownership",
+            # Graduated: T-UC-004-boundary-ownership (impl-differs + rest-matches pass)
         }
         if marker_names & _UC004_BOUNDARY_TAGS:
             item.add_marker(pytest.mark.xfail(reason="boundary validation partially implemented", strict=False))
+
+        # Graduated: T-UC-004-boundary-ownership — impl-"differs" and rest-"matches" pass
+        # Remaining failures: impl-matches, a2a-both, mcp-both, rest-differs
+        if "T-UC-004-boundary-ownership" in marker_names:
+            _ownership_passes = (not is_a2a and not is_mcp) and (
+                (not is_rest and "differs from owner" in nodeid) or (is_rest and "matches owner" in nodeid)
+            )
+            if not _ownership_passes:
+                item.add_marker(
+                    pytest.mark.xfail(reason="ownership boundary: validation gaps on some transports", strict=False)
+                )
 
         # --- UC-004 boundary: selective xfail for graduated strong groups ---
         # Only the failing subset gets xfailed; clean-pass examples graduate to PASS.
@@ -1399,25 +1420,50 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {"non-boolean", "non_boolean", "string 'true'"},
                 "include_package_daily_breakdown boundary: non-boolean validation not implemented",
             ),
-            # media_buy_resolution: buyer_refs, partial, zero, empty array fail
+            # media_buy_resolution: buyer_refs, partial, zero fail on all transports
+            # Graduated: "empty array" passes on impl/mcp/rest (only a2a fails)
             # Clean-pass: media_buy_ids only, both provided, neither provided
             (
                 "T-UC-004-boundary-resolution",
-                {"buyer_refs only", "empty array", "partial resolution", "zero resolution"},
+                {"buyer_refs only", "partial resolution", "zero resolution"},
                 "media_buy_resolution boundary: production gaps on some transports",
             ),
-            # status_filter: only "failed" and "[]" fail on some transports
-            (
-                "T-UC-004-boundary-status-filter",
-                {"not in AdCP enum", "empty array, violates"},
-                "status_filter boundary: invalid enum/empty array validation not implemented",
-            ),
+            # Graduated: status_filter "not in AdCP enum" passes on impl+rest,
+            # "empty array, violates" passes on impl+mcp+rest (transport-aware below)
         ]
         for tag, substrings, reason in _UC004_BOUNDARY_SELECTIVE:
             if tag in marker_names:
                 if any(s in nodeid for s in substrings):
                     item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
                 break
+
+        # Graduated boundary entries with transport-specific failures:
+        # T-UC-004-boundary-resolution "empty array": only a2a still fails
+        if "T-UC-004-boundary-resolution" in marker_names and is_a2a and "empty array" in nodeid:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="media_buy_resolution boundary: empty array validation gap on a2a",
+                    strict=False,
+                )
+            )
+        # T-UC-004-boundary-status-filter: graduated per-transport
+        # "not in AdCP enum" (failed): only a2a + mcp still fail
+        # "empty array, violates" ([]): only a2a still fails
+        if "T-UC-004-boundary-status-filter" in marker_names:
+            if "not in AdCP enum" in nodeid and (is_a2a or is_mcp):
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="status_filter boundary: invalid enum validation not implemented on a2a/mcp",
+                        strict=False,
+                    )
+                )
+            elif "empty array, violates" in nodeid and is_a2a:
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="status_filter boundary: empty array validation not implemented on a2a",
+                        strict=False,
+                    )
+                )
 
         # UC-004 partition scenarios: adcp 3.10 changed schema validation behavior.
         # Partition tests exercise valid/invalid value ranges per field.
