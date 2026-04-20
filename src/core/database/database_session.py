@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 import pydantic_core
 from sqlalchemy import create_engine, event, select
 from sqlalchemy.exc import DisconnectionError, OperationalError, SQLAlchemyError
-from sqlalchemy.orm import Session, scoped_session, sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from src.core.database.db_config import DatabaseConfig
 
@@ -24,7 +24,6 @@ logger = logging.getLogger(__name__)
 # Module-level globals for lazy initialization
 _engine = None
 _session_factory = None
-_scoped_session = None
 
 # Track database health
 _last_health_check: float = 0.0
@@ -113,7 +112,7 @@ def _is_pgbouncer_connection(connection_string: str) -> bool:
 
 def get_engine():
     """Get or create the database engine (lazy initialization)."""
-    global _engine, _session_factory, _scoped_session
+    global _engine, _session_factory
 
     if _engine is None:
         # In test mode without DATABASE_URL, we should NOT create a real connection
@@ -191,20 +190,18 @@ def get_engine():
             cursor.execute(f"SET statement_timeout = '{query_timeout * 1000}'")
             cursor.close()
 
-        # Create session factory
+        # Create bare session factory — NO scoped_session registry (Decision D2).
+        # Each `with get_db_session()` block constructs a fresh Session from this
+        # factory so that FastAPI's AnyIO threadpool thread reuse cannot leak
+        # session state between requests. See CLAUDE.md Critical Invariant #4.
         _session_factory = sessionmaker(bind=_engine)
-        _scoped_session = scoped_session(_session_factory)
 
     return _engine
 
 
 def reset_engine():
     """Reset engine for testing - closes existing connections and clears global state."""
-    global _engine, _session_factory, _scoped_session
-
-    if _scoped_session is not None:
-        _scoped_session.remove()
-        _scoped_session = None
+    global _engine, _session_factory
 
     if _engine is not None:
         _engine.dispose()
@@ -232,13 +229,6 @@ def reset_health_state():
     _last_health_check = 0
 
 
-def get_scoped_session():
-    """Get the scoped session factory (lazy initialization)."""
-    # Calling get_engine() ensures all globals are initialized
-    get_engine()
-    return _scoped_session
-
-
 @contextmanager
 def get_db_session() -> Generator[Session, None, None]:
     """
@@ -251,11 +241,20 @@ def get_db_session() -> Generator[Session, None, None]:
             session.add(new_object)
             session.commit()  # Explicit commit needed
 
-    The session will automatically rollback on exception and
-    always be properly closed. Connection errors are logged with more detail.
+    Each `with get_db_session()` call constructs a new Session instance from
+    the bare sessionmaker (NO scoped_session registry — Decision D2). This is
+    safe under FastAPI's AnyIO threadpool thread reuse because there is no
+    thread-local state to leak between requests. The `session.close()` on
+    block exit returns the underlying connection to the QueuePool; the
+    Session object itself is garbage-collected.
+
+    The session will automatically rollback on exception and always be
+    properly closed. Connection errors are logged with more detail.
 
     Note: Query timeout is enforced at the database level via statement_timeout.
     Queries exceeding DATABASE_QUERY_TIMEOUT will raise OperationalError.
+
+    Per CLAUDE.md Critical Invariant #4 and Decision D2 (2026-04-16).
     """
     import time
 
@@ -267,15 +266,15 @@ def get_db_session() -> Generator[Session, None, None]:
         if time_since_check < 10:  # Fail fast for 10 seconds after unhealthy check
             raise RuntimeError("Database is unhealthy - failing fast to prevent cascading failures")
 
-    scoped = get_scoped_session()
-    session = scoped()
+    # Ensure engine + session factory are initialized (lazy).
+    get_engine()
+    assert _session_factory is not None  # type narrowing — set by get_engine()
+    session = _session_factory()
     try:
         yield session
     except (OperationalError, DisconnectionError) as e:
         logger.error(f"Database connection error: {e}")
         session.rollback()
-        # Remove session from registry to force reconnection
-        scoped.remove()
         # Mark as unhealthy for circuit breaker
         _is_healthy = False
         _last_health_check = time.time()
@@ -285,8 +284,9 @@ def get_db_session() -> Generator[Session, None, None]:
         session.rollback()
         raise
     finally:
+        # Close returns the underlying connection to the QueuePool;
+        # the Session object itself is garbage-collected.
         session.close()
-        scoped.remove()
 
 
 def execute_with_retry(func, max_retries: int = 3, retry_on: tuple = (OperationalError, DisconnectionError)) -> Any:
@@ -319,8 +319,8 @@ def execute_with_retry(func, max_retries: int = 3, retry_on: tuple = (Operationa
                 wait_time = 0.5 * (2**attempt)
                 logger.info(f"Waiting {wait_time}s before retry...")
                 time.sleep(wait_time)
-                scoped = get_scoped_session()
-                scoped.remove()  # Clear the session registry
+                # No registry to clear under bare sessionmaker (Decision D2);
+                # the failed session was closed in get_db_session()'s finally.
                 continue
             raise
         except SQLAlchemyError as e:
@@ -345,10 +345,17 @@ class DatabaseManager:
 
     @property
     def session(self) -> Session:
-        """Get or create a session."""
+        """Get or create a session.
+
+        Constructs a fresh Session from the bare sessionmaker (no
+        scoped_session registry per Decision D2). The manager holds this
+        instance on `self._session` until close() is called.
+        """
         if self._session is None:
-            scoped = get_scoped_session()
-            self._session = scoped()
+            # Ensure engine + session factory are initialized (lazy).
+            get_engine()
+            assert _session_factory is not None  # type narrowing — set by get_engine()
+            self._session = _session_factory()
         return self._session
 
     def commit(self):
@@ -366,11 +373,14 @@ class DatabaseManager:
             self._session.rollback()
 
     def close(self):
-        """Close and cleanup the session."""
+        """Close and cleanup the session.
+
+        Under bare sessionmaker (Decision D2), `Session.close()` returns
+        the underlying connection to the QueuePool; the Session object
+        itself is garbage-collected. No registry to clear.
+        """
         if self._session:
             self._session.close()
-            scoped = get_scoped_session()
-            scoped.remove()
             self._session = None
 
     def __enter__(self):
