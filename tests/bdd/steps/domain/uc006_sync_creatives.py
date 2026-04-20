@@ -6497,3 +6497,140 @@ def given_creative_exists_for_principal_scope(ctx: dict, creative_id: str, princ
     the creative. If different, sync creates a new one (cross-principal isolation).
     """
     _preseed_creative_for_principal(ctx, creative_id, principal_id)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# THEN steps — creative scope resolution / boundary (1atj)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _get_action_str(result: object) -> str:
+    """Extract the action string from a SyncCreativeResult.
+
+    The action field is a CreativeAction enum; normalise to a plain string.
+    """
+    action_val = getattr(result, "action", None)
+    return str(getattr(action_val, "value", action_val))
+
+
+@then(parsers.parse('the action should be "{expected_action}"'))
+def then_action_should_be(ctx: dict, expected_action: str) -> None:
+    """Assert the first SyncCreativeResult has the expected action."""
+    result = _get_sync_creative_result(ctx)
+    action_str = _get_action_str(result)
+    assert action_str == expected_action, f"Expected creative action '{expected_action}', got '{action_str}'"
+
+
+@then("the existing creative should be updated")
+def then_existing_creative_updated(ctx: dict) -> None:
+    """Assert the sync result indicates the creative was updated (action == 'updated')."""
+    result = _get_sync_creative_result(ctx)
+    action_str = _get_action_str(result)
+    assert action_str == "updated", f"Expected creative action 'updated', got '{action_str}'"
+
+
+@then("a new creative should be created")
+def then_new_creative_created(ctx: dict) -> None:
+    """Assert the sync result indicates a new creative was created (action == 'created')."""
+    result = _get_sync_creative_result(ctx)
+    action_str = _get_action_str(result)
+    assert action_str == "created", f"Expected creative action 'created', got '{action_str}'"
+
+
+@then(parsers.parse('a new creative should be created for "{principal_id}"'))
+def then_new_creative_created_for_principal_scope(ctx: dict, principal_id: str) -> None:
+    """Assert the sync created a new creative stamped with the given principal_id.
+
+    Verifies both:
+    1. The SyncCreativeResult action is "created"
+    2. The creative in the DB belongs to the expected principal (cross-principal isolation)
+    """
+    result = _get_sync_creative_result(ctx)
+    action_str = _get_action_str(result)
+    assert action_str == "created", f"Expected creative action 'created', got '{action_str}'"
+
+    # Verify the creative was stamped with the correct principal_id in DB
+    _xfail_if_e2e(ctx)
+
+    from sqlalchemy import select
+
+    from src.core.database.models import Creative
+
+    creative_id = getattr(result, "creative_id", None) or ctx.get("creative_id")
+    assert creative_id is not None, "No creative_id found in result or ctx"
+
+    env = ctx["env"]
+    with db_session(ctx) as session:
+        creative = session.scalars(
+            select(Creative).filter_by(
+                tenant_id=env._tenant_id,
+                principal_id=principal_id,
+                creative_id=creative_id,
+            )
+        ).first()
+        assert creative is not None, (
+            f"No creative found in DB for tenant={env._tenant_id}, principal={principal_id}, creative_id={creative_id}"
+        )
+        assert creative.principal_id == principal_id, (
+            f"Expected creative stamped with principal_id '{principal_id}', got '{creative.principal_id}'"
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GIVEN steps — assignment weight for proportional delivery (tuq3)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given(parsers.parse('creative "{creative_id}" assigned to "{package_id}" with weight {weight:d}'))
+def given_creative_assigned_to_package_with_weight(ctx: dict, creative_id: str, package_id: str, weight: int) -> None:
+    """Set up a creative payload with an assignment to a package at a given weight.
+
+    Builds the creative payload (if not already present for this creative_id)
+    and adds an assignment entry with the specified weight. The assignment is
+    stored in ctx["assignments"] as the dict shape that _sync_creatives_impl
+    expects, and the weight is tracked in ctx["assignment_weights"] for Then
+    step assertions.
+    """
+    from tests.factories import MediaBuyFactory, MediaPackageFactory, ProductFactory
+
+    env = ctx["env"]
+    _ensure_tenant_principal_from_db(ctx, env)
+    tenant = ctx["tenant"]
+    principal = ctx["principal"]
+
+    # Build the creative payload if not already present for this creative_id
+    existing_ids = {c["creative_id"] for c in ctx.get("creatives", [])}
+    if creative_id not in existing_ids:
+        _build_creative_scope_payload(ctx, creative_id)
+
+    # Ensure a media buy + package exist for the assignment
+    if "media_buy" not in ctx:
+        media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
+        env._commit_factory_data()
+        ctx["media_buy"] = media_buy
+
+    # Create the package if it doesn't exist yet
+    packages = ctx.setdefault("_packages", {})
+    if package_id not in packages:
+        agent_url = env.DEFAULT_AGENT_URL
+        product = ProductFactory(
+            tenant=tenant,
+            format_ids=[{"agent_url": agent_url, "id": "display_300x250"}],
+        )
+        package = MediaPackageFactory(
+            media_buy=ctx["media_buy"],
+            package_id=package_id,
+            package_config={"product_id": product.product_id, "budget": 1000.0},
+        )
+        env._commit_factory_data()
+        packages[package_id] = package
+
+    # Add the assignment mapping (creative_id -> [package_id])
+    assignments = ctx.setdefault("assignments", {})
+    assignments.setdefault(creative_id, [])
+    if package_id not in assignments[creative_id]:
+        assignments[creative_id].append(package_id)
+
+    # Track weights for Then step assertions
+    weights = ctx.setdefault("assignment_weights", {})
+    weights[creative_id] = weight
