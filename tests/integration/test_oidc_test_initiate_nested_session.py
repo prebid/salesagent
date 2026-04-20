@@ -14,12 +14,18 @@ scoped_session (current) and bare sessionmaker (post-B2).
 This test mirrors the pattern already applied to callback() at oidc.py:229.
 """
 
-from datetime import UTC, datetime
-
 import pytest
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant, TenantAuthConfig
+from tests.factories import TenantAuthConfigFactory, TenantFactory
+from tests.harness._base import IntegrationEnv
+
+
+class _OidcRegressionEnv(IntegrationEnv):
+    """Bare integration env for oidc.test_initiate() regression fixtures."""
+
+    EXTERNAL_PATCHES: dict[str, str] = {}
 
 
 @pytest.fixture
@@ -30,22 +36,14 @@ def tenant_without_oidc_config(integration_db):
     the same branch that `callback()` at oidc.py:229 uses.
     """
     tenant_id = "oidc_test_tenant_no_cfg"
-    now = datetime.now(UTC)
-    with get_db_session() as session:
-        tenant = Tenant(
+    with _OidcRegressionEnv():
+        TenantFactory(
             tenant_id=tenant_id,
             name="OIDC Regression Tenant (no cfg)",
             subdomain="oidc-regress-nocfg",
-            is_active=True,
-            ad_server="mock",
-            auth_setup_mode=False,
-            authorized_emails=["test@example.com"],
-            created_at=now,
-            updated_at=now,
         )
-        session.add(tenant)
-        session.commit()
     yield tenant_id
+    # Teardown via a fresh session — env has exited so factories are unbound.
     with get_db_session() as session:
         session.query(Tenant).filter_by(tenant_id=tenant_id).delete()
         session.commit()
@@ -59,35 +57,22 @@ def tenant_with_oidc_config(integration_db):
     DetachedInstanceError under bare sessionmaker.
     """
     tenant_id = "oidc_test_tenant_with_cfg"
-    now = datetime.now(UTC)
-    with get_db_session() as session:
-        tenant = Tenant(
+    with _OidcRegressionEnv():
+        tenant = TenantFactory(
             tenant_id=tenant_id,
             name="OIDC Regression Tenant (with cfg)",
             subdomain="oidc-regress-withcfg",
-            is_active=True,
-            ad_server="mock",
-            auth_setup_mode=False,
-            authorized_emails=["test@example.com"],
-            created_at=now,
-            updated_at=now,
         )
-        session.add(tenant)
-        session.flush()
-
-        auth_config = TenantAuthConfig(
-            tenant_id=tenant_id,
+        TenantAuthConfigFactory(
+            tenant=tenant,
             oidc_enabled=False,
             oidc_provider="google",
             oidc_discovery_url="https://accounts.google.com/.well-known/openid-configuration",
             oidc_client_id="regression-test-client-id",
             oidc_scopes="openid email profile",
-            created_at=now,
+            # post_generation hook runs the encryption setter.
+            oidc_client_secret="regression-test-secret",
         )
-        # Exercises the encryption setter — same path used by test_initiate()
-        auth_config.oidc_client_secret = "regression-test-secret"
-        session.add(auth_config)
-        session.commit()
     yield tenant_id
     with get_db_session() as session:
         session.query(TenantAuthConfig).filter_by(tenant_id=tenant_id).delete()

@@ -131,6 +131,7 @@ def is_super_admin(email: str) -> bool:
 
     try:
         with get_db_session() as db:
+            # FIXME(salesagent-l0d): migrate to TenantManagementConfigRepository
             emails_cfg = db.scalars(select(TenantManagementConfig).filter_by(config_key="super_admin_emails")).first()
             if emails_cfg and emails_cfg.config_value:
                 db_emails = {e.strip().lower() for e in emails_cfg.config_value.split(",") if e.strip()}

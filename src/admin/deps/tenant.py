@@ -29,6 +29,7 @@ def _load_tenant(tenant_id: str) -> dict[str, Any]:
     upgrade is deferred to L4 per the foundation-modules note.
     """
     with get_db_session() as db:
+        # FIXME(salesagent-l0d): migrate to TenantRepository.get_dto
         tenant = db.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
         if tenant is None:
             raise HTTPException(
@@ -56,6 +57,7 @@ def _user_has_tenant_access(email: str, tenant_id: str) -> bool:
     deactivated users retained admin access until session expiry.
     """
     with get_db_session() as db:
+        # FIXME(salesagent-l0d): migrate to UserRepository.get_active_for_tenant
         found = db.scalars(select(User).filter_by(email=email.lower(), tenant_id=tenant_id, is_active=True)).first()
         return found is not None
 
@@ -64,6 +66,7 @@ def _tenant_has_auth_setup_mode(tenant_id: str) -> bool:
     """Return True iff the tenant has ``auth_setup_mode=True`` (bootstrap
     window during which access controls are intentionally permissive)."""
     with get_db_session() as db:
+        # FIXME(salesagent-l0d): migrate to TenantRepository.auth_setup_mode
         tenant = db.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
         return bool(tenant and getattr(tenant, "auth_setup_mode", False))
 

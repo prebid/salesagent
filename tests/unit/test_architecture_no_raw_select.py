@@ -100,6 +100,11 @@ ALLOWLIST: set[tuple[str, str]] = {
     # ── Admin app ──
     ("src/admin/app.py", "create_app"),
     ("src/admin/app.py", "inject_context"),
+    # ── Admin deps (L0-12 dependency-injection deps; FIXME(salesagent-l0d)) ──
+    ("src/admin/deps/auth.py", "is_super_admin"),
+    ("src/admin/deps/tenant.py", "_load_tenant"),
+    ("src/admin/deps/tenant.py", "_user_has_tenant_access"),
+    ("src/admin/deps/tenant.py", "_tenant_has_auth_setup_mode"),
     # ── Admin blueprints ──
     ("src/admin/routers/activity_stream.py", "get_recent_activities"),
     ("src/admin/routers/adapters.py", "list_broadstreet_zones"),

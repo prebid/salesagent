@@ -11,7 +11,14 @@ from typing import Any
 import factory
 from factory import LazyAttribute, RelatedFactory, Sequence, SubFactory
 
-from src.core.database.models import AdapterConfig, CurrencyLimit, PropertyTag, PublisherPartner, Tenant
+from src.core.database.models import (
+    AdapterConfig,
+    CurrencyLimit,
+    PropertyTag,
+    PublisherPartner,
+    Tenant,
+    TenantAuthConfig,
+)
 
 
 class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
@@ -101,3 +108,32 @@ class PropertyTagFactory(factory.alchemy.SQLAlchemyModelFactory):
     tag_id = Sequence(lambda n: f"tag_{n:04d}")
     name = LazyAttribute(lambda o: f"Tag {o.tag_id}")
     description = LazyAttribute(lambda o: f"Description for {o.name}")
+
+
+class TenantAuthConfigFactory(factory.alchemy.SQLAlchemyModelFactory):
+    """Per-tenant OIDC/SSO auth configuration.
+
+    ``oidc_client_secret`` is NOT an ORM column — it's a property that
+    encrypts into ``oidc_client_secret_encrypted``. Pass it via a post_generation
+    hook so the encryption setter runs.
+    """
+
+    class Meta:
+        model = TenantAuthConfig
+        sqlalchemy_session = None
+        sqlalchemy_session_persistence = "commit"
+
+    tenant = SubFactory(TenantFactory)
+    tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
+    oidc_enabled = False
+    oidc_provider = "google"
+    oidc_discovery_url = "https://accounts.google.com/.well-known/openid-configuration"
+    oidc_client_id = Sequence(lambda n: f"oidc-client-{n:04d}")
+    oidc_scopes = "openid email profile"
+
+    @factory.post_generation
+    def oidc_client_secret(obj, create, extracted, **kwargs):  # noqa: N805
+        """Set the encrypted secret via the model's property setter."""
+        if not create or extracted is None:
+            return
+        obj.oidc_client_secret = extracted

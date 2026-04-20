@@ -38,20 +38,20 @@ class TestAuditActionDep:
 
         dep(_request(), background, user)
 
-        background.add_task.assert_called_once()
-        # First positional arg should be the _write_audit callable.
-        call = background.add_task.call_args
-        assert call.args[0] is _write_audit
-        assert call.kwargs["action"] == "create_user"
-        assert call.kwargs["user_email"] == "admin@x.com"
-        assert call.kwargs["tenant_id"] == "t1"
-        assert call.kwargs["path"] == "/tenant/t1/users"
-        assert call.kwargs["method"] == "POST"
+        # Single atomic assertion: scheduled exactly once with these exact args.
+        background.add_task.assert_called_once_with(
+            _write_audit,
+            action="create_user",
+            user_email="admin@x.com",
+            tenant_id="t1",
+            path="/tenant/t1/users",
+            method="POST",
+        )
 
     def test_missing_tenant_id_is_none(self) -> None:
         """Routes without a tenant_id path param yield tenant_id=None in the
         audit payload (not KeyError)."""
-        from src.admin.deps.audit import audit_action
+        from src.admin.deps.audit import _write_audit, audit_action
         from src.admin.deps.auth import AdminUser
 
         dep = audit_action("super_admin_action")
@@ -65,8 +65,15 @@ class TestAuditActionDep:
             user,
         )
 
-        call = background.add_task.call_args
-        assert call.kwargs["tenant_id"] is None
+        # Single atomic assertion: tenant_id=None flows through unchanged.
+        background.add_task.assert_called_once_with(
+            _write_audit,
+            action="super_admin_action",
+            user_email="root@x.com",
+            tenant_id=None,
+            path="/admin/tenants",
+            method="GET",
+        )
 
 
 class TestWriteAuditFailureIsolation:
