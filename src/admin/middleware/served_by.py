@@ -22,17 +22,14 @@ assertion is NOT bumped here.
 
 Per ``.claude/notes/flask-to-fastapi/L0-implementation-plan-v2.md §L0-18``
 and ``implementation-checklist.md §EP-1``, ``§EP-2``.
-
-**Pattern (a) stub-first** — at L0 Red the middleware passes the request
-through unchanged; semantic tests assert ``X-Served-By`` presence against
-a response that lacks the header. L0 Green adds the header emission.
 """
 
 from __future__ import annotations
 
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 HEADER_NAME: str = "x-served-by"
+_HEADER_BYTES: bytes = HEADER_NAME.encode("latin-1")
 
 
 class ServedByMiddleware:
@@ -41,15 +38,35 @@ class ServedByMiddleware:
     Constructor takes an explicit ``stack_name`` so tests can stamp either
     ``flask`` or ``fastapi`` deterministically without mutating global state.
     L1a wires it with a per-request resolver that reads the feature flag.
+
+    Non-HTTP scopes (lifespan, websocket) pass through unchanged — no
+    response-header fabrication on messages that don't carry headers.
     """
 
     def __init__(self, app: ASGIApp, stack_name: str = "flask") -> None:
         self.app = app
         self.stack_name = stack_name
+        self._value_bytes = stack_name.encode("latin-1")
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        # L0 Red stub: pass through without touching headers.
-        await self.app(scope, receive, send)
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        header_bytes = self._value_bytes
+
+        async def send_with_header(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))
+                # Replace any prior value — if an inner middleware already
+                # stamped ``X-Served-By``, the outermost middleware wins so
+                # the observed header reflects the actual serving stack.
+                headers = [(n, v) for (n, v) in headers if n.lower() != _HEADER_BYTES]
+                headers.append((_HEADER_BYTES, header_bytes))
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, send_with_header)
 
 
 __all__ = ["HEADER_NAME", "ServedByMiddleware"]
