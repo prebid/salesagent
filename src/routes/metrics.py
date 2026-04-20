@@ -1,4 +1,4 @@
-"""``/metrics`` endpoint scaffold — Prometheus text exposition format.
+"""``/metrics`` endpoint — Prometheus text exposition format.
 
 Leaf route landed at L0 per the permitted-modifications carve-out in
 ``L0-implementation-plan-v2.md §7.2 RATIFIED``. The endpoint exists so
@@ -17,8 +17,12 @@ Response shape:
 - Content-Type ``text/plain; version=0.0.4`` — Prometheus text
   exposition format version token. Scrapers parse this to pick the
   grammar.
-- Body: a single ``# HELP``+``# TYPE`` header and the ``adcp_up``
-  gauge with value ``1``. Placeholder until L1+ adds real metrics.
+- Body: the live Prometheus registry rendered via
+  ``src.core.metrics.get_metrics_text()`` — same source Flask's
+  ``core_bp.metrics`` (``src/admin/routers/core.py``) delegates to, so
+  the FastAPI route returns byte-equivalent output to the existing
+  Flask ``/metrics`` endpoint. This preserves L0's zero-visible-change
+  thesis for Prometheus scrapers.
 
 Per ``.claude/notes/flask-to-fastapi/L0-implementation-plan-v2.md §L0-19``.
 """
@@ -28,11 +32,9 @@ from __future__ import annotations
 from fastapi import APIRouter
 from starlette.responses import Response
 
-PROMETHEUS_CONTENT_TYPE: str = "text/plain; version=0.0.4; charset=utf-8"
+from src.core.metrics import get_metrics_text
 
-_PLACEHOLDER_BODY: str = (
-    "# HELP adcp_up Liveness gauge — 1 if the process is serving.\n" "# TYPE adcp_up gauge\n" "adcp_up 1\n"
-)
+PROMETHEUS_CONTENT_TYPE: str = "text/plain; version=0.0.4; charset=utf-8"
 
 
 router = APIRouter(tags=["observability"], include_in_schema=False)
@@ -40,14 +42,20 @@ router = APIRouter(tags=["observability"], include_in_schema=False)
 
 @router.get("/metrics", name="metrics")
 def metrics() -> Response:
-    """Return a Prometheus text-format ``200`` with a liveness gauge.
+    """Return a Prometheus text-format ``200`` from the live registry.
 
-    The handler is intentionally synchronous — there is no I/O at L0
-    (the body is a module-level constant). L1+ expands the body but
-    must stay synchronous while ``_PLACEHOLDER_BODY`` is the contract.
+    Delegates to ``src.core.metrics.get_metrics_text()`` so FastAPI's
+    ``/metrics`` returns the same bytes as Flask's ``core_bp.metrics``
+    — the REGISTRY is a process-global ``prometheus_client`` default,
+    so both transports observe the same counters, histograms, and
+    gauges.
+
+    The handler stays synchronous at L0: ``get_metrics_text()`` runs
+    ``prometheus_client.generate_latest`` which is CPU-bound
+    serialization over an in-memory registry (no I/O).
     """
     return Response(
-        content=_PLACEHOLDER_BODY,
+        content=get_metrics_text(),
         media_type=PROMETHEUS_CONTENT_TYPE,
         status_code=200,
     )
