@@ -22,13 +22,13 @@ no_direct_env_access.txt::src/admin/cache.py:132
 no_direct_env_access.txt::src/admin/cache.py:133
 no_direct_env_access.txt::src/admin/deps/auth.py:124
 no_direct_env_access.txt::src/admin/deps/auth.py:128
-no_direct_env_access.txt::src/admin/deps/auth.py:170
+no_direct_env_access.txt::src/admin/deps/auth.py:171
 no_direct_env_access.txt::src/admin/middleware/external_domain.py:148
 no_direct_env_access.txt::src/admin/middleware/external_domain.py:151
-no_direct_env_access.txt::src/admin/oauth.py:162
 no_direct_env_access.txt::src/admin/oauth.py:163
 no_direct_env_access.txt::src/admin/oauth.py:164
-no_direct_env_access.txt::src/admin/oauth.py:186
+no_direct_env_access.txt::src/admin/oauth.py:165
+no_direct_env_access.txt::src/admin/oauth.py:187
 no_direct_env_access.txt::src/admin/routers/api.py:299
 no_direct_env_access.txt::src/admin/routers/api.py:300
 no_direct_env_access.txt::src/admin/routers/auth.py:1087
