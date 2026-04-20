@@ -4,6 +4,8 @@
 **Status:** Pre-implementation audit — plan revisions required before Wave 0 begins
 **Supersedes:** `flask-to-fastapi-adcp-safety.md` §4 (first-order audit) with deeper analysis
 
+> **L0 STATUS:** All 6 blockers are addressed by L0 foundation modules. See `L0-implementation-plan-v2.md §6 exit-gate audit` for per-blocker attribution. Risks §2 remain partially open — L5+ items still apply.
+
 > **LAYERED SCOPE (2026-04-14) — v2.0 uses SYNC admin handlers through L4, async in L5.**
 > This file predates the layered scoping. Blocker 4's original async-first resolution is
 > superseded for L0-L4 (sync `def` with bare `sessionmaker` + `Session` per Decision D2 —

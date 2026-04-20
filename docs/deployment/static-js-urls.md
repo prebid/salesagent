@@ -1,5 +1,7 @@
 # Static JavaScript URL Strategy (v2.0)
 
+**L0 STATUS:** Strategy doc landed at L0-29 `904eb868`. Per L0 plan §7.5 RATIFIED, the scan is relaxed at L0; per-router enforcement begins at L1c/L1d. 37 JS `scriptRoot` call sites migrate alongside their owning templates, not as a bulk rewrite.
+
 Status: active (Flask→FastAPI v2.0 migration)
 Decision: ratified at L0 per `.claude/notes/flask-to-fastapi/L0-implementation-plan-v2.md` §7.5 "RATIFIED WITH REFINEMENT"
 Enforcement layer: per-router at L1c and L1d (NOT at L0)

@@ -1,5 +1,7 @@
 # Flask → FastAPI Migration: Deep Elaboration of §14, §16, §21
 
+> **L0 STATUS:** L0 shipped 2026-04-19 at `a2d3b350`. Rollback procedures in §5 are dormant — use only if reverting the entire L0 branch. L1a rollback procedure is the live next-step reference.
+
 > **LAYERED SCOPE (2026-04-14) — L0-L4 use SYNC admin handlers; L5 converts to ASYNC.**
 > This file predates the L0-L7 layering and contains ~68 async pattern references
 > (`async def`, `AsyncSession`, `asyncpg`, etc.) that are **L5+ scope within v2.0**, not L0-L4.

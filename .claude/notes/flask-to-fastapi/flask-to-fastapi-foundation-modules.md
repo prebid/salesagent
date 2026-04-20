@@ -1,5 +1,7 @@
 # §11 Foundation Modules — Detailed Elaboration
 
+> **L0 STATUS:** All foundation modules §11.1-11.15 SCAFFOLDED at L0 (commits `d2841632..a2d3b350`). Routing-level wiring lands at L1a per `MIDDLEWARE_STACK_VERSION` table in §11.36. Code specs below are canonical — reference as needed during L1a+.
+
 > **v2.0 LAYER GUIDE (2026-04-14)**
 >
 > This file contains foundation module designs for the FULL v2.0 migration. Sections are tagged by layer:

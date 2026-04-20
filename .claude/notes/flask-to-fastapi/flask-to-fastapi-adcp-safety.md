@@ -4,6 +4,8 @@
 **Status:** Pre-implementation audit
 **Purpose:** Verify that the v2.0.0 Flask → FastAPI migration plan does NOT impact the AdCP protocol surface and does NOT make assumptions that would require updates from external AdCP consumers
 
+> **L0 STATUS:** AdCP-safety first-order audit items addressed via L0-02 AdCP boundary protective tests (`745c920e`) + L0-11 OAuth byte-immutability constants (`ee99874d`). Byte-stable via L0-02 fingerprints in `tests/migration/fixtures/`.
+
 > **LAYERED SCOPE (2026-04-14) — v2.0 uses SYNC admin handlers through L0-L4, then converts to async in L5.**
 > This file predates the layered scoping. Any references to async admin handlers
 > or `AsyncSession` are Layer 5+ scope. v2.0 ships with sync `def` handlers through L4 and
