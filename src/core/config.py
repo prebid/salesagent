@@ -100,6 +100,19 @@ class AppConfig(BaseSettings):
     debug: bool = Field(default=False, description="Enable debug mode")
     environment: str = Field(default="development", description="Environment: production, staging, or development")
 
+    # Flask → FastAPI v2.0 L0-18 migration traffic flag. Set to ``True`` at
+    # L1a for progressive rollout; removed in L2 when Flask is deleted
+    # (per implementation-checklist.md §EP-1). Default ``False`` keeps
+    # Flask serving 100% of ``/admin/*`` traffic at L0.
+    adcp_use_fastapi_admin: bool = Field(
+        default=False,
+        description=(
+            "Route /admin/* traffic to the FastAPI admin stack instead of Flask. "
+            "Lands at L0 (default False), flipped during L1a rollout, removed at L2. "
+            "Observable via the X-Served-By response header."
+        ),
+    )
+
     # Configuration objects
     # BaseSettings subclasses read from environment; mypy doesn't understand this pattern
     gam_oauth: GAMOAuthConfig = Field(default_factory=GAMOAuthConfig)
