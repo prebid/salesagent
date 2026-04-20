@@ -1,0 +1,16 @@
+{# Fixture input: mixed — `script_root`, static assets, Flask dotted url_for, in one file. #}
+{% extends "base.html" %}
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('static', path='/css/admin.css') }}">
+<div class="header">
+  <a href="{{ url_for('admin_core_index') }}">Home</a>
+  <a href="{{ url_for('admin_tenants_tenant_settings', tenant_id=tenant.tenant_id) }}">Settings</a>
+</div>
+<main>
+  <a href="{{ url_for('admin_products_list_products', tenant_id=tenant.tenant_id) }}" class="btn">Products</a>
+  <form method="POST" action="{{ url_for('admin_tenants_deactivate', tenant_id=tenant.tenant_id) }}">
+    <button>Deactivate</button>
+  </form>
+  <script src="{{ url_for('static', path='/js/admin.js') }}"></script>
+</main>
+{% endblock %}

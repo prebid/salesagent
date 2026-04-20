@@ -1,0 +1,5 @@
+{# Fixture input: bare `{{ script_root }}` form (less common than `{{ request.script_root }}`). #}
+<a href="{{ url_for('admin_workflows_list', tenant_id=tenant.tenant_id) }}" class="btn">Workflows</a>
+<form method="POST" action="{{ url_for('admin_settings_slack', tenant_id=tenant.tenant_id) }}">
+  <input type="submit">
+</form>

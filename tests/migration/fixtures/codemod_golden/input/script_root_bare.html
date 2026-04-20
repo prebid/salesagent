@@ -1,0 +1,5 @@
+{# Fixture input: bare `{{ script_root }}` form (less common than `{{ request.script_root }}`). #}
+<a href="{{ script_root }}/tenant/{{ tenant.tenant_id }}/workflows" class="btn">Workflows</a>
+<form method="POST" action="{{ script_root }}/tenant/{{ tenant.tenant_id }}/settings/slack">
+  <input type="submit">
+</form>

@@ -1,0 +1,8 @@
+{# Fixture input: realistic `{{ request.script_root }}/tenant/{{ ... }}/<suffix>` references
+   that resolve via the route-name map baked into the codemod. Suffixes NOT in the map are
+   left untouched and surface in the manifest as manual-review items. #}
+<a href="{{ url_for('admin_tenants_dashboard', tenant_id=tenant.tenant_id) }}" class="btn btn-secondary">Back</a>
+<form method="POST" action="{{ url_for('admin_settings_general', tenant_id=tenant.tenant_id) }}">Save</form>
+<a href="{{ url_for('admin_products_list_products', tenant_id=tenant.tenant_id) }}" class="btn">Products</a>
+<a href="{{ url_for('admin_products_add_product', tenant_id=tenant.tenant_id) }}" class="btn">Add Product</a>
+<form method="POST" action="{{ url_for('admin_tenants_deactivate', tenant_id=tenant.tenant_id) }}">Deactivate</form>

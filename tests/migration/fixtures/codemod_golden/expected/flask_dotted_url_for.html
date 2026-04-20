@@ -1,0 +1,11 @@
+{# Fixture input: Flask dotted `url_for('blueprint.endpoint', ...)` names. These rewrite to
+   the flat `admin_<blueprint>_<endpoint>` form per foundation-modules §11.1. The `static`
+   name (Starlette's mount name) is preserved as-is. #}
+<a href="{{ url_for('admin_accounts_list_accounts', tenant_id=tenant_id) }}" class="btn">Accounts</a>
+<a href="{{ url_for('admin_accounts_create_account', tenant_id=tenant_id) }}" class="btn btn-primary">New Account</a>
+<form action="{{ url_for('admin_products_add_product', tenant_id=tenant.tenant_id) }}" method="POST">
+  <input type="submit" value="Add Product">
+</form>
+<a href="{{ url_for('admin_core_index') }}">Home</a>
+<link rel="stylesheet" href="{{ url_for('static', path='/css/base.css') }}">
+<script src="{{ url_for('static', path='/js/app.js') }}"></script>
