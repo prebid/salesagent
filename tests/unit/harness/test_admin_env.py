@@ -27,8 +27,6 @@ These tests are unit-level: the isolated ``FastAPI()`` inside
 ``integration_db`` patches already proven by ``test_harness_base.py``.
 """
 
-from __future__ import annotations
-
 from unittest.mock import MagicMock, patch
 
 
@@ -155,6 +153,8 @@ class TestDependencyOverrideIsolation:
 class TestSessionCookieRoundtrip:
     def test_session_cookie_roundtrips_across_requests(self):
         """SessionMiddleware: setting session["key"] once is readable on the next request."""
+        from fastapi import Request
+
         from tests.harness._base import IntegrationEnv
 
         patches = _mock_integration_deps()
@@ -167,32 +167,18 @@ class TestSessionCookieRoundtrip:
                 app = env.admin_app
 
                 @app.get("/admin/__set-session", name="admin_set_session")
-                def _set(request) -> dict[str, str]:
+                def _set(request: Request) -> dict[str, str]:
                     request.session["marker"] = "hello"
                     return {"set": "ok"}
 
                 @app.get("/admin/__read-session", name="admin_read_session")
-                def _read(request) -> dict[str, str | None]:
-                    return {"marker": request.session.get("marker")}
-
-                from starlette.requests import Request
-
-                # Rebind request parameter: add a signature with Request
-                app.router.routes.clear()
-
-                @app.get("/admin/__set-session", name="admin_set_session")
-                def _set2(request: Request) -> dict[str, str]:
-                    request.session["marker"] = "hello"
-                    return {"set": "ok"}
-
-                @app.get("/admin/__read-session", name="admin_read_session")
-                def _read2(request: Request) -> dict[str, str | None]:
+                def _read(request: Request) -> dict[str, str | None]:
                     return {"marker": request.session.get("marker")}
 
                 r1 = client.get("/admin/__set-session")
-                assert r1.status_code == 200
+                assert r1.status_code == 200, r1.text
                 r2 = client.get("/admin/__read-session")
-                assert r2.status_code == 200
+                assert r2.status_code == 200, r2.text
                 assert r2.json() == {"marker": "hello"}
         finally:
             for p in reversed(patches):
@@ -200,7 +186,7 @@ class TestSessionCookieRoundtrip:
 
     def test_session_payload_kwarg_pre_populates_session(self):
         """``session_payload=...`` seeds the session so the first request sees it."""
-        from starlette.requests import Request
+        from fastapi import Request
 
         from tests.harness._base import IntegrationEnv
 
@@ -226,7 +212,7 @@ class TestSessionCookieRoundtrip:
 
     def test_authenticated_kwarg_populates_minimal_admin_session(self):
         """``authenticated=True`` seeds a session with canonical admin keys."""
-        from starlette.requests import Request
+        from fastapi import Request
 
         from tests.harness._base import IntegrationEnv
 

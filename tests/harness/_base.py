@@ -186,6 +186,49 @@ def _unwrap_a2a_server_error(exc: Exception) -> Exception:
     return exc
 
 
+def b64encode_json(payload: dict[str, Any]) -> bytes:
+    """Serialize ``payload`` to bytes the way Starlette's SessionMiddleware does.
+
+    Starlette uses ``base64.b64encode(json.dumps(data).encode("utf-8"))`` to
+    produce the signer input. We match that exactly so the middleware's
+    decode path accepts our seeded cookie without modification.
+    """
+    import base64
+    import json
+
+    return base64.b64encode(json.dumps(payload).encode("utf-8"))
+
+
+class _OverrideDependencyCM:
+    """Context manager that installs + removes one FastAPI dependency override.
+
+    Used by ``IntegrationEnv.override_dependency`` — keeps the override
+    lifecycle tied to a ``with`` block so teardown order is deterministic
+    regardless of test-body exceptions.
+    """
+
+    def __init__(self, app: Any, key: Any, value_fn: Any) -> None:
+        self._app = app
+        self._key = key
+        self._value_fn = value_fn
+        self._prior: Any = None
+        self._had_prior: bool = False
+
+    def __enter__(self) -> _OverrideDependencyCM:
+        if self._key in self._app.dependency_overrides:
+            self._had_prior = True
+            self._prior = self._app.dependency_overrides[self._key]
+        self._app.dependency_overrides[self._key] = self._value_fn
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        if self._had_prior:
+            self._app.dependency_overrides[self._key] = self._prior
+        else:
+            self._app.dependency_overrides.pop(self._key, None)
+        return False
+
+
 class BaseTestEnv:
     """Base test environment for _impl function testing.
 
@@ -246,6 +289,14 @@ class BaseTestEnv:
         self._session: Session | None = None
         self._identity_cache: dict[str, ResolvedIdentity] = {}
         self._rest_client: Any = None  # Lazy-created TestClient
+        # Admin-client state (L0-22) — lazy-built by get_admin_client().
+        # The admin client uses a dedicated FastAPI() instance (not src.app.app)
+        # so that at L0 it works before the root app has middleware wired, and
+        # so that dependency_overrides are scoped to this env (no cross-test
+        # leakage per Agent B Risk #13).
+        self._admin_client: Any = None
+        self._admin_app: Any = None
+        self._admin_overrides_snapshot: dict[Any, Any] | None = None
 
     # -- Identity (one function, all transports) ----------------------------
 
@@ -549,10 +600,11 @@ class BaseTestEnv:
                         # If a third module imports get_http_headers without being
                         # patched, this won't catch it — but at least we verify
                         # the known auth paths were exercised.
-                        assert patched_th.called or patched_mw.called, (
-                            f"Auth chain not exercised for {tool_name} — get_http_headers patches were not called"
-                        )
+                        assert (
+                            patched_th.called or patched_mw.called
+                        ), f"Auth chain not exercised for {tool_name} — get_http_headers patches were not called"
                         return response_cls(**result.structured_content)
+
         else:
             # Unit mode: inject identity directly.
             async def _call():
@@ -833,6 +885,25 @@ class BaseTestEnv:
             except Exception as e:
                 errors.append(e)
 
+        # 1a. Clean up admin client + restore its dependency_overrides to
+        # the snapshot captured at build time (Agent B Risk #13 isolation).
+        # The admin app is env-local, so this only matters if a test held a
+        # reference to it and mutated overrides outside override_dependency()
+        # — we still restore/clear to guarantee no cross-test leakage even
+        # in that path.
+        if self._admin_app is not None:
+            try:
+                if self._admin_overrides_snapshot is not None:
+                    self._admin_app.dependency_overrides.clear()
+                    self._admin_app.dependency_overrides.update(self._admin_overrides_snapshot)
+                else:
+                    self._admin_app.dependency_overrides.clear()
+                self._admin_client = None
+                self._admin_app = None
+                self._admin_overrides_snapshot = None
+            except Exception as e:
+                errors.append(e)
+
         # 2. Unbind factories (integration mode only)
         if self.use_real_db:
             try:
@@ -912,3 +983,139 @@ class IntegrationEnv(BaseTestEnv):
             self._rest_client = TestClient(app)
 
         return self._rest_client
+
+    # -- Admin-context client (L0-22) ---------------------------------------
+
+    @property
+    def admin_app(self) -> Any:
+        """Return the FastAPI app backing ``get_admin_client()`` (lazy-built).
+
+        Exposed so tests can register throwaway probe routes on it (useful
+        for exercising session/middleware behavior without a real blueprint).
+        Calling this before ``get_admin_client()`` builds the app on demand.
+        """
+        if self._admin_app is None:
+            self.get_admin_client()
+        return self._admin_app
+
+    def get_admin_client(
+        self,
+        *,
+        authenticated: bool = False,
+        session_payload: dict[str, Any] | None = None,
+    ) -> Any:
+        """Return a ``TestClient`` bound to an admin-context FastAPI app.
+
+        The admin client is a sibling of ``get_rest_client()`` but targets an
+        **isolated** ``FastAPI()`` instance (NOT ``src.app.app``). Rationale:
+        at L0 the root app has no ``SessionMiddleware``, no admin router
+        inclusion, and no ``TrustedHost`` / ``UnifiedAuth`` layers — those
+        land at L1a..L2. Binding the admin client to the root app at L0
+        would either crash on middleware-order asserts or silently hit the
+        Flask WSGI mount. Instead, each env owns a fresh FastAPI with just
+        ``SessionMiddleware`` + ``build_admin_router()`` — the minimum L1+
+        tests need to exercise the empty admin scaffold.
+
+        Dependency-override isolation (Agent B Risk #13): overrides live on
+        ``self._admin_app.dependency_overrides``, which is owned by this
+        env and cleared on ``__exit__``. No two envs share an admin app,
+        so xdist-parallel tests cannot clobber each other's overrides.
+
+        Args:
+            authenticated: If True, pre-populate the session with a minimal
+                admin identity (``user_email`` + ``tenant_id``). Useful for
+                L1+ tests hitting authed admin routes.
+            session_payload: Explicit dict to write into the signed session
+                cookie before the first request. Overrides take precedence
+                over the synthetic payload produced by ``authenticated``.
+
+        Returns:
+            ``starlette.testclient.TestClient`` with the ``adcp_session``
+            cookie pre-seeded if a payload was provided.
+
+        Note:
+            If called twice on the same env with conflicting session args,
+            the second call re-seeds the cookie on the existing client.
+            The admin app itself is only built once per env.
+        """
+        from fastapi import FastAPI
+        from starlette.middleware.sessions import SessionMiddleware
+        from starlette.testclient import TestClient
+
+        from src.admin.app_factory import build_admin_router
+
+        if self._admin_app is None:
+            app = FastAPI(
+                title="admin-test-harness",
+                # redirect_slashes must match the admin router invariant so
+                # url_for tests exercise the same 307/308 behavior seen in prod.
+                redirect_slashes=True,
+            )
+            # Test-only secret. Production uses SESSION_SECRET env var via
+            # session_middleware_kwargs() (landed at L1a). Must be >= 32 bytes
+            # to match the production validation in src/admin/sessions.py.
+            app.add_middleware(
+                SessionMiddleware,
+                secret_key="x" * 64,
+                session_cookie="adcp_session",
+                max_age=14 * 24 * 3600,
+                same_site="lax",
+                https_only=False,
+                path="/",
+            )
+            app.include_router(build_admin_router())
+
+            self._admin_app = app
+            # Snapshot the starting state (typically empty) so __exit__ can
+            # restore to exactly what it was — defends against helpers that
+            # install framework-level overrides during app construction.
+            self._admin_overrides_snapshot = dict(app.dependency_overrides)
+            self._admin_client = TestClient(app)
+
+        # Seed the session cookie if requested. This is done every call so
+        # successive get_admin_client(authenticated=..., session_payload=...)
+        # invocations are idempotent/stateless from the caller's perspective.
+        payload: dict[str, Any] = {}
+        if authenticated:
+            payload = {
+                "user_email": f"admin@{self._tenant_id}",
+                "tenant_id": self._tenant_id,
+            }
+        if session_payload is not None:
+            payload.update(session_payload)
+        if payload:
+            self._seed_admin_session(payload)
+
+        return self._admin_client
+
+    def _seed_admin_session(self, payload: dict[str, Any]) -> None:
+        """Write a signed ``adcp_session`` cookie onto the admin TestClient.
+
+        Uses the same ``itsdangerous.TimestampSigner`` format Starlette's
+        ``SessionMiddleware`` produces. This mirrors the production cookie
+        shape byte-for-byte so tests exercise the real middleware decode
+        path on the next request.
+        """
+        import itsdangerous
+
+        signer = itsdangerous.TimestampSigner("x" * 64)
+        serialized = b64encode_json(payload)
+        signed = signer.sign(serialized).decode("utf-8")
+        # httpx TestClient cookie jar
+        self._admin_client.cookies.set("adcp_session", signed)
+
+    def override_dependency(self, key: Any, value_fn: Any) -> _OverrideDependencyCM:
+        """Context manager: install a ``dependency_overrides`` entry scoped to a block.
+
+        The override lives on ``self._admin_app.dependency_overrides`` for the
+        duration of the ``with`` block; it is removed on exit (or restored
+        to its prior value if the key was already set). Tests MUST use this
+        instead of raw ``app.dependency_overrides[k] = fn`` assignment so
+        the harness can enforce per-block cleanup — enforced by the
+        structural guard ``test_architecture_harness_overrides_isolated``.
+        """
+        if self._admin_app is None:
+            # Auto-build the admin app so callers don't have to remember the
+            # get_admin_client() call first; mirrors admin_app property.
+            self.get_admin_client()
+        return _OverrideDependencyCM(self._admin_app, key, value_fn)
