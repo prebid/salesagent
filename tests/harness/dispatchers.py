@@ -112,14 +112,18 @@ class RestE2EDispatcher:
 
         # identity=None means "send without auth headers" (no-auth test).
         # Let Docker's auth middleware return 401/structured error.
+        # When identity exists but auth_token is None (e.g., principal_id=None
+        # boundary tests), omit that header so the server rejects gracefully
+        # instead of httpx raising "Header value must be str or bytes, not NoneType".
+        headers: dict[str, str] = {"Content-Type": "application/json"}
         if identity is not None:
-            headers = {
-                "x-adcp-auth": identity.auth_token,
-                "x-adcp-tenant": identity.tenant["subdomain"],
-                "Content-Type": "application/json",
-            }
-        else:
-            headers = {"Content-Type": "application/json"}
+            if identity.auth_token is not None:
+                headers["x-adcp-auth"] = identity.auth_token
+            tenant = getattr(identity, "tenant", None)
+            if tenant is not None:
+                subdomain = tenant.get("subdomain") if isinstance(tenant, dict) else getattr(tenant, "subdomain", None)
+                if subdomain is not None:
+                    headers["x-adcp-tenant"] = subdomain
 
         body = env.build_rest_body(**kwargs)
         endpoint = env.REST_ENDPOINT  # type: ignore[attr-defined]

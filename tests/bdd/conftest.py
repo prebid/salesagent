@@ -1063,19 +1063,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
-        # UC-011 e2e_rest-only failures
-        _UC011_E2E_REST_XFAIL: set[str] = {
-            "T-UC-011-list-no-principal",
-            "T-UC-011-sync-no-principal",
-        }
-        if "e2e_rest" in nodeid and marker_names & _UC011_E2E_REST_XFAIL:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="e2e_rest: principal_id=None causes 'Header value must be str or bytes' in REST transport",
-                    strict=True,
-                )
-            )
-
         # UC-011 e2e_rest: sync/list account scenarios that need real HTTP stack
         if "e2e_rest" in nodeid and any(t.startswith("T-UC-011") for t in marker_names):
             test_func = nodeid.split("::")[-1].split("[")[0] if "::" in nodeid else ""
@@ -1531,7 +1518,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # Invariants that still fail entirely
             "T-UC-019-inv-150-1",
             "T-UC-019-inv-150-3",
-            "T-UC-019-inv-150-5",
+            # Graduated: T-UC-019-inv-150-5 (status filter no longer blocks by-ID queries)
             "T-UC-019-inv-151-4",
             "T-UC-019-inv-153-3",
             "T-UC-019-inv-153-4",
@@ -1565,18 +1552,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # These scenario outlines have some parametrizations that pass (graduated)
         # and some that still fail. Only the failing variants are xfailed.
         _UC019_PARAM_XFAIL: list[tuple[str, set[str], str]] = [
-            # Status computation: pre_flight/post_flight fail (non-active statuses)
-            (
-                "T-UC-019-partition-status",
-                {"pre_flight", "post_flight"},
-                "UC-019: non-active status computation not implemented",
-            ),
-            # Status boundary: day-before/day-after transitions fail
-            (
-                "T-UC-019-boundary-status",
-                {"day before", "day after"},
-                "UC-019: non-active status boundary transitions not implemented",
-            ),
+            # Graduated: T-UC-019-partition-status pre_flight/post_flight
+            # (status filter no longer blocks by-ID queries)
+            # Graduated: T-UC-019-boundary-status day before/day after
+            # (status filter no longer blocks by-ID queries)
             # Default status filter: multi-status queries fail
             (
                 "T-UC-019-partition-status-filter",
@@ -1613,6 +1592,41 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 if tag in marker_names and any(s in nodeid for s in substrings):
                     item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
                     break
+
+        # --- UC-019: e2e_rest xfails for datetime-mock-dependent tests ---
+        # These scenarios use `And today is "<date>"` which patches datetime
+        # in-process. The patch has no effect on Docker — real datetime.now()
+        # is used, so status assertions fail.
+        if is_e2e_rest and any(t.startswith("T-UC-019") for t in marker_names):
+            _UC019_E2E_DATETIME_TAGS: set[str] = {
+                "T-UC-019-partition-status",
+                "T-UC-019-boundary-status",
+                "T-UC-019-inv-150-2",
+                "T-UC-019-inv-150-4",
+                "T-UC-019-inv-150-5",
+                # Default filter test creates flight dates relative to mock_today
+                # (default 2026-03-15), making both buys "completed" on real date.
+                "T-UC-019-inv-151-1",
+            }
+            _UC019_E2E_MOCK_TAGS: set[str] = {
+                # Adapter mock (get_adapter patch) has no effect in Docker.
+                "T-UC-019-partition-snapshot",
+                "T-UC-019-boundary-snapshot",
+            }
+            if marker_names & _UC019_E2E_DATETIME_TAGS:
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="e2e_rest: datetime.now() mock has no effect in Docker — status computed from real date",
+                        strict=False,
+                    )
+                )
+            if marker_names & _UC019_E2E_MOCK_TAGS:
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="e2e_rest: adapter mock has no effect in Docker — snapshot data not controllable",
+                        strict=False,
+                    )
+                )
 
         # --- UC-026: xfails for spec-production gaps ---
         # Transport wiring done (a3xo: MediaBuyDualEnv routes updates correctly).
