@@ -196,6 +196,7 @@ def _setup_account_by_natural_key(brand_domain: str, operator: str, tenant: obje
 # ═══════════════════════════════════════════════════════════════════════
 
 
+@when("the Buyer Agent syncs the creatives")
 @when("the Buyer Agent syncs the creative")
 @when("the Buyer Agent syncs the creative via the REST/A2A endpoint")
 @when("the Buyer Agent syncs the creative via the MCP tool")
