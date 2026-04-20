@@ -688,10 +688,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # Graduated (all 4 transports pass with strong assertions):
             # T-UC-005-partition-disclosure, T-UC-005-boundary-disclosure,
             # T-UC-005-boundary-asset-types
+            # Graduated MCP: inv-049-8-violated, inv-049-8-nofield
+            # (MCP now passes with strong assertions; impl/a2a/rest still xfail)
             "T-UC-005-inv-049-8-violated",
             "T-UC-005-inv-049-8-nofield",
         }
-        if marker_names & _UC005_PARTIAL_TAGS:
+        if marker_names & _UC005_PARTIAL_TAGS and not is_mcp:
             item.add_marker(pytest.mark.xfail(reason="disclosure/asset partial impl", strict=False))
             # Skip selective xfails for these — the strict=False above covers them
         else:
@@ -1066,8 +1068,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # UC-011 e2e_rest: sync/list account scenarios that need real HTTP stack
         if "e2e_rest" in nodeid and any(t.startswith("T-UC-011") for t in marker_names):
             test_func = nodeid.split("::")[-1].split("[")[0] if "::" in nodeid else ""
+            # Graduated: test_newly_synced_account_appears_in_list_accounts (now passes on e2e_rest)
             _UC011_E2E_REST_FUNCS = {
-                "test_newly_synced_account_appears_in_list_accounts",
                 "test_sync_accounts_are_scoped_to_the_authenticated_agent",
             }
             # Also match by tag
