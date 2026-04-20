@@ -57,7 +57,7 @@ def _write_audit(
             )
         else:
             logger.debug(
-                "AuditLogger.log() not yet implemented; skipping audit write " "for action=%s (L0 scaffold)",
+                "AuditLogger.log() not yet implemented; skipping audit write for action=%s (L0 scaffold)",
                 action,
             )
     except Exception:
