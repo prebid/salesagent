@@ -6,8 +6,11 @@ Accept-matrix semantic obligation (Invariant #3) is not met.
 Green state: real branching per foundation-modules.md §11.11 + frontend-deep-audit
 F6/H7 — path-scope to /admin/* + /tenant/*, XHR reject, AJAX reject, HTML for
 browser navigation, HTML for browser-fetch (no AJAX indicator) on admin paths.
-Also exercises templates/error.html pinned contract {error_code, message,
-status_code}.
+Also exercises templates/_fastapi_error.html pinned contract
+{error_code, message, status_code}. The FastAPI-native error template lives
+at templates/_fastapi_error.html; Flask routers continue to render
+templates/error.html with the legacy {error, error_title, error_message,
+back_url} contract until they are ported at L1+.
 """
 
 from __future__ import annotations
@@ -105,9 +108,14 @@ class TestResponseModeAcceptMatrix:
 
 
 class TestErrorTemplatePinnedContract:
-    """Golden render test for templates/error.html pinned variable contract
-    {error_code, message, status_code}. Any drift here breaks handlers that
-    reuse the template per foundation-modules.md §11.11.
+    """Golden render test for templates/_fastapi_error.html pinned variable
+    contract {error_code, message, status_code}. Any drift here breaks
+    handlers that reuse the template per foundation-modules.md §11.11.
+
+    This template is the FastAPI-native companion to the legacy Flask
+    templates/error.html (which keeps the {error, error_title, error_message,
+    back_url} contract until L1+ port). Keeping them as separate files
+    preserves L0's zero-visible-change thesis.
     """
 
     def test_template_renders_with_pinned_contract(self) -> None:
@@ -116,10 +124,10 @@ class TestErrorTemplatePinnedContract:
         from jinja2 import DictLoader, Environment
 
         project_root = Path(__file__).resolve().parents[3]
-        template_path = project_root / "templates" / "error.html"
+        template_path = project_root / "templates" / "_fastapi_error.html"
         base_path = project_root / "templates" / "base.html"
 
-        assert template_path.exists(), "templates/error.html must be authored at L0-14"
+        assert template_path.exists(), "templates/_fastapi_error.html must be authored at L0-14"
         assert base_path.exists(), "templates/base.html must exist"
 
         # Isolated Jinja environment — stub base.html to avoid dragging in the
@@ -130,7 +138,7 @@ class TestErrorTemplatePinnedContract:
         env = Environment(
             loader=DictLoader(
                 {
-                    "error.html": src,
+                    "_fastapi_error.html": src,
                     "base.html": (
                         "<!doctype html><html><head><title>{% block title %}"
                         "{% endblock %}</title></head><body>{% block content %}"
@@ -140,7 +148,7 @@ class TestErrorTemplatePinnedContract:
             ),
             autoescape=True,
         )
-        rendered = env.get_template("error.html").render(
+        rendered = env.get_template("_fastapi_error.html").render(
             error_code="NOT_FOUND", message="Tenant missing", status_code=404
         )
 
@@ -154,11 +162,12 @@ class TestErrorTemplatePinnedContract:
     def test_template_does_not_reference_legacy_variables(self) -> None:
         """The pinned contract is EXACTLY {error_code, message, status_code}.
         Legacy Flask-era names (error_title, error_message, back_url) MUST
-        be absent — no invented extra variables per L0-14 constraint."""
+        be absent from the FastAPI-native template — no invented extra
+        variables per L0-14 constraint."""
         from pathlib import Path
 
         project_root = Path(__file__).resolve().parents[3]
-        src = (project_root / "templates" / "error.html").read_text(encoding="utf-8")
+        src = (project_root / "templates" / "_fastapi_error.html").read_text(encoding="utf-8")
 
         for legacy in ("error_title", "error_message", "back_url"):
             assert legacy not in src, f"Legacy variable {legacy!r} must not appear in pinned contract"

@@ -9,9 +9,15 @@ Canonical spec: ``flask-to-fastapi-foundation-modules.md §11.10`` + ``§11.11``
 ``flask-to-fastapi-deep-audit.md §1.3`` (Blocker 3); ``frontend-deep-audit.md``
 F6 / H7 (AJAX and browser-fetch wildcard-Accept edge cases).
 
-Companion template: ``templates/error.html`` with pinned variable contract
-``{error_code, message, status_code}`` — handlers that render the template
-MUST pass exactly those three keys; no extras per L0-14 constraint.
+Companion template: ``templates/_fastapi_error.html`` with pinned variable
+contract ``{error_code, message, status_code}`` — the FastAPI-native error
+renderer at L1+ MUST pass exactly those three keys; no extras per L0-14
+constraint. Flask routers (``src/admin/routers/*.py``) continue to render
+``templates/error.html`` with the legacy ``{error, error_title, error_message,
+back_url}`` contract until they are ported at L1+. Keeping the two templates
+as separate files preserves L0's zero-visible-change thesis: Flask callers
+see unchanged template output; the new FastAPI renderer has its own pinned
+template.
 
 Sync L0-L4 — no async primitives; header read is O(1).
 """

@@ -1,15 +1,19 @@
 {% extends "base.html" %}
 
-{% block title %}Error {{ status_code }}{% endblock %}
+{% block title %}{{ error_title or "Error" }}{% endblock %}
 
 {% block content %}
 <div class="container" style="max-width: 600px; margin: 50px auto; text-align: center;">
     <div class="card" style="padding: 2rem;">
-        <h2 style="color: #dc3545; margin-bottom: 0.5rem;">Error {{ status_code }}</h2>
-        <p style="color: #999; font-size: 0.9rem; margin-bottom: 1rem;">{{ error_code }}</p>
+        <h2 style="color: #dc3545; margin-bottom: 1rem;">{{ error_title or "Error" }}</h2>
         <p style="font-size: 1.1rem; color: #666; margin-bottom: 2rem;">
-            {{ message }}
+            {{ error_message or "An error occurred." }}
         </p>
+        {% if back_url %}
+        <a href="{{ back_url }}" class="btn btn-primary">← Go Back</a>
+        {% else %}
+        <a href="/" class="btn btn-primary">← Go Home</a>
+        {% endif %}
     </div>
 </div>
 {% endblock %}
