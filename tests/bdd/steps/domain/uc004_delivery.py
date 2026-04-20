@@ -705,6 +705,33 @@ def when_request_no_status_filter(ctx: dict) -> None:
     dispatch_request(ctx, media_buy_ids=real_ids if real_ids else None)
 
 
+@when(parsers.parse('the Buyer Agent requests delivery metrics at status_filter boundary "{boundary_value}"'))
+def when_request_status_filter_boundary(ctx: dict, boundary_value: str) -> None:
+    """Request delivery metrics with a status_filter boundary value.
+
+    Parses boundary_value:
+      - '(field absent)' → omit status_filter entirely (server default)
+      - '[]' → empty list
+      - '["active", "paused"]' → parsed JSON list
+      - 'canceled' → single-element list ['canceled']
+    """
+    media_buys = ctx.get("media_buys", {})
+    labels = list(media_buys.keys())
+    real_ids = _resolve_media_buy_ids(ctx, labels) if labels else []
+    kwargs: dict[str, Any] = {}
+    if real_ids:
+        kwargs["media_buy_ids"] = real_ids
+
+    if boundary_value == "(field absent)":
+        pass  # omit status_filter — test server default behavior
+    elif boundary_value.startswith("["):
+        kwargs["status_filter"] = json.loads(boundary_value)
+    else:
+        kwargs["status_filter"] = [boundary_value]
+
+    dispatch_request(ctx, **kwargs)
+
+
 @when(parsers.parse('the Buyer Agent requests delivery metrics with start_date "{start}" and end_date "{end}"'))
 def when_request_date_range(ctx: dict, start: str, end: str) -> None:
     """Request with date range."""
