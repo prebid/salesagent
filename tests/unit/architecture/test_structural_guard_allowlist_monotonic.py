@@ -106,8 +106,7 @@ def test_allowlist_counts_do_not_exceed_baselines() -> None:
             )
     assert not violations, (
         "Structural-guard allowlist(s) GREW — Captured→shrink allowlists can only shrink.\n"
-        "Fix the new violations at the source site; do NOT append to the allowlist:\n"
-        + "\n".join(violations)
+        "Fix the new violations at the source site; do NOT append to the allowlist:\n" + "\n".join(violations)
     )
 
 
@@ -131,8 +130,7 @@ def test_baselines_stay_in_sync_with_shrinks() -> None:
             )
     assert not stale, (
         "Structural-guard baseline(s) are stale (current < baseline). "
-        "Decrement the baseline in the same commit that removed the allowlist entry:\n"
-        + "\n".join(stale)
+        "Decrement the baseline in the same commit that removed the allowlist entry:\n" + "\n".join(stale)
     )
 
 
@@ -162,6 +160,5 @@ def test_detector_catches_growth(tmp_path: Path) -> None:
     current = len(active_entries)
     baseline = int(planted_baseline["allowlist_count"])
     assert current > baseline, (
-        f"Meta-test broken: planted baseline={baseline} should be below "
-        f"the 3 entries we wrote. Got current={current}."
+        f"Meta-test broken: planted baseline={baseline} should be below the 3 entries we wrote. Got current={current}."
     )

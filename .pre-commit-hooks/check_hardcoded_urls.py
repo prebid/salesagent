@@ -134,7 +134,7 @@ def main(filenames: list[str]) -> int:
 
     print("Target pattern:")
     print("  <!-- template -->")
-    print('  <body data-api-url="{{ url_for(\'admin_api_list\', tenant_id=tenant.id) }}">')
+    print("  <body data-api-url=\"{{ url_for('admin_api_list', tenant_id=tenant.id) }}\">")
     print()
     print("  // JS")
     print("  const apiUrl = document.body.dataset.apiUrl;")

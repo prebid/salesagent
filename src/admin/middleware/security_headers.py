@@ -101,9 +101,7 @@ class SecurityHeadersMiddleware:
 
     def _wrap_send(self, send: Send) -> Send:
         hsts_header = (
-            f"max-age={self.hsts_seconds}; includeSubDomains; preload".encode("latin-1")
-            if self.https_only
-            else None
+            f"max-age={self.hsts_seconds}; includeSubDomains; preload".encode("latin-1") if self.https_only else None
         )
         csp_header = self.csp.encode("latin-1")
         permissions_header = DEFAULT_PERMISSIONS_POLICY.encode("latin-1")
