@@ -44,21 +44,9 @@ from fastapi import FastAPI, Request
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.testclient import TestClient
 
-EXPECTED_KEYS: frozenset[str] = frozenset(
-    {
-        "messages",
-        "support_email",
-        "sales_agent_domain",
-        "user_email",
-        "user_authenticated",
-        "user_role",
-        "test_mode",
-        "session",
-        "g_test_mode",
-        "csrf_token",
-        "get_flashed_messages",
-    }
-)
+from tests.unit.admin._contracts import ADMIN_BASE_CTX_KEYS
+
+EXPECTED_KEYS: frozenset[str] = ADMIN_BASE_CTX_KEYS
 
 
 def _build_context() -> dict[str, object]:

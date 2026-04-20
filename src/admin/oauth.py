@@ -58,7 +58,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
-from typing import Any
+from typing import Any, Final
 
 from authlib.integrations.starlette_client import OAuth
 from authlib.integrations.starlette_client.apps import StarletteOAuth2App
@@ -74,10 +74,10 @@ logger = logging.getLogger(__name__)
 # ``CLAUDE.md`` §Critical Invariants and
 # ``flask-to-fastapi-deep-audit.md`` §1 blocker 6.
 
-OAUTH_GOOGLE_CALLBACK_PATH: str = "/admin/auth/google/callback"
+OAUTH_GOOGLE_CALLBACK_PATH: Final[str] = "/admin/auth/google/callback"
 """Google OAuth callback URI — byte-immutable per Invariant #6."""
 
-OAUTH_OIDC_CALLBACK_PATH: str = "/admin/auth/oidc/callback"
+OAUTH_OIDC_CALLBACK_PATH: Final[str] = "/admin/auth/oidc/callback"
 """Per-tenant OIDC callback URI — NO ``{tenant_id}`` segment.
 
 Tenant context is resolved from ``request.session["tenant_id"]`` inside
@@ -86,7 +86,7 @@ the handler, not from a URL path parameter. Verified at
 L1a by the route registration in ``src/admin/routers/auth.py``.
 """
 
-OAUTH_GAM_CALLBACK_PATH: str = "/admin/auth/gam/callback"
+OAUTH_GAM_CALLBACK_PATH: Final[str] = "/admin/auth/gam/callback"
 """Google Ad Manager OAuth callback URI — WITH the ``/admin/`` prefix.
 
 The ``/admin/`` prefix is part of the registered URI in Google Cloud
@@ -94,7 +94,7 @@ Console. Verified at ``src/admin/blueprints/auth.py:931,959`` (legacy
 Flask) and enforced at L1a by the route registration.
 """
 
-GOOGLE_CLIENT_NAME: str = "google"
+GOOGLE_CLIENT_NAME: Final[str] = "google"
 """Authlib registration key for the global Google OAuth client.
 
 Referenced by :func:`init_oauth` at registration time and by callback
@@ -150,8 +150,9 @@ def set_oidc_config_resolver(resolver: Any) -> None:
 def init_oauth() -> None:
     """Register the default global Google OIDC client.
 
-    Called once at startup by :func:`src.admin.app_factory.build_admin_router`.
-    Reads OAuth env vars once (not on every request) and is idempotent:
+    Called once at startup by ``src/app.py::app_lifespan`` at L1a (not yet
+    wired at L0). Reads OAuth env vars once (not on every request) and is
+    idempotent:
     when the ``google`` client is already registered, subsequent calls
     are a no-op.
 

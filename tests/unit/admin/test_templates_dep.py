@@ -18,6 +18,8 @@ from unittest.mock import MagicMock
 from fastapi import Depends
 from fastapi.templating import Jinja2Templates
 
+from tests.unit.admin._contracts import ADMIN_BASE_CTX_KEYS
+
 
 class _StubRequest:
     """Minimal Request duck-type — only exposes .session and .app.state.templates."""
@@ -97,21 +99,7 @@ def test_get_templates_returns_app_state_instance() -> None:
 # 11-key BaseCtxDep contract
 # ---------------------------------------------------------------------------
 
-EXPECTED_BASE_CTX_KEYS: frozenset[str] = frozenset(
-    {
-        "messages",
-        "support_email",
-        "sales_agent_domain",
-        "user_email",
-        "user_authenticated",
-        "user_role",
-        "test_mode",
-        "session",
-        "g_test_mode",
-        "csrf_token",
-        "get_flashed_messages",
-    }
-)
+EXPECTED_BASE_CTX_KEYS: frozenset[str] = ADMIN_BASE_CTX_KEYS
 
 
 def _call_get_base_context(request: _StubRequest) -> dict:
