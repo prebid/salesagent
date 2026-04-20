@@ -1,0 +1,16 @@
+# Planted-violation meta-fixture for
+# tests/unit/architecture/test_architecture_single_worker_invariant.py.
+#
+# This file is NOT production config — it is intentionally broken. The guard's
+# `test_detector_catches_meta_fixture` reads this file and asserts the regex
+# detects a workers>=2 declaration. If this fixture stops tripping the
+# detector, the guard is silently broken and must be fixed (not the fixture).
+#
+# Per the same pattern used by L0-01's meta-fixtures under
+# tests/unit/architecture/fixtures/.
+
+# Docker env var form:
+WEB_CONCURRENCY=4
+
+# Uvicorn CLI flag form:
+uvicorn src.app:app --workers 4 --host 0.0.0.0

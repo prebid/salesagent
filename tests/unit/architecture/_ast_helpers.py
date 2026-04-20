@@ -114,6 +114,21 @@ def find_stale_allowlist_entries(
     return stale
 
 
+def call_func_name(node: ast.Call) -> str | None:
+    """Return the plain or attribute name of an ``ast.Call``'s target, or None.
+
+    For ``foo()`` returns ``"foo"``; for ``bar.foo()`` returns ``"foo"``;
+    for more exotic expression targets (e.g. ``(a or b)()``) returns None.
+    Shared helper across structural guards that filter calls by name.
+    """
+    func = node.func
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return None
+
+
 def iter_route_decorator_calls(tree: ast.AST) -> Iterator[tuple[ast.FunctionDef | ast.AsyncFunctionDef, ast.Call]]:
     """Yield ``(handler_node, decorator_call)`` for every FastAPI route decorator.
 
@@ -139,6 +154,7 @@ __all__ = [
     "SCRIPTS",
     "SRC",
     "TESTS",
+    "call_func_name",
     "find_stale_allowlist_entries",
     "iter_python_files",
     "iter_route_decorator_calls",
