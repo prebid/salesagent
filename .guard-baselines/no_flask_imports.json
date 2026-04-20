@@ -1,0 +1,6 @@
+{
+  "allowlist_file": "no_flask_imports.txt",
+  "allowlist_count": 40,
+  "committed_at": "2026-04-20",
+  "note": "Captured→shrink baseline — decrement when removing entries from no_flask_imports.txt. See test_structural_guard_allowlist_monotonic.py (§11.26)."
+}

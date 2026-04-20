@@ -1,0 +1,6 @@
+{
+  "allowlist_file": "no_form_getlist.txt",
+  "allowlist_count": 3,
+  "committed_at": "2026-04-20",
+  "note": "Captured→shrink baseline — decrement when removing entries from no_form_getlist.txt. See test_structural_guard_allowlist_monotonic.py (§11.26)."
+}

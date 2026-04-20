@@ -1,0 +1,6 @@
+{
+  "allowlist_file": "no_direct_env_access.txt",
+  "allowlist_count": 132,
+  "committed_at": "2026-04-20",
+  "note": "Captured→shrink baseline — decrement when removing entries from no_direct_env_access.txt. See test_structural_guard_allowlist_monotonic.py (§11.26)."
+}

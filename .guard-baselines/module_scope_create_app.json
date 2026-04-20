@@ -1,0 +1,6 @@
+{
+  "allowlist_file": "module_scope_create_app.txt",
+  "allowlist_count": 7,
+  "committed_at": "2026-04-20",
+  "note": "Captured→shrink baseline — decrement when removing entries from module_scope_create_app.txt. See test_structural_guard_allowlist_monotonic.py (§11.26)."
+}

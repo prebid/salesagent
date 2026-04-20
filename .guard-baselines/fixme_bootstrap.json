@@ -1,0 +1,6 @@
+{
+  "allowlist_file": "fixme_bootstrap.txt",
+  "allowlist_count": 132,
+  "committed_at": "2026-04-20",
+  "note": "Captured→shrink bootstrap of pre-existing allowlist entries without FIXMEs. See test_architecture_allowlist_fixme_coverage.py."
+}
