@@ -36,11 +36,7 @@ class TestInventoryPageLoads:
         page.goto(f"{base_url}/tenant/default/inventory")
         page.wait_for_load_state("networkidle")
 
-        # Check if this is a GAM tenant (Browse Inventory tab exists)
         browser_tab = page.locator("#browser-tab")
-        if browser_tab.count() == 0:
-            pytest.skip("Not a GAM tenant — Browse Inventory tab not available")
-
         browser_tab.click()
         page.wait_for_timeout(500)
 
@@ -74,12 +70,8 @@ class TestInventoryPickerTree:
         """
         page = authenticated_page
 
-        # Try GAM product page first, fall back to generic
-        page.goto(f"{base_url}/tenant/default/products/add-gam")
+        page.goto(f"{base_url}/tenant/default/products/add")
         page.wait_for_load_state("networkidle")
-
-        if "Not Found" in (page.locator("body").text_content() or ""):
-            pytest.skip("Add product GAM page not available")
 
         assert page.js_errors == [], f"JS errors on add product page: {page.js_errors}"
 
@@ -87,16 +79,11 @@ class TestInventoryPickerTree:
         """Open the inventory picker modal and verify no JS errors."""
         page = authenticated_page
 
-        page.goto(f"{base_url}/tenant/default/products/add-gam")
+        page.goto(f"{base_url}/tenant/default/products/add")
         page.wait_for_load_state("networkidle")
 
-        if "Not Found" in (page.locator("body").text_content() or ""):
-            pytest.skip("Add product GAM page not available")
-
-        # Try to open the ad unit picker
+        # Open the ad unit picker
         browse_btn = page.locator("text=Browse Ad Units").first
-        if browse_btn.count() == 0 or not browse_btn.is_enabled():
-            pytest.skip("Browse Ad Units button not available (inventory not synced)")
 
         browse_btn.click()
         page.wait_for_timeout(1000)

@@ -39,6 +39,22 @@ def _ensure_test_auth_enabled():
     engine = create_engine(db_url)
     with engine.connect() as conn:
         conn.execute(text("UPDATE tenants SET auth_setup_mode = true WHERE tenant_id = 'default'"))
+        # Configure as GAM tenant so inventory tree UI paths are exercised
+        conn.execute(text("UPDATE tenants SET ad_server = 'google_ad_manager' WHERE tenant_id = 'default'"))
+        # Seed one ad unit so inventory_synced=True and Browse Ad Units is enabled
+        conn.execute(
+            text(
+                "INSERT INTO gam_inventory"
+                " (tenant_id, inventory_type, inventory_id, name, path, status,"
+                "  inventory_metadata, last_synced, created_at, updated_at)"
+                " VALUES ('default', 'ad_unit', 'smoke-au-001', 'Smoke Test Ad Unit',"
+                "  '[\"Smoke Test Ad Unit\"]'::jsonb, 'ACTIVE',"
+                '  \'{"parent_id": null, "has_children": false, "sizes":'
+                '  [{"width": 300, "height": 250}]}\'::jsonb,'
+                "  NOW(), NOW(), NOW())"
+                " ON CONFLICT DO NOTHING"
+            )
+        )
         conn.commit()
     engine.dispose()
 
