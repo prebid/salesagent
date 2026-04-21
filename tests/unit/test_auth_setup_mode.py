@@ -7,13 +7,13 @@ Auth setup mode allows test credentials to work per-tenant:
 """
 
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from src.core.database.models import Tenant
 
 
 class TestTenantAuthSetupMode:
-    """Tests for the auth_setup_mode field on Tenant model."""
+    """Characterization tests for the auth_setup_mode field on the Tenant ORM model."""
 
     def test_tenant_has_auth_setup_mode_field(self):
         """Tenant model should have auth_setup_mode field."""
@@ -42,121 +42,63 @@ class TestTenantAuthSetupMode:
         assert column.type.python_type is bool
 
 
-class TestSetupModeLogic:
-    """Tests for the setup mode enable/disable logic."""
+class TestTestAuthEndpoint:
+    """Endpoint-level tests for the /test/auth gate.
 
-    def test_disable_setup_mode_requires_sso_enabled(self):
-        """Should not allow disabling setup mode without SSO enabled."""
-        tenant = MagicMock()
-        tenant.auth_setup_mode = True
+    F-02 fix: test auth requires BOTH ADCP_AUTH_TEST_MODE=true AND
+    the tenant's auth_setup_mode=True. These tests exercise the actual
+    Flask endpoint so a gate change in auth.py causes a real failure.
 
-        auth_config = MagicMock()
-        auth_config.oidc_enabled = False
+    (Previously removed in e1dbe47d and replaced with tests that
+    re-implemented the endpoint conditional inline — restored here.)
+    """
 
-        # Logic from disable_setup_mode endpoint:
-        # if not auth_config or not auth_config.oidc_enabled:
-        #     return error
-        should_reject = not auth_config or not auth_config.oidc_enabled
-        assert should_reject is True
+    def test_test_auth_allowed_when_both_enabled(self, make_auth_test_client):
+        """POST /test/auth returns 302 when env var and tenant setup mode are both on."""
+        with make_auth_test_client(auth_setup_mode=True) as (client, _):
+            with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true", "PRODUCTION": "", "ENVIRONMENT": ""}):
+                response = client.post(
+                    "/test/auth",
+                    data={"email": "test_super_admin@example.com", "password": "test123", "tenant_id": "default"},
+                )
 
-    def test_disable_setup_mode_allowed_with_sso(self):
-        """Should allow disabling setup mode when SSO is enabled."""
-        tenant = MagicMock()
-        tenant.auth_setup_mode = True
+        assert response.status_code == 302
 
-        auth_config = MagicMock()
-        auth_config.oidc_enabled = True
+    def test_test_auth_blocked_when_env_var_only(self, make_auth_test_client):
+        """POST /test/auth returns 404 when env var is set but tenant has disabled setup mode.
 
-        # Logic check
-        should_reject = not auth_config or not auth_config.oidc_enabled
-        assert should_reject is False
+        F-02 regression: this was the vulnerable case before the fix.
+        """
+        with make_auth_test_client(auth_setup_mode=False) as (client, _):
+            with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true", "PRODUCTION": "", "ENVIRONMENT": ""}):
+                response = client.post(
+                    "/test/auth",
+                    data={"email": "test_super_admin@example.com", "password": "test123", "tenant_id": "default"},
+                )
 
-        # After successful disable:
-        tenant.auth_setup_mode = False
-        assert tenant.auth_setup_mode is False
+        assert response.status_code == 404
 
-    def test_enable_setup_mode_always_allowed(self):
-        """Should always allow re-enabling setup mode."""
-        tenant = MagicMock()
-        tenant.auth_setup_mode = False
+    def test_test_auth_blocked_when_setup_mode_only(self, make_auth_test_client):
+        """POST /test/auth returns 404 when tenant is in setup mode but env var is not set."""
+        with make_auth_test_client(auth_setup_mode=True) as (client, _):
+            with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "", "PRODUCTION": "", "ENVIRONMENT": ""}):
+                response = client.post(
+                    "/test/auth",
+                    data={"email": "test_super_admin@example.com", "password": "test123", "tenant_id": "default"},
+                )
 
-        # Enable it
-        tenant.auth_setup_mode = True
-        assert tenant.auth_setup_mode is True
+        assert response.status_code == 404
 
+    def test_test_auth_blocked_when_both_disabled(self, make_auth_test_client):
+        """POST /test/auth returns 404 when both env var and tenant setup mode are off."""
+        with make_auth_test_client(auth_setup_mode=False) as (client, _):
+            with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "", "PRODUCTION": "", "ENVIRONMENT": ""}):
+                response = client.post(
+                    "/test/auth",
+                    data={"email": "test_super_admin@example.com", "password": "test123", "tenant_id": "default"},
+                )
 
-class TestTestAuthEndpointLogic:
-    """Tests for the /test/auth endpoint logic with setup mode."""
-
-    def test_test_auth_allowed_with_env_var(self):
-        """Test auth should be allowed when ADCP_AUTH_TEST_MODE=true."""
-        with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
-            env_test_mode = os.environ.get("ADCP_AUTH_TEST_MODE", "").lower() == "true"
-            tenant_setup_mode = False
-
-            # Should NOT abort (allow access)
-            should_abort = not env_test_mode and not tenant_setup_mode
-            assert should_abort is False
-
-    def test_test_auth_allowed_with_tenant_setup_mode(self):
-        """Test auth should be allowed when tenant has auth_setup_mode=True."""
-        with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": ""}):
-            env_test_mode = os.environ.get("ADCP_AUTH_TEST_MODE", "").lower() == "true"
-            tenant_setup_mode = True  # Tenant is in setup mode
-
-            # Should NOT abort (allow access)
-            should_abort = not env_test_mode and not tenant_setup_mode
-            assert should_abort is False
-
-    def test_test_auth_blocked_when_both_disabled(self):
-        """Test auth should 404 when both env var and setup mode are off."""
-        with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": ""}):
-            env_test_mode = os.environ.get("ADCP_AUTH_TEST_MODE", "").lower() == "true"
-            tenant_setup_mode = False  # Tenant disabled setup mode
-
-            # SHOULD abort (deny access)
-            should_abort = not env_test_mode and not tenant_setup_mode
-            assert should_abort is True
-
-
-class TestTenantLoginLogic:
-    """Tests for tenant login page respecting setup mode."""
-
-    def test_login_uses_tenant_auth_setup_mode(self):
-        """Tenant login should use tenant's auth_setup_mode field."""
-        tenant = MagicMock()
-        tenant.auth_setup_mode = True
-
-        # Logic from tenant_login:
-        # test_mode = tenant.auth_setup_mode if hasattr(tenant, "auth_setup_mode") else True
-        test_mode = tenant.auth_setup_mode if hasattr(tenant, "auth_setup_mode") else True
-        assert test_mode is True
-
-    def test_login_env_var_overrides_to_enable(self):
-        """Env var ADCP_AUTH_TEST_MODE=true should override to enable test mode."""
-        tenant = MagicMock()
-        tenant.auth_setup_mode = False  # Tenant disabled setup mode
-
-        with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
-            # Logic from tenant_login:
-            test_mode = tenant.auth_setup_mode if hasattr(tenant, "auth_setup_mode") else True
-            if os.environ.get("ADCP_AUTH_TEST_MODE", "").lower() == "true":
-                test_mode = True
-
-            assert test_mode is True
-
-    def test_login_respects_disabled_setup_mode(self):
-        """Tenant login should respect disabled setup mode when no env override."""
-        tenant = MagicMock()
-        tenant.auth_setup_mode = False  # Tenant disabled setup mode
-
-        with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": ""}):
-            test_mode = tenant.auth_setup_mode if hasattr(tenant, "auth_setup_mode") else True
-            if os.environ.get("ADCP_AUTH_TEST_MODE", "").lower() == "true":
-                test_mode = True
-
-            # Should remain False since no env override
-            assert test_mode is False
+        assert response.status_code == 404
 
 
 class TestMigration:
@@ -164,8 +106,6 @@ class TestMigration:
 
     def test_migration_file_exists(self):
         """Migration file for auth_setup_mode should exist."""
-        import os
-
         migration_path = "alembic/versions/add_auth_setup_mode.py"
         assert os.path.exists(migration_path), f"Migration file not found: {migration_path}"
 
@@ -178,47 +118,7 @@ class TestMigration:
         migration = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(migration)
 
-        # Check revision chain
         assert migration.revision == "add_auth_setup_mode"
         assert migration.down_revision == "add_tenant_auth_config"
         assert callable(migration.upgrade)
         assert callable(migration.downgrade)
-
-
-class TestUsersEndpointConfig:
-    """Tests for the users page template context."""
-
-    def test_list_users_passes_auth_setup_mode(self):
-        """list_users endpoint should pass auth_setup_mode to template."""
-        # The endpoint passes these to the template:
-        # auth_setup_mode=tenant.auth_setup_mode,
-        # oidc_enabled=auth_config.oidc_enabled if auth_config else False,
-
-        tenant = MagicMock()
-        tenant.auth_setup_mode = True
-
-        auth_config = MagicMock()
-        auth_config.oidc_enabled = True
-
-        context = {
-            "auth_setup_mode": tenant.auth_setup_mode,
-            "oidc_enabled": auth_config.oidc_enabled if auth_config else False,
-        }
-
-        assert context["auth_setup_mode"] is True
-        assert context["oidc_enabled"] is True
-
-    def test_list_users_handles_no_auth_config(self):
-        """list_users should handle case when no auth config exists."""
-        tenant = MagicMock()
-        tenant.auth_setup_mode = True
-
-        auth_config = None  # No auth config yet
-
-        context = {
-            "auth_setup_mode": tenant.auth_setup_mode,
-            "oidc_enabled": auth_config.oidc_enabled if auth_config else False,
-        }
-
-        assert context["auth_setup_mode"] is True
-        assert context["oidc_enabled"] is False
