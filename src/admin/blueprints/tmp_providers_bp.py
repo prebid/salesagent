@@ -10,6 +10,8 @@ The Sales Agent exposes active registrations via ``GET /tmp/providers``
 so the router can poll for discovery — it never reads the DB directly.
 """
 
+from __future__ import annotations
+
 import logging
 
 import requests
@@ -33,6 +35,78 @@ VALID_UID_TYPES = frozenset([
 
 # Create Blueprint
 tmp_providers_bp = Blueprint("tmp_providers", __name__)
+
+
+# ---------------------------------------------------------------------------
+# Shared form validation helper (DRY: used by both add and edit routes)
+# ---------------------------------------------------------------------------
+
+
+def _validate_provider_form(form: dict) -> tuple[dict, str | None]:
+    """Parse and validate TMP provider form data.
+
+    Returns:
+        (data, error_message) — *error_message* is ``None`` on success.
+        *data* contains the parsed/normalised fields ready for DB write.
+    """
+    name = form.get("name", "").strip()
+    endpoint = form.get("endpoint", "").strip()
+    context_match = form.get("context_match") == "on"
+    identity_match = form.get("identity_match") == "on"
+    countries_raw = form.get("countries", "").strip()
+    uid_types_raw = form.get("uid_types", "").strip()
+    properties_raw = form.get("properties", "").strip()
+    timeout_ms = int(form.get("timeout_ms", "50"))
+    priority = int(form.get("priority", "0"))
+    status = form.get("status", "active").strip()
+
+    # Parse comma-separated lists
+    countries = [c.strip().upper() for c in countries_raw.split(",") if c.strip()] or None
+    uid_types = [u.strip() for u in uid_types_raw.split(",") if u.strip()] or None
+    properties_list = [p.strip() for p in properties_raw.split(",") if p.strip()] or None
+
+    if not endpoint:
+        return {}, "Endpoint URL is required"
+
+    is_safe, ssrf_error = check_url_ssrf(endpoint)
+    if not is_safe:
+        logger.warning("[SECURITY] TMP provider rejected unsafe URL %r: %s", endpoint, ssrf_error)
+        return {}, f"Endpoint URL is not allowed: {ssrf_error}"
+
+    if not name:
+        return {}, "Provider name is required"
+
+    # At least one of context_match or identity_match must be true
+    if not context_match and not identity_match:
+        return {}, "Provider must support at least one of context_match or identity_match"
+
+    # Per AdCP spec: countries and uid_types MUST be non-empty when identity_match is true
+    if identity_match:
+        if not countries:
+            return {}, "Countries are required when identity_match is enabled (ISO 3166-1 alpha-2 codes)"
+        if not uid_types:
+            return {}, "UID types are required when identity_match is enabled (e.g. uid2, publisher_first_party)"
+        # Validate uid_type values against the AdCP enum
+        invalid_types = [u for u in uid_types if u not in VALID_UID_TYPES]
+        if invalid_types:
+            return {}, (
+                f"Invalid uid_type(s): {', '.join(invalid_types)}. "
+                f"Valid values: {', '.join(sorted(VALID_UID_TYPES))}"
+            )
+
+    data = {
+        "name": name,
+        "endpoint": endpoint,
+        "context_match": context_match,
+        "identity_match": identity_match,
+        "countries": countries,
+        "uid_types": uid_types,
+        "properties": properties_list,
+        "timeout_ms": timeout_ms,
+        "priority": priority,
+        "status": status,
+    }
+    return data, None
 
 
 @tmp_providers_bp.route("/")
@@ -112,75 +186,28 @@ def add_tmp_provider(tenant_id):
                 flash("Tenant not found", "error")
                 return redirect(url_for("core.index"))
 
-            name = request.form.get("name", "").strip()
-            endpoint = request.form.get("endpoint", "").strip()
-            context_match = request.form.get("context_match") == "on"
-            identity_match = request.form.get("identity_match") == "on"
-            countries_raw = request.form.get("countries", "").strip()
-            uid_types_raw = request.form.get("uid_types", "").strip()
-            properties_raw = request.form.get("properties", "").strip()
-            timeout_ms = int(request.form.get("timeout_ms", "50"))
-            priority = int(request.form.get("priority", "0"))
-
-            # Parse comma-separated lists
-            countries = [c.strip().upper() for c in countries_raw.split(",") if c.strip()] or None
-            uid_types = [u.strip() for u in uid_types_raw.split(",") if u.strip()] or None
-            properties_list = [p.strip() for p in properties_raw.split(",") if p.strip()] or None
-
-            if not endpoint:
-                flash("Endpoint URL is required", "error")
+            data, error = _validate_provider_form(request.form)
+            if error:
+                flash(error, "error")
                 return redirect(url_for("tmp_providers.add_tmp_provider", tenant_id=tenant_id))
-
-            is_safe, ssrf_error = check_url_ssrf(endpoint)
-            if not is_safe:
-                logger.warning("[SECURITY] TMP provider add rejected unsafe URL %r: %s", endpoint, ssrf_error)
-                flash(f"Endpoint URL is not allowed: {ssrf_error}", "error")
-                return redirect(url_for("tmp_providers.add_tmp_provider", tenant_id=tenant_id))
-
-            if not name:
-                flash("Provider name is required", "error")
-                return redirect(url_for("tmp_providers.add_tmp_provider", tenant_id=tenant_id))
-
-            # At least one of context_match or identity_match must be true
-            if not context_match and not identity_match:
-                flash("Provider must support at least one of context_match or identity_match", "error")
-                return redirect(url_for("tmp_providers.add_tmp_provider", tenant_id=tenant_id))
-
-            # Per AdCP spec: countries and uid_types MUST be non-empty when identity_match is true
-            if identity_match:
-                if not countries:
-                    flash("Countries are required when identity_match is enabled (ISO 3166-1 alpha-2 codes)", "error")
-                    return redirect(url_for("tmp_providers.add_tmp_provider", tenant_id=tenant_id))
-                if not uid_types:
-                    flash("UID types are required when identity_match is enabled (e.g. uid2, publisher_first_party)", "error")
-                    return redirect(url_for("tmp_providers.add_tmp_provider", tenant_id=tenant_id))
-                # Validate uid_type values against the AdCP enum
-                invalid_types = [u for u in uid_types if u not in VALID_UID_TYPES]
-                if invalid_types:
-                    flash(
-                        f"Invalid uid_type(s): {', '.join(invalid_types)}. "
-                        f"Valid values: {', '.join(sorted(VALID_UID_TYPES))}",
-                        "error",
-                    )
-                    return redirect(url_for("tmp_providers.add_tmp_provider", tenant_id=tenant_id))
 
             provider = TMPProvider(
                 tenant_id=tenant_id,
-                name=name,
-                endpoint=endpoint,
-                context_match=context_match,
-                identity_match=identity_match,
-                countries=countries,
-                uid_types=uid_types,
-                properties=properties_list,
-                timeout_ms=timeout_ms,
-                priority=priority,
+                name=data["name"],
+                endpoint=data["endpoint"],
+                context_match=data["context_match"],
+                identity_match=data["identity_match"],
+                countries=data["countries"],
+                uid_types=data["uid_types"],
+                properties=data["properties"],
+                timeout_ms=data["timeout_ms"],
+                priority=data["priority"],
             )
             repo = TMPProviderRepository(session, tenant_id)
             repo.create(provider)
             session.commit()
 
-            flash(f"TMP provider '{name}' added successfully", "success")
+            flash(f"TMP provider '{data['name']}' added successfully", "success")
             return redirect(url_for("tmp_providers.list_tmp_providers", tenant_id=tenant_id))
 
     except Exception as e:
@@ -239,89 +266,29 @@ def edit_tmp_provider(tenant_id, provider_id):
                 flash("TMP provider not found", "error")
                 return redirect(url_for("tmp_providers.list_tmp_providers", tenant_id=tenant_id))
 
-            new_endpoint = request.form.get("endpoint", "").strip()
-            new_name = request.form.get("name", "").strip()
-            new_context_match = request.form.get("context_match") == "on"
-            new_identity_match = request.form.get("identity_match") == "on"
-            new_countries_raw = request.form.get("countries", "").strip()
-            new_uid_types_raw = request.form.get("uid_types", "").strip()
-            new_properties_raw = request.form.get("properties", "").strip()
-            new_timeout_ms = int(request.form.get("timeout_ms", "50"))
-            new_priority = int(request.form.get("priority", "0"))
-            new_status = request.form.get("status", "active").strip()
-
-            # Parse comma-separated lists
-            new_countries = [c.strip().upper() for c in new_countries_raw.split(",") if c.strip()] or None
-            new_uid_types = [u.strip() for u in new_uid_types_raw.split(",") if u.strip()] or None
-            new_properties = [p.strip() for p in new_properties_raw.split(",") if p.strip()] or None
-
-            if not new_endpoint:
-                flash("Endpoint URL is required", "error")
+            data, error = _validate_provider_form(request.form)
+            if error:
+                flash(error, "error")
                 return redirect(
                     url_for("tmp_providers.edit_tmp_provider", tenant_id=tenant_id, provider_id=provider_id)
                 )
-
-            is_safe, ssrf_error = check_url_ssrf(new_endpoint)
-            if not is_safe:
-                logger.warning("[SECURITY] TMP provider edit rejected unsafe URL %r: %s", new_endpoint, ssrf_error)
-                flash(f"Endpoint URL is not allowed: {ssrf_error}", "error")
-                return redirect(
-                    url_for("tmp_providers.edit_tmp_provider", tenant_id=tenant_id, provider_id=provider_id)
-                )
-
-            if not new_name:
-                flash("Provider name is required", "error")
-                return redirect(
-                    url_for("tmp_providers.edit_tmp_provider", tenant_id=tenant_id, provider_id=provider_id)
-                )
-
-            # At least one of context_match or identity_match must be true
-            if not new_context_match and not new_identity_match:
-                flash("Provider must support at least one of context_match or identity_match", "error")
-                return redirect(
-                    url_for("tmp_providers.edit_tmp_provider", tenant_id=tenant_id, provider_id=provider_id)
-                )
-
-            # Per AdCP spec: countries and uid_types MUST be non-empty when identity_match is true
-            if new_identity_match:
-                if not new_countries:
-                    flash("Countries are required when identity_match is enabled (ISO 3166-1 alpha-2 codes)", "error")
-                    return redirect(
-                        url_for("tmp_providers.edit_tmp_provider", tenant_id=tenant_id, provider_id=provider_id)
-                    )
-                if not new_uid_types:
-                    flash("UID types are required when identity_match is enabled (e.g. uid2, publisher_first_party)", "error")
-                    return redirect(
-                        url_for("tmp_providers.edit_tmp_provider", tenant_id=tenant_id, provider_id=provider_id)
-                    )
-                # Validate uid_type values against the AdCP enum
-                invalid_types = [u for u in new_uid_types if u not in VALID_UID_TYPES]
-                if invalid_types:
-                    flash(
-                        f"Invalid uid_type(s): {', '.join(invalid_types)}. "
-                        f"Valid values: {', '.join(sorted(VALID_UID_TYPES))}",
-                        "error",
-                    )
-                    return redirect(
-                        url_for("tmp_providers.edit_tmp_provider", tenant_id=tenant_id, provider_id=provider_id)
-                    )
 
             repo.update_fields(
                 provider_id,
-                name=new_name,
-                endpoint=new_endpoint,
-                context_match=new_context_match,
-                identity_match=new_identity_match,
-                countries=new_countries,
-                uid_types=new_uid_types,
-                properties=new_properties,
-                timeout_ms=new_timeout_ms,
-                priority=new_priority,
-                status=new_status,
+                name=data["name"],
+                endpoint=data["endpoint"],
+                context_match=data["context_match"],
+                identity_match=data["identity_match"],
+                countries=data["countries"],
+                uid_types=data["uid_types"],
+                properties=data["properties"],
+                timeout_ms=data["timeout_ms"],
+                priority=data["priority"],
+                status=data["status"],
             )
             session.commit()
 
-            flash(f"TMP provider '{new_name}' updated successfully", "success")
+            flash(f"TMP provider '{data['name']}' updated successfully", "success")
             return redirect(url_for("tmp_providers.list_tmp_providers", tenant_id=tenant_id))
 
     except Exception as e:
@@ -378,7 +345,14 @@ def delete_tmp_provider(tenant_id, provider_id):
 @tmp_providers_bp.route("/<provider_id>/health", methods=["GET"])
 @require_tenant_access()
 def health_check_tmp_provider(tenant_id, provider_id):
-    """HTTP GET to provider.endpoint/health — returns JSON status."""
+    """HTTP GET to provider.endpoint/health — returns JSON status.
+
+    .. warning:: Worker starvation risk
+
+       This performs a **synchronous** HTTP call in the request handler,
+       blocking the worker thread for up to 5 s.  If the provider is slow
+       or unreachable, this stalls the admin UI for the requesting user.
+    """
     try:
         with get_db_session() as session:
             repo = TMPProviderRepository(session, tenant_id)
@@ -390,8 +364,10 @@ def health_check_tmp_provider(tenant_id, provider_id):
 
             # SSRF validation was already applied when the endpoint was
             # registered (add/edit routes). The stored URL is trusted.
+            # allow_redirects=False prevents SSRF via open-redirect even
+            # though the base URL was validated at registration time.
             try:
-                resp = requests.get(health_url, timeout=5)
+                resp = requests.get(health_url, timeout=5, allow_redirects=False)
                 if resp.status_code == 200:
                     return jsonify({"success": True, "status": "healthy", "provider": provider.name})
                 else:
@@ -409,25 +385,25 @@ def health_check_tmp_provider(tenant_id, provider_id):
 # ------------------------------------------------------------------
 # Discovery endpoint — unauthenticated, polled by the Go TMP Router
 # ------------------------------------------------------------------
+# This endpoint is intentionally unauthenticated because the TMP Router
+# polls it on the internal Docker/VPC network every 30 s.  The tenant_id
+# comes from the URL path (set by the blueprint prefix) — NOT from a
+# query parameter — so one tenant cannot enumerate another tenant's
+# providers.  Do NOT add a query-param override for tenant_id here.
+# ------------------------------------------------------------------
 
 
 @tmp_providers_bp.route("/discovery", methods=["GET"])
-def discover_tmp_providers():
+def discover_tmp_providers(tenant_id):
     """Return active TMP providers for a tenant as JSON.
 
     The Go TMP Router polls this endpoint to discover which buyer-side
-    agents to fan out to. No admin authentication required.
-
-    Query parameters:
-        tenant_id: Required. The tenant whose providers to list.
+    agents to fan out to.  **Intentionally unauthenticated** — scoped
+    by the ``tenant_id`` in the URL path (blueprint prefix).
 
     Returns:
         JSON array of active provider objects.
     """
-    tenant_id = request.args.get("tenant_id")
-    if not tenant_id:
-        return jsonify({"error": "tenant_id query parameter is required"}), 400
-
     try:
         with get_db_session() as session:
             repo = TMPProviderRepository(session, tenant_id)

@@ -102,6 +102,8 @@ class TestTMPProviderAddSSRF:
                                 "endpoint": "https://provider.example.com/tmp",
                                 "context_match": "on",
                                 "identity_match": "on",
+                                "countries": "US,GB",
+                                "uid_types": "uid2,id5",
                                 "timeout_ms": "50",
                             },
                             follow_redirects=False,
@@ -331,7 +333,9 @@ class TestTMPProviderHealthCheck:
         data = response.get_json()
         assert data["success"] is True
         assert data["status"] == "healthy"
-        mock_get.assert_called_once_with("https://provider.example.com/tmp/health", timeout=5)
+        mock_get.assert_called_once_with(
+            "https://provider.example.com/tmp/health", timeout=5, allow_redirects=False
+        )
 
     def test_health_check_returns_unhealthy_on_non_200(self):
         """GET /tmp-providers/<id>/health returns unhealthy when endpoint responds non-200."""
@@ -393,10 +397,15 @@ class TestTMPProviderHealthCheck:
 
 
 class TestTMPProviderDiscovery:
-    """Discovery endpoint returns active providers as JSON for the Go TMP Router."""
+    """Discovery endpoint returns active providers as JSON for the Go TMP Router.
+
+    The discovery endpoint uses the tenant_id from the URL path (blueprint
+    prefix), NOT from a query parameter.  This prevents cross-tenant
+    enumeration.
+    """
 
     def test_discovery_returns_active_providers(self):
-        """GET /tmp-providers/discovery?tenant_id=X returns active providers."""
+        """GET /tmp-providers/discovery returns active providers (tenant from URL path)."""
         client = _make_tmp_provider_client()
 
         provider1 = _make_mock_provider(provider_id="uuid-1", name="Provider A")
@@ -410,7 +419,7 @@ class TestTMPProviderDiscovery:
             mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
             mock_db.return_value.__exit__ = MagicMock(return_value=False)
             with patch("src.admin.blueprints.tmp_providers_bp.TMPProviderRepository", return_value=mock_repo):
-                response = client.get("/tenant/default/tmp-providers/discovery?tenant_id=default")
+                response = client.get("/tenant/default/tmp-providers/discovery")
 
         assert response.status_code == 200
         data = response.get_json()
@@ -423,7 +432,7 @@ class TestTMPProviderDiscovery:
         mock_repo.list_active.assert_called_once()
 
     def test_discovery_returns_empty_list_when_no_active_providers(self):
-        """GET /tmp-providers/discovery?tenant_id=X returns [] when no active providers."""
+        """GET /tmp-providers/discovery returns [] when no active providers."""
         client = _make_tmp_provider_client()
 
         mock_session = MagicMock()
@@ -434,21 +443,11 @@ class TestTMPProviderDiscovery:
             mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
             mock_db.return_value.__exit__ = MagicMock(return_value=False)
             with patch("src.admin.blueprints.tmp_providers_bp.TMPProviderRepository", return_value=mock_repo):
-                response = client.get("/tenant/default/tmp-providers/discovery?tenant_id=default")
+                response = client.get("/tenant/default/tmp-providers/discovery")
 
         assert response.status_code == 200
         data = response.get_json()
         assert data == []
-
-    def test_discovery_requires_tenant_id(self):
-        """GET /tmp-providers/discovery without tenant_id returns 400."""
-        client = _make_tmp_provider_client()
-
-        response = client.get("/tenant/default/tmp-providers/discovery")
-
-        assert response.status_code == 400
-        data = response.get_json()
-        assert "tenant_id" in data["error"]
 
     def test_discovery_includes_expected_fields(self):
         """Discovery response includes all fields needed by the Go TMP Router."""
@@ -464,7 +463,7 @@ class TestTMPProviderDiscovery:
             mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
             mock_db.return_value.__exit__ = MagicMock(return_value=False)
             with patch("src.admin.blueprints.tmp_providers_bp.TMPProviderRepository", return_value=mock_repo):
-                response = client.get("/tenant/default/tmp-providers/discovery?tenant_id=default")
+                response = client.get("/tenant/default/tmp-providers/discovery")
 
         assert response.status_code == 200
         data = response.get_json()
