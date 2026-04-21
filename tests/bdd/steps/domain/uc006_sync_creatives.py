@@ -6635,3 +6635,73 @@ def given_creative_assigned_to_package_with_weight(ctx: dict, creative_id: str, 
     # Track weights for Then step assertions
     weights = ctx.setdefault("assignment_weights", {})
     weights[creative_id] = weight
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# THEN steps — proportional delivery assertions (tuq3)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@then("creative-A should receive proportionally more delivery than creative-B")
+def then_creative_a_more_delivery_than_b(ctx: dict) -> None:
+    """Assert creative-A (higher weight) has more delivery weight than creative-B.
+
+    Spec (BR-RULE-093 INV-3): When two creatives are assigned to the same
+    package with different weights (e.g. 80 vs 20), the higher-weighted
+    creative should receive proportionally more delivery.
+
+    We verify this by reading the CreativeAssignment rows from the DB and
+    comparing their weight values. Production currently hard-codes weight=100
+    for all assignments, so a SPEC-PRODUCTION GAP is expected.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.models import CreativeAssignment
+
+    _xfail_if_e2e(ctx)
+
+    error = ctx.get("error")
+    if error is not None:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: expected proportional delivery, "
+            f"but production raised {type(error).__name__}: {error}"
+        )
+
+    # Retrieve requested weights from the Given step
+    assignment_weights = ctx.get("assignment_weights", {})
+    assert "creative-A" in assignment_weights, "Given step did not set weight for creative-A"
+    assert "creative-B" in assignment_weights, "Given step did not set weight for creative-B"
+    weight_a_requested = assignment_weights["creative-A"]
+    weight_b_requested = assignment_weights["creative-B"]
+    assert weight_a_requested > weight_b_requested, (
+        f"Test precondition: creative-A weight ({weight_a_requested}) must exceed "
+        f"creative-B weight ({weight_b_requested})"
+    )
+
+    # Read actual weights from DB
+    tenant_id = ctx["tenant"].tenant_id
+    with db_session(ctx) as session:
+        assignment_a = session.scalars(
+            select(CreativeAssignment).filter_by(
+                tenant_id=tenant_id,
+                creative_id="creative-A",
+            )
+        ).first()
+        assignment_b = session.scalars(
+            select(CreativeAssignment).filter_by(
+                tenant_id=tenant_id,
+                creative_id="creative-B",
+            )
+        ).first()
+
+    assert assignment_a is not None, "No CreativeAssignment found for creative-A"
+    assert assignment_b is not None, "No CreativeAssignment found for creative-B"
+
+    # Compare actual DB weights: creative-A should have strictly more weight
+    if assignment_a.weight <= assignment_b.weight:
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: Per-assignment weight not supported. "
+            f"Requested weights creative-A={weight_a_requested}, creative-B={weight_b_requested}, "
+            f"but DB has creative-A.weight={assignment_a.weight}, creative-B.weight={assignment_b.weight}. "
+            f"Production hard-codes weight=100 on all assignments."
+        )
