@@ -1367,9 +1367,26 @@ def get_inventory_sizes(tenant_id):
                 GAMInventory.tenant_id == tenant_id,
                 GAMInventory.inventory_id.in_(inventory_ids),
             )
-            items = db_session.scalars(stmt).all()
+            items = list(db_session.scalars(stmt).all())
 
-            # Extract sizes from inventory metadata
+            # Resolve placements to their constituent ad units (placements don't
+            # carry sizes — only ad_unit_ids pointing to the ad units that do).
+            placement_au_ids = set()
+            for item in items:
+                if item.inventory_type == "placement":
+                    meta = item.inventory_metadata or {}
+                    placement_au_ids.update(meta.get("ad_unit_ids", []))
+            # Exclude ad units already fetched directly
+            placement_au_ids -= {item.inventory_id for item in items if item.inventory_type == "ad_unit"}
+            if placement_au_ids:
+                au_stmt = select(GAMInventory).filter(
+                    GAMInventory.tenant_id == tenant_id,
+                    GAMInventory.inventory_type == "ad_unit",
+                    GAMInventory.inventory_id.in_(list(placement_au_ids)),
+                )
+                items.extend(db_session.scalars(au_stmt).all())
+
+            # Extract sizes from inventory metadata (ad_unit rows only)
             sizes = set()
             for item in items:
                 metadata = item.inventory_metadata or {}

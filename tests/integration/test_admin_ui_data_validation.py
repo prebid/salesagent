@@ -380,6 +380,47 @@ class TestInventorySizesEndpoint:
         assert data["sizes"] == ["300x250", "728x90"], f"Expected dedup + sort by (width, height), got: {data}"
         assert data["count"] == 2
 
+    def test_endpoint_resolves_placement_to_ad_unit_sizes(
+        self, authenticated_admin_session, test_tenant_with_data, integration_db, _bind_factories_for_sizes
+    ):
+        """Placement IDs must resolve to their constituent ad units' sizes."""
+        from tests.factories import GAMInventoryFactory
+
+        tenant_id = test_tenant_with_data["tenant_id"]
+        tenant = self._load_tenant(tenant_id, _bind_factories_for_sizes)
+
+        # Create ad units that the placement references
+        GAMInventoryFactory(
+            tenant=tenant,
+            inventory_type="ad_unit",
+            inventory_id="au_in_placement_1",
+            name="Ad Unit in Placement 1",
+            inventory_metadata={"sizes": [{"width": 300, "height": 250}]},
+        )
+        GAMInventoryFactory(
+            tenant=tenant,
+            inventory_type="ad_unit",
+            inventory_id="au_in_placement_2",
+            name="Ad Unit in Placement 2",
+            inventory_metadata={"sizes": [{"width": 728, "height": 90}]},
+        )
+
+        # Create a placement that references those ad units
+        GAMInventoryFactory(
+            tenant=tenant,
+            inventory_type="placement",
+            inventory_id="placement_1",
+            name="Test Placement",
+            inventory_metadata={"ad_unit_ids": ["au_in_placement_1", "au_in_placement_2"]},
+        )
+
+        response = authenticated_admin_session.get(f"/api/tenant/{tenant_id}/inventory/sizes?ids=placement_1")
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["sizes"] == ["300x250", "728x90"], f"Placement should resolve to its ad units' sizes, got: {data}"
+        assert data["count"] == 2
+
 
 class TestDashboardDataValidation:
     """Validate that dashboard shows correct metrics."""
