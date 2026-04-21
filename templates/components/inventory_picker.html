@@ -23,10 +23,7 @@ Then in your template, add browse buttons:
         <div style="padding: 1.5rem; border-bottom: 1px solid #ddd; display: flex; justify-content: space-between; align-items: center;">
             <h3 id="picker-modal-title" style="margin: 0;">Select Items</h3>
             <div id="picker-tree-controls" style="display: none; gap: 0.5rem;">
-                <button type="button" onclick="window.inventoryPicker.expandToSelected()" class="btn btn-sm btn-primary" style="padding: 0.25rem 0.5rem; font-size: 0.85rem;">
-                    Expand to Selected
-                </button>
-                <button type="button" onclick="window.inventoryPicker.expandAll()" class="btn btn-sm btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.85rem;">
+<button type="button" onclick="window.inventoryPicker.expandAll()" class="btn btn-sm btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.85rem;">
                     Expand All
                 </button>
                 <button type="button" onclick="window.inventoryPicker.collapseAll()" class="btn btn-sm btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.85rem;">
@@ -96,7 +93,6 @@ Then in your template, add browse buttons:
         triggerSearch: triggerSearch,
         expandAll: () => adUnitTree && adUnitTree.expandAll(),
         collapseAll: () => adUnitTree && adUnitTree.collapseAll(),
-        expandToSelected: () => {}, // Not supported with lazy-loading
         setOnApplyCallback: (callback) => { onApplyCallback = callback; },
         cache: inventoryPickerCache,  // Expose cache for external access
         config: config
