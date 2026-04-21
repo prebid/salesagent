@@ -19,7 +19,7 @@ our control.
 
 import pytest
 
-from tests.e2e.adcp_schema_validator import AdCPSchemaValidator, SchemaDownloadError
+from tests.e2e.adcp_schema_validator import AdCPSchemaValidator
 
 
 class TestA2AProtocolCompliance:
@@ -48,34 +48,11 @@ class TestA2AProtocolCompliance:
             assert "media_buy_id" in schema.get("properties", {}), "Schema should define media_buy_id"
             assert "media_buy_id" in schema.get("required", []), "media_buy_id should be required"
 
-    @pytest.mark.asyncio
-    async def test_update_media_buy_schema_validates_correctly(self):
-        """
-        Test that AdCP validator can validate update_media_buy requests.
-
-        Uses the validator's validate_request method to check schema compliance.
-        Note: adcp 2.12.0+ uses 'paused' boolean instead of 'active' boolean.
-        """
-        async with AdCPSchemaValidator(offline_mode=False) as validator:
-            # Construct a minimal valid AdCP v2.12.0+ request
-            valid_request = {
-                "media_buy_id": "mb_test_123",
-                "paused": False,  # adcp 2.12.0+ uses 'paused' instead of 'active'
-            }
-
-            # Validate request - should not raise exception
-            try:
-                await validator.validate_request(task_name="update-media-buy", request_data=valid_request)
-                validation_passed = True
-                error_msg = ""
-            except SchemaDownloadError as e:
-                # External schema server unavailable - skip test
-                pytest.skip(f"AdCP schema server unavailable: {e}")
-            except Exception as e:
-                validation_passed = False
-                error_msg = str(e)
-
-            assert validation_passed, f"Valid request should pass: {error_msg}"
+    # test_update_media_buy_schema_validates_correctly removed:
+    # Validated a hardcoded request dict against adcontextprotocol.org/schemas/latest/...
+    # Did not exercise any sales agent behavior — purely fixture vs. upstream spec drift.
+    # Real schema conformance is covered by tests/unit/test_adcp_contract.py against
+    # the pinned adcp library version. See PR #1186 notes.
 
     @pytest.mark.asyncio
     async def test_all_adcp_skills_have_schemas(self):

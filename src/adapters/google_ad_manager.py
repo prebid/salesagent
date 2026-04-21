@@ -1136,21 +1136,15 @@ class GoogleAdManager(AdServerAdapter):
             # Extract date from the row (reporting service uses DATE dimension)
             date_str = row.get("date", row.get("DATE", ""))
             if date_str:
-                # Ensure date format is YYYY-MM-DD
+                # Normalize to YYYY-MM-DD using dateutil (handles any format)
                 if not isinstance(date_str, str):
                     date_str = str(date_str)
-
-                # Parse and reformat if needed (handle various date formats)
                 try:
-                    # Try parsing ISO format first
-                    if "T" in date_str:
-                        date_obj = datetime.fromisoformat(date_str.split("T")[0])
-                        date_str = date_obj.strftime("%Y-%m-%d")
-                    # Handle YYYY-MM-DD format (already correct)
-                    elif len(date_str) == 10 and date_str[4] == "-" and date_str[7] == "-":
-                        pass  # Already in correct format
-                except Exception:
-                    # If parsing fails, skip this row
+                    from dateutil import parser as dateutil_parser
+
+                    date_str = dateutil_parser.parse(date_str).strftime("%Y-%m-%d")
+                except (ValueError, OverflowError) as e:
+                    logger.warning("Unparseable date '%s' in reporting row, skipping: %s", date_str, e)
                     continue
 
                 if date_str not in daily_metrics:
