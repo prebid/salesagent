@@ -2725,18 +2725,24 @@ def _dispatch_partition(ctx: dict, field: str, value: str) -> None:
 
     # Handle special partition values
     if value_stripped in ("(field absent)", "(omitted)", "(not provided)"):
+        ctx["partition_field"] = field
+        ctx["partition_value"] = None
         dispatch_request(ctx)
         return
 
     # Try to parse as JSON
     try:
         parsed = json.loads(value_stripped)
+        ctx["partition_field"] = field
+        ctx["partition_value"] = parsed
         dispatch_request(ctx, **{field: parsed})
         return
     except (json.JSONDecodeError, TypeError):
         pass
 
     # Pass as string
+    ctx["partition_field"] = field
+    ctx["partition_value"] = value_stripped
     dispatch_request(ctx, **{field: value_stripped})
 
 
@@ -2930,6 +2936,38 @@ def _assert_valid_content(ctx: dict, field: str) -> None:
     elif field in ("daily_breakdown", "daily breakdown", "include_package_daily_breakdown"):
         deliveries = getattr(resp, "media_buy_deliveries", None) or []
         assert len(deliveries) > 0, f"Valid {field}: expected non-empty deliveries"
+        # Verify deliveries have valid totals structure (strong for all cases)
+        for d in deliveries:
+            totals = getattr(d, "totals", None)
+            assert totals is not None, f"Valid {field}: delivery missing totals"
+            assert getattr(totals, "impressions", None) is not None, (
+                f"Valid {field}: delivery totals missing impressions"
+            )
+        # When include_package_daily_breakdown=true, verify daily_breakdown content
+        requested_daily = ctx.get("partition_value")
+        if requested_daily is True:
+            # When true, verify daily_breakdown is populated with date-keyed entries
+            has_daily = False
+            for d in deliveries:
+                db = getattr(d, "daily_breakdown", None)
+                if db:
+                    has_daily = True
+                    for entry in db:
+                        assert hasattr(entry, "date") and isinstance(entry.date, str), (
+                            f"Valid {field}: daily_breakdown entry missing date string"
+                        )
+                        assert hasattr(entry, "impressions") and entry.impressions >= 0, (
+                            f"Valid {field}: daily_breakdown entry missing non-negative impressions"
+                        )
+                        assert hasattr(entry, "spend") and entry.spend >= 0, (
+                            f"Valid {field}: daily_breakdown entry missing non-negative spend"
+                        )
+            if not has_daily:
+                pytest.xfail(
+                    "SPEC-PRODUCTION GAP: include_package_daily_breakdown=true but "
+                    "daily_breakdown not populated. See media_buy_delivery.py:504 "
+                    "(hard-coded daily_breakdown=None)"
+                )
 
     elif field == "account":
         # Strong assertion: when account is provided and valid, deliveries should be
