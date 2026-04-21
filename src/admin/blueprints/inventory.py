@@ -6,7 +6,7 @@ import logging
 from flask import Blueprint, jsonify, render_template, request, session
 from sqlalchemy import String, func, or_, select
 
-from src.admin.utils import get_tenant_config_from_db, require_auth, require_tenant_access
+from src.admin.utils import execute_limited, get_tenant_config_from_db, require_auth, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
 from src.core.database.models import GAMInventory, GAMOrder, MediaBuy, Principal, Tenant
@@ -970,8 +970,10 @@ def _build_tree(all_units, matching_ids):
 
 
 # Safety limits to prevent OOM on large GAM networks (GitHub #1154)
+# All list-returning inventory queries must use execute_limited() with one of these.
 _TREE_LIMIT = 10_000
 _SEARCH_LIMIT = 1_000
+_LIST_LIMIT = 500
 
 
 @inventory_bp.route("/api/tenant/<tenant_id>/inventory/tree", methods=["GET"])
@@ -1007,10 +1009,8 @@ def get_inventory_tree(tenant_id):
                         GAMInventory.inventory_metadata["parent_id"].as_string() == parent_id_param,
                     )
                     .order_by(GAMInventory.name)
-                    .limit(_TREE_LIMIT)
                 )
-                children = db_session.scalars(stmt).all()
-                truncated = len(children) >= _TREE_LIMIT
+                children, truncated = execute_limited(db_session, stmt, _TREE_LIMIT)
                 units = [_unit_to_dict(u) for u in children]
                 logger.info(f"Found {len(units)} children of {parent_id_param} (truncated: {truncated})")
                 return jsonify({"units": units, "truncated": truncated})
@@ -1080,10 +1080,8 @@ def get_inventory_tree(tenant_id):
                         ),
                     )
                     .order_by(GAMInventory.name)
-                    .limit(_SEARCH_LIMIT)
                 )
-                matching_units = db_session.scalars(search_stmt).all()
-                truncated = len(matching_units) >= _SEARCH_LIMIT
+                matching_units, truncated = execute_limited(db_session, search_stmt, _SEARCH_LIMIT)
 
                 logger.info(f"Search found {len(matching_units)} matches (truncated: {truncated})")
 
@@ -1120,10 +1118,8 @@ def get_inventory_tree(tenant_id):
                         GAMInventory.inventory_metadata["parent_id"].as_string().is_(None),
                     )
                     .order_by(GAMInventory.name)
-                    .limit(_TREE_LIMIT)
                 )
-                roots = db_session.scalars(root_stmt).all()
-                truncated = len(roots) >= _TREE_LIMIT
+                roots, truncated = execute_limited(db_session, root_stmt, _TREE_LIMIT)
 
                 root_units = [_unit_to_dict(u) for u in roots]
                 logger.info(
@@ -1269,10 +1265,7 @@ def get_inventory_list(tenant_id):
             # Order by path/name for better organization
             stmt = stmt.order_by(GAMInventory.inventory_type, GAMInventory.name)
 
-            # Limit results to prevent overwhelming the UI
-            stmt = stmt.limit(500)
-
-            items = db_session.scalars(stmt).all()
+            items, truncated = execute_limited(db_session, stmt, _LIST_LIMIT)
 
             logger.info(
                 f"Query returned {len(items)} items after filtering "
@@ -1294,7 +1287,7 @@ def get_inventory_list(tenant_id):
                 )
 
             logger.info(f"Returning {len(result)} formatted inventory items to UI")
-            response = jsonify({"items": result, "count": len(result), "has_more": len(result) >= 500})
+            response = jsonify({"items": result, "count": len(result), "has_more": truncated})
 
             # Cache the result for 5 minutes (only if no search term)
             if cache and not search:

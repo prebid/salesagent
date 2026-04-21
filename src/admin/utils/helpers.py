@@ -1,15 +1,22 @@
 """Utility functions shared across admin UI modules."""
 
+from __future__ import annotations
+
 import json
 import logging
 import os
 from functools import wraps
+from typing import NamedTuple, TypeVar
 
 from flask import abort, g, jsonify, redirect, session, url_for
 from sqlalchemy import select
+from sqlalchemy.orm import Session
+from sqlalchemy.sql import Select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant, TenantManagementConfig, User
+
+T = TypeVar("T")
 
 logger = logging.getLogger(__name__)
 
@@ -539,3 +546,25 @@ def translate_custom_targeting(custom_targeting_node, tenant_id=None):
         return None
 
     return translate_node(custom_targeting_node)
+
+
+# ---------------------------------------------------------------------------
+# Query limiting
+# ---------------------------------------------------------------------------
+
+
+class LimitedResult(NamedTuple):
+    """Result of a limited query — rows plus a truncation flag."""
+
+    rows: list
+    truncated: bool
+
+
+def execute_limited(db_session: Session, stmt: Select, limit: int) -> LimitedResult:
+    """Execute *stmt* with a row limit and report whether the result was truncated.
+
+    Returns ``LimitedResult(rows, truncated)`` where *truncated* is ``True``
+    when the database returned exactly *limit* rows (meaning more may exist).
+    """
+    rows = list(db_session.scalars(stmt.limit(limit)).all())
+    return LimitedResult(rows=rows, truncated=len(rows) >= limit)
