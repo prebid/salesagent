@@ -1007,11 +1007,13 @@ def get_inventory_tree(tenant_id):
                         GAMInventory.inventory_metadata["parent_id"].as_string() == parent_id_param,
                     )
                     .order_by(GAMInventory.name)
+                    .limit(_TREE_LIMIT)
                 )
                 children = db_session.scalars(stmt).all()
+                truncated = len(children) >= _TREE_LIMIT
                 units = [_unit_to_dict(u) for u in children]
-                logger.info(f"Found {len(units)} children of {parent_id_param}")
-                return jsonify({"units": units})
+                logger.info(f"Found {len(units)} children of {parent_id_param} (truncated: {truncated})")
+                return jsonify({"units": units, "truncated": truncated})
         except Exception as e:
             logger.error(f"Error fetching children for {parent_id_param}: {e}", exc_info=True)
             return jsonify({"error": str(e)}), 500
