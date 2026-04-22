@@ -15,17 +15,19 @@ without risking ``DetachedInstanceError``.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
 
-Role = Literal["super_admin", "tenant_admin", "tenant_user", "test"]
+from src.admin.auth import Role, normalize_email
 
 
 @dataclass(frozen=True, slots=True)
 class Principal:
     """Immutable admin-UI identity carried on ``request.state.principal``.
 
-    ``user_email`` is always lowercased at construction time (centralizes
-    the 40+ ``.lower()`` calls scattered across the Flask blueprints).
+    ``user_email`` is canonicalized (stripped + lowercased) at construction
+    time via ``normalize_email`` — the shared helper from ``src.admin.auth``
+    that centralizes the 40+ ad-hoc ``.lower()`` calls that otherwise
+    accumulated across the Flask blueprints.
+
     ``is_test_user`` is set only when ``ADCP_AUTH_TEST_MODE=true`` AND
     the session carries a test-user marker — it enables the test-fixture
     bypass path in admin deps.
@@ -38,8 +40,9 @@ class Principal:
     is_test_user: bool = False
 
     def __post_init__(self) -> None:
-        if self.user_email != self.user_email.lower():
-            object.__setattr__(self, "user_email", self.user_email.lower())
+        canonical = normalize_email(self.user_email)
+        if canonical != self.user_email:
+            object.__setattr__(self, "user_email", canonical)
 
     @property
     def is_super_admin(self) -> bool:

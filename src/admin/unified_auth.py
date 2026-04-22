@@ -33,7 +33,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.admin.auth.principal import Principal, Role
+from src.admin.auth import Role, coerce_role, normalize_email
+from src.admin.auth.principal import Principal
 
 # Paths that MUST bypass the auth gate — OAuth callbacks (Invariant #6
 # byte-immutable), login/logout entry points, and static assets. The
@@ -89,38 +90,22 @@ def _wants_json(headers: list[tuple[bytes, bytes]]) -> bool:
     return False
 
 
-def _session_role(raw: Any) -> Role:
-    """Coerce a session-stored role string into the ``Role`` literal.
-
-    Unknown values fall back to ``tenant_user`` — the least-privileged
-    authenticated role. The detailed role-resolution flow (super-admin
-    env-list, DB fallback) lands in ``src/admin/deps/auth.py`` at L0-12;
-    the middleware itself only mirrors what the session already carries.
-    """
-    if isinstance(raw, str):
-        if raw == "super_admin":
-            return "super_admin"
-        if raw == "tenant_admin":
-            return "tenant_admin"
-        if raw == "test":
-            return "test"
-        if raw == "tenant_user":
-            return "tenant_user"
-    return "tenant_user"
-
-
 def _principal_from_session(session: dict[str, Any]) -> Principal | None:
     """Construct a detached ``Principal`` from session dict, or None.
 
     Tolerates both string and dict ``user`` values (legacy Flask code
     stored either — OAuth claims produced a dict, while test-mode code
-    sometimes stored a bare email string).
+    sometimes stored a bare email string). Role falls back to
+    ``tenant_user`` on unknown / missing — the least-privileged
+    authenticated role. Detailed super-admin resolution (env-list, DB
+    fallback) lives in ``src/admin/deps/auth.py::is_super_admin``; the
+    middleware only mirrors what the session already carries.
     """
     user_raw = session.get("user")
     if isinstance(user_raw, dict):
-        email = str(user_raw.get("email") or "").strip().lower()
+        email = normalize_email(user_raw.get("email"))
     elif isinstance(user_raw, str):
-        email = user_raw.strip().lower()
+        email = normalize_email(user_raw)
     else:
         email = ""
 
@@ -131,7 +116,7 @@ def _principal_from_session(session: dict[str, Any]) -> Principal | None:
     if not isinstance(tenant_id, str) or not tenant_id:
         return None
 
-    role = _session_role(session.get("role"))
+    role: Role = coerce_role(session.get("role")) or "tenant_user"
 
     raw_available = session.get("available_tenants") or ()
     if isinstance(raw_available, (list, tuple, set, frozenset)):

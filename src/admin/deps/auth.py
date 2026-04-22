@@ -23,28 +23,29 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 
 from fastapi import Depends, HTTPException, status
 from sqlalchemy import select
 from starlette.requests import Request
 
+from src.admin.auth import Role, coerce_role, normalize_email
 from src.core.database.database_session import get_db_session
 from src.core.database.models import TenantManagementConfig
 
 logger = logging.getLogger(__name__)
-
-Role = Literal["super_admin", "tenant_admin", "tenant_user", "test"]
 
 
 @dataclass(frozen=True)
 class AdminUser:
     """Immutable admin-UI identity.
 
-    ``email`` is always lowercased at construction time — centralizing that here
-    removes 40+ ``.lower()`` calls across routers. ``is_test_user`` is set only
-    when ``ADCP_AUTH_TEST_MODE=true`` AND the session contains a ``test_user``
-    key; the flag enables the test-fixture bypass path in ``CurrentTenantDep``.
+    ``email`` is canonicalized at construction time via ``normalize_email``
+    from ``src.admin.auth`` — the shared helper that centralizes the 40+
+    ad-hoc ``.lower()`` calls scattered across Flask routers. ``is_test_user``
+    is set only when ``ADCP_AUTH_TEST_MODE=true`` AND the session contains a
+    ``test_user`` key; the flag enables the test-fixture bypass path in
+    ``CurrentTenantDep``.
     """
 
     email: str
@@ -52,8 +53,9 @@ class AdminUser:
     is_test_user: bool = False
 
     def __post_init__(self) -> None:
-        if self.email != self.email.lower():
-            object.__setattr__(self, "email", self.email.lower())
+        canonical = normalize_email(self.email)
+        if canonical != self.email:
+            object.__setattr__(self, "email", canonical)
 
 
 class AdminRedirect(Exception):
@@ -91,12 +93,13 @@ def _extract_email(raw: Any) -> str:
     """Safely extract an email from the session's ``user`` field.
 
     Legacy Flask code stored either a string email or a dict with an ``email``
-    key (OAuth claims). Handle both; return "" for anything else.
+    key (OAuth claims). Handle both; return "" for anything else. Delegates
+    canonicalization (strip + lowercase) to ``normalize_email``.
     """
     if isinstance(raw, dict):
-        return str(raw.get("email") or "").strip().lower()
+        return normalize_email(raw.get("email"))
     if isinstance(raw, str):
-        return raw.strip().lower()
+        return normalize_email(raw)
     return ""
 
 
@@ -173,9 +176,7 @@ def _get_admin_user_or_none(request: Request) -> AdminUser | None:
         email = _extract_email(session["test_user"])
         if not email:
             return None
-        role = session.get("test_user_role", "tenant_user")
-        if role not in ("super_admin", "tenant_admin", "tenant_user", "test"):
-            role = "tenant_user"
+        role: Role = coerce_role(session.get("test_user_role")) or "tenant_user"
         return AdminUser(email=email, role=role, is_test_user=True)
 
     raw = session.get("user")
