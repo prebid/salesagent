@@ -4,8 +4,9 @@ import asyncio
 import logging
 
 from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
-from adcp.types import CreateMediaBuySuccessResponse, Package
+from adcp.types import CreateMediaBuyErrorResponse, CreateMediaBuySuccessResponse, Package
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
+from adcp.types.generated_poc.core.error import Error
 from adcp.types.generated_poc.media_buy.create_media_buy_async_response_input_required import (
     CreateMediaBuyInputRequired,
 )
@@ -314,14 +315,16 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
     Webhook dispatch matrix
     -----------------------
 
-    Per-branch webhook semantics, driven by a single ``webhook_status`` variable set in Phase 1:
+    Per-branch webhook semantics, driven by a single ``webhook_status`` variable set in Phase 1
+    (success/rejected/input_required branches) or flipped to ``failed`` in Phase 2 on adapter
+    failure:
 
     =================================================  ================  ============================================
     Branch                                             webhook_status    Result payload schema
     =================================================  ================  ============================================
     approve + pending + all_creatives_approved + OK    ``completed``     ``CreateMediaBuySuccessResponse``
-    approve + pending + all_creatives_approved + FAIL  ``None``          (early return before Phase 3)
-    approve + pending + creatives NOT approved          ``input_required``  ``CreateMediaBuyInputRequired(APPROVAL_REQUIRED)``
+    approve + pending + all_creatives_approved + FAIL  ``failed``        ``CreateMediaBuyErrorResponse(errors=[...])``
+    approve + pending + creatives NOT approved         ``input_required``  ``CreateMediaBuyInputRequired(APPROVAL_REQUIRED)``
     approve + step-level ack (status != pending)       ``None``          (no webhook)
     reject                                             ``rejected``      ``CreateMediaBuySuccessResponse``
     =================================================  ================  ============================================
@@ -332,11 +335,15 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
     the media buy is live. A2A serializes ``input_required`` as the hyphenated wire string
     ``input-required``; MCP serializes it as ``input_required``.
 
+    ``failed`` closes the create_media_buy task from the buyer's perspective when the adapter
+    refuses to create the underlying order/line-items. Result payload wraps the adapter's
+    error message in a single ``Error(code="adapter_execution_failed", message=...)`` for
+    buyer debugging. Pre-P3 this branch emitted no webhook — the buyer's task hung forever.
+
     Note on latent upstream gap (NOT addressed here): on the happy path, ``execute_approved_media_buy``
     itself does NOT emit a ``create_media_buy → completed`` webhook — the buyer infers media-buy
     liveness from the separate ``sync_creatives`` webhook chain. File P2 follow-up to close that
-    loop. Similarly the adapter-fail branch emits no webhook at all (buyer never sees failure);
-    file P3 follow-up.
+    loop.
     """
     from datetime import UTC, datetime
 
@@ -365,7 +372,16 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
         # historical silent bug — a step-level ack would have emitted completed without any
         # adapter call. Default to None; each branch sets the correct status explicitly.
         webhook_status: AdcpTaskStatus | None = None
+        # Adapter-failure state carried from Phase 2 into Phase 3 so the failed-branch
+        # webhook can wrap the adapter error message in CreateMediaBuyErrorResponse and
+        # Phase 3 knows to update media_buy.status to "failed" in the same session.
+        adapter_failed = False
+        adapter_error_msg: str | None = None
         flash_on_success = "Media buy approved successfully"  # default for approve-without-adapter
+        # Flash category override — None means "derive from action" (approve→success,
+        # reject→info). Set to "error" by the adapter-failure branch in Phase 2 so
+        # the operator sees a red flash without needing an early return.
+        flash_category: str | None = None
 
         with get_db_session() as db_session:
             # Find the pending approval workflow step for this media buy (tenant-scoped via Context join)
@@ -515,63 +531,104 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
             success, error_msg = execute_approved_media_buy(media_buy_id, tenant_id)
 
             if not success:
-                # Adapter creation failed — mark media buy "failed" in a fresh session.
-                with get_db_session() as error_session:
-                    error_repo = MediaBuyRepository(error_session, tenant_id)
-                    error_buy = error_repo.update_status(media_buy_id, "failed")
-                    if error_buy:
-                        error_session.commit()
+                # Adapter creation failed. Flip webhook_status to failed and stash the
+                # error message; Phase 3 will (a) mark media_buy.status="failed" in a
+                # fresh session AND (b) emit the failed webhook with the error in the
+                # payload. Merging both concerns into Phase 3 keeps the raw
+                # select(PushNotificationConfig) inside a single function body (the
+                # test_architecture_no_raw_select allowlist entry for approve_media_buy
+                # already covers it) and avoids duplicating the webhook-send block.
+                logger.warning(f"[APPROVAL] Adapter creation FAILED for {media_buy_id}: {error_msg}")
+                webhook_status = AdcpTaskStatus.failed
+                adapter_failed = True
+                adapter_error_msg = error_msg
+                flash_on_success = f"Media buy approved but adapter creation failed: {error_msg}"
+                flash_category = "error"
+            else:
+                logger.info(f"[APPROVAL] Adapter creation succeeded for {media_buy_id}")
+                flash_on_success = "Media buy approved and order created successfully"
 
-                flash(f"Media buy approved but adapter creation failed: {error_msg}", "error")
-                return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
-
-            logger.info(f"[APPROVAL] Adapter creation succeeded for {media_buy_id}")
-            flash_on_success = "Media buy approved and order created successfully"
-
-        # -------- Phase 3: fresh outer session #2 — send webhook ------------------------
+        # -------- Phase 3: fresh outer session #2 — DB status write (if adapter_failed) + webhook ----
         # Kept inline (rather than extracted) so the raw select(PushNotificationConfig)
         # below stays inside the approve_media_buy allowlist entry for the
         # test_architecture_no_raw_select guard. Extracting it to a helper would add
         # a new (file, function) entry to the allowlist, which the guard disallows.
         #
-        # Gate: fire only when Phase 1 set a webhook_status. No-op branches
-        # (step-level ack, no push URL, no webhook config match) fall through.
-        if webhook_status is not None and media_buy_data and step_data and media_buy_data.get("push_notification_url"):
+        # Phase 3 covers TWO concerns:
+        #   1. Mark media_buy.status="failed" when the adapter failed (adapter_failed=True).
+        #      This must commit BEFORE the webhook fires so the buyer cannot observe
+        #      `failed` status via an out-of-band GET race before the DB reflects it.
+        #   2. Emit the branch-appropriate webhook when webhook_status is set AND the
+        #      buyer configured a push URL.
+        #
+        # A buyer without a push_notification_url still gets the DB status write (concern 1).
+        # A step-level ack branch sets webhook_status=None and adapter_failed=False, so
+        # Phase 3 is entirely a no-op for that branch (matches main's behavior).
+        webhook_emit_eligible = (
+            webhook_status is not None
+            and media_buy_data is not None
+            and step_data is not None
+            and bool(media_buy_data.get("push_notification_url"))
+        )
+        if adapter_failed or webhook_emit_eligible:
             with get_db_session() as webhook_session:
-                stmt_webhook = (
-                    select(PushNotificationConfig)
-                    .filter_by(
-                        tenant_id=tenant_id,
-                        principal_id=media_buy_data["principal_id"],
-                        url=media_buy_data["push_notification_url"],
-                        is_active=True,
-                    )
-                    .order_by(PushNotificationConfig.created_at.desc())
-                )
-                webhook_config = webhook_session.scalars(stmt_webhook).first()
+                # Concern 1: DB status write for adapter-failure. Commit before the
+                # webhook so the buyer sees consistent state on any post-webhook GET.
+                if adapter_failed:
+                    error_repo = MediaBuyRepository(webhook_session, tenant_id)
+                    error_buy = error_repo.update_status(media_buy_id, "failed")
+                    if error_buy:
+                        webhook_session.commit()
 
-                if webhook_config:
-                    # Branch the result payload by webhook_status. `input_required` uses
-                    # the canonical `CreateMediaBuyInputRequired` shape (with a Reason
-                    # enum) rather than `CreateMediaBuySuccessResponse` — the latter
-                    # implies an operational media buy, which a buyer waiting on
-                    # creatives does not have. Builders below accept `dict[str, Any]`
-                    # so wire serialization works for either shape; spec-validating
-                    # buyers will see the correct discriminated-union variant.
-                    webhook_result: CreateMediaBuyInputRequired | CreateMediaBuySuccessResponse
-                    if webhook_status == AdcpTaskStatus.input_required:
-                        webhook_result = CreateMediaBuyInputRequired(
-                            reason=CreateMediaBuyInputRequiredReason.APPROVAL_REQUIRED,
+                # Concern 2: emit the webhook if eligibility holds. A buyer without a
+                # configured push URL still got the DB write above; no webhook is sent.
+                if webhook_emit_eligible:
+                    assert media_buy_data is not None and step_data is not None  # type narrowing
+                    stmt_webhook = (
+                        select(PushNotificationConfig)
+                        .filter_by(
+                            tenant_id=tenant_id,
+                            principal_id=media_buy_data["principal_id"],
+                            url=media_buy_data["push_notification_url"],
+                            is_active=True,
                         )
-                    else:
-                        webhook_repo = MediaBuyRepository(webhook_session, tenant_id)
-                        all_packages = webhook_repo.get_packages(media_buy_id)
-                        webhook_result = CreateMediaBuySuccessResponse(
-                            media_buy_id=media_buy_id,
-                            buyer_ref=media_buy_data["buyer_ref"],
-                            packages=[Package(package_id=x.package_id) for x in all_packages],
-                            context={},  # TODO: @yusuf - please fix this, like we've fixed in the creative approval
+                        .order_by(PushNotificationConfig.created_at.desc())
+                    )
+                    webhook_config = webhook_session.scalars(stmt_webhook).first()
+
+                    if webhook_config:
+                        # Branch the result payload by webhook_status. `input_required` uses
+                        # the canonical `CreateMediaBuyInputRequired` shape (with a Reason
+                        # enum). `failed` uses `CreateMediaBuyErrorResponse` wrapping the
+                        # adapter's error message as an `Error(code=adapter_execution_failed)`.
+                        # `completed` and `rejected` use `CreateMediaBuySuccessResponse`.
+                        # Builders accept `dict[str, Any]` so wire serialization works for
+                        # any shape; spec-validating buyers see the correct variant.
+                        webhook_result: (
+                            CreateMediaBuyInputRequired | CreateMediaBuySuccessResponse | CreateMediaBuyErrorResponse
                         )
+                        if webhook_status == AdcpTaskStatus.input_required:
+                            webhook_result = CreateMediaBuyInputRequired(
+                                reason=CreateMediaBuyInputRequiredReason.APPROVAL_REQUIRED,
+                            )
+                        elif webhook_status == AdcpTaskStatus.failed:
+                            webhook_result = CreateMediaBuyErrorResponse(
+                                errors=[
+                                    Error(
+                                        code="adapter_execution_failed",
+                                        message=adapter_error_msg or "Adapter creation failed",
+                                    )
+                                ],
+                            )
+                        else:
+                            webhook_repo = MediaBuyRepository(webhook_session, tenant_id)
+                            all_packages = webhook_repo.get_packages(media_buy_id)
+                            webhook_result = CreateMediaBuySuccessResponse(
+                                media_buy_id=media_buy_id,
+                                buyer_ref=media_buy_data["buyer_ref"],
+                                packages=[Package(package_id=x.package_id) for x in all_packages],
+                                context={},  # TODO: @yusuf - please fix this, like we've fixed in the creative approval
+                            )
 
                     metadata = {
                         "task_type": step_data["tool_name"],
@@ -609,7 +666,11 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     except Exception as webhook_err:
                         logger.warning(f"Failed to send webhook notification: {webhook_err}")
 
-        flash(flash_on_success, "success" if action == "approve" else "info")
+        # Flash category: Phase 2's adapter-failure branch sets flash_category="error"
+        # to override the default. Otherwise derive from action (approve→success,
+        # reject→info) to match pre-P3 behavior exactly.
+        final_flash_category = flash_category or ("success" if action == "approve" else "info")
+        flash(flash_on_success, final_flash_category)
         return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
 
     except Exception as e:

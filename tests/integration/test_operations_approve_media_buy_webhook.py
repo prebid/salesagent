@@ -15,13 +15,14 @@ resulted:
   the buyer was told the media buy was operational with no adapter execution.
 
 The fix replaces the variable with `webhook_status: AdcpTaskStatus | None`,
-set explicitly per branch in Phase 1:
+set explicitly per branch in Phase 1 (or flipped to `failed` in Phase 2 per
+P3 follow-up):
 
     ==================================================== ===================
     Branch                                               webhook_status
     ==================================================== ===================
     approve + pending + all_creatives_approved + OK      completed
-    approve + pending + all_creatives_approved + FAIL    None (early return)
+    approve + pending + all_creatives_approved + FAIL    failed (P3)
     approve + pending + creatives NOT approved           input_required
     approve + step-level ack (status != pending)         None
     reject                                               rejected
@@ -33,7 +34,12 @@ branch uses `CreateMediaBuyInputRequired(reason=APPROVAL_REQUIRED)` — the
 canonical discriminated-union variant for `input_required` — rather than
 `CreateMediaBuySuccessResponse` which implies an operational media buy.
 
-Covers the 5 dispatch branches + 2 result-schema assertions. Phase 3's inline
+`failed` (P3) closes the buyer's create_media_buy task when the adapter
+refuses to execute. Result payload wraps the adapter error in
+`CreateMediaBuyErrorResponse(errors=[Error(code="adapter_execution_failed", ...)])`.
+Pre-P3 the handler early-returned with no webhook — the buyer's task hung.
+
+Covers the 5 dispatch branches + result-schema assertions. Phase 3's inline
 `select(PushNotificationConfig)` stays inline to avoid adding an entry to the
 `test_architecture_no_raw_select` shrinking allowlist.
 """
@@ -185,13 +191,20 @@ class TestApproveMediaBuyWebhookDispatch:
         payload = send_mock.call_args.kwargs["payload"]
         assert _payload_status(payload) in ("completed", "Completed")
 
-    def test_approve_pending_creatives_approved_adapter_fails_no_webhook(
+    def test_approve_pending_creatives_approved_adapter_fails_sends_failed_webhook(
         self,
         client,
         authenticated,  # noqa: F811
         webhook_scenario,
     ):
-        """Adapter failure: early return before Phase 3 → NO webhook."""
+        """Adapter failure (P3): emit a ``failed`` webhook with CreateMediaBuyErrorResponse.
+
+        Pre-P3 the handler early-returned without any webhook emission, so the
+        buyer's ``create_media_buy`` task hung forever. Post-P3, Phase 3 covers
+        both the DB status write (``media_buy.status = "failed"``) AND the
+        ``failed`` webhook with an ``Error(code="adapter_execution_failed", ...)``
+        carrying the adapter's error message.
+        """
         tenant_id = webhook_scenario["tenant_id"]
         principal_id = webhook_scenario["principal_id"]
         media_buy_id = webhook_scenario["media_buy_id"]
@@ -218,7 +231,117 @@ class TestApproveMediaBuyWebhookDispatch:
             )
 
         assert response.status_code in (302, 303)
-        send_mock.assert_not_called()
+        send_mock.assert_called_once()
+        payload = send_mock.call_args.kwargs["payload"]
+        # A2A hyphenates; MCP uses underscore. Default protocol is MCP here.
+        assert _payload_status(payload) in ("failed", "Failed")
+
+        # Result payload must be the CreateMediaBuyErrorResponse variant with
+        # the adapter's error message surfaced in Error(code="adapter_execution_failed").
+        result_dict = _payload_result(payload)
+        assert result_dict is not None, f"no result found in payload: {payload!r}"
+        errors = result_dict.get("errors")
+        assert isinstance(errors, list) and errors, f"expected non-empty errors list, got {result_dict!r}"
+        assert errors[0].get("code") == "adapter_execution_failed"
+        assert "adapter boom" in errors[0].get("message", "")
+
+    def test_approve_pending_adapter_fails_marks_media_buy_failed_in_db(
+        self,
+        client,
+        authenticated,  # noqa: F811
+        webhook_scenario,
+    ):
+        """P3 regression guard: adapter-failure path commits media_buy.status="failed".
+
+        Pre-P3 this happened in a mid-flow session before the early return.
+        Post-P3 it happens inside Phase 3 before webhook emission so the buyer
+        cannot observe ``failed`` status on a post-webhook GET before the DB
+        write has committed.
+        """
+        tenant_id = webhook_scenario["tenant_id"]
+        principal_id = webhook_scenario["principal_id"]
+        media_buy_id = webhook_scenario["media_buy_id"]
+
+        creative = CreativeFactory(tenant_id=tenant_id, principal_id=principal_id, status="approved")
+        _assign_creative_to_media_buy(tenant_id, principal_id, creative.creative_id, media_buy_id)
+
+        service, _send_mock = _capture_webhook_call()
+
+        with (
+            patch(
+                "src.core.tools.media_buy_create.execute_approved_media_buy",
+                return_value=(False, "boom"),
+            ),
+            patch(
+                "src.services.protocol_webhook_service.get_protocol_webhook_service",
+                return_value=service,
+            ),
+        ):
+            response = client.post(
+                f"/tenant/{tenant_id}/media-buy/{media_buy_id}/approve",
+                data={"action": "approve"},
+                follow_redirects=False,
+            )
+
+        assert response.status_code in (302, 303)
+
+        from sqlalchemy import select
+
+        with get_db_session() as session:
+            mb = session.scalars(select(MediaBuy).filter_by(tenant_id=tenant_id, media_buy_id=media_buy_id)).first()
+            assert mb is not None
+            assert mb.status == "failed", f"expected media_buy.status == 'failed', got {mb.status!r}"
+
+    def test_approve_pending_adapter_fails_webhook_raise_does_not_mask_db_write(
+        self,
+        client,
+        authenticated,  # noqa: F811
+        webhook_scenario,
+    ):
+        """If the buyer's webhook endpoint is unreachable, Phase 3 still marks
+        the media buy ``failed`` in the DB.
+
+        The webhook emission is wrapped in ``try/except Exception → logger.warning``
+        (mirrors the pre-P3 pattern for other statuses). This test asserts that
+        the DB write (which happens BEFORE emission within the same session)
+        survives even if the send raises.
+        """
+        tenant_id = webhook_scenario["tenant_id"]
+        principal_id = webhook_scenario["principal_id"]
+        media_buy_id = webhook_scenario["media_buy_id"]
+
+        creative = CreativeFactory(tenant_id=tenant_id, principal_id=principal_id, status="approved")
+        _assign_creative_to_media_buy(tenant_id, principal_id, creative.creative_id, media_buy_id)
+
+        service = MagicMock()
+        service.send_notification = AsyncMock(side_effect=RuntimeError("buyer endpoint down"))
+
+        with (
+            patch(
+                "src.core.tools.media_buy_create.execute_approved_media_buy",
+                return_value=(False, "boom"),
+            ),
+            patch(
+                "src.services.protocol_webhook_service.get_protocol_webhook_service",
+                return_value=service,
+            ),
+        ):
+            response = client.post(
+                f"/tenant/{tenant_id}/media-buy/{media_buy_id}/approve",
+                data={"action": "approve"},
+                follow_redirects=False,
+            )
+
+        # Handler does NOT 5xx — the webhook raise is swallowed.
+        assert response.status_code in (302, 303)
+
+        # DB write committed before the webhook attempt.
+        from sqlalchemy import select
+
+        with get_db_session() as session:
+            mb = session.scalars(select(MediaBuy).filter_by(tenant_id=tenant_id, media_buy_id=media_buy_id)).first()
+            assert mb is not None
+            assert mb.status == "failed"
 
     def test_approve_pending_creatives_not_approved_sends_input_required(
         self,
