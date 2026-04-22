@@ -9,7 +9,7 @@ reads it off the request; the wrapper module ``src/admin/templating.py`` is
 deliberately NOT created (structural guard
 ``tests/unit/test_architecture_no_admin_wrapper_modules.py`` enforces absence).
 
-**11-key ``BaseCtxDep`` contract** — v1's 7 keys (messages, support_email,
+**10-key ``BaseCtxDep`` contract** — v1's 6 keys (support_email,
 sales_agent_domain, user_email, user_authenticated, user_role, test_mode) plus
 v2's 4 additions:
 
@@ -19,11 +19,14 @@ v2's 4 additions:
                            uses Origin-header validation, not form tokens —
                            templates coded against Flask reference
                            ``{{ csrf_token() }}``, so a callable must exist)
-- ``get_flashed_messages`` — drain-wrapper over the ``Messages`` accumulator so
-                           templates may call ``{% for m in get_flashed_messages() %}``
-                           (Flask compat).
+- ``get_flashed_messages`` — SOLE flash surface: drain-wrapper over the ``Messages``
+                           accumulator so templates call
+                           ``{% with messages = get_flashed_messages() %}``
+                           (Flask compat). A pre-drained ``messages`` key is
+                           deliberately absent — see ``get_base_context`` for
+                           the dual-drain defect it prevents.
 
-The 11-key contract is load-bearing for ``base.html`` across ~54 admin pages;
+The 10-key contract is load-bearing for ``base.html`` across ~54 admin pages;
 drop one key and every page breaks at render time. ``test_template_context_completeness.py``
 (L0-05 sibling guard) pins the set.
 
@@ -101,15 +104,19 @@ def get_base_context(
 ) -> dict[str, Any]:
     """Auto-merged template context — replaces Flask's ``inject_context()`` processor.
 
-    Returns the 11-key contract (see module docstring). Drains messages exactly
-    once per request because FastAPI dep-caches ``Depends()`` results.
+    Returns the 10-key contract (see module docstring). ``get_flashed_messages``
+    is the SOLE drain site — invoked lazily from templates via
+    ``{% with messages = get_flashed_messages() %}``.
 
     NO ``csrf_token`` string (callable-NULL-OP instead). NO tenant (N+1 risk —
     handlers load on-demand via ``CurrentTenantDep``).
     """
     session = request.session
+    # NO "messages" key — templates shadow it via {% with messages = get_flashed_messages(...) %}.
+    # Adding a pre-drained "messages" key here would double-drain the session bucket
+    # (wrapper sees an empty bucket and returns []); see
+    # tests/unit/admin/test_templates_dep.py::test_base_ctx_has_no_messages_key.
     return {
-        "messages": messages.drain(),
         "support_email": get_support_email(),
         "sales_agent_domain": get_sales_agent_domain() or "example.com",
         "user_email": session.get("user"),

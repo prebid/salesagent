@@ -13,7 +13,7 @@
 ## Revision summary — what changed from v1
 
 1. **NEW work item L0-32 `admin_redirect()` 302-default helper** (~30 LOC + 5 tests). Per `async-audit/frontend-deep-audit.md` F3 / `async-audit/testing-strategy.md` Tier 1. L0 total work items: **32** (was 31 + L0-00 = 32; now 33 including L0-00).
-2. **L0-05 `TemplatesDep` extended** to register Jinja `tojson` filter (with `indent` kwarg support) and widen `BaseCtxDep` key set from 7 → 11 keys. Per `frontend-deep-audit.md` F5 / H4-H5.
+2. **L0-05 `TemplatesDep` extended** to register Jinja `tojson` filter (with `indent` kwarg support) and widen `BaseCtxDep` key set from 7 → 10 keys (adds `session`, `g_test_mode`, `csrf_token`, `get_flashed_messages`; drops `user_name`; drops `messages` — templates consume `get_flashed_messages()` which shadows the dict key, so a pre-drained `messages` key double-drains). Per `frontend-deep-audit.md` F5 / H4-H5.
 3. **L0-14 `content_negotiation.py` extended** to author `templates/error.html` with pinned `{error_code, message, status_code}` contract + golden fingerprint, AND to extend `_response_mode()` test matrix to cover AJAX and browser-fetch `Accept: */*` false-positive cases. Per `flask-to-fastapi-deep-audit.md` §1.3 + `frontend-deep-audit.md` F6/H7.
 4. **Test-Before-Implement Red reframe** across L0-04..L0-15. v1 used ImportError as the Red failure mode; v2 declares per-item which Red pattern is used: (a) minimal-stub-then-semantic-test, or (b) `pytest.raises(ImportError)` as SEMANTIC assertion about module absence. Items using pattern (a): L0-05, L0-06, L0-07, L0-08, L0-09, L0-10, L0-12, L0-13, L0-14. Items using pattern (b): L0-04, L0-11, L0-15 (guards-and-constants-only). Rationale stated per item.
 5. **Stale-entry meta-guard added** (§5.X) — every CAPTURED→shrink allowlist carries a stale-entry assertion via the meta-guard `test_structural_guard_allowlist_monotonic.py` extended with stale-entry logic (one convention applied uniformly).
@@ -166,18 +166,18 @@ Work items run **roughly** in order; items at the same depth are parallelizable 
 
 **✅ SHIPPED: `0c9ff48c` (Green) + `b91d7fda` (Red) + `9513c9cc` (ruff format follow-up)**
 
-- **Rationale:** `Jinja2Templates` attached to `app.state.templates` at lifespan startup (not a wrapper module). `TemplatesDep` + `BaseCtxDep` replace Flask's `inject_context()` processor. **Extended in v2** to register Jinja `tojson` filter + widen `BaseCtxDep` key set to 11.
-- **Files:** `src/admin/deps/templates.py` (~50 LOC for `TemplatesDep` + filter registration; ~100 LOC for `BaseCtxDep` — 11 keys; v1's 7 + `session`, `g_test_mode`, `csrf_token`, `get_flashed_messages`).
+- **Rationale:** `Jinja2Templates` attached to `app.state.templates` at lifespan startup (not a wrapper module). `TemplatesDep` + `BaseCtxDep` replace Flask's `inject_context()` processor. **Extended in v2** to register Jinja `tojson` filter + widen `BaseCtxDep` key set to 10.
+- **Files:** `src/admin/deps/templates.py` (~50 LOC for `TemplatesDep` + filter registration; ~100 LOC for `BaseCtxDep` — 10 keys; v1's 6 + `session`, `g_test_mode`, `csrf_token`, `get_flashed_messages`; pre-drained `messages` deliberately absent — templates use `{% with messages = get_flashed_messages() %}` which shadows the dict key, so exposing a pre-drained list double-drains the bucket).
 - **LOC:** ~150 production + ~220 unit tests.
 - **Tests:**
-  - Red (pattern a — stub first): Land an empty stub `src/admin/deps/templates.py` with `TemplatesDep = None` / `BaseCtxDep = None` sentinels. Then write the Red test: `tests/unit/admin/test_templates_dep.py` asserts `BaseCtxDep` returns dict with keys `{messages, support_email, sales_agent_domain, user_email, user_authenticated, user_role, test_mode, session, g_test_mode, csrf_token, get_flashed_messages}`. Red asserts AttributeError or TypeError on the sentinel — a SEMANTIC failure.
-  - Green: implement. `csrf_token` is a callable returning `""` (NULL-OP by contract — CSRFOriginMiddleware uses Origin validation, not tokens, but templates coded against Flask reference `{{ csrf_token() }}`). `get_flashed_messages` is a callable drain wrapper over `MessagesDep`. `g_test_mode` bridges `g.test_mode` semantics via request state.
+  - Red (pattern a — stub first): Land an empty stub `src/admin/deps/templates.py` with `TemplatesDep = None` / `BaseCtxDep = None` sentinels. Then write the Red test: `tests/unit/admin/test_templates_dep.py` asserts `BaseCtxDep` returns dict with keys `{support_email, sales_agent_domain, user_email, user_authenticated, user_role, test_mode, session, g_test_mode, csrf_token, get_flashed_messages}`. Red asserts AttributeError or TypeError on the sentinel — a SEMANTIC failure.
+  - Green: implement. `csrf_token` is a callable returning `""` (NULL-OP by contract — CSRFOriginMiddleware uses Origin validation, not tokens, but templates coded against Flask reference `{{ csrf_token() }}`). `get_flashed_messages` is the SOLE flash surface — a callable drain wrapper over `MessagesDep`. `g_test_mode` bridges `g.test_mode` semantics via request state.
   - Jinja `tojson` filter test: 5 tests — basic dict, `|tojson(indent=2)`, nested, nullable, unicode. Per `frontend-deep-audit.md` F5 / `testing-strategy.md` Wave 0.
-  - Also add `tests/unit/architecture/test_template_context_completeness.py` (empty allowlist; asserts `BaseCtxDep()(request)` returns all 11 keys).
+  - Also add `tests/unit/architecture/test_template_context_completeness.py` (empty allowlist; asserts `BaseCtxDep()(request)` returns all 10 keys) AND `test_base_ctx_has_no_messages_key` regression guard asserting absence of `messages` dict key (prevents re-introduction of the dual-drain defect).
 - **Test-Before-Implement pattern:** Pattern (a) — stub first, then semantic behavioral test. Justified because `BaseCtxDep` has concrete behavior (key set) that a stub can fail against without invoking ImportError.
 - **Dependencies:** L0-01, L0-04 (MessagesDep for drain wrapper).
 - **Reference:** `implementation-checklist.md` §422; `foundation-modules.md §D8-native`; `frontend-deep-audit.md` F2, F5, H4-H5.
-- **Risk:** **LOW-MEDIUM** — 11-key contract is load-bearing for `base.html` across all 54 admin pages; drop one key and every page breaks.
+- **Risk:** **LOW-MEDIUM** — 10-key contract is load-bearing for `base.html` across all 54 admin pages; drop one key and every page breaks.
 
 ### L0-06 foundation module: `src/admin/csrf.py` (CSRFOriginMiddleware)
 
@@ -581,7 +581,7 @@ Per `CLAUDE.md` §Test-Before-Implement, each work item is one Red+Green pair un
 | L0-02 | 9 Red+Green pairs | No | Pattern (a) |
 | L0-03 | Red: `test: retire scoped_session` → Green: `refactor(core): drop scoped_session` | No | Pattern (a) — semantic identity assertion |
 | L0-04 | Red: `test: MessagesDep round-trip — expected ImportError` → Green: `feat(admin): add messages.py` | No | **Pattern (b)** |
-| L0-05 | Red (stub-first) + Green for templates.py + 11-key BaseCtxDep + tojson filter tests | No | **Pattern (a)** |
+| L0-05 | Red (stub-first) + Green for templates.py + 10-key BaseCtxDep + tojson filter tests | No | **Pattern (a)** |
 | L0-06 | Red (stub-first) + Green for csrf.py | No | **Pattern (a)** |
 | L0-07 | Red (stub-first) + Green for external_domain.py | No | **Pattern (a)** |
 | L0-08 | Red (stub-first) + Green for fly_headers.py | No | **Pattern (a)** |
@@ -701,7 +701,7 @@ Every dormant-at-L0 guard ships with a planted-violation meta-fixture per `/writ
 | All 48 structural guards green | ✅ satisfied by L0-01 `c259ecf6` (17 guards), L0-02 `745c920e`, L0-03 `ab2b9e59`, L0-23 `63b3f018`, L0-24 `2cce10d2`, L0-25 `e379ba29`, L0-13 `b67cafab`, L0-18 `32f09057`, plus L0-05 `0c9ff48c` / L0-15 `cad4536b` / L0-20 `b1ba541f` (orphan owners) |
 | `admin_redirect()` default-302 contract asserted | ✅ satisfied by L0-32 `4a4cbbf4` + `9e11f6b1` |
 | `templates/error.html` pinned + golden fingerprint | ✅ satisfied by L0-14 `a3b0c292` + regression fix `273ede24` |
-| 11-key `BaseCtxDep` contract asserted | ✅ satisfied by L0-05 `0c9ff48c` |
+| 10-key `BaseCtxDep` contract asserted (messages drop + dual-drain fix) | ✅ satisfied by L0-05 `0c9ff48c` (initial 11-key) + C1 fix (drop dead `messages` key — pre-merge PR #1221) |
 | Jinja `tojson` filter registered | ✅ satisfied by L0-05 `0c9ff48c` |
 | `_response_mode()` handles AJAX + browser-fetch `*/*` correctly | ✅ satisfied by L0-14 `a3b0c292` |
 | Captured→shrink allowlist files exist at `tests/unit/architecture/allowlists/` | ✅ satisfied by L0-01 `c259ecf6` (3 files per §5.4) + FIXME bootstrap `11fb7322` |

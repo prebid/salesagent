@@ -1745,7 +1745,7 @@ def create_account(
     )
 ```
 
-**Template integration:** `messages` appears in template context via `BaseCtxDep.drain()` (called exactly once per request because FastAPI dep-caches `Depends()` results). Templates consume `{% for m in messages %}<div class="alert alert-{{ m.level.value }}">{{ m.text }}</div>{% endfor %}`. NO Jinja global trampoline. NO implicit read-and-pop on render.
+**Template integration:** flash messages surface through the `get_flashed_messages` callable exposed by `BaseCtxDep` — templates consume `{% with messages = get_flashed_messages() %}{% for m in messages %}<div class="alert alert-{{ m.level }}">{{ m.text }}</div>{% endfor %}{% endwith %}`. The wrapper drains the `Messages` accumulator on invocation (idempotent — a second call returns `[]`). **A pre-drained `messages` dict key is deliberately absent** — the `{% with %}` idiom shadows any outer `messages` key, so exposing one alongside the wrapper would double-drain the session bucket (caller drains first, wrapper then sees an empty bucket and returns `[]`). See `src/admin/deps/templates.py::get_base_context` for the guard comment preventing re-addition. NO Jinja global trampoline. NO implicit read-and-pop on render.
 
 ### §D8-native.2 — Inline `SessionMiddleware` registration (replaces §11.2 sessions.py)
 
@@ -1833,21 +1833,30 @@ def get_base_context(
 ) -> dict[str, Any]:
     """Auto-merged template context — replaces Flask's inject_context() processor.
 
-    Contents: messages (drained FlashMessage list), support_email, sales_agent_domain,
-    user_email, user_name, user_authenticated, user_role, test_mode. NO csrf_token
-    (CSRFOriginMiddleware uses Origin validation). NO tenant (N+1 risk — handlers
-    load on-demand via CurrentTenantDep).
+    Returns a 10-key contract: support_email, sales_agent_domain, user_email,
+    user_authenticated, user_role, test_mode, session, g_test_mode,
+    csrf_token (NULL-OP callable), get_flashed_messages (drain-wrapper — sole
+    flash surface). NO pre-drained `messages` key — templates use
+    `{% with messages = get_flashed_messages() %}` which shadows any outer
+    dict key, and exposing a pre-drained list would double-drain the bucket.
+    NO csrf_token string (CSRFOriginMiddleware uses Origin validation; the
+    callable returns ""). NO tenant (N+1 risk — handlers load on-demand via
+    CurrentTenantDep).
     """
     session = request.session
+    # NO "messages" key — templates shadow it via {% with messages = get_flashed_messages(...) %}.
+    # Adding a pre-drained "messages" key here would double-drain the session bucket.
     return {
-        "messages": messages.drain(),
         "support_email": get_support_email(),
         "sales_agent_domain": get_sales_agent_domain() or "example.com",
         "user_email": session.get("user"),
-        "user_name": session.get("user_name"),
         "user_authenticated": bool(session.get("user")),
         "user_role": session.get("role"),
         "test_mode": False,
+        "session": session,
+        "g_test_mode": False,
+        "csrf_token": _null_csrf_token,
+        "get_flashed_messages": _build_flashed_messages_wrapper(messages),
     }
 
 

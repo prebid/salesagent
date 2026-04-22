@@ -1,7 +1,7 @@
 """L0-05 — TemplatesDep + BaseCtxDep + tojson filter obligation tests.
 
 Pattern (a) Red: module-level stubs exist but return sentinels / empty dicts —
-the tests below assert the real behavior (11-key context, callable drain,
+the tests below assert the real behavior (10-key context, callable drain,
 tojson with indent support). Red fails with AttributeError / AssertionError
 on the stub — a SEMANTIC failure, not ImportError.
 
@@ -96,7 +96,7 @@ def test_get_templates_returns_app_state_instance() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 11-key BaseCtxDep contract
+# 10-key BaseCtxDep contract
 # ---------------------------------------------------------------------------
 
 EXPECTED_BASE_CTX_KEYS: frozenset[str] = ADMIN_BASE_CTX_KEYS
@@ -111,8 +111,8 @@ def _call_get_base_context(request: _StubRequest) -> dict:
     return get_base_context(request, messages)  # type: ignore[arg-type]
 
 
-def test_base_ctx_has_exactly_11_keys_no_more_no_less() -> None:
-    """The 11-key contract is load-bearing for base.html across ~54 admin pages."""
+def test_base_ctx_has_exactly_10_keys_no_more_no_less() -> None:
+    """The 10-key contract is load-bearing for base.html across ~54 admin pages."""
     request = _StubRequest()
     ctx = _call_get_base_context(request)
 
@@ -121,12 +121,28 @@ def test_base_ctx_has_exactly_11_keys_no_more_no_less() -> None:
     assert actual == expected, f"got {sorted(actual)}, want {sorted(expected)}"
 
 
-def test_base_ctx_messages_is_drained_list() -> None:
-    """messages is the drained list of FlashMessage (empty here)."""
-    request = _StubRequest()
-    ctx = _call_get_base_context(request)
+def test_base_ctx_has_no_messages_key() -> None:
+    """A pre-drained ``messages`` key is deliberately absent.
 
-    assert ctx["messages"] == []
+    Rationale: every base template (base.html, login.html, settings.html,
+    signup_onboarding.html, users.html, tenant_users.html) uses
+    ``{% with messages = get_flashed_messages(...) %}`` which shadows any
+    outer ``messages`` key. Exposing a pre-drained list alongside the
+    wrapper causes a double-drain: the pre-populated key consumes the
+    bucket, and the wrapper then sees an empty bucket and returns ``[]``.
+    See ``src/admin/deps/templates.py::get_base_context`` for the guard
+    comment preventing re-addition.
+    """
+    from src.admin.deps.messages import Messages
+    from src.admin.deps.templates import get_base_context
+
+    request = _StubRequest()
+    messages = Messages(request)  # type: ignore[arg-type]
+    messages.info("seeded")  # seed to prove the wrapper is the only drain site
+
+    ctx = get_base_context(request, messages)  # type: ignore[arg-type]
+
+    assert "messages" not in ctx
 
 
 def test_base_ctx_session_bridges_request_session() -> None:
@@ -157,7 +173,15 @@ def test_base_ctx_csrf_token_is_callable_returning_empty_string() -> None:
 
 
 def test_base_ctx_get_flashed_messages_is_callable_drain_wrapper() -> None:
-    """get_flashed_messages is a callable that drains messages."""
+    """get_flashed_messages is a callable that drains messages.
+
+    Regression guard for the dual-drain defect: invoking the wrapper
+    MUST return the seeded message. A prior implementation populated a
+    ``messages`` dict key by calling ``messages.drain()`` inside
+    ``get_base_context``, which emptied the bucket before templates
+    could invoke the wrapper. The wrapper then returned ``[]`` silently.
+    See ``test_base_ctx_has_no_messages_key`` for the absence-guard.
+    """
     from src.admin.deps.messages import Messages
 
     request = _StubRequest()
@@ -171,6 +195,18 @@ def test_base_ctx_get_flashed_messages_is_callable_drain_wrapper() -> None:
 
     gfm = ctx["get_flashed_messages"]
     assert callable(gfm), "get_flashed_messages must be callable for template compat"
+
+    # First invocation: must surface the seeded message (not an empty list —
+    # which is what happened under the dual-drain defect).
+    first = gfm()
+    assert isinstance(first, list)
+    assert len(first) == 1, f"expected seeded message, got {first!r}"
+    assert first[0]["level"] == "info"
+    assert first[0]["text"] == "hello"
+
+    # Second invocation: idempotent drain — bucket is now empty.
+    second = gfm()
+    assert second == []
 
 
 def test_base_ctx_user_authenticated_derived_from_session_user() -> None:

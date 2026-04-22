@@ -1,17 +1,16 @@
-"""L0-24 atomic guard: ``BaseCtxDep`` returns the full 11-key contract.
+"""L0-24 atomic guard: ``BaseCtxDep`` returns the full 10-key contract.
 
 Rationale — ``src/admin/deps/templates.py::get_base_context`` is the
 function that replaces Flask's ``inject_context()`` processor. Every
-admin template inherits ``base.html`` which references 11 context
+admin template inherits ``base.html`` which references 10 context
 keys; omitting one breaks page rendering at runtime. The structural
-invariant is that the returned dict keys == exactly the 11 keys
+invariant is that the returned dict keys == exactly the 10 keys
 documented in the module docstring.
 
 The contract:
 
-v1 (Flask parity, 7 keys):
+v1 (Flask parity, 6 keys):
 
-- ``messages``
 - ``support_email``
 - ``sales_agent_domain``
 - ``user_email``
@@ -24,7 +23,11 @@ v2 additions (4 keys) per ``frontend-deep-audit.md §F2/H4-H5``:
 - ``session``
 - ``g_test_mode``
 - ``csrf_token`` (callable, NOT string)
-- ``get_flashed_messages`` (callable drain wrapper)
+- ``get_flashed_messages`` (callable drain wrapper — SOLE flash surface)
+
+A pre-drained ``messages`` key is deliberately absent; adding one would
+double-drain the session bucket (wrapper returns []). See
+``test_templates_dep.py::test_base_ctx_has_no_messages_key``.
 
 Any drift — a renamed key, a silently-dropped key, a key type change —
 breaks base.html rendering across ~54 admin pages. This guard pins
@@ -77,8 +80,8 @@ def _build_context() -> dict[str, object]:
     return captured
 
 
-def test_base_context_returns_exactly_eleven_keys() -> None:
-    """get_base_context returns exactly the 11 expected keys — no more, no less."""
+def test_base_context_returns_exactly_ten_keys() -> None:
+    """get_base_context returns exactly the 10 expected keys — no more, no less."""
     ctx = _build_context()
     keys = set(ctx.keys())
     missing = EXPECTED_KEYS - keys
@@ -86,14 +89,16 @@ def test_base_context_returns_exactly_eleven_keys() -> None:
     assert not missing, f"BaseCtxDep missing required keys: {sorted(missing)}"
     assert not extra, (
         f"BaseCtxDep grew unexpected keys: {sorted(extra)}. Expanding the "
-        "contract requires a spec update — frontend-deep-audit.md §F2/H4-H5."
+        "contract requires a spec update — frontend-deep-audit.md §F2/H4-H5. "
+        "Note: a pre-drained 'messages' key is deliberately absent — see "
+        "test_templates_dep.py::test_base_ctx_has_no_messages_key."
     )
 
 
-def test_base_context_key_count_is_eleven() -> None:
-    """Key-count pin: the contract is exactly 11 keys."""
+def test_base_context_key_count_is_ten() -> None:
+    """Key-count pin: the contract is exactly 10 keys."""
     ctx = _build_context()
-    assert len(ctx) == 11, f"Expected 11 keys, got {len(ctx)}: {sorted(ctx.keys())}"
+    assert len(ctx) == 10, f"Expected 10 keys, got {len(ctx)}: {sorted(ctx.keys())}"
 
 
 def test_csrf_token_is_callable_not_string() -> None:

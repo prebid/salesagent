@@ -60,7 +60,7 @@ Planned Accept-aware handler checks `"text/html" in Accept`. Browser `fetch()` s
 ## High-Severity Issues
 
 ### H1. 366 flash() calls — largest mechanical change
-17 files, 4 categories (error/success/warning/info). FastAPI has no equivalent. Needs custom FlashMiddleware + `get_flashed_messages` Jinja global.
+17 files, 4 categories (error/success/warning/info). FastAPI has no equivalent. Needs custom FlashMiddleware + `get_flashed_messages` callable in `BaseCtxDep` (drain-wrapper over `MessagesDep`). **Note (2026-04-21 C1 fix):** `get_flashed_messages` is the SOLE flash surface in the 10-key context — a pre-drained `messages` dict key is deliberately absent. Reason: all 6 base-rendering templates (`base.html:189`, `login.html:32`, `settings.html:9`, `signup_onboarding.html:17`, `users.html:411`, `tenant_users.html:411`) use `{% with messages = get_flashed_messages(...) %}` which shadows any outer `messages` key; exposing a pre-drained list would double-drain the session bucket (caller empties the bucket first, wrapper then returns `[]` from a template's perspective). The original H4-H5 11-key expansion is now a 10-key contract. Regression guard: `tests/unit/admin/test_templates_dep.py::test_base_ctx_has_no_messages_key`.
 
 ### H2. 130 Flask-style url_for calls need name mapping
 55 unique Flask endpoint names across 17 blueprints → `admin_<bp>_<endpoint>` convention. Every `url_for('blueprint.endpoint')` must be rewritten.
