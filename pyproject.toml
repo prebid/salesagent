@@ -53,6 +53,8 @@ dependencies = [
     "pillow>=12.2.0",  # GHSA-cfh3-3jmp-rvhc + GHSA-whj4-6x5x-4v2j
     "python-multipart>=0.0.26",  # GHSA-wp53-j4wj-2cfg + GHSA-mj87-hwqh-73pj
     "pyasn1>=0.6.3",  # GHSA-jr27-m4p2-rc6r
+    "lxml>=6.1.0",  # GHSA-vfmq-68hx-4jfw
+    "python-dotenv>=1.2.2",  # GHSA-mf9w-mj56-hr94
 ]
 
 
