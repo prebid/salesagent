@@ -74,6 +74,70 @@ class TestSafeNextURL:
     def test_rejects_no_leading_slash(self):
         assert safe_next_url("admin/accounts") is None
 
+    # ------------------------------------------------------------------
+    # Control-character rejection (RFC 3986 §2 defense-in-depth).
+    # Starlette re-quotes on egress so response-splitting is blocked at
+    # the response boundary; these tests verify the validator ALSO rejects
+    # at input time so a callsite that forwards the return value into a
+    # raw header cannot bite.
+    # ------------------------------------------------------------------
+
+    def test_rejects_raw_cr(self):
+        assert safe_next_url("/admin/foo\r") is None
+
+    def test_rejects_raw_lf(self):
+        assert safe_next_url("/admin/foo\n") is None
+
+    def test_rejects_raw_crlf(self):
+        assert safe_next_url("/admin/foo\r\n") is None
+
+    def test_rejects_raw_tab(self):
+        assert safe_next_url("/admin/foo\t") is None
+
+    def test_rejects_raw_null(self):
+        assert safe_next_url("/admin/foo\x00") is None
+
+    def test_rejects_raw_del(self):
+        assert safe_next_url("/admin/foo\x7f") is None
+
+    def test_rejects_raw_vertical_tab(self):
+        assert safe_next_url("/admin/foo\x0b") is None
+
+    def test_rejects_raw_form_feed(self):
+        assert safe_next_url("/admin/foo\x0c") is None
+
+    def test_rejects_encoded_cr(self):
+        assert safe_next_url("/admin/foo%0D") is None
+
+    def test_rejects_encoded_lf(self):
+        assert safe_next_url("/admin/foo%0A") is None
+
+    def test_rejects_encoded_crlf(self):
+        assert safe_next_url("/admin/foo%0D%0A") is None
+
+    def test_rejects_encoded_tab(self):
+        assert safe_next_url("/admin/foo%09") is None
+
+    def test_rejects_encoded_null(self):
+        assert safe_next_url("/admin/foo%00") is None
+
+    def test_rejects_encoded_del(self):
+        assert safe_next_url("/admin/foo%7F") is None
+
+    def test_rejects_unicode_line_separator(self):
+        # U+2028 — breaks JavaScript string literals; not a CRLF vector but
+        # should not flow through a URL validator.
+        assert safe_next_url("/admin/foo ") is None
+
+    def test_rejects_unicode_paragraph_separator(self):
+        # U+2029 — same class as U+2028.
+        assert safe_next_url("/admin/foo ") is None
+
+    def test_accepts_encoded_space(self):
+        # %20 (space) is legal URL content in already-encoded paths; the
+        # control-char check MUST NOT reject it.
+        assert safe_next_url("/admin/foo%20bar") == "/admin/foo bar"
+
 
 class TestLoginURLWithNext:
     def test_builds_correctly(self):
