@@ -6,6 +6,12 @@ import logging
 from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
 from adcp.types import CreateMediaBuySuccessResponse, Package
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
+from adcp.types.generated_poc.media_buy.create_media_buy_async_response_input_required import (
+    CreateMediaBuyInputRequired,
+)
+from adcp.types.generated_poc.media_buy.create_media_buy_async_response_input_required import (
+    Reason as CreateMediaBuyInputRequiredReason,
+)
 from flask import Blueprint, request
 from sqlalchemy import select
 
@@ -293,7 +299,8 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
 
     Phase 1 (session 1): Load workflow step + media buy, validate, mark step approved/rejected,
         set media_buy.approved_at/approved_by (approve) or status="rejected" (reject), decide
-        whether to call the adapter based on creative approval state. Commit and close.
+        (a) whether to call the adapter and (b) what AdCP task-status the downstream webhook
+        should report. Commit and close.
 
     Phase 2 (no session held): Call execute_approved_media_buy() if the adapter path applies.
         That function opens its own MediaBuyUoW and commits media_buy.status="active".
@@ -302,8 +309,34 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
         sessionmaker — a lost-update hazard. Closing the outer session first eliminates it.
 
     Phase 3 (session 2): Re-open a fresh session to send the webhook notification (reads only).
-        For the "creatives not fully approved" branch we also set media_buy.status="draft" here
-        via the repository, since Phase 2 is skipped in that branch.
+        Fires only when ``webhook_status`` was set during Phase 1.
+
+    Webhook dispatch matrix
+    -----------------------
+
+    Per-branch webhook semantics, driven by a single ``webhook_status`` variable set in Phase 1:
+
+    =================================================  ================  ============================================
+    Branch                                             webhook_status    Result payload schema
+    =================================================  ================  ============================================
+    approve + pending + all_creatives_approved + OK    ``completed``     ``CreateMediaBuySuccessResponse``
+    approve + pending + all_creatives_approved + FAIL  ``None``          (early return before Phase 3)
+    approve + pending + creatives NOT approved          ``input_required``  ``CreateMediaBuyInputRequired(APPROVAL_REQUIRED)``
+    approve + step-level ack (status != pending)       ``None``          (no webhook)
+    reject                                             ``rejected``      ``CreateMediaBuySuccessResponse``
+    =================================================  ================  ============================================
+
+    ``input_required`` is the exact AdCP A2A ``TaskStatus`` for "workflow step complete but
+    waiting on buyer input (approved creatives)". Sending ``completed`` here — as main did
+    after running the adapter anyway on incomplete creatives — misleads the buyer into thinking
+    the media buy is live. A2A serializes ``input_required`` as the hyphenated wire string
+    ``input-required``; MCP serializes it as ``input_required``.
+
+    Note on latent upstream gap (NOT addressed here): on the happy path, ``execute_approved_media_buy``
+    itself does NOT emit a ``create_media_buy → completed`` webhook — the buyer infers media-buy
+    liveness from the separate ``sync_creatives`` webhook chain. File P2 follow-up to close that
+    loop. Similarly the adapter-fail branch emits no webhook at all (buyer never sees failure);
+    file P3 follow-up.
     """
     from datetime import UTC, datetime
 
@@ -328,7 +361,10 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
         step_data: dict | None = None
         media_buy_data: dict | None = None
         call_adapter = False  # True only on approve + all creatives approved + media_buy pending
-        adapter_task_status = AdcpTaskStatus.completed  # "completed" for approve, "rejected" for reject
+        # Per-branch webhook semantics. None = no webhook. The "completed" default was the
+        # historical silent bug — a step-level ack would have emitted completed without any
+        # adapter call. Default to None; each branch sets the correct status explicitly.
+        webhook_status: AdcpTaskStatus | None = None
         flash_on_success = "Media buy approved successfully"  # default for approve-without-adapter
 
         with get_db_session() as db_session:
@@ -425,19 +461,25 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         # to "active" — the outer write was effectively dead code under
                         # scoped_session and a lost-update hazard under bare sessionmaker.)
                         call_adapter = True
+                        webhook_status = AdcpTaskStatus.completed
                     else:
                         # No adapter call in this branch — status stays "draft" to indicate
-                        # the media buy is still waiting on creatives.
+                        # the media buy is still waiting on creatives. Notify the buyer with
+                        # input_required (the AdCP A2A TaskStatus for "workflow step done
+                        # but waiting on buyer input" — in this case, approved creatives).
                         media_buy.status = "draft"
+                        webhook_status = AdcpTaskStatus.input_required
                         flash_on_success = "Media buy approved successfully"
                 else:
                     # No state transition — just a step-level approval ack.
+                    # No webhook: matches main's behavior; a step-level ack is operator-
+                    # internal workflow bookkeeping with no buyer-visible state change.
                     flash_on_success = "Media buy approved successfully"
 
                 db_session.commit()
 
             elif action == "reject":
-                adapter_task_status = AdcpTaskStatus.rejected
+                webhook_status = AdcpTaskStatus.rejected
 
                 step.status = "rejected"
                 step.error_message = reason or "Rejected by administrator"
@@ -491,7 +533,10 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
         # below stays inside the approve_media_buy allowlist entry for the
         # test_architecture_no_raw_select guard. Extracting it to a helper would add
         # a new (file, function) entry to the allowlist, which the guard disallows.
-        if media_buy_data and step_data and media_buy_data.get("push_notification_url"):
+        #
+        # Gate: fire only when Phase 1 set a webhook_status. No-op branches
+        # (step-level ack, no push URL, no webhook config match) fall through.
+        if webhook_status is not None and media_buy_data and step_data and media_buy_data.get("push_notification_url"):
             with get_db_session() as webhook_session:
                 stmt_webhook = (
                     select(PushNotificationConfig)
@@ -506,15 +551,28 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 webhook_config = webhook_session.scalars(stmt_webhook).first()
 
                 if webhook_config:
-                    webhook_repo = MediaBuyRepository(webhook_session, tenant_id)
-                    all_packages = webhook_repo.get_packages(media_buy_id)
+                    # Branch the result payload by webhook_status. `input_required` uses
+                    # the canonical `CreateMediaBuyInputRequired` shape (with a Reason
+                    # enum) rather than `CreateMediaBuySuccessResponse` — the latter
+                    # implies an operational media buy, which a buyer waiting on
+                    # creatives does not have. Builders below accept `dict[str, Any]`
+                    # so wire serialization works for either shape; spec-validating
+                    # buyers will see the correct discriminated-union variant.
+                    webhook_result: CreateMediaBuyInputRequired | CreateMediaBuySuccessResponse
+                    if webhook_status == AdcpTaskStatus.input_required:
+                        webhook_result = CreateMediaBuyInputRequired(
+                            reason=CreateMediaBuyInputRequiredReason.APPROVAL_REQUIRED,
+                        )
+                    else:
+                        webhook_repo = MediaBuyRepository(webhook_session, tenant_id)
+                        all_packages = webhook_repo.get_packages(media_buy_id)
+                        webhook_result = CreateMediaBuySuccessResponse(
+                            media_buy_id=media_buy_id,
+                            buyer_ref=media_buy_data["buyer_ref"],
+                            packages=[Package(package_id=x.package_id) for x in all_packages],
+                            context={},  # TODO: @yusuf - please fix this, like we've fixed in the creative approval
+                        )
 
-                    webhook_result = CreateMediaBuySuccessResponse(
-                        media_buy_id=media_buy_id,
-                        buyer_ref=media_buy_data["buyer_ref"],
-                        packages=[Package(package_id=x.package_id) for x in all_packages],
-                        context={},  # TODO: @yusuf - please fix this, like we've fixed in the creative approval
-                    )
                     metadata = {
                         "task_type": step_data["tool_name"],
                         # TODO: @yusuf - check if we were passing principal_id and tenant to this previously
@@ -527,7 +585,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     if protocol == "a2a":
                         webhook_payload = create_a2a_webhook_payload(
                             task_id=step_data["step_id"],
-                            status=adapter_task_status,
+                            status=webhook_status,
                             result=webhook_result,
                             context_id=step_data["context_id"],
                         )
@@ -535,7 +593,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         webhook_payload = create_mcp_webhook_payload(
                             task_id=step_data["step_id"],
                             result=webhook_result,
-                            status=adapter_task_status,
+                            status=webhook_status,
                         )
 
                     try:

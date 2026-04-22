@@ -67,7 +67,7 @@ from tests.integration._approval_helpers import (
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 ROOT = Path(__file__).resolve().parents[2]
-OPERATIONS_FILE = ROOT / "src" / "admin" / "blueprints" / "operations.py"
+OPERATIONS_FILE = ROOT / "src" / "admin" / "routers" / "operations.py"
 
 
 # ---------------------------------------------------------------------------
