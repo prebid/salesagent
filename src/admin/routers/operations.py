@@ -315,18 +315,21 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
     Webhook dispatch matrix
     -----------------------
 
-    Per-branch webhook semantics, driven by a single ``webhook_status`` variable set in Phase 1
-    (success/rejected/input_required branches) or flipped to ``failed`` in Phase 2 on adapter
-    failure:
+    Per-branch webhook semantics, driven by a single ``webhook_status`` variable. The
+    ``completed`` happy-path webhook is emitted from INSIDE
+    ``src.core.tools.media_buy_create.execute_approved_media_buy`` (P2 loop-closure) so
+    the other two call sites of that function (``creatives.py::approve_creative``,
+    ``workflows.py::approve_workflow_step``) also close the buyer's create_media_buy
+    task. Phase 3 here handles only the non-adapter-success branches:
 
     =================================================  ================  ============================================
-    Branch                                             webhook_status    Result payload schema
+    Branch                                             webhook_status    Dispatch site
     =================================================  ================  ============================================
-    approve + pending + all_creatives_approved + OK    ``completed``     ``CreateMediaBuySuccessResponse``
-    approve + pending + all_creatives_approved + FAIL  ``failed``        ``CreateMediaBuyErrorResponse(errors=[...])``
-    approve + pending + creatives NOT approved         ``input_required``  ``CreateMediaBuyInputRequired(APPROVAL_REQUIRED)``
-    approve + step-level ack (status != pending)       ``None``          (no webhook)
-    reject                                             ``rejected``      ``CreateMediaBuySuccessResponse``
+    approve + pending + all_creatives_approved + OK    ``completed``     execute_approved_media_buy (post-adapter)
+    approve + pending + all_creatives_approved + FAIL  ``failed``        Phase 3 — CreateMediaBuyErrorResponse(errors=[...])
+    approve + pending + creatives NOT approved         ``input_required``  Phase 3 — CreateMediaBuyInputRequired(APPROVAL_REQUIRED)
+    approve + step-level ack (status != pending)       ``None``          (no webhook — operator-internal ack)
+    reject                                             ``rejected``      Phase 3 — CreateMediaBuySuccessResponse
     =================================================  ================  ============================================
 
     ``input_required`` is the exact AdCP A2A ``TaskStatus`` for "workflow step complete but
@@ -339,11 +342,6 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
     refuses to create the underlying order/line-items. Result payload wraps the adapter's
     error message in a single ``Error(code="adapter_execution_failed", message=...)`` for
     buyer debugging. Pre-P3 this branch emitted no webhook — the buyer's task hung forever.
-
-    Note on latent upstream gap (NOT addressed here): on the happy path, ``execute_approved_media_buy``
-    itself does NOT emit a ``create_media_buy → completed`` webhook — the buyer infers media-buy
-    liveness from the separate ``sync_creatives`` webhook chain. File P2 follow-up to close that
-    loop.
     """
     from datetime import UTC, datetime
 
@@ -477,7 +475,12 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         # to "active" — the outer write was effectively dead code under
                         # scoped_session and a lost-update hazard under bare sessionmaker.)
                         call_adapter = True
-                        webhook_status = AdcpTaskStatus.completed
+                        # NO webhook_status = completed here — P2 moved that emission into
+                        # execute_approved_media_buy so the three call sites (approve_media_buy,
+                        # creatives.py::approve_creative, workflows.py::approve_workflow_step)
+                        # all close the buyer's create_media_buy task from a single authoritative
+                        # source. Phase 3 only emits when webhook_status is explicitly set by a
+                        # non-adapter-success branch (input_required, rejected, or failed).
                     else:
                         # No adapter call in this branch — status stays "draft" to indicate
                         # the media buy is still waiting on creatives. Notify the buyer with

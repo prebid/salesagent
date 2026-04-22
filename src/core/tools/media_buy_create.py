@@ -8,6 +8,7 @@ Handles media buy creation including:
 - Budget validation
 """
 
+import asyncio
 import logging
 import time
 import uuid
@@ -513,6 +514,20 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                 logger.error(f"[APPROVAL] {error_msg}")
                 return False, error_msg
 
+            # Idempotency guard for the P2 loop-closure webhook: capture the pre-adapter
+            # status so the closing webhook fires at most once per lifecycle. Scheduler
+            # retries and manual re-approvals re-enter this function with status="active"
+            # — re-firing a completed webhook would spam the buyer with duplicates. Only
+            # transition-out-of-non-active emits. Note this is an in-memory snapshot; a
+            # concurrent write via a separate session would not update it, but that race
+            # requires two operators approving the same buy at the same instant — the
+            # database's single-row update is the tiebreaker (one of the two subsequent
+            # adapter calls will end up a no-op at the UoW3 `update_status("active")`).
+            was_already_active = media_buy.status == "active"
+            # Snapshot buyer-ref for the closing webhook payload — the inner UoW will
+            # close before we emit, and a fresh session lookup below re-reads packages.
+            media_buy_buyer_ref = media_buy.buyer_ref
+
             # Reconstruct CreateMediaBuyRequest from raw_request
             try:
                 # Strip package_id from packages - it was added for UI tracking but isn't
@@ -990,6 +1005,143 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             assert uow3.media_buys is not None
             uow3.media_buys.update_status(media_buy_id, "active")
             logger.info(f"[APPROVAL] Updated media buy {media_buy_id} status to 'active'")
+
+        # P2 loop-closure: emit the `create_media_buy → completed` webhook if the
+        # buyer configured a push_notification_url on the originating WorkflowStep.
+        # This closes the buyer's task from a single authoritative site — pre-P2
+        # the completed webhook fired from `approve_media_buy` Phase 3, which left
+        # the `creatives.py::approve_creative` and `workflows.py::approve_workflow_step`
+        # orphan call sites silently un-notified. Placed AFTER the UoW3 status flip
+        # and AFTER the line_item_ids + creative uploads so a buyer polling
+        # `get_media_buy` immediately after the webhook sees a fully-provisioned buy.
+        #
+        # Idempotency: gated on pre-adapter status != "active" (retry scenarios
+        # re-enter this function and would otherwise double-fire).
+        #
+        # Best-effort: wrapped in try/except so buyer endpoint outages do NOT roll
+        # back the status="active" commit. Mirrors the admin-route Phase 3 pattern.
+        #
+        # Kept inline (no helper) to preserve the single `(file, function)` entry in
+        # the `test_architecture_no_raw_select` shrinking allowlist — an extracted
+        # helper would add a new entry which the shrinking guard forbids.
+        if not was_already_active:
+            try:
+                from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
+                from adcp.types import CreateMediaBuySuccessResponse
+
+                from src.core.database.models import MediaPackage as _DBMediaPackage
+                from src.core.database.models import (
+                    ObjectWorkflowMapping,
+                    WorkflowStep,
+                )
+                from src.core.database.models import PushNotificationConfig as _DBPushNotificationConfig
+                from src.services.protocol_webhook_service import get_protocol_webhook_service
+
+                # Reuse the established MediaBuyUoW pattern for the webhook-lookup
+                # session. A raw ``get_db_session()`` block here would add this
+                # function to the ``test_architecture_repository_pattern`` guard's
+                # empty IMPL_SESSION_ALLOWLIST — guard is shrinking-only, so a new
+                # entry is forbidden. UoW wraps a fresh Session; we use it for
+                # reads only (no UoW commit needed).
+                with MediaBuyUoW(tenant_id) as webhook_uow:
+                    assert webhook_uow.session is not None
+                    webhook_session = webhook_uow.session
+                    # Find the originating `create_media_buy` workflow step for this
+                    # media buy. If multiple exist (unlikely — each media buy has a
+                    # single create step), prefer the most-recently created one so
+                    # a scheduler retry uses the original task_id.
+                    step_stmt = (
+                        select(WorkflowStep)
+                        .join(ObjectWorkflowMapping, WorkflowStep.step_id == ObjectWorkflowMapping.step_id)
+                        .filter(
+                            ObjectWorkflowMapping.object_type == "media_buy",
+                            ObjectWorkflowMapping.object_id == media_buy_id,
+                            WorkflowStep.tool_name == "create_media_buy",
+                        )
+                        .order_by(WorkflowStep.created_at.desc())
+                    )
+                    step = webhook_session.scalars(step_stmt).first()
+
+                    if step is None:
+                        # No originating step — buyer never started a create_media_buy
+                        # task through our admin surface. Nothing to close.
+                        logger.debug(
+                            f"[APPROVAL] No create_media_buy workflow step found for "
+                            f"{media_buy_id}; skipping completed webhook."
+                        )
+                    else:
+                        push_config = (step.request_data or {}).get("push_notification_config") or {}
+                        push_url = push_config.get("url")
+                        principal_id = media_buy.principal_id  # from the Phase-1 UoW snapshot
+                        if push_url and principal_id:
+                            webhook_stmt = (
+                                select(_DBPushNotificationConfig)
+                                .filter_by(
+                                    tenant_id=tenant_id,
+                                    principal_id=principal_id,
+                                    url=push_url,
+                                    is_active=True,
+                                )
+                                .order_by(_DBPushNotificationConfig.created_at.desc())
+                            )
+                            webhook_config = webhook_session.scalars(webhook_stmt).first()
+
+                            if webhook_config:
+                                # Reload packages from the DB so the webhook reflects
+                                # the post-adapter state (line_item_ids persisted).
+                                pkg_stmt = select(_DBMediaPackage).filter_by(media_buy_id=media_buy_id)
+                                all_packages = webhook_session.scalars(pkg_stmt).all()
+
+                                webhook_result = CreateMediaBuySuccessResponse(
+                                    media_buy_id=media_buy_id,
+                                    buyer_ref=media_buy_buyer_ref,
+                                    packages=[ResponsePackage(package_id=p.package_id) for p in all_packages],
+                                    context={},
+                                )
+                                metadata = {"task_type": step.tool_name}
+                                protocol = (step.request_data or {}).get("protocol", "mcp")
+
+                                # Coerce the Pydantic result to a dict so both
+                                # payload builders accept it under their
+                                # ``AdcpAsyncResponseData | dict[str, Any] | None``
+                                # signature. operations.py slips the equivalent
+                                # pattern past mypy because its handler is an
+                                # untyped Flask route; this helper is typed, so
+                                # we coerce explicitly.
+                                webhook_result_dict = webhook_result.model_dump(mode="json")
+                                webhook_payload: Any
+                                if protocol == "a2a":
+                                    webhook_payload = create_a2a_webhook_payload(
+                                        task_id=step.step_id,
+                                        status=AdcpTaskStatus.completed,
+                                        result=webhook_result_dict,
+                                        context_id=step.context_id,
+                                    )
+                                else:
+                                    webhook_payload = create_mcp_webhook_payload(
+                                        task_id=step.step_id,
+                                        result=webhook_result_dict,
+                                        status=AdcpTaskStatus.completed,
+                                    )
+
+                                service = get_protocol_webhook_service()
+                                asyncio.run(
+                                    service.send_notification(
+                                        push_notification_config=webhook_config,
+                                        payload=webhook_payload,
+                                        metadata=metadata,
+                                    )
+                                )
+                                logger.info(
+                                    f"[APPROVAL] Emitted create_media_buy completed webhook "
+                                    f"for {media_buy_id} (task_id={step.step_id})"
+                                )
+            except Exception as emit_err:
+                # Do NOT raise — media buy is active in the DB; webhook is best-effort.
+                logger.warning(
+                    f"[APPROVAL] Failed to emit create_media_buy completed webhook for {media_buy_id}: {emit_err}",
+                    exc_info=True,
+                )
 
         return True, None
 

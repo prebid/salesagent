@@ -153,13 +153,30 @@ def _assign_creative_to_media_buy(
 class TestApproveMediaBuyWebhookDispatch:
     """End-to-end Flask-route tests pinning per-branch webhook_status + result-schema."""
 
-    def test_approve_pending_creatives_approved_adapter_ok_sends_completed(
+    def test_approve_pending_creatives_approved_adapter_ok_phase3_does_not_emit(
         self,
         client,
         authenticated,  # noqa: F811
         webhook_scenario,
     ):
-        """Happy path: all creatives approved, adapter succeeds → completed webhook."""
+        """Happy-path regression: Phase 3 does NOT emit a ``completed`` webhook.
+
+        P2 moved the ``completed`` emission into ``execute_approved_media_buy``
+        itself so the three call sites of that function (approve_media_buy,
+        creatives.py::approve_creative, workflows.py::approve_workflow_step)
+        all close the buyer's create_media_buy task uniformly. This test pins
+        the absence of the Phase 3 emission by mocking out the adapter
+        function (which in real operation would do the emission) — if Phase 3
+        ever regresses and re-adds a ``webhook_status = completed`` branch, this
+        test catches it.
+
+        Coverage of the emission itself from INSIDE ``execute_approved_media_buy``
+        is deferred to a dedicated integration test (P4 follow-up) that runs
+        the real adapter path rather than mocking it, because the emission is
+        intentionally inline in the function body (kept inline to preserve the
+        single ``(file, function)`` entry in the ``test_architecture_no_raw_select``
+        shrinking allowlist — extracting a helper would forbidden-grow the list).
+        """
         tenant_id = webhook_scenario["tenant_id"]
         principal_id = webhook_scenario["principal_id"]
         media_buy_id = webhook_scenario["media_buy_id"]
@@ -187,9 +204,10 @@ class TestApproveMediaBuyWebhookDispatch:
             )
 
         assert response.status_code in (302, 303)
-        send_mock.assert_called_once()
-        payload = send_mock.call_args.kwargs["payload"]
-        assert _payload_status(payload) in ("completed", "Completed")
+        # Adapter is mocked, so the P2 emission site is bypassed. Phase 3 MUST NOT
+        # emit a completed webhook — pre-P2 it did; post-P2 this assertion pins
+        # the absence.
+        send_mock.assert_not_called()
 
     def test_approve_pending_creatives_approved_adapter_fails_sends_failed_webhook(
         self,
