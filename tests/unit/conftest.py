@@ -197,3 +197,57 @@ def make_auth_test_client():
             yield client, mock_session
 
     return _factory
+
+
+@pytest.fixture
+def make_users_test_client():
+    """Factory fixture: context manager yielding (client, mock_session) for users blueprint.
+
+    Sets up ADCP_AUTH_TEST_MODE=true + a super-admin test session so
+    @require_tenant_access() passes without a DB call. tenant_id used in routes is "default".
+
+    Usage::
+
+        with make_users_test_client(auth_setup_mode=True) as (client, mock_session):
+            response = client.get("/tenant/default/users")
+    """
+    import os
+    from contextlib import contextmanager
+
+    from src.admin.app import create_app
+
+    @contextmanager
+    def _factory(
+        auth_setup_mode: bool = True,
+        oidc_enabled: bool = False,
+        auth_config_exists: bool = True,
+    ):
+        app = create_app({"TESTING": True, "SECRET_KEY": "test-secret", "WTF_CSRF_ENABLED": False})
+        client = app.test_client()
+
+        mock_tenant = MagicMock()
+        mock_tenant.auth_setup_mode = auth_setup_mode
+        mock_tenant.name = "Test Tenant"
+        mock_tenant.authorized_domains = []
+
+        mock_auth_config = MagicMock() if auth_config_exists else None
+        if auth_config_exists:
+            mock_auth_config.oidc_enabled = oidc_enabled
+
+        mock_session = MagicMock()
+        # list_users calls scalars().first() twice (tenant, then auth_config) and .all() once
+        # enable_setup_mode calls scalars().first() once (tenant)
+        mock_session.scalars.return_value.first.side_effect = [mock_tenant, mock_auth_config]
+        mock_session.scalars.return_value.all.return_value = []
+
+        with patch("src.admin.blueprints.users.get_db_session") as mock_db:
+            mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
+            mock_db.return_value.__exit__ = MagicMock(return_value=False)
+            with client.session_transaction() as sess:
+                sess["test_user"] = "admin@test.com"
+                sess["test_tenant_id"] = "default"
+                sess["test_user_role"] = "super_admin"
+            with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
+                yield client, mock_session
+
+    return _factory
