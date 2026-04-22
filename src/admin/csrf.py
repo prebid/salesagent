@@ -35,27 +35,44 @@ logger = logging.getLogger(__name__)
 
 _SAFE_METHODS: frozenset[str] = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
 
-# Byte-immutable OAuth callback paths (notes/CLAUDE.md invariant 6). Providers
-# POST the authorization-code response to these URLs; they cannot be
-# CSRF-protected because the POST originates from the provider's origin.
-_OAUTH_CALLBACK_EXEMPTS: tuple[str, ...] = (
+# Unified CSRF-exemption set (exact-match paths + prefix-match paths).
+#
+# Semantics applied by ``_is_exempt``:
+#   - An entry ending in ``/`` matches as a prefix only (``path.startswith(entry)``).
+#     Example: ``"/api/v1/"`` matches ``"/api/v1/foo"`` but NOT ``"/api/v1"`` bare.
+#   - An entry NOT ending in ``/`` matches EXACTLY or as ``entry + "/"`` prefix.
+#     Example: ``"/mcp"`` matches ``"/mcp"`` exact and ``"/mcp/tool"`` via
+#     ``"/mcp/"`` prefix, but does NOT match ``"/mcpanything"`` (pre-rename
+#     ``startswith("/mcp")`` would have exempted it — a false positive).
+#
+# The tuple mixes three concerns that the AdCP-coverage guard
+# (``tests/unit/architecture/test_architecture_csrf_exempt_covers_adcp.py``)
+# treats uniformly:
+#
+#   1. Byte-immutable OAuth callback paths (notes/CLAUDE.md invariant 6).
+#      Providers POST the authorization-code response to these URLs; they
+#      cannot be CSRF-protected because the POST originates from the
+#      provider's origin.
+#   2. AdCP public transport surfaces (``/mcp``, ``/a2a``, ``/agent.json``,
+#      ``/.well-known/``) — out-of-scope for admin CSRF.
+#   3. Internal / well-known admin surfaces (``/api/v1/``, ``/_internal/``).
+#
+# FIXME(adcp-webhooks): when AdCP inbound push-notification receivers land
+# (per PushNotificationConfig DB rows), add their path prefix to this tuple.
+CSRF_EXEMPT_PATHS: tuple[str, ...] = (
+    # OAuth provider-initiated POSTs (byte-immutable per Invariant #6).
     "/admin/auth/google/callback",
     "/admin/auth/oidc/callback",
     "/admin/auth/gam/callback",
-)
-
-# AdCP and internal transport surfaces — out-of-scope for admin CSRF.
-_TRANSPORT_EXEMPT_PREFIXES: tuple[str, ...] = (
+    # AdCP public transports — exact match AND prefix-with-"/".
     "/mcp",
     "/a2a",
+    "/agent.json",
+    # Internal / well-known — prefix only.
     "/api/v1/",
     "/.well-known/",
-    "/agent.json",
     "/_internal/",
 )
-# FIXME(adcp-webhooks): when AdCP inbound push-notification receivers land
-# (per PushNotificationConfig DB rows), add their path prefix to this tuple
-# and update test_architecture_csrf_exempt_covers_webhooks.py.
 
 
 _DEFAULT_PORTS: dict[str, int] = {"http": 80, "https": 443, "ws": 80, "wss": 443}
@@ -115,9 +132,21 @@ def _origin_of(url: str) -> str | None:
 
 
 def _is_exempt(path: str) -> bool:
-    if path in _OAUTH_CALLBACK_EXEMPTS:
-        return True
-    return any(path.startswith(p) for p in _TRANSPORT_EXEMPT_PREFIXES)
+    """Return True iff *path* is CSRF-exempt per ``CSRF_EXEMPT_PATHS`` semantics.
+
+    Trailing-slash entries match as pure prefix. Bare entries match exact OR
+    as ``entry + "/"`` prefix — i.e., ``"/mcp"`` exempts ``"/mcp"`` and
+    ``"/mcp/tool"`` but NOT ``"/mcpanything"``. The dual semantic is required
+    because MCP/A2A serve BOTH at the bare mount AND at sub-paths; the old
+    ``startswith`` over bare entries silently exempted ``/mcpanything``.
+    """
+    for entry in CSRF_EXEMPT_PATHS:
+        if entry.endswith("/"):
+            if path.startswith(entry):
+                return True
+        elif path == entry or path.startswith(entry + "/"):
+            return True
+    return False
 
 
 def _scope_wants_html(scope: dict) -> bool:

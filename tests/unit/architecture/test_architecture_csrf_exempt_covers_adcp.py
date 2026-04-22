@@ -1,5 +1,4 @@
-"""Structural guard (DORMANT at L0): CSRF exemption list covers every AdCP
-public path.
+"""Structural guard: CSRF exemption list covers every AdCP public path.
 
 Required entries (per CLAUDE.md invariant #6 and foundation-modules.md):
 
@@ -13,11 +12,18 @@ Required entries (per CLAUDE.md invariant #6 and foundation-modules.md):
 * ``/admin/auth/oidc/callback``
 * ``/admin/auth/gam/callback``
 
-At L0 ``CSRFOriginMiddleware`` does not yet exist (L0-06 will add it). The
-scanner therefore returns an empty result today and this test passes
-vacuously. The meta-guard still proves the detector works against a planted
-fixture that DECLARES the expected constant but MISSES entries — the
-detector reports the missing ones.
+Activated in the L2-prep refactor (PR #1221 follow-up): the guard now
+requires at least one module under ``src/`` to declare ``CSRF_EXEMPT_PATHS``
+containing every required entry. Today that module is ``src/admin/csrf.py``.
+
+The guard combines the historical OAuth-callback list with the transport
+prefix list under a single unified name — see ``src/admin/csrf.py`` for
+the authoritative declaration and ``_is_exempt``'s dual-semantic predicate
+(exact-match for bare entries, prefix-match for trailing-slash entries).
+
+The meta-guard proves the detector works against a planted fixture that
+DECLARES the expected constant but MISSES entries — the detector reports
+the missing ones.
 
 Per `.claude/notes/flask-to-fastapi/L0-implementation-plan-v2.md` §L0-01
 row #6 of the §5.5 Structural Guards Inventory.
@@ -55,14 +61,23 @@ CONSTANT_NAME = "CSRF_EXEMPT_PATHS"
 
 
 def _find_csrf_exempt_paths(tree: ast.AST) -> frozenset[str] | None:
-    """Return the set of string literals assigned to ``CSRF_EXEMPT_PATHS``, or None."""
+    """Return the set of string literals assigned to ``CSRF_EXEMPT_PATHS``, or None.
+
+    Accepts both bare assignment (``CSRF_EXEMPT_PATHS = (...)``) and the
+    annotated form (``CSRF_EXEMPT_PATHS: tuple[str, ...] = (...)``) since
+    the authoritative declaration in ``src/admin/csrf.py`` uses the
+    annotated form for mypy.
+    """
     if not isinstance(tree, ast.Module):
         return None
     for node in tree.body:
-        if not isinstance(node, ast.Assign):
-            continue
-        for target in node.targets:
-            if isinstance(target, ast.Name) and target.id == CONSTANT_NAME:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == CONSTANT_NAME:
+                    return _literal_string_collection(node.value)
+        elif isinstance(node, ast.AnnAssign):
+            target = node.target
+            if isinstance(target, ast.Name) and target.id == CONSTANT_NAME and node.value is not None:
                 return _literal_string_collection(node.value)
     return None
 
@@ -84,13 +99,14 @@ def _missing_paths(declared: frozenset[str]) -> frozenset[str]:
     return REQUIRED_CSRF_EXEMPT_PATHS - declared
 
 
-def test_csrf_exempt_declaration_is_dormant_at_l0() -> None:
-    """DORMANT at L0 — no ``CSRF_EXEMPT_PATHS`` constant is expected yet.
+def test_csrf_exempt_declaration_covers_required_paths() -> None:
+    """Every module declaring ``CSRF_EXEMPT_PATHS`` must list every required path.
 
-    When L0-06 lands ``CSRFOriginMiddleware``, a module under src/ must
-    declare ``CSRF_EXEMPT_PATHS`` containing every entry in
-    ``REQUIRED_CSRF_EXEMPT_PATHS``. Today no declaration exists and this
-    test passes without firing.
+    Any module under ``src/`` that declares ``CSRF_EXEMPT_PATHS`` must be a
+    superset of the required AdCP-plus-OAuth-callback path set. Missing an
+    entry opens a CSRF-rejection on a path that cannot be CSRF-protected
+    (OAuth callbacks originate from the provider's origin; MCP/A2A carry
+    their own auth surface and never use session cookies).
     """
     for path in iter_python_files([SRC]):
         try:
@@ -105,6 +121,30 @@ def test_csrf_exempt_declaration_is_dormant_at_l0() -> None:
             f"{path.as_posix()} declares {CONSTANT_NAME} but is missing: "
             f"{sorted(missing)}. Every AdCP public path must be exempt from CSRF."
         )
+
+
+def test_csrf_exempt_declaration_is_active_at_l2_prep() -> None:
+    """Anti-vacuous guard: at least one module under ``src/`` must declare ``CSRF_EXEMPT_PATHS``.
+
+    Without this check, the ``_covers_required_paths`` test above trivially
+    passes when nothing declares the constant — a silent regression surface.
+    ``src/admin/csrf.py`` is the authoritative source today; if it ever loses
+    the declaration, this test catches it before the coverage check does.
+    """
+    declaring_modules: list[str] = []
+    for path in iter_python_files([SRC]):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError:
+            continue
+        if _find_csrf_exempt_paths(tree) is not None:
+            declaring_modules.append(path.as_posix())
+
+    assert declaring_modules, (
+        f"No module under src/ declares {CONSTANT_NAME}. The CSRF exemption "
+        "contract is unsatisfied; a module must declare the constant so the "
+        "coverage guard can validate it."
+    )
 
 
 def test_meta_fixture_exists() -> None:

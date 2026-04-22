@@ -108,6 +108,48 @@ def test_transport_exempt_paths_post_without_origin_passes(path: str) -> None:
         assert c.post(path).status_code == 200
 
 
+def test_bare_mcp_mount_exempt_via_exact_match() -> None:
+    """POST to ``/mcp`` (no trailing slash) is exempt — the MCP mount serves
+    there. Pre-rename, the ``startswith("/mcp")`` predicate exempted this by
+    accident; post-rename, it is exempt by the new exact-match semantic.
+    """
+    # Construct a scope-level test: the default _build() harness routes
+    # /mcp/tool but not bare /mcp. The predicate is what matters, so we
+    # exercise it directly.
+    from src.admin.csrf import _is_exempt
+
+    assert _is_exempt("/mcp") is True
+    assert _is_exempt("/a2a") is True
+
+
+def test_transport_prefix_does_not_bleed_into_sibling_routes() -> None:
+    """A future ``/mcpanything`` or ``/a2aadmin`` top-level route MUST NOT be
+    silently CSRF-exempt. The pre-rename ``startswith("/mcp")`` predicate
+    exempted these. Post-rename, bare entries match exact OR ``entry + "/"``
+    prefix — so ``/mcpanything`` is NOT exempt.
+    """
+    from src.admin.csrf import _is_exempt
+
+    assert _is_exempt("/mcpanything") is False
+    assert _is_exempt("/a2aadmin") is False
+    assert _is_exempt("/agent.jsonify") is False
+
+
+def test_trailing_slash_prefixes_require_the_slash() -> None:
+    """Entries declared with a trailing slash (``/api/v1/``, ``/_internal/``)
+    match only via prefix, not as a bare path. A hypothetical bare ``/api/v1``
+    or ``/_internal`` is NOT exempt — there are no such routes today, but the
+    invariant is enforced in case one is added without the corresponding
+    exempt entry.
+    """
+    from src.admin.csrf import _is_exempt
+
+    assert _is_exempt("/api/v1/foo") is True
+    assert _is_exempt("/api/v1") is False
+    assert _is_exempt("/_internal") is False
+    assert _is_exempt("/.well-known") is False
+
+
 @pytest.mark.parametrize(
     "path",
     [
