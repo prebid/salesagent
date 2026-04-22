@@ -1623,7 +1623,6 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
     - canceled: irreversible cancellation flag
     - cancellation_reason: reason for cancellation
     - new_packages: mid-flight package additions
-    - invoice_recipient: override billing entity for this buy
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
@@ -1641,11 +1640,6 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
     canceled: bool | None = Field(None, description="Cancel the media buy (irreversible)")
     cancellation_reason: str | None = Field(None, description="Reason for cancellation", max_length=500)
     new_packages: list[PackageRequest] | None = Field(None, description="New packages to add mid-flight")
-    invoice_recipient: dict[str, Any] | None = Field(
-        None,
-        description="Override who receives the invoice for this buy (business-entity.json). "
-        "When provided, the seller invoices this entity instead of the account's default billing_entity.",
-    )
     # idempotency_key: now provided by adcp library base class (since 3.10)
     # Internal testing field
     today: date | None = Field(None, exclude=True, description="For testing/simulation only - not part of AdCP spec")
