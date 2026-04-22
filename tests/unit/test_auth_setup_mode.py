@@ -33,21 +33,7 @@ Auth setup mode allows test credentials to work per-tenant:
 #   test_migration_has_correct_revision             — locks: revision ID and down_revision
 #       chain; internal migration structure
 #
-# SUSPECT (7/17 tests — reconstruct production logic without calling the endpoint):
-#   test_enable_setup_mode_always_allowed           — tests MagicMock attribute assignment
-#       only; a broken endpoint would not fail this test
-#   test_login_uses_tenant_auth_setup_mode          — copies tenant_login() conditional into
-#       test body; endpoint changes would not break this
-#   test_login_env_var_overrides_to_enable          — same pattern
-#   test_login_respects_disabled_setup_mode         — same pattern
-#   test_list_users_passes_auth_setup_mode          — builds context dict manually; endpoint
-#       changes would not break this
-#   test_list_users_handles_no_auth_config          — same pattern
-#
-# Action: The 6 SUSPECT endpoint-logic-reconstruction tests (TestSetupModeLogic,
-#   TestTenantLoginLogic, TestUsersEndpointConfig) should be replaced with tests that call
-#   the actual Flask endpoints, following the same pattern used in TestTestAuthEndpoint.
-#   This was the same issue flagged for TestSuperAdminCredentialPath in PR #1141.
+# SUSPECT (0 tests — all replaced by endpoint tests per issue #1149)
 # ---
 
 import os
@@ -86,49 +72,44 @@ class TestTenantAuthSetupMode:
         assert column.type.python_type is bool
 
 
-class TestSetupModeLogic:
-    """Tests for the setup mode enable/disable logic."""
+class TestDisableSetupModeEndpoint:
+    """Endpoint-level tests for POST /disable-setup-mode.
 
-    def test_disable_setup_mode_requires_sso_enabled(self):
-        """Should not allow disabling setup mode without SSO enabled."""
-        tenant = MagicMock()
-        tenant.auth_setup_mode = True
+    Replaces SUSPECT MagicMock-only tests that reconstructed the endpoint
+    conditional in the test body. Uses make_users_test_client to call the
+    real route so a broken endpoint would actually fail.
+    """
 
-        auth_config = MagicMock()
-        auth_config.oidc_enabled = False
+    def test_disable_setup_mode_rejects_when_not_sso_logged_in(self, make_users_test_client):
+        """POST disable-setup-mode returns 403 when session auth_method is not 'oidc'."""
+        with make_users_test_client(auth_setup_mode=True, oidc_enabled=True) as (client, _):
+            response = client.post("/tenant/default/users/disable-setup-mode")
+        assert response.status_code == 403
+        body = response.get_json()
+        assert body["success"] is False
+        assert "logged in via SSO" in body["error"]
 
-        # Logic from disable_setup_mode endpoint:
-        # if not auth_config or not auth_config.oidc_enabled:
-        #     return error
-        should_reject = not auth_config or not auth_config.oidc_enabled
-        assert should_reject is True
+    def test_disable_setup_mode_rejects_when_sso_not_enabled(self, make_users_test_client):
+        """POST disable-setup-mode returns 400 when tenant auth_config has oidc_enabled=False."""
+        with make_users_test_client(auth_setup_mode=True, oidc_enabled=False) as (client, _):
+            with client.session_transaction() as sess:
+                sess["auth_method"] = "oidc"
+            response = client.post("/tenant/default/users/disable-setup-mode")
+        assert response.status_code == 400
+        body = response.get_json()
+        assert body["success"] is False
+        assert "SSO must be configured" in body["error"]
 
-    def test_disable_setup_mode_allowed_with_sso(self):
-        """Should allow disabling setup mode when SSO is enabled."""
-        tenant = MagicMock()
-        tenant.auth_setup_mode = True
-
-        auth_config = MagicMock()
-        auth_config.oidc_enabled = True
-
-        # Logic check
-        should_reject = not auth_config or not auth_config.oidc_enabled
-        assert should_reject is False
-
-        # After successful disable:
-        tenant.auth_setup_mode = False
-        assert tenant.auth_setup_mode is False
-
-    # SUSPECT: tests MagicMock attribute assignment only — a broken enable_setup_mode
-    # endpoint would not fail this test. Replace with an endpoint-level test.
-    def test_enable_setup_mode_always_allowed(self):
-        """Should always allow re-enabling setup mode."""
-        tenant = MagicMock()
-        tenant.auth_setup_mode = False
-
-        # Enable it
-        tenant.auth_setup_mode = True
-        assert tenant.auth_setup_mode is True
+    def test_disable_setup_mode_succeeds_when_sso_enabled(self, make_users_test_client):
+        """POST disable-setup-mode returns 200 and sets auth_setup_mode=False when SSO is enabled."""
+        with make_users_test_client(auth_setup_mode=True, oidc_enabled=True) as (client, mock_session):
+            with client.session_transaction() as sess:
+                sess["auth_method"] = "oidc"
+            response = client.post("/tenant/default/users/disable-setup-mode")
+        assert response.status_code == 200
+        assert response.get_json()["success"] is True
+        # The endpoint must have persisted the state change.
+        mock_session.commit.assert_called()
 
 
 class TestTestAuthEndpoint:
@@ -187,52 +168,6 @@ class TestTestAuthEndpoint:
         assert response.status_code == 404
 
 
-class TestTenantLoginLogic:
-    """Tests for tenant login page respecting setup mode."""
-
-    # SUSPECT: copies tenant_login() conditional expression into test body — a change to the
-    # actual login route would not break this test. Replace with a GET /login endpoint test.
-    def test_login_uses_tenant_auth_setup_mode(self):
-        """Tenant login should use tenant's auth_setup_mode field."""
-        tenant = MagicMock()
-        tenant.auth_setup_mode = True
-
-        # Logic from tenant_login:
-        # test_mode = tenant.auth_setup_mode if hasattr(tenant, "auth_setup_mode") else True
-        test_mode = tenant.auth_setup_mode if hasattr(tenant, "auth_setup_mode") else True
-        assert test_mode is True
-
-    # SUSPECT: copies tenant_login() conditional into test body — endpoint changes would not
-    # break this. Replace with endpoint test.
-    def test_login_env_var_overrides_to_enable(self):
-        """Env var ADCP_AUTH_TEST_MODE=true should override to enable test mode."""
-        tenant = MagicMock()
-        tenant.auth_setup_mode = False  # Tenant disabled setup mode
-
-        with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
-            # Logic from tenant_login:
-            test_mode = tenant.auth_setup_mode if hasattr(tenant, "auth_setup_mode") else True
-            if os.environ.get("ADCP_AUTH_TEST_MODE", "").lower() == "true":
-                test_mode = True
-
-            assert test_mode is True
-
-    # SUSPECT: copies tenant_login() conditional into test body — endpoint changes would not
-    # break this. Replace with endpoint test.
-    def test_login_respects_disabled_setup_mode(self):
-        """Tenant login should respect disabled setup mode when no env override."""
-        tenant = MagicMock()
-        tenant.auth_setup_mode = False  # Tenant disabled setup mode
-
-        with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": ""}):
-            test_mode = tenant.auth_setup_mode if hasattr(tenant, "auth_setup_mode") else True
-            if os.environ.get("ADCP_AUTH_TEST_MODE", "").lower() == "true":
-                test_mode = True
-
-            # Should remain False since no env override
-            assert test_mode is False
-
-
 class TestMigration:
     """Tests for the auth_setup_mode migration."""
 
@@ -259,44 +194,89 @@ class TestMigration:
         assert callable(migration.downgrade)
 
 
-class TestUsersEndpointConfig:
-    """Tests for the users page template context."""
+class TestEnableSetupModeEndpoint:
+    """Endpoint-level tests for POST /enable-setup-mode.
 
-    # SUSPECT: builds template context dict manually instead of calling list_users — endpoint
-    # changes would not break this. Replace with a GET endpoint test checking rendered HTML.
-    def test_list_users_passes_auth_setup_mode(self):
-        """list_users endpoint should pass auth_setup_mode to template."""
-        # The endpoint passes these to the template:
-        # auth_setup_mode=tenant.auth_setup_mode,
-        # oidc_enabled=auth_config.oidc_enabled if auth_config else False,
+    Replaces the SUSPECT MagicMock-only test that was unable to detect
+    a broken endpoint. Uses make_users_test_client to call the real route.
+    """
 
-        tenant = MagicMock()
-        tenant.auth_setup_mode = True
+    def test_enable_setup_mode_returns_success(self, make_users_test_client):
+        """POST enable-setup-mode returns {"success": True} regardless of current state."""
+        with make_users_test_client(auth_setup_mode=False) as (client, _):
+            response = client.post("/tenant/default/users/enable-setup-mode")
+        assert response.status_code == 200
+        assert response.get_json()["success"] is True
 
-        auth_config = MagicMock()
-        auth_config.oidc_enabled = True
 
-        context = {
-            "auth_setup_mode": tenant.auth_setup_mode,
-            "oidc_enabled": auth_config.oidc_enabled if auth_config else False,
-        }
+class TestTenantLoginEndpoint:
+    """Endpoint-level tests for GET /tenant/<id>/login respecting setup mode.
 
-        assert context["auth_setup_mode"] is True
-        assert context["oidc_enabled"] is True
+    Replaces three SUSPECT tests that copied the tenant_login() conditional
+    expression into the test body. Each test calls the real Flask route and
+    asserts on the rendered HTML so a regression in auth.py causes a real failure.
 
-    # SUSPECT: builds template context dict manually — endpoint changes would not break this.
-    # Replace with endpoint test.
-    def test_list_users_handles_no_auth_config(self):
-        """list_users should handle case when no auth config exists."""
-        tenant = MagicMock()
-        tenant.auth_setup_mode = True
+    The 'Setup Mode' banner (templates/login.html) is the HTML marker: it is
+    rendered when test_mode=True, absent when test_mode=False.
+    """
 
-        auth_config = None  # No auth config yet
+    def test_login_shows_test_banner_when_setup_mode_enabled(self, make_auth_test_client):
+        """GET /login renders the Setup Mode banner when auth_setup_mode=True."""
+        with make_auth_test_client(auth_setup_mode=True) as (client, _):
+            with (
+                patch("src.admin.blueprints.auth.get_oauth_config", return_value=("", "", "", "")),
+                patch("src.services.auth_config_service.get_oidc_config_for_auth", return_value=None),
+                patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": ""}),
+            ):
+                response = client.get("/tenant/default/login")
+        assert response.status_code == 200
+        assert b"Setup Mode" in response.data
 
-        context = {
-            "auth_setup_mode": tenant.auth_setup_mode,
-            "oidc_enabled": auth_config.oidc_enabled if auth_config else False,
-        }
+    def test_login_env_var_enables_test_banner_regardless_of_setup_mode(self, make_auth_test_client):
+        """GET /login renders the Setup Mode banner when ADCP_AUTH_TEST_MODE=true,
+        even if the tenant has disabled auth_setup_mode."""
+        with make_auth_test_client(auth_setup_mode=False) as (client, _):
+            with (
+                patch("src.admin.blueprints.auth.get_oauth_config", return_value=("", "", "", "")),
+                patch("src.services.auth_config_service.get_oidc_config_for_auth", return_value=None),
+                patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}),
+            ):
+                response = client.get("/tenant/default/login")
+        assert response.status_code == 200
+        assert b"Setup Mode" in response.data
 
-        assert context["auth_setup_mode"] is True
-        assert context["oidc_enabled"] is False
+    def test_login_hides_test_banner_when_setup_mode_disabled(self, make_auth_test_client):
+        """GET /login omits the Setup Mode banner when auth_setup_mode=False and no env override."""
+        with make_auth_test_client(auth_setup_mode=False) as (client, _):
+            with (
+                patch("src.admin.blueprints.auth.get_oauth_config", return_value=("", "", "", "")),
+                patch("src.services.auth_config_service.get_oidc_config_for_auth", return_value=None),
+                patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": ""}),
+            ):
+                response = client.get("/tenant/default/login")
+        assert response.status_code == 200
+        assert b"Setup Mode" not in response.data
+
+
+class TestListUsersEndpoint:
+    """Endpoint-level tests for GET /tenant/<id>/users respecting setup mode flags.
+
+    Replaces two SUSPECT tests that built the template context dict manually.
+    Each test calls the real Flask route and asserts on rendered HTML so a
+    regression in users.py (e.g., wrong kwarg name passed to render_template)
+    causes a real failure.
+    """
+
+    def test_list_users_renders_setup_mode_active_banner(self, make_users_test_client):
+        """GET /users renders 'Setup Mode Active' when auth_setup_mode=True."""
+        with make_users_test_client(auth_setup_mode=True, oidc_enabled=True) as (client, _):
+            response = client.get("/tenant/default/users")
+        assert response.status_code == 200
+        assert b"Setup Mode Active" in response.data
+
+    def test_list_users_renders_production_mode_when_no_auth_config(self, make_users_test_client):
+        """GET /users renders 'Production Mode' when auth_setup_mode=False and auth_config absent."""
+        with make_users_test_client(auth_setup_mode=False, auth_config_exists=False) as (client, _):
+            response = client.get("/tenant/default/users")
+        assert response.status_code == 200
+        assert b"Production Mode" in response.data
