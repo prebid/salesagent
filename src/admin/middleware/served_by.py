@@ -26,7 +26,9 @@ and ``implementation-checklist.md §EP-1``, ``§EP-2``.
 
 from __future__ import annotations
 
-from starlette.types import ASGIApp, Message, Receive, Scope, Send
+from starlette.types import ASGIApp, Receive, Scope, Send
+
+from src.admin.middleware._ascgi_headers import build_header_wrapper
 
 HEADER_NAME: str = "x-served-by"
 _HEADER_BYTES: bytes = HEADER_NAME.encode("latin-1")
@@ -53,20 +55,16 @@ class ServedByMiddleware:
             await self.app(scope, receive, send)
             return
 
-        header_bytes = self._value_bytes
+        # Replace-mode: the outermost middleware wins so the observed header
+        # reflects the actual serving stack even if an inner layer stamped
+        # a prior value.
+        wrapped_send = build_header_wrapper(
+            send,
+            to_set=[(_HEADER_BYTES, self._value_bytes)],
+            mode="replace",
+        )
 
-        async def send_with_header(message: Message) -> None:
-            if message["type"] == "http.response.start":
-                headers = list(message.get("headers", []))
-                # Replace any prior value — if an inner middleware already
-                # stamped ``X-Served-By``, the outermost middleware wins so
-                # the observed header reflects the actual serving stack.
-                headers = [(n, v) for (n, v) in headers if n.lower() != _HEADER_BYTES]
-                headers.append((_HEADER_BYTES, header_bytes))
-                message = {**message, "headers": headers}
-            await send(message)
-
-        await self.app(scope, receive, send_with_header)
+        await self.app(scope, receive, wrapped_send)
 
 
 __all__ = ["HEADER_NAME", "ServedByMiddleware"]

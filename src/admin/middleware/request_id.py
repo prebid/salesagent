@@ -21,9 +21,9 @@ from __future__ import annotations
 
 import uuid
 
-from starlette.types import ASGIApp, Message, Receive, Scope, Send
+from starlette.types import ASGIApp, Receive, Scope, Send
 
-_HEADER_NAME = b"x-request-id"
+from src.admin.middleware._ascgi_headers import build_header_wrapper
 
 
 class RequestIDMiddleware:
@@ -56,16 +56,14 @@ class RequestIDMiddleware:
         scope["state"]["request_id"] = request_id
 
         rid_bytes = request_id.encode("latin-1")
-        header_name = self.header_name
 
-        async def send_with_header(message: Message) -> None:
-            if message["type"] == "http.response.start":
-                headers = list(message.get("headers", []))
-                # Replace any existing X-Request-ID to keep a single source
-                # of truth; we trust our own active value on the response.
-                headers = [(n, v) for (n, v) in headers if n != header_name]
-                headers.append((header_name, rid_bytes))
-                message = {**message, "headers": headers}
-            await send(message)
+        # Replace-mode: we own the X-Request-ID header; strip any existing
+        # value (e.g., if an inner middleware also stamped one) and install
+        # ours as the single source of truth on the response.
+        wrapped_send = build_header_wrapper(
+            send,
+            to_set=[(self.header_name, rid_bytes)],
+            mode="replace",
+        )
 
-        await self.app(scope, receive, send_with_header)
+        await self.app(scope, receive, wrapped_send)

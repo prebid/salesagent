@@ -35,7 +35,9 @@ Header set
 
 from __future__ import annotations
 
-from starlette.types import ASGIApp, Message, Receive, Scope, Send
+from starlette.types import ASGIApp, Receive, Scope, Send
+
+from src.admin.middleware._ascgi_headers import HeaderPair, build_header_wrapper
 
 # Default CSP — tight but compatible with current admin templates.
 DEFAULT_CSP = (
@@ -97,35 +99,33 @@ class SecurityHeadersMiddleware:
             await self.app(scope, receive, send)
             return
 
-        await self.app(scope, receive, self._wrap_send(send))
-
-    def _wrap_send(self, send: Send) -> Send:
-        hsts_header = (
-            f"max-age={self.hsts_seconds}; includeSubDomains; preload".encode("latin-1") if self.https_only else None
+        # Append-if-missing semantics: an individual handler may override
+        # any of these (rare — e.g., a PDF endpoint needing a tighter
+        # ``default-src 'none'`` CSP). The list is computed lazily at
+        # response time via the thunk so the conditional HSTS branch
+        # doesn't plumb a separate flag through the wrapper.
+        wrapped_send = build_header_wrapper(
+            send,
+            to_set=self._compute_headers,
+            mode="append_if_missing",
         )
-        csp_header = self.csp.encode("latin-1")
-        permissions_header = DEFAULT_PERMISSIONS_POLICY.encode("latin-1")
+        await self.app(scope, receive, wrapped_send)
 
-        async def wrapped(message: Message) -> None:
-            if message["type"] == "http.response.start":
-                headers = list(message.get("headers", []))
-                existing = {name.lower() for name, _ in headers}
-                # Only inject headers the handler did not explicitly set —
-                # lets an individual handler override (rare; e.g., a PDF
-                # endpoint needing a tighter default-src 'none' CSP).
-                if hsts_header is not None and b"strict-transport-security" not in existing:
-                    headers.append((b"strict-transport-security", hsts_header))
-                if b"x-frame-options" not in existing:
-                    headers.append((b"x-frame-options", b"DENY"))
-                if b"x-content-type-options" not in existing:
-                    headers.append((b"x-content-type-options", b"nosniff"))
-                if b"referrer-policy" not in existing:
-                    headers.append((b"referrer-policy", b"strict-origin-when-cross-origin"))
-                if b"content-security-policy" not in existing:
-                    headers.append((b"content-security-policy", csp_header))
-                if b"permissions-policy" not in existing:
-                    headers.append((b"permissions-policy", permissions_header))
-                message = {**message, "headers": headers}
-            await send(message)
+    def _compute_headers(self) -> list[HeaderPair]:
+        """Build the list of security headers for this response.
 
-        return wrapped
+        Called lazily by the header-wrapper on ``http.response.start``.
+        Conditional HSTS is baked into this list (present iff ``https_only``)
+        so the wrapper does not need to know about the condition.
+        """
+        headers: list[HeaderPair] = [
+            (b"x-frame-options", b"DENY"),
+            (b"x-content-type-options", b"nosniff"),
+            (b"referrer-policy", b"strict-origin-when-cross-origin"),
+            (b"content-security-policy", self.csp.encode("latin-1")),
+            (b"permissions-policy", DEFAULT_PERMISSIONS_POLICY.encode("latin-1")),
+        ]
+        if self.https_only:
+            hsts_value = f"max-age={self.hsts_seconds}; includeSubDomains; preload".encode("latin-1")
+            headers.append((b"strict-transport-security", hsts_value))
+        return headers
