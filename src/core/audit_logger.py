@@ -146,7 +146,7 @@ class AuditLogger:
                         if tenant:
                             tenant_name = tenant.name
                 except Exception:
-                    pass
+                    audit_logger.debug("Could not load tenant name for Slack context", exc_info=True)
 
             # Send notification based on criteria
             should_notify = False
@@ -226,7 +226,7 @@ class AuditLogger:
                             if tenant:
                                 tenant_config = serialize_tenant_to_dict(tenant)
                     except Exception:
-                        pass
+                        audit_logger.debug("Could not load tenant config for Slack context", exc_info=True)
 
                 slack_notifier = get_slack_notifier(tenant_config=tenant_config)
                 slack_notifier.notify_audit_log(
@@ -241,7 +241,7 @@ class AuditLogger:
                 )
         except Exception:
             # Don't let Slack failures affect core functionality
-            pass
+            audit_logger.warning("Slack audit notification failed", exc_info=True)
 
     def log_security_violation(
         self, operation: str, principal_id: str, resource_id: str, reason: str, tenant_id: str | None = None
@@ -299,7 +299,7 @@ class AuditLogger:
                             tenant_name = tenant.name
                             tenant_config = serialize_tenant_to_dict(tenant)
                 except Exception:
-                    pass
+                    audit_logger.debug("Could not load tenant for security violation Slack context", exc_info=True)
 
             slack_notifier = get_slack_notifier(tenant_config=tenant_config)
             slack_notifier.notify_audit_log(
@@ -314,7 +314,7 @@ class AuditLogger:
             )
         except Exception:
             # Don't let Slack failures affect core functionality
-            pass
+            audit_logger.warning("Slack security violation notification failed", exc_info=True)
 
     def log_success(self, message: str):
         """Log a success message with checkmark."""

@@ -270,17 +270,19 @@ class TestTenantModelIntegration:
         # Internal values should be different (though we can't compare directly due to random IV)
         assert tenant._gemini_api_key != encrypted1  # Different due to new encryption
 
-    def test_tenant_property_handles_invalid_encrypted_data(self, set_encryption_key):
-        """Test that invalid encrypted data returns None with warning."""
+    def test_tenant_property_raises_on_invalid_encrypted_data(self, set_encryption_key):
+        """Test that invalid encrypted data raises AdCPConfigurationError."""
         from src.core.database.models import Tenant
+        from src.core.exceptions import AdCPConfigurationError
 
         tenant = Tenant(tenant_id="test", name="Test", subdomain="test")
 
         # Set invalid encrypted value directly
         tenant._gemini_api_key = "invalid-encrypted-data"
 
-        # Property getter should return None and log warning
-        assert tenant.gemini_api_key is None
+        # Property getter should raise AdCPConfigurationError (not return None)
+        with pytest.raises(AdCPConfigurationError, match="decrypt"):
+            _ = tenant.gemini_api_key
 
 
 class TestErrorHandling:

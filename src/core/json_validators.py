@@ -44,67 +44,6 @@ class PlatformMappingModel(BaseModel):
         return self
 
 
-class CreativeFormatModel(BaseModel):
-    """Model for product.format_ids array items."""
-
-    format_id: str = Field(..., min_length=1)
-    name: str = Field(..., min_length=1)
-    type: str = Field(..., min_length=1)
-    description: str | None = Field(None, min_length=1)
-    width: int | None = Field(None, gt=0)
-    height: int | None = Field(None, gt=0)
-    duration: int | None = Field(None, gt=0)
-    assets: list[dict[str, Any]] = Field(default_factory=list)
-    delivery_options: dict[str, Any] = Field(default_factory=dict)
-
-    @field_validator("type")
-    @classmethod
-    def validate_type(cls, v: str) -> str:
-        """Validate format type with flexible handling for legacy values."""
-        if not v or not v.strip():
-            raise ValueError("Format type cannot be empty")
-
-        v = v.strip().lower()
-
-        # Standard AdCP format types
-        standard_types = {"display", "video", "audio", "native"}
-
-        # Legacy/alternative format types that should be mapped to standard types
-        type_mapping = {
-            "banner": "display",
-            "image": "display",
-            "static": "display",
-            "advertisement": "display",
-            "rich_media": "display",
-            "expandable": "display",
-            "interstitial": "display",
-            "popup": "display",
-            "overlay": "display",
-            "streaming": "video",
-            "preroll": "video",
-            "midroll": "video",
-            "postroll": "video",
-            "podcast": "audio",
-            "radio": "audio",
-            "sponsored": "native",
-            "content": "native",
-            "article": "native",
-            "feed": "native",
-        }
-
-        # If it's already a standard type, return as-is
-        if v in standard_types:
-            return v
-
-        # If it's a mappable legacy type, map it to standard type
-        if v in type_mapping:
-            return type_mapping[v]
-
-        # If it's not recognized, default to 'display' but allow it
-        # This prevents deletion failures for products with non-standard format types
-        return "display"
-
-
 class TargetingTemplateModel(BaseModel):
     """Model for product.targeting_template."""
 
@@ -208,71 +147,6 @@ class JSONValidatorMixin:
         # Validate using Pydantic
         validated = PlatformMappingModel(**value)
         return validated.model_dump(mode="json", exclude_none=True)
-
-    @validates("formats")
-    def validate_formats(self, key, value):
-        """Validate formats field is a list of format IDs (strings)."""
-        if value is None:
-            return []
-
-        if isinstance(value, str):
-            try:
-                value = json.loads(value)
-            except json.JSONDecodeError:
-                # For deletion operations, don't fail on invalid JSON - just return as-is
-                # SQLAlchemy may trigger validators even during deletion
-                import logging
-
-                logger = logging.getLogger(__name__)
-                logger.warning(f"Invalid JSON in formats field during validation: {value[:100]}")
-                return []
-
-        if not isinstance(value, list):
-            # During deletion, be lenient with validation
-            import logging
-
-            logger = logging.getLogger(__name__)
-            logger.warning(f"Expected list for formats field, got {type(value).__name__}")
-            return []
-
-        validated_formats = []
-        for fmt in value:
-            try:
-                if isinstance(fmt, dict):
-                    # AdCP spec uses "id" field, but we store full format objects
-                    # Accept both "id" (AdCP spec) and "format_id" (legacy)
-                    format_id = fmt.get("id") or fmt.get("format_id")
-                    if not format_id:
-                        # Skip invalid format objects instead of failing
-                        import logging
-
-                        logger = logging.getLogger(__name__)
-                        logger.warning(f"Skipping format object without id or format_id: {fmt}")
-                        continue
-                    # Store the full format object (with agent_url and id)
-                    validated_formats.append(fmt)
-                elif isinstance(fmt, str):
-                    # Current approach: Store format IDs as strings
-                    if not fmt.strip():
-                        # Skip empty format IDs instead of failing
-                        continue
-                    validated_formats.append(fmt.strip())
-                else:
-                    # Skip unrecognized format types instead of failing
-                    import logging
-
-                    logger = logging.getLogger(__name__)
-                    logger.warning(f"Skipping unrecognized format type: {type(fmt).__name__}")
-                    continue
-            except Exception as e:
-                # Be extra defensive - don't let validation errors block deletion
-                import logging
-
-                logger = logging.getLogger(__name__)
-                logger.warning(f"Error validating individual format: {e}")
-                continue
-
-        return validated_formats
 
     @validates("targeting_template")
     def validate_targeting_template(self, key, value):

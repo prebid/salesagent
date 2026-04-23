@@ -1,6 +1,9 @@
+import logging
 import random
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from src.core.schemas import Snapshot
@@ -684,7 +687,7 @@ class MockAdServer(AdServerAdapter):
                         tenant_gemini_key = tenant_obj.gemini_api_key
         except Exception:
             # Database not available (e.g., in unit tests) - use default template
-            pass
+            logger.debug("Could not load tenant config from DB, using defaults", exc_info=True)
 
         # Build context and apply template
         context = build_order_name_context(request, packages, start_time, end_time, tenant_gemini_key=tenant_gemini_key)
@@ -1400,7 +1403,7 @@ class MockAdServer(AdServerAdapter):
                         # Handle format selection
                         formats = request.form.getlist("formats")
                         if formats:
-                            product_obj.formats = formats
+                            product_obj.format_ids = formats
 
                         # Validate the configuration
                         validation_errors = self.validate_product_config(new_config)
@@ -1416,7 +1419,7 @@ class MockAdServer(AdServerAdapter):
                                 product=product,
                                 config=config,
                                 formats=available_formats,
-                                selected_formats=product_obj.formats or [],
+                                selected_formats=product_obj.format_ids or [],
                                 error=validation_errors[0],
                             )
 
@@ -1435,7 +1438,7 @@ class MockAdServer(AdServerAdapter):
                             product=product,
                             config=new_config,
                             formats=available_formats,
-                            selected_formats=product_obj.formats or [],
+                            selected_formats=product_obj.format_ids or [],
                             success=True,
                         )
 
@@ -1450,7 +1453,7 @@ class MockAdServer(AdServerAdapter):
                         product=product,
                         config=config,
                         formats=available_formats,
-                        selected_formats=product_obj.formats or [],
+                        selected_formats=product_obj.format_ids or [],
                     )
 
             return wrapped_view()

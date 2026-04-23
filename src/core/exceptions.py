@@ -159,6 +159,19 @@ class AdCPAdapterError(AdCPError):
     recovery: RecoveryHint = "transient"
 
 
+class AdCPConfigurationError(AdCPError):
+    """Server-side configuration is broken (500).
+
+    Raised when encrypted secrets cannot be decrypted (key rotation,
+    corruption, missing ENCRYPTION_KEY). Callers should NOT silently
+    fall back — the configuration needs admin intervention.
+    """
+
+    status_code = 500
+    error_code = "CONFIGURATION_ERROR"
+    recovery: RecoveryHint = "correctable"
+
+
 class AdCPServiceUnavailableError(AdCPError):
     """Service or product temporarily unavailable (503)."""
 
