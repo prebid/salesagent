@@ -92,6 +92,16 @@ def collect_refs(node: object, out: set[str]) -> None:
             collect_refs(item, out)
 
 
+def cache_filename(schema_ref: str) -> str:
+    """Filesystem-safe filename for a schema `$ref`.
+
+    Shared by `AdCPSchemaValidator._get_cache_path`, the cache-completeness
+    structural guard, and regression tests — all three must agree on this
+    mapping or lookups silently miss.
+    """
+    return schema_ref.replace("/", "_").replace(".", "_") + ".json"
+
+
 async def walk_transitive_refs(
     initial: Iterable[str],
     fetch: Callable[[str], Awaitable[dict]],
@@ -214,8 +224,7 @@ class AdCPSchemaValidator:
 
     def _get_cache_path(self, schema_ref: str) -> Path:
         """Get local cache path for a schema reference."""
-        # Convert schema reference to safe filename
-        safe_name = schema_ref.replace("/", "_").replace(".", "_") + ".json"
+        safe_name = cache_filename(schema_ref)
 
         # Try main cache directory first
         main_cache_path = self.cache_dir / safe_name

@@ -29,6 +29,7 @@ from tests.e2e.adcp_schema_validator import (
     AdCPSchemaValidator,
     SchemaResolutionError,
     SchemaValidationError,
+    cache_filename,
 )
 
 # ---------------------------------------------------------------------------
@@ -56,11 +57,6 @@ MISSING_CHILD_REF_PATH = "/schemas/latest/fake/missing-child.json"
 PRESENT_CHILD_REF = "/schemas/latest/fake/present-child.json"
 
 
-def _cache_filename(ref: str) -> str:
-    """Mirror ``AdCPSchemaValidator._get_cache_path``'s filename convention."""
-    return ref.replace("/", "_").replace(".", "_") + ".json"
-
-
 def _write_index(cache_dir: Path, task_name: str, root_ref: str) -> None:
     """Seed ``index.json`` so ``_find_schema_ref_for_task`` returns ``root_ref``."""
     index = {
@@ -80,7 +76,7 @@ def _write_index(cache_dir: Path, task_name: str, root_ref: str) -> None:
 
 def _write_schema(cache_dir: Path, ref: str, body: dict) -> None:
     """Write ``body`` to the filesystem slot the validator will look up for ``ref``."""
-    (cache_dir / _cache_filename(ref)).write_text(json.dumps(body))
+    (cache_dir / cache_filename(ref)).write_text(json.dumps(body))
 
 
 @pytest.fixture

@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.e2e.adcp_schema_validator import collect_refs, walk_transitive_refs
+from tests.e2e.adcp_schema_validator import cache_filename, collect_refs, walk_transitive_refs
 
 ROOT = Path(__file__).resolve().parents[2]
 CACHE_ROOT = ROOT / "schemas"
@@ -35,11 +35,6 @@ def _resolve_cache_version() -> str:
     if VERSION_POINTER.exists():
         return VERSION_POINTER.read_text().strip() or DEFAULT_VERSION
     return DEFAULT_VERSION
-
-
-def _safe_name(schema_ref: str) -> str:
-    """Mirror AdCPSchemaValidator._get_cache_path filename transform."""
-    return schema_ref.replace("/", "_").replace(".", "_") + ".json"
 
 
 class TestAdCPSchemaCacheComplete:
@@ -82,7 +77,7 @@ class TestAdCPSchemaCacheComplete:
             boundary clean — every problem is captured in `missing` / `malformed`
             and surfaced below as a single error message.
             """
-            cache_path = cache_dir / _safe_name(ref)
+            cache_path = cache_dir / cache_filename(ref)
             if not cache_path.exists():
                 missing.append(ref)
                 return {}

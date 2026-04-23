@@ -23,6 +23,7 @@ from tests.e2e.adcp_schema_validator import (
     AdCPSchemaValidator,
     SchemaError,
     SchemaResolutionError,
+    cache_filename,
 )
 
 
@@ -54,7 +55,7 @@ class TestUnresolvableRef:
 
     def test_raises_on_corrupt_cache_file(self, empty_cache_dir: Path):
         ref = "/schemas/latest/corrupt/bar.json"
-        cached_path = empty_cache_dir / (ref.replace("/", "_").replace(".", "_") + ".json")
+        cached_path = empty_cache_dir / cache_filename(ref)
         cached_path.write_text("not valid json {{{")
 
         v = AdCPSchemaValidator(cache_dir=empty_cache_dir, offline_mode=True)
@@ -83,7 +84,7 @@ class TestResolverCacheHit:
 
     def test_cached_schema_is_returned(self, empty_cache_dir: Path):
         ref = "/schemas/latest/example/widget.json"
-        cached_path = empty_cache_dir / (ref.replace("/", "_").replace(".", "_") + ".json")
+        cached_path = empty_cache_dir / cache_filename(ref)
         cached_path.write_text(json.dumps({"type": "object", "properties": {"id": {"type": "string"}}}))
 
         v = AdCPSchemaValidator(cache_dir=empty_cache_dir, offline_mode=True)
