@@ -20,6 +20,7 @@ import functools
 import hashlib
 import json
 import logging
+from collections.abc import Awaitable, Callable, Iterable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -88,6 +89,57 @@ def collect_refs(node: object, out: set[str]) -> None:
     elif isinstance(node, list):
         for item in node:
             collect_refs(item, out)
+
+
+async def walk_transitive_refs(
+    initial: Iterable[str],
+    fetch: Callable[[str], Awaitable[dict]],
+    local_prefix: str,
+) -> tuple[set[str], set[str]]:
+    """BFS over the `$ref` graph starting from `initial`.
+
+    Refs that match `local_prefix` and end with `.json` are fetched via
+    `fetch(ref)`; the returned schema body is scanned with `collect_refs()`
+    and any new refs are enqueued. Refs that don't match the filter are
+    collected into the external set and never fetched.
+
+    Args:
+        initial: Starting set of refs (e.g. every `$ref` extracted from an
+            index body, or the single ref for a root schema).
+        fetch: Async callable returning the schema body for a ref. Callers
+            plug in `validator.get_schema` (HTTP-backed) or a filesystem
+            reader (the cache guard) as needed.
+        local_prefix: Refs satisfying `ref.startswith(local_prefix) and
+            ref.endswith(".json")` are followed transitively. All other
+            refs are recorded as external and skipped.
+
+    Returns:
+        `(seen_local, external)` where `seen_local` is every local ref that
+        was fetched (and thus transitively walked) and `external` is every
+        ref encountered that did not match the prefix filter. Callers decide
+        what to do with empty / missing / malformed results — this helper
+        never asserts, exits, or raises on an empty start set.
+    """
+    queue: set[str] = set(initial)
+    seen_local: set[str] = set()
+    external: set[str] = set()
+
+    while queue:
+        ref = queue.pop()
+        if ref in seen_local or ref in external:
+            continue
+
+        if not (ref.startswith(local_prefix) and ref.endswith(".json")):
+            external.add(ref)
+            continue
+
+        seen_local.add(ref)
+        schema = await fetch(ref)
+        nested: set[str] = set()
+        collect_refs(schema, nested)
+        queue |= nested - seen_local - external
+
+    return seen_local, external
 
 
 class AdCPSchemaValidator:

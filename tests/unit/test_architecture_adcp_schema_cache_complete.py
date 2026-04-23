@@ -17,12 +17,13 @@ Fix: run `make schemas-refresh` to populate the cache from upstream.
 No allowlist — the cache is all-or-nothing. A partial cache is a stale cache.
 """
 
+import asyncio
 import json
 from pathlib import Path
 
 import pytest
 
-from tests.e2e.adcp_schema_validator import collect_refs
+from tests.e2e.adcp_schema_validator import collect_refs, walk_transitive_refs
 
 ROOT = Path(__file__).resolve().parents[2]
 CACHE_ROOT = ROOT / "schemas"
@@ -67,42 +68,43 @@ class TestAdCPSchemaCacheComplete:
                 f"  make schemas-refresh\n"
             )
 
-        queue: set[str] = set()
-        collect_refs(index, queue)
+        initial: set[str] = set()
+        collect_refs(index, initial)
 
-        seen: set[str] = set()
         missing: list[str] = []
         malformed: list[str] = []
 
-        while queue:
-            ref = queue.pop()
-            if ref in seen:
-                continue
-            seen.add(ref)
+        async def _load_from_cache(ref: str) -> dict:
+            """Return the cached schema body, recording any failure without raising.
 
-            if not (ref.startswith(local_ref_prefix) and ref.endswith(".json")):
-                continue
-
+            `walk_transitive_refs` expects an async fetch that yields the body so the
+            BFS can keep walking. Returning `{}` on failure keeps the closure
+            boundary clean — every problem is captured in `missing` / `malformed`
+            and surfaced below as a single error message.
+            """
             cache_path = cache_dir / _safe_name(ref)
             if not cache_path.exists():
                 missing.append(ref)
-                continue
-
+                return {}
             try:
-                body = json.loads(cache_path.read_text())
+                return json.loads(cache_path.read_text())
             except json.JSONDecodeError:
                 malformed.append(ref)
-                continue
+                return {}
 
-            nested: set[str] = set()
-            collect_refs(body, nested)
-            queue |= nested - seen
+        seen, _ = asyncio.run(walk_transitive_refs(initial, _load_from_cache, local_ref_prefix))
+
+        # Empty index → the BFS would silently pass every assertion below
+        # by vacuous truth. Fail loudly instead.
+        assert seen, (
+            f"BFS found zero local refs in {index_file}; the schema index is empty or malformed. "
+            f"Fix by running:\n  make schemas-refresh\n"
+        )
 
         problems: list[str] = []
         if missing:
             problems.append(
-                f"Missing {len(missing)} cache file(s) for refs declared in the closure. "
-                f"First 5: {sorted(missing)[:5]}"
+                f"Missing {len(missing)} cache file(s) for refs declared in the closure. First 5: {sorted(missing)[:5]}"
             )
         if malformed:
             problems.append(f"Malformed cache file(s) for {len(malformed)} ref(s). First 5: {sorted(malformed)[:5]}")

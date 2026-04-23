@@ -33,7 +33,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from tests.e2e.adcp_schema_validator import AdCPSchemaValidator, collect_refs  # noqa: E402
+from tests.e2e.adcp_schema_validator import AdCPSchemaValidator, collect_refs, walk_transitive_refs  # noqa: E402
 
 DEFAULT_VERSION = "latest"
 
@@ -55,25 +55,12 @@ async def _refresh(version: str) -> None:
     async with AdCPSchemaValidator(adcp_version=version) as validator:
         index = await validator.get_schema_index()
 
-        queue: set[str] = set()
-        collect_refs(index, queue)
+        initial: set[str] = set()
+        collect_refs(index, initial)
 
-        seen: set[str] = set()
-        fetched = 0
-        while queue:
-            ref = queue.pop()
-            if ref in seen:
-                continue
-            seen.add(ref)
-            if not (ref.startswith(local_prefix) and ref.endswith(".json")):
-                continue
+        seen, _ = await walk_transitive_refs(initial, validator.get_schema, local_prefix)
 
-            schema = await validator.get_schema(ref)
-            fetched += 1
-            nested: set[str] = set()
-            collect_refs(schema, nested)
-            queue |= nested - seen
-
+    fetched = len(seen)
     cache_dir = PROJECT_ROOT / "schemas" / version
     pointer = PROJECT_ROOT / "schemas" / ".current-version"
 
