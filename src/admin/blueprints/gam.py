@@ -959,6 +959,7 @@ def test_gam_connection(tenant_id):
 
         # Get all networks user has access to
         networks = []
+        network_error = None
         try:
             # Service account auth with network_code already set - use getCurrentNetwork
             if auth_method == "service_account":
@@ -1014,11 +1015,41 @@ def test_gam_connection(tenant_id):
                 ]
             except Exception as e:
                 logger.error(f"Failed to get network info: {e}")
+                network_error = str(e)
                 networks = []
         except Exception as e:
             logger.error(f"Failed to get networks: {e}")
             logger.exception("Full exception details:")
+            network_error = str(e)
             networks = []
+
+        # If no network is accessible, the connection test must fail.
+        # The OAuth / service-account handshake can succeed while the
+        # downstream network call (getCurrentNetwork / getAllNetworks)
+        # throws or returns nothing — returning success=True with an
+        # empty networks list silently hid that case and led users to
+        # believe the connection was working.
+        if not networks:
+            if auth_method == "service_account":
+                error_msg = (
+                    "Authentication succeeded but no network is accessible to this "
+                    "service account. The most common cause is that the service "
+                    "account was added under GAM Admin → Access & authorization → "
+                    "Users, which sends an email invitation that a service account "
+                    "cannot accept. Authorize it under Admin → Global Settings → "
+                    "API access → \"Add a service account user\" instead, then "
+                    "verify the account appears under Access & authorization → "
+                    "Users as an active user."
+                )
+            else:
+                error_msg = (
+                    "Authentication succeeded but getAllNetworks() returned no "
+                    "networks. Verify your Google account has access to at least "
+                    "one Google Ad Manager network."
+                )
+            if network_error:
+                error_msg = f"{error_msg} (Underlying error: {network_error})"
+            return jsonify({"success": False, "error": error_msg}), 200
 
         result = {
             "success": True,

@@ -52,7 +52,7 @@ def _extract_tenant_and_principal(context: Any) -> tuple[str | None, str | None]
                 if identity.principal_id:
                     principal_id = identity.principal_id
         except Exception:
-            pass
+            logger.debug("Could not extract identity for error logging", exc_info=True)
 
     return tenant_id, principal_id
 
