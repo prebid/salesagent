@@ -2255,31 +2255,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
                 break
 
-        # SPEC-PRODUCTION GAP: no-token/no-principal scenarios
-        # Production raises AdCPAuthenticationError(AUTH_TOKEN_INVALID) for all auth
-        # failures — spec defines AUTH_REQUIRED for no-token/no-principal.
-        _AUTH_REQUIRED_REASON = (
-            "SPEC-PRODUCTION GAP: production raises AdCPAuthenticationError(AUTH_TOKEN_INVALID) "
-            "for all auth failures — spec defines AUTH_REQUIRED for no-token/no-principal"
-        )
-        _UC011_AUTH_GAP_TAGS = {
-            "T-UC-011-list-unauth",
-            "T-UC-011-ext-a-no-token",
-            "T-UC-011-list-no-principal",
-            "T-UC-011-sync-no-principal",
-        }
-        if marker_names & _UC011_AUTH_GAP_TAGS:
-            item.add_marker(pytest.mark.xfail(reason=_AUTH_REQUIRED_REASON, strict=False))
-
-        # REST transport collapses all 401 responses to AUTH_REQUIRED —
-        # expired-token scenarios expect AUTH_TOKEN_INVALID but REST can't distinguish.
-        if is_rest and marker_names & {"T-UC-011-list-expired", "T-UC-011-ext-a-expired"}:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="REST transport returns AUTH_REQUIRED for all 401s — cannot distinguish expired token",
-                    strict=False,
-                )
-            )
+        # Graduated: no-token/no-principal scenarios now pass after Gherkin
+        # correction to AUTH_REQUIRED (commit 13b4ca8d). Production returns
+        # AUTH_REQUIRED on rest/e2e_rest, matching the corrected Gherkin.
+        # Graduated: expired-token also passes — AUTH_TOKEN_INVALID matches.
 
         _UC011_XFAIL_TAGS: dict[str, str] = {
             # deactivation scoping: production doesn't scope deactivation to authenticated agent
