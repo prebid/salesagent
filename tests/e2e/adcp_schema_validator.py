@@ -53,6 +53,25 @@ class SchemaValidationError(SchemaError):
         self.json_path = json_path
 
 
+def collect_refs(node: object, out: set[str]) -> None:
+    """Recursively collect every `$ref` string value found under `node`.
+
+    Shared by the cache-completeness structural guard
+    (`tests/unit/test_architecture_adcp_schema_cache_complete.py`) and the
+    refresh CLI (`scripts/ops/refresh_adcp_schemas.py`). Both must agree on
+    what "transitive closure" means, so the BFS lives here in one place.
+    """
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k == "$ref" and isinstance(v, str):
+                out.add(v)
+            else:
+                collect_refs(v, out)
+    elif isinstance(node, list):
+        for item in node:
+            collect_refs(item, out)
+
+
 class AdCPSchemaValidator:
     """
     Validator for AdCP protocol JSON schemas.
