@@ -462,9 +462,25 @@ jobs:
     steps:
     - name: Check test results
       run: |
-        if [ "${{ needs.security-audit.result }}" = "failure" ] || [ "${{ needs.unit-tests.result }}" = "failure" ] || [ "${{ needs.integration-tests.result }}" = "failure" ] || [ "${{ needs.quickstart-test.result }}" = "failure" ] || [ "${{ needs.e2e-tests.result }}" = "failure" ] || [ "${{ needs.lint.result }}" = "failure" ]; then
+        fail=0
+        for pair in \
+          "security-audit=${{ needs.security-audit.result }}" \
+          "smoke-tests=${{ needs.smoke-tests.result }}" \
+          "refresh-schemas=${{ needs.refresh-schemas.result }}" \
+          "unit-tests=${{ needs.unit-tests.result }}" \
+          "integration-tests=${{ needs.integration-tests.result }}" \
+          "quickstart-test=${{ needs.quickstart-test.result }}" \
+          "e2e-tests=${{ needs.e2e-tests.result }}" \
+          "lint=${{ needs.lint.result }}"; do
+          name="${pair%%=*}"
+          result="${pair#*=}"
+          if [ "$result" != "success" ]; then
+            echo "::error::$name: $result (expected success)"
+            fail=1
+          fi
+        done
+        if [ "$fail" = "1" ]; then
           echo "❌ Tests failed"
           exit 1
-        else
-          echo "✅ All tests passed (security-audit, smoke, unit, integration x5, quickstart, e2e, lint+mypy)"
         fi
+        echo "✅ All tests passed (security-audit, smoke, refresh-schemas, unit, integration x5, quickstart, e2e, lint+mypy)"
