@@ -24,6 +24,7 @@ Wired into `make schemas-refresh`.
 
 import argparse
 import asyncio
+import functools
 import logging
 import sys
 from pathlib import Path
@@ -53,12 +54,18 @@ async def _refresh(version: str) -> None:
     local_prefix = f"/schemas/{version}/"
 
     async with AdCPSchemaValidator(adcp_version=version) as validator:
-        index = await validator.get_schema_index()
+        # The refresh CLI must fail loudly on upstream errors. Passing
+        # allow_stale_cache=False prevents the downloader's built-in
+        # flake tolerance (appropriate for e2e tests) from silently
+        # returning the stale on-disk cache and reporting success while
+        # the cache is weeks out of date. See PR #1230.
+        index = await validator.get_schema_index(allow_stale_cache=False)
 
         initial: set[str] = set()
         collect_refs(index, initial)
 
-        seen, _ = await walk_transitive_refs(initial, validator.get_schema, local_prefix)
+        fetch = functools.partial(validator.get_schema, allow_stale_cache=False)
+        seen, _ = await walk_transitive_refs(initial, fetch, local_prefix)
 
     fetched = len(seen)
     cache_dir = PROJECT_ROOT / "schemas" / version

@@ -234,7 +234,7 @@ class AdCPSchemaValidator:
         """Get path for cache metadata file (stores ETag, last-modified, etc)."""
         return cache_path.with_suffix(cache_path.suffix + ".meta")
 
-    async def _download_schema_index(self) -> dict[str, Any]:
+    async def _download_schema_index(self, allow_stale_cache: bool = True) -> dict[str, Any]:
         """
         Download the main schema index/registry with ETag-based caching.
 
@@ -243,6 +243,15 @@ class AdCPSchemaValidator:
 
         Now includes content hash verification to prevent meta file updates when
         only weak ETags change but content is identical.
+
+        Args:
+            allow_stale_cache: If True (default), transient HTTP errors are
+                logged and the cached index is returned. Appropriate for e2e
+                tests where tolerating network flakes is preferable to failing
+                every test on a transient blip. The refresh CLI
+                (``scripts/ops/refresh_adcp_schemas.py``) must pass ``False``
+                so upstream errors surface instead of silently leaving the
+                on-disk cache stale.
         """
         cache_path = self.cache_dir / "index.json"
         meta_path = self._get_cache_metadata_path(cache_path)
@@ -325,15 +334,21 @@ class AdCPSchemaValidator:
             return index_data
 
         except (httpx.HTTPError, json.JSONDecodeError) as e:
-            # If download fails but we have cache, use it
-            if cache_path.exists():
+            # If download fails but we have cache, use it (default e2e behavior)
+            if allow_stale_cache and cache_path.exists():
                 logger.warning("Failed to download index, using cached version: %s", e)
                 with open(cache_path) as f:
                     return json.load(f)
 
+            if not allow_stale_cache and cache_path.exists():
+                raise SchemaDownloadError(
+                    f"Network fetch of {self.INDEX_URL} failed ({e}); refusing to fall "
+                    f"back to stale cache. Fix upstream or retry when available."
+                )
+
             raise SchemaDownloadError(f"Failed to download schema index: {e}")
 
-    async def _download_schema(self, schema_ref: str) -> dict[str, Any]:
+    async def _download_schema(self, schema_ref: str, allow_stale_cache: bool = True) -> dict[str, Any]:
         """
         Download a specific schema by reference with ETag-based caching.
 
@@ -342,6 +357,14 @@ class AdCPSchemaValidator:
 
         Now includes content hash verification to prevent meta file updates when
         only weak ETags change but content is identical.
+
+        Args:
+            schema_ref: The schema reference (either a relative ref like
+                ``core/product.json`` or an absolute path like
+                ``/schemas/latest/core/product.json``).
+            allow_stale_cache: See ``_download_schema_index``. Default ``True``
+                preserves e2e-validator flake tolerance; the refresh CLI passes
+                ``False`` so upstream errors surface loudly.
         """
         cache_path = self._get_cache_path(schema_ref)
         meta_path = self._get_cache_metadata_path(cache_path)
@@ -431,24 +454,47 @@ class AdCPSchemaValidator:
             return schema_data
 
         except (httpx.HTTPError, json.JSONDecodeError) as e:
-            # If download fails but we have cache, use it
-            if cache_path.exists():
+            # If download fails but we have cache, use it (default e2e behavior)
+            if allow_stale_cache and cache_path.exists():
                 logger.warning("Failed to download %s, using cached version: %s", schema_ref, e)
                 with open(cache_path) as f:
                     return json.load(f)
 
+            if not allow_stale_cache and cache_path.exists():
+                raise SchemaDownloadError(
+                    f"Network fetch of {schema_url} failed ({e}); refusing to fall "
+                    f"back to stale cache. Fix upstream or retry when available."
+                )
+
             raise SchemaDownloadError(f"Failed to download schema {schema_ref}: {e}")
 
-    async def get_schema_index(self) -> dict[str, Any]:
-        """Get the schema index, using cache when possible."""
+    async def get_schema_index(self, allow_stale_cache: bool = True) -> dict[str, Any]:
+        """Get the schema index, using cache when possible.
+
+        Args:
+            allow_stale_cache: Forwarded to ``_download_schema_index`` on a
+                cache miss. Default ``True`` preserves existing e2e behavior.
+                Pass ``False`` when running the refresh CLI so upstream errors
+                surface as ``SchemaDownloadError`` instead of being logged and
+                papered over with the on-disk cache.
+        """
         if self._index_cache is None:
-            self._index_cache = await self._download_schema_index()
+            self._index_cache = await self._download_schema_index(allow_stale_cache=allow_stale_cache)
         return self._index_cache
 
-    async def get_schema(self, schema_ref: str) -> dict[str, Any]:
-        """Get a schema by reference, using cache when possible."""
+    async def get_schema(self, schema_ref: str, allow_stale_cache: bool = True) -> dict[str, Any]:
+        """Get a schema by reference, using cache when possible.
+
+        Args:
+            schema_ref: The schema reference to fetch.
+            allow_stale_cache: Forwarded to ``_download_schema`` on a cache
+                miss. Default ``True`` preserves existing e2e behavior; the
+                refresh CLI passes ``False`` to surface upstream errors.
+        """
         if schema_ref not in self._schema_registry:
-            self._schema_registry[schema_ref] = await self._download_schema(schema_ref)
+            self._schema_registry[schema_ref] = await self._download_schema(
+                schema_ref, allow_stale_cache=allow_stale_cache
+            )
         return self._schema_registry[schema_ref]
 
     def _get_compiled_validator(self, schema: dict[str, Any]) -> Draft7Validator:
