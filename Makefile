@@ -1,9 +1,12 @@
 .PHONY: setup quality quality-full pre-pr lint-fix lint typecheck test-fast test-full
 .PHONY: test-stack-up test-stack-down test-all test-cov test-entity
-.PHONY: test-int test-bdd test-e2e
+.PHONY: test-int test-bdd test-e2e schemas-refresh
 
 setup:
 	uv run python scripts/setup-dev.py
+
+schemas-refresh:
+	uv run python scripts/ops/refresh_adcp_schemas.py
 
 quality:
 	uv run ruff format --check .

@@ -74,8 +74,8 @@ jobs:
         fi
         echo "✅ No skip decorators found"
 
-  unit-tests:
-    name: Unit Tests
+  refresh-schemas:
+    name: Refresh AdCP Schema Cache
     runs-on: ubuntu-latest
 
     steps:
@@ -102,6 +102,52 @@ jobs:
     - name: Install dependencies
       run: uv sync --extra dev
 
+    - name: Refresh schemas/latest/ cache
+      run: make schemas-refresh
+
+    - name: Upload schemas artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: adcp-schemas
+        path: schemas/
+        retention-days: 1
+        if-no-files-found: error
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: refresh-schemas
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v4
+      with:
+        version: ${{ env.UV_VERSION }}
+
+    - name: Cache uv dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/uv
+          .venv
+        key: ${{ runner.os }}-uv-v2-${{ hashFiles('**/uv.lock') }}
+
+    - name: Install dependencies
+      run: uv sync --extra dev
+
+    - name: Download schemas artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: adcp-schemas
+        path: schemas/
+
     - name: Run unit tests
       env:
         GEMINI_API_KEY: test_key_for_mocking
@@ -115,6 +161,7 @@ jobs:
     name: Integration (${{ matrix.group }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    needs: refresh-schemas
     strategy:
       fail-fast: false
       matrix:
@@ -171,6 +218,12 @@ jobs:
         uv sync --extra dev
         find . -type d -name __pycache__ -exec rm -rf {} + || true
         find . -type f -name '*.pyc' -delete || true
+
+    - name: Download schemas artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: adcp-schemas
+        path: schemas/
 
     - name: Run database migrations
       env:
@@ -288,6 +341,7 @@ jobs:
     name: E2E Tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    needs: refresh-schemas
     # Run E2E tests on PRs and main branch pushes - catch issues early!
     if: github.event_name == 'push' || github.event_name == 'pull_request'
 
@@ -314,6 +368,12 @@ jobs:
 
     - name: Install dependencies
       run: uv sync --extra dev
+
+    - name: Download schemas artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: adcp-schemas
+        path: schemas/
 
     - name: Verify Docker Compose v2
       run: |
@@ -396,7 +456,7 @@ jobs:
   test-summary:
     name: Test Summary
     runs-on: ubuntu-latest
-    needs: [security-audit, smoke-tests, unit-tests, integration-tests, quickstart-test, e2e-tests, lint]
+    needs: [security-audit, smoke-tests, refresh-schemas, unit-tests, integration-tests, quickstart-test, e2e-tests, lint]
     if: always()
 
     steps:
