@@ -53,7 +53,7 @@ class A2AAdCPComplianceClient:
         """Enter async context."""
         # Initialize schema validator if enabled
         if self.validate_schemas:
-            self.schema_validator = AdCPSchemaValidator(offline_mode=self.offline_mode, adcp_version="v1")
+            self.schema_validator = AdCPSchemaValidator(offline_mode=self.offline_mode, adcp_version="latest")
             await self.schema_validator.__aenter__()
 
         return self
