@@ -170,13 +170,22 @@ class TestValidateRequestRaisesOnUnresolvableRef:
 
 
 class TestValidateResponseRaisesOnUnresolvableRef:
-    """Mirror of the request-side contract for ``validate_response``."""
+    """Mirror of the request-side contract for ``validate_response``.
+
+    The payload includes MCP/A2A protocol wrapper fields so the test
+    exercises ``_extract_adcp_payload`` before the ref-resolution failure.
+    """
 
     @pytest.mark.asyncio
     async def test_missing_transitive_ref_raises_schema_resolution_error(self, unresolvable_ref_cache: Path) -> None:
+        wrapped_response = {
+            "message": "Operation completed successfully",
+            "context_id": "ctx_abc123",
+            "child": {"name": "anything"},
+        }
         async with AdCPSchemaValidator(cache_dir=unresolvable_ref_cache, offline_mode=True) as validator:
             with pytest.raises(SchemaResolutionError) as exc_info:
-                await validator.validate_response(TASK_NAME, {"child": {"name": "anything"}})
+                await validator.validate_response(TASK_NAME, wrapped_response)
 
         assert exc_info.value.url == MISSING_CHILD_REF_ABSOLUTE
         assert "make schemas-refresh" in str(exc_info.value)
