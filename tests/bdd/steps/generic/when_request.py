@@ -23,6 +23,37 @@ DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
+def _sandbox_identity(ctx: dict, transport: Transport | None = None) -> ResolvedIdentity | None:
+    """Return a dry_run identity when ctx['sandbox'] is True, else None.
+
+    For REST transport, uses the env's DB-backed identity as base (real auth
+    token required) and replaces the testing_context with dry_run=True.
+    For other transports, builds a synthetic identity via PrincipalFactory.
+    """
+    if not ctx.get("sandbox"):
+        return None
+
+    env = ctx["env"]
+
+    if transport == Transport.REST:
+        # REST goes through middleware — need real DB-backed auth token.
+        # Clone the env's default REST identity with dry_run=True.
+        base = env.identity_for(Transport.REST)
+        from src.core.testing_hooks import AdCPTestContext
+
+        return base.model_copy(
+            update={"testing_context": AdCPTestContext(dry_run=True)},
+        )
+
+    from tests.factories.principal import PrincipalFactory
+
+    return PrincipalFactory.make_identity(
+        principal_id=env._principal_id,
+        tenant_id=env._tenant_id,
+        dry_run=True,
+    )
+
+
 def _call(ctx: dict, req: ListCreativeFormatsRequest | None = None) -> None:
     """Dispatch through ctx['transport'] (defaults to IMPL for backward compat)."""
     transport = ctx.get("transport")
@@ -30,8 +61,12 @@ def _call(ctx: dict, req: ListCreativeFormatsRequest | None = None) -> None:
         _call_via(ctx, transport, req=req)
     else:
         env = ctx["env"]
+        call_kwargs: dict[str, Any] = {"req": req}
+        identity = _sandbox_identity(ctx, Transport.IMPL)
+        if identity is not None:
+            call_kwargs["identity"] = identity
         try:
-            ctx["response"] = env.call_impl(req=req)
+            ctx["response"] = env.call_impl(**call_kwargs)
         except Exception as exc:
             ctx["error"] = exc
 
@@ -51,6 +86,10 @@ def _call_via(ctx: dict, transport: str | Transport, req: ListCreativeFormatsReq
             kwargs.update(req.model_dump(exclude_none=True))
         else:
             kwargs["req"] = req
+
+    identity = _sandbox_identity(ctx, t)
+    if identity is not None:
+        kwargs["identity"] = identity
 
     try:
         result = env.call_via(t, **kwargs)

@@ -87,6 +87,7 @@ def _adcp_error_from_code(
         AdCPAdapterError,
         AdCPAuthenticationError,
         AdCPAuthorizationError,
+        AdCPAuthRequiredError,
         AdCPBudgetExhaustedError,
         AdCPConflictError,
         AdCPError,
@@ -100,6 +101,7 @@ def _adcp_error_from_code(
         cls.error_code: cls
         for cls in (
             AdCPValidationError,
+            AdCPAuthRequiredError,
             AdCPAuthenticationError,
             AdCPAuthorizationError,
             AdCPNotFoundError,
@@ -799,6 +801,9 @@ class BaseTestEnv:
                 headers["x-adcp-auth"] = auth_token
             if identity.tenant_id:
                 headers["x-adcp-tenant"] = identity.tenant_id
+            # Propagate testing_context via X-Dry-Run header (BR-RULE-209)
+            if identity.testing_context and identity.testing_context.dry_run:
+                headers["x-dry-run"] = "true"
 
         body = self.build_rest_body(**kwargs)
         method = getattr(self, "REST_METHOD", "post")

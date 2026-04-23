@@ -65,6 +65,17 @@ class AdCPValidationError(AdCPError):
     recovery: RecoveryHint = "correctable"
 
 
+class AdCPAuthRequiredError(AdCPError):
+    """No authentication context present (401, AUTH_REQUIRED).
+
+    Raised when the request contains no auth token at all -- distinct from
+    AUTH_TOKEN_INVALID (token present but bad).
+    """
+
+    status_code = 401
+    error_code = "AUTH_REQUIRED"
+
+
 class AdCPAuthenticationError(AdCPError):
     """Missing or invalid authentication credentials (401)."""
 

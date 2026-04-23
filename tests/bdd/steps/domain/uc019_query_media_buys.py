@@ -2096,10 +2096,14 @@ def then_no_real_api_calls(ctx: dict) -> None:
             f"adapter mock type: {type(adapter_mock).__name__}"
         )
     else:
-        # Path 2: no adapter mock — operation is adapter-free by design
-        assert env.EXTERNAL_PATCHES == {}, (
-            f"No adapter mock but EXTERNAL_PATCHES is non-empty: {env.EXTERNAL_PATCHES}. "
-            f"If the env patches external services, it should include an adapter mock "
+        # Path 2: no adapter mock — operation is adapter-free by design.
+        # Some envs patch non-adapter services (registry, audit_logger) that
+        # are not ad platform API calls.  Only flag truly unknown patches.
+        non_adapter_patches = {"registry", "audit_logger"}
+        unexpected = set(env.EXTERNAL_PATCHES) - non_adapter_patches
+        assert not unexpected, (
+            f"No adapter mock but EXTERNAL_PATCHES contains unexpected entries: {unexpected}. "
+            f"If the env patches ad platform services, it should include an adapter mock "
             f"to verify no real calls were made in sandbox mode."
         )
         # Confirm response was successful (operation completed without adapter)

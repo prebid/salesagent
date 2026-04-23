@@ -50,6 +50,7 @@ from src.core.domain_config import get_a2a_server_url
 from src.core.exceptions import (
     AdCPAuthenticationError,
     AdCPAuthorizationError,
+    AdCPAuthRequiredError,
     AdCPBudgetExhaustedError,
     AdCPConflictError,
     AdCPError,
@@ -111,7 +112,7 @@ def _adcp_to_a2a_error(exc: AdCPError) -> InvalidParamsError | InvalidRequestErr
         data["details"] = exc.details
     if isinstance(exc, (AdCPValidationError, AdCPConflictError, AdCPBudgetExhaustedError)):
         return InvalidParamsError(message=exc.message, data=data)
-    elif isinstance(exc, (AdCPAuthenticationError, AdCPAuthorizationError)):
+    elif isinstance(exc, (AdCPAuthRequiredError, AdCPAuthenticationError, AdCPAuthorizationError)):
         return InvalidRequestError(message=exc.message, data=data)
     else:
         return InternalError(message=exc.message, data=data)
@@ -185,7 +186,12 @@ class AdCPRequestHandler(RequestHandler):
         headers = auth_ctx.headers if auth_ctx else {}
 
         if require_valid_token and not auth_token:
-            raise ServerError(InvalidRequestError(message="Missing authentication token"))
+            raise ServerError(
+                InvalidRequestError(
+                    message="Missing authentication token",
+                    data={"error_code": "AUTH_REQUIRED", "recovery": "terminal"},
+                )
+            )
 
         # Extract testing context from A2A request headers (same as MCP does)
         testing_context = AdCPTestContext.from_headers(headers)
@@ -540,7 +546,8 @@ class AdCPRequestHandler(RequestHandler):
             if requires_auth and not auth_token:
                 raise ServerError(
                     InvalidRequestError(
-                        message="Missing authentication token - Bearer token required in Authorization header"
+                        message="Missing authentication token - Bearer token required in Authorization header",
+                        data={"error_code": "AUTH_REQUIRED", "recovery": "terminal"},
                     )
                 )
 

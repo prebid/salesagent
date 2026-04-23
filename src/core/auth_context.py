@@ -10,11 +10,16 @@ Identity resolution (principal, tenant) happens at handler level via
 resolve_identity() — this is intentional to avoid DB calls on every request.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 from fastapi import Depends, Request
+
+if TYPE_CHECKING:
+    from src.core.testing_hooks import AdCPTestContext
 
 # Shared state key for auth context in scope["state"] and ServerCallContext.state.
 # All producers/consumers must use this constant instead of a string literal.
@@ -39,7 +44,7 @@ class AuthContext:
             object.__setattr__(self, "headers", MappingProxyType(self.headers))
 
     @classmethod
-    def unauthenticated(cls, *, headers: "dict[str, str] | None" = None) -> "AuthContext":
+    def unauthenticated(cls, *, headers: dict[str, str] | None = None) -> AuthContext:
         """Factory for unauthenticated request context."""
         return cls(headers=MappingProxyType(headers or {}))
 
@@ -66,7 +71,14 @@ get_auth_context: Any = Depends(_get_auth_context)
 # ---------------------------------------------------------------------------
 
 
-def _resolve_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIdentity | None":
+def _extract_testing_context(headers: MappingProxyType[str, str]) -> AdCPTestContext | None:
+    """Extract testing context from request headers (X-Dry-Run, etc.)."""
+    from src.core.testing_hooks import AdCPTestContext
+
+    return AdCPTestContext.from_headers(dict(headers))
+
+
+def _resolve_auth_dep(auth_ctx: AuthContext = get_auth_context) -> ResolvedIdentity | None:
     """FastAPI dependency: resolve identity (auth-optional, for discovery endpoints).
 
     Returns ResolvedIdentity if a valid token is present, None otherwise.
@@ -82,6 +94,7 @@ def _resolve_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIden
         auth_token=auth_ctx.auth_token,
         require_valid_token=False,
         protocol="rest",
+        testing_context=_extract_testing_context(auth_ctx.headers),
     )
 
     if not identity.principal_id:
@@ -96,16 +109,19 @@ def _resolve_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIden
     return identity
 
 
-def _require_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIdentity":
+def _require_auth_dep(auth_ctx: AuthContext = get_auth_context) -> ResolvedIdentity:
     """FastAPI dependency: resolve identity (auth-required, raises 401 if missing).
 
-    Returns ResolvedIdentity on success. Raises AdCPAuthenticationError if
-    no token is present or the token is invalid.
+    Returns ResolvedIdentity on success. Raises AdCPAuthRequiredError if
+    no token is present, or AdCPAuthenticationError if the token is invalid.
     """
-    from src.core.exceptions import AdCPAuthenticationError
+    from src.core.exceptions import AdCPAuthenticationError, AdCPAuthRequiredError
 
     if not auth_ctx.auth_token:
-        raise AdCPAuthenticationError("Authentication required")
+        raise AdCPAuthRequiredError(
+            "Authentication required",
+            details={"suggestion": "Provide a valid x-adcp-auth token to authenticate the request"},
+        )
 
     from src.core.resolved_identity import resolve_identity
 
@@ -114,6 +130,7 @@ def _require_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIden
         auth_token=auth_ctx.auth_token,
         require_valid_token=True,
         protocol="rest",
+        testing_context=_extract_testing_context(auth_ctx.headers),
     )
 
     if not identity.principal_id:

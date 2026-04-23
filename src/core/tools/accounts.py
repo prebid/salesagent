@@ -37,7 +37,7 @@ from fastmcp.tools.tool import ToolResult
 from src.core.audit_logger import get_audit_logger
 from src.core.database.models import Account as DBAccount
 from src.core.database.repositories.uow import AccountUoW
-from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.exceptions import AdCPAuthRequiredError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas.account import (
     Account,
@@ -129,11 +129,9 @@ def _list_accounts_impl(
     if req is None:
         req = ListAccountsRequest()
 
-    # BR-RULE-055 INV-3: unauthenticated → auth error (consistent with sync_accounts)
+    # BR-RULE-055 INV-3: unauthenticated or incomplete identity → AUTH_REQUIRED
     if identity is None or identity.principal_id is None or identity.tenant_id is None:
-        from src.core.exceptions import AdCPAuthenticationError
-
-        raise AdCPAuthenticationError("Authentication required for list_accounts")
+        raise AdCPAuthRequiredError("Authentication required for list_accounts")
 
     tenant_id = identity.tenant_id
     principal_id = identity.principal_id
@@ -446,9 +444,9 @@ async def _sync_accounts_impl(
     if req is None:
         req = SyncAccountsRequest(accounts=[])
 
-    # BR-RULE-055: sync requires auth
+    # BR-RULE-055: sync requires auth — AUTH_REQUIRED for missing/incomplete identity
     if identity is None or identity.principal_id is None or identity.tenant_id is None:
-        raise AdCPAuthenticationError("Authentication required: sync_accounts requires a valid auth token.")
+        raise AdCPAuthRequiredError("Authentication required: sync_accounts requires a valid auth token.")
 
     # Validate non-empty accounts array
     if not req.accounts:

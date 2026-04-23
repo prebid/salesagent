@@ -731,6 +731,7 @@ class TestErrorCodeVocabularyConsistency:
     CANONICAL_ERROR_CODES = {
         "INTERNAL_ERROR",  # HTTP 500 catch-all (salesagent extension)
         "VALIDATION_ERROR",  # adcp-req: Generic Errors
+        "AUTH_REQUIRED",  # HTTP 401 no auth context (salesagent extension)
         "AUTH_TOKEN_INVALID",  # HTTP 401 (salesagent extension)
         "AUTHORIZATION_ERROR",  # HTTP 403 (salesagent extension)
         "NOT_FOUND",  # Generic form of {ENTITY}_NOT_FOUND

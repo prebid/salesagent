@@ -110,11 +110,9 @@ class AccountSyncEnv(IntegrationEnv):
         """Dispatch list_accounts through any transport.
 
         Cross-cutting scenarios (context-echo, sandbox) run under
-        AccountSyncEnv but need list_accounts dispatch. For transports
-        that use REST_ENDPOINT (REST, E2E_REST), temporarily swap the
-        endpoint and parser so the standard dispatcher hits
-        ``/api/v1/accounts`` instead of ``/api/v1/accounts/sync``.
-        For IMPL, delegates to call_list_impl directly.
+        AccountSyncEnv but need list_accounts dispatch. Each transport
+        needs its own swap since the env's default methods target
+        sync_accounts, not list_accounts.
         """
         from src.core.schemas.account import ListAccountsResponse
         from tests.harness.dispatchers import DISPATCHERS
@@ -129,6 +127,20 @@ class AccountSyncEnv(IntegrationEnv):
             except Exception as exc:
                 return TransportResult(error=exc)
             return TransportResult(payload=payload, envelope={"transport": "impl"})
+
+        if transport == Transport.A2A:
+            try:
+                payload = self._run_a2a_handler("list_accounts", ListAccountsResponse, **kwargs)
+            except Exception as exc:
+                return TransportResult(error=exc)
+            return TransportResult(payload=payload, envelope={"transport": "a2a"})
+
+        if transport == Transport.MCP:
+            try:
+                payload = self._run_mcp_client("list_accounts", ListAccountsResponse, **kwargs)
+            except Exception as exc:
+                return TransportResult(error=exc)
+            return TransportResult(payload=payload, envelope={"transport": "mcp"})
 
         # For REST-based transports, swap endpoint and parser to target
         # list_accounts instead of sync_accounts.

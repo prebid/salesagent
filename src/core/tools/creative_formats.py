@@ -427,6 +427,11 @@ def _list_creative_formats_impl(
     )
 
     # Create response (no message/specification_version - not in adapter schema)
+    # Determine sandbox flag from identity (BR-RULE-209 INV-4)
+    sandbox_flag: bool | None = None
+    if identity and identity.testing_context and identity.testing_context.dry_run:
+        sandbox_flag = True
+
     # Format list from registry is compatible with library Format type
     response = ListCreativeFormatsResponse(
         formats=page_formats,
@@ -434,6 +439,7 @@ def _list_creative_formats_impl(
         errors=agent_errors if agent_errors else None,
         context=req.context,
         pagination=pagination_response,
+        sandbox=sandbox_flag,
     )
 
     # Always return Pydantic model - MCP wrapper will handle serialization

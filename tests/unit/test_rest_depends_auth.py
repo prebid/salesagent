@@ -216,14 +216,14 @@ class TestRequireAuthDepBehavior:
     """Test the require_auth dependency function behavior directly."""
 
     def test_raises_without_token(self):
-        """require_auth dep should raise AdCPAuthenticationError without token."""
+        """require_auth dep should raise AdCPAuthRequiredError without token."""
         import pytest
 
         from src.core.auth_context import AuthContext, _require_auth_dep
-        from src.core.exceptions import AdCPAuthenticationError
+        from src.core.exceptions import AdCPAuthRequiredError
 
         auth_ctx = AuthContext.unauthenticated()
-        with pytest.raises(AdCPAuthenticationError, match="Authentication required"):
+        with pytest.raises(AdCPAuthRequiredError, match="Authentication required"):
             _require_auth_dep(auth_ctx)
 
     def test_returns_identity_with_valid_token(self):
@@ -250,3 +250,70 @@ class TestRequireAuthDepBehavior:
 
         assert isinstance(result, ResolvedIdentity)
         assert result.principal_id == "test_principal"
+
+    def test_missing_token_returns_auth_required_error_code(self):
+        """No token → AUTH_REQUIRED (distinct from AUTH_TOKEN_INVALID)."""
+        import pytest
+
+        from src.core.auth_context import AuthContext, _require_auth_dep
+        from src.core.exceptions import AdCPAuthRequiredError
+
+        auth_ctx = AuthContext.unauthenticated()
+        with pytest.raises(AdCPAuthRequiredError) as exc_info:
+            _require_auth_dep(auth_ctx)
+
+        assert exc_info.value.error_code == "AUTH_REQUIRED"
+
+    def test_invalid_token_returns_auth_token_invalid_error_code(self):
+        """Token present but invalid → AUTH_TOKEN_INVALID (not AUTH_REQUIRED).
+
+        Covers: T-UC-011-list-expired
+        """
+        from unittest.mock import patch
+
+        import pytest
+
+        from src.core.auth_context import AuthContext, _require_auth_dep
+        from src.core.exceptions import AdCPAuthenticationError
+
+        auth_ctx = AuthContext(
+            auth_token="expired-or-invalid-token",
+            headers={"x-adcp-auth": "expired-or-invalid-token"},
+        )
+
+        with patch(
+            "src.core.resolved_identity.resolve_identity",
+            side_effect=AdCPAuthenticationError("Token is invalid or expired"),
+        ):
+            with pytest.raises(AdCPAuthenticationError) as exc_info:
+                _require_auth_dep(auth_ctx)
+
+        assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
+
+    def test_token_present_but_no_principal_returns_auth_token_invalid(self):
+        """Token present, resolves to identity with no principal → AUTH_TOKEN_INVALID."""
+        from unittest.mock import patch
+
+        import pytest
+
+        from src.core.auth_context import AuthContext, _require_auth_dep
+        from src.core.exceptions import AdCPAuthenticationError
+        from src.core.resolved_identity import ResolvedIdentity
+
+        auth_ctx = AuthContext(
+            auth_token="some-token",
+            headers={"x-adcp-auth": "some-token"},
+        )
+
+        mock_identity = ResolvedIdentity(
+            principal_id=None,
+            tenant_id="default",
+            tenant={"tenant_id": "default"},
+            protocol="rest",
+        )
+
+        with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
+            with pytest.raises(AdCPAuthenticationError) as exc_info:
+                _require_auth_dep(auth_ctx)
+
+        assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"

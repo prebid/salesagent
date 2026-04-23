@@ -19,10 +19,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import ast
 import json
 import re
-import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -134,7 +132,14 @@ def print_summary(buckets: dict) -> None:
         print(f"{marker} {bucket:25s} {len(items):5d}  — {desc}")
 
     # Action items
-    action_buckets = ["XFAIL_STEP_MISSING", "XPASS_STALE", "XPASS_WEAK", "XFAIL_BROAD", "FAIL_E2E_REST", "FAIL_REGRESSION"]
+    action_buckets = [
+        "XFAIL_STEP_MISSING",
+        "XPASS_STALE",
+        "XPASS_WEAK",
+        "XFAIL_BROAD",
+        "FAIL_E2E_REST",
+        "FAIL_REGRESSION",
+    ]
     action_count = sum(len(buckets.get(b, [])) for b in action_buckets)
     print(f"\nACTION NEEDED: {action_count} tests across {sum(1 for b in action_buckets if buckets.get(b))} categories")
 

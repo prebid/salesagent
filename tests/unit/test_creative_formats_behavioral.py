@@ -896,3 +896,51 @@ class TestAgentReferralFailureLogsWarning:
         assert any("referral" in msg.lower() or "agent" in msg.lower() for msg in warning_msgs), (
             f"Expected a warning about agent referral failure, got: {warning_msgs}"
         )
+
+
+class TestSandboxFlagOnResponse:
+    """BR-RULE-209 INV-4: sandbox=true on responses for sandbox accounts.
+
+    Covers: T-UC-005-sandbox-happy
+    """
+
+    def _call_with_sandbox(self, *, dry_run: bool):
+        """Call _list_creative_formats_impl with a sandbox or production identity."""
+        from src.core.creative_agent_registry import FormatFetchResult
+        from src.core.tools.creative_formats import _list_creative_formats_impl
+
+        formats = [_make_format("display_300x250", "Display 300x250")]
+
+        identity = PrincipalFactory.make_identity(
+            principal_id=None,
+            tenant_id=MOCK_TENANT["tenant_id"],
+            tenant=MOCK_TENANT,
+            dry_run=dry_run,
+        )
+
+        with (
+            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry,
+            patch(
+                "src.core.tools.creative_formats.get_audit_logger",
+                return_value=MagicMock(),
+            ),
+        ):
+            mock_reg = MagicMock()
+
+            async def mock_list_formats_with_errors(**kwargs):
+                return FormatFetchResult(formats=list(formats), errors=[])
+
+            mock_reg.list_all_formats_with_errors = mock_list_formats_with_errors
+            mock_registry.return_value = mock_reg
+
+            return _list_creative_formats_impl(ListCreativeFormatsRequest(), identity)
+
+    def test_sandbox_account_response_has_sandbox_true(self):
+        """Sandbox account (dry_run=True) -> response.sandbox is True."""
+        response = self._call_with_sandbox(dry_run=True)
+        assert response.sandbox is True
+
+    def test_production_account_response_has_no_sandbox(self):
+        """Production account (no testing_context) -> response.sandbox is None."""
+        response = self._call_with_sandbox(dry_run=False)
+        assert response.sandbox is None
