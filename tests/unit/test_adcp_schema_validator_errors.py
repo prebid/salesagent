@@ -1,7 +1,7 @@
 """Regression tests for AdCPSchemaValidator error propagation at the
 validate_request / validate_response boundary.
 
-Covers the contract from PR #1230: unresolvable ``$ref`` targets surface as
+Covers the contract that unresolvable ``$ref`` targets surface as
 ``SchemaResolutionError`` with an actionable "run ``make schemas-refresh``"
 message, rather than being category-mistyped as ``SchemaValidationError``.
 
@@ -9,15 +9,13 @@ These are production-path tests (they call ``validate_request`` /
 ``validate_response``, not the internal ``_resolve_*`` helpers). The existing
 tests at ``test_adcp_schema_validator_ref_resolution.py`` exercise helper-level
 behavior but would miss regressions on the call chain that actually produced
-#1213 — specifically: ``iter_errors`` -> ``retrieve`` -> referencing-library
+the bug — specifically: ``iter_errors`` -> ``retrieve`` -> referencing-library
 wrapping -> a bare ``except Exception`` that reclassified the failure as a
 schema-validation error. This file locks in the contract at the production
 entry point.
 
 Honors ``tests/CLAUDE.md`` rule #2: obligation tests must call a production
 function, not just import it.
-
-Relates to #1213.
 """
 
 import json
