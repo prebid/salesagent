@@ -142,7 +142,7 @@ class TestSyncAccountsAuth:
 
     @pytest.mark.asyncio
     async def test_unauthenticated_raises_error(self, integration_db):
-        from src.core.exceptions import AdCPAuthenticationError
+        from src.core.exceptions import AdCPAuthRequiredError
 
         with AccountSyncEnv(tenant_id="sync_t5", principal_id="agent_sync5") as env:
             env.setup_default_data()
@@ -156,7 +156,7 @@ class TestSyncAccountsAuth:
                     }
                 ],
             )
-            with pytest.raises(AdCPAuthenticationError):
+            with pytest.raises(AdCPAuthRequiredError):
                 await env.call_impl_async(req=req, identity=None)
 
 
