@@ -16,7 +16,6 @@ Usage:
     await validator.validate_response("get-products", response_data)
 """
 
-import asyncio
 import functools
 import hashlib
 import json
@@ -48,11 +47,14 @@ class SchemaDownloadError(SchemaError):
 
 
 class SchemaResolutionError(SchemaError):
-    """Raised when a $ref cannot be resolved from cache during validation.
+    """Raised when a $ref cannot be resolved from the local cache during validation.
 
-    Surfaced from `_resolve_*_schema_ref` under strict mode instead of falling
-    back to a permissive empty-object stub. The stub used to mask schema-cache
-    gaps as spurious `additionalProperties` errors at unrelated JSON paths.
+    Distinct from SchemaDownloadError (network failure during download): a
+    SchemaResolutionError means the local cache is incomplete and must be
+    refreshed. Resolution happens synchronously inside referencing.Registry's
+    retrieve callback and cannot re-download, so a missing cache entry is fatal.
+
+    Fix: run `make schemas-refresh`.
     """
 
     def __init__(self, url: str, message: str | None = None):
@@ -103,23 +105,21 @@ class AdCPSchemaValidator:
         cache_dir: Path | None = None,
         offline_mode: bool = False,
         adcp_version: str = "latest",
-        strict: bool = True,
     ):
         """
         Initialize the schema validator.
+
+        Validation is always strict: unresolvable $refs and schema-download
+        failures raise rather than being silently swallowed. Callers are
+        expected to maintain a current schema cache (`make schemas-refresh`).
 
         Args:
             cache_dir: Directory to cache schemas. Defaults to schemas/{version}
             offline_mode: If True, only use cached schemas (no downloads)
             adcp_version: AdCP schema version to use (e.g., "latest", a pinned semver)
-            strict: If True (default), schema-download and ref-resolution failures
-                raise instead of being silently swallowed. Set to False only with
-                an explicit FIXME-tracked follow-up — silent failures here mask
-                real AdCP drift.
         """
         self.offline_mode = offline_mode
         self.adcp_version = adcp_version
-        self.strict = strict
 
         # Set up versioned cache directory
         if cache_dir is None:
@@ -415,9 +415,8 @@ class AdCPSchemaValidator:
         """Resolve an AdCP schema reference synchronously from the local cache.
 
         Called via referencing.Registry(retrieve=...) during validation, which
-        requires sync resolution. Under strict=True (default), unresolvable refs
-        raise SchemaResolutionError; under strict=False, they fall back to a
-        permissive empty-object stub (preserved for opt-out callers only).
+        requires sync resolution. Unresolvable refs raise SchemaResolutionError —
+        callers must ensure the schema cache is current (`make schemas-refresh`).
         """
         cache_path = self._get_cache_path(url)
         if cache_path.exists():
@@ -425,27 +424,27 @@ class AdCPSchemaValidator:
                 with open(cache_path) as f:
                     return json.load(f)
             except (json.JSONDecodeError, OSError) as e:
-                if self.strict:
-                    raise SchemaResolutionError(url, f"Cached schema {url} is unreadable: {e}") from e
-                logger.warning("Cached schema %s is unreadable: %s", url, e)
+                raise SchemaResolutionError(
+                    url,
+                    f"Cached schema {url} is unreadable ({e}); run `make schemas-refresh`.",
+                ) from e
 
-        if self.strict:
-            raise SchemaResolutionError(url)
-        logger.warning("Could not resolve schema reference %s — using empty-object stub", url)
-        return {"type": "object", "additionalProperties": False, "properties": {}}
+        raise SchemaResolutionError(
+            url,
+            f"Schema {url} is not in the local cache; run `make schemas-refresh`.",
+        )
 
     def _resolve_http_schema_ref(self, url: str) -> dict[str, Any]:
-        """Resolve HTTP schema reference synchronously."""
-        # For HTTP references, fall back to the AdCP resolver
-        # Extract the path part and resolve as AdCP schema
+        """Resolve HTTP schema reference synchronously.
+
+        Delegates adcontextprotocol.org URLs to the AdCP resolver. Other hosts
+        raise — we don't cache schemas we don't own.
+        """
         if "adcontextprotocol.org" in url:
             path_part = url.split("adcontextprotocol.org")[-1]
             return self._resolve_adcp_schema_ref(path_part)
 
-        if self.strict:
-            raise SchemaResolutionError(url)
-        logger.warning("Could not resolve HTTP schema reference %s — using empty-object stub", url)
-        return {"type": "object", "additionalProperties": False, "properties": {}}
+        raise SchemaResolutionError(url, f"Unknown HTTP schema host: {url}")
 
     async def _find_schema_ref_for_task(self, task_name: str, request_or_response: str) -> str | None:
         """Find the schema reference for a specific task and type."""
@@ -572,27 +571,12 @@ class AdCPSchemaValidator:
             return
         _visited.add(schema_ref)
 
-        try:
-            schema = await self.get_schema(schema_ref)
-            refs_to_load = self._find_schema_references(schema)
+        schema = await self.get_schema(schema_ref)
+        refs_to_load = self._find_schema_references(schema)
 
-            for ref in refs_to_load:
-                try:
-                    await self.get_schema(ref)
-                    await self._preload_schema_references(ref, _visited)
-                except SchemaDownloadError as e:
-                    if self.strict:
-                        raise
-                    logger.warning("Could not preload referenced schema %s: %s", ref, e)
-                except (json.JSONDecodeError, OSError) as e:
-                    if self.strict:
-                        raise
-                    logger.warning("Cache I/O error preloading schema %s: %s", ref, e)
-
-        except (SchemaDownloadError, json.JSONDecodeError, OSError) as e:
-            if self.strict:
-                raise
-            logger.warning("Could not preload schema references for %s: %s", schema_ref, e)
+        for ref in refs_to_load:
+            await self.get_schema(ref)
+            await self._preload_schema_references(ref, _visited)
 
     def _find_schema_references(self, schema: dict[str, Any]) -> list[str]:
         """Find all $ref references in a schema recursively."""
@@ -732,114 +716,3 @@ async def adcp_validator_offline():
     """Pytest fixture providing an offline AdCP schema validator."""
     async with AdCPSchemaValidator(offline_mode=True) as validator:
         yield validator
-
-
-# Utility functions for test setup
-
-
-async def preload_schemas(task_names: list[str] = None, load_all: bool = True, adcp_version: str = "latest"):
-    """
-    Preload schemas for faster test execution.
-
-    Args:
-        task_names: List of task names to preload. If None, loads common tasks.
-        load_all: If True, loads all schemas from registry (core, enums, tasks).
-        adcp_version: AdCP schema version to use (e.g., "latest", a pinned semver)
-    """
-    async with AdCPSchemaValidator(adcp_version=adcp_version) as validator:
-        # Preload index
-        index = await validator.get_schema_index()
-
-        if load_all:
-            print("📥 Loading ALL AdCP schemas from registry...")
-
-            # Load core schemas
-            print("\n📁 CORE SCHEMAS:")
-            core_schemas = index.get("schemas", {}).get("core", {}).get("schemas", {})
-            for name, info in core_schemas.items():
-                try:
-                    schema_ref = info["$ref"]
-                    await validator.get_schema(schema_ref)
-                    print(f"  ✓ {name}")
-                except Exception as e:
-                    print(f"  ⚠ {name}: {e}")
-
-            # Load enum schemas
-            print("\n📁 ENUM SCHEMAS:")
-            enum_schemas = index.get("schemas", {}).get("enums", {}).get("schemas", {})
-            for name, info in enum_schemas.items():
-                try:
-                    schema_ref = info["$ref"]
-                    await validator.get_schema(schema_ref)
-                    print(f"  ✓ {name}")
-                except Exception as e:
-                    print(f"  ⚠ {name}: {e}")
-
-            # Load media-buy task schemas
-            print("\n📁 MEDIA-BUY TASK SCHEMAS:")
-            media_tasks = index.get("schemas", {}).get("media-buy", {}).get("tasks", {})
-            for task_name, task_info in media_tasks.items():
-                for req_resp in ["request", "response"]:
-                    if req_resp in task_info:
-                        try:
-                            schema_ref = task_info[req_resp]["$ref"]
-                            await validator.get_schema(schema_ref)
-                            print(f"  ✓ {task_name}-{req_resp}")
-                        except Exception as e:
-                            print(f"  ⚠ {task_name}-{req_resp}: {e}")
-
-            # Load signals task schemas
-            print("\n📁 SIGNALS TASK SCHEMAS:")
-            signals_tasks = index.get("schemas", {}).get("signals", {}).get("tasks", {})
-            for task_name, task_info in signals_tasks.items():
-                for req_resp in ["request", "response"]:
-                    if req_resp in task_info:
-                        try:
-                            schema_ref = task_info[req_resp]["$ref"]
-                            await validator.get_schema(schema_ref)
-                            print(f"  ✓ {task_name}-{req_resp}")
-                        except Exception as e:
-                            print(f"  ⚠ {task_name}-{req_resp}: {e}")
-
-        else:
-            # Legacy behavior - only load specific tasks
-            if task_names is None:
-                task_names = [
-                    "get-products",
-                    "list-creative-formats",
-                    "create-media-buy",
-                    "add-creative-assets",
-                    "update-media-buy",
-                    "get-media-buy-delivery",
-                ]
-
-            print(f"📥 Loading schemas for specific tasks: {task_names}")
-            for task_name in task_names:
-                try:
-                    for req_resp in ["request", "response"]:
-                        schema_ref = await validator._find_schema_ref_for_task(task_name, req_resp)
-                        if schema_ref:
-                            await validator.get_schema(schema_ref)
-                            print(f"✓ Preloaded {task_name} {req_resp} schema")
-                except Exception as e:
-                    print(f"⚠ Failed to preload {task_name}: {e}")
-
-        print("\n🎉 Schema preloading completed!")
-
-        # Show cache status
-        cache_dir = validator.cache_dir
-        cached_files = list(cache_dir.glob("*.json"))
-        print(f"📦 Total schemas cached: {len(cached_files)}")
-        print(f"💾 Cache location: {cache_dir}")
-
-
-if __name__ == "__main__":
-    """CLI for testing and preloading schemas."""
-    import asyncio
-
-    async def main():
-        print("AdCP Schema Validator - Preloading common schemas...")
-        await preload_schemas()
-        print("Schema preloading completed!")
-
-    asyncio.run(main())

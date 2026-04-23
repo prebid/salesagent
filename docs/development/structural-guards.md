@@ -460,10 +460,11 @@ contain a cache file for every `$ref` declared in the transitive closure of
 `index.json` and every referenced schema body.
 
 **Why it matters:** When a `$ref` target is missing from the cache, the validator
-falls back to a strict empty-object stub (`{"type": "object", "additionalProperties":
-False, "properties": {}}`). That stub silently masks real AdCP spec drift as
-spurious `additionalProperties` errors at unrelated JSON paths during validation.
-A complete cache is the prerequisite for `strict=True` mode to mean anything.
+raises `SchemaResolutionError` at the resolver boundary. A complete cache is the
+prerequisite for validation to succeed. Earlier versions silently fell back to an
+empty-object stub (`{"type": "object", "additionalProperties": False, "properties":
+{}}`) that masked real AdCP spec drift as spurious `additionalProperties` errors
+at unrelated JSON paths; that fallback has been removed.
 
 #### How it works
 
