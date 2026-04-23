@@ -20,6 +20,7 @@ import asyncio
 import functools
 import hashlib
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,8 @@ import pytest
 import referencing
 from jsonschema.validators import Draft7Validator
 from referencing.jsonschema import DRAFT7
+
+logger = logging.getLogger(__name__)
 
 
 class SchemaError(Exception):
@@ -42,6 +45,19 @@ class SchemaDownloadError(SchemaError):
     """Raised when schema download fails."""
 
     pass
+
+
+class SchemaResolutionError(SchemaError):
+    """Raised when a $ref cannot be resolved from cache during validation.
+
+    Surfaced from `_resolve_*_schema_ref` under strict mode instead of falling
+    back to a permissive empty-object stub. The stub used to mask schema-cache
+    gaps as spurious `additionalProperties` errors at unrelated JSON paths.
+    """
+
+    def __init__(self, url: str, message: str | None = None):
+        super().__init__(message or f"Could not resolve schema reference: {url}")
+        self.url = url
 
 
 class SchemaValidationError(SchemaError):
@@ -82,7 +98,13 @@ class AdCPSchemaValidator:
     BASE_SCHEMA_URL = "https://adcontextprotocol.org/schemas/latest"
     INDEX_URL = "https://adcontextprotocol.org/schemas/latest/index.json"
 
-    def __init__(self, cache_dir: Path | None = None, offline_mode: bool = False, adcp_version: str = "latest"):
+    def __init__(
+        self,
+        cache_dir: Path | None = None,
+        offline_mode: bool = False,
+        adcp_version: str = "latest",
+        strict: bool = True,
+    ):
         """
         Initialize the schema validator.
 
@@ -90,9 +112,14 @@ class AdCPSchemaValidator:
             cache_dir: Directory to cache schemas. Defaults to schemas/{version}
             offline_mode: If True, only use cached schemas (no downloads)
             adcp_version: AdCP schema version to use (e.g., "latest", a pinned semver)
+            strict: If True (default), schema-download and ref-resolution failures
+                raise instead of being silently swallowed. Set to False only with
+                an explicit FIXME-tracked follow-up — silent failures here mask
+                real AdCP drift.
         """
         self.offline_mode = offline_mode
         self.adcp_version = adcp_version
+        self.strict = strict
 
         # Set up versioned cache directory
         if cache_dir is None:
@@ -232,7 +259,7 @@ class AdCPSchemaValidator:
         except (httpx.HTTPError, json.JSONDecodeError) as e:
             # If download fails but we have cache, use it
             if cache_path.exists():
-                print(f"Warning: Failed to download index, using cached version: {e}")
+                logger.warning("Failed to download index, using cached version: %s", e)
                 with open(cache_path) as f:
                     return json.load(f)
 
@@ -338,7 +365,7 @@ class AdCPSchemaValidator:
         except (httpx.HTTPError, json.JSONDecodeError) as e:
             # If download fails but we have cache, use it
             if cache_path.exists():
-                print(f"Warning: Failed to download {schema_ref}, using cached version: {e}")
+                logger.warning("Failed to download %s, using cached version: %s", schema_ref, e)
                 with open(cache_path) as f:
                     return json.load(f)
 
@@ -385,20 +412,26 @@ class AdCPSchemaValidator:
         return self._compiled_validators[schema_hash]
 
     def _resolve_adcp_schema_ref(self, url: str) -> dict[str, Any]:
-        """Resolve an AdCP schema reference synchronously."""
-        # This is called during validation, so we need a sync version
-        # We'll try to get from cache first, then fail gracefully if not available
+        """Resolve an AdCP schema reference synchronously from the local cache.
+
+        Called via referencing.Registry(retrieve=...) during validation, which
+        requires sync resolution. Under strict=True (default), unresolvable refs
+        raise SchemaResolutionError; under strict=False, they fall back to a
+        permissive empty-object stub (preserved for opt-out callers only).
+        """
         cache_path = self._get_cache_path(url)
         if cache_path.exists():
             try:
                 with open(cache_path) as f:
                     return json.load(f)
-            except (json.JSONDecodeError, OSError):
-                pass
+            except (json.JSONDecodeError, OSError) as e:
+                if self.strict:
+                    raise SchemaResolutionError(url, f"Cached schema {url} is unreadable: {e}") from e
+                logger.warning("Cached schema %s is unreadable: %s", url, e)
 
-        # If not in cache, we can't resolve it synchronously
-        # Use a strict schema instead of permissive one to catch more validation issues
-        print(f"Warning: Could not resolve schema reference {url} - using strict fallback")
+        if self.strict:
+            raise SchemaResolutionError(url)
+        logger.warning("Could not resolve schema reference %s — using empty-object stub", url)
         return {"type": "object", "additionalProperties": False, "properties": {}}
 
     def _resolve_http_schema_ref(self, url: str) -> dict[str, Any]:
@@ -409,8 +442,9 @@ class AdCPSchemaValidator:
             path_part = url.split("adcontextprotocol.org")[-1]
             return self._resolve_adcp_schema_ref(path_part)
 
-        # Unknown HTTP reference - use strict fallback
-        print(f"Warning: Could not resolve HTTP schema reference {url} - using strict fallback")
+        if self.strict:
+            raise SchemaResolutionError(url)
+        logger.warning("Could not resolve HTTP schema reference %s — using empty-object stub", url)
         return {"type": "object", "additionalProperties": False, "properties": {}}
 
     async def _find_schema_ref_for_task(self, task_name: str, request_or_response: str) -> str | None:
@@ -446,8 +480,10 @@ class AdCPSchemaValidator:
         """
         schema_ref = await self._find_schema_ref_for_task(task_name, "request")
         if not schema_ref:
-            # Don't fail if schema not found - log warning instead
-            print(f"Warning: No request schema found for task '{task_name}'")
+            # Some AdCP tasks legitimately have no request schema (e.g. notifications).
+            # Not strict-gated: a typoed task name is a separate concern, tracked in
+            # tests/unit/test_architecture_adcp_schema_cache_complete.py via the index.
+            logger.warning("No request schema found for task '%s'", task_name)
             return
 
         # Preload any referenced schemas before validation
@@ -471,8 +507,8 @@ class AdCPSchemaValidator:
         """
         schema_ref = await self._find_schema_ref_for_task(task_name, "response")
         if not schema_ref:
-            # Don't fail if schema not found - log warning instead
-            print(f"Warning: No response schema found for task '{task_name}'")
+            # See note in validate_request — same legitimate-skip rationale.
+            logger.warning("No response schema found for task '%s'", task_name)
             return
 
         # Extract AdCP payload from protocol wrapper if present
@@ -540,22 +576,23 @@ class AdCPSchemaValidator:
             schema = await self.get_schema(schema_ref)
             refs_to_load = self._find_schema_references(schema)
 
-            # Recursively load all referenced schemas (download them so they're in cache for validation)
             for ref in refs_to_load:
                 try:
                     await self.get_schema(ref)
-                    # Recursively preload refs within this schema
                     await self._preload_schema_references(ref, _visited)
                 except SchemaDownloadError as e:
-                    # Schema download failed - log but continue
-                    # (validation will use strict fallback for this ref)
-                    print(f"Warning: Could not preload referenced schema {ref}: {e}")
-                except Exception as e:
-                    # Unexpected error - log but continue
-                    print(f"Warning: Unexpected error preloading schema {ref}: {e}")
+                    if self.strict:
+                        raise
+                    logger.warning("Could not preload referenced schema %s: %s", ref, e)
+                except (json.JSONDecodeError, OSError) as e:
+                    if self.strict:
+                        raise
+                    logger.warning("Cache I/O error preloading schema %s: %s", ref, e)
 
-        except Exception as e:
-            print(f"Warning: Could not preload schema references for {schema_ref}: {e}")
+        except (SchemaDownloadError, json.JSONDecodeError, OSError) as e:
+            if self.strict:
+                raise
+            logger.warning("Could not preload schema references for %s: %s", schema_ref, e)
 
     def _find_schema_references(self, schema: dict[str, Any]) -> list[str]:
         """Find all $ref references in a schema recursively."""
@@ -613,6 +650,10 @@ class AdCPSchemaValidator:
 
         except SchemaDownloadError:
             # Re-raise schema download errors
+            raise
+        except SchemaResolutionError:
+            # Strict-mode resolver failures must surface unwrapped — they signal
+            # a missing cache entry, not a validation failure of the input data.
             raise
         except SchemaValidationError:
             # Re-raise schema validation errors without wrapping them
