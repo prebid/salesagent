@@ -1144,7 +1144,7 @@ def when_sync_accounts_with_table(ctx: dict, datatable: Any) -> None:
             err = AdCPAuthenticationError(
                 "Authentication token is expired. Please re-authenticate to obtain a fresh token.",
             )
-            err.error_code = "AUTH_TOKEN_INVALID"
+            err.error_code = "AUTH_TOKEN_INVALID"  # expired/invalid token → local extension code
             ctx["error"] = err
             return
         kwargs["identity"] = ctx["force_identity"]
