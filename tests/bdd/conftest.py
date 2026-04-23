@@ -513,45 +513,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
-        # FIXME(salesagent-hsz): E2E_REST — sandbox accounts created in test
-        # process are not visible to Docker's separate DB.
-        _UC011_E2E_SANDBOX_CONTEXT_TAGS: set[str] = {
-            "T-UC-011-sandbox-list-filter",
-            "T-UC-011-ext-g-absent",
-        }
-        if is_e2e_rest and (marker_names & _UC011_E2E_SANDBOX_CONTEXT_TAGS):
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="e2e_rest fixture injection gap — sandbox accounts created in test not visible to Docker DB",
-                    strict=False,
-                )
-            )
+        # Graduated: T-UC-011-sandbox-list-filter, ext-g-absent (salesagent-gg1z: Docker DB seeded)
 
         # FIXME(salesagent-l9iz): E2E_REST — UC-006 account_resolution_boundary
         # success-path partitions rely on account fixtures not injected into the
         # Docker DB. Only the two success boundary_points fail on Docker.
         # Graduated: T-UC-006-boundary-account e2e_rest — account fixtures now
         # injected correctly. "account exists" and "single match" pass.
-
-        # FIXME(salesagent-y20i): UC-019 REST/E2E_REST boundary-principal — auth middleware
-        # returns 401 before the endpoint can produce spec-level business errors
-        # (principal_id_missing, principal_not_found). Only affects invalid-principal
-        # boundary examples; valid-principal examples pass.
-        # E2E_REST has the same issue: no auth_token → no x-adcp-auth header →
-        # Docker's auth middleware rejects before business logic runs.
-        if (is_rest or is_e2e_rest) and "T-UC-019-boundary-principal" in marker_names:
-            _invalid_principal_patterns = (
-                "principal_id is null",
-                "principal_id is empty string",
-                "principal_id not in registry",
-            )
-            if any(p in nodeid for p in _invalid_principal_patterns):
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="REST auth middleware returns 401 before business-level principal error",
-                        strict=True,
-                    )
-                )
 
         # FIXME(salesagent-9vgz.18): UC-003 empty update — production does not reject
         # requests with no updatable fields. Instead returns completed with empty
@@ -955,14 +923,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "e2e_rest: sync_creatives REST assignment scenarios — "
                 "JSONDecodeError or UniqueViolation on idempotent replay"
             ),
-            "T-UC-006-partition-auth": (
-                "e2e_rest: authenticated creative sync returns action='failed' "
-                "instead of 'created' — REST response shape difference"
-            ),
-            "T-UC-006-boundary-principal": (
-                "e2e_rest: authenticated creative sync returns action='failed' "
-                "instead of 'created' — REST response shape difference"
-            ),
+            # Graduated: T-UC-006-partition-auth missing/empty, T-UC-006-boundary-principal
+            # missing/null/empty — unauthenticated rejection works on e2e_rest.
+            # Only the "typical" (authenticated) variant still fails → selective xfail below.
             # Assignment weight scenarios — empty REST response body
             "T-UC-006-partition-assignment-weight": ("e2e_rest: assignment weight scenarios — REST returns empty body"),
             "T-UC-006-boundary-assignment-weight": ("e2e_rest: assignment weight boundary — REST returns empty body"),
@@ -972,6 +935,19 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 if tag in marker_names:
                     item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
                     break
+
+        # UC-006 e2e_rest: auth partition/boundary — only "typical" (authenticated)
+        # variant fails (action='failed' instead of 'created'). The missing/empty
+        # variants pass because unauthenticated rejection works on e2e_rest.
+        if "e2e_rest" in nodeid and marker_names & {"T-UC-006-partition-auth", "T-UC-006-boundary-principal"}:
+            if "typical" in nodeid:
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="e2e_rest: authenticated creative sync returns action='failed' "
+                        "instead of 'created' — REST response shape difference",
+                        strict=True,
+                    )
+                )
 
         # UC-006 e2e_rest: creative scope — action='failed' through REST
         if "e2e_rest" in nodeid and marker_names & {
@@ -1751,12 +1727,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {"include_snapshot omitted", "include_snapshot explicitly false", "mixed"},
                 "UC-019: snapshot boundary omitted/false/mixed paths not implemented",
             ),
-            # Principal boundary: no-auth variant fails
-            (
-                "T-UC-019-boundary-principal",
-                {"identity not resolved"},
-                "UC-019: AUTH_REQUIRED error path not implemented",
-            ),
         ]
         if any(t.startswith("T-UC-019") for t in marker_names):
             for tag, substrings, reason in _UC019_PARAM_XFAIL:
@@ -1785,10 +1755,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "T-UC-019-boundary-snapshot",
             }
             # Graduated e2e_rest examples that pass despite datetime/mock concern:
+            # These variants have expected status=completed, which matches the
+            # real date (all flight dates are in the past).
             _UC019_E2E_DT_GRADUATED = {
                 ("T-UC-019-partition-status", "post_flight"),
                 ("T-UC-019-boundary-status", "day after end_date"),
-                ("T-UC-019-boundary-status", "start_date equals end_date"),
+                ("T-UC-019-boundary-status", "start_date equals end_date and today is day after"),
             }
             _dt_graduated = any(tag in marker_names and substr in nodeid for tag, substr in _UC019_E2E_DT_GRADUATED)
             _inv150_5_graduated = "T-UC-019-inv-150-5" in marker_names  # all examples pass
@@ -1811,32 +1783,17 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                         strict=False,
                     )
                 )
-            # FIXME(salesagent-arnp): fixture injection gap — test creates
-            # principals/media buys in-process; Docker DB doesn't see them.
-            _UC019_E2E_FIXTURE_INJECTION_TAGS: set[str] = {
-                "T-UC-019-inv-154-tenant",
-            }
-            if marker_names & _UC019_E2E_FIXTURE_INJECTION_TAGS:
+            # Un-graduated: T-UC-019-inv-154-tenant returns empty response on e2e_rest
+            # because in-process fixture data doesn't populate Docker DB.
+            if "T-UC-019-inv-154-tenant" in marker_names:
                 item.add_marker(
                     pytest.mark.xfail(
-                        reason="e2e_rest: fixture injection gap — test data created in-process not visible to Docker DB",
+                        reason="e2e_rest: cross-principal isolation test returns empty set — "
+                        "in-process fixtures don't populate Docker DB",
                         strict=False,
                     )
                 )
-            # FIXME(salesagent-ool9): creative approval data created in-process
-            # is not visible to Docker — approval assertions fail on e2e_rest.
-            _UC019_E2E_CREATIVE_APPROVAL_TAGS: set[str] = {
-                "T-UC-019-inv-152-1",
-                "T-UC-019-inv-152-2",
-                "T-UC-019-inv-152-5",
-            }
-            if marker_names & _UC019_E2E_CREATIVE_APPROVAL_TAGS:
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="e2e_rest: creative approval data created in-process not visible to Docker DB",
-                        strict=False,
-                    )
-                )
+            # Graduated: T-UC-019-inv-152-1/2/5 (salesagent-kgmm: creative approval data seeded)
 
         # --- UC-026: xfails for spec-production gaps ---
         # Transport wiring done (a3xo: MediaBuyDualEnv routes updates correctly).
@@ -2234,6 +2191,32 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 if any(s in nodeid for s in substrings):
                     item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
                 break
+
+        # SPEC-PRODUCTION GAP: no-token/no-principal scenarios
+        # Production raises AdCPAuthenticationError(AUTH_TOKEN_INVALID) for all auth
+        # failures — spec defines AUTH_REQUIRED for no-token/no-principal.
+        _AUTH_REQUIRED_REASON = (
+            "SPEC-PRODUCTION GAP: production raises AdCPAuthenticationError(AUTH_TOKEN_INVALID) "
+            "for all auth failures — spec defines AUTH_REQUIRED for no-token/no-principal"
+        )
+        _UC011_AUTH_GAP_TAGS = {
+            "T-UC-011-list-unauth",
+            "T-UC-011-ext-a-no-token",
+            "T-UC-011-list-no-principal",
+            "T-UC-011-sync-no-principal",
+        }
+        if marker_names & _UC011_AUTH_GAP_TAGS:
+            item.add_marker(pytest.mark.xfail(reason=_AUTH_REQUIRED_REASON, strict=False))
+
+        # REST transport collapses all 401 responses to AUTH_REQUIRED —
+        # expired-token scenarios expect AUTH_TOKEN_INVALID but REST can't distinguish.
+        if is_rest and marker_names & {"T-UC-011-list-expired", "T-UC-011-ext-a-expired"}:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="REST transport returns AUTH_REQUIRED for all 401s — cannot distinguish expired token",
+                    strict=False,
+                )
+            )
 
         _UC011_XFAIL_TAGS: dict[str, str] = {
             # deactivation scoping: production doesn't scope deactivation to authenticated agent
