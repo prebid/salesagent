@@ -17,7 +17,6 @@ requires parameterizing those constants (tracked as a follow-up).
 Usage:
     uv run python scripts/ops/refresh_adcp_schemas.py
     uv run python scripts/ops/refresh_adcp_schemas.py --version latest
-    uv run python scripts/ops/refresh_adcp_schemas.py --version 3.0.0-rc.2
 
 Wired into `make schemas-refresh`.
 """
@@ -58,7 +57,7 @@ async def _refresh(version: str) -> None:
         # allow_stale_cache=False prevents the downloader's built-in
         # flake tolerance (appropriate for e2e tests) from silently
         # returning the stale on-disk cache and reporting success while
-        # the cache is weeks out of date. See PR #1230.
+        # the cache is weeks out of date.
         index = await validator.get_schema_index(allow_stale_cache=False)
 
         initial: set[str] = set()
@@ -91,8 +90,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--version",
         default=DEFAULT_VERSION,
-        help=f"Schema version to fetch (default: {DEFAULT_VERSION!r}). Must match the "
-        "validator's BASE_SCHEMA_URL path segment or the BFS fetches 0 refs.",
+        choices=["latest"],
+        help=f"Schema version to fetch (default: {DEFAULT_VERSION!r}). Only 'latest' is "
+        "accepted today — the validator's BASE_SCHEMA_URL is hardcoded to /schemas/latest/. "
+        "Per-version pinning is tracked as a follow-up.",
     )
     parser.add_argument(
         "-v",
