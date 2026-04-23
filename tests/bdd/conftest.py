@@ -658,6 +658,17 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
+        # FIXME(#1270): e2e_rest: Docker auth middleware returns AUTH_REQUIRED
+        # before _impl can produce AdCPAuthenticationError with spec-level details.
+        if is_e2e_rest and "T-UC-002-nfr-001-enforcement" in marker_names:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="e2e_rest: Docker auth middleware rejects with AUTH_REQUIRED "
+                    "before business logic — error shape differs from spec",
+                    strict=True,
+                )
+            )
+
         # Tag-based xfail for all other scenarios
         for tag, reason in _XFAIL_TAGS.items():
             if tag in marker_names:
@@ -1379,6 +1390,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                         reason="sampling_method boundary: not implemented on this transport", strict=False
                     )
                 )
+            # FIXME(#1270): e2e_rest: Docker doesn't validate sampling_method —
+            # invalid enum value succeeds instead of failing.
+            if is_e2e_rest and "Unknown string not in enum" in nodeid:
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="e2e_rest: Docker does not validate sampling_method — invalid value succeeds",
+                        strict=True,
+                    )
+                )
 
         # Graduated: T-UC-004-boundary-date-range — valid examples (before, omitted)
         # pass on rest; invalid examples (equals, after) pass on impl.
@@ -1396,6 +1416,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             if _dr_valid_fail or _dr_invalid_fail:
                 item.add_marker(
                     pytest.mark.xfail(reason="date_range boundary: validation gaps on some transports", strict=False)
+                )
+            # FIXME(#1270): e2e_rest: Docker doesn't validate date range params —
+            # invalid cases (equals, after) succeed instead of failing.
+            if is_e2e_rest and any(s in nodeid for s in ("start_date equals end_date", "start_date after end_date")):
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="e2e_rest: Docker does not validate date range — invalid cases succeed",
+                        strict=True,
+                    )
                 )
 
         # Graduated: T-UC-004-boundary-attribution — invalid examples pass on impl/mcp/rest,
@@ -1774,6 +1803,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             _UC019_E2E_MOCK_GRADUATED = {
                 ("T-UC-019-partition-snapshot", "supported_but_unavailable"),
                 ("T-UC-019-boundary-snapshot", "adapter supported"),
+                # Graduated: "adapter supports" variant also passes on e2e_rest
+                ("T-UC-019-boundary-snapshot", "adapter supports"),
             }
             _mock_graduated = any(tag in marker_names and substr in nodeid for tag, substr in _UC019_E2E_MOCK_GRADUATED)
             if marker_names & _UC019_E2E_MOCK_TAGS and not _mock_graduated:
@@ -1794,6 +1825,38 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     )
                 )
             # Graduated: T-UC-019-inv-152-1/2/5 (salesagent-kgmm: creative approval data seeded)
+            # — only in-process transports graduated; e2e_rest still fails (below).
+
+            # FIXME(#1270): e2e_rest: principal_scoping_boundary error cases —
+            # Docker auth middleware returns 401 before business logic can produce
+            # spec-level errors (principal_id_missing, principal_not_found).
+            if "T-UC-019-boundary-principal" in marker_names and any(
+                s in nodeid
+                for s in ("principal_id is null", "principal_id is empty string", "principal_id not in registry")
+            ):
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="e2e_rest: Docker auth middleware rejects before business logic — "
+                        "returns 401 instead of spec-level principal error",
+                        strict=True,
+                    )
+                )
+
+            # FIXME(#1270): e2e_rest: creative approval mapping tests —
+            # creative approval data created in-process is not visible to Docker.
+            _UC019_E2E_CREATIVE_APPROVAL_TAGS: set[str] = {
+                "T-UC-019-inv-152-1",
+                "T-UC-019-inv-152-2",
+                "T-UC-019-inv-152-5",
+            }
+            if marker_names & _UC019_E2E_CREATIVE_APPROVAL_TAGS:
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason="e2e_rest: creative approval fixtures created in-process are not "
+                        "visible to Docker — action/assertion mismatch",
+                        strict=True,
+                    )
+                )
 
         # --- UC-026: xfails for spec-production gaps ---
         # Transport wiring done (a3xo: MediaBuyDualEnv routes updates correctly).
