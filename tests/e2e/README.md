@@ -184,18 +184,18 @@ pytest tests/e2e/test_schema_validation_standalone.py -v
 ```
 
 ### Cached Schemas
-- **Location**: `tests/e2e/schemas/v1/` (37 schemas, ~160KB)
+- **Location**: `schemas/<version>/` at the repo root (gitignored runtime cache)
 - **Purpose**: Offline validation, CI reliability, version pinning
-- **Update**: Manual updates when AdCP specification changes
+- **Update**: Run `make schemas-refresh` to populate from upstream
 
 ### Multi-Version Support
 ```python
-# Use specific schema version
-async with AdCPSchemaValidator(adcp_version="v1") as validator:
+# Use the floating upstream alias (default)
+async with AdCPSchemaValidator(adcp_version="latest") as validator:
     await validator.validate_response("get-products", data)
 
-# Future: Support multiple versions for different partners
-async with AdCPSchemaValidator(adcp_version="v2") as validator:
+# Or pin to a specific upstream-published semver
+async with AdCPSchemaValidator(adcp_version="3.0.0-rc.2") as validator:
     await validator.validate_response("get-products", data)
 ```
 

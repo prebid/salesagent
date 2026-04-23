@@ -82,7 +82,7 @@ class TestA2AResponseAttributeAccess:
 
     def test_list_authorized_properties_response_attribute_access(self):
         """Verify ListAuthorizedPropertiesResponse has expected flat structure per AdCP spec."""
-        # Per /schemas/v1/media-buy/list-authorized-properties-response.json
+        # Per /schemas/latest/media-buy/list-authorized-properties-response.json
         response = ListAuthorizedPropertiesResponse(
             publisher_domains=["example.com"],
             primary_channels=["display"],
