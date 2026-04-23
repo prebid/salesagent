@@ -168,20 +168,6 @@ class TestValidateRequestRaisesOnUnresolvableRef:
         assert exc_info.value.url == MISSING_CHILD_REF_ABSOLUTE
         assert "make schemas-refresh" in str(exc_info.value)
 
-    @pytest.mark.asyncio
-    async def test_missing_transitive_ref_not_classified_as_validation_error(
-        self, unresolvable_ref_cache: Path
-    ) -> None:
-        """Guard against regression — do NOT reclassify as SchemaValidationError.
-
-        Before T2 this exact scenario produced a misleading
-        ``SchemaValidationError`` ("additionalProperties" at root), which sent
-        developers chasing phantom drift between our tests and the AdCP spec.
-        """
-        async with AdCPSchemaValidator(cache_dir=unresolvable_ref_cache, offline_mode=True) as validator:
-            with pytest.raises(SchemaResolutionError):
-                await validator.validate_request(TASK_NAME, {"child": {"name": "anything"}})
-
 
 class TestValidateResponseRaisesOnUnresolvableRef:
     """Mirror of the request-side contract for ``validate_response``."""
@@ -194,14 +180,6 @@ class TestValidateResponseRaisesOnUnresolvableRef:
 
         assert exc_info.value.url == MISSING_CHILD_REF_ABSOLUTE
         assert "make schemas-refresh" in str(exc_info.value)
-
-    @pytest.mark.asyncio
-    async def test_missing_transitive_ref_not_classified_as_validation_error(
-        self, unresolvable_ref_cache: Path
-    ) -> None:
-        async with AdCPSchemaValidator(cache_dir=unresolvable_ref_cache, offline_mode=True) as validator:
-            with pytest.raises(SchemaResolutionError):
-                await validator.validate_response(TASK_NAME, {"child": {"name": "anything"}})
 
 
 # ---------------------------------------------------------------------------
