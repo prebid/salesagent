@@ -1802,9 +1802,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             _UC019_E2E_MOCK_GRADUATED = {
                 ("T-UC-019-partition-snapshot", "supported_but_unavailable"),
-                ("T-UC-019-boundary-snapshot", "adapter supported"),
-                # Graduated: "adapter supports" variant also passes on e2e_rest
-                ("T-UC-019-boundary-snapshot", "adapter supports"),
+                # Only "snapshot null" passes on e2e_rest: Docker's mock adapter
+                # has no test media buy data, so get_packages_snapshot returns None,
+                # and production maps that to SNAPSHOT_TEMPORARILY_UNAVAILABLE —
+                # matching the expected outcome. Other variants FAIL because:
+                # - "snapshot returned"/"all packages" expect real snapshot data
+                # - "does not support" expects UNSUPPORTED but mock says supported=True
+                ("T-UC-019-boundary-snapshot", "snapshot null"),
             }
             _mock_graduated = any(tag in marker_names and substr in nodeid for tag, substr in _UC019_E2E_MOCK_GRADUATED)
             if marker_names & _UC019_E2E_MOCK_TAGS and not _mock_graduated:

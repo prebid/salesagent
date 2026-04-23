@@ -156,6 +156,34 @@ def _snapshot_account_count(ctx: dict) -> None:
         ctx["_pre_error_account_count"] = 0
 
 
+def _dispatch_list_accounts(ctx: dict, **kwargs: Any) -> None:
+    """Dispatch list_accounts through the active transport.
+
+    Cross-cutting scenarios (context-echo, sandbox) run under AccountSyncEnv
+    but need list_accounts dispatch. When a transport is set, delegates to
+    env.call_list_via() so that e2e_rest sends real HTTP to the correct
+    endpoint (``/api/v1/accounts``) instead of silently calling _impl in-process.
+    """
+    from tests.harness.account_sync import AccountSyncEnv
+
+    env = ctx["env"]
+    transport = ctx.get("transport")
+
+    if isinstance(env, AccountSyncEnv) and transport is not None:
+        result = env.call_list_via(transport, **kwargs)
+        if result.is_error:
+            ctx["error"] = result.error
+        else:
+            ctx["response"] = result.payload
+    elif isinstance(env, AccountSyncEnv):
+        try:
+            ctx["response"] = env.call_list_impl(**kwargs)
+        except Exception as exc:
+            ctx["error"] = exc
+    else:
+        dispatch_request(ctx, **kwargs)
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — authentication and account setup
 # ═══════════════════════════════════════════════════════════════════════
@@ -582,8 +610,8 @@ def when_list_accounts_unfiltered(ctx: dict) -> None:
     """Send list_accounts request with no filters (matches multiple phrasings).
 
     For cross-cutting scenarios (context-echo) that run under AccountSyncEnv,
-    dispatches through env.call_list_impl() since the sync env's call_impl()
-    targets sync_accounts, not list_accounts.
+    dispatches through _dispatch_list_accounts() which routes through the
+    active transport (including e2e_rest).
     """
     # Handle forced DB error (transient failure scenario)
     if ctx.get("force_db_error"):
@@ -594,16 +622,7 @@ def when_list_accounts_unfiltered(ctx: dict) -> None:
         ctx["error"] = err
         return
 
-    from tests.harness.account_sync import AccountSyncEnv
-
-    env = ctx["env"]
-    if isinstance(env, AccountSyncEnv):
-        try:
-            ctx["response"] = env.call_list_impl()
-        except Exception as exc:
-            ctx["error"] = exc
-    else:
-        dispatch_request(ctx)
+    _dispatch_list_accounts(ctx)
 
 
 @when(parsers.parse('the Buyer Agent sends a list_accounts request with status filter "{status}"'))
@@ -623,20 +642,11 @@ def when_named_agent_list(ctx: dict, agent: str) -> None:
     """Send list_accounts under a named agent's identity.
 
     For cross-cutting scenarios that run under AccountSyncEnv,
-    dispatches through env.call_list_impl() since the sync env's call_impl()
-    targets sync_accounts, not list_accounts.
+    dispatches through _dispatch_list_accounts() which routes through the
+    active transport (including e2e_rest).
     """
-    from tests.harness.account_sync import AccountSyncEnv
-
     identity = _make_identity_for_agent(ctx, agent)
-    env = ctx["env"]
-    if isinstance(env, AccountSyncEnv):
-        try:
-            ctx["response"] = env.call_list_impl(identity=identity)
-        except Exception as exc:
-            ctx["error"] = exc
-    else:
-        dispatch_request(ctx, identity=identity)
+    _dispatch_list_accounts(ctx, identity=identity)
 
 
 @when("the Buyer Agent sends a list_accounts request with no principal_id")
@@ -648,7 +658,21 @@ def when_list_no_principal(ctx: dict) -> None:
 
 @when("the Buyer Agent sends a list_accounts request without an authentication token")
 def when_list_accounts_no_auth(ctx: dict) -> None:
-    """Send list_accounts without authentication."""
+    """Send list_accounts without authentication.
+
+    Handles expired-token scenario: Given step sets auth_failure_reason to
+    'token_expired', meaning a token IS present but has expired. Simulate
+    what resolve_identity() does for expired tokens: raise
+    AdCPAuthenticationError (AUTH_TOKEN_INVALID) before _impl is reached.
+    Consistent with the sync_accounts When step handling.
+    """
+    if ctx.get("auth_failure_reason") == "token_expired":
+        from src.core.exceptions import AdCPAuthenticationError
+
+        ctx["error"] = AdCPAuthenticationError(
+            "Authentication token is expired. Please re-authenticate to obtain a fresh token.",
+        )
+        return
     dispatch_request(ctx, identity=None)
 
 
@@ -702,22 +726,14 @@ def when_list_accounts_with_explicit_cursor(ctx: dict, cursor: str) -> None:
 def when_list_sandbox_filter(ctx: dict, value: str) -> None:
     """Send list_accounts with sandbox filter.
 
-    May run under AccountSyncEnv (sandbox tag). For cross-cutting scenarios
-    that need list dispatch on a sync env, dispatches through
-    env.call_list_impl() instead of the sync env's default call_impl().
+    May run under AccountSyncEnv (sandbox tag). Dispatches through
+    _dispatch_list_accounts() which routes through the active transport
+    (including e2e_rest).
     """
     from src.core.schemas.account import ListAccountsRequest
-    from tests.harness.account_sync import AccountSyncEnv
 
-    env = ctx["env"]
     req = ListAccountsRequest(sandbox=value.lower() == "true")
-    if isinstance(env, AccountSyncEnv):
-        try:
-            ctx["response"] = env.call_list_impl(req=req)
-        except Exception as exc:
-            ctx["error"] = exc
-    else:
-        dispatch_request(ctx, req=req)
+    _dispatch_list_accounts(ctx, req=req)
 
 
 # ═══════════════════════════════════════════════════════════════════════

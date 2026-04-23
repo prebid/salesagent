@@ -105,3 +105,40 @@ class AccountSyncEnv(IntegrationEnv):
         self._commit_factory_data()
         kwargs.setdefault("identity", self.identity)
         return _list_accounts_impl(**kwargs)
+
+    def call_list_via(self, transport: Any, **kwargs: Any) -> Any:
+        """Dispatch list_accounts through any transport.
+
+        Cross-cutting scenarios (context-echo, sandbox) run under
+        AccountSyncEnv but need list_accounts dispatch. For transports
+        that use REST_ENDPOINT (REST, E2E_REST), temporarily swap the
+        endpoint and parser so the standard dispatcher hits
+        ``/api/v1/accounts`` instead of ``/api/v1/accounts/sync``.
+        For IMPL, delegates to call_list_impl directly.
+        """
+        from src.core.schemas.account import ListAccountsResponse
+        from tests.harness.dispatchers import DISPATCHERS
+        from tests.harness.transport import Transport, TransportResult
+
+        kwargs.setdefault("identity", self.identity_for(transport))
+        self._commit_factory_data()
+
+        if transport == Transport.IMPL:
+            try:
+                payload = self.call_list_impl(**kwargs)
+            except Exception as exc:
+                return TransportResult(error=exc)
+            return TransportResult(payload=payload, envelope={"transport": "impl"})
+
+        # For REST-based transports, swap endpoint and parser to target
+        # list_accounts instead of sync_accounts.
+        saved_endpoint = self.REST_ENDPOINT
+        saved_parser = self.parse_rest_response
+        try:
+            self.REST_ENDPOINT = "/api/v1/accounts"
+            self.parse_rest_response = lambda data: ListAccountsResponse(**data)  # type: ignore[assignment]
+            dispatcher = DISPATCHERS[transport]
+            return dispatcher.dispatch(self, **kwargs)
+        finally:
+            self.REST_ENDPOINT = saved_endpoint
+            self.parse_rest_response = saved_parser  # type: ignore[assignment]
