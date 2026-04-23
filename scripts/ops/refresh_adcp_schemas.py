@@ -43,11 +43,10 @@ logger = logging.getLogger("refresh_adcp_schemas")
 async def _refresh(version: str) -> None:
     """Download the transitive closure of AdCP schemas into schemas/{version}/.
 
-    Walks index.json + every referenced body ourselves rather than relying on
-    the deprecated preload_schemas() helper (which hardcoded 4 buckets out of
-    16). Raises SystemExit if the BFS fetches zero schemas — that always
-    indicates a prefix mismatch between the fetched index and the validator's
-    BASE_SCHEMA_URL, never a legitimate state.
+    Walks index.json + every referenced body so coverage follows upstream
+    automatically. Raises SystemExit if the BFS fetches zero schemas — that
+    always indicates a prefix mismatch between the fetched index and the
+    validator's BASE_SCHEMA_URL, never a legitimate state.
     """
     logger.info("Refreshing schemas into schemas/%s/", version)
     local_prefix = f"/schemas/{version}/"
