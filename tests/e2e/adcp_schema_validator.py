@@ -29,6 +29,7 @@ from urllib.parse import urljoin
 import httpx
 import pytest
 import referencing
+import referencing.exceptions
 from jsonschema.validators import Draft7Validator
 from referencing.jsonschema import DRAFT7
 
@@ -168,8 +169,23 @@ class AdCPSchemaValidator:
         Args:
             cache_dir: Directory to cache schemas. Defaults to schemas/{version}
             offline_mode: If True, only use cached schemas (no downloads)
-            adcp_version: AdCP schema version to use (e.g., "latest", a pinned semver)
+            adcp_version: AdCP schema version to use. Only "latest" is currently
+                accepted — `BASE_SCHEMA_URL` / `INDEX_URL` are hardcoded to
+                `/schemas/latest/`, so any other value would silently change
+                the cache directory without changing what we download. True
+                per-version pinning requires parameterizing those constants
+                (tracked as a follow-up).
+
+        Raises:
+            ValueError: If ``adcp_version`` is not ``"latest"``.
         """
+        if adcp_version != "latest":
+            raise ValueError(
+                f"adcp_version={adcp_version!r} is not supported. BASE_SCHEMA_URL is "
+                f"hardcoded to /schemas/latest/; version pinning requires parameterizing "
+                f"it (tracked as follow-up)."
+            )
+
         self.offline_mode = offline_mode
         self.adcp_version = adcp_version
 
@@ -436,39 +452,78 @@ class AdCPSchemaValidator:
         return self._schema_registry[schema_ref]
 
     def _get_compiled_validator(self, schema: dict[str, Any]) -> Draft7Validator:
-        """Get a compiled validator for a schema, with caching."""
+        """Get a compiled validator for a schema, with caching.
+
+        The Registry is pre-seeded with every preloaded schema so the hot
+        validation path never invokes the retrieve callback — this both
+        avoids per-validation filesystem reads and ensures missing-ref
+        failures surface as ``SchemaResolutionError`` (translated at the
+        ``_validate_against_schema`` boundary) rather than being wrapped
+        by the ``referencing`` library and misclassified as validation
+        failures. See ``.claude/notes/typed-boundaries-principle.md``.
+        """
         # Create a hash of the schema for caching
         schema_hash = hashlib.md5(json.dumps(schema, sort_keys=True).encode()).hexdigest()
 
         if schema_hash not in self._compiled_validators:
+            registry = referencing.Registry(retrieve=self._retrieve_for_registry)
 
-            def _retrieve(uri: str) -> referencing.Resource:
-                """Retrieve a schema by URI for the referencing registry."""
-                if "adcontextprotocol.org" in uri:
-                    resolved = self._resolve_http_schema_ref(uri)
-                elif uri.startswith(("http://", "https://")):
-                    resolved = self._resolve_http_schema_ref(uri)
-                else:
-                    resolved = self._resolve_adcp_schema_ref(uri)
-                return DRAFT7.create_resource(resolved)
+            # Seed every preloaded schema by both its ref URI and its $id
+            # (when they differ). Belt-and-suspenders: callers look up by
+            # whichever string ``$ref`` gave them, and upstream schemas
+            # sometimes use absolute $ids that diverge from our cache keys.
+            pairs: list[tuple[str, referencing.Resource]] = []
+            for ref, body in self._schema_registry.items():
+                resource = DRAFT7.create_resource(body)
+                pairs.append((ref, resource))
+                schema_id = body.get("$id") if isinstance(body, dict) else None
+                if schema_id and schema_id != ref:
+                    pairs.append((schema_id, resource))
+            if pairs:
+                registry = registry.with_resources(pairs)
 
-            registry = referencing.Registry(retrieve=_retrieve)
-            # Seed the registry with the root schema
-            root_resource = DRAFT7.create_resource(schema)
+            # Also seed the root schema under its $id (if present and not
+            # already covered by the preloaded registry).
             root_id = schema.get("$id", "")
-            if root_id:
-                registry = registry.with_resource(root_id, root_resource)
+            if root_id and root_id not in self._schema_registry:
+                registry = registry.with_resource(root_id, DRAFT7.create_resource(schema))
 
             self._compiled_validators[schema_hash] = Draft7Validator(schema, registry=registry)
 
         return self._compiled_validators[schema_hash]
 
+    def _retrieve_for_registry(self, uri: str) -> referencing.Resource:
+        """Defensive retrieve callback for ``referencing.Registry``.
+
+        The hot path never hits this — ``_get_compiled_validator`` pre-seeds
+        the Registry with every preloaded schema. This callback only fires
+        on the cold path (caller skipped ``_preload_schema_references``, or
+        the ref wasn't in the transitive closure).
+
+        On a miss we raise ``referencing.exceptions.NoSuchResource`` — the
+        library's own sentinel — so the library propagates it as
+        ``Unresolvable(ref=uri)`` with ``.ref`` populated. We translate to
+        ``SchemaResolutionError`` at the validation boundary per the
+        typed-boundaries principle.
+        """
+        try:
+            if "adcontextprotocol.org" in uri:
+                resolved = self._resolve_http_schema_ref(uri)
+            elif uri.startswith(("http://", "https://")):
+                resolved = self._resolve_http_schema_ref(uri)
+            else:
+                resolved = self._resolve_adcp_schema_ref(uri)
+        except SchemaResolutionError as e:
+            raise referencing.exceptions.NoSuchResource(ref=uri) from e
+        return DRAFT7.create_resource(resolved)
+
     def _resolve_adcp_schema_ref(self, url: str) -> dict[str, Any]:
         """Resolve an AdCP schema reference synchronously from the local cache.
 
-        Called via referencing.Registry(retrieve=...) during validation, which
-        requires sync resolution. Unresolvable refs raise SchemaResolutionError —
-        callers must ensure the schema cache is current (`make schemas-refresh`).
+        Called from the ``_retrieve_for_registry`` callback, which the
+        referencing library requires to be synchronous. Unresolvable refs
+        raise ``SchemaResolutionError`` — callers must ensure the schema
+        cache is current (``make schemas-refresh``).
         """
         cache_path = self._get_cache_path(url)
         if cache_path.exists():
@@ -607,45 +662,22 @@ class AdCPSchemaValidator:
 
         return adcp_payload
 
-    async def _preload_schema_references(self, schema_ref: str, _visited: set[str] | None = None) -> None:
+    async def _preload_schema_references(self, schema_ref: str) -> None:
+        """Preload the transitive closure of schemas referenced by ``schema_ref``.
+
+        Delegates to the shared ``walk_transitive_refs`` BFS so this validator,
+        the cache-completeness guard, and the refresh CLI all agree on what
+        "transitive closure" means. Intra-document fragment refs
+        (``#/$defs/...``) and non-JSON refs are filtered out by the
+        ``local_prefix + ".json"`` gate — those resolve natively inside
+        ``referencing.Registry`` against the parent schema and don't need
+        pre-fetching.
+
+        Populates ``self._schema_registry`` as a side effect of
+        ``get_schema`` being used as the fetch callback.
         """
-        Recursively preload all schemas referenced by the given schema.
-
-        Args:
-            schema_ref: The schema reference to preload
-            _visited: Set of already-visited refs to avoid infinite recursion (internal use)
-        """
-        if _visited is None:
-            _visited = set()
-
-        # Avoid infinite recursion
-        if schema_ref in _visited:
-            return
-        _visited.add(schema_ref)
-
-        schema = await self.get_schema(schema_ref)
-        refs_to_load = self._find_schema_references(schema)
-
-        for ref in refs_to_load:
-            await self.get_schema(ref)
-            await self._preload_schema_references(ref, _visited)
-
-    def _find_schema_references(self, schema: dict[str, Any]) -> list[str]:
-        """Find all $ref references in a schema recursively."""
-        refs = []
-
-        def find_refs_recursive(obj):
-            if isinstance(obj, dict):
-                if "$ref" in obj:
-                    refs.append(obj["$ref"])
-                for value in obj.values():
-                    find_refs_recursive(value)
-            elif isinstance(obj, list):
-                for item in obj:
-                    find_refs_recursive(item)
-
-        find_refs_recursive(schema)
-        return refs
+        local_prefix = f"/schemas/{self.adcp_version}/"
+        await walk_transitive_refs({schema_ref}, self.get_schema, local_prefix)
 
     async def _validate_against_schema(self, schema_ref: str, data: dict[str, Any], context: str = "") -> None:
         """
@@ -657,45 +689,46 @@ class AdCPSchemaValidator:
             context: Context string for error messages
 
         Raises:
-            SchemaValidationError: If validation fails
+            SchemaDownloadError: If a schema could not be downloaded.
+            SchemaResolutionError: If a ``$ref`` could not be resolved from
+                the local cache (``Unresolvable`` from the referencing library
+                is translated here).
+            SchemaValidationError: If the data does not conform to the schema.
         """
+        schema = await self.get_schema(schema_ref)
+        validator = self._get_compiled_validator(schema)
+
         try:
-            schema = await self.get_schema(schema_ref)
-            validator = self._get_compiled_validator(schema)
-
             errors = list(validator.iter_errors(data))
-            if errors:
-                error_messages = []
-                for error in errors:
-                    # Build JSON path
-                    path = ".".join(str(p) for p in error.absolute_path)
-                    if not path:
-                        path = "root"
+        except referencing.exceptions.Unresolvable as e:
+            # Translate at our boundary: ``referencing`` wraps callback
+            # exceptions as ``Unresolvable`` (``_WrappedReferencingError`` is a
+            # subclass), with ``.ref`` populated. Surface this as the typed
+            # ``SchemaResolutionError`` with the actionable remediation hint
+            # rather than letting callers see an opaque library exception.
+            raise SchemaResolutionError(
+                e.ref,
+                f"Schema {e.ref} is not in the local cache; run `make schemas-refresh`.",
+            ) from e
 
-                    # Include more detailed error information
-                    error_msg = f"At {path}: {error.message}"
-                    if hasattr(error, "schema_path") and error.schema_path:
-                        schema_path = ".".join(str(p) for p in error.schema_path)
-                        error_msg += f" (schema path: {schema_path})"
+        if errors:
+            error_messages = []
+            path = ""
+            for error in errors:
+                # Build JSON path
+                path = ".".join(str(p) for p in error.absolute_path)
+                if not path:
+                    path = "root"
 
-                    error_messages.append(error_msg)
+                # Include more detailed error information
+                error_msg = f"At {path}: {error.message}"
+                if hasattr(error, "schema_path") and error.schema_path:
+                    schema_path = ".".join(str(p) for p in error.schema_path)
+                    error_msg += f" (schema path: {schema_path})"
 
-                raise SchemaValidationError(
-                    f"Schema validation failed for {context}", error_messages, json_path=path if errors else ""
-                )
+                error_messages.append(error_msg)
 
-        except SchemaDownloadError:
-            # Re-raise schema download errors
-            raise
-        except SchemaResolutionError:
-            # Strict-mode resolver failures must surface unwrapped — they signal
-            # a missing cache entry, not a validation failure of the input data.
-            raise
-        except SchemaValidationError:
-            # Re-raise schema validation errors without wrapping them
-            raise
-        except Exception as e:
-            raise SchemaValidationError(f"Unexpected error validating {context}: {e}", [str(e)])
+            raise SchemaValidationError(f"Schema validation failed for {context}", error_messages, json_path=path)
 
 
 # Decorator functions for easy integration with tests
