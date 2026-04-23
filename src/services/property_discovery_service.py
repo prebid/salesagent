@@ -29,6 +29,33 @@ from src.core.database.models import AuthorizedProperty, PropertyTag
 logger = logging.getLogger(__name__)
 
 
+_SUBDOMAIN_PREFIXES = ("www.", "m.", "mobile.")
+
+
+def _normalize_domain(domain: str) -> str:
+    """Strip common subdomain prefixes and lowercase for comparison.
+
+    Handles variants like ``www.example.com``, ``m.example.com``, and
+    ``mobile.example.com`` so they all compare equal to ``example.com``.
+    """
+    domain = domain.strip().lower()
+    for prefix in _SUBDOMAIN_PREFIXES:
+        if domain.startswith(prefix):
+            domain = domain[len(prefix) :]
+            break  # Only strip one prefix layer
+    return domain
+
+
+def _domains_match(publisher_domain: str, domain_identifiers: list[str]) -> bool:
+    """Check whether *publisher_domain* matches any value in *domain_identifiers*.
+
+    Comparison is done on normalized domains so that ``www.example.com``
+    matches ``example.com`` and vice-versa.
+    """
+    normalized_publisher = _normalize_domain(publisher_domain)
+    return any(_normalize_domain(d) == normalized_publisher for d in domain_identifiers)
+
+
 def _make_stats(dry_run: bool) -> dict[str, Any]:
     """Create an empty stats dict for sync operations."""
     return {
@@ -117,7 +144,8 @@ def _filter_properties_by_domain(
     """Filter properties to only those belonging to the given publisher domain.
 
     An adagents.json may list properties for many domains. Properties without
-    a domain identifier (e.g., mobile apps) are kept.
+    a domain identifier (e.g., mobile apps) are kept. Domain comparison is
+    normalized (www/m/mobile subdomain prefixes are stripped).
     """
     if not properties:
         return properties
@@ -128,7 +156,7 @@ def _filter_properties_by_domain(
         domain_identifiers = [ident.get("value", "") for ident in identifiers if ident.get("type") == "domain"]
         if not domain_identifiers:
             filtered.append(prop)
-        elif domain in domain_identifiers:
+        elif _domains_match(domain, domain_identifiers):
             filtered.append(prop)
         else:
             logger.debug(
