@@ -89,25 +89,50 @@ def then_no_video(ctx: dict) -> None:
 
 @then("the response should include creative_agents referrals")
 def then_has_referrals(ctx: dict) -> None:
-    """Assert response contains creative_agents with well-formed referral entries."""
+    """Assert response contains creative_agents matching the Given agents.
+
+    On mock transports: verifies the agent URLs from the Given step appear
+    in the response (production correctly passes through registry data).
+    On e2e_rest: verifies at least one agent is present from the real registry.
+    """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     referrals = getattr(resp, "creative_agents", None) or []
     assert len(referrals) > 0, "Expected creative agent referrals in response"
+
+    # Verify each referral is well-formed
+    actual_urls = set()
     for ref in referrals:
-        assert getattr(ref, "agent_url", None), f"Referral missing agent_url: {ref}"
-        # Referrals must include capabilities to be well-formed
+        url = getattr(ref, "agent_url", None)
+        assert url, f"Referral missing agent_url: {ref}"
+        actual_urls.add(str(url))
         capabilities = getattr(ref, "capabilities", None)
         assert capabilities is not None, f"Referral missing capabilities: {ref}"
+
+    # On mock transports, verify the Given agents' URLs appear in the response.
+    # On e2e_rest, the Given step is a no-op (Docker's real agent serves),
+    # so we can't predict the URL — structural checks above are sufficient.
+    given_agents = ctx.get("creative_agent_referrals", [])
+    if given_agents:
+        expected_urls = {str(a.agent_url) for a in given_agents}
+        missing = expected_urls - actual_urls
+        if missing:
+            # E2E won't match — Given URLs are test fixtures, Docker has its own
+            is_e2e = any("e2e" in str(u) or "creative-agent" in str(u) for u in actual_urls)
+            if not is_e2e:
+                assert not missing, (
+                    f"Given agent URLs not in response: {missing}. "
+                    f"Response has: {actual_urls}"
+                )
 
 
 @then("each referral should include the agent URL and supported capabilities")
 def then_referral_fields(ctx: dict) -> None:
-    """Assert each referral has a well-formed agent_url AND non-empty capabilities list.
+    """Assert each referral has a well-formed agent_url AND non-empty capabilities.
 
-    Strengthens then_has_referrals by verifying:
-    - agent_url looks like a URL (starts with http)
-    - capabilities is a non-empty list (not just truthy)
+    Verifies:
+    - agent_url is a valid URL (http/https)
+    - capabilities is a non-empty list with known capability values
     """
     resp = ctx.get("response")
     referrals = getattr(resp, "creative_agents", None) or []
@@ -119,7 +144,14 @@ def then_referral_fields(ctx: dict) -> None:
         assert url_str.startswith("http"), f"agent_url should be a URL (http/https), got: {url!r}"
         caps = getattr(ref, "capabilities", None)
         assert caps is not None, f"Missing capabilities in referral: {ref}"
-        assert isinstance(caps, list) and len(caps) > 0, f"capabilities should be a non-empty list, got: {caps!r}"
+        assert isinstance(caps, (list, tuple)) and len(caps) > 0, (
+            f"capabilities should be a non-empty list, got: {caps!r}"
+        )
+        # Verify capabilities are known enum values (not arbitrary strings)
+        cap_strs = {str(c.value) if hasattr(c, "value") else str(c) for c in caps}
+        known = {"validation", "assembly", "preview", "delivery"}
+        unknown = cap_strs - known
+        assert not unknown, f"Unknown capabilities: {unknown}. Expected subset of {known}"
 
 
 # ── Format field presence ────────────────────────────────────────────
