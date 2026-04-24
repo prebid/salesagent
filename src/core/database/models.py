@@ -174,9 +174,10 @@ class Tenant(Base, JSONValidatorMixin):
 
         try:
             return decrypt_api_key(self._gemini_api_key)
-        except ValueError:
-            logger.warning(f"Failed to decrypt Gemini API key for tenant {self.tenant_id}")
-            return None
+        except ValueError as exc:
+            from src.core.exceptions import AdCPConfigurationError
+
+            raise AdCPConfigurationError(f"Failed to decrypt Gemini API key for tenant {self.tenant_id}") from exc
 
     @gemini_api_key.setter
     def gemini_api_key(self, value: str | None) -> None:
@@ -638,7 +639,12 @@ class TenantAuthConfig(Base):
             return None
         from src.core.utils.encryption import decrypt_api_key
 
-        return decrypt_api_key(self.oidc_client_secret_encrypted)
+        try:
+            return decrypt_api_key(self.oidc_client_secret_encrypted)
+        except ValueError as exc:
+            from src.core.exceptions import AdCPConfigurationError
+
+            raise AdCPConfigurationError(f"Failed to decrypt OIDC client secret for tenant {self.tenant_id}") from exc
 
     @oidc_client_secret.setter
     def oidc_client_secret(self, value: str | None) -> None:
@@ -1187,9 +1193,12 @@ class AdapterConfig(Base):
 
         try:
             return decrypt_api_key(self._gam_service_account_json)
-        except ValueError:
-            logger.warning(f"Failed to decrypt GAM service account JSON for tenant {self.tenant_id}")
-            return None
+        except ValueError as exc:
+            from src.core.exceptions import AdCPConfigurationError
+
+            raise AdCPConfigurationError(
+                f"Failed to decrypt GAM service account JSON for tenant {self.tenant_id}"
+            ) from exc
 
     @gam_service_account_json.setter
     def gam_service_account_json(self, value: str | None) -> None:

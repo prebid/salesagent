@@ -125,7 +125,7 @@ def index(tenant_id):
                 )
         except Exception:
             # WorkflowStep table might not exist in fresh databases
-            pass
+            logger.debug("Could not load workflow steps (table may not exist)", exc_info=True)
 
     return render_template(
         "policy_settings_comprehensive.html",
