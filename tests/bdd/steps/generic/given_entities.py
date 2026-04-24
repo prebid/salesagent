@@ -119,16 +119,23 @@ def given_registry_two_types(ctx: dict, type_a: str, type_b: str) -> None:
 
 @given("the seller has additional creative agents beyond the default")
 def given_additional_creative_agents(ctx: dict) -> None:
-    """Seller has additional creative agent referrals."""
+    """Seller has additional creative agent referrals.
+
+    Puts agent data in ctx AND wires it into the harness env so
+    production's registry._get_tenant_agents() returns these agents.
+    E2E: no-op — Docker's real creative agent registers itself.
+    """
     from adcp.types import CreativeAgent as LibraryCreativeAgent
     from adcp.types.generated_poc.enums.creative_agent_capability import CreativeAgentCapability
 
-    ctx["creative_agent_referrals"] = [
+    agents = [
         LibraryCreativeAgent(
             agent_url="https://extra-creatives.example.com",
             capabilities=[CreativeAgentCapability.assembly, CreativeAgentCapability.delivery],
         ),
     ]
+    ctx["creative_agent_referrals"] = agents
+    ctx["env"].set_creative_agents(agents)
 
 
 @given("no creative agents have any registered formats")

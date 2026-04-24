@@ -93,6 +93,28 @@ class CreativeFormatsEnv(IntegrationEnv):
         mock_logger = MagicMock()
         self.mock["audit_logger"].return_value = mock_logger
 
+    def set_creative_agents(self, agents: list[Any]) -> None:
+        """Configure registry to return these agents from _get_tenant_agents.
+
+        In E2E mode: no-op — Docker's real creative agent registers itself.
+        In in-process mode: patches the mock registry's _get_tenant_agents.
+        """
+        if self.e2e_config:
+            # Docker has a real creative agent — it registers itself.
+            # Nothing to mock.
+            return
+
+        # Build agent objects that match what registry._get_tenant_agents returns
+        from unittest.mock import MagicMock
+
+        mock_agents = []
+        for agent in agents:
+            mock_agent = MagicMock()
+            mock_agent.agent_url = getattr(agent, "agent_url", str(agent))
+            mock_agent.name = getattr(agent, "agent_name", None) or getattr(agent, "name", "test-agent")
+            mock_agents.append(mock_agent)
+        self.mock["registry"].return_value._get_tenant_agents = MagicMock(return_value=mock_agents)
+
     def set_registry_formats(self, formats: list[Any]) -> None:
         """Configure registry to return these formats from list_all_formats.
 

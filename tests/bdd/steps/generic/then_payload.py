@@ -115,7 +115,8 @@ def then_referral_fields(ctx: dict) -> None:
     for ref in referrals:
         url = getattr(ref, "agent_url", None)
         assert url, f"Missing agent_url in referral: {ref}"
-        assert isinstance(url, str) and url.startswith("http"), f"agent_url should be a URL (http/https), got: {url!r}"
+        url_str = str(url)  # handles both str and Pydantic AnyUrl
+        assert url_str.startswith("http"), f"agent_url should be a URL (http/https), got: {url!r}"
         caps = getattr(ref, "capabilities", None)
         assert caps is not None, f"Missing capabilities in referral: {ref}"
         assert isinstance(caps, list) and len(caps) > 0, f"capabilities should be a non-empty list, got: {caps!r}"
