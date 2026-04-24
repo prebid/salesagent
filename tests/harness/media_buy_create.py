@@ -156,7 +156,7 @@ class MediaBuyCreateEnv(IntegrationEnv):
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         self._commit_factory_data()
-        identity = kwargs.pop("identity", None) or self.identity
+        identity = kwargs.pop("identity", self.identity)
 
         # Build request from kwargs if not provided directly
         req = kwargs.pop("req", None)
@@ -208,7 +208,7 @@ class MediaBuyCreateEnv(IntegrationEnv):
             flat.update(kwargs)
             kwargs = flat
 
-        identity = kwargs.pop("identity", None) or self.identity_for(Transport.MCP)
+        identity = kwargs.pop("identity", self.identity)_for(Transport.MCP)
         mock_ctx = MM(spec=Context)
         mock_ctx.get_state = AsyncMock(return_value=identity)
 

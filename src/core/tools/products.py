@@ -165,7 +165,7 @@ async def _get_products_impl(
 
     # Extract identity fields
     if identity is None:
-        raise AdCPValidationError("Identity is required")
+        raise AdCPAuthRequiredError("Identity is required", details={"suggestion": "Provide a valid authentication token"})
 
     testing_ctx: AdCPTestContext | None = identity.testing_context or AdCPTestContext()
     principal_id: str | None = identity.principal_id

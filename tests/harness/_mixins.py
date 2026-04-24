@@ -430,7 +430,7 @@ class ProductMixin:
 
         # Pop identity — injected by call_via for transport dispatch
         # but not a GetProductsRequest field.
-        identity = extra.pop("identity", None) or self.identity  # type: ignore[attr-defined]
+        identity = extra.pop("identity", self.identity)  # type: ignore[attr-defined]
 
         if brand is None:
             brand = {"domain": "test.com"}

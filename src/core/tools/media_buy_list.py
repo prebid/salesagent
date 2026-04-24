@@ -60,7 +60,7 @@ from adcp.types.generated_poc.enums.media_buy_status import MediaBuyStatus
 from src.core.auth import get_principal_object
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyUoW
-from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.exceptions import AdCPAuthRequiredError, AdCPAuthenticationError, AdCPValidationError
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.schemas import (
     ApprovalStatus,
@@ -92,7 +92,7 @@ def _get_media_buys_impl(
         GetMediaBuysResponse with matching media buys
     """
     if identity is None:
-        raise AdCPAuthenticationError("Identity is required")
+        raise AdCPAuthRequiredError("Identity is required", details={"suggestion": "Provide a valid authentication token"})
 
     if req.account is not None or req.account_id is not None:
         raise AdCPValidationError("account filtering is not yet supported", recovery="correctable")

@@ -138,7 +138,7 @@ def _update_media_buy_impl(
     affected_packages_list: list[AffectedPackage] = []
 
     if identity is None:
-        raise ValueError("Identity is required for update_media_buy")
+        raise AdCPAuthRequiredError("Identity is required", details={"suggestion": "Provide a valid authentication token"})
 
     # CRITICAL: Extract principal from identity
     principal_id = identity.principal_id

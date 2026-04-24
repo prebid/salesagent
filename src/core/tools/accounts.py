@@ -131,7 +131,7 @@ def _list_accounts_impl(
 
     # BR-RULE-055 INV-3: unauthenticated or incomplete identity → AUTH_REQUIRED
     if identity is None or identity.principal_id is None or identity.tenant_id is None:
-        raise AdCPAuthRequiredError("Authentication required for list_accounts")
+        raise AdCPAuthRequiredError("Authentication required for list_accounts", details={"suggestion": "Provide a valid authentication token"})
 
     tenant_id = identity.tenant_id
     principal_id = identity.principal_id
@@ -446,7 +446,7 @@ async def _sync_accounts_impl(
 
     # BR-RULE-055: sync requires auth — AUTH_REQUIRED for missing/incomplete identity
     if identity is None or identity.principal_id is None or identity.tenant_id is None:
-        raise AdCPAuthRequiredError("Authentication required: sync_accounts requires a valid auth token.")
+        raise AdCPAuthRequiredError("Authentication required: sync_accounts requires a valid auth token.", details={"suggestion": "Provide a valid authentication token"})
 
     # Validate non-empty accounts array
     if not req.accounts:

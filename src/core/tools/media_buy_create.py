@@ -36,6 +36,7 @@ from src.core.exceptions import (
     AdCPAdapterError,
     AdCPAuthenticationError,
     AdCPAuthorizationError,
+    AdCPAuthRequiredError,
     AdCPError,
     AdCPNotFoundError,
     AdCPValidationError,
@@ -1323,7 +1324,7 @@ async def _create_media_buy_impl(
 
     # Extract testing context first
     if identity is None:
-        raise AdCPValidationError("Identity is required")
+        raise AdCPAuthRequiredError("Identity is required", details={"suggestion": "Provide a valid authentication token"})
 
     testing_ctx = identity.testing_context if identity.testing_context else AdCPTestContext()
 

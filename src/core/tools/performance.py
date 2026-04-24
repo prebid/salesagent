@@ -57,7 +57,7 @@ def _update_performance_index_impl(
         raise AdCPValidationError(format_validation_error(e, context="update_performance_index request")) from e
 
     if identity is None:
-        raise ValueError("Identity is required for update_performance_index")
+        raise AdCPAuthRequiredError("Identity is required", details={"suggestion": "Provide a valid authentication token"})
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
     tenant = identity.tenant

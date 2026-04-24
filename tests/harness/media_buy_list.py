@@ -33,7 +33,7 @@ class MediaBuyListEnv(IntegrationEnv):
         from src.core.tools.media_buy_list import _get_media_buys_impl
 
         self._commit_factory_data()
-        identity = kwargs.pop("identity", None) or self.identity
+        identity = kwargs.pop("identity", self.identity)
         include_snapshot = kwargs.pop("include_snapshot", False)
 
         req = kwargs.pop("req", None)
