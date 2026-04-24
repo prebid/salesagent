@@ -1313,6 +1313,7 @@ class GAMInventory(Base):
         Index("idx_gam_inventory_tenant", "tenant_id"),
         Index("idx_gam_inventory_type", "inventory_type"),
         Index("idx_gam_inventory_status", "status"),
+        Index("idx_gam_inventory_tenant_type_status", "tenant_id", "inventory_type", "status"),
     )
 
 

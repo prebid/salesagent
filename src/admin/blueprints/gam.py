@@ -1037,7 +1037,7 @@ def test_gam_connection(tenant_id):
                     "account was added under GAM Admin → Access & authorization → "
                     "Users, which sends an email invitation that a service account "
                     "cannot accept. Authorize it under Admin → Global Settings → "
-                    "API access → \"Add a service account user\" instead, then "
+                    'API access → "Add a service account user" instead, then '
                     "verify the account appears under Access & authorization → "
                     "Users as an active user."
                 )

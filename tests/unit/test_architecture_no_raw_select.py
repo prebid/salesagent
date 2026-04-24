@@ -146,6 +146,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/inventory.py", "check_inventory_sync"),
     ("src/admin/blueprints/inventory.py", "get_inventory_list"),
     ("src/admin/blueprints/inventory.py", "get_inventory_sizes"),
+    ("src/admin/blueprints/inventory.py", "_batch_fetch_ancestors"),  # FIXME(salesagent-y6n3): extract to repository
     ("src/admin/blueprints/inventory.py", "get_inventory_tree"),
     ("src/admin/blueprints/inventory.py", "get_order_details"),
     ("src/admin/blueprints/inventory.py", "get_orders"),

@@ -441,10 +441,9 @@ const API_URLS = {
 };
 
 let selectedInventory = null;
-let inventoryTree = null;
+let adUnitTree = null;
 let selectedAdUnitsMap = new Map();  // id -> {id, name, path}
 let selectedPlacementsMap = new Map();  // id -> {id, name}
-const inventoryCache = new Map();  // Cache for shared tree partial
 
 // Show/hide Create Profile button based on active tab
 function updateCreateProfileButtonVisibility() {
@@ -743,22 +742,23 @@ function loadInventoryStatus() {
     const stats = document.getElementById('inventoryStats');
     if (!syncStatus || !stats) return;  // Non-GAM tenant, skip
 
-    // Load stats via the tree API
-    fetch(API_URLS.inventoryTree, {
-        credentials: 'same-origin'
-    })
-        .then(response => {
-            if (response.status === 401) {
-                const loginUrl = scriptRoot + '/login?redirect=' + encodeURIComponent(window.location.pathname);
-                window.location.href = loginUrl;
-                return Promise.reject(new Error('Session expired'));
+    adUnitTree = initInventoryTree({
+        apiUrl: API_URLS.inventoryTree,
+        containerId: 'adUnitTree',
+        showCheckboxes: true,
+        showSearch: false,
+        showStats: false,
+        onSelect: (nodeId, nodeData, checked) => {
+            const name = nodeData.name || '';
+            const path = (nodeData.path || [nodeData.name]).join(' > ');
+            if (checked) {
+                selectedAdUnitsMap.set(nodeId, { id: nodeId, name, path });
+            } else {
+                selectedAdUnitsMap.delete(nodeId);
             }
-            if (!response.ok) {
-                return Promise.reject(new Error(`HTTP ${response.status}: ${response.statusText}`));
-            }
-            return response.json();
-        })
-        .then(data => {
+            updateSelectionDisplay();
+        },
+        onStatsLoaded: (data) => {
             if (data.last_sync) {
                 const lastSync = new Date(data.last_sync);
                 const timeAgo = getTimeAgo(lastSync);
@@ -777,35 +777,21 @@ function loadInventoryStatus() {
                 <div><strong>Targeting Keys:</strong> ${data.custom_targeting_keys || 0}</div>
                 <div><strong>Audience Segments:</strong> ${data.audience_segments || 0}</div>
             `;
-
-            inventoryTree = data;
-        })
-        .catch(error => {
-            if (error.message !== 'Session expired') {
-                console.error('Error loading inventory status:', error);
-                if (syncStatus) {
-                    syncStatus.innerHTML = '<span class="text-danger">Error loading status</span>';
-                }
-            }
-        });
-
-    // Load tree via shared partial (fetches and renders independently)
-    loadInventoryTree('', API_URLS.inventoryTree, 'adUnitTree', '_inventorySelectedIds', inventoryCache, attachNodeClickHandlers);
-}
-
-function attachNodeClickHandlers() {
-    document.querySelectorAll('#adUnitTree .tree-node-label').forEach(label => {
-        label.addEventListener('click', function(e) {
-            if (e.target.closest('.tree-toggle')) return;
-            e.preventDefault();
-            e.stopPropagation();
-            const nodeHeader = this.closest('.tree-node-header');
-            const node = this.closest('.tree-node');
-            const unitId = node.dataset.unitId;
-            document.querySelectorAll('#adUnitTree .tree-node-header.selected').forEach(n => n.classList.remove('selected'));
-            nodeHeader.classList.add('selected');
-            selectNode(unitId);
-        });
+        },
+        onRender: (nodeEl, nodeData) => {
+            // Click-to-select for detail panel
+            const label = nodeEl.querySelector('.tree-node-label');
+            label.style.cursor = 'pointer';
+            label.addEventListener('click', (e) => {
+                if (e.target.closest('.tree-toggle')) return;
+                e.preventDefault();
+                e.stopPropagation();
+                document.querySelectorAll('#adUnitTree .tree-node-header.selected')
+                    .forEach(n => n.classList.remove('selected'));
+                nodeEl.querySelector('.tree-node-header').classList.add('selected');
+                showInventoryDetail(nodeData, 'ad_unit');
+            });
+        },
     });
 }
 
@@ -974,21 +960,10 @@ function performSelectiveSync() {
 }
 
 function selectNode(unitId) {
-    const unit = findUnitById(inventoryTree.root_units, unitId);
+    const unit = adUnitTree ? adUnitTree.getNodeData(unitId) : null;
     if (unit) {
         showInventoryDetail(unit, 'ad_unit');
     }
-}
-
-function findUnitById(units, unitId) {
-    for (const unit of units) {
-        if (unit.id === unitId) return unit;
-        if (unit.children) {
-            const found = findUnitById(unit.children, unitId);
-            if (found) return found;
-        }
-    }
-    return null;
 }
 
 function showInventoryDetail(item, type) {
@@ -1098,31 +1073,32 @@ function displaySearchResults(results) {
     detailDiv.innerHTML = html;
 }
 
-// Override shared partial's handleTreeCheckboxChange to track selections
-handleTreeCheckboxChange = function(checkbox) {
-    const id = checkbox.value;
-    const name = checkbox.dataset.name || '';
-    const path = checkbox.dataset.path ? JSON.parse(checkbox.dataset.path).join(' > ') : '';
+function toggleSelectAll() {
+    if (!adUnitTree) return;
+    adUnitTree.expandAll();
 
-    if (checkbox.checked) {
-        selectedAdUnitsMap.set(id, { id, name, path });
+    const anyChecked = adUnitTree.getSelectedIds().size > 0;
+    if (anyChecked) {
+        // Deselect all
+        adUnitTree.setSelectedIds(new Set());
+        selectedAdUnitsMap.clear();
     } else {
-        selectedAdUnitsMap.delete(id);
+        // Select all visible nodes
+        const allIds = new Set();
+        document.querySelectorAll('#adUnitTree .tree-checkbox').forEach(cb => {
+            allIds.add(cb.value);
+            const data = adUnitTree.getNodeData(cb.value);
+            if (data) {
+                selectedAdUnitsMap.set(cb.value, {
+                    id: cb.value,
+                    name: data.name || '',
+                    path: (data.path || [data.name]).join(' > ')
+                });
+            }
+        });
+        adUnitTree.setSelectedIds(allIds);
     }
     updateSelectionDisplay();
-};
-
-function toggleSelectAll() {
-    const checkboxes = document.querySelectorAll('#adUnitTree .tree-checkbox');
-    const anyChecked = document.querySelectorAll('#adUnitTree .tree-checkbox:checked').length > 0;
-
-    // Expand all nodes first so all checkboxes are visible
-    expandAllTreeNodes();
-
-    checkboxes.forEach(cb => {
-        cb.checked = !anyChecked;
-        handleTreeCheckboxChange(cb);
-    });
 }
 
 function updateSelectionDisplay() {
