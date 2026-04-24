@@ -49,7 +49,7 @@ def get_available_currencies():
             if name:  # Skip if no English name available
                 currencies.append({"code": code, "name": name})
         except Exception:
-            # Skip currencies that can't be resolved
+            logger.debug("Could not resolve currency %s", code, exc_info=True)
             continue
 
     return currencies

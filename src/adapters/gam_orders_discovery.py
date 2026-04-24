@@ -541,12 +541,11 @@ class GAMOrdersDiscovery:
                         self.orders[order.order_id] = order
                         discovered_orders.append(order)
                     except Exception as e:
-                        order_id = "unknown"
-                        try:
-                            order_id = str(getattr(gam_order, "id", "unknown"))
-                        except Exception:
-                            pass
-                        logger.error(f"Error processing order {order_id}: {e}")
+                        order_id = str(getattr(gam_order, "id", "unknown"))
+                        logger.error(
+                            f"Error processing order {order_id}: {e}",
+                            exc_info=True,
+                        )
                         continue
 
                 statement_builder.offset += len(response["results"])
@@ -597,12 +596,11 @@ class GAMOrdersDiscovery:
                         self.line_items[line_item.line_item_id] = line_item
                         discovered_line_items.append(line_item)
                     except Exception as e:
-                        li_id = "unknown"
-                        try:
-                            li_id = str(getattr(gam_line_item, "id", "unknown"))
-                        except Exception:
-                            pass
-                        logger.error(f"Error processing line item {li_id}: {e}")
+                        li_id = str(getattr(gam_line_item, "id", "unknown"))
+                        logger.error(
+                            f"Error processing line item {li_id}: {e}",
+                            exc_info=True,
+                        )
                         continue
 
                 statement_builder.offset += len(response["results"])

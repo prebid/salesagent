@@ -59,6 +59,6 @@ class MCPAuthMiddleware(Middleware):
                 if ctx_id:
                     await context.fastmcp_context.set_state("context_id", ctx_id, serializable=False)
             except Exception:
-                pass
+                logger.debug("Could not set context_id state", exc_info=True)
 
         return await call_next(context)

@@ -1817,7 +1817,7 @@ function saveManualServiceAccount() {
         button.innerHTML = 'Save Service Account Configuration';
 
         if (data.success) {
-            alert('✅ Service account configuration saved!\n\nMake sure the service account email (' + jsonData.client_email + ') is added as a user in GAM with Trafficker role, then test the connection.');
+            alert('✅ Service account configuration saved!\n\nNext, authorize the service account email (' + jsonData.client_email + ') in GAM:\n\n1. In GAM, go to Admin → Global Settings\n2. Scroll to API access and ensure it is enabled\n3. Click "Add a service account user"\n4. Paste the email and assign the Trafficker role\n5. Click Save\n\nNote: service accounts must be added through Global Settings → API access, not the Users page (which sends an email invitation a service account cannot accept). You can verify the account appears under Admin → Access & authorization → Users once added.\n\nThen come back here and test the connection.');
             location.reload();
         } else {
             alert('❌ Failed to save configuration:\n\n' + (data.error || data.errors?.join('\n') || 'Unknown error'));
@@ -1851,7 +1851,7 @@ function testGAMServiceAccountConnection() {
         if (data.success) {
             alert('✅ Connection successful!\n\nNetwork: ' + (data.networks?.[0]?.displayName || 'N/A') + '\nNetwork Code: ' + (data.networks?.[0]?.networkCode || 'N/A'));
         } else {
-            alert('❌ Connection failed!\n\n' + (data.error || 'Unknown error') + '\n\nPlease make sure:\n1. You added the service account email to your GAM\n2. You assigned the Trafficker role\n3. You clicked Save in GAM\n4. You saved the correct network code');
+            alert('❌ Connection failed!\n\n' + (data.error || 'Unknown error') + '\n\nPlease make sure:\n1. You authorized the service account in GAM under Admin → Global Settings → API access → "Add a service account user" (NOT through the Users page — that path sends an email invitation and will not work for service accounts)\n2. The service account now appears under Admin → Access & authorization → Users as an active user (this is how you verify the authorization took effect)\n3. You assigned the Trafficker role\n4. You clicked Save in GAM\n5. The network code is correct');
         }
     })
     .catch(error => {

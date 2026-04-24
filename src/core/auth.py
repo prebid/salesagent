@@ -99,7 +99,7 @@ def get_principal_from_context(
     try:
         headers = get_http_headers(include_all=True)
     except Exception:
-        pass  # Will try fallback below
+        logger.debug("get_http_headers() unavailable, trying fallback", exc_info=True)
 
     # If get_http_headers() returned empty dict or None, try context.meta fallback
     # This is necessary for sync tools where get_http_headers() may not work
