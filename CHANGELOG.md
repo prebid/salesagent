@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.1](https://github.com/prebid/salesagent/compare/v1.7.0...v1.7.1) (2026-04-24)
+
+
+### Bug Fixes
+
+* apply selection_type inference to inventory profile publisher_properties ([#1174](https://github.com/prebid/salesagent/issues/1174)) ([a50ff50](https://github.com/prebid/salesagent/commit/a50ff500788a060a44e6a2274fb7070a51f887cc))
+* correct GAM service account authorization instructions ([#1218](https://github.com/prebid/salesagent/issues/1218)) ([c2ce35e](https://github.com/prebid/salesagent/commit/c2ce35ee21ec2b47d39a484d431a82d64eadad47))
+* error-handling cleanup — data loss bugs, silent catches, structural guard ([#1078](https://github.com/prebid/salesagent/issues/1078)) ([#1212](https://github.com/prebid/salesagent/issues/1212)) ([e5886aa](https://github.com/prebid/salesagent/commit/e5886aa7f75ebb2e407c3707b6936893c63b56a5))
+* GAM test-connection must not report success with no accessible network ([#1219](https://github.com/prebid/salesagent/issues/1219)) ([6bf9d6a](https://github.com/prebid/salesagent/commit/6bf9d6a4c844335fd72a62b322f2325f7f3fb11b))
+* implement empty BDD Given step bodies ([#1181](https://github.com/prebid/salesagent/issues/1181)) ([#1185](https://github.com/prebid/salesagent/issues/1185)) ([d0b472c](https://github.com/prebid/salesagent/commit/d0b472cb0dd89f1c6e59912aa14b380f5ac32963))
+* lazy-loading inventory tree to prevent OOM on large GAM networks ([#1176](https://github.com/prebid/salesagent/issues/1176)) ([5c0e2c0](https://github.com/prebid/salesagent/commit/5c0e2c04521d835e3638349385a4c057bee5a545))
+* normalize domains in property filtering to handle www/m subdomains ([#1207](https://github.com/prebid/salesagent/issues/1207)) ([76701c1](https://github.com/prebid/salesagent/commit/76701c181e3645064d8de775d9511ba93c560ae2))
+
+
+### Code Refactoring
+
+* extract shared helpers in property discovery service ([#1206](https://github.com/prebid/salesagent/issues/1206)) ([426fd97](https://github.com/prebid/salesagent/commit/426fd97e8634ffa9c5e4a6da011cebcd91d421eb))
+* move billing policy and approval mode to tenant configuration ([#1184](https://github.com/prebid/salesagent/issues/1184)) ([#1186](https://github.com/prebid/salesagent/issues/1186)) ([5ef141a](https://github.com/prebid/salesagent/commit/5ef141aaf37b0258a2d5768be93101c2e56b043d))
+
 ## [1.7.0](https://github.com/prebid/salesagent/compare/v1.6.0...v1.7.0) (2026-04-09)
 
 
