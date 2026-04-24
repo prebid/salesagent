@@ -19,6 +19,7 @@ from tests.factories.core import (
     PropertyTagFactory,
     PublisherPartnerFactory,
     TenantFactory,
+    UserFactory,
 )
 from tests.factories.creative import CreativeAssignmentFactory, CreativeFactory
 from tests.factories.creative_asset import CreativeAssetFactory
@@ -38,6 +39,7 @@ ALL_FACTORIES = [
     CurrencyLimitFactory,
     PropertyTagFactory,
     PublisherPartnerFactory,
+    UserFactory,
     PrincipalFactory,
     InventoryProfileFactory,
     ProductFactory,
@@ -72,4 +74,5 @@ __all__ = [
     "PublisherPartnerFactory",
     "PushNotificationConfigFactory",
     "TenantFactory",
+    "UserFactory",
 ]

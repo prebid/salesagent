@@ -1,6 +1,6 @@
 """Factory_boy factories for core tenant-related models.
 
-Factories: TenantFactory, CurrencyLimitFactory, PropertyTagFactory, PublisherPartnerFactory
+Factories: TenantFactory, CurrencyLimitFactory, PropertyTagFactory, PublisherPartnerFactory, UserFactory
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from typing import Any
 import factory
 from factory import LazyAttribute, RelatedFactory, Sequence, SubFactory
 
-from src.core.database.models import AdapterConfig, CurrencyLimit, PropertyTag, PublisherPartner, Tenant
+from src.core.database.models import AdapterConfig, CurrencyLimit, PropertyTag, PublisherPartner, Tenant, User
 
 
 class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
@@ -88,6 +88,21 @@ class AdapterConfigFactory(factory.alchemy.SQLAlchemyModelFactory):
     tenant = SubFactory(TenantFactory)
     tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
     adapter_type = "mock"
+
+
+class UserFactory(factory.alchemy.SQLAlchemyModelFactory):
+    class Meta:
+        model = User
+        sqlalchemy_session = None
+        sqlalchemy_session_persistence = "commit"
+
+    tenant = SubFactory(TenantFactory)
+    tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
+    user_id = Sequence(lambda n: f"user_{n:04d}")
+    email = Sequence(lambda n: f"user{n}@example.com")
+    name = LazyAttribute(lambda o: o.email.split("@")[0].title())
+    role = "admin"
+    is_active = True
 
 
 class PropertyTagFactory(factory.alchemy.SQLAlchemyModelFactory):
