@@ -20,7 +20,7 @@ Per D10 (Path C), CodeQL is **advisory** for 2 weeks then flips to gating. zizmo
 - Version anchor consolidation → PR 5
 - CSRF middleware (`Flask-WTF CSRFProtect`) → deferred to v2.0 phases (the v2.0 branch already adds `src/admin/csrf.py`)
 - Any change under `src/` (production code untouched)
-- `harden-runner` adoption (Fortune-50 pattern, but file as PR 6 follow-up per D-pending-4)
+- `harden-runner` adoption (Fortune-50 pattern, file as PR 6 follow-up per D25; v2.16.0+ pin floor)
 
 ## Internal commit sequence
 
@@ -221,9 +221,16 @@ Closes PD3. Per D12, bumps each hook to its latest tag and rewrites `rev:` to a 
 
 ```bash
 git checkout -b chore/sha-freeze-preview
-uv run pre-commit autoupdate --freeze
+# Pin individual hooks, NOT all. Hold psf/black at 25.1.0 — autoupdate would jump
+# to 26.3.0 (2026-style) and trigger a global reformat. The 26.x reformat is
+# deferred to ADR-008 (post-#1234 follow-up).
+uv run pre-commit autoupdate --freeze \
+  --repo https://github.com/pre-commit/pre-commit-hooks \
+  --repo https://github.com/astral-sh/ruff-pre-commit \
+  --repo https://github.com/pre-commit/mirrors-mypy
+# psf/black NOT in the --repo list — held at 25.1.0 per ADR-008 deferral.
 git diff .pre-commit-config.yaml > /tmp/sha-freeze.diff
-cat /tmp/sha-freeze.diff   # review the 4 hook bumps
+cat /tmp/sha-freeze.diff   # review the 3 hook bumps (black excluded)
 # If any bump breaks pre-commit run --all-files, hold individual hooks at previous version
 uv run pre-commit run --all-files
 # If clean, cherry-pick or replay onto PR 1 branch
@@ -231,7 +238,12 @@ uv run pre-commit run --all-files
 
 Verification:
 ```bash
-[[ $(grep -E '^\s+rev:' .pre-commit-config.yaml | grep -vcE 'rev: [a-f0-9]{40}\s+# frozen: v') == "0" ]]
+# SHA-freeze regex: relaxed to `# frozen: \S+` since black ships `25.1.0` (no `v` prefix)
+# while pre-commit-hooks ships `v6.0.0`. Strict regex `# frozen: v<tag>` would fail
+# on correctly-frozen black entries.
+[[ $(grep -E '^\s+rev:' .pre-commit-config.yaml | grep -vcE 'rev: [a-f0-9]{40}\s+# frozen: \S+') == "0" ]]
+# Black is held at 25.1.0 (ADR-008 deferral): verify it's still on the original tag-pin
+grep -qE '^\s+rev:\s+25\.1\.0\s*$' .pre-commit-config.yaml
 uv run pre-commit run --all-files
 ```
 
@@ -305,28 +317,16 @@ PERSIST_FALSE=$(grep -RnA5 'uses: actions/checkout@' .github/workflows/ | grep -
 test -s .github/.action-shas.txt
 ```
 
-### Commit 10 — `ci: gate Gemini key behind unconditional mock`
+### Commit 10 — MOVED to PR 3
 
-Files:
-- `.github/workflows/test.yml:342` (modify)
+The Gemini-fallback unconditional-mock fix (D15, PD24) has been **moved to PR 3** in the
+2026-04-25 P0 sweep. Rationale: PR 3 rewrites `test.yml` wholesale (the file is replaced by
+`ci.yml` + reusable composite); applying the Gemini fix on `test.yml` in PR 1 just to have
+PR 3 rewrite the same region is wasted work. The fix lands as a new commit in PR 3's commit
+sequence, applied directly to the new composite `_pytest/action.yml`.
 
-Closes PD24, per D15.
-
-Replace:
-```yaml
-GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || 'test_key_for_mocking' }}
-```
-
-With:
-```yaml
-GEMINI_API_KEY: test_key_for_mocking
-```
-
-Verification:
-```bash
-! grep -q 'secrets.GEMINI_API_KEY' .github/workflows/test.yml
-grep -q "GEMINI_API_KEY: test_key_for_mocking" .github/workflows/test.yml
-```
+PR 1 commit numbering remains 1-11 with this slot vacant; commit 11 (zizmor) is the next
+real commit.
 
 ### Commit 11 — `ci: zizmor pre-flight findings — fix or allowlist`
 
@@ -342,7 +342,7 @@ Per pre-flight P3 (`.zizmor-preflight.txt`), fix all medium+ findings except the
 
 ```yaml
 # zizmor configuration — workflow security audit
-# Sources: https://woodruffw.github.io/zizmor/configuration/
+# Sources: https://zizmorcore.github.io/zizmor/configuration/
 #
 # Dangerous-trigger findings are allowlisted on the two workflows that
 # legitimately need pull_request_target (PR-title enforcement, IPR-agreement
@@ -470,7 +470,7 @@ PR 1 is mostly additive (8 new files, 4 modified). Revert is atomic:
 
 ```bash
 git revert -m 1 <PR1-merge-sha>
-git push origin main   # USER ACTION; agent does not run this
+# admin: pushes via UI; agent does NOT run this command
 ```
 
 Plus admin actions if needed:
@@ -1063,7 +1063,7 @@ jobs:
       - uses: astral-sh/setup-uv@<SHA>  # v4
       - run: uvx zizmor --format sarif .github/workflows/ > zizmor.sarif
         continue-on-error: true   # SARIF still uploads even on findings
-      - uses: github/codeql-action/upload-sarif@<SHA>  # v3
+      - uses: github/codeql-action/upload-sarif@<SHA>  # v4 — pin v4 (v3 deprecates Dec 2026)
         with:
           sarif_file: zizmor.sarif
       - run: uvx zizmor --min-severity medium .github/workflows/  # this gates
@@ -1096,13 +1096,13 @@ jobs:
         language: [python]
     steps:
       - uses: actions/checkout@<SHA>  # v4
-      - uses: github/codeql-action/init@<SHA>  # v3
+      - uses: github/codeql-action/init@<SHA>  # v4 — pin v4 (v3 deprecates Dec 2026)
         with:
           languages: ${{ matrix.language }}
           queries: security-extended
           config-file: ./.github/codeql/codeql-config.yml
-      - uses: github/codeql-action/autobuild@<SHA>  # v3
-      - uses: github/codeql-action/analyze@<SHA>  # v3
+      - uses: github/codeql-action/autobuild@<SHA>  # v4 — pin v4 (v3 deprecates Dec 2026)
+      - uses: github/codeql-action/analyze@<SHA>  # v4 — pin v4 (v3 deprecates Dec 2026)
         with:
           category: '/language:${{ matrix.language }}'
         continue-on-error: true   # PER D10 PATH C — advisory until 2026-05-30

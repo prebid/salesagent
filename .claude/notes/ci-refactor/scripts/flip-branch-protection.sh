@@ -14,11 +14,50 @@ set -euo pipefail
 
 REPO="${REPO:-prebid/salesagent}"
 SNAPSHOT="${SNAPSHOT:-.claude/notes/ci-refactor/branch-protection-snapshot.json}"
+DRY_RUN="${DRY_RUN:-0}"
 
 [[ -f "$SNAPSHOT" ]] || { echo "ERROR: pre-flip snapshot missing: $SNAPSHOT (see pre-flight A1)" >&2; exit 2; }
 
 echo "Confirming pre-flight: rendered names check"
 "$(dirname "$0")/capture-rendered-names.sh" || { echo "ERROR: rendered names diverge — fix before flipping" >&2; exit 2; }
+
+# Idempotency check: if we're already in target state, exit 0 with informational message
+EXISTING_CONTEXTS=$(gh api "repos/${REPO}/branches/main/protection/required_status_checks" \
+  --jq '.checks[].context' 2>/dev/null | sort | tr '\n' '|')
+EXPECTED_CONTEXTS=$(printf 'CI / Admin UI Tests|CI / BDD Tests|CI / Coverage|CI / E2E Tests|CI / Integration Tests|CI / Migration Roundtrip|CI / Quality Gate|CI / Schema Contract|CI / Summary|CI / Type Check|CI / Unit Tests|')
+if [[ "$EXISTING_CONTEXTS" == "$EXPECTED_CONTEXTS" ]]; then
+  echo "Already in target state — 11 frozen contexts match. No action needed."
+  exit 0
+fi
+
+# Capture pre-flip state for diff/rollback (ratchet snapshot)
+PRE_FLIP_FILE="${SNAPSHOT%.json}-pre-flip.json"
+gh api "repos/${REPO}/branches/main/protection" -H "Accept: application/vnd.github+json" \
+  > "$PRE_FLIP_FILE"
+echo "Pre-flip snapshot saved to $PRE_FLIP_FILE (used for rollback if PATCH fails)."
+
+if [[ "$DRY_RUN" == "1" ]]; then
+  echo "DRY_RUN=1 — printing PATCH body and exiting without applying:"
+  cat <<'EOF'
+{
+  "strict": true,
+  "checks": [
+    {"context": "CI / Quality Gate"},
+    {"context": "CI / Type Check"},
+    {"context": "CI / Schema Contract"},
+    {"context": "CI / Unit Tests"},
+    {"context": "CI / Integration Tests"},
+    {"context": "CI / E2E Tests"},
+    {"context": "CI / Admin UI Tests"},
+    {"context": "CI / BDD Tests"},
+    {"context": "CI / Migration Roundtrip"},
+    {"context": "CI / Coverage"},
+    {"context": "CI / Summary"}
+  ]
+}
+EOF
+  exit 0
+fi
 
 read -p "Phase B atomic flip — type 'FLIP' to proceed (any other input cancels): " CONFIRM
 [[ "$CONFIRM" == "FLIP" ]] || { echo "Cancelled." >&2; exit 0; }
@@ -48,7 +87,7 @@ EOF
 echo ""
 echo "Flip applied. Verifying..."
 gh api "repos/${REPO}/branches/main/protection/required_status_checks" \
-  --jq '.contexts[]' | sort > /tmp/protected-now
+  --jq '.checks[].context' | sort > /tmp/protected-now   # canonical field; .contexts[] is deprecated
 sort > /tmp/expected-now <<'EOF'
 CI / Quality Gate
 CI / Type Check

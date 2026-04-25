@@ -8,9 +8,10 @@ import yaml
 from tests.unit._architecture_helpers import iter_workflow_files, repo_root
 
 # Workflows where cancel-in-progress is wrong (release artifacts must complete).
+# Note: PR 6 EXTENDS release-please.yml's publish-docker job with cosign signing —
+# no separate `release.yml` exists. (Decision-5 P0 sweep.)
 _NO_CONCURRENCY_REQUIRED: set[str] = {
     "release-please.yml",
-    "release.yml",  # PR 6 cosign signing flow
 }
 
 

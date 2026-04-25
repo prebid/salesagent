@@ -102,6 +102,113 @@ def iter_compose_files(repo: Path) -> Iterator[Path]:
 
 
 # ---------------------------------------------------------------------------
+# Cross-surface version-anchor extractors (D24 + PR 5)
+# ---------------------------------------------------------------------------
+
+# Patterns intentionally permissive: surfaces use varied formats. Each returns
+# a normalized version string ("3.12", "17", "0.11.7") via the first capture group.
+
+_PY_VERSION_PATTERNS: list[tuple[str, str]] = [
+    # Dockerfile / Dockerfile.* — `FROM python:3.12-slim` or `FROM python:3.12.4`
+    (r"^\s*FROM\s+python:([0-9]+(?:\.[0-9]+)*)", "Dockerfile"),
+    # pyproject.toml — `target-version = "py312"` (black/ruff)
+    (r'^\s*target-version\s*=\s*["\']py([0-9]{2,3})["\']', "pyproject.toml"),
+    # pyproject.toml — `python_version = "3.12"` (mypy section)
+    (r'^\s*python_version\s*=\s*["\']?([0-9]+\.[0-9]+)', "pyproject.toml"),
+    # pyproject.toml — `requires-python = ">=3.12"`
+    (r'^\s*requires-python\s*=\s*["\']>=\s*([0-9]+\.[0-9]+)', "pyproject.toml"),
+    # mypy.ini — `python_version = 3.12`
+    (r"^\s*python_version\s*=\s*([0-9]+\.[0-9]+)", "mypy.ini"),
+    # .python-version — bare version string
+    (r"^\s*([0-9]+\.[0-9]+(?:\.[0-9]+)?)\s*$", ".python-version"),
+    # tox.ini — `basepython = python3.12`
+    (r"^\s*basepython\s*=\s*python([0-9]+\.[0-9]+)", "tox.ini"),
+    # .github/workflows/*.yml + actions/*/action.yml — `python-version: '3.12'` or
+    # `python-version: ['3.12', '3.13']` first match
+    (r"^\s*python-version:\s*['\"]?([0-9]+\.[0-9]+)", ".yml"),
+    (r"^\s*python-version:\s*['\"]?([0-9]+\.[0-9]+)", ".yaml"),
+]
+
+
+def iter_python_version_anchors(repo: Path) -> Iterator[tuple[Path, str]]:
+    """Yield (file_path, version_string) for every Python version anchor across repo surfaces.
+
+    Surfaces scanned: Dockerfile / Dockerfile.*, pyproject.toml (target-version, python_version,
+    requires-python), .python-version, mypy.ini, tox.ini, .github/workflows/*.yml,
+    .github/actions/*/action.yml. Returns one tuple per match (a file may have multiple).
+
+    Used by `test_architecture_uv_version_anchor.py` (and python-anchor-consistency) to assert
+    cross-file consistency under D24 + PR 5.
+    """
+    candidates: list[Path] = []
+    candidates.extend(repo.glob("Dockerfile*"))
+    for fname in ("pyproject.toml", "mypy.ini", "tox.ini", ".python-version"):
+        p = repo / fname
+        if p.exists():
+            candidates.append(p)
+    candidates.extend(iter_workflow_files(repo))
+    actions_dir = repo / ".github" / "actions"
+    if actions_dir.exists():
+        candidates.extend(actions_dir.rglob("action.yml"))
+        candidates.extend(actions_dir.rglob("action.yaml"))
+
+    for path in candidates:
+        try:
+            text = path.read_text()
+        except (OSError, UnicodeDecodeError):
+            continue
+        for pattern, suffix_hint in _PY_VERSION_PATTERNS:
+            if not str(path).endswith(suffix_hint):
+                continue
+            for m in re.finditer(pattern, text, flags=re.MULTILINE):
+                version = m.group(1)
+                # Normalize "py312" → "3.12" for black/ruff target-version values
+                if pattern.startswith(r"^\s*target-version"):
+                    if len(version) == 3:  # "312"
+                        version = f"{version[0]}.{version[1:]}"
+                    elif len(version) == 2:  # "312" via 2-digit major
+                        version = f"{version[0]}.{version[1]}"
+                yield path, version
+
+
+_PG_IMAGE_PATTERNS: tuple[str, ...] = (
+    # Dockerfile / Dockerfile.* — `FROM postgres:17-alpine`
+    r"^\s*FROM\s+postgres:([0-9]+(?:\.[0-9]+)?(?:-[a-z0-9.]+)?)",
+    # docker-compose*.yml + .github/workflows/*.yml — `image: postgres:17-alpine`
+    r"^\s+image:\s+postgres:([0-9]+(?:\.[0-9]+)?(?:-[a-z0-9.]+)?)",
+    # tests/conftest*.py — `"postgres:17-alpine"` or 'postgres:17'
+    r'["\']postgres:([0-9]+(?:\.[0-9]+)?(?:-[a-z0-9.]+)?)["\']',
+)
+
+
+def iter_postgres_image_refs(repo: Path) -> Iterator[tuple[Path, str]]:
+    """Yield (file_path, image_tag) for every postgres image reference across repo surfaces.
+
+    Surfaces scanned: Dockerfile / Dockerfile.*, docker-compose*.yml, .github/workflows/*.yml,
+    tests/conftest*.py. The yielded `image_tag` is the part after `postgres:` (e.g.,
+    "17-alpine", "17.9", "16").
+
+    Used by structural guards to assert cross-file Postgres-version consistency under PR 5.
+    """
+    candidates: list[Path] = []
+    candidates.extend(repo.glob("Dockerfile*"))
+    candidates.extend(iter_compose_files(repo))
+    candidates.extend(iter_workflow_files(repo))
+    tests_dir = repo / "tests"
+    if tests_dir.exists():
+        candidates.extend(tests_dir.rglob("conftest*.py"))
+
+    for path in candidates:
+        try:
+            text = path.read_text()
+        except (OSError, UnicodeDecodeError):
+            continue
+        for pattern in _PG_IMAGE_PATTERNS:
+            for m in re.finditer(pattern, text, flags=re.MULTILINE):
+                yield path, m.group(1)
+
+
+# ---------------------------------------------------------------------------
 # Action-uses regex (workflow + composite-action files)
 # ---------------------------------------------------------------------------
 

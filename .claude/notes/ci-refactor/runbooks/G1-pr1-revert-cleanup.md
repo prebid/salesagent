@@ -1,5 +1,13 @@
 ### G1 — PR 1 reverted: how to clean up
 
+> **⚠️ ADMIN-ONLY — DO NOT RUN AS AGENT** ⚠️
+>
+> This runbook contains branch-protection mutations (`gh api -X PATCH .../branches/main/protection`).
+> Only the user (admin) runs these commands. Per `feedback_user_owns_git_push.md`, agents
+> NEVER mutate branch protection.
+>
+> Agent role: read this runbook to understand the user's recovery path; assist with log triage
+> and rollback verification on user request.
 
 **Trigger**: emergency revert of PR 1 merge.
 **Severity**: P1.

@@ -361,7 +361,15 @@ Add `stages: [pre-push]` to:
 - `ast-grep-bdd-guards` (only relevant pre-push since BDD tests run there)
 - `check-migration-completeness` (only matters if `alembic/versions/` changed)
 
-Closes PD16. **Resolves Blocker #2:** post-rollout commit-stage hook count must reach ≤12. Current baseline: **37 commit-stage** today (drifted +1 from the 36 in `research/empirical-baseline.md` due to a hook added post-measurement). Math: 37 − 15 deletions − **9** moves to pre-push − 1 consolidation = **12 commit-stage hooks** (at the ≤12 ceiling). If the baseline drifts further upward by execution time, identify additional candidates for pre-push from `mcp-cors-allowlist`, `check-no-private-ssm`, or any other hook with average duration > 200ms.
+Closes PD16. **Resolves Blocker #2:** post-rollout commit-stage hook count must reach ≤12. **Real baseline (revised 2026-04-25 P0 sweep): 33 effective commit-stage hooks** — 36 total `- id:` entries minus 3 already `stages: [manual]` (smoke-tests, test-migrations, pytest-unit, mcp-endpoint-tests). The earlier "37 commit-stage" framing double-counted manual hooks.
+
+Of plan's 15 deletions, **2 are already manual** (`pytest-unit`, `mcp-endpoint-tests`) — they reduce the dead-manual count, not the commit-stage count. So the deletion sweep removes 13 commit-stage hooks plus 2 manual stubs.
+
+**Real math:** 33 effective commit-stage − 13 commit-stage deletions − **9** moves to pre-push − 1 consolidation = **10 commit-stage hooks** (under ≤12 ceiling, with 2-hook headroom for v2.0 additions or future invariants).
+
+**Coordination with v2.0**: v2.0 phase PR also deletes `test-migrations` (already manual; net commit-stage count unchanged). Verify post-rebase: if `test-migrations` is absent from `.pre-commit-config.yaml`, drop it from PR 4's deletion list — otherwise the deletion is a no-op or fails.
+
+If the baseline drifts further upward, identify additional pre-push candidates from `mcp-cors-allowlist`, `check-no-private-ssm`, or any other hook with average duration > 200ms.
 
 Verification:
 ```bash
@@ -531,7 +539,19 @@ sys.exit(0 if secs < 5 else 1)
 "
 ```
 
-### Commit 9 — `docs: update CLAUDE.md guards table for PR 4 additions`
+### Commit 9 — DEFERRED to post-v2.0-rebase per 2026-04-25 P0 sweep
+
+**Action:** PR 4 commit 9 (CLAUDE.md guards table audit) **defers** to a post-v2.0-rebase
+follow-up commit. Rationale: v2.0 phase PR adds 3 of D18's 5 "missing rows" (`bdd_obligation_sync`,
+`bdd_no_direct_call_impl`, `test_marker_coverage`). PR 4 commit 9 only adds the residual 2
+(`test_architecture_no_silent_except.py`, `test_architecture_production_session_add.py`), and
+even those should land AFTER v2.0 rebases to avoid table churn. The full ~73-row table audit
+(post-v2.0) is a separate follow-up, not a PR 4 deliverable.
+
+**PR 4 commit 9 minimal scope:** add ONLY the 2 residual rows; verify all PR 4-introduced
+guards (4 new + 1 extended) appear in the table. Defer the broader 23→~73 audit.
+
+### Commit 9 — DEFERRED — see above. Below is the legacy spec for reference only:
 
 Files:
 - `CLAUDE.md` (extend the structural-guards table per D18)
@@ -542,9 +562,13 @@ Add 4 new rows (B1-B5 minus the extension):
 - No defensive RootModel
 - Import usage
 
-CLAUDE.md guard count post-PR-4: 32 (28 from PR 2 corrections + 4 PR 4 additions). v2.0's 9 guards from `.guard-baselines/` will land separately.
-
-Update guard count in CLAUDE.md from "24" to "32" wherever it appears.
+CLAUDE.md guard count post-PR-4 (revised 2026-04-25 P0 sweep): the table audit DEFERS to
+post-v2.0-rebase. PR 4 commit 9 adds only the 2 residual rows
+(`test_architecture_no_silent_except.py`, `test_architecture_production_session_add.py`) plus
+the 4 new + 1 extended PR 4 guards. Final count after v2.0 lands: **~73** rows
+(27 baseline + 1 PR 2 + 4 PR 4 + 1 PR 5 + 8 PR 1/3/6 governance + 31 v2.0 architecture tests
++ 9 v2.0 baseline JSONs). Per D18 (revised in 2026-04-25 P0 sweep). Do NOT update the
+"~73" number in CLAUDE.md until v2.0 phase PRs land — premature update creates phantom rows.
 
 Verification:
 ```bash
@@ -555,6 +579,51 @@ for f in test_architecture_no_tenant_config.py test_architecture_jsontype_column
 done
 # Guard count text reflects 32
 grep -qE '32 (existing )?guards' CLAUDE.md || grep -qE '\b32\b' CLAUDE.md
+```
+
+### Commit 10a — `chore(pre-commit): install pre-push hook stage; add architecture-guards`
+
+**New commit added in 2026-04-25 P0 sweep.** Without this, the 9 hooks moved to `stages: [pre-push]` in commit 5 don't actually run for contributors who haven't installed the pre-push hook stage.
+
+Files:
+- `.pre-commit-config.yaml` — add the `architecture-guards` pre-push entry from
+  `drafts/precommit-prepush-hook.md:5-15` (a single hook that runs `pytest tests/unit/test_architecture_*.py -q`).
+
+Plus a documentation step (folded into commit 10b below):
+- `CONTRIBUTING.md` (or `docs/development/contributing.md` per D21) — add a one-line
+  "Install both stages: `pre-commit install --hook-type pre-commit --hook-type pre-push`"
+  instruction in the local-setup section.
+
+Without this commit, contributors run `pre-commit install` (default = pre-commit stage only),
+push commits, and discover the 9 pre-push hooks via failed CI rather than locally.
+
+Verification:
+```bash
+# architecture-guards entry exists at pre-push stage
+yq '.repos[].hooks[] | select(.id == "architecture-guards") | .stages' .pre-commit-config.yaml \
+  | grep -q pre-push
+# CONTRIBUTING.md (canonical copy per D21 — `docs/development/contributing.md`) mentions both stages
+grep -q 'hook-type pre-commit' docs/development/contributing.md
+grep -q 'hook-type pre-push' docs/development/contributing.md
+```
+
+### Commit 10b — `chore(pre-commit): classify no-hardcoded-urls`
+
+**New commit added in 2026-04-25 P0 sweep.** PR 4's original spec did not classify the
+`no-hardcoded-urls` hook (Critical Pattern #6 enforcement — gates JS/template hardcoded
+URLs). Decision: **KEEP IN PRE-COMMIT** (commit-stage). Rationale: the hook runs in <100ms
+on changed files only, gates a critical-path pattern (script_root discipline) that has no
+structural-guard equivalent, and contributor JS edits benefit from immediate fail-fast
+feedback. Cannot move to pre-push without losing that feedback; cannot delete without
+losing the invariant.
+
+Files:
+- `.pre-commit-config.yaml` — add a `# kept in pre-commit per PR 4 P0 sweep — Pattern #6 gate, no guard equivalent` comment near the `no-hardcoded-urls` hook entry. No structural change.
+
+Verification:
+```bash
+# Hook is at commit-stage (default; not in stages: [...])
+yq '.repos[].hooks[] | select(.id == "no-hardcoded-urls")' .pre-commit-config.yaml | grep -v 'stages:'
 ```
 
 ### Commit 10 — `docs: update ci-pipeline.md and structural-guards.md for layered model`
@@ -602,7 +671,7 @@ grep -qE 'pre_commit_no_additional_deps' docs/development/structural-guards.md
 
 From issue #1234 §Acceptance criteria, scoped to PR 4:
 
-- [ ] `.pre-commit-config.yaml` hook count ≤ 12 for pre-commit stage
+- [ ] `.pre-commit-config.yaml` hook count ≤ 12 for pre-commit stage (real target: 10, with 2-hook headroom)
 - [ ] `stages: [pre-push]` used for medium-cost hooks
 - [ ] 5 new test_architecture_*.py files exist (4 new + 1 extension), all passing in `tox -e unit`
 - [ ] No `always_run: true` except file-level hygiene hooks
@@ -615,7 +684,7 @@ Plus agent-derived:
 - [ ] `tests/unit/_architecture_helpers.py` shared module exists
 - [ ] `.pre-commit-coverage-map.yml` documents every deleted/moved hook's replacement
 - [ ] `check_repo_invariants.py` consolidates the 2 remaining grep one-liners
-- [ ] CLAUDE.md guards table accurate post-PR-4 (32 rows)
+- [ ] CLAUDE.md guards table audit DEFERRED to post-v2.0-rebase (PR 4 commit 9 adds only the residual 2 missing rows; broader audit follows v2.0)
 - [ ] `docs/development/ci-pipeline.md` rewritten with the 5-layer model
 - [ ] `docs/development/structural-guards.md` extended with PR 2 + PR 4 additions
 
@@ -715,7 +784,7 @@ Document the test runs in PR description.
 
 ```bash
 git revert -m 1 <PR4-merge-sha>
-git push origin main   # USER ACTION
+# admin: pushes via UI; agent does NOT run this command
 pre-commit clean && pre-commit install
 ```
 

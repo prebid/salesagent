@@ -48,12 +48,14 @@ Commits in order:
                  [(_:=target['enforced_by'] in {'guard','guard-existing','ci-step','pre-push','pre-push + ci','deleted'}) \
                   or (_ for _ in (1/0,)) for hook,target in m.items()]; print(f'{len(m)} entries')"
 
-[ ] 5. refactor(pre-commit): move medium-cost hooks to pre-push stage
-       File: .pre-commit-config.yaml — add `stages: [pre-push]` to:
+[ ] 5. refactor(pre-commit): move 9 medium-cost hooks to pre-push stage (D27 P0 sweep)
+       File: .pre-commit-config.yaml — add `stages: [pre-push]` to all 9:
          check-docs-links, check-route-conflicts, type-ignore-no-regression,
-         adcp-contract-tests, mcp-contract-validation
+         adcp-contract-tests, mcp-contract-validation,
+         mcp-schema-alignment, check-tenant-context-order, ast-grep-bdd-guards, check-migration-completeness
        Verify: for h in check-docs-links check-route-conflicts type-ignore-no-regression \
-                        adcp-contract-tests mcp-contract-validation; do
+                        adcp-contract-tests mcp-contract-validation \
+                        mcp-schema-alignment check-tenant-context-order ast-grep-bdd-guards check-migration-completeness; do
                  yq ".repos[].hooks[] | select(.id == \"$h\") | .stages" .pre-commit-config.yaml | grep -q pre-push
                done
 
@@ -67,7 +69,7 @@ Commits in order:
                uv run pre-commit run repo-invariants --all-files
 
 [ ] 7. refactor(pre-commit): delete migrated and dead hooks
-       File: .pre-commit-config.yaml — delete the 15 hooks listed in Briefing §"Hooks DELETED"
+       File: .pre-commit-config.yaml — delete the 15 hooks listed in Briefing §"Hooks DELETED" (13 commit-stage + 2 already-manual stubs: pytest-unit, mcp-endpoint-tests). v2.0 phase PR may have already deleted test-migrations — verify post-rebase.
        Verify: for h in no-tenant-config enforce-jsontype check-rootmodel-access enforce-sqlalchemy-2-0 \
                         check-import-usage check-gam-auth-support check-response-attribute-access \
                         check-roundtrip-tests check-code-duplication check-parameter-alignment \
@@ -93,16 +95,16 @@ Commits in order:
                # Acceptance: warm < 5s
        If >5s: profile, fix or escalate before commit 9.
 
-[ ] 9. docs: update CLAUDE.md guards table for PR 4 additions
+[ ] 9. docs: update CLAUDE.md guards table — DEFERRED scope per D18 P0 sweep
        File: CLAUDE.md
-       D18 audit:
-       - Verify EVERY row's test file exists on disk
-       - Verify EVERY tests/unit/test_architecture_*.py file has a row
-       - Add 4 PR-4 rows (no_tenant_config, jsontype_columns, no_defensive_rootmodel, import_usage)
-       - Update guard count text from "24" to "32"
-       Verify: ls tests/unit/test_architecture_*.py | xargs -n1 basename | while read f; do
-                 grep -qF "$f" CLAUDE.md || { echo "NOT IN CLAUDE.md: $f"; exit 1; }
-               done
+       Per D18 (revised 2026-04-25 P0 sweep), the full ~73-row table audit DEFERS to a
+       post-v2.0-rebase commit. PR 4 commit 9 has minimal scope:
+       - Add the 4 PR-4 rows (no_tenant_config, jsontype_columns, no_defensive_rootmodel, import_usage)
+       - Add the 2 residual missing rows (test_architecture_no_silent_except, test_architecture_production_session_add)
+       - Do NOT update guard-count text to a final number (~73 only after v2.0 lands)
+       - Do NOT remove rows whose tests don't exist (none exist; the "phantom" framing was wrong)
+       Verify: each of the 4+2 new rows present in CLAUDE.md table.
+               # Full audit (every test file has a row + every row has a file) deferred.
 
 [ ] 10. docs: rewrite ci-pipeline.md and extend structural-guards.md
         Files: docs/development/ci-pipeline.md (full rewrite per 12-section outline in spec §Commit 10)
@@ -123,6 +125,6 @@ Stop conditions:
 File: .claude/notes/ci-refactor/escalations/pr4-<topic>.md
 
 Post-merge:
-- Update CLAUDE.md guards table again when v2.0 phase PRs land their 9 guards (final 41)
+- Update CLAUDE.md guards table again when v2.0 phase PRs land their 31 architecture tests + 9 baseline JSONs (final ~73 per D18 revised P0 sweep)
 - Monitor first contributor PR's `pre-commit run --all-files` time; expect ~1.5-2s warm
 ```

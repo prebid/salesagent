@@ -39,7 +39,7 @@
 
 [ ] STEP 3 — Verify (within 60 seconds of step 2):
     gh api repos/prebid/salesagent/branches/main/protection/required_status_checks \
-      --jq '.contexts[]' | sort > /tmp/protected
+      --jq '.checks[].context' | sort > /tmp/protected   # `.checks[].context` is canonical; `.contexts[]` is deprecated
     cat <<'EOF' | sort > /tmp/expected
     CI / Quality Gate
     CI / Type Check

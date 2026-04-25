@@ -17,14 +17,15 @@ Commits in order:
                && ! grep -qE 'description = "Add your description here"' pyproject.toml
        If fails: SECURITY.md missing private-vuln link → see spec §Embedded SECURITY.md verbatim.
 
-[ ] 2. docs: rewrite CONTRIBUTING.md
-       Files: CONTRIBUTING.md (rewrite using spec §"Embedded CONTRIBUTING.md outline" — fill ~120 lines from the 10 bullet sections);
-              docs/development/contributing.md (delete OR ≤5-line pointer)
-       Verify: [[ $(wc -l < CONTRIBUTING.md) -ge 80 ]] && \
-               grep -q 'uv sync --group dev' CONTRIBUTING.md && \
-               grep -q 'pre-commit install' CONTRIBUTING.md && \
-               grep -qE 'CI / Quality Gate|CI / Type Check' CONTRIBUTING.md
-       If fails: missing the 11 frozen check-name list → spec §Embedded outline §4.
+[ ] 2. docs: rewrite CONTRIBUTING.md as thin pointer; KEEP docs/development/contributing.md as canonical (D21 revised P0 sweep)
+       Files: CONTRIBUTING.md (rewrite as thin pointer ~30 lines: 6 conventional-commit prefixes + "See docs/development/contributing.md for full contributor workflow" + `pre-commit install --hook-type pre-commit --hook-type pre-push`);
+              docs/development/contributing.md (KEEP — 594 lines, canonical content; do NOT delete)
+       Verify: [[ $(wc -l < CONTRIBUTING.md) -ge 20 && $(wc -l < CONTRIBUTING.md) -le 80 ]] && \
+               grep -q 'docs/development/contributing.md' CONTRIBUTING.md && \
+               grep -q 'pre-commit install --hook-type pre-commit --hook-type pre-push' CONTRIBUTING.md && \
+               grep -qE 'feat|fix|refactor|docs|chore|perf' CONTRIBUTING.md && \
+               [[ -f docs/development/contributing.md && $(wc -l < docs/development/contributing.md) -ge 500 ]]
+       If fails: see spec §Commit 2 (revised — root is thin pointer, docs/ is canonical).
 
 [ ] 3. chore: add CODEOWNERS
        Files: .github/CODEOWNERS (new, lift from spec §Embedded CODEOWNERS verbatim)
@@ -48,10 +49,11 @@ Commits in order:
                grep -q 'zizmor' .github/workflows/security.yml && \
                grep -q 'pip-audit' .github/workflows/security.yml
 
-[ ] 6. ci: add codeql.yml (advisory per D10)
+[ ] 6. ci: add codeql.yml (advisory per D10) — pin to **v4** (was v3 in earlier draft; v3 deprecates Dec 2026)
        Files: .github/workflows/codeql.yml + .github/codeql/codeql-config.yml (both new, lift from spec)
        Verify: grep -qE 'security-extended' .github/workflows/codeql.yml && \
-               grep -q 'continue-on-error: true' .github/workflows/codeql.yml
+               grep -q 'continue-on-error: true' .github/workflows/codeql.yml && \
+               grep -qE 'github/codeql-action/[a-z-]+@[a-f0-9]{40}\s+#\s+v4' .github/workflows/codeql.yml
        (continue-on-error is REQUIRED at this stage — D10 Path C. Removing it is a Week 5 admin action.)
 
 [ ] 7. docs: add ADR-001 + ADR-002
@@ -61,19 +63,27 @@ Commits in order:
                test -f docs/decisions/adr-002-solo-maintainer-bypass.md && \
                grep -q '## Status' docs/decisions/adr-002-solo-maintainer-bypass.md
 
-[ ] 8. chore: pre-commit autoupdate --freeze (SHA-pin all external hooks)
+[ ] 8. chore: pre-commit autoupdate --freeze (SHA-pin external hooks; HOLD black at 25.1.0 per ADR-008)
        Procedure: on a SCRATCH branch first:
                   git checkout -b chore/sha-freeze-preview
-                  uv run pre-commit autoupdate --freeze
+                  # NOTE: psf/black is INTENTIONALLY omitted — autoupdate would jump 25.1.0 → 26.3.0
+                  # (2026-style reformat). Per ADR-008 (P0 sweep), target-version bumps DEFERRED to
+                  # a post-#1234 PR. Use individual --repo flags:
+                  uv run pre-commit autoupdate --freeze \
+                    --repo https://github.com/pre-commit/pre-commit-hooks \
+                    --repo https://github.com/astral-sh/ruff-pre-commit \
+                    --repo https://github.com/pre-commit/mirrors-mypy
                   git diff .pre-commit-config.yaml > /tmp/sha-freeze.diff
-                  cat /tmp/sha-freeze.diff   # review the 4 hook bumps
+                  cat /tmp/sha-freeze.diff   # review the 3 hook bumps (black NOT in this list)
                   uv run pre-commit run --all-files
                   # If clean: cherry-pick or replay the diff onto the PR 1 branch and commit there
-       Verify: [[ $(grep -E '^\s+rev:' .pre-commit-config.yaml | grep -vcE 'rev: [a-f0-9]{40}\s+# frozen: v') == "0" ]] && \
+       Verify: # SHA-freeze regex relaxed to # frozen: \S+ (black ships 25.1.0 no `v`; pre-commit-hooks ships v6.0.0)
+               [[ $(grep -E '^\s+rev:' .pre-commit-config.yaml | grep -vcE 'rev: [a-f0-9]{40}\s+# frozen: \S+') == "0" ]] && \
+               # Black held at 25.1.0
+               grep -qE '^\s+rev:\s+25\.1\.0\s*$' .pre-commit-config.yaml && \
                uv run pre-commit run --all-files
-       If fails: a bumped hook breaks pre-commit run --all-files → hold that hook at previous SHA via:
-                 uv run pre-commit autoupdate --freeze --repo <url-of-other-hook>  # for each non-broken
-                 then manually pin the broken one.
+       If fails: a bumped hook breaks pre-commit run --all-files → hold that hook at previous SHA;
+                 if black somehow bumped (autoupdate misconfigured), revert it to 25.1.0.
 
 [ ] 9. ci: pin GitHub Actions to SHAs and add top-level permissions
        Files: .github/workflows/{test,pr-title-check,release-please,ipr-agreement,security,codeql}.yml
@@ -93,12 +103,10 @@ Commits in order:
                [[ "$total" == "$sha" ]] && \
                for f in .github/workflows/*.yml; do grep -qE '^permissions:' "$f"; done
 
-[ ] 10. ci: gate Gemini key behind unconditional mock
-        Files: .github/workflows/test.yml (line 342 area)
-        Edit: GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || 'test_key_for_mocking' }}
-              → GEMINI_API_KEY: test_key_for_mocking
-        Verify: ! grep -q 'secrets.GEMINI_API_KEY' .github/workflows/test.yml && \
-                grep -q "GEMINI_API_KEY: test_key_for_mocking" .github/workflows/test.yml
+[ ] 10. MOVED to PR 3 in 2026-04-25 P0 sweep
+        The Gemini-fallback unconditional-mock fix (D15/PD24) is now PR 3 commit 11.
+        Rationale: PR 3 rewrites test.yml wholesale into ci.yml + composite; redundant to fix
+        the same region twice. PR 1 commit 10 slot is vacant; commit 11 (zizmor) is next.
 
 [ ] 11. ci: zizmor pre-flight findings — fix or allowlist
         Files: .github/workflows/pr-title-check.yml + ipr-agreement.yml (allowlist comments at top:

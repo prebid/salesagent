@@ -45,11 +45,21 @@ if [[ -f .github/dependabot.yml ]]; then
 fi
 
 # Commit 8: pre-commit autoupdate --freeze
-# pre-commit emits: rev: <40-char-sha>  # frozen: v<tag>  (single line)
-if grep -q 'frozen: v' .pre-commit-config.yaml; then
-  BAD=$(grep -E '^\s+rev:' .pre-commit-config.yaml | grep -vcE 'rev: [a-f0-9]{40}\s+# frozen: v')
-  [[ "$BAD" == "0" ]] || fail "$BAD external rev: line(s) not in '<40-sha>  # frozen: v<tag>' format"
-  ok "pre-commit external hooks SHA-pinned with '# frozen: v<tag>' comment"
+# pre-commit emits: rev: <40-char-sha>  # frozen: <tag>  (single line)
+# Tag format varies: pre-commit-hooks ships `v6.0.0`, black ships `25.1.0` (no `v` prefix),
+# ruff-pre-commit ships `v0.14.10`. Regex relaxed to `# frozen: \S+`.
+# Note: black is held at 25.1.0 per ADR-008 (target-version bump deferred); the autoupdate
+# in PR 1 commit 8 explicitly omits psf/black via individual --repo flags.
+if grep -qE '# frozen: \S+' .pre-commit-config.yaml; then
+  BAD=$(grep -E '^\s+rev:' .pre-commit-config.yaml | grep -vcE 'rev: [a-f0-9]{40}\s+# frozen: \S+')
+  [[ "$BAD" == "0" ]] || fail "$BAD external rev: line(s) not in '<40-sha>  # frozen: <tag>' format"
+  ok "pre-commit external hooks SHA-pinned with '# frozen: <tag>' comment"
+  # Verify black held at 25.1.0 per ADR-008
+  if grep -qE '^\s+rev:\s+25\.1\.0\s*$' .pre-commit-config.yaml; then
+    ok "psf/black held at 25.1.0 (ADR-008 deferral)"
+  fi
+else
+  echo "  skipped: PR 1 commit 8 (pre-commit autoupdate --freeze) not yet applied"
 fi
 
 # Commit 9: SHA-pinned actions + persist-credentials + permissions
@@ -71,14 +81,31 @@ if [[ -f .github/.action-shas.txt ]]; then
   PERSIST_FALSE=$(grep -RnA5 'uses: actions/checkout@' .github/workflows/ | grep -c 'persist-credentials: false')
   [[ "$CHECKOUT_USES" -le "$PERSIST_FALSE" ]] || fail "$((CHECKOUT_USES - PERSIST_FALSE)) checkout(s) missing persist-credentials:false"
   ok "all $CHECKOUT_USES actions/checkout calls set persist-credentials:false"
+
+  # Per Round 5+6 P0 sweep: ipr-agreement.yml and pr-title-check.yml use pull_request_target
+  # without checkout (zizmor allowlist via ADR-003). Their lack of persist-credentials is
+  # benign because they don't checkout. The PERSIST_FALSE check above only applies to files
+  # with checkout calls; verify the non-checkout workflows still have top-level permissions.
+  for f in .github/workflows/ipr-agreement.yml .github/workflows/pr-title-check.yml; do
+    if [[ -f "$f" ]]; then
+      grep -qE '^permissions:' "$f" || fail "$f missing top-level permissions (pull_request_target requires)"
+    fi
+  done
+
+  # peter-evans/create-pull-request appears in dependabot pre-commit fallback workflow;
+  # if present, ensure SHA-pinned
+  if grep -RqE 'uses: peter-evans/create-pull-request@' .github/workflows/; then
+    grep -RhoE 'uses: peter-evans/create-pull-request@[a-f0-9]{40}' .github/workflows/ \
+      || fail "peter-evans/create-pull-request not SHA-pinned"
+    ok "peter-evans/create-pull-request SHA-pinned"
+  fi
+else
+  echo "  skipped: PR 1 commit 9 (.action-shas.txt artifact) not yet applied"
 fi
 
-# Commit 10: Gemini key
-if grep -q 'GEMINI_API_KEY' .github/workflows/test.yml 2>/dev/null; then
-  ! grep -q 'secrets.GEMINI_API_KEY' .github/workflows/test.yml || fail "secrets.GEMINI_API_KEY still referenced"
-  grep -q "GEMINI_API_KEY: test_key_for_mocking" .github/workflows/test.yml || fail "Gemini mock missing"
-  ok "Gemini key is unconditional mock"
-fi
+# Commit 10: MOVED to PR 3 per 2026-04-25 P0 sweep (D15/PD24 Gemini fallback fix is now
+# applied as a new commit in PR 3's commit sequence, since PR 3 rewrites test.yml wholesale
+# into ci.yml + composite. Verification of the Gemini mock lives in scripts/verify-pr3.sh.)
 
 # Commit 11: zizmor
 if [[ -f .github/zizmor.yml ]]; then

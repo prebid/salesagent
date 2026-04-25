@@ -12,12 +12,12 @@ Per R1 (HIGH severity), a misconfigured branch-protection flip locks out merging
 
 **What you can rely on (already true on main)**
 - `.github/workflows/ci.yml` exists and emits the 11 frozen check names per D17 — `CI / Quality Gate`, `CI / Type Check`, `CI / Schema Contract`, `CI / Unit Tests`, `CI / Integration Tests`, `CI / E2E Tests`, `CI / Admin UI Tests`, `CI / BDD Tests`, `CI / Migration Roundtrip`, `CI / Coverage`, `CI / Summary`
-- `.github/workflows/_pytest.yml` reusable workflow exists
+- `.github/actions/_pytest/action.yml` composite action exists (NOT a reusable workflow — Decision-4 P0 sweep eliminates the 3-segment rendered-name issue at design time)
 - `.github/actions/setup-env/action.yml` composite action exists
 - `.github/scripts/migration_roundtrip.sh` exists and is executable
-- `.coverage-baseline` exists with contents `53.5` (advisory window per D11 still active for ~2 more weeks)
+- `.coverage-baseline` exists with contents `53.5` (D11 revised in 2026-04-25 P0 sweep — hard-gate from PR 3 day 1; ratchet upward only when measured-stable)
 - `.github/workflows/test.yml` STILL exists (Phase A overlap — both old and new run); will be deleted in Phase C
-- All actions in `ci.yml`, `_pytest.yml`, `setup-env/action.yml` are SHA-pinned
+- All actions in `ci.yml`, `_pytest/action.yml`, `setup-env/action.yml` are SHA-pinned
 - Branch protection STILL points at the OLD required-checks list (e.g., `Security Audit`, `Smoke Tests…` — verify against `.claude/notes/ci-refactor/required-checks-current.txt`)
 - ≥48 hours of overlap has elapsed; both old `test.yml` and new `ci.yml` runs are green for ≥2-3 PRs
 
@@ -64,11 +64,11 @@ None. Phase B is admin-only. No code changes; only branch-protection state chang
 7. After user runs flip: execute Step 6 verification
 
 **Decisions in effect**
-D2 (branch protection + bypass — `@chrishuie` on bypass list, was set in PR 1 admin steps), D17 (the 11 frozen names — frozen as a contract; do not deviate), D11 (`.coverage-baseline = 53.5` advisory; do not flip to gating yet — that's Week 7-8)
+D2 (branch protection + bypass — `@chrishuie` on bypass list, was set in PR 1 admin steps), D17 (the 11 frozen names — frozen as a contract; do not deviate), D11 (`.coverage-baseline = 53.5` hard-gate from PR 3 day 1, revised 2026-04-25 P0 sweep), D26 (workflow naming — bare job names; the rendered-name probe in Step 1b is mandatory)
 
 **Risks active right now**
 - R1 (HIGH severity, low prob): branch-protection flip locks out merging. Mitigation: pre-flight snapshot + atomic flip + ≤5-minute window. Recovery: <5 minutes via inverse PATCH
-- R8: coverage drop after CI restructure — coverage advisory still in effect; no action this week
+- R8: coverage drop after CI restructure — coverage is hard-gated from PR 3 day 1 (D11 revised); a single PR dropping >2pp blocks merge with a clear failure message. No advisory window.
 
 **Escalation triggers**
 - Phase A overlap shows ANY new check failing (not green) on main: STOP, do not flip; investigate flake vs real failure

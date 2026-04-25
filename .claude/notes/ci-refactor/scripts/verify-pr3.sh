@@ -24,21 +24,33 @@ if [[ -f .github/workflows/ci.yml ]]; then
   grep -qE '^concurrency:' .github/workflows/ci.yml \
     || fail "ci.yml missing 'concurrency:' block"
 
-  # All 11 frozen check names exist as job-name strings (rendered name = workflow + ' / ' + job)
+  # All 11 frozen check names exist as bare job-name strings (D26: rendered = `CI` + ` / ` + bare).
+  # Quoted form ('Foo' / "Foo") OR unquoted bare form (   name: Foo) — accept all three.
   for name in 'Quality Gate' 'Type Check' 'Schema Contract' 'Unit Tests' 'Integration Tests' \
               'E2E Tests' 'Admin UI Tests' 'BDD Tests' 'Migration Roundtrip' 'Coverage' 'Summary'; do
     grep -qF "name: '$name'" .github/workflows/ci.yml || \
       grep -qF "name: \"$name\"" .github/workflows/ci.yml || \
+      grep -qE "^\s+name:\s+${name}\s*$" .github/workflows/ci.yml || \
       fail "ci.yml missing job name: $name"
   done
-  ok "ci.yml present, properly structured, 11 frozen names"
+
+  # Develop branch trigger (P0 sweep — covers existing test.yml branches: [main, develop] until v2.0 ships)
+  grep -qE 'branches:\s+\[main,\s*develop\]|branches:\s+\[\s*main\s*,\s*develop\s*\]' .github/workflows/ci.yml \
+    || fail "ci.yml triggers must include 'develop' branch (P0 sweep — formal deprecation deferred)"
+
+  ok "ci.yml present, properly structured, 11 frozen bare names + develop branch"
 fi
 
-# Reusable workflow
+# Decision-4 (P0 sweep): _pytest is a composite action, NOT a reusable workflow.
+# Reusable form would re-introduce 3-segment rendered names ('CI / Unit Tests / pytest').
 if [[ -f .github/workflows/_pytest.yml ]]; then
-  yamllint -d relaxed .github/workflows/_pytest.yml >/dev/null 2>&1 || fail "_pytest.yml fails yamllint"
-  grep -q 'workflow_call:' .github/workflows/_pytest.yml || fail "_pytest.yml missing workflow_call trigger"
-  ok "_pytest.yml reusable workflow present"
+  fail ".github/workflows/_pytest.yml exists — Decision-4 (P0 sweep) requires composite at .github/actions/_pytest/action.yml instead"
+fi
+if [[ -f .github/actions/_pytest/action.yml ]]; then
+  yamllint -d relaxed .github/actions/_pytest/action.yml >/dev/null 2>&1 || fail "_pytest/action.yml fails yamllint"
+  grep -qE 'using:\s+["\x27]?composite' .github/actions/_pytest/action.yml \
+    || fail "_pytest/action.yml not a composite action"
+  ok "_pytest composite action present (Decision-4)"
 fi
 
 # Composite action
@@ -54,10 +66,24 @@ if [[ -f .github/scripts/migration_roundtrip.sh ]]; then
   ok "migration_roundtrip.sh present and executable"
 fi
 
-# Coverage baseline
+# Coverage baseline (D11 revised in 2026-04-25 P0 sweep — hard-gate from PR 3 day 1, not advisory)
 if [[ -f .coverage-baseline ]]; then
   [[ "$(cat .coverage-baseline)" == "53.5" ]] || fail ".coverage-baseline != 53.5"
-  ok ".coverage-baseline = 53.5 (per D11, advisory for 4 weeks)"
+  ok ".coverage-baseline = 53.5 (D11: hard-gate from PR 3 day 1, ratchet-only-stable)"
+  # Hard-gate must be in ci.yml — `--fail-under=$(cat .coverage-baseline)`
+  grep -q -- '--fail-under=$(cat .coverage-baseline)' .github/workflows/ci.yml \
+    || fail "ci.yml coverage job missing --fail-under=\$(cat .coverage-baseline) (D11 hard gate)"
+fi
+
+# Gemini fallback fix (PR 3 commit 11 — moved from PR 1 commit 10 in P0 sweep)
+if [[ -f .github/actions/_pytest/action.yml ]]; then
+  ! grep -q 'secrets.GEMINI_API_KEY' .github/actions/_pytest/action.yml \
+    || fail "_pytest/action.yml still references secrets.GEMINI_API_KEY (D15: must be unconditional mock)"
+  if grep -q 'GEMINI_API_KEY' .github/actions/_pytest/action.yml; then
+    grep -q "GEMINI_API_KEY: test_key_for_mocking" .github/actions/_pytest/action.yml \
+      || fail "_pytest/action.yml GEMINI_API_KEY is not the unconditional mock"
+    ok "Gemini key is unconditional mock (D15/PD24, moved to PR 3 in P0 sweep)"
+  fi
 fi
 
 # Action SHAs reused from PR 1

@@ -80,12 +80,12 @@ Format: each decision has a date, a one-line statement, the rationale, and a tri
 - **Original directive:** the user's first answer was "blocking to start, rollback to advisory if needed." Revised after CSRF scope was discovered.
 - **Tripwire:** end of Week 4. If CodeQL findings ≤ 5, flip to gating. If > 5 but ≤ 20, extend advisory by 1 week and triage. If > 20, file a follow-up issue and accept indefinite advisory until v2.0 lands.
 
-## D11 — Coverage baseline: advisory for 4 weeks at `current - 2%`
+## D11 — Coverage baseline: hard gate from PR 3 day 1 at `current - 2%`
 
-**Decided 2026-04-25:** PR 3 introduces `.coverage-baseline` set to `53.5` (current measured 55.56% minus 2pp safety margin). Advisory for 4 weeks. Flip to gating in Week 7-8.
+**Decided 2026-04-25, REVISED 2026-04-25 (P0 sweep):** PR 3 introduces `.coverage-baseline` set to `53.5` (current measured 55.56% minus 2pp safety margin) as a **hard gate from PR 3 landing**. Coverage job runs `coverage report --fail-under=$(cat .coverage-baseline)`. Ratchet upward only when measured-stable across 4+ consecutive PRs.
 
-- **Rationale:** ratcheting-from-current can deadlock on legit bugfix PRs that delete over-fitted tests; advisory window absorbs measurement noise from `pytest-xdist` shuffling.
-- **Tripwire:** if any single PR within the advisory window lowers measured coverage by >3pp, investigate before flipping to gating.
+- **Rationale:** the 2pp safety margin absorbs measurement noise from `pytest-xdist` shuffling; a true regression triggers immediate failure rather than accumulating advisory debt. The earlier "advisory for 4 weeks" framing was contradicted by the actual implementation (`--fail-under` is a hard gate); aligning the framing with the implementation eliminates ambiguity. Week 7-8 "flip to gating" step removed (already gating).
+- **Tripwire:** if any single PR lowers measured coverage by >3pp, investigate before allowing further ratcheting.
 
 ## D12 — `pre-commit autoupdate --freeze` scope: bump-to-latest
 
@@ -149,13 +149,24 @@ Format: each decision has a date, a one-line statement, the rationale, and a tri
 - **Note:** branch-protection still references current names (`Security Audit`, `Smoke Tests…`, etc.). PR 3's 3-phase merge handles the rename atomically. See PR 3 spec.
 - **Frozen:** rename requires coordinated branch-protection update; treat as a contract.
 
-## D18 — Structural guard count baseline: 27 + 1 (PR2) + 4 (PR4) + 1 (PR5) + 9 (v2.0) = 42
+## D18 — Structural guard count baseline: 27 + 1 + 4 + 1 + 8 + 31 + 9 = ~73
 
-**Decided 2026-04-25, REVISED 2026-04-25 post-integrity-audit:** Existing on-disk guards count = 27 (23 `test_architecture_*.py` + 3 transport-boundary guards `test_no_toolerror_in_impl.py`, `test_transport_agnostic_impl.py`, `test_impl_resolved_identity.py` + `check_code_duplication.py` script). PR 2 adds 1. PR 4 adds 4 + extends 1. PR 5 adds 1 (`test_architecture_uv_version_anchor`). v2.0 contributes 9 via `.guard-baselines/`. **Final post-rollout: 42** (canonical count for cross-doc reconciliation).
+**Decided 2026-04-25, REVISED 2026-04-25 post-integrity-audit, REVISED 2026-04-25 (P0 sweep + v2.0 disk-truth audit):** Existing on-disk guards count = 27 (23 `test_architecture_*.py` + 3 transport-boundary guards `test_no_toolerror_in_impl.py`, `test_transport_agnostic_impl.py`, `test_impl_resolved_identity.py` + `check_code_duplication.py` script). Math:
 
-- **Rationale:** doc-drafting agent re-counted disk; the "24" in CLAUDE.md was wrong. PR 4 corrects the table to the post-rollout count and reserves the v2.0 9 as future entries.
-- **CLAUDE.md table audit step (mandatory in PR 4):** for each row, verify the test file exists; for each test file under `tests/unit/test_architecture_*.py`, verify a row exists. **0 phantom rows** (all listed files exist on disk; the integrity audit corrected the earlier "3 phantom" claim — there were never any phantoms). **5 missing rows** must be added (files exist but were omitted from the table): `test_architecture_no_silent_except.py`, `test_architecture_bdd_no_direct_call_impl.py`, `test_architecture_bdd_obligation_sync.py`, `test_architecture_production_session_add.py`, `test_architecture_test_marker_coverage.py`. Final corrected 52-row table source: `drafts/claudemd-guards-table-final.md` (sectioned by Schema/Transport/DB/BDD/Test integrity/Governance/Cross-file).
-- **Tripwire:** when v2.0 phase PRs land, append the 9 new guard rows.
+| Source | Guards added |
+|---|---|
+| Baseline (on disk today) | 27 |
+| PR 2 (`_architecture_helpers.py` baseline guard) | 1 |
+| PR 4 (4 new + 1 extended) | 4 |
+| PR 5 (`test_architecture_uv_version_anchor`) | 1 |
+| PR 1/3/6 governance (scorecard, actions-sha-pinned, workflow-permissions, persist-credentials-false, required-checks-frozen, workflow-concurrency, workflow-timeout-minutes, dependabot-groups-complete) | 8 |
+| v2.0 architecture tests under `tests/unit/architecture/` + 4 top-level | 31 |
+| v2.0 baseline JSONs under `.guard-baselines/` | 9 |
+| **Final post-v2.0-rebase** | **~73** |
+
+- **Rationale:** v2.0's PR #1221 contributes far more than the original "9 baseline JSONs" claim — disk-truth + v2-overlap audits in 2026-04-25 P0 sweep verified 31 net-new architecture tests (27 under `tests/unit/architecture/` + 4 top-level: `test_architecture_no_scoped_session.py`, `_no_module_level_get_engine.py`, `_no_runtime_psycopg2.py`, `_get_db_connection_callers_allowlist.py`) plus 9 baseline JSONs.
+- **CLAUDE.md table audit step:** **DEFERRED to a post-v2.0-rebase commit, NOT executed in PR 4 commit 9.** Rationale: v2.0 will land 3 of the 5 "missing rows" (`test_architecture_bdd_no_direct_call_impl.py`, `test_architecture_bdd_obligation_sync.py`, `test_architecture_test_marker_coverage.py`); only **residual 2** (`test_architecture_no_silent_except.py`, `test_architecture_production_session_add.py`) are PR 4's responsibility. Current CLAUDE.md table is **22 rows with 0 phantoms + 5 missing** (corrected from earlier "24 rows with 3 phantoms + 5 missing"). Final corrected table source: `drafts/claudemd-guards-table-final.md` (still claims 52 rows; needs ~73-row revision post-v2.0).
+- **Tripwire:** when v2.0 phase PRs land, append the 31+9 new guard rows post-rebase.
 
 ## D19 — Master plan format: per-PR specs, not master doc
 
@@ -173,13 +184,14 @@ Format: each decision has a date, a one-line statement, the rationale, and a tri
 - **Critical coordination:** **`[project.optional-dependencies].dev` is already deleted on the v2.0 branch.** PR 2's pyproject.toml change must NOT re-introduce the block when v2.0 rebases. Verify pyproject.toml diff during PR 2 final review.
 - **Tripwire:** if v2.0 phase PRs are blocked for >2 weeks, revisit sequencing — issue #1234 PRs 3-5 may need to wait.
 
-## D21 — Document collisions: keep root `CONTRIBUTING.md`
+## D21 — Document collisions: docs/development/contributing.md is canonical (revised 2026-04-25 P0 sweep)
 
-**Decided 2026-04-25:** Root `CONTRIBUTING.md` (currently 20 lines) is the canonical contributor guide. PR 1 rewrites it to ~120 lines.
+**Decided 2026-04-25, REVISED 2026-04-25 (Round 5+6 P0 sweep):** `docs/development/contributing.md` (594 lines on disk — verified by 2026-04-25 disk-truth audit) is the canonical contributor guide. Root `CONTRIBUTING.md` (currently 20 lines) becomes a thin pointer (~30 lines: 6 conventional-commit prefixes inline + "See docs/development/contributing.md for full contributor workflow." + `pre-commit install --hook-type pre-commit --hook-type pre-push` instruction).
 
-- **Rationale:** root location is GitHub-recognized (auto-displayed in PR creation flow). `docs/development/contributing.md` (existing duplicate) is demoted to a thin pointer or deleted in PR 1.
+- **Rationale (revised):** the original D21 framing assumed `docs/development/contributing.md` was a thin duplicate of the 20-line root. Round 6 disk-truth audit found it's actually a 594-line substantive contributor doc — 30× larger than root. Demoting it to a pointer would lose content. Better: keep docs version as canonical, make root the thin pointer (root is GitHub-recognized and auto-displayed in PR creation flow; the pointer redirect is sufficient).
 - **`docs/development/ci-pipeline.md`** already exists (~70 lines). PR 4 rewrites/expands it; not a new file.
 - **Tripwire:** none.
+- **Implication for PR 1 commit 2:** scope changes from "rewrite root → 120 lines, demote docs version" to "rewrite root → ~30-line thin pointer, KEEP docs/development/contributing.md as-is." `verify-pr1.sh` line-count gates: root ≤ 50 lines, docs/development/contributing.md ≥ 500 lines.
 
 ## D22 — zizmor placement: CI-only
 
@@ -204,7 +216,7 @@ Format: each decision has a date, a one-line statement, the rationale, and a tri
 **Decided 2026-04-25** (promoted from D-pending-4, **resolved by PR 6**): harden-runner is adopted as a Week 6 follow-up PR. Audit-mode for 2 weeks, then flip to block-mode with allowlist captured from telemetry. See `pr6-image-supply-chain.md` Commits 1 + 3.
 
 - **Tripwire:** if audit-mode reveals unexpected egress endpoints (e.g., suspicious analytics/telemetry from any pinned action), do NOT add to allowlist without supply-chain investigation.
-- **Critical:** harden-runner pinned version MUST be v2.12.0 or later, with `disable-sudo-and-containers: true` (NOT `disable-sudo: true`) per CVE-2025-32955.
+- **Critical (revised 2026-04-25 P0 sweep):** harden-runner pinned version MUST be **v2.16.0 or later**, with `disable-sudo-and-containers: true` (NOT `disable-sudo: true`). v2.12.0 is the floor for CVE-2025-32955; **v2.13+** patches additional medium DoH/DNS-over-TCP egress-bypass advisories ([GHSA-46g3-37rh-v698](https://github.com/step-security/harden-runner/security/advisories)). v2.16.0+ captures all post-CVE advisories.
 
 ## D26 — Workflow naming convention: drop `CI /` prefix from job names
 
@@ -214,12 +226,24 @@ Format: each decision has a date, a one-line statement, the rationale, and a tri
 - **Affected files:** `.github/workflows/ci.yml`, plus PR 3 Phase B PATCH body and verification scripts.
 - **Tripwire:** when adding a new required check, follow this convention. Verify rendered name via `gh api repos/.../check-runs --jq '.check_runs[].name'` before adding to branch protection.
 
-## D27 — Pre-commit hook reallocation: 9 hooks moved to pre-push (not 5)
+## D27 — Pre-commit hook reallocation: 9 hooks moved to pre-push
 
-**Decided 2026-04-25** (resolves Blocker #2 from `research/integrity-audit.md`): To meet PR 4's `commit-stage hooks ≤ 12` acceptance with the actual 37-hook baseline (drifted +1 from the 36 measured), PR 4 commit 5 moves 9 hooks to pre-push, not 5. The 4 additional hooks: `mcp-schema-alignment`, `check-tenant-context-order`, `ast-grep-bdd-guards`, `check-migration-completeness`.
+**Decided 2026-04-25, REVISED 2026-04-25 (P0 sweep — disk-truth audit):** To meet PR 4's `commit-stage hooks ≤ 12` acceptance, PR 4 commit 5 moves 9 hooks to pre-push. The 4 additional hooks beyond the original 5: `mcp-schema-alignment`, `check-tenant-context-order`, `ast-grep-bdd-guards`, `check-migration-completeness`.
 
-- **Math:** 37 commit-stage today − 15 deletions − 9 moves to pre-push − 1 consolidation = **12 commit-stage** (exactly at the ceiling).
+- **Real baseline: 33 effective commit-stage hooks** (36 total `- id:` minus 3 already `stages: [manual]`). The 4 hooks that are already manual: `smoke-tests`, `test-migrations`, `pytest-unit`, `mcp-endpoint-tests` — but disk-truth audit found only 3 are at `stages: [manual]` today; the fourth is at a different stage. (Earlier "37 commit-stage" framing double-counted manual hooks.)
+- **Math:** 33 effective commit-stage − 13 commit-stage deletions (2 of plan's 15 are already manual: `pytest-unit`, `mcp-endpoint-tests` — they reduce dead-manual count, not commit-stage count) − 9 moves to pre-push − 1 consolidation = **10 commit-stage** (under ≤12 ceiling).
+- **Note:** v2.0 phase PR also deletes `test-migrations` hook (already manual). PR 4's hook-deletion list double-counts if v2.0 lands first; verify post-rebase.
 - **Tripwire:** if `time pre-commit run --all-files` warm exceeds 2s after PR 4 lands, identify additional move candidates.
+
+## D28 — Defer black/ruff target-version bump out of PR 5
+
+**Decided 2026-04-25 (Round 5+6 P0 sweep):** The black/ruff py311 → py312 target-version bump is **DEFERRED** out of PR 5 to a separate hand-reviewed PR after #1234 closes.
+
+- **Rationale:** the original PR 5 step `ruff check --target-version py312 --fix --select UP` replicates the exact pattern that triggered the 2026-04-14 unsafe-autofix incident (UP040 production-schema breakage). Per `feedback_no_unsafe_autofix.md`, "If a lint rule would rewrite 3+ files in source, STOP and ask." Target-version bump unlocks no value chain in #1234.
+- **PR 5 retains:** cross-file uv version consolidation, Python version consolidation, Postgres version consolidation, structural guard `test_architecture_uv_version_anchor`. The load-bearing piece (anchor consolidation) stays.
+- **PR 5 drops:** `[tool.black].target-version` py311 → py312, `[tool.ruff].target-version` py311 → py312, `ruff check --target-version py312 --fix --select UP` mass-fix, `--no-verify` carve-out (was needed because UP040 fix-cycle could mismatch hooks).
+- **Follow-up:** filed as 'Post-#1234: bump black/ruff py311 → py312 with hand-applied UP040 fixes.' See ADR-008 (`drafts/adr-008-target-version-bump.md`).
+- **Tripwire:** revisit after PR 5 ships AND `_pytest.yml` → composite migration is verified stable.
 
 ## Decisions still open (will be resolved in flight)
 
@@ -230,3 +254,4 @@ Format: each decision has a date, a one-line statement, the rationale, and a tri
 - 2026-04 — D1, D3-D9 captured from issue #1234
 - 2026-04-25 — D2, D10-D21 added; D7 revised after OSS validation surfaced prek adopters
 - 2026-04-25 (post-integrity-audit) — D-pending-1..4 promoted to D22-D25; D26 (workflow naming) and D27 (hook reallocation) added; D17 and D18 revised; D-pending-5 resolved as inline acceptance criterion (not a separate decision)
+- 2026-04-25 (Round 5+6 P0 sweep) — D11 reframed (drop "advisory" — hard gate from day 1); D18 rewritten (~73 final post-v2.0-rebase, was 42); D27 rewritten (real baseline 33 effective, math 33−13−9−1=10); D28 added (defer target-version bump per ADR-008)

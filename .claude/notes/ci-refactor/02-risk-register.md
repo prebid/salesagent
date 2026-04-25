@@ -1,6 +1,6 @@
 # Risk Register
 
-Top-10 risks for the 5-PR rollout. Severity × probability ranked. Each entry has a trigger (how you know it fired), a mitigation (preventive), and a rollback (corrective).
+Risks for the 6-PR rollout. Severity × probability ranked. Each entry has a trigger (how you know it fired), a mitigation (preventive), and a rollback (corrective). Entries R11-R18, R24-R25 from `research/edge-case-stress-test.md` remain LOW-impact informational; R19/R20/R23 promoted into base register and R26-R30 added in 2026-04-25 P0 sweep.
 
 | # | Risk | Sev | Prob | PR |
 |---|---|---|---|---|
@@ -14,6 +14,14 @@ Top-10 risks for the 5-PR rollout. Severity × probability ranked. Each entry ha
 | 8 | Coverage drops > 2% after CI restructure | Med | Med | PR 3 |
 | 9 | Dependabot deluge week 1 (>15 PRs) | Low | High | PR 1 |
 | 10 | OpenSSF Scorecard < 7.5 after all PRs | Med | Low | All |
+| 19 | Path-filtered job 422 (Migration Roundtrip never reports on non-alembic soak PR) | High | Med | PR 3 Phase B |
+| 20 | Compromised Dependabot PR via bypass actor | **Crit** | Low | PR 1 |
+| 23 | Concurrent admin overwrite of branch protection mid-rollout | Med | Med | All |
+| 26 | CodeQL CSRF estimate 2.4× low (v2.0 dual-state inflates) | Med | High | PR 1 |
+| 27 | `actions/upload-artifact` tar-bomb of `.coverage.*` | Low | Low | PR 3 |
+| 28 | `concurrency: cancel-in-progress` cancels mid-flip dispatch | Low | Med | PR 3 Phase B |
+| 29 | release-please tag publish races with cosign sign step | High | Low | PR 6 |
+| 30 | GitHub repo `allow_auto_merge` toggle bypasses D5 | **Crit** | Low | All |
 
 ## R1 — Branch-protection flip locks out merging (HIGH)
 
@@ -86,7 +94,7 @@ Top-10 risks for the 5-PR rollout. Severity × probability ranked. Each entry ha
 
 - **Trigger:** PR 3's reusable workflows miss a test path; combined coverage post-Phase A is below the pre-rollout 55.56%.
 - **Mitigation:**
-  - Coverage advisory for 4 weeks per D11.
+  - Coverage hard-gated from PR 3 day 1 per D11 (revised 2026-04-25 P0 sweep — no advisory window). A single PR dropping >2pp triggers immediate failure.
   - Phase A overlap runs both old and new workflows in parallel; baseline-current values are captured during this window.
   - `.coverage-baseline = 53.5` (current - 2pp) absorbs measurement noise from xdist worker shuffling.
 - **Rollback:** investigate (find the missed path); fix forward in a small follow-up PR. If unfixable in <48h, extend advisory window.
@@ -109,6 +117,74 @@ Top-10 risks for the 5-PR rollout. Severity × probability ranked. Each entry ha
   - File a follow-up issue with specific check failures. Not a rollout blocker; iterate.
 - **Rollback:** none needed. Document gap in [03-decision-log.md](03-decision-log.md) and continue.
 
+## R19 — Path-filtered job 422 (HIGH, MED prob, PR 3 Phase B)
+
+- **Trigger:** `Migration Roundtrip` is path-filtered to `paths: ['alembic/versions/**']` in `_pytest/action.yml`. A 48h soak window run on a non-alembic PR will never publish that check name; the Phase B PATCH would 422 against a missing required check.
+- **Mitigation:**
+  - Force a `workflow_dispatch` trigger on `ci.yml` BEFORE the Phase B flip, so all 11 jobs publish their check names regardless of path filtering.
+  - `capture-rendered-names.sh` verifies the published set against the 11 frozen names AFTER the forced full-suite run, not just from passive soak.
+- **Rollback:** if Phase B PATCH 422s, the inverse PATCH from `branch-protection-snapshot.json` restores the prior contexts.
+
+## R20 — Compromised Dependabot PR via bypass actor (CRITICAL, LOW prob, PR 1)
+
+- **Trigger:** @chrishuie's account is compromised (phishing) and the attacker submits a Dependabot security update PR with a malicious payload via the bypass mechanism, OR clicks "Enable auto-merge" on the PR (R30 attack chain).
+- **Mitigation:**
+  - **A11 pre-flight audit** (`gh api repos/prebid/salesagent --jq '.allow_auto_merge'` MUST be `false`).
+  - Daily cron `branch-protection-snapshot.yml` Action (R23 mitigation) detects unexpected bypass-list mutations.
+  - 24h cooldown label workflow on Dependabot PRs (auto-applies `cooldown-24h` label that blocks merge until 24h post-open) — gives a human review window even under bypass.
+  - Hardware MFA on the bypass actor's GitHub account (organizational, out of plan scope but recommended).
+- **Rollback:** revert the malicious commit; rotate any leaked secrets; audit downstream commits in the 72h window.
+
+## R23 — Concurrent admin overwrite of branch protection mid-rollout (MED, MED prob, all PRs)
+
+- **Trigger:** a concurrent org admin updates branch protection via the GitHub UI for an unrelated reason during the 5-week rollout. The next Phase B execution PATCHes against a stale snapshot.
+- **Mitigation:**
+  - Daily cron `branch-protection-snapshot.yml` Action: runs `gh api repos/.../branches/main/protection > .github/.branch-protection-snapshot.json` and opens an issue (with a label and a CODEOWNERS auto-request) if `git diff` against the prior snapshot shows non-empty drift. Run nightly UTC.
+  - Phase B re-captures snapshot immediately before flip.
+- **Rollback:** apply the most recent pre-drift snapshot via inverse PATCH.
+
+## R26 — CodeQL CSRF estimate 2.4× low (MED, HIGH prob, PR 1)
+
+- **Trigger:** PR 1's first CodeQL run reports 200-300 CSRF findings (not 99). Cause: v2.0 mid-flight has both Flask `src/admin/blueprints/` AND new FastAPI `src/admin/routers/` emitting CSRF candidates. Verified disk count: 107 mutating + 99 GET-only = 237 total Flask routes.
+- **Mitigation:**
+  - D10 Path C (advisory CodeQL for 2 weeks) absorbs this — PR 1 is not blocked by the inflated count.
+  - Triage budget scaled to 200-300 findings (3-4× the original estimate).
+  - Allowlist Flask Blueprint routes that v2.0's `src/admin/csrf.py` will protect with `# codeql:ignore-csrf-deferred-to-v2-fastapi-csrf-middleware` comments. Reduces noise during advisory window.
+- **Rollback:** keep CodeQL advisory indefinitely if findings exceed 300; document in a new ADR.
+
+## R27 — `actions/upload-artifact` tar-bomb of `.coverage.*` (LOW, LOW prob, PR 3)
+
+- **Trigger:** `_pytest/action.yml` (the new composite from PR 3 Decision-4) uploads `.coverage.${{ inputs.tox-env }}` with `include-hidden-files: true`. If a test creates `.coverage` files in unexpected paths (e.g., `/tmp/`, sub-pkg dirs), the upload glob picks up files outside intended scope, leaking test artifacts or paths into a public artifact.
+- **Mitigation:**
+  - Scope upload glob to literal path: `path: '.coverage.${{ inputs.tox-env }}'` (no wildcard).
+  - Add `if-no-files-found: error` to fail noisily if the file is absent.
+- **Rollback:** delete the leaky artifact via `gh api -X DELETE`; tighten glob in next PR.
+
+## R28 — `concurrency: cancel-in-progress` cancels mid-flip dispatch (LOW, MED prob, PR 3 Phase B)
+
+- **Trigger:** maintainer pushes a confirmation commit during Phase B Step 1b's `workflow_dispatch` on `ci.yml`. The dispatch run gets cancelled by next-push, leaving rendered-names.txt partially populated.
+- **Mitigation:**
+  - `capture-rendered-names.sh` waits for `gh run watch <run-id>` to reach `completed` status, NOT just to start.
+  - `concurrency: cancel-in-progress: true` is gated to `pull_request` trigger only (not `push` or `workflow_dispatch`); state explicitly in `ci.yml`.
+- **Rollback:** re-run `workflow_dispatch` and re-execute `capture-rendered-names.sh`.
+
+## R29 — release-please tag publish races with cosign sign step (HIGH, LOW prob, PR 6)
+
+- **Trigger:** release-please pushes a tag and triggers `release_created`. The `publish-docker` job (modified by PR 6) builds + pushes + cosign-signs in one job. cosign step fails (Sigstore TUF refresh hiccup) — tag exists in git AND image pushed but unsigned. Verifiers downstream get the tag without signature; rollback requires deleting GHCR tag + git tag (irreversible if anyone pulled it).
+- **Mitigation:**
+  - Split `publish-docker` into two jobs (build+push, then sign) with explicit `needs:` and a failure-blocks-tag gate.
+  - Document that cosign failures require manual re-sign or tag-deletion + re-cut.
+  - Sigstore Rekor v2 transition (TUF-distributed; cosign auto-upgrades) reduces flakiness over time.
+- **Rollback:** delete the unsigned GHCR tag; delete the git tag; cut a new patch release.
+
+## R30 — GitHub repo `allow_auto_merge` toggle bypasses D5 (CRITICAL, LOW prob, all PRs)
+
+- **Trigger:** GitHub repo Settings → General → "Allow auto-merge" is enabled (default ON for new repos). Even with D5 forbidding auto-merge in `dependabot.yml`, ANY PR (Dependabot included) can be enabled for auto-merge by clicking the button. Combined with R20 (phishing the bypass actor), an attacker who phishes @chrishuie can merge a malicious Dependabot PR via auto-merge button click.
+- **Mitigation:**
+  - **A11 pre-flight audit** (`gh api repos/prebid/salesagent --jq '.allow_auto_merge'` MUST be `false`). Disable via UI Settings → General → Pull Requests → Disable "Allow auto-merge", or via `gh api -X PATCH /repos/prebid/salesagent -f allow_auto_merge=false`.
+  - Daily cron snapshot Action (R23 mitigation) diffs `.allow_auto_merge` value and opens an issue if drifted to `true`.
+- **Rollback:** flip the toggle off via API or UI; audit recent merges for unauthorized auto-merge events.
+
 ## Cross-cutting risk: Dependabot review backlog (D5 sustainability tripwire)
 
 Documented in D5. Watch the metric:
@@ -121,7 +197,9 @@ If consistently > 5 across two consecutive Mondays, pause forward work on issue 
 
 ## Risk-monitoring cadence
 
-- **During each PR review:** check the 1-2 risks specifically tagged for that PR
-- **Weekly during the 5-week rollout:** check Dependabot backlog metric
-- **End of Week 4:** R3 trigger check (CodeQL finding count) before flipping to gating
-- **End of Week 5:** R10 final Scorecard check + close issue #1234
+- **Daily (cron) during the 6-week rollout:** branch-protection snapshot drift check (R23 mitigation, also covers R20 and R30 attack chains)
+- **During each PR review:** check the risks specifically tagged for that PR
+- **Weekly during the 6-week rollout:** check Dependabot backlog metric
+- **End of Week 4:** R3 trigger check (CodeQL finding count) before flipping to gating; R26 follow-up if count >300
+- **End of Week 5:** R10 interim Scorecard check
+- **End of Week 6:** R10 final Scorecard check (≥7.5/10) + close issue #1234

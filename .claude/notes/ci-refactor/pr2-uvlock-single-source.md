@@ -267,7 +267,7 @@ Files:
 This commit also corrects:
 - Add 5 missing rows for guards on disk (`test_architecture_no_silent_except.py`, `test_architecture_bdd_no_direct_call_impl.py`, `test_architecture_bdd_obligation_sync.py`, `test_architecture_production_session_add.py`, `test_architecture_test_marker_coverage.py`)
 - Remove 3 phantom rows (guards listed but not on disk)
-- Audit table column count (per D18, target post-PR-2: 28; PR 4 adds 4 more for final 32)
+- Audit table column count (per D18 revised P0 sweep, target post-PR-2: 28; PR 4 adds 4 more; v2.0 contributes 31 architecture tests + 9 baseline JSONs; PR 1/3/6 governance adds 8 — final ~73 post-v2.0-rebase)
 
 Verification:
 ```bash
@@ -362,7 +362,7 @@ PR 2 has more conditional rollback than PR 1 because of the `--extra dev` → `-
 **Option A — full revert (preferred):**
 ```bash
 git revert -m 1 <PR2-merge-sha>
-git push origin main   # USER ACTION
+# admin: pushes via UI; agent does NOT run this command
 ```
 
 If revert breaks CI (because `[project.optional-dependencies].dev` is referenced by callsite that was deleted in PR 2 commit 4), the revert is incomplete; need to reapply commit 4's `--extra dev` references.

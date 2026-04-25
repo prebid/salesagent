@@ -29,27 +29,19 @@ Commits:
                ! grep -qE '^RUN pip install.*uv' Dockerfile
 
 [ ] 4. chore(uv): align UV_VERSION across Dockerfile and workflows + add structural guard
-       Files: .github/workflows/_pytest.yml, ci.yml; .github/actions/setup-env/action.yml (default '0.11.6');
+       Files: .github/workflows/ci.yml, .github/actions/_pytest/action.yml (composite — Decision-4),
+              .github/actions/setup-env/action.yml (default '0.11.6');
               tests/unit/test_architecture_uv_version_anchor.py (new; spec §Commit 4 verbatim)
        Verify: uv run pytest tests/unit/test_architecture_uv_version_anchor.py -v
 
-[ ] 5. refactor(format): bump black target-version to py312
-       File: pyproject.toml:117 — target-version = ['py311'] → ['py312']
-       Pre-flight: uvx black --check --diff --target-version py312 src/ 2>&1 | tee /tmp/black-py312.txt
-       Verify: python -c "import tomllib; d=tomllib.load(open('pyproject.toml','rb')); \
-                 assert 'py312' in d['tool']['black']['target-version']"
+[ ] 5. DEFERRED per D28 (P0 sweep — black target-version bump out of #1234)
+       Black target-version = py311 → py312 lives in a post-#1234 follow-up PR per ADR-008.
+       Rationale: 2026-04-14 unsafe-autofix incident pattern (UP040 broke prod schemas).
+       File a follow-up issue: 'Post-#1234: bump black/ruff py311 → py312 with hand-applied UP040 fixes.'
 
-[ ] 6. refactor(format): bump ruff target-version to py312
-       File: pyproject.toml:138 — target-version = "py311" → "py312"
-       Pre-flight: uv run ruff check src/ tests/ --target-version py312 --statistics
-       Apply autofix if needed: uv run ruff check src/ tests/ --target-version py312 --fix --select UP
-       Verify: python -c "import tomllib; d=tomllib.load(open('pyproject.toml','rb')); \
-                 assert d['tool']['ruff']['target-version'] == 'py312'"
-               uv run ruff check src/
+[ ] 6. DEFERRED per D28 — same reason as commit 5 (ruff target-version bump out of PR 5)
 
-[ ] 7. chore: black reformat + ruff fix (target-version py312)
-       (Only if commits 5+6 produced diff. Files: variable.)
-       Verify: make quality
+[ ] 7. DEFERRED per D28 — `--select UP` mass-fix is FORBIDDEN in PR 5 (feedback_no_unsafe_autofix.md)
 
 [ ] 8. chore: regression checks against PG17
        (No code change — local verification, document in PR description.)

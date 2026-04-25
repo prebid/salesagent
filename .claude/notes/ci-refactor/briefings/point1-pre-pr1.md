@@ -18,6 +18,10 @@
 - A8: Pre-commit warm latency baseline captured (issue claimed 18-30s; actual number is in your snapshot)
 - A9: OpenSSF Scorecard baseline captured (target post-rollout ≥7.5/10)
 - A10: CSRF Path C plan confirmed (advisory CodeQL for 2 weeks, flip to gating Week 5)
+- A11 (P0 sweep): `allow_auto_merge` audit — repo toggle MUST be `false` (R30 mitigation; combined with R20, an attacker phishing the bypass actor could click "Enable auto-merge" on a malicious Dependabot PR)
+- A12 (P0 sweep): Dependabot PR queue drained to ≤2 open before PR 1 lands
+- A13 (P0 sweep): `mypy.ini [mypy.plugins]` block snapshotted to `mypy-plugins-baseline.txt` (R2/D13 — proves plugin was dead pre-PR-2)
+- A14 (P0 sweep): @chrishuie bypass-list addition feasibility confirmed (Prebid.org may require higher-tier admin)
 - P1: drift evidence re-verified (line numbers in `.pre-commit-config.yaml` and `pyproject.toml` still valid)
 - P2: `.mypy-baseline.txt` captured (errors-before count for PR 2)
 - P3: `.zizmor-preflight.txt` captured (~35 expected findings)

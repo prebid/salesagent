@@ -101,6 +101,46 @@ Re-read [03-decision-log.md](03-decision-log.md) D10. Confirm you accept Path C 
 
 If you change your mind: PR 1 spec has a one-line toggle for gating-vs-advisory in the codeql.yml workflow.
 
+### A11 — Audit GitHub repo `allow_auto_merge` toggle (R30 mitigation)
+
+```bash
+gh api repos/prebid/salesagent --jq '.allow_auto_merge'
+```
+
+Expected: `false`. If `true`, this is the silent bypass attack chain: combined with R20 (compromised bypass actor), an attacker who phishes @chrishuie can click the "Enable auto-merge" button on a malicious Dependabot PR.
+
+Disable via:
+- UI path: **Settings → General → Pull Requests → Disable "Allow auto-merge"**, OR
+- API: `gh api -X PATCH /repos/prebid/salesagent -f allow_auto_merge=false`
+
+Confirm: `gh api repos/prebid/salesagent --jq '.allow_auto_merge'` returns `false`.
+
+### A12 — Drain existing Dependabot PR queue before PR 1 lands (R9 + D5)
+
+```bash
+gh pr list --author "app/dependabot" --state open --json number,title --jq '.[] | "\(.number) \(.title)"'
+```
+
+Plan: clear the queue to ≤2 open Dependabot PRs before authoring PR 1, so the first post-PR-1 cron cycle doesn't compound a backlog onto a fresh deluge. If queue is ≥5, the D5 sustainability tripwire fires; pause PR 1 authoring until cleared.
+
+### A13 — Snapshot `mypy.ini [mypy.plugins]` block (R2/D13 mitigation)
+
+```bash
+grep -A 1 '^plugins' mypy.ini > .claude/notes/ci-refactor/mypy-plugins-baseline.txt
+```
+
+Captures the current dead-plugin state (`pydantic.mypy` listed but dependency missing from mirrors-mypy hook). PR 2 makes the plugin live; this snapshot proves it was dead pre-PR-2.
+
+### A14 — Confirm @chrishuie can be added to bypass list (D2 mitigation)
+
+The Prebid.org GitHub org may require a higher-tier admin to add @chrishuie to the branch-protection bypass list. Confirm before authoring PR 1 (which depends on the bypass for the solo-maintainer model). Test:
+
+```bash
+gh api repos/prebid/salesagent/branches/main/protection/bypass_pull_request_allowances --jq '.users[].login'
+```
+
+If @chrishuie is not in the list and current GH role doesn't have org-admin to add, escalate to org admin before PR 1 lands.
+
 ## Agent-runnable preparation steps
 
 These can be delegated to the executor agent at the start of PR 1's session.
@@ -189,6 +229,10 @@ Before PR 1 is authored, this file should be marked complete:
 - [ ] A8 — pre-commit latency baseline captured
 - [ ] A9 — OpenSSF Scorecard baseline captured
 - [ ] A10 — CSRF advisory plan confirmed
+- [ ] A11 — `allow_auto_merge` toggle audited (must be `false`)
+- [ ] A12 — Dependabot PR queue drained to ≤2 open
+- [ ] A13 — mypy.ini plugin block snapshotted
+- [ ] A14 — @chrishuie bypass-list addition feasibility confirmed
 - [ ] P1 — drift evidence re-verified (or noted as still-current)
 - [ ] P2 — pydantic.mypy baseline captured (`.mypy-baseline.txt`)
 - [ ] P3 — zizmor pre-flight captured (`.zizmor-preflight.txt`)

@@ -13,20 +13,30 @@ Commits in order:
        Verify: grep -qE 'using: .composite.' .github/actions/setup-env/action.yml && \
                yamllint -d relaxed .github/actions/setup-env/action.yml
 
-[ ] 2. ci: add _pytest.yml reusable workflow
-       File: .github/workflows/_pytest.yml (new; spec §Phase A Commit 2; postgres:17-alpine; permissions: {})
-       Verify: grep -q 'workflow_call:' .github/workflows/_pytest.yml && \
-               grep -qE '^permissions:\s*\{?\s*\}?' .github/workflows/_pytest.yml && \
-               grep -q 'postgres:17-alpine' .github/workflows/_pytest.yml
+[ ] 2. ci: add _pytest composite action (Decision-4 — NOT a reusable workflow)
+       File: .github/actions/_pytest/action.yml (new; spec §Phase A Commit 2; using: composite)
+       Note: postgres:17-alpine services live at the calling-job level in ci.yml (composites can't declare services)
+       Verify: grep -qE 'using:\s+["\x27]?composite' .github/actions/_pytest/action.yml && \
+               yamllint -d relaxed .github/actions/_pytest/action.yml && \
+               ! test -f .github/workflows/_pytest.yml   # reusable form forbidden post-Decision-4
 
-[ ] 3. ci: add ci.yml orchestrator with 11 frozen check names
+[ ] 3. ci: add ci.yml orchestrator with 11 frozen BARE job names (D26)
        File: .github/workflows/ci.yml (new; spec §Phase A Commit 3 verbatim — DO NOT alter check names)
-       Verify: for name in 'CI / Quality Gate' 'CI / Type Check' 'CI / Schema Contract' 'CI / Unit Tests' \
-                          'CI / Integration Tests' 'CI / E2E Tests' 'CI / Admin UI Tests' 'CI / BDD Tests' \
-                          'CI / Migration Roundtrip' 'CI / Coverage' 'CI / Summary'; do
-                 grep -qF "name: '$name'" .github/workflows/ci.yml || \
-                   { echo "missing check name: $name"; exit 1; }
-               done
+       D26: workflow `name: CI` + jobs use BARE names (NOT 'CI / X' — that produces 'CI / CI / X' rendered)
+       Verify the workflow header and bare job names:
+         grep -qE '^name:\s+CI\s*$' .github/workflows/ci.yml
+         for name in 'Quality Gate' 'Type Check' 'Schema Contract' 'Unit Tests' \
+                    'Integration Tests' 'E2E Tests' 'Admin UI Tests' 'BDD Tests' \
+                    'Migration Roundtrip' 'Coverage' 'Summary'; do
+           grep -qF "name: '$name'" .github/workflows/ci.yml || \
+             grep -qF "name: \"$name\"" .github/workflows/ci.yml || \
+             grep -qE "^\s+name:\s+${name}\s*$" .github/workflows/ci.yml || \
+             { echo "missing bare job name: $name"; exit 1; }
+         done
+         # No 'CI /' prefix in job names (the D26 bug)
+         ! grep -qE "name:\s+['\"]CI / " .github/workflows/ci.yml
+         # develop branch trigger (P0 sweep)
+         grep -qE 'branches:\s+\[main,\s*develop\]' .github/workflows/ci.yml
 
 [ ] 4. ci: add migration_roundtrip.sh script
        File: .github/scripts/migration_roundtrip.sh (new, executable; spec §Phase A Commit 4 verbatim)
@@ -37,10 +47,10 @@ Commits in order:
 
 [ ] 5. ci: pin GitHub Actions in new workflows to SHAs
        Files: replace every <SHA> placeholder in commits 1-3 with actual 40-char SHA + # v<tag>
-       Reuse the SHA-resolution loop from PR 1 commit 9 (it's in your shell history).
-       Verify: [[ $(grep -hoE 'uses: [^ ]+@<SHA>' .github/workflows/ci.yml .github/workflows/_pytest.yml \
+       Reuse `.github/.action-shas.txt` from PR 1 commit 9.
+       Verify: [[ $(grep -hoE 'uses: [^ ]+@<SHA>' .github/workflows/ci.yml .github/actions/_pytest/action.yml \
                     .github/actions/setup-env/action.yml | wc -l) == "0" ]] && \
-               [[ $(grep -hoE 'uses: [^ ]+@[a-f0-9]{40}' .github/workflows/ci.yml .github/workflows/_pytest.yml \
+               [[ $(grep -hoE 'uses: [^ ]+@[a-f0-9]{40}' .github/workflows/ci.yml .github/actions/_pytest/action.yml \
                     .github/actions/setup-env/action.yml | wc -l) -ge "5" ]]
 
 [ ] 6. ci: add coverage baseline

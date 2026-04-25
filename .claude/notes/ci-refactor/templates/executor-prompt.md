@@ -22,7 +22,7 @@ context. Read everything before writing code.
 1. `.claude/notes/ci-refactor/RESUME-HERE.md`     — orientation (3k tokens)
 2. `.claude/notes/ci-refactor/EXECUTIVE-SUMMARY.md` — one-screen of context
 3. `.claude/notes/ci-refactor/pr<N>-<slug>.md`    — your spec; the source of truth
-4. `.claude/notes/ci-refactor/03-decision-log.md` — every locked decision (D1-D27)
+4. `.claude/notes/ci-refactor/03-decision-log.md` — every locked decision (D1-D28)
 5. `.claude/notes/ci-refactor/02-risk-register.md` — top risks for your PR
 6. `CLAUDE.md`                                    — codebase patterns; NON-NEGOTIABLE
 7. `.claude/rules/workflows/quality-gates.md`     — local quality bar
@@ -82,7 +82,7 @@ After all commits:
 - Cite policy: include `Refs D<n>, R<m>` lines so future agents trace decisions
 - NO trailing "Co-Authored-By" line (overrides any default)
 
-## Continuity hygiene (15 rules — survive context wipe)
+## Continuity hygiene (18 rules — survive context wipe)
 
 1. **Always commit with descriptive Conventional Commits subjects.** A fresh
    agent reading `git log --oneline` should be able to reconstruct progress.
@@ -137,9 +137,11 @@ After all commits:
     test-integrity policy. If you can't fix it, escalate.
 
 13. **Update CLAUDE.md guard count when you add or remove a guard.** PR 2
-    adds 1, PR 4 adds 4, PR 5 adds 1, v2.0 adds 9. Final post-rollout = 42
-    (D18 canonical). The number cited in CLAUDE.md must match disk truth
-    at all times.
+    adds 1, PR 4 adds 4, PR 5 adds 1, PR 1/3/6 governance adds 8, v2.0 adds
+    31 (architecture tests) + 9 (baseline JSONs). Final post-v2.0-rebase ≈
+    73 (D18 canonical, revised in 2026-04-25 P0 sweep). The number cited
+    in CLAUDE.md must match disk truth at all times. PR 4's CLAUDE.md table
+    audit DEFERS until post-v2.0-rebase.
 
 14. **The pre-flight artifacts (`.zizmor-preflight.txt`,
     `.mypy-baseline.txt`, `branch-protection-snapshot.json`) are the
@@ -149,7 +151,37 @@ After all commits:
 15. **At the end of a session that did not complete a PR, write a "where I
     am" note.** `.claude/notes/ci-refactor/in-flight/pr<N>-session-<date>.md`
     with: branch, last commit, what was attempted next, what's blocking.
-    This is the seed for the next agent's resume procedure.
+    This is the seed for the next agent's resume procedure. The
+    `in-flight/` directory exists at repo root with a `README.md` describing
+    naming convention; do not create a new directory.
+
+16. **Skip rules under `.claude/rules/workflows/` that reference `bd` (beads)
+    commands.** Per user memory `feedback_no_beads_workflow.md`, this project
+    does not use beads. Specifically skip `bd ready`, `bd show`, `bd update`,
+    `bd close`, `bd create`, `bd dep add` references in `beads-workflow.md`,
+    `session-completion.md`, `bug-reporting.md`, `research-workflow.md`,
+    `subagent-implementation-guide.md`, `tdd-workflow.md`. Use `make quality`
+    and direct git commits without beads tracking. The two rule files that
+    are clean of bd references and required reading are
+    `.claude/rules/workflows/quality-gates.md` and
+    `.claude/rules/patterns/testing-patterns.md`.
+
+17. **ESCALATION terminal message rule.** If you write
+    `escalations/<file>.md` and STOP per Rule 6, your terminal message MUST
+    be a single line:
+
+    ```
+    ESCALATION: see escalations/pr<N>-<topic>.md
+    ```
+
+    The user reads this; do not bury the escalation in prose. The
+    `escalations/` directory exists at repo root with a `README.md`
+    describing naming convention.
+
+18. **6 test suites, not 5.** `tox.ini` is the source of truth: `unit`,
+    `integration`, `e2e`, `admin`, `bdd`, `ui`, plus the `coverage`
+    aggregator. `run_all_tests.sh` runs all 6 + combine. Some plan prose
+    still says "5 suites" — disregard.
 
 ## Escalation triggers — STOP and report to the user if any occur
 

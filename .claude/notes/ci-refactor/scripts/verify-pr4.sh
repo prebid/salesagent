@@ -78,10 +78,12 @@ fi
 # Commit 8: latency baseline
 [[ -f .pre-commit-latency-after.txt ]] && ok ".pre-commit-latency-after.txt captured"
 
-# Commit 9: CLAUDE.md guards table
+# Commit 9: CLAUDE.md guards table (D18 revised P0 sweep — final ~73 post-v2.0-rebase)
+# Per the deferral: PR 4 commit 9 adds only the 4 PR-4 rows + 2 residual missing rows;
+# the full ~73-row audit happens in a post-v2.0-rebase commit, not here.
 if grep -q 'Structural Guards' CLAUDE.md; then
   TABLE_ROWS=$(awk '/^\| Guard/,/^$/' CLAUDE.md | grep -cE '^\|.*test_architecture_')
-  [[ "$TABLE_ROWS" -ge 30 ]] && ok "CLAUDE.md guards table has $TABLE_ROWS rows (target ~52)"
+  [[ "$TABLE_ROWS" -ge 28 ]] && ok "CLAUDE.md guards table has $TABLE_ROWS rows (target ≥28 post-PR-4; ~73 final post-v2.0-rebase)"
 fi
 
 # Coverage map

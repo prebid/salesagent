@@ -16,6 +16,21 @@ if grep -RhoE 'uses: step-security/harden-runner@' .github/workflows/ >/dev/null
   grep -q 'disable-sudo-and-containers: true' .github/workflows/ci.yml \
     && ok "harden-runner uses disable-sudo-and-containers (CVE-2025-32955 mitigated)"
 
+  # Version floor: v2.16.0+ (was v2.12.0+ — bumped in 2026-04-25 P0 sweep to capture
+  # GHSA-46g3-37rh-v698 DoH/DNS-over-TCP egress-bypass advisories patched in v2.13+).
+  # SHA-pinned refs in PR 1's .action-shas.txt; verify the trailing comment shows v2.16+.
+  HR_REFS=$(grep -RhoE 'uses: step-security/harden-runner@[a-f0-9]{40}\s*#\s*v[0-9.]+' .github/workflows/ | grep -oE 'v[0-9.]+' | sort -u)
+  if [[ -n "$HR_REFS" ]]; then
+    while IFS= read -r tag; do
+      MAJOR=$(echo "$tag" | tr -d v | cut -d. -f1)
+      MINOR=$(echo "$tag" | tr -d v | cut -d. -f2)
+      if [[ "$MAJOR" -lt 2 ]] || { [[ "$MAJOR" -eq 2 ]] && [[ "$MINOR" -lt 16 ]]; }; then
+        fail "harden-runner pinned to $tag — must be ≥v2.16.0 (GHSA-46g3-37rh-v698)"
+      fi
+    done <<< "$HR_REFS"
+    ok "harden-runner ≥v2.16.0 (DoH-bypass advisories patched)"
+  fi
+
   # Audit mode initially
   grep -q 'egress-policy: audit' .github/workflows/ci.yml \
     && ok "harden-runner egress-policy: audit (Commit 1 stage)"
@@ -73,6 +88,23 @@ if grep -q 'egress-policy: block' .github/workflows/ci.yml 2>/dev/null; then
   grep -q 'allowed-endpoints:' .github/workflows/ci.yml \
     || fail "block-mode requires allowed-endpoints"
   ok "harden-runner flipped to block-mode with allowed-endpoints"
+fi
+
+# Commit (P0 sweep): self-hosted Scorecard workflow file exists
+if [[ -f .github/workflows/scorecard.yml ]]; then
+  yamllint -d relaxed .github/workflows/scorecard.yml >/dev/null 2>&1 || fail "scorecard.yml fails yamllint"
+  grep -q 'ossf/scorecard-action' .github/workflows/scorecard.yml \
+    || fail "scorecard.yml missing ossf/scorecard-action"
+  grep -qE 'publish_results:\s*true' .github/workflows/scorecard.yml \
+    || fail "scorecard.yml missing publish_results: true (badge auto-update)"
+  grep -q 'branch_protection_rule' .github/workflows/scorecard.yml \
+    && ok "scorecard.yml: ossf/scorecard-action + publish_results + branch_protection_rule"
+fi
+
+# Commit (P0 sweep): no stale `release.yml` references; everything goes through release-please.yml
+if grep -RnE 'release\.yml' .claude/notes/ci-refactor/scripts/ .claude/notes/ci-refactor/*.md 2>/dev/null \
+    | grep -vE 'release-please\.yml|# (extends|does NOT|MOVED)' >/dev/null; then
+  fail "stale 'release.yml' references found in plan corpus — must use 'release-please.yml' (D5/PR6 P0 sweep)"
 fi
 
 # Commit 4-7 are admin/operator actions — out of scope for the agent verifier

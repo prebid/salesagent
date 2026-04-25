@@ -13,7 +13,7 @@ Sequenced as TWO sub-PRs with ≥2-week separation. Sub-PR A first, Sub-PR B aft
 Commits:
 
 [ ] 1. ci(security): add harden-runner in audit mode to all workflows
-       harden-runner@<SHA> v2.12.0+ as first step in every Ubuntu job.
+       harden-runner@<SHA> v2.16.0+ as first step in every Ubuntu job.
        MUST use `disable-sudo-and-containers: true` (CVE-2025-32955).
        NOT `disable-sudo: true` — that flag is bypassable via Docker.
        egress-policy: audit (NOT block — audit-mode soak runs ≥2 weeks

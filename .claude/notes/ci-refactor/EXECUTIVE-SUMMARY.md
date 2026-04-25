@@ -3,7 +3,7 @@
 **If you have time to read ONE file before being parachuted in, this is it.**
 Read order for cold-start: this file → `RESUME-HERE.md` → `pr<N>-<slug>.md` for your PR. ~14-20k tokens total.
 
-Last refresh: 2026-04-25 (post-integrity-audit, blockers fixed, D22-D27 promoted).
+Last refresh: 2026-04-25 (post-integrity-audit + Round 5+6 P0 sweep applied, blockers fixed, D22-D28, R19/R20/R23 promoted, R26-R30 added).
 
 ---
 
@@ -21,10 +21,10 @@ A concurrent v2.0 (Flask-to-FastAPI) effort runs under [PR #1221](https://github
 |---|---|---|---|
 | 1 | Governance + supply-chain hardening (CODEOWNERS, SECURITY.md, dependabot, zizmor, CodeQL advisory, SHA-pin all hooks/actions, `persist-credentials: false` on every checkout) | 2.5 days | 2, 3 |
 | 2 | uv.lock as single source: replace `mirrors-mypy` and `psf/black` with local `language: system` hooks (NOT a deprecation — fixes isolated-env import resolution per [Jared Khan](https://jaredkhan.com/blog/mypy-pre-commit)); delete `[project.optional-dependencies].dev`; re-enable `pydantic.mypy` plugin | 4-6 days | 3 |
-| 3 | CI authoritative + reusable workflows; 11 frozen check names (D17); 3-phase merge (overlap → rendered-name capture → atomic flip → cleanup) | 3-4 days | 4 |
-| 4 | Hook relocation: 5 grep hooks → AST guards; **9** to pre-push (D27, was 5); 4 to CI-only; 6 deleted; CLAUDE.md guards table grows to 52 rows | 2 days | 5 |
-| 5 | Version consolidation: Python, Postgres, uv anchors single-sourced; black/ruff py312; `test_architecture_uv_version_anchor` guard | 2 days | none |
-| 6 | Image supply chain: `harden-runner` (audit→block, v2.12.0+ for CVE-2025-32955), `cosign` keyless signing + SBOM + provenance, dependency-review (Week 6 follow-up; resolves D-pending-4 → D25) | 1.5-2 days | none |
+| 3 | CI authoritative + composite actions (Decision-4: composite, NOT reusable workflows); 11 frozen bare-name check jobs (D17 + D26); 3-phase merge (overlap → rendered-name capture → atomic flip → cleanup); coverage hard-gate from day 1 (D11 revised) | 3-4 days | 4 |
+| 4 | Hook relocation: 5 grep hooks → AST guards; **9** to pre-push (D27); 4 to CI-only; 6 deleted; real math 33 effective − 13 − 9 − 1 = 10 commit-stage; CLAUDE.md guards table audit DEFERS to post-v2.0-rebase (target ~73 rows, D18 revised) | 2 days | 5 |
+| 5 | Version consolidation: Python, Postgres, uv anchors single-sourced; `test_architecture_uv_version_anchor` guard. **Black/ruff target-version DEFERRED per D28 (ADR-008 — separate post-#1234 PR)** | 2 days | none |
+| 6 | Image supply chain: `harden-runner` (audit→block, **v2.16.0+** for CVE-2025-32955 + GHSA-46g3-37rh-v698), `cosign` keyless signing + SBOM + provenance, dependency-review, `scorecard.yml` self-host (Week 6 follow-up; resolves D-pending-4 → D25) | 1.5-2 days | none |
 
 ---
 
@@ -35,12 +35,12 @@ These were the load-bearing defects that would have failed at runtime. All three
 | # | Defect | Status |
 |---|---|---|
 | 1 | PR 3 spec used `name: 'CI / Quality Gate'` job names with workflow `name: CI` — GitHub renders this as `CI / CI / Quality Gate` (auto-prefix). Phase B PATCH would 422. | ✅ Fixed: 11 sites in `pr3-ci-authoritative.md`; D26 added; pre-flip rendered-name capture step at Phase B Step 1b |
-| 2 | PR 4 hook math: 37 commit-stage today − 15 deletions − 5 moves = 17 (vs ≤12 acceptance) | ✅ Fixed: PR 4 commit 5 now moves 9 hooks to pre-push (37 − 15 − 9 − 1 = 12); D27 added |
+| 2 | PR 4 hook math: 37 commit-stage today − 15 deletions − 5 moves = 17 (vs ≤12 acceptance) | ✅ Fixed: real baseline is 33 effective commit-stage (36 minus 3 manual). 2 of 15 deletions are already manual. Math: 33 − 13 − 9 − 1 = 10 (under ≤12 ceiling); D27 revised in 2026-04-25 P0 sweep |
 | 3 | `tests/unit/_architecture_helpers.py` collision — both PR 2 commit 8 and PR 4 commit 1 said "create" | ✅ Fixed: PR 2 creates baseline (~30 lines); PR 4 EXTENDS to ~221 lines (reconciled draft at `drafts/_architecture_helpers.py`) |
 
 ---
 
-## The 27 locked decisions (D1-D27)
+## The 28 locked decisions (D1-D28)
 
 D1: Solo maintainer (@chrishuie sole CODEOWNERS) ·
 D2: Branch protection + @chrishuie bypass (ADR-002) ·
@@ -52,23 +52,24 @@ D7: Pre-commit (not prek) for CI; prek optional-local ·
 D8: No pre-commit.ci ·
 D9: `.claude/` out of scope; CLAUDE.md guards table updated in PR 4 ·
 D10: CodeQL Path C — advisory 2 weeks, gating Week 5 ·
-D11: Coverage advisory 4 weeks at 53.5% ·
+D11: Coverage hard-gate from PR 3 day 1 at 53.5% (revised 2026-04-25 P0 sweep) ·
 D12: pre-commit autoupdate --freeze ·
 D13: Fix pydantic.mypy errors in PR 2 (tripwire >200) ·
 D14: Migrate ui-tests extras → dependency-groups ·
 D15: Delete Gemini key fallback (unconditional mock) ·
 D16: Dependabot ignores adcp until #1217 merges ·
 D17: 11 frozen CI check names (the *rendered* names; see D26) ·
-D18: 27 + 1 + 4 + 1 + 9 = **42** final guards (canonical) ·
+D18: **27 baseline + 1 + 4 + 1 + 8 + 31 + 9 = ~73** final guards (post-v2.0-rebase canonical; revised in 2026-04-25 P0 sweep) ·
 D19: Per-PR specs, not master doc ·
 D20: Path 1 sequencing (#1234 first, v2.0 rebases) ·
-D21: Root CONTRIBUTING.md is canonical ·
+D21: `docs/development/contributing.md` (594 lines) is canonical; root `CONTRIBUTING.md` is thin pointer (revised in P0 sweep) ·
 D22: zizmor placement — CI-only (was D-pending-1) ·
 D23: check-parameter-alignment — delete (was D-pending-2) ·
 D24: UV_VERSION anchor in `_setup-env` (was D-pending-3) ·
 D25: harden-runner adoption → PR 6 (was D-pending-4) ·
 D26: Workflow naming — drop `CI /` prefix from job names (resolves Blocker #1) ·
-D27: Pre-commit hook reallocation — 9 to pre-push, not 5 (resolves Blocker #2)
+D27: Pre-commit hook reallocation — 9 to pre-push; revised math 33−13−9−1=10 (resolves Blocker #2) ·
+D28: Defer black/ruff target-version bump out of PR 5 (P0 sweep; ADR-008 follow-up after #1234)
 
 ---
 
@@ -111,12 +112,12 @@ Branch protection requires exact-string match. Reusable workflow nesting can pro
 
 | Week | Activity | Deliverable |
 |------|----------|-------------|
-| 1 | Pre-flight + PR 1 (CodeQL advisory; persist-credentials everywhere) | PR 1 merged; Scorecard ≥6.5 |
+| 1 | Pre-flight (A1-A14 incl. allow_auto_merge audit, dependabot drain) + PR 1 (CodeQL advisory; persist-credentials everywhere; pinact + actionlint) | PR 1 merged; Scorecard ≥6.5 |
 | 2 | PR 2 + Dependabot intake | PR 2 merged mid-week |
-| 3 | PR 3 Phase A + 48h soak + rendered-name capture | Phase A merged |
-| 4 | PR 3 Phase B (admin flip) + Phase C (cleanup); 48h soak each | PR 3 fully landed |
-| 5 | PR 4 + PR 5 + flip CodeQL to gating | Close #1234 |
-| 6 | PR 6 (harden-runner audit→block + cosign + SBOM) | Scorecard ≥7.5 verified |
+| 3 | PR 3 Phase A + 48h soak + rendered-name capture (composite `_pytest`, not reusable) | Phase A merged |
+| 4 | PR 3 Phase B (admin flip; `--paginate` + `--app_id`) + Phase C (cleanup); 48h soak each | PR 3 fully landed; coverage hard-gated from day 1 (D11 revised) |
+| 5 | PR 4 + PR 5 (without target-version bump per D28) + flip CodeQL to gating | Close #1234 |
+| 6 | PR 6 (harden-runner v2.16+ audit→block + cosign + SBOM + scorecard.yml + ghcr immutability) | Scorecard ≥7.5 verified |
 
 ---
 
@@ -128,9 +129,13 @@ Branch protection requires exact-string match. Reusable workflow nesting can pro
 - Use `--no-verify`, `--ignore`, `--deselect`, `pytest.mark.skip` to bypass failures
 - Bundle CSRF middleware into PR 1 (Path C; deferred to v2.0's `src/admin/csrf.py`)
 - Auto-merge Dependabot PRs (D5)
+- **Click "Enable auto-merge" button on any PR** (R30; A11 pre-flight gates this at the repo-toggle level)
+- **Skip the daily branch-protection snapshot drift check** (R23/R20/R30 mitigation chain)
 - Touch files outside your PR's spec scope
 - Use `harden-runner`'s `disable-sudo: true` (CVE-2025-32955; use `disable-sudo-and-containers: true`)
+- Use `harden-runner` v2.12.x or older (DoH/DNS-over-TCP egress-bypass advisories; pin v2.16.0+)
 - Frame the mirrors-mypy migration as "deprecation" (it's not — it's an isolated-env import-resolution fix)
+- Run `ruff --fix --select UP` or any other unsafe autofix during a migration (per `feedback_no_unsafe_autofix.md`; D28 deferred this entirely)
 
 ---
 
@@ -175,10 +180,10 @@ Then STOP. The user reads, decides, you resume.
 - `RESUME-HERE.md` (orientation)
 - `EXECUTIVE-SUMMARY.md` (this file)
 - `00-MASTER-INDEX.md` (status table)
-- `01-pre-flight-checklist.md` (admin + agent prep)
-- `02-risk-register.md` (R1-R10 today; R11-R25 in `research/edge-case-stress-test.md` pending integration)
-- `03-decision-log.md` (D1-D27)
-- `architecture.md` (current vs target)
+- `01-pre-flight-checklist.md` (A1-A14 admin + P1-P6 agent prep)
+- `02-risk-register.md` (R1-R10 + R19/R20/R23 promoted + R26-R30 added; R11-R18, R24-R25 remain LOW info in `research/edge-case-stress-test.md`)
+- `03-decision-log.md` (D1-D28)
+- `architecture.md` (current vs target — partially stale; specs are authoritative)
 - `landing-schedule.md` (6-week calendar)
 
 **Per-PR (load only the one for your PR):**

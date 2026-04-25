@@ -20,18 +20,19 @@ if [[ -f Dockerfile ]] && [[ -n "${PYV:-}" ]]; then
   grep -qE "ARG PYTHON_VERSION" Dockerfile && ok "Dockerfile has ARG PYTHON_VERSION"
 fi
 
-# black target-version
+# black target-version (D28 P0 sweep: bump DEFERRED to post-#1234 follow-up per ADR-008)
+# PR 5 verifies the bump did NOT happen prematurely.
 if grep -q 'target-version' pyproject.toml; then
-  grep -qE 'target-version\s*=\s*\[?["'\'']py312' pyproject.toml \
-    || fail "black target-version != py312"
-  ok "black target-version = py312"
+  grep -qE 'target-version\s*=\s*\[?["'\'']py311' pyproject.toml \
+    || fail "black target-version drifted; D28 holds at py311 until post-#1234 follow-up"
+  ok "black target-version held at py311 (D28 — bump deferred per ADR-008)"
 fi
 
-# ruff target-version
+# ruff target-version (D28: same deferral)
 if grep -qE '\[tool\.ruff\]' pyproject.toml; then
-  grep -qE 'target-version\s*=\s*["'\'']py312' pyproject.toml \
-    || fail "ruff target-version != py312"
-  ok "ruff target-version = py312"
+  grep -qE 'target-version\s*=\s*["'\'']py311' pyproject.toml \
+    || fail "ruff target-version drifted; D28 holds at py311 until post-#1234 follow-up"
+  ok "ruff target-version held at py311 (D28 — bump deferred per ADR-008)"
 fi
 
 # UV_VERSION anchor in setup-env

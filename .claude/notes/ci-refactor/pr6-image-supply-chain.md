@@ -32,18 +32,23 @@ Commits are independent; revert any one without breaking others.
 ### Commit 1 — `ci: enable harden-runner in audit-mode on every job`
 
 Files:
-- `.github/workflows/ci.yml`, `security.yml`, `codeql.yml`, `_pytest.yml` — add `step-security/harden-runner` step at the top of every `runs-on: ubuntu-latest` job
+- `.github/workflows/ci.yml`, `security.yml`, `codeql.yml`, `scorecard.yml` (P0 sweep addition; created in commit 7b), `release-please.yml` (`publish-docker` job — extended in commit 2) — add `step-security/harden-runner` step at the top of every `runs-on: ubuntu-latest` job. **NOTE:** harden-runner is NOT added inside `.github/actions/_pytest/action.yml` (composite — Decision-4); composites don't get their own runner. The composite executes inside `ci.yml`'s integration/e2e/admin/bdd/migration-roundtrip jobs which are already hardened by their job-level harden-runner step.
 
 ```yaml
     steps:
-      - uses: step-security/harden-runner@<SHA>  # v2.12.0+ — required for CVE-2025-32955 fix
+      - uses: step-security/harden-runner@<SHA>  # v2.16.0+ — required for CVE-2025-32955 fix
         with:
           egress-policy: audit
           disable-sudo-and-containers: true   # NOT disable-sudo:true (bypassable per CVE-2025-32955)
       - uses: ./.github/actions/setup-env
 ```
 
-**Pinning requirement:** the `<SHA>` for `harden-runner` must resolve to v2.12.0 or later. Earlier versions accept `disable-sudo: true` but it is bypassable via Docker per [CVE-2025-32955](https://www.sysdig.com/blog/security-mechanism-bypass-in-harden-runner-github-action). Version 2.12.0 (April 2025) introduced `disable-sudo-and-containers: true` as the only correct option. SHA-pin to the release tag from [v2.12.0+](https://github.com/step-security/harden-runner/releases) using the same SHA-resolution loop established in PR 1 commit 9.
+**Pinning requirement (revised 2026-04-25 P0 sweep):** the `<SHA>` for `harden-runner` must resolve to **v2.16.0 or later** (NOT v2.12.0).
+- v2.12.0 (April 2025) introduced `disable-sudo-and-containers: true` and fixed [CVE-2025-32955](https://www.sysdig.com/blog/security-mechanism-bypass-in-harden-runner-github-action). It is the floor for CVE-2025-32955 mitigation but NOT sufficient on its own.
+- **v2.13+** patches additional medium DoH/DNS-over-TCP egress-bypass advisories ([GHSA-46g3-37rh-v698](https://github.com/step-security/harden-runner/security/advisories)).
+- **v2.16.0** captures all post-CVE advisories.
+
+Use `disable-sudo-and-containers: true` everywhere; `disable-sudo: true` is bypassable. SHA-pin to a [v2.16.0+ release tag](https://github.com/step-security/harden-runner/releases) using the SHA-resolution loop established in PR 1 commit 9.
 
 Verification:
 ```bash
@@ -79,7 +84,7 @@ Files:
       attestations: write   # NEW: attest-build-provenance writes Sigstore bundle
     steps:
       # NEW: harden-runner from PR 6 commit 1 (carry-forward; CVE-2025-32955 fix)
-      - uses: step-security/harden-runner@<SHA>   # v2.12.0+ — see commit 1 for SHA
+      - uses: step-security/harden-runner@<SHA>   # v2.16.0+ — see commit 1 for SHA
         with:
           egress-policy: audit
           disable-sudo-and-containers: true
@@ -193,7 +198,7 @@ Files: all workflow files modified by commit 1 — change `egress-policy: audit`
 
 ```yaml
     steps:
-      - uses: step-security/harden-runner@<SHA>  # v2.12.0+
+      - uses: step-security/harden-runner@<SHA>  # v2.16.0+
         with:
           egress-policy: block
           disable-sudo-and-containers: true   # CVE-2025-32955 mitigation; carry-forward from commit 1
@@ -201,6 +206,9 @@ Files: all workflow files modified by commit 1 — change `egress-policy: audit`
             api.github.com:443
             github.com:443
             objects.githubusercontent.com:443
+            codeload.github.com:443
+            pkg-containers.githubusercontent.com:443
+            uploads.github.com:443
             pypi.org:443
             files.pythonhosted.org:443
             astral.sh:443
@@ -208,19 +216,42 @@ Files: all workflow files modified by commit 1 — change `egress-policy: audit`
             registry-1.docker.io:443
             auth.docker.io:443
             production.cloudflare.docker.com:443
-            uploads.github.com:443
+            index.docker.io:443
+            app.stepsecurity.io:443
+            apiurl.stepsecurity.io:443
+            *.actions.githubusercontent.com:443
+            *.blob.core.windows.net:443
+            rekor.sigstore.dev:443
+            fulcio.sigstore.dev:443
+            tuf-repo-cdn.sigstore.dev:443
 ```
+
+**Allowlist additions in 2026-04-25 P0 sweep** (Round 6 scenarios reviewer caught these):
+- `codeload.github.com:443` — autobuild source download (CodeQL workflow + `curl https://github.com/.../archive/...`)
+- `pkg-containers.githubusercontent.com:443` — GHCR layer pulls
+- `*.actions.githubusercontent.com:443` and `*.blob.core.windows.net:443` — GitHub artifact upload/download
+- `index.docker.io:443` — Docker Hub publish (release-please.yml's existing publish-docker job)
+- `app.stepsecurity.io:443` + `apiurl.stepsecurity.io:443` — StepSecurity dashboard telemetry
+- `rekor.sigstore.dev:443` + `fulcio.sigstore.dev:443` + `tuf-repo-cdn.sigstore.dev:443` — Sigstore for cosign keyless signing (RELEASE-ONLY; if the audit window did NOT include a release, these endpoints won't appear in telemetry — see "Force release dry-run" below)
+
+**Force release dry-run during audit window** (2026-04-25 P0 sweep): release-please.yml is gated on `release_created`; if no release happens during the 2-week audit window, sigstore + Docker Hub publish endpoints never appear in telemetry. Before flipping block-mode, force a dry-run:
+
+```bash
+# Trigger release-please workflow on main; the publish-docker job runs and exercises
+# all release-only endpoints (cosign, Docker Hub, GHCR pkg, sigstore TUF).
+gh workflow run release-please.yml --ref main
+gh run watch  # wait for completion; check StepSecurity dashboard for new endpoints
+```
+
+If the audit window did NOT include a release, do NOT flip block-mode for `release-please.yml`. Either run the dry-run above first, OR keep release-please.yml in audit-mode while flipping ci.yml + security.yml to block-mode.
 
 **How to extract the allowlist from audit-mode telemetry** (do this before opening commit 3):
 
 1. After every CI run during the 2-week audit window, the GitHub job step summary contains a link of the form `https://app.stepsecurity.io/github/prebid/salesagent/actions/runs/<run_id>` (the StepSecurity insights URL — added automatically by harden-runner).
-2. Click through ~3-5 representative runs (one of each workflow type: ci, codeql, security, _pytest reusable, release-please).
-3. The dashboard "Outbound calls" table lists every endpoint hit with hit count + step name. Copy each unique `host:port` from non-anomalous calls.
-4. Aggregate into a single deduplicated list. Example query (if you've granted StepSecurity API access):
-   ```bash
-   # Manual aggregation works fine — there are typically <20 unique endpoints
-   ```
-5. The block above is a typical profile for a Python+Docker repo. Do NOT add new endpoints without supply-chain investigation; a new endpoint can indicate a typosquatted action or compromised dependency.
+2. Click through ~3-5 representative runs (one of each workflow type: ci, codeql, security, `_pytest` composite invocation, release-please-dry-run).
+3. The dashboard "Outbound calls" table lists every endpoint hit with hit count + step name. Copy each unique `host:port` from non-anomalous calls. Use the StepSecurity "Suggested allowed endpoints" export to JSON if available.
+4. Aggregate into a single deduplicated list. Manual aggregation works fine — there are typically <25 unique endpoints (the block above is the empirically derived 2026-04 list for this repo).
+5. The block above is a typical profile for a Python+Docker+Sigstore repo. Do NOT add new endpoints without supply-chain investigation; a new endpoint can indicate a typosquatted action or compromised dependency.
 
 Reference: [StepSecurity 2-week soak procedure](https://docs.stepsecurity.io/harden-runner/getting-started) and `research/external-tool-yaml.md` §4 "2-week soak procedure".
 
@@ -250,7 +281,7 @@ Files:
       contents: read
       pull-requests: write
     steps:
-      - uses: step-security/harden-runner@<SHA>   # v2.12.0+ — CVE-2025-32955 fix
+      - uses: step-security/harden-runner@<SHA>   # v2.16.0+ — CVE-2025-32955 fix
         with:
           egress-policy: block
           disable-sudo-and-containers: true       # CVE-2025-32955 mitigation
@@ -331,14 +362,14 @@ Acceptance: CodeQL findings now block PR merges. File follow-up issues for remai
 ### Commit 6 — `ci: add provenance: mode=max attestation + ADR-007`
 
 Files:
-- Verify `release.yml` has `provenance: mode=max` (set in commit 2)
+- Verify `release-please.yml` has `provenance: mode=max` in the publish-docker job (set in commit 2)
 - `docs/decisions/adr-007-build-provenance.md` (new, ~50 lines)
 
 ADR-007 documents why we use `mode=max` over default and accept the ~40s overhead per build.
 
 Verification:
 ```bash
-grep -q 'provenance: mode=max' .github/workflows/release.yml
+grep -q 'provenance: mode=max' .github/workflows/release-please.yml
 test -f docs/decisions/adr-007-build-provenance.md
 grep -q '## Status' docs/decisions/adr-007-build-provenance.md
 ```
@@ -347,12 +378,14 @@ Acceptance: `cosign verify-attestation` reports type `https://slsa.dev/provenanc
 
 ### Commit 7 — `chore(repo): web-commit signoff + branch deletion + secret scanning`
 
-Admin actions (no file changes; documented for the rollout record):
+Admin actions (no file changes; documented for the rollout record). **All steps are ADMIN-ONLY — DO NOT RUN AS AGENT.**
 
 1. Settings → General → "Require contributors to sign off on web-based commits" → enable
 2. Branch protection → main → "Restrict who can delete this branch" → admins only
 3. Verify force-push disabled (already implied by PR 1)
 4. Settings → Code security → Secret scanning → enable + Push protection → enable
+5. **(P0 sweep addition)** GitHub Container Registry tag immutability — Settings → Packages → `salesagent` → "Tag immutability" → set to immutable for `:vX.Y.Z` semver tags. Prevents an attacker who gains push access from replaying old tags. (GA 2025; enterprise-only previously.)
+6. **(P0 sweep addition, R30 mitigation)** Settings → General → Pull Requests → "Allow auto-merge" → DISABLE. Pre-flight A11 audited this before PR 1; verify it's still off post-PR-6 (A23/R30 mitigation chain).
 
 Verification (post-admin-action):
 ```bash
@@ -360,9 +393,69 @@ gh api repos/prebid/salesagent --jq '.web_commit_signoff_required' | grep -q 'tr
 gh api repos/prebid/salesagent --jq '.security_and_analysis.secret_scanning.status' | grep -q '"enabled"'
 gh api repos/prebid/salesagent --jq '.security_and_analysis.secret_scanning_push_protection.status' | grep -q '"enabled"'
 gh api repos/prebid/salesagent/branches/main/protection/allow_force_pushes --jq '.enabled' | grep -q 'false'
+gh api repos/prebid/salesagent --jq '.allow_auto_merge' | grep -q 'false'   # R30 mitigation
+# Tag immutability is package-scoped; verify via UI (no public API as of 2026-04)
 ```
 
-Acceptance: each `gh api` check returns the expected enabled state.
+Acceptance: each `gh api` check returns the expected enabled state; tag-immutability confirmed manually.
+
+### Commit 7b (P0 sweep addition) — `ci: add OpenSSF Scorecard self-host workflow`
+
+**New commit added in 2026-04-25 P0 sweep.** Plan claims a Scorecard target of ≥7.5/10 but no committed `.github/workflows/scorecard.yml` workflow file existed. Self-hosted Scorecard produces deterministic scores (vs. waiting for the external public dashboard's weekly scrape) AND publishes findings to the Code Scanning tab via SARIF, so they show up alongside CodeQL.
+
+Files:
+- `.github/workflows/scorecard.yml` (new — lift verbatim from `research/external-tool-yaml.md` §3)
+
+Skeleton:
+```yaml
+name: OpenSSF Scorecard
+
+on:
+  branch_protection_rule:        # fires on bp changes — early signal
+  schedule:
+    - cron: '0 6 * * 1'          # weekly Monday 06:00 UTC
+  push:
+    branches: [main]
+
+permissions: read-all
+
+jobs:
+  analysis:
+    name: 'Scorecard analysis'
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write     # to upload SARIF
+      id-token: write             # for OIDC (Sigstore signing of result)
+      contents: read
+    steps:
+      - uses: actions/checkout@<SHA>  # v4
+        with:
+          persist-credentials: false
+      - uses: ossf/scorecard-action@<SHA>  # v2.5.0+
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+      - uses: actions/upload-artifact@<SHA>  # v4
+        with:
+          name: SARIF file
+          path: results.sarif
+          retention-days: 5
+      - uses: github/codeql-action/upload-sarif@<SHA>  # v4
+        with:
+          sarif_file: results.sarif
+```
+
+Verification:
+```bash
+test -f .github/workflows/scorecard.yml
+yamllint -d relaxed .github/workflows/scorecard.yml
+grep -q 'ossf/scorecard-action' .github/workflows/scorecard.yml
+grep -qE 'publish_results:\s*true' .github/workflows/scorecard.yml
+grep -q 'branch_protection_rule' .github/workflows/scorecard.yml
+```
+
+Acceptance: Scorecard workflow runs weekly + on every BP change; results appear in the Code Scanning tab.
 
 ### Commit 8 (optional) — `test(perf): pytest-benchmark regression suite`
 
@@ -417,7 +510,7 @@ Acceptance: a PR causing >25% regression in a benchmarked path fails the perform
 - [ ] (Optional) `tests/perf/` exists with ≥4 benchmarks; CI gates on 25% regression
 
 Plus agent-derived:
-- [ ] `release.yml` has top-level `permissions: {}`
+- [ ] `release-please.yml` has top-level `permissions: {}` (job-level overrides where needed)
 - [ ] All new actions are SHA-pinned
 - [ ] ADR-007 (build-provenance) exists; CLAUDE.md ADR table updated
 - [ ] `make quality` passes
@@ -436,10 +529,10 @@ set -euo pipefail
 echo "[1/8] harden-runner present..."
 [[ $(grep -RhoE 'uses: step-security/harden-runner@' .github/workflows/ | wc -l) -ge 5 ]]
 
-echo "[2/8] release.yml signs images..."
-test -f .github/workflows/release.yml
-grep -q 'cosign sign --yes' .github/workflows/release.yml
-grep -q 'actions/attest-build-provenance' .github/workflows/release.yml
+echo "[2/8] release-please.yml signs images..."
+test -f .github/workflows/release-please.yml
+grep -q 'cosign sign --yes' .github/workflows/release-please.yml
+grep -q 'actions/attest-build-provenance' .github/workflows/release-please.yml
 
 echo "[3/8] dependency-review configured..."
 grep -q 'actions/dependency-review-action' .github/workflows/security.yml
@@ -448,13 +541,13 @@ echo "[4/8] CodeQL gating..."
 ! grep -q 'continue-on-error: true' .github/workflows/codeql.yml
 
 echo "[5/8] provenance: mode=max..."
-grep -q 'provenance: mode=max' .github/workflows/release.yml
+grep -q 'provenance: mode=max' .github/workflows/release-please.yml
 
 echo "[6/8] ADR-007 present..."
 test -f docs/decisions/adr-007-build-provenance.md
 
 echo "[7/8] All new uses: SHA-pinned..."
-[[ $(grep -hoE 'uses: [^ ]+@[^ ]+' .github/workflows/release.yml | grep -vcE '@[a-f0-9]{40}') == "0" ]]
+[[ $(grep -hoE 'uses: [^ ]+@[^ ]+' .github/workflows/release-please.yml | grep -vcE '@[a-f0-9]{40}') == "0" ]]
 
 echo "[8/8] make quality passes..."
 make quality

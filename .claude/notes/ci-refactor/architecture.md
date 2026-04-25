@@ -1,8 +1,29 @@
 # Salesagent CI/Pre-commit Architecture: Current vs Target
 
-Definitive architecture documentation for the CI/pre-commit refactor. Documents both the present state on `main` and the post-rollout state after PRs 1-5 (issue #1234) plus PR 6 (Fortune-50 supply-chain follow-up) plus the v2.0 phase PRs.
+> **⚠️ STALE — pre-Round-5+6-P0-sweep audit trail.** This file documents the architecture
+> as understood before the 2026-04-25 P0 sweep. Several details were superseded by
+> Decision-4 (composite migration), D11 (hard-gate from day 1), D18 (~73 final guards),
+> D27 (real hook math 33−13−9−1=10), D28 (target-version bump deferred), and the
+> harden-runner v2.16+ pin. Specific stale items in this file:
+>
+> - References to `.github/workflows/_pytest.yml` as a reusable workflow → **superseded** by
+>   `.github/actions/_pytest/action.yml` composite (Decision-4). Per-job `services: postgres:`
+>   blocks now live in `ci.yml`'s integration/e2e/admin/bdd/migration-roundtrip jobs.
+> - References to `.github/workflows/release.yml` as a separate PR 6 workflow → **superseded**;
+>   PR 6 EXTENDS the existing `release-please.yml` `publish-docker` job. No `release.yml` exists.
+> - `.coverage-baseline = 53.5` "advisory 4 weeks" → **superseded** by hard-gate from PR 3 day 1.
+> - PR 1 commit 10 (Gemini fallback) → **moved** to PR 3 commit 11 in the P0 sweep.
+> - Black/ruff `target-version = py312` → **deferred** out of PR 5 per D28 / ADR-008.
+> - "32 rows post-PR-4" / "52 total guards" → **superseded** by D18 revised "~73 final post-v2.0-rebase".
+> - `harden-runner v2.12.0+` → **superseded** by v2.16.0+ floor.
+>
+> **Authoritative current state lives in:** `RESUME-HERE.md`, `EXECUTIVE-SUMMARY.md`,
+> `00-MASTER-INDEX.md`, `03-decision-log.md`, and the 6 per-PR specs. This architecture doc
+> is preserved for the audit trail; do not rely on it for executor handoff.
 
-Cross-references: `/Users/quantum/Documents/ComputedChaos/salesagent/.claude/notes/ci-refactor/00-MASTER-INDEX.md`, `/Users/quantum/Documents/ComputedChaos/salesagent/.claude/notes/ci-refactor/03-decision-log.md`, the 5 per-PR specs, and the source files cited inline.
+Definitive architecture documentation for the CI/pre-commit refactor (audit trail; see warning above). Documents both the present state on `main` and the post-rollout state after PRs 1-5 (issue #1234) plus PR 6 (Fortune-50 supply-chain follow-up) plus the v2.0 phase PRs.
+
+Cross-references: `/Users/quantum/Documents/ComputedChaos/salesagent/.claude/notes/ci-refactor/00-MASTER-INDEX.md`, `/Users/quantum/Documents/ComputedChaos/salesagent/.claude/notes/ci-refactor/03-decision-log.md`, the 6 per-PR specs, and the source files cited inline.
 
 ---
 
