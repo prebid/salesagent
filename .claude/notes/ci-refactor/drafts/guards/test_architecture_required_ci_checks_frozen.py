@@ -1,39 +1,72 @@
-"""Guard: ci.yml declares the 11 frozen required-check names per D17.
+"""Guard: ci.yml renders the 11 frozen required-check names per D17.
 
 The check names are a contract with branch protection. Renaming any of them
 is an atomic flip handled by PR 3 Phase B; the names cannot drift in code
 without coordinating the branch-protection update.
+
+Per D26: GitHub renders status checks as `<workflow.name> / <job.name>`. The
+workflow header is `name: CI`; jobs use BARE `name: 'Quality Gate'` (NOT
+`name: 'CI / Quality Gate'` — that would render as `CI / CI / Quality Gate`).
+This guard validates the bare job-name convention plus the workflow `name: CI`
+prefix, which together produce the rendered names that branch protection sees.
 """
 
 import re
 
 from tests.unit._architecture_helpers import repo_root
 
-# D17 — exact names. Order arbitrary.
-_FROZEN_CHECK_NAMES: tuple[str, ...] = (
-    "CI / Quality Gate",
-    "CI / Type Check",
-    "CI / Schema Contract",
-    "CI / Unit Tests",
-    "CI / Integration Tests",
-    "CI / E2E Tests",
-    "CI / Admin UI Tests",
-    "CI / BDD Tests",
-    "CI / Migration Roundtrip",
-    "CI / Coverage",
-    "CI / Summary",
+# D17 — bare job names (the rendered names are workflow `CI` + ` / ` + bare).
+_BARE_JOB_NAMES: tuple[str, ...] = (
+    "Quality Gate",
+    "Type Check",
+    "Schema Contract",
+    "Unit Tests",
+    "Integration Tests",
+    "E2E Tests",
+    "Admin UI Tests",
+    "BDD Tests",
+    "Migration Roundtrip",
+    "Coverage",
+    "Summary",
 )
 
 
-def test_ci_yml_declares_all_frozen_check_names():
+def test_ci_yml_workflow_name_is_CI():
+    text = (repo_root() / ".github" / "workflows" / "ci.yml").read_text()
+    assert re.search(r"^name:\s+CI\s*$", text, flags=re.MULTILINE), (
+        "ci.yml workflow header must be `name: CI` so GitHub auto-prefixes job "
+        "names to produce the D17 frozen check names. Per D26."
+    )
+
+
+def test_ci_yml_declares_all_frozen_job_names():
     text = (repo_root() / ".github" / "workflows" / "ci.yml").read_text()
     missing: list[str] = []
-    for name in _FROZEN_CHECK_NAMES:
-        # Match: name: 'CI / Foo'  or  name: "CI / Foo"
-        if not re.search(rf"name:\s*['\"]{re.escape(name)}['\"]", text):
-            missing.append(name)
+    for bare in _BARE_JOB_NAMES:
+        # Job names live UNDER the jobs: block, indented. Match:
+        #   name: 'Foo'   or   name: "Foo"   or   name: Foo
+        if not re.search(
+            rf"^\s+name:\s+(?:['\"]?){re.escape(bare)}(?:['\"]?)\s*$",
+            text,
+            flags=re.MULTILINE,
+        ):
+            missing.append(bare)
     assert not missing, (
-        "Frozen required-check name(s) missing from ci.yml — branch protection "
-        "drift risk. Add the missing job(s) or coordinate a Phase-B-style flip:\n"
-        + "\n".join(f"  - {n}" for n in missing)
+        "Frozen job name(s) missing from ci.yml — branch protection drift "
+        "risk. Add the missing job(s) or coordinate a Phase-B-style flip:\n" + "\n".join(f"  - {n}" for n in missing)
+    )
+
+
+def test_ci_yml_jobs_do_not_include_CI_prefix():
+    """Per D26: job names must NOT include the `CI / ` prefix.
+
+    GitHub auto-prefixes the workflow `name:` onto the job `name:` separated
+    by ` / `. Including `CI /` in the job name produces `CI / CI / Quality
+    Gate`, which Phase B's atomic branch-protection PATCH does not match.
+    """
+    text = (repo_root() / ".github" / "workflows" / "ci.yml").read_text()
+    bad = re.findall(r"^\s+name:\s+['\"]CI / .+['\"]\s*$", text, flags=re.MULTILINE)
+    assert not bad, (
+        "ci.yml jobs must NOT use 'CI / X' name format (D26). Use bare 'X' — "
+        "GitHub auto-prefixes the workflow name. Offending lines:\n  " + "\n  ".join(bad)
     )

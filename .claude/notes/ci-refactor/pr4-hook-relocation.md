@@ -8,7 +8,7 @@
 
 ## Scope
 
-Per-hook reassignment per the layered architecture. Drops warm pre-commit latency from ~23s to ~1.7s (10× improvement). Migrates 5 grep-based hooks to AST-based structural guards. Moves 5 medium-cost hooks to `pre-push` stage. Migrates 4 expensive hooks to CI-only. Deletes 6 dead/advisory hooks. Adds `@pytest.mark.architecture` marker per D12.
+Per-hook reassignment per the layered architecture. Drops warm pre-commit latency from ~23s to ~1.7s (10× improvement). Migrates 5 grep-based hooks to AST-based structural guards. Moves **9** medium-cost hooks to `pre-push` stage (per D27 — was 5; Blocker #2 fix). Migrates 4 expensive hooks to CI-only. Deletes 6 dead/advisory hooks. Adds `@pytest.mark.architecture` marker per D12.
 
 **Internal commit ordering is load-bearing:** all new structural guards must pass on main BEFORE any hook is deleted. The spec enforces this.
 
@@ -23,13 +23,15 @@ Per-hook reassignment per the layered architecture. Drops warm pre-commit latenc
 
 ORDER IS LOAD-BEARING. Guards added before hook deletions.
 
-### Commit 1 — `test: register @pytest.mark.architecture marker; add _architecture_helpers.py`
+### Commit 1 — `test: register @pytest.mark.architecture marker; extend _architecture_helpers.py`
 
 Files:
 - `pyproject.toml` (add to `[tool.pytest.ini_options].markers`)
-- `tests/unit/_architecture_helpers.py` (new, ~50 lines, AST-walking helpers)
+- `tests/unit/_architecture_helpers.py` (**EXTEND** — file already created in PR 2 commit 8 as ~30-line baseline; this PR grows it to ~221 lines with the AST-walking helpers below)
 
 Per D12.
+
+**Ownership rule (resolves Blocker #3):** PR 2 commit 8 creates the baseline (`repo_root`, `parse_module` mtime-keyed cache, `iter_function_defs`, `iter_call_expressions`, `src_python_files`). PR 4 commit 1 EXTENDS by appending the additional helpers (`iter_workflow_files`, `iter_compose_files`, `iter_action_uses`, `iter_python_version_anchors`, `iter_postgres_image_refs`, `assert_violations_match_allowlist`, `assert_anchor_consistency`, `format_failure`). The final reconciled module is at `.claude/notes/ci-refactor/drafts/_architecture_helpers.py` (221 lines) — lift verbatim during execution.
 
 ```toml
 [tool.pytest.ini_options]
@@ -93,9 +95,18 @@ def repo_root() -> pathlib.Path:
 
 Verification:
 ```bash
+# File exists from PR 2 commit 8 baseline
 test -f tests/unit/_architecture_helpers.py
+grep -q 'parse_module' tests/unit/_architecture_helpers.py   # baseline marker
 grep -q 'architecture:' pyproject.toml
-uv run python -c "from tests.unit._architecture_helpers import parse_module, iter_function_defs, iter_call_expressions, src_python_files, repo_root; print('OK')"
+
+# This commit adds the extended helpers (must all be importable):
+uv run python -c "from tests.unit._architecture_helpers import (
+    parse_module, iter_function_defs, iter_call_expressions, src_python_files, repo_root,
+    iter_workflow_files, iter_compose_files, iter_action_uses,
+    iter_python_version_anchors, iter_postgres_image_refs,
+    assert_violations_match_allowlist, assert_anchor_consistency, format_failure,
+); print('OK')"
 ```
 
 ### Commit 2 — `test: backfill @pytest.mark.architecture on existing 27 guards`
@@ -345,12 +356,19 @@ Add `stages: [pre-push]` to:
 - `type-ignore-no-regression`
 - `adcp-contract-tests`
 - `mcp-contract-validation`
+- `mcp-schema-alignment` (medium-cost YAML schema validation; only matters when schemas/ change)
+- `check-tenant-context-order` (Python script invocation; not formatter-fast)
+- `ast-grep-bdd-guards` (only relevant pre-push since BDD tests run there)
+- `check-migration-completeness` (only matters if `alembic/versions/` changed)
 
-Closes PD16.
+Closes PD16. **Resolves Blocker #2:** post-rollout commit-stage hook count must reach ≤12. Current baseline: **37 commit-stage** today (drifted +1 from the 36 in `research/empirical-baseline.md` due to a hook added post-measurement). Math: 37 − 15 deletions − **9** moves to pre-push − 1 consolidation = **12 commit-stage hooks** (at the ≤12 ceiling). If the baseline drifts further upward by execution time, identify additional candidates for pre-push from `mcp-cors-allowlist`, `check-no-private-ssm`, or any other hook with average duration > 200ms.
 
 Verification:
 ```bash
-for hook in check-docs-links check-route-conflicts type-ignore-no-regression adcp-contract-tests mcp-contract-validation; do
+for hook in check-docs-links check-route-conflicts type-ignore-no-regression \
+            adcp-contract-tests mcp-contract-validation \
+            mcp-schema-alignment check-tenant-context-order ast-grep-bdd-guards \
+            check-migration-completeness; do
   yq ".repos[].hooks[] | select(.id == \"$hook\") | .stages" .pre-commit-config.yaml | grep -q pre-push
 done
 ```
@@ -483,7 +501,7 @@ for r in cfg['repos']:
             n += 1
 print(n)
 ")
-[[ "$HOOKS_COMMIT" -le 12 ]] || { echo "commit hook count $HOOKS_COMMIT > 12"; exit 1; }
+[[ "$HOOKS_COMMIT" -le 12 ]] || { echo "commit hook count $HOOKS_COMMIT > 12 — see PR 4 §Commit 5 for additional pre-push candidates"; exit 1; }
 ```
 
 ### Commit 8 — `chore: latency baseline post-PR-4`
@@ -496,7 +514,7 @@ pre-commit run --all-files >/dev/null 2>&1 || true
 { time pre-commit run --all-files >/dev/null; } 2>&1 | tee .pre-commit-latency-after.txt
 ```
 
-Acceptance: warm < 5s (issue's bar; D-pending-5 may tighten to < 2s).
+Acceptance: warm < 5s (issue #1234's bar; the bar may tighten to < 2s after PR 4's hook moves stabilize — handled as an inline acceptance criterion adjustment, not a separate decision-log item).
 
 If wall-clock > 5s, profile and fix or escalate.
 

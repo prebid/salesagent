@@ -6,13 +6,14 @@ Tracks the rollout of GitHub issue [#1234](https://github.com/prebid/salesagent/
 
 | PR | Title | Status | Spec | Hidden scope |
 |---|---|---|---|---|
-| PR 1 | Supply-chain hardening | not started | [pr1-supply-chain-hardening.md](pr1-supply-chain-hardening.md) | 2.5 days (Path C CodeQL) |
+| PR 1 | Supply-chain hardening | not started | [pr1-supply-chain-hardening.md](pr1-supply-chain-hardening.md) | 2.5 days (Path C CodeQL); closes PD15a + PD15b |
 | PR 2 | uv.lock single-source for pre-commit deps | not started | [pr2-uvlock-single-source.md](pr2-uvlock-single-source.md) | 4-6 days (pydantic.mypy delta) |
 | PR 3 | CI authoritative + reusable workflows | not started | [pr3-ci-authoritative.md](pr3-ci-authoritative.md) | 3-4 days (3-phase merge) |
 | PR 4 | Hook relocation + structural guards | not started | [pr4-hook-relocation.md](pr4-hook-relocation.md) | 2 days |
 | PR 5 | Cross-surface version consolidation | not started | [pr5-version-consolidation.md](pr5-version-consolidation.md) | 2 days |
+| PR 6 | Image supply chain (cosign + harden-runner + SBOM) | not started | [pr6-image-supply-chain.md](pr6-image-supply-chain.md) | 1.5-2 days (Week 6 follow-up; resolves D-pending-4) |
 
-**Total realistic effort:** ~14-18 engineer-days, ~5 calendar weeks part-time.
+**Total realistic effort:** ~13.5-17 engineer-days for the 5-PR core rollout; +1.5-2 days for PR 6 follow-up = **15-19 engineer-days total, ~6 calendar weeks part-time**.
 
 ## Read in this order
 
@@ -39,28 +40,31 @@ PR 1 → PR 2 → PR 3 (3-phase) → PR 4 → PR 5. Strict ordering for these re
   - **`[project.optional-dependencies].dev` is already deleted on v2.0** — coordinate so PR 2 doesn't accidentally re-introduce the block during rebase.
   - **9 new structural guards (`.guard-baselines/*.json`)** ship with v2.0 — projected post-rollout guard count is 27 (existing) + 1 (PR 2) + 4 (PR 4) + 9 (v2.0) = **41**. PR 4's CLAUDE.md guards table update will need a final pass once v2.0 phase landings settle.
 
-## Success criteria (5 weeks from start)
+## Success criteria (6 weeks from start)
 
-- All 5 PRs merged on main
+- All 6 PRs merged on main (PR 1-5 + PR 6 follow-up; see `pr6-image-supply-chain.md`)
 - Issue #1234 closed
-- OpenSSF Scorecard ≥7.5/10
+- **OpenSSF Scorecard target phased:**
+  - ≥6.5/10 after PR 1 (governance + SHA-pinned + permissions; `Signed-Releases` still capped without PR 6)
+  - ≥7.5/10 after PR 6 (image signing via cosign satisfies `Signed-Releases`; CodeQL gating satisfies `SAST`)
 - `time pre-commit run --all-files` warm < 2s
 - `time make quality` < 2 minutes
 - 4 weeks of Dependabot PRs cleared with no >5-PR backlog
 - ≥1 contributor PR has gone through CODEOWNERS auto-request flow
-- Zero post-merge reverts of any of the 5 PRs
+- Zero post-merge reverts of any of the 6 PRs
 
-## Calendar (5 weeks part-time)
+## Calendar (6 weeks part-time)
 
 | Week | Activity | Deliverable |
 |---|---|---|
-| Week 1 | Pre-flight checklist + PR 1 (Path C CodeQL advisory) | PR 1 merged by EOW |
+| Week 1 | Pre-flight checklist + PR 1 (Path C CodeQL advisory) | PR 1 merged by EOW; Scorecard ≥6.5 verified |
 | Week 2 | OpenSSF Scorecard re-run; PR 2; first Dependabot PRs land | PR 2 merged mid-week |
-| Week 3 | PR 3 Phase A (overlap, both old + new workflows running) + 48h soak | Phase A merged; new workflows running advisory |
-| Week 4 | PR 3 Phase B (admin flips required-checks list) + Phase C (cleanup) + PR 4 | PR 3 fully landed; PR 4 in review |
-| Week 5 | PR 4 merged; PR 5; final OpenSSF Scorecard verification; close #1234; flip CodeQL to gating | All 5 PRs merged; Scorecard ≥7.5 |
+| Week 3 | PR 3 Phase A (overlap, both old + new workflows running) + 48h soak | Phase A merged; new workflows running advisory; rendered-name capture for Phase B |
+| Week 4 | PR 3 Phase B (admin flips required-checks list) + Phase C (cleanup) | PR 3 fully landed; ≥48h soak A→B and B→C |
+| Week 5 | PR 4 + PR 5 + flip CodeQL to gating | PR 4 + PR 5 merged; close #1234 |
+| Week 6 | PR 6 (harden-runner audit→block + cosign + SBOM) | PR 6 merged; Scorecard ≥7.5 verified |
 
-Built-in slack: 1-2 days per week absorbs Dependabot review load.
+Built-in slack: 1-2 days per week absorbs Dependabot review load. Week 4 was previously packed with Phase B + Phase C + PR 4 — too tight for two ≥48h soak windows; PR 4 moved to Week 5 to relieve.
 
 **Dependabot backlog tripwire:** if open Dependabot PRs reach 5, pause forward work and clear them. The "no auto-merge" decision is only safe if review keeps pace.
 

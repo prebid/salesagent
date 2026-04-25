@@ -196,10 +196,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: step-security/harden-runner@<SHA>   # v2.x
+      - uses: step-security/harden-runner@<SHA>   # v2.12.0+ required for CVE-2025-32955
         with:
           egress-policy: audit                    # log only, no blocking
-          disable-sudo: true
+          disable-sudo-and-containers: true       # NOT disable-sudo:true — CVE-2025-32955 bypassable via Docker
           disable-telemetry: false
       - uses: actions/checkout@<SHA>
       # ... rest of job
@@ -208,10 +208,10 @@ jobs:
 **Block mode (after 2-week soak, with allowlist):**
 
 ```yaml
-- uses: step-security/harden-runner@<SHA>
+- uses: step-security/harden-runner@<SHA>   # v2.12.0+
   with:
     egress-policy: block
-    disable-sudo: true
+    disable-sudo-and-containers: true        # CVE-2025-32955 — bypass-resistant
     allowed-endpoints: >
       api.github.com:443
       github.com:443
@@ -224,7 +224,7 @@ jobs:
 
 **Parameter semantics (verified):**
 - `egress-policy: audit|block` — audit logs egress, block enforces allowlist + a global block list of known-malicious IPs.
-- `disable-sudo: true` — strip `sudo` from runner user (catches privilege-escalation attacks).
+- `disable-sudo-and-containers: true` — strip `sudo` AND container access from runner user (catches privilege-escalation attacks). **Do NOT use the legacy `disable-sudo: true` flag** — bypassable via Docker per [CVE-2025-32955](https://www.sysdig.com/blog/security-mechanism-bypass-in-harden-runner-github-action). The combined flag was introduced in harden-runner v2.12.0 (April 2025) and is the only correct setting.
 - `disable-telemetry` — opt out of StepSecurity telemetry.
 - `allowed-endpoints` — newline/space-separated `host:port`. Wildcards supported in block mode (since 2024).
 - `disable-file-monitoring` — turn off file-integrity tracking (rarely needed).

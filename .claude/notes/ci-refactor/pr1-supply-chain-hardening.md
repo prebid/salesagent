@@ -34,22 +34,40 @@ Files:
 
 Pure docs/metadata. Closes PD5, PD23.
 
+**`[project.urls]` block to add** (5 keys; matches `scripts/verify-pr1.sh` expectations):
+
+```toml
+[project.urls]
+Homepage = "https://github.com/prebid/salesagent"
+Repository = "https://github.com/prebid/salesagent"
+Issues = "https://github.com/prebid/salesagent/issues"
+Documentation = "https://github.com/prebid/salesagent/tree/main/docs"
+Changelog = "https://github.com/prebid/salesagent/blob/main/CHANGELOG.md"
+```
+
+Replace the placeholder description (`"Add your description here"`) with: `"Prebid Sales Agent — AdCP-compliant MCP/A2A/REST server for ad inventory orchestration."`
+
 Verification:
 ```bash
 test -s SECURITY.md
 [[ $(wc -l < SECURITY.md) -ge 30 ]]
 grep -qiE 'private vulnerability|security advisory' SECURITY.md
 grep -qE '\[project\.urls\]' pyproject.toml
+for k in Homepage Repository Issues Documentation Changelog; do
+  grep -qE "^${k} = \"https" pyproject.toml || { echo "missing [project.urls].${k}"; exit 1; }
+done
 ! grep -qE 'description = "Add your description here"' pyproject.toml
 ```
 
 ### Commit 2 — `docs: rewrite CONTRIBUTING.md`
 
 Files:
-- `CONTRIBUTING.md` (rewrite from 20 lines → ~120 lines)
+- `CONTRIBUTING.md` (rewrite from 20 lines → ~120 lines — **this is an authoring step, not a lift-and-shift**; expand from the bulleted outline at the bottom of this spec)
 - `docs/development/contributing.md` (delete OR replace with thin pointer)
 
 Closes PD7. Per D21, root file is canonical.
+
+**Note:** the executor authors ~120 lines of prose from the section-header outline at the end of this spec (§"CONTRIBUTING.md outline"). Budget 30-45 minutes for this commit alone. If you don't reach 80 lines, expand any thin section before committing — `verify-pr1.sh` enforces the floor.
 
 Verification:
 ```bash
@@ -133,11 +151,56 @@ grep -qE 'security-extended' .github/workflows/codeql.yml
 ### Commit 7 — `docs: add ADR-001 (single-source pre-commit deps) and ADR-002 (solo-maintainer bypass)`
 
 Files:
-- `docs/decisions/adr-001-single-source-pre-commit-deps.md` (new, full text in §Embedded ADR-001 below)
+- `docs/decisions/adr-001-single-source-pre-commit-deps.md` (new — embed body below)
 - `docs/decisions/adr-002-solo-maintainer-bypass.md` (new, full text in §Embedded ADR-002 below)
-- `docs/decisions/.placeholder` removed if it exists (mkdir creates the directory implicitly)
+- `docs/decisions/.placeholder` removed if it exists (`mkdir -p docs/decisions` creates the directory implicitly)
 
 ADR-001 is referenced by PR 2 but committed here so the directory and pattern exist before PR 2.
+
+**Embedded ADR-001 body** (lift verbatim into `docs/decisions/adr-001-single-source-pre-commit-deps.md`):
+
+```markdown
+# ADR-001 — uv.lock as single source of truth for pre-commit deps
+
+## Status
+Accepted (2026-04 — finalized PR 2 of issue #1234)
+
+## Context
+`.pre-commit-config.yaml` previously declared external project dependencies
+under each hook's `additional_dependencies` block (e.g., `factory-boy`,
+`sqlalchemy[mypy]`). This produces a second source of dependency truth that
+drifts from `pyproject.toml` + `uv.lock` whenever either side updates without
+the other being mirrored.
+
+## Decision
+1. `uv.lock` (with `pyproject.toml`'s `[dependency-groups].dev`) is the single
+   source of truth for ALL Python dev-time dependencies.
+2. `.pre-commit-config.yaml` external repos (e.g., `psf/black`, `mirrors-mypy`)
+   are replaced by `local` hooks that invoke `uv run <tool>` at
+   `language: system`. The hooks resolve against the project venv.
+3. The `additional_dependencies` field is permitted ONLY for `types-*` stub
+   packages (e.g., `types-PyYAML`) that pre-commit's isolated env genuinely
+   needs and that don't belong in dev deps.
+4. A structural guard (`tests/unit/test_architecture_pre_commit_no_additional_deps.py`)
+   enforces this: any `additional_dependencies` value that resolves to a
+   project-level dependency name fails the build.
+
+## Consequences
+- Pre-commit and CI/local-make-quality see identical dependency versions.
+- Hook execution speed is slightly slower (cold venv hit) but warm runs are
+  comparable.
+- `mirrors-mypy` migration: the underlying motivation is NOT deprecation
+  (mirrors-mypy is actively maintained) but isolated-env import resolution —
+  see [Jared Khan's analysis](https://jaredkhan.com/blog/mypy-pre-commit) and
+  [mypy#13916](https://github.com/python/mypy/issues/13916).
+
+## Tripwire
+If a future hook genuinely needs a project-version dep that's also in
+pyproject.toml AND isolation is required, the only acceptable answer is
+to extract the hook's logic into a script under `.pre-commit-hooks/` invoked
+via `language: system` — never re-add `additional_dependencies` for project
+libs.
+```
 
 Verification:
 ```bash
@@ -172,22 +235,25 @@ Verification:
 uv run pre-commit run --all-files
 ```
 
-### Commit 9 — `ci: pin GitHub Actions to SHAs and add top-level permissions`
+### Commit 9 — `ci: pin GitHub Actions to SHAs, add permissions, and persist-credentials:false`
 
 Files:
-- `.github/workflows/test.yml` (modify all `uses:` lines, add `permissions: {}` top-level)
+- `.github/workflows/test.yml` (modify all `uses:` lines, add `permissions: {}` top-level, set `persist-credentials: false` on all `actions/checkout` steps)
 - `.github/workflows/pr-title-check.yml` (same)
 - `.github/workflows/release-please.yml` (same)
 - `.github/workflows/ipr-agreement.yml` (same)
 
-Addresses zizmor's `unpinned-uses` and `excessive-permissions` findings (~32 expected from pre-flight P3). Closes PD15.
+Addresses zizmor's `unpinned-uses` and `excessive-permissions` findings (~32 expected from pre-flight P3). Also closes the OSSF Scorecard `Token-Permissions` gap by ensuring no `actions/checkout` invocation persists credentials in `.git/config` (default behavior leaks the GITHUB_TOKEN to subsequent steps and any artifact they upload — see [actions/checkout#2312](https://github.com/actions/checkout/issues/2312)). Closes PD15a (SHA-pin scope) and PD15b (workflow permissions remainder).
 
-For each `uses: actions/<name>@v<X>` reference, replace with `uses: actions/<name>@<40-char-sha>  # v<X>`.
+**Reference count** (verified 2026-04-25): 23 total `uses:` references across 4 workflows (release-please.yml=6, test.yml=15, pr-title-check.yml=1, ipr-agreement.yml=1) — not 24 as estimated in `research/empirical-baseline.md` (one fewer site to pin).
+
+For each `uses: actions/<name>@v<X>` reference, replace with `uses: actions/<name>@<40-char-sha>  # v<X>`. Persist the resolved SHAs as a committed artifact at `.github/.action-shas.txt` so PR 3 commit 5 can reuse them without re-running the loop.
 
 Mechanical operation — generate the SHAs in batch:
 
 ```bash
 # For each unique action ref, fetch its SHA at the pinned tag
+: > .github/.action-shas.txt
 for ref in $(grep -RhoE 'uses: [^ ]+' .github/workflows/ | sort -u | sed 's/uses: //'); do
   case "$ref" in
     *@v*)
@@ -198,13 +264,28 @@ for ref in $(grep -RhoE 'uses: [^ ]+' .github/workflows/ | sort -u | sed 's/uses
       if [[ $(gh api repos/$tool/git/tags/$sha --jq '.object.type' 2>/dev/null) == "commit" ]]; then
         sha=$(gh api repos/$tool/git/tags/$sha --jq '.object.sha')
       fi
-      echo "$ref -> $sha  # $tag"
+      printf '%s\t%s\t%s\n' "$ref" "$sha" "$tag" >> .github/.action-shas.txt
       ;;
   esac
 done
+sort -o .github/.action-shas.txt .github/.action-shas.txt
 ```
 
-Apply via `sed` or manual edits.
+Apply via `sed` or manual edits. PR 3 commit 5 reads `.github/.action-shas.txt` instead of re-running this loop.
+
+**Add `persist-credentials: false` to every `actions/checkout` step:**
+
+```yaml
+# Before
+- uses: actions/checkout@<SHA>  # v4
+
+# After
+- uses: actions/checkout@<SHA>  # v4
+  with:
+    persist-credentials: false
+```
+
+If the existing `with:` block has other keys (e.g., `fetch-depth`), append `persist-credentials: false` alongside.
 
 Verification:
 ```bash
@@ -215,6 +296,13 @@ Verification:
 for f in .github/workflows/*.yml; do
   grep -qE '^permissions:' "$f" || { echo "missing top-level perms: $f"; exit 1; }
 done
+# Every actions/checkout call disables credential persistence
+CHECKOUT_USES=$(grep -RhoE 'uses: actions/checkout@' .github/workflows/ | wc -l)
+PERSIST_FALSE=$(grep -RnA5 'uses: actions/checkout@' .github/workflows/ | grep -c 'persist-credentials: false')
+[[ "$CHECKOUT_USES" -le "$PERSIST_FALSE" ]] || \
+  { echo "missing persist-credentials:false on $((CHECKOUT_USES - PERSIST_FALSE)) checkout(s)"; exit 1; }
+# SHA artifact is committed and referenced by PR 3
+test -s .github/.action-shas.txt
 ```
 
 ### Commit 10 — `ci: gate Gemini key behind unconditional mock`
@@ -243,19 +331,49 @@ grep -q "GEMINI_API_KEY: test_key_for_mocking" .github/workflows/test.yml
 ### Commit 11 — `ci: zizmor pre-flight findings — fix or allowlist`
 
 Files:
-- `.github/workflows/pr-title-check.yml` (allowlist `pull_request_target` with comment)
-- `.github/workflows/ipr-agreement.yml` (allowlist `pull_request_target` with comment)
+- `.github/workflows/pr-title-check.yml` (add `# zizmor: ignore[dangerous-triggers]` comment with cite to ADR-003)
+- `.github/workflows/ipr-agreement.yml` (same)
 - `docs/decisions/adr-003-pull-request-target-trust.md` (new, ~50 lines, explaining why these workflows legitimately use the dangerous trigger)
-- `.github/zizmor.yml` (new, configures audit rules)
+- `.github/zizmor.yml` (new — embed below)
 
 Per pre-flight P3 (`.zizmor-preflight.txt`), fix all medium+ findings except the legitimate `pull_request_target` workflows.
 
+**`.github/zizmor.yml` content** (lift verbatim — keep `online_audits: true`; do NOT enable both `--annotations` and `--advanced-security` simultaneously per the GHAS exclusivity constraint):
+
+```yaml
+# zizmor configuration — workflow security audit
+# Sources: https://woodruffw.github.io/zizmor/configuration/
+#
+# Dangerous-trigger findings are allowlisted on the two workflows that
+# legitimately need pull_request_target (PR-title enforcement, IPR-agreement
+# CLA gate). See docs/decisions/adr-003-pull-request-target-trust.md.
+rules:
+  dangerous-triggers:
+    ignore:
+      - pr-title-check.yml
+      - ipr-agreement.yml
+  # Reserve room for forward additions; default-on for everything else.
+  unpinned-uses:
+    config:
+      policies:
+        # All actions/* and docker/* must be 40-char SHA-pinned.
+        "actions/*": ref-is-pinned
+        "docker/*": ref-is-pinned
+        "github/*": ref-is-pinned
+
+# Online audits hit GitHub for upstream metadata (license, deprecated state).
+online_audits: true
+```
+
 Verification:
 ```bash
-uvx zizmor .github/workflows/ --min-severity medium
+uvx zizmor .github/workflows/ --min-severity medium --config .github/zizmor.yml
 # Expected exit code: 0 (or 1 with only allowlisted findings)
 test -f docs/decisions/adr-003-pull-request-target-trust.md
+grep -q '## Status' docs/decisions/adr-003-pull-request-target-trust.md
 test -f .github/zizmor.yml
+yamllint -d relaxed .github/zizmor.yml
+grep -q 'dangerous-triggers' .github/zizmor.yml
 ```
 
 ## Acceptance criteria

@@ -129,7 +129,7 @@ Format: each decision has a date, a one-line statement, the rationale, and a tri
 
 ## D17 — Required CI check names: issue's verbatim list
 
-**Decided 2026-04-25:** The 11 frozen check names are exactly:
+**Decided 2026-04-25:** The 11 frozen check names — these are the *rendered* check-run names that GitHub publishes (workflow `name:` + ` / ` + job `name:`):
 
 1. `CI / Quality Gate`
 2. `CI / Type Check`
@@ -144,15 +144,17 @@ Format: each decision has a date, a one-line statement, the rationale, and a tri
 11. `CI / Summary`
 
 - **Rationale:** issue #1234 §Target architecture lists these. Three different agent reports proposed alternative casings/groupings; the issue is the source of truth.
+- **Implementation note (D26 corollary):** the workflow `.github/workflows/ci.yml` has `name: CI` and each job has `name: 'Quality Gate'` (NOT `name: 'CI / Quality Gate'`). GitHub auto-prefixes the workflow name. Including `CI / ` in the job name produces `CI / CI / Quality Gate` (the Blocker #1 bug). See [community/discussions/46752](https://github.com/orgs/community/discussions/46752).
+- **Verification before Phase B (mandatory):** capture actual rendered names via `gh api repos/.../commits/<sha>/check-runs` and confirm exact-string match against this list. Reusable workflow nesting can produce 3-segment names (e.g., `CI / Unit Tests / pytest`). See PR 3 Phase B Step 1b.
 - **Note:** branch-protection still references current names (`Security Audit`, `Smoke Tests…`, etc.). PR 3's 3-phase merge handles the rename atomically. See PR 3 spec.
 - **Frozen:** rename requires coordinated branch-protection update; treat as a contract.
 
-## D18 — Structural guard count baseline: 27 + 9 (v2.0) projected
+## D18 — Structural guard count baseline: 27 + 1 (PR2) + 4 (PR4) + 1 (PR5) + 9 (v2.0) = 42
 
-**Decided 2026-04-25:** Existing on-disk guards count = 27 (23 `test_architecture_*.py` + 3 transport-boundary guards `test_no_toolerror_in_impl.py`, `test_transport_agnostic_impl.py`, `test_impl_resolved_identity.py` + `check_code_duplication.py` script). PR 4 adds 4 + extends 1. v2.0 contributes 9 via `.guard-baselines/`. Final post-rollout: **41**.
+**Decided 2026-04-25, REVISED 2026-04-25 post-integrity-audit:** Existing on-disk guards count = 27 (23 `test_architecture_*.py` + 3 transport-boundary guards `test_no_toolerror_in_impl.py`, `test_transport_agnostic_impl.py`, `test_impl_resolved_identity.py` + `check_code_duplication.py` script). PR 2 adds 1. PR 4 adds 4 + extends 1. PR 5 adds 1 (`test_architecture_uv_version_anchor`). v2.0 contributes 9 via `.guard-baselines/`. **Final post-rollout: 42** (canonical count for cross-doc reconciliation).
 
-- **Rationale:** doc-drafting agent re-counted disk; the "24" in CLAUDE.md was wrong. PR 4 corrects the table to 32 (existing + PR 2 + PR 4) and reserves the v2.0 9 as future entries.
-- **CLAUDE.md table audit step (mandatory in PR 4):** for each row, verify the test file exists; for each test file under `tests/unit/test_architecture_*.py`, verify a row exists. Three rows must be removed (they reference files that don't exist on disk). Five rows must be added (files exist but were omitted from the table).
+- **Rationale:** doc-drafting agent re-counted disk; the "24" in CLAUDE.md was wrong. PR 4 corrects the table to the post-rollout count and reserves the v2.0 9 as future entries.
+- **CLAUDE.md table audit step (mandatory in PR 4):** for each row, verify the test file exists; for each test file under `tests/unit/test_architecture_*.py`, verify a row exists. **0 phantom rows** (all listed files exist on disk; the integrity audit corrected the earlier "3 phantom" claim — there were never any phantoms). **5 missing rows** must be added (files exist but were omitted from the table): `test_architecture_no_silent_except.py`, `test_architecture_bdd_no_direct_call_impl.py`, `test_architecture_bdd_obligation_sync.py`, `test_architecture_production_session_add.py`, `test_architecture_test_marker_coverage.py`. Final corrected 52-row table source: `drafts/claudemd-guards-table-final.md` (sectioned by Schema/Transport/DB/BDD/Test integrity/Governance/Cross-file).
 - **Tripwire:** when v2.0 phase PRs land, append the 9 new guard rows.
 
 ## D19 — Master plan format: per-PR specs, not master doc
@@ -179,14 +181,52 @@ Format: each decision has a date, a one-line statement, the rationale, and a tri
 - **`docs/development/ci-pipeline.md`** already exists (~70 lines). PR 4 rewrites/expands it; not a new file.
 - **Tripwire:** none.
 
+## D22 — zizmor placement: CI-only
+
+**Decided 2026-04-25** (promoted from D-pending-1): zizmor runs in CI (`.github/workflows/security.yml`), not as a pre-commit hook. Matches issue #1234 framing and avoids the layering problem of having pre-commit run a workflow-security linter that targets files pre-commit doesn't typically inspect.
+
+- **Tripwire:** if zizmor's CI signal is consistently slow (>30s wall-clock per PR), revisit local pre-commit invocation.
+
+## D23 — check-parameter-alignment: delete
+
+**Decided 2026-04-25** (promoted from D-pending-2): `check-parameter-alignment` pre-commit hook is deleted in PR 4 commit 7. Coverage is preserved by `test_architecture_boundary_completeness.py` which already enforces MCP/A2A wrapper completeness via AST inspection.
+
+- **Tripwire:** if a regression bypasses `boundary_completeness`, file a follow-up to extend that guard, NOT to resurrect the grep hook.
+
+## D24 — UV_VERSION: anchor in `_setup-env` composite action
+
+**Decided 2026-04-25** (promoted from D-pending-3): PR 3's `.github/actions/setup-env/action.yml` declares `UV_VERSION: <pinned>` as a single source of truth. PR 5 enforces cross-file consistency via `test_architecture_uv_version_anchor.py`.
+
+- **Tripwire:** when uv ships a major version (e.g., 0.5 → 1.0), bump the anchor in one place; the guard catches drift across `.python-version`, mypy.ini, Dockerfile, tox.ini.
+
+## D25 — harden-runner adoption: PR 6 (follow-up)
+
+**Decided 2026-04-25** (promoted from D-pending-4, **resolved by PR 6**): harden-runner is adopted as a Week 6 follow-up PR. Audit-mode for 2 weeks, then flip to block-mode with allowlist captured from telemetry. See `pr6-image-supply-chain.md` Commits 1 + 3.
+
+- **Tripwire:** if audit-mode reveals unexpected egress endpoints (e.g., suspicious analytics/telemetry from any pinned action), do NOT add to allowlist without supply-chain investigation.
+- **Critical:** harden-runner pinned version MUST be v2.12.0 or later, with `disable-sudo-and-containers: true` (NOT `disable-sudo: true`) per CVE-2025-32955.
+
+## D26 — Workflow naming convention: drop `CI /` prefix from job names
+
+**Decided 2026-04-25** (resolves Blocker #1 from `research/integrity-audit.md`): GitHub renders status checks as `<workflow.name> / <job.name>`. The workflow has `name: CI`; jobs use bare `name: 'Quality Gate'`, NOT `name: 'CI / Quality Gate'`. Including the prefix produces `CI / CI / Quality Gate` (silent bug — Phase B branch-protection PATCH would 422 against unprefixed names).
+
+- **Source:** [community/discussions/46752](https://github.com/orgs/community/discussions/46752)
+- **Affected files:** `.github/workflows/ci.yml`, plus PR 3 Phase B PATCH body and verification scripts.
+- **Tripwire:** when adding a new required check, follow this convention. Verify rendered name via `gh api repos/.../check-runs --jq '.check_runs[].name'` before adding to branch protection.
+
+## D27 — Pre-commit hook reallocation: 9 hooks moved to pre-push (not 5)
+
+**Decided 2026-04-25** (resolves Blocker #2 from `research/integrity-audit.md`): To meet PR 4's `commit-stage hooks ≤ 12` acceptance with the actual 37-hook baseline (drifted +1 from the 36 measured), PR 4 commit 5 moves 9 hooks to pre-push, not 5. The 4 additional hooks: `mcp-schema-alignment`, `check-tenant-context-order`, `ast-grep-bdd-guards`, `check-migration-completeness`.
+
+- **Math:** 37 commit-stage today − 15 deletions − 9 moves to pre-push − 1 consolidation = **12 commit-stage** (exactly at the ceiling).
+- **Tripwire:** if `time pre-commit run --all-files` warm exceeds 2s after PR 4 lands, identify additional move candidates.
+
 ## Decisions still open (will be resolved in flight)
 
-- **D-pending-1**: zizmor placement in pre-commit (matches pydantic/django) vs CI-only (matches issue framing). **Default**: CI-only per issue. Reviewer judgment in PR 1.
-- **D-pending-2**: `check-parameter-alignment` salvage as enforced CI check vs delete. **Default**: delete per PR 4 agent's analysis (boundary-completeness guard already covers it).
-- **D-pending-3**: `UV_VERSION` orphan: anchor in `_setup-env` composite action vs remove-and-float. **Default**: anchor.
-- **D-pending-4**: harden-runner adoption — Fortune-50 pattern not in the issue. **Default**: file as a follow-up PR 6 candidate; out of scope for the 5-PR rollout.
+(None as of 2026-04-25 — D-pending-1..4 promoted to D22-D25 above. The earlier reference to "D-pending-5" in `pr4-hook-relocation.md:499` is a one-off mention of the issue body's bar tightening from <5s to <2s; not a decision-log-status item — handled inline at that PR 4 acceptance criterion.)
 
 ## Change log
 
 - 2026-04 — D1, D3-D9 captured from issue #1234
 - 2026-04-25 — D2, D10-D21 added; D7 revised after OSS validation surfaced prek adopters
+- 2026-04-25 (post-integrity-audit) — D-pending-1..4 promoted to D22-D25; D26 (workflow naming) and D27 (hook reallocation) added; D17 and D18 revised; D-pending-5 resolved as inline acceptance criterion (not a separate decision)

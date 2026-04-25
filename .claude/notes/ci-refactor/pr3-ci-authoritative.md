@@ -196,7 +196,7 @@ concurrency:
 
 jobs:
   quality-gate:
-    name: 'CI / Quality Gate'
+    name: 'Quality Gate'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -210,7 +210,7 @@ jobs:
       - run: uv run python .pre-commit-hooks/check_code_duplication.py
 
   type-check:
-    name: 'CI / Type Check'
+    name: 'Type Check'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -219,7 +219,7 @@ jobs:
       - run: uv run mypy src/ --config-file=mypy.ini
 
   schema-contract:
-    name: 'CI / Schema Contract'
+    name: 'Schema Contract'
     uses: ./.github/workflows/_pytest.yml
     with:
       tox-env: unit
@@ -227,14 +227,14 @@ jobs:
       timeout-minutes: 10
 
   unit-tests:
-    name: 'CI / Unit Tests'
+    name: 'Unit Tests'
     uses: ./.github/workflows/_pytest.yml
     with:
       tox-env: unit
       timeout-minutes: 15
 
   integration-tests:
-    name: 'CI / Integration Tests'
+    name: 'Integration Tests'
     uses: ./.github/workflows/_pytest.yml
     with:
       tox-env: integration
@@ -243,7 +243,7 @@ jobs:
       timeout-minutes: 30
 
   e2e-tests:
-    name: 'CI / E2E Tests'
+    name: 'E2E Tests'
     uses: ./.github/workflows/_pytest.yml
     with:
       tox-env: e2e
@@ -251,7 +251,7 @@ jobs:
       timeout-minutes: 25
 
   admin-tests:
-    name: 'CI / Admin UI Tests'
+    name: 'Admin UI Tests'
     uses: ./.github/workflows/_pytest.yml
     with:
       tox-env: admin
@@ -259,7 +259,7 @@ jobs:
       timeout-minutes: 20
 
   bdd-tests:
-    name: 'CI / BDD Tests'
+    name: 'BDD Tests'
     uses: ./.github/workflows/_pytest.yml
     with:
       tox-env: bdd
@@ -267,7 +267,7 @@ jobs:
       timeout-minutes: 20
 
   migration-roundtrip:
-    name: 'CI / Migration Roundtrip'
+    name: 'Migration Roundtrip'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -291,7 +291,7 @@ jobs:
         run: bash .github/scripts/migration_roundtrip.sh
 
   coverage:
-    name: 'CI / Coverage'
+    name: 'Coverage'
     runs-on: ubuntu-latest
     needs: [unit-tests, integration-tests, e2e-tests, admin-tests, bdd-tests]
     permissions:
@@ -320,7 +320,7 @@ jobs:
         # Per D11, advisory for first 4 weeks; --fail-under above is set to 53.5
 
   summary:
-    name: 'CI / Summary'
+    name: 'Summary'
     runs-on: ubuntu-latest
     needs:
       - quality-gate
@@ -507,6 +507,40 @@ After Phase A has been on main for ≥48 hours and the new check names appear gr
 ```bash
 test -f .claude/notes/ci-refactor/branch-protection-snapshot.json   # from pre-flight A1
 ```
+
+#### Step 1b — Capture the **actually-rendered** check names from the latest Phase A PR
+
+GitHub renders status checks as `<workflow.name> / <job.name>` and the branch-protection `context` field requires an exact-string match. Reusable workflow calls can produce 3-segment names (e.g., `CI / Unit Tests / pytest`) instead of the expected 2-segment names. Verify before flipping.
+
+```bash
+# Get the most recent Phase A PR head SHA
+PR_SHA=$(gh pr list --state merged --limit 1 --search "phase a" --json headRefOid --jq '.[0].headRefOid')
+
+# Capture every check-run name GitHub published for that SHA
+gh api repos/prebid/salesagent/commits/${PR_SHA}/check-runs --paginate \
+  --jq '.check_runs[].name' | sort -u > /tmp/rendered-names.txt
+
+# Compare to the 11 expected names — they must match the Step 2 PATCH body exactly
+cat <<'EOF' | sort -u > /tmp/expected-names.txt
+CI / Quality Gate
+CI / Type Check
+CI / Schema Contract
+CI / Unit Tests
+CI / Integration Tests
+CI / E2E Tests
+CI / Admin UI Tests
+CI / BDD Tests
+CI / Migration Roundtrip
+CI / Coverage
+CI / Summary
+EOF
+
+# These must each appear as a substring/exact match in /tmp/rendered-names.txt
+diff /tmp/expected-names.txt <(grep -F -f /tmp/expected-names.txt /tmp/rendered-names.txt | sort -u) \
+  || { echo "Rendered names diverge from expected. Inspect /tmp/rendered-names.txt and update PATCH body in Step 2 to match exact strings before flipping."; exit 1; }
+```
+
+If the diff fails, the reusable workflow nesting added a 3rd segment. Either (a) update the Step 2 PATCH body to reference the 3-segment names verbatim, or (b) flatten `_pytest.yml` so that `name:` of the calling job becomes the published label (preferred — preserves the D17 contract).
 
 #### Step 2 — Atomic flip via `gh api`
 

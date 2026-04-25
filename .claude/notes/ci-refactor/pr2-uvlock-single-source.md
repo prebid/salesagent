@@ -43,6 +43,8 @@ Files:
 
 Closes PD1.
 
+**Rationale (do NOT frame as "mirrors-mypy is deprecated" — it is not):** The `pre-commit/mirrors-mypy` repo is actively maintained. The reason to migrate is that mirrors-mypy runs mypy in pre-commit's *isolated* virtualenv where the project's deps aren't visible. mypy then silently emits `--ignore-missing-imports`-grade output that diverges from a direct `uv run mypy src/` invocation, masking real type errors. The `language: system` local hook below invokes mypy against the project's actual environment, restoring the type contract the project claimed to enforce. References: [Jared Khan – mypy in pre-commit](https://jaredkhan.com/blog/mypy-pre-commit), [mypy issue #13916](https://github.com/python/mypy/issues/13916).
+
 The new hook (under `repos[0].hooks` — the existing `local` repo block):
 
 ```yaml
@@ -179,7 +181,9 @@ uv run pre-commit run black --all-files
 
 Files:
 - `tests/unit/test_architecture_pre_commit_no_additional_deps.py` (new, ~40 lines)
-- `tests/unit/_architecture_helpers.py` (new, ~30 lines, shared AST/YAML helpers)
+- `tests/unit/_architecture_helpers.py` (**new baseline** — ~30 lines: `repo_root`, `parse_module` mtime-keyed cache, `iter_function_defs`, `iter_call_expressions`, `src_python_files`)
+
+**Coordination with PR 4 (Blocker #3):** This commit creates the baseline only. PR 4 commit 1 EXTENDS the file by appending workflow/compose/anchor helpers and assertion utilities, growing it to ~221 lines. The final reconciled module is at `.claude/notes/ci-refactor/drafts/_architecture_helpers.py`. PR 4 commit 1's verification pre-asserts that this file already exists.
 
 The guard:
 

@@ -194,9 +194,11 @@ The 4 ADRs are persisted at `drafts/adr-{004,005,006,007}-*.md`. Each is committ
 
 The 8 guard skeletons at `drafts/guards/*.py` need to be referenced from the per-PR specs (which guard belongs to which PR):
 
-- **PR 1 owns:** `test_architecture_workflow_concurrency.py`, `test_architecture_persist_credentials_false.py`, `test_architecture_workflow_timeout_minutes.py` (3 Fortune-50 guards)
-- **PR 3 owns:** `test_architecture_no_advisory_ci.py`, `test_architecture_required_ci_checks_frozen.py`
-- **PR 4 owns:** `test_architecture_explicit_nested_serialization.py`, `test_architecture_pre_commit_hook_count.py`, `test_architecture_helpers.py` (meta-guard)
+**Per D19, ALL 8 guards land in PR 4.** Earlier drafts split ownership across PR 1/3/4; that allocation was reverted because the helper functions the guards need (`iter_workflow_files`, `iter_action_uses`, etc.) don't exist until PR 4 commit 1 extends `_architecture_helpers.py`.
+
+- **All 8 in PR 4 commit 3 (or follow-on commits):** `test_architecture_workflow_concurrency.py`, `test_architecture_persist_credentials_false.py`, `test_architecture_workflow_timeout_minutes.py`, `test_architecture_no_advisory_ci.py`, `test_architecture_required_ci_checks_frozen.py`, `test_architecture_explicit_nested_serialization.py`, `test_architecture_pre_commit_hook_count.py`, `test_architecture_helpers.py` (meta-guard)
+- PR 1 still ships the *workflow content* the guards inspect (SHA-pinning, `permissions: {}`, `persist-credentials: false`); PR 4 lands the enforcement.
+- Backfill commits B1-B7 are no longer necessary in PR 1 — the workflow content lands in commit 9 of PR 1 and the guards green on day 1 in PR 4.
 
 For each owning PR's spec:
 - Add a commit step ("test: add `test_architecture_<name>.py`")

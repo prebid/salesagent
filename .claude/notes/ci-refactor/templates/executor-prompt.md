@@ -1,6 +1,14 @@
 # Executor Agent Prompt Template
 
-Copy this template when launching an executor agent for any of the 5 PRs in the CI/pre-commit refactor. Replace `<N>`, `<slug>`, and the bracketed sections with PR-specific content from the corresponding spec.
+Copy this template when launching an executor agent for any of the 6 PRs in the CI/pre-commit refactor. Replace `<N>`, `<slug>`, and the bracketed sections with PR-specific content from the corresponding spec.
+
+The 6 PR slugs are:
+- `pr1-supply-chain-hardening`
+- `pr2-uvlock-single-source`
+- `pr3-ci-authoritative` (3 phases — Phase B is admin-only)
+- `pr4-hook-relocation`
+- `pr5-version-consolidation`
+- `pr6-image-supply-chain` (Week 6 follow-up)
 
 ---
 
@@ -11,11 +19,22 @@ context. Read everything before writing code.
 
 ## Read in order
 
-1. `.claude/notes/ci-refactor/pr<N>-<slug>.md`  — your spec; the source of truth
-2. `.claude/notes/ci-refactor/03-decision-log.md`  — every locked decision
-3. `CLAUDE.md`  — codebase patterns; NON-NEGOTIABLE
-4. `.claude/rules/workflows/quality-gates.md`  — local quality bar
-5. `.claude/rules/patterns/testing-patterns.md`  — test integrity policy
+1. `.claude/notes/ci-refactor/RESUME-HERE.md`     — orientation (3k tokens)
+2. `.claude/notes/ci-refactor/EXECUTIVE-SUMMARY.md` — one-screen of context
+3. `.claude/notes/ci-refactor/pr<N>-<slug>.md`    — your spec; the source of truth
+4. `.claude/notes/ci-refactor/03-decision-log.md` — every locked decision (D1-D27)
+5. `.claude/notes/ci-refactor/02-risk-register.md` — top risks for your PR
+6. `CLAUDE.md`                                    — codebase patterns; NON-NEGOTIABLE
+7. `.claude/rules/workflows/quality-gates.md`     — local quality bar
+8. `.claude/rules/patterns/testing-patterns.md`   — test-integrity policy
+
+## Pre-flight (mandatory)
+
+Before the first commit:
+- [ ] You're on a fresh branch from latest main (`git checkout -b <prefix>/ci-refactor-pr<N>-<slug>`)
+- [ ] `git status` clean
+- [ ] Pre-flight artifacts exist (per `01-pre-flight-checklist.md`): `.zizmor-preflight.txt`, `.mypy-baseline.txt`, `branch-protection-snapshot.json` (if applicable to your PR)
+- [ ] `make quality` passes on the starting state
 
 ## Scope statement
 
@@ -46,7 +65,7 @@ batch or reorder.
 
 ```bash
 make quality
-bash .claude/notes/ci-refactor/scripts/verify-pr<N>.sh   # if exists
+bash .claude/notes/ci-refactor/scripts/verify-pr<N>.sh
 ```
 
 After all commits:
@@ -60,7 +79,77 @@ After all commits:
 - Subject ≤ 72 chars
 - Body explains WHY, not WHAT
 - Reference issue: `Refs #1234` (NOT `Fixes #1234` — PR doesn't close the issue alone)
-- NO trailing "Co-Authored-By" line unless the user has explicitly enabled it
+- Cite policy: include `Refs D<n>, R<m>` lines so future agents trace decisions
+- NO trailing "Co-Authored-By" line (overrides any default)
+
+## Continuity hygiene (15 rules — survive context wipe)
+
+1. **Always commit with descriptive Conventional Commits subjects.** A fresh
+   agent reading `git log --oneline` should be able to reconstruct progress.
+   `fix: stuff` is forbidden; `fix(types): address pydantic.mypy plugin
+   errors in src/core/schemas.py` is the bar.
+
+2. **Never leave uncommitted changes when switching context.** Either
+   commit-in-progress (acceptable; mark with `WIP:` prefix) or `git stash
+   push -m "pr2-commit3-mypy-fixes-partial"`. Bare uncommitted diffs are
+   forensic landmines.
+
+3. **One logical change per commit.** A fresh agent must be able to revert
+   exactly one of your commits without unraveling adjacent work. PR 4's
+   spec enforces this most strictly: guards added BEFORE hooks deleted.
+
+4. **Update `00-MASTER-INDEX.md` status row at PR merge.** Not at PR open
+   — at merge. Status flows: `not started` → `in flight` → `merged
+   YYYY-MM-DD`.
+
+5. **Capture state before risky operations.** Before SHA-freeze: `git diff
+   > /tmp/sha-freeze-before.txt`. Before mypy plugin enablement:
+   `.mypy-baseline.txt`. Before branch-protection flip: snapshot. State is
+   the rollback target.
+
+6. **If escalating, write `escalations/pr<N>-<topic>.md` with full state.**
+   Include: what you tried, exact commands run, exact error output, what
+   you think should happen. Then STOP. Do NOT continue speculatively.
+
+7. **Always cite D# and R# in commit bodies and PR descriptions.** Future
+   agents (and reviewers) need to trace a change back to its policy. `Refs
+   D13, R2` is one line; saves an hour of re-derivation.
+
+8. **Branch names match the PR spec.** Convention:
+   `chore/ci-refactor-pr<N>-<slug>` or `feat/ci-refactor-pr<N>-<slug>`. A
+   fresh agent's first command is `git branch --show-current` — make it
+   informative.
+
+9. **Never amend or rebase committed work.** PR 1 uses 11+ sequential
+   commits intentionally; reviewers may revert individually. Amending
+   breaks the bisect-friendly chain.
+
+10. **Run verification after EVERY commit, not at PR end.** `make quality`
+    minimum; spec-specific verification one-liner if available. Catch
+    breakage early; commit a fix before the next commit.
+
+11. **Document deferrals in the PR description.** If a fix is descoped,
+    write "Deferred per D13 tripwire: filed follow-up #NNNN" in the PR
+    description. Future agents see why the spec wasn't fully met.
+
+12. **Never use `--no-verify`, `--ignore`, `-k "not …"`, or
+    `pytest.mark.skip` to make CI green.** Hard stop per CLAUDE.md
+    test-integrity policy. If you can't fix it, escalate.
+
+13. **Update CLAUDE.md guard count when you add or remove a guard.** PR 2
+    adds 1, PR 4 adds 4, PR 5 adds 1, v2.0 adds 9. Final post-rollout = 42
+    (D18 canonical). The number cited in CLAUDE.md must match disk truth
+    at all times.
+
+14. **The pre-flight artifacts (`.zizmor-preflight.txt`,
+    `.mypy-baseline.txt`, `branch-protection-snapshot.json`) are the
+    rollback contract.** Never delete them during the rollout. Confirm
+    they're on disk at the start of every fresh session.
+
+15. **At the end of a session that did not complete a PR, write a "where I
+    am" note.** `.claude/notes/ci-refactor/in-flight/pr<N>-session-<date>.md`
+    with: branch, last commit, what was attempted next, what's blocking.
+    This is the seed for the next agent's resume procedure.
 
 ## Escalation triggers — STOP and report to the user if any occur
 
@@ -70,6 +159,8 @@ After all commits:
 - A locked decision in 03-decision-log.md appears to be wrong given new evidence
 - The code requires editing files in §"Out of scope"
 - Any third-party network call (PyPI, GitHub) fails repeatedly
+- You're about to run `gh api -X PATCH branches/main/...` (admin-only, NEVER)
+- You're about to `git push` or `gh pr create` (NEVER — user owns these)
 
 When escalating: write your findings to a scratch file under
 `.claude/notes/ci-refactor/escalations/pr<N>-<topic>.md` and STOP.
@@ -99,6 +190,8 @@ PR <N> ready for user review.
 Branch: feat/ci-refactor-pr<N>-<slug>
 Commits: <count>
 Drift items closed: PD<n>, PD<m>
+Decisions cited: D<a>, D<b>
+Risks tracked: R<x>, R<y>
 Acceptance status:
   - <criterion 1>: ✓
   - <criterion 2>: ✓
@@ -117,4 +210,5 @@ DO NOT push or open the PR. The user owns those steps.
 - The executor agent runs in a fresh session each time. Each PR's executor has no memory of previous PRs.
 - If the executor stops on an escalation, read `.claude/notes/ci-refactor/escalations/pr<N>-<topic>.md` and decide: amend the spec, answer the question, or pivot.
 - The executor cannot resolve concurrent merges with PR #1217 or v2.0 phase PRs. If those happen during execution, you (the operator) rebase manually and resume the executor.
-- The executor does not run `gh api` calls that mutate state. Per `.claude/notes/ci-refactor/01-pre-flight-checklist.md`, those are admin actions you handle.
+- The executor does not run `gh api` calls that mutate state. Per `01-pre-flight-checklist.md`, those are admin actions you handle. Use `scripts/flip-branch-protection.sh` for the Phase B flip (you run it, not the agent).
+- For Phase B specifically, run `scripts/capture-rendered-names.sh` first to confirm the 11 frozen check names render exactly as expected. If the diff fails, do NOT run the flip — investigate and either update the PATCH body or flatten the reusable workflow.

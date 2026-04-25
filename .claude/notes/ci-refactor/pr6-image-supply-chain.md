@@ -1,10 +1,10 @@
 # PR 6 — Image signing + advanced supply-chain hardening
 
-**Drift items closed:** D-pending-4 (harden-runner adoption), plus net-new Fortune-50 patterns
+**Drift items closed:** D25 (was D-pending-4) (harden-runner adoption), plus net-new Fortune-50 patterns
 **Estimated effort:** 1.5-2 days
 **Depends on:** PR 1 merged (zizmor baseline, SHA-pinning convention), PR 3 Phase C merged (`ci.yml` is authoritative)
 **Blocks:** none — final follow-up after the 5-PR core rollout
-**Decisions referenced:** D2, D10, D17, D-pending-4
+**Decisions referenced:** D2, D10, D17, D25 (was D-pending-4)
 
 ## Scope
 
@@ -36,75 +36,106 @@ Files:
 
 ```yaml
     steps:
-      - uses: step-security/harden-runner@<SHA>  # v2
+      - uses: step-security/harden-runner@<SHA>  # v2.12.0+ — required for CVE-2025-32955 fix
         with:
           egress-policy: audit
+          disable-sudo-and-containers: true   # NOT disable-sudo:true (bypassable per CVE-2025-32955)
       - uses: ./.github/actions/setup-env
 ```
+
+**Pinning requirement:** the `<SHA>` for `harden-runner` must resolve to v2.12.0 or later. Earlier versions accept `disable-sudo: true` but it is bypassable via Docker per [CVE-2025-32955](https://www.sysdig.com/blog/security-mechanism-bypass-in-harden-runner-github-action). Version 2.12.0 (April 2025) introduced `disable-sudo-and-containers: true` as the only correct option. SHA-pin to the release tag from [v2.12.0+](https://github.com/step-security/harden-runner/releases) using the same SHA-resolution loop established in PR 1 commit 9.
 
 Verification:
 ```bash
 COUNT=$(grep -RhoE 'uses: step-security/harden-runner@' .github/workflows/ | wc -l)
 [[ $COUNT -ge 5 ]]
 grep -q 'egress-policy: audit' .github/workflows/ci.yml
+grep -q 'disable-sudo-and-containers: true' .github/workflows/ci.yml
+! grep -RnE '^\s+disable-sudo:\s+true\s*$' .github/workflows/   # bypassable; must be absent
 ```
 
 Acceptance: every Ubuntu CI job runs harden-runner; audit data populates the StepSecurity dashboard.
 
-### Commit 2 — `ci: cosign keyless signing for GHCR + Docker Hub images`
+### Commit 2 — `ci: extend release-please.yml publish-docker with cosign + SBOM + provenance`
+
+**Critical context:** the existing `.github/workflows/release-please.yml` already has a `publish-docker` job that builds + pushes multi-arch images (`linux/amd64,linux/arm64`) to BOTH `ghcr.io/${{ github.repository }}` AND `${{ secrets.DOCKERHUB_USER }}/salesagent` on a `release_created` gate. This PR 6 commit EXTENDS that job to add cosign keyless signing + SBOM + provenance — it does NOT create a new `release.yml` workflow (a new workflow on `tags: ['v*']` would race with release-please's tag push and produce duplicate publishes).
 
 Files:
-- `.github/workflows/release.yml` (new, ~110 lines) — handles tag-triggered image push + sign
+- `.github/workflows/release-please.yml` (modify the existing `publish-docker` job — see diff below)
+
+**Diff from existing `publish-docker` job** (preserves multi-arch + Docker Hub):
 
 ```yaml
-name: Release Image
-
-on:
-  push:
-    tags: ['v*']
-  workflow_dispatch:
-
-permissions: {}
-
-jobs:
-  build-sign-publish:
+  publish-docker:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # NEW: explicit job-level permissions (PR 1 commit 9 added top-level `permissions:`; this scopes to job)
     permissions:
       contents: read
       packages: write
-      id-token: write
-      attestations: write
+      id-token: write       # NEW: cosign keyless OIDC + attest-build-provenance
+      attestations: write   # NEW: attest-build-provenance writes Sigstore bundle
     steps:
-      - uses: step-security/harden-runner@<SHA>  # v2
+      # NEW: harden-runner from PR 6 commit 1 (carry-forward; CVE-2025-32955 fix)
+      - uses: step-security/harden-runner@<SHA>   # v2.12.0+ — see commit 1 for SHA
         with:
           egress-policy: audit
-      - uses: actions/checkout@<SHA>  # v4
+          disable-sudo-and-containers: true
+
+      - uses: actions/checkout@<SHA>  # v4 — SHA from .github/.action-shas.txt (PR 1 commit 9)
         with:
           persist-credentials: false
-      - uses: docker/setup-buildx-action@<SHA>  # v3
-      - uses: docker/login-action@<SHA>  # v3
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@<SHA>      # v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@<SHA>    # v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@<SHA>           # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - id: meta
-        uses: docker/metadata-action@<SHA>  # v5
+      - name: Log in to Docker Hub
+        uses: docker/login-action@<SHA>           # v3 — PRESERVED from existing workflow
         with:
-          images: ghcr.io/prebid/salesagent
+          username: ${{ secrets.DOCKERHUB_USER }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+
+      - id: meta
+        name: Extract metadata for Docker
+        uses: docker/metadata-action@<SHA>        # v5
+        with:
+          images: |
+            ghcr.io/${{ github.repository }}
+            ${{ secrets.DOCKERHUB_USER }}/salesagent
           tags: |
-            type=ref,event=tag
-            type=sha,prefix=sha-
+            type=semver,pattern={{version}},value=${{ needs.release-please.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.release-please.outputs.version }}
+            type=semver,pattern={{major}},value=${{ needs.release-please.outputs.version }}
+            type=raw,value=latest
+
       - id: build
-        uses: docker/build-push-action@<SHA>  # v6
+        name: Build and push Docker image
+        uses: docker/build-push-action@<SHA>      # v5+
         with:
           context: .
+          file: Dockerfile
           push: true
+          platforms: linux/amd64,linux/arm64       # PRESERVED — multi-arch
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # NEW: SLSA provenance + SBOM
           provenance: mode=max
           sbom: true
-      - uses: sigstore/cosign-installer@<SHA>  # v3
+
+      # NEW: cosign keyless signing for both registries
+      - uses: sigstore/cosign-installer@<SHA>     # v3
       - name: Sign image (keyless)
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
@@ -113,21 +144,38 @@ jobs:
           for tag in $TAGS; do
             cosign sign --yes "${tag}@${DIGEST}"
           done
+
+      # NEW: build-provenance attestation (separate from cosign — see ADR-007 reconciliation)
       - uses: actions/attest-build-provenance@<SHA>  # v2
         with:
-          subject-name: ghcr.io/prebid/salesagent
+          subject-name: ghcr.io/${{ github.repository }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
 ```
 
+The trigger (`on: push: branches: [main]` gated by `release_created`) and the `release-please` job stay unchanged. No new workflow file is created.
+
 Verification:
 ```bash
-test -f .github/workflows/release.yml
-yamllint -d relaxed .github/workflows/release.yml
-grep -q 'cosign sign --yes' .github/workflows/release.yml
-grep -q 'actions/attest-build-provenance' .github/workflows/release.yml
-grep -qE '^permissions:\s*\{?\s*\}?' .github/workflows/release.yml
-grep -q 'id-token: write' .github/workflows/release.yml
+# We're modifying an existing file, not creating one.
+test -f .github/workflows/release-please.yml
+yamllint -d relaxed .github/workflows/release-please.yml
+
+# Multi-arch + Docker Hub PRESERVED
+grep -q 'platforms: linux/amd64,linux/arm64' .github/workflows/release-please.yml
+grep -q 'DOCKERHUB_USER' .github/workflows/release-please.yml
+
+# New supply-chain fields present
+grep -q 'cosign sign --yes' .github/workflows/release-please.yml
+grep -q 'actions/attest-build-provenance' .github/workflows/release-please.yml
+grep -q 'sbom: true' .github/workflows/release-please.yml
+grep -q 'provenance: mode=max' .github/workflows/release-please.yml
+
+# CVE-2025-32955 fix
+grep -q 'disable-sudo-and-containers: true' .github/workflows/release-please.yml
+
+# OIDC permissions scoped to job (top-level remains `permissions: contents: write, pull-requests: write, packages: write`)
+grep -q 'id-token: write' .github/workflows/release-please.yml
 ```
 
 Acceptance: tag push produces signed multi-platform image at `ghcr.io/prebid/salesagent:vX.Y.Z` plus provenance attestation. Verify:
@@ -145,9 +193,10 @@ Files: all workflow files modified by commit 1 — change `egress-policy: audit`
 
 ```yaml
     steps:
-      - uses: step-security/harden-runner@<SHA>  # v2
+      - uses: step-security/harden-runner@<SHA>  # v2.12.0+
         with:
           egress-policy: block
+          disable-sudo-and-containers: true   # CVE-2025-32955 mitigation; carry-forward from commit 1
           allowed-endpoints: >
             api.github.com:443
             github.com:443
@@ -162,13 +211,26 @@ Files: all workflow files modified by commit 1 — change `egress-policy: audit`
             uploads.github.com:443
 ```
 
-The exact list is captured from audit-mode telemetry; the above is a typical profile.
+**How to extract the allowlist from audit-mode telemetry** (do this before opening commit 3):
+
+1. After every CI run during the 2-week audit window, the GitHub job step summary contains a link of the form `https://app.stepsecurity.io/github/prebid/salesagent/actions/runs/<run_id>` (the StepSecurity insights URL — added automatically by harden-runner).
+2. Click through ~3-5 representative runs (one of each workflow type: ci, codeql, security, _pytest reusable, release-please).
+3. The dashboard "Outbound calls" table lists every endpoint hit with hit count + step name. Copy each unique `host:port` from non-anomalous calls.
+4. Aggregate into a single deduplicated list. Example query (if you've granted StepSecurity API access):
+   ```bash
+   # Manual aggregation works fine — there are typically <20 unique endpoints
+   ```
+5. The block above is a typical profile for a Python+Docker repo. Do NOT add new endpoints without supply-chain investigation; a new endpoint can indicate a typosquatted action or compromised dependency.
+
+Reference: [StepSecurity 2-week soak procedure](https://docs.stepsecurity.io/harden-runner/getting-started) and `research/external-tool-yaml.md` §4 "2-week soak procedure".
 
 Verification:
 ```bash
 ! grep -q 'egress-policy: audit' .github/workflows/ci.yml
 grep -q 'egress-policy: block' .github/workflows/ci.yml
 grep -q 'allowed-endpoints:' .github/workflows/ci.yml
+grep -q 'disable-sudo-and-containers: true' .github/workflows/ci.yml   # CVE-2025-32955
+! grep -RnE '^\s+disable-sudo:\s+true\s*$' .github/workflows/   # bypassable variant absent
 ```
 
 Acceptance: subsequent CI runs succeed with block-mode active; unexpected egress causes a "blocked endpoint" failure with a clear log message.
@@ -177,7 +239,7 @@ Acceptance: subsequent CI runs succeed with block-mode active; unexpected egress
 
 Files:
 - `.github/workflows/security.yml` — add `dependency-review` job
-- Branch-protection update (admin action) to add `Security / Dependency Review`
+- Branch-protection update — **ADMIN-ONLY action**, runs after merge via `scripts/add-required-check.sh "Security / Dependency Review"` (NEW companion to `flip-branch-protection.sh`); the executor agent does NOT run `gh api -X PATCH branches/main/...` per `feedback_user_owns_git_push.md`.
 
 ```yaml
   dependency-review:
@@ -188,9 +250,10 @@ Files:
       contents: read
       pull-requests: write
     steps:
-      - uses: step-security/harden-runner@<SHA>
+      - uses: step-security/harden-runner@<SHA>   # v2.12.0+ — CVE-2025-32955 fix
         with:
           egress-policy: block
+          disable-sudo-and-containers: true       # CVE-2025-32955 mitigation
           allowed-endpoints: >
             api.github.com:443
             github.com:443
@@ -204,18 +267,31 @@ Files:
           deny-licenses: GPL-3.0, AGPL-3.0
 ```
 
-Branch-protection (admin runs after merge):
+**ADMIN ACTION (executor MUST NOT run this):** after this commit merges, the user adds `Security / Dependency Review` to branch protection's required checks list:
+
 ```bash
-gh api repos/prebid/salesagent/branches/main/protection/required_status_checks \
-  --jq '.contexts' > /tmp/checks.json
-jq '. + ["Security / Dependency Review"]' /tmp/checks.json > /tmp/checks-new.json
-# PATCH back per PR 3 Phase B procedure
+# Non-destructive read first
+CURRENT=$(gh api repos/prebid/salesagent/branches/main/protection/required_status_checks \
+  --jq '[.checks[].context]')
+NEW=$(echo "$CURRENT" | jq '. + ["Security / Dependency Review"] | unique')
+
+# PATCH using the same shape as flip-branch-protection.sh
+gh api -X PATCH \
+  /repos/prebid/salesagent/branches/main/protection/required_status_checks \
+  -H "Accept: application/vnd.github+json" \
+  --input - <<EOF
+{
+  "strict": true,
+  "checks": $(echo "$NEW" | jq '[.[] | {context: .}]')
+}
+EOF
 ```
 
 Verification:
 ```bash
 grep -q 'actions/dependency-review-action' .github/workflows/security.yml
 grep -q 'fail-on-severity: moderate' .github/workflows/security.yml
+grep -q 'disable-sudo-and-containers: true' .github/workflows/security.yml
 yamllint -d relaxed .github/workflows/security.yml
 ```
 
@@ -427,7 +503,7 @@ Full revert: `git revert -m 1 <PR6-merge-sha>`. Recovery: <10 min plus admin act
 3. **Pre-flight CodeQL count**: before commit 5, run `gh api 'repos/prebid/salesagent/code-scanning/alerts?state=open' --jq 'length'`. If > 5, hold commit 5; file triage issues per D10 tripwire.
 4. **Release workflow dry-run**: tag a `v0.0.0-dry` test tag in a throwaway branch, verify `cosign tree ghcr.io/prebid/salesagent:v0.0.0-dry`, then delete.
 5. **After merge**: admin actions in commit 7 require maintainer login to GitHub UI. Do not delegate.
-6. **Issue #1234**: this PR closes the rollout's optional Fortune-50 follow-up per D-pending-4. Comment on #1234 with closure date and final OpenSSF Scorecard score.
+6. **Issue #1234**: this PR closes the rollout's optional Fortune-50 follow-up per D25 (was D-pending-4). Comment on #1234 with closure date and final OpenSSF Scorecard score.
 ```
 
 ---
