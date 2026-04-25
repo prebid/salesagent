@@ -8,6 +8,7 @@ This module follows the MCP/A2A shared implementation pattern from CLAUDE.md.
 
 import logging
 from datetime import UTC, datetime
+from typing import Any
 
 from adcp.types import GetAdcpCapabilitiesRequest, GetAdcpCapabilitiesResponse
 from adcp.types.generated_poc.core.media_buy_features import MediaBuyFeatures
@@ -243,6 +244,7 @@ def _get_adcp_capabilities_impl(
 
 async def get_adcp_capabilities(
     protocols: list[str] | None = None,
+    ext: Any | None = None,  # AdCP ExtensionObject for custom fields
     ctx: Context | None = None,
 ) -> ToolResult:
     """Get the capabilities of this AdCP sales agent.
@@ -259,7 +261,7 @@ async def get_adcp_capabilities(
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
 
     # Build request object (currently minimal)
-    req = GetAdcpCapabilitiesRequest()
+    req = GetAdcpCapabilitiesRequest(ext=ext)
 
     # Call shared implementation
     response = _get_adcp_capabilities_impl(req, identity)
@@ -287,6 +289,7 @@ async def get_adcp_capabilities(
 
 async def get_adcp_capabilities_raw(
     protocols: list[str] | None = None,
+    ext: Any | None = None,  # AdCP ExtensionObject for custom fields
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ) -> GetAdcpCapabilitiesResponse:
@@ -306,5 +309,5 @@ async def get_adcp_capabilities_raw(
         from src.core.transport_helpers import resolve_identity_from_context
 
         identity = resolve_identity_from_context(ctx, require_valid_token=False)
-    req = GetAdcpCapabilitiesRequest()
+    req = GetAdcpCapabilitiesRequest(ext=ext)
     return _get_adcp_capabilities_impl(req, identity)

@@ -55,6 +55,7 @@ def _list_creatives_impl(
     sort_by: str = "created_date",
     sort_order: str = "desc",
     context: ContextObject | None = None,  # Application level context per adcp spec
+    ext: Any | None = None,  # AdCP ExtensionObject for custom fields
     identity: ResolvedIdentity | None = None,
 ) -> ListCreativesResponse:
     """List and search creative library (AdCP v2.5 spec endpoint).
@@ -410,6 +411,7 @@ async def list_creatives(
     sort_order: str = "desc",
     webhook_url: str | None = None,
     context: ContextObject | None = None,  # Application level context per adcp spec
+    ext: Any | None = None,  # AdCP ExtensionObject for custom fields
     ctx: Context | ToolContext | None = None,
 ):
     """List and filter creative assets from the centralized library (AdCP v2.5).
@@ -454,6 +456,7 @@ async def list_creatives(
         sort_by=sort_by,
         sort_order=sort_order,
         context=context,
+        ext=ext,
         identity=identity,
     )
     return ToolResult(content=str(response), structured_content=response)
@@ -480,6 +483,7 @@ def list_creatives_raw(
     sort_by: str = "created_date",
     sort_order: str = "desc",
     context: dict | None = None,  # Application level context per adcp spec
+    ext: Any | None = None,  # AdCP ExtensionObject for custom fields
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ):
@@ -540,5 +544,6 @@ def list_creatives_raw(
         sort_by=sort_by,
         sort_order=sort_order,
         context=to_context_object(context),
+        ext=ext,
         identity=identity,
     )

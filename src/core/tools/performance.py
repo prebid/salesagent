@@ -31,6 +31,7 @@ def _update_performance_index_impl(
     media_buy_id: str,
     performance_data: list[dict[str, Any]],
     context: ContextObject | None = None,
+    ext: Any | None = None,  # AdCP ExtensionObject for custom fields
     identity: ResolvedIdentity | None = None,
 ) -> UpdatePerformanceIndexResponse:
     """Shared implementation for update_performance_index (used by both MCP and A2A).
@@ -51,7 +52,7 @@ def _update_performance_index_impl(
     try:
         performance_objects = [ProductPerformance(**perf) for perf in performance_data]
         req = UpdatePerformanceIndexRequest(
-            media_buy_id=media_buy_id, performance_data=performance_objects, context=context
+            media_buy_id=media_buy_id, performance_data=performance_objects, context=context, ext=ext
         )
     except ValidationError as e:
         raise AdCPValidationError(format_validation_error(e, context="update_performance_index request")) from e
@@ -132,6 +133,7 @@ async def update_performance_index(
     performance_data: list[dict[str, Any]],
     webhook_url: str | None = None,
     context: ContextObject | None = None,
+    ext: Any | None = None,  # AdCP ExtensionObject for custom fields
     ctx: Context | ToolContext | None = None,
 ):
     """Update performance index data for a media buy.
@@ -149,7 +151,7 @@ async def update_performance_index(
         ToolResult with UpdatePerformanceIndexResponse data
     """
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
-    response = _update_performance_index_impl(media_buy_id, performance_data, context, identity)
+    response = _update_performance_index_impl(media_buy_id, performance_data, context, ext, identity)
     return ToolResult(content=str(response), structured_content=response)
 
 
@@ -157,6 +159,7 @@ def update_performance_index_raw(
     media_buy_id: str,
     performance_data: list[dict[str, Any]],
     context: ContextObject | None = None,
+    ext: Any | None = None,  # AdCP ExtensionObject for custom fields
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ):
@@ -177,7 +180,7 @@ def update_performance_index_raw(
         from src.core.transport_helpers import resolve_identity_from_context
 
         identity = resolve_identity_from_context(ctx, require_valid_token=True)
-    return _update_performance_index_impl(media_buy_id, performance_data, context, identity)
+    return _update_performance_index_impl(media_buy_id, performance_data, context, ext, identity)
 
 
 # --- Human-in-the-Loop Task Queue Tools ---

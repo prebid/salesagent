@@ -102,6 +102,7 @@ def create_get_products_request(
     filters: dict[str, Any] | ProductFilters | None = None,
     property_list: dict[str, Any] | PropertyListReference | None = None,
     context: dict[str, Any] | ContextObject | None = None,
+    ext: Any | None = None,
 ) -> GetProductsRequest:
     """Create GetProductsRequest aligned with adcp v3.6.0 spec.
 
@@ -136,6 +137,7 @@ def create_get_products_request(
         filters=filters_obj,
         property_list=to_property_list_reference(property_list),
         context=to_context_object(context),
+        ext=ext,
     )
 
 

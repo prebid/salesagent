@@ -814,6 +814,7 @@ async def get_products(
     property_list: dict | None = None,
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,  # payload-level context
+    ext: Any | None = None,  # AdCP ExtensionObject for custom fields
     ctx: Context | ToolContext | None = None,
 ):
     """Get available products matching the brief.
@@ -841,6 +842,7 @@ async def get_products(
             filters=filters,
             property_list=property_list,
             context=context,
+            ext=ext,
         )
 
     except ValidationError as e:
@@ -873,6 +875,7 @@ async def get_products_raw(
     property_list: dict | None = None,
     strategy_id: str | None = None,
     context: dict | None = None,  # Application level context per adcp spec
+    ext: Any | None = None,  # AdCP ExtensionObject for custom fields
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ) -> GetProductsResponse:
@@ -910,6 +913,7 @@ async def get_products_raw(
         filters=filters,
         property_list=property_list,
         context=context,
+        ext=ext,
     )
 
     # Call shared implementation
