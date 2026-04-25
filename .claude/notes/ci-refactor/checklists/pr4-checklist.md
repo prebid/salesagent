@@ -48,16 +48,21 @@ Commits in order:
                  [(_:=target['enforced_by'] in {'guard','guard-existing','ci-step','pre-push','pre-push + ci','deleted'}) \
                   or (_ for _ in (1/0,)) for hook,target in m.items()]; print(f'{len(m)} entries')"
 
-[ ] 5. refactor(pre-commit): move 9 medium-cost hooks to pre-push stage (D27 P0 sweep)
-       File: .pre-commit-config.yaml — add `stages: [pre-push]` to all 9:
+[ ] 5. refactor(pre-commit): move 10 medium-cost hooks to pre-push stage (D27 revised Round 8)
+       File: .pre-commit-config.yaml — add `stages: [pre-push]` to all 10:
          check-docs-links, check-route-conflicts, type-ignore-no-regression,
          adcp-contract-tests, mcp-contract-validation,
-         mcp-schema-alignment, check-tenant-context-order, ast-grep-bdd-guards, check-migration-completeness
+         mcp-schema-alignment, check-tenant-context-order, ast-grep-bdd-guards, check-migration-completeness,
+         mypy (the 10th, added per D3 — was at commit-stage during PR 2's migration window for invocation parity; CI's `CI / Type Check` is authoritative)
        Verify: for h in check-docs-links check-route-conflicts type-ignore-no-regression \
                         adcp-contract-tests mcp-contract-validation \
-                        mcp-schema-alignment check-tenant-context-order ast-grep-bdd-guards check-migration-completeness; do
+                        mcp-schema-alignment check-tenant-context-order ast-grep-bdd-guards check-migration-completeness mypy; do
                  yq ".repos[].hooks[] | select(.id == \"$h\") | .stages" .pre-commit-config.yaml | grep -q pre-push
                done
+       Pre-flight (Round 8 disk-truth re-verification — zero-headroom warning):
+         BASELINE_HOOKS=$(grep -c "^\s*- id:" .pre-commit-config.yaml)
+         MANUAL_HOOKS=$(grep -c "stages: \[manual\]" .pre-commit-config.yaml)
+         [[ $((BASELINE_HOOKS - MANUAL_HOOKS)) -le 36 ]] || { echo "baseline drifted >36; v2.0 may have added hooks; identify 11th move"; exit 1; }
 
 [ ] 6. refactor(pre-commit): consolidate grep one-liners into check_repo_invariants.py
        Files: .pre-commit-hooks/check_repo_invariants.py (new ~80 lines per spec);
@@ -95,15 +100,16 @@ Commits in order:
                # Acceptance: warm < 5s
        If >5s: profile, fix or escalate before commit 9.
 
-[ ] 9. docs: update CLAUDE.md guards table — DEFERRED scope per D18 P0 sweep
+[ ] 9. docs: update CLAUDE.md guards table — DEFERRED scope per D18 (revised Round 8)
        File: CLAUDE.md
-       Per D18 (revised 2026-04-25 P0 sweep), the full ~73-row table audit DEFERS to a
+       Per D18 (revised 2026-04-25 Round 8), the full ~81-row table audit DEFERS to a
        post-v2.0-rebase commit. PR 4 commit 9 has minimal scope:
        - Add the 4 PR-4 rows (no_tenant_config, jsontype_columns, no_defensive_rootmodel, import_usage)
-       - Add the 2 residual missing rows (test_architecture_no_silent_except, test_architecture_production_session_add)
-       - Do NOT update guard-count text to a final number (~73 only after v2.0 lands)
+       - Add the **1 residual missing row** (`test_architecture_production_session_add`).
+         **Do NOT add `test_architecture_no_silent_except`** — v2.0 phase PR DELETES it.
+       - Do NOT update guard-count text to a final number (~81 only after v2.0 lands)
        - Do NOT remove rows whose tests don't exist (none exist; the "phantom" framing was wrong)
-       Verify: each of the 4+2 new rows present in CLAUDE.md table.
+       Verify: each of the 4+1 new rows present in CLAUDE.md table; no_silent_except is NOT added.
                # Full audit (every test file has a row + every row has a file) deferred.
 
 [ ] 10. docs: rewrite ci-pipeline.md and extend structural-guards.md

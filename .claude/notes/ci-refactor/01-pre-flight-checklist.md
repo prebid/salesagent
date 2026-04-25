@@ -22,8 +22,10 @@ If the API returns `404 Branch not protected`, no rule exists yet — start from
 
 ```bash
 gh api repos/prebid/salesagent/branches/main/protection/required_status_checks \
-  --jq '.contexts[]' > .claude/notes/ci-refactor/required-checks-current.txt
+  --jq '.checks[].context' > .claude/notes/ci-refactor/required-checks-current.txt
 ```
+
+`.checks[].context` is the canonical field per GitHub's branch-protection API; the deprecated `.contexts[]` form was scrubbed in 2026-04-25 Round 8 sweep.
 
 This is the list PR 3 Phase B will atomically replace with the 11 frozen names from D17.
 
@@ -131,6 +133,34 @@ grep -A 1 '^plugins' mypy.ini > .claude/notes/ci-refactor/mypy-plugins-baseline.
 
 Captures the current dead-plugin state (`pydantic.mypy` listed but dependency missing from mirrors-mypy hook). PR 2 makes the plugin live; this snapshot proves it was dead pre-PR-2.
 
+### A15 — Decide `develop` branch fate (Round 8 — silent-bypass mitigation)
+
+`origin/develop` exists and is 35 commits ahead / 2 behind `main` (Round 8 drift-verified). Both `test.yml` (current) and `ci.yml` (PR 3 introduces) trigger on `branches: [main, develop]`. Branch protection is configured on `main` only — `develop` is unprotected.
+
+**Risk:** silent governance bypass. Any PR merged to `develop` escapes the 11 frozen required checks.
+
+**Decision required before PR 1 launches** — pick one:
+
+**Option A — delete `develop`** (preferred for cleanest governance):
+```bash
+# Verify nothing in flight targets develop (admin only)
+gh pr list --base develop --state open
+# If empty:
+gh api -X DELETE /repos/prebid/salesagent/git/refs/heads/develop
+# Update ci.yml triggers to drop `develop` (in PR 3 spec)
+```
+
+**Option B — apply branch protection symmetrically to `develop`** (if `develop` must remain — e.g., contributor forks track it):
+```bash
+gh api -X PUT /repos/prebid/salesagent/branches/develop/protection \
+  --input .claude/notes/ci-refactor/branch-protection-snapshot.json
+# Document in ADR-002 that `develop` mirrors `main` protection
+```
+
+**Option C — leave `develop` unprotected and remove from triggers** (intermediate — develop becomes a personal feature-branch convention without CI gating).
+
+Default recommendation: Option A (delete) unless contributor workflow concretely depends on `develop`.
+
 ### A14 — Confirm @chrishuie can be added to bypass list (D2 mitigation)
 
 The Prebid.org GitHub org may require a higher-tier admin to add @chrishuie to the branch-protection bypass list. Confirm before authoring PR 1 (which depends on the bypass for the solo-maintainer model). Test:
@@ -233,6 +263,7 @@ Before PR 1 is authored, this file should be marked complete:
 - [ ] A12 — Dependabot PR queue drained to ≤2 open
 - [ ] A13 — mypy.ini plugin block snapshotted
 - [ ] A14 — @chrishuie bypass-list addition feasibility confirmed
+- [ ] A15 — `develop` branch fate decided (delete / protect symmetrically / drop-from-triggers)
 - [ ] P1 — drift evidence re-verified (or noted as still-current)
 - [ ] P2 — pydantic.mypy baseline captured (`.mypy-baseline.txt`)
 - [ ] P3 — zizmor pre-flight captured (`.zizmor-preflight.txt`)

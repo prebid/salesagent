@@ -40,7 +40,7 @@ PR 1 → PR 2 → PR 3 (3-phase) → PR 4 → PR 5. Strict ordering for these re
   - **`[project.optional-dependencies].dev` is already deleted on v2.0** — PR 2's pyproject.toml change becomes "verify the block is absent (deleted on v2.0); no-op if v2.0 already merged."
   - **`.pre-commit-config.yaml` three-way collision warning** — PR 1 SHA-pins, PR 2 deletes the entire `mirrors-mypy` block + replaces with `language: system` local hook, AND v2.0 bumps `mirrors-mypy rev: v1.18.2 → v1.19.1` + edits `additional_dependencies`. If v2.0 phase PR landed mid-PR-2-review, re-run autoupdate-freeze on the resulting block before authoring PR 2's deletion commit.
   - **`test-migrations` already deleted on v2.0** — PR 4's hook-deletion list double-counts if v2.0 lands first; verify post-rebase.
-  - **31 + 9 = 40 v2.0 guard contributions** + 8 PR 1/3/6 governance guards — projected post-rollout guard count is **~73** (D18 revised in 2026-04-25 P0 sweep). PR 4's CLAUDE.md guards table audit defers to a post-v2.0-rebase commit.
+  - **27 architecture/ + 4 top-level + 9 baselines = 40 v2.0 guard contributions** + 8 PR 1/3/6 governance guards — projected post-rollout guard count is **~81** (D18 revised Round 8 sweep — was 73, drift-corrected after v2.0 architecture/ count re-verified at 27 not 31). PR 4's CLAUDE.md guards table audit defers to a post-v2.0-rebase commit.
 
 ## Success criteria (6 weeks from start)
 

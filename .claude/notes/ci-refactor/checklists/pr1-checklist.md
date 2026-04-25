@@ -42,12 +42,15 @@ Commits in order:
                ! grep -qE 'auto-?merge' .github/dependabot.yml
        If fails: pre-commit ecosystem may not be GA in this org's plan — see spec §"Fallback for the pre-commit ecosystem" (peter-evans/create-pull-request workflow).
 
-[ ] 5. ci: add security.yml (zizmor + pip-audit)
-       Files: .github/workflows/security.yml (new, lift from spec §Embedded security.yml)
+[ ] 5. ci: add security.yml (zizmor + pip-audit + pinact + actionlint per Round 8 P0)
+       Files: .github/workflows/security.yml (new, lift from spec §Embedded security.yml — 4 jobs)
        Verify: yamllint -d relaxed .github/workflows/security.yml && \
                grep -qE '^permissions:\s*\{?\s*\}?' .github/workflows/security.yml && \
                grep -q 'zizmor' .github/workflows/security.yml && \
-               grep -q 'pip-audit' .github/workflows/security.yml
+               grep -q 'pip-audit' .github/workflows/security.yml && \
+               grep -qE '^\s+pinact:' .github/workflows/security.yml && \
+               grep -qE 'pinact run --check' .github/workflows/security.yml && \
+               grep -qE '^\s+actionlint:' .github/workflows/security.yml
 
 [ ] 6. ci: add codeql.yml (advisory per D10) — pin to **v4** (was v3 in earlier draft; v3 deprecates Dec 2026)
        Files: .github/workflows/codeql.yml + .github/codeql/codeql-config.yml (both new, lift from spec)

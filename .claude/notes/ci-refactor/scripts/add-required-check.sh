@@ -48,8 +48,8 @@ gh api -X PATCH \
 }
 EOF
 
-# Verify
+# Verify (uses canonical `.checks[].context`; `.contexts[]` is deprecated)
 gh api "repos/${REPO}/branches/main/protection/required_status_checks" \
-  --jq '.contexts[]' | grep -Fxq "$NEW_CHECK" \
+  --jq '.checks[].context' | grep -Fxq "$NEW_CHECK" \
   && echo "OK: '$NEW_CHECK' is now a required check." \
   || { echo "MISMATCH — investigate immediately." >&2; exit 1; }

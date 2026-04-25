@@ -149,9 +149,9 @@ Format: each decision has a date, a one-line statement, the rationale, and a tri
 - **Note:** branch-protection still references current names (`Security Audit`, `Smoke Tests…`, etc.). PR 3's 3-phase merge handles the rename atomically. See PR 3 spec.
 - **Frozen:** rename requires coordinated branch-protection update; treat as a contract.
 
-## D18 — Structural guard count baseline: 27 + 1 + 4 + 1 + 8 + 31 + 9 = ~73
+## D18 — Structural guard count baseline: 27 + 1 + 4 + 1 + 8 + 27 + 4 + 9 = ~81
 
-**Decided 2026-04-25, REVISED 2026-04-25 post-integrity-audit, REVISED 2026-04-25 (P0 sweep + v2.0 disk-truth audit):** Existing on-disk guards count = 27 (23 `test_architecture_*.py` + 3 transport-boundary guards `test_no_toolerror_in_impl.py`, `test_transport_agnostic_impl.py`, `test_impl_resolved_identity.py` + `check_code_duplication.py` script). Math:
+**Decided 2026-04-25, REVISED 2026-04-25 post-integrity-audit, REVISED 2026-04-25 (P0 sweep + v2.0 disk-truth audit), REVISED 2026-04-25 (Round 8 — drift re-verified v2.0 architecture/ count):** Existing on-disk guards count = 27 (23 `test_architecture_*.py` + 3 transport-boundary guards `test_no_toolerror_in_impl.py`, `test_transport_agnostic_impl.py`, `test_impl_resolved_identity.py` + `check_code_duplication.py` script). Math:
 
 | Source | Guards added |
 |---|---|
@@ -160,13 +160,14 @@ Format: each decision has a date, a one-line statement, the rationale, and a tri
 | PR 4 (4 new + 1 extended) | 4 |
 | PR 5 (`test_architecture_uv_version_anchor`) | 1 |
 | PR 1/3/6 governance (scorecard, actions-sha-pinned, workflow-permissions, persist-credentials-false, required-checks-frozen, workflow-concurrency, workflow-timeout-minutes, dependabot-groups-complete) | 8 |
-| v2.0 architecture tests under `tests/unit/architecture/` + 4 top-level | 31 |
+| v2.0 architecture tests under `tests/unit/architecture/` (Round 8 drift-verified: actual count is **27**, was claimed 31) | 27 |
+| v2.0 top-level architecture tests (`no_scoped_session`, `no_module_level_get_engine`, `no_runtime_psycopg2`, `get_db_connection_callers_allowlist`) | 4 |
 | v2.0 baseline JSONs under `.guard-baselines/` | 9 |
-| **Final post-v2.0-rebase** | **~73** |
+| **Final post-v2.0-rebase** | **~81** |
 
-- **Rationale:** v2.0's PR #1221 contributes far more than the original "9 baseline JSONs" claim — disk-truth + v2-overlap audits in 2026-04-25 P0 sweep verified 31 net-new architecture tests (27 under `tests/unit/architecture/` + 4 top-level: `test_architecture_no_scoped_session.py`, `_no_module_level_get_engine.py`, `_no_runtime_psycopg2.py`, `_get_db_connection_callers_allowlist.py`) plus 9 baseline JSONs.
-- **CLAUDE.md table audit step:** **DEFERRED to a post-v2.0-rebase commit, NOT executed in PR 4 commit 9.** Rationale: v2.0 will land 3 of the 5 "missing rows" (`test_architecture_bdd_no_direct_call_impl.py`, `test_architecture_bdd_obligation_sync.py`, `test_architecture_test_marker_coverage.py`); only **residual 2** (`test_architecture_no_silent_except.py`, `test_architecture_production_session_add.py`) are PR 4's responsibility. Current CLAUDE.md table is **22 rows with 0 phantoms + 5 missing** (corrected from earlier "24 rows with 3 phantoms + 5 missing"). Final corrected table source: `drafts/claudemd-guards-table-final.md` (still claims 52 rows; needs ~73-row revision post-v2.0).
-- **Tripwire:** when v2.0 phase PRs land, append the 31+9 new guard rows post-rebase.
+- **Rationale:** v2.0's PR #1221 contributes 27 architecture tests in `tests/unit/architecture/` + 4 top-level — Round 8 drift audit corrected the earlier "31 architecture tests" framing (was conflating the architecture/ subdirectory + top-level into one number). Plus 9 baseline JSONs.
+- **CLAUDE.md table audit step:** **DEFERRED to a post-v2.0-rebase commit, NOT executed in PR 4 commit 9.** Rationale: v2.0 lands 3 of the 5 "missing rows" (`test_architecture_bdd_no_direct_call_impl.py`, `test_architecture_bdd_obligation_sync.py`, `test_architecture_test_marker_coverage.py`); v2.0 also **deletes `test_architecture_no_silent_except.py`** entirely (Round 8 drift-confirmed). PR 4 commit 9 adds only **1 residual row** (`test_architecture_production_session_add.py`), NOT 2 as earlier framing claimed. Current CLAUDE.md table is **22 rows with 0 phantoms + 5 missing**. Final corrected table source: `drafts/claudemd-guards-table-final.md` (still claims 52 rows; needs ~81-row revision post-v2.0).
+- **Tripwire:** when v2.0 phase PRs land, append the 27+4+9 new guard rows post-rebase, and remove `no_silent_except` from any planned addition list.
 
 ## D19 — Master plan format: per-PR specs, not master doc
 
@@ -226,14 +227,17 @@ Format: each decision has a date, a one-line statement, the rationale, and a tri
 - **Affected files:** `.github/workflows/ci.yml`, plus PR 3 Phase B PATCH body and verification scripts.
 - **Tripwire:** when adding a new required check, follow this convention. Verify rendered name via `gh api repos/.../check-runs --jq '.check_runs[].name'` before adding to branch protection.
 
-## D27 — Pre-commit hook reallocation: 9 hooks moved to pre-push
+## D27 — Pre-commit hook reallocation: 10 hooks moved to pre-push
 
-**Decided 2026-04-25, REVISED 2026-04-25 (P0 sweep — disk-truth audit):** To meet PR 4's `commit-stage hooks ≤ 12` acceptance, PR 4 commit 5 moves 9 hooks to pre-push. The 4 additional hooks beyond the original 5: `mcp-schema-alignment`, `check-tenant-context-order`, `ast-grep-bdd-guards`, `check-migration-completeness`.
+**Decided 2026-04-25, REVISED 2026-04-25 (P0 sweep), REVISED 2026-04-25 (Round 8 sweep — disk re-verified):** To meet PR 4's `commit-stage hooks ≤ 12` acceptance, PR 4 commit 5 moves **10 hooks to pre-push**:
+- 9 from the original P0-sweep list: `check-docs-links`, `check-route-conflicts`, `type-ignore-no-regression`, `adcp-contract-tests`, `mcp-contract-validation`, `mcp-schema-alignment`, `check-tenant-context-order`, `ast-grep-bdd-guards`, `check-migration-completeness`.
+- **+1 from D3:** `mypy` (PR 2 creates the local mypy hook at commit-stage for invocation parity during the migration window; PR 4 moves it to pre-push per D3 — this move was always implied but was missing from D27's enumerated list).
 
-- **Real baseline: 33 effective commit-stage hooks** (36 total `- id:` minus 3 already `stages: [manual]`). The 4 hooks that are already manual: `smoke-tests`, `test-migrations`, `pytest-unit`, `mcp-endpoint-tests` — but disk-truth audit found only 3 are at `stages: [manual]` today; the fourth is at a different stage. (Earlier "37 commit-stage" framing double-counted manual hooks.)
-- **Math:** 33 effective commit-stage − 13 commit-stage deletions (2 of plan's 15 are already manual: `pytest-unit`, `mcp-endpoint-tests` — they reduce dead-manual count, not commit-stage count) − 9 moves to pre-push − 1 consolidation = **10 commit-stage** (under ≤12 ceiling).
-- **Note:** v2.0 phase PR also deletes `test-migrations` hook (already manual). PR 4's hook-deletion list double-counts if v2.0 lands first; verify post-rebase.
-- **Tripwire:** if `time pre-commit run --all-files` warm exceeds 2s after PR 4 lands, identify additional move candidates.
+- **Real baseline (Round 8 disk-verified):** **36 effective commit-stage hooks** (40 total `- id:` minus 4 at `stages: [manual]`: `smoke-tests`, `test-migrations`, `pytest-unit`, `mcp-endpoint-tests`). Earlier "33 effective" framing in P0 sweep was off by 3 due to a counting error (missed 1 active hook + miscounted manual hooks). Actual disk-truth: 40 active − 4 manual = 36.
+- **Math:** 36 effective commit-stage − 13 commit-stage deletions (15 plan deletions − 2 already-manual: `pytest-unit`, `mcp-endpoint-tests`) − **10 moves to pre-push** − 1 consolidation = **12 commit-stage** (exactly at ≤12 ceiling, zero headroom).
+- **Note 1:** v2.0 phase PR also deletes `test-migrations` hook (already manual). Net effect on commit-stage count: zero. PR 4's hook-deletion list double-counts if v2.0 lands first; verify post-rebase.
+- **Note 2:** v2.0 also deletes `test_architecture_no_silent_except.py` (drift-confirmed Round 8). PR 4 commit 9 must NOT add this row to CLAUDE.md table.
+- **Tripwire:** if `time pre-commit run --all-files` warm exceeds 2s after PR 4 lands, identify additional move candidates from the 12 remaining commit-stage hooks (no-hardcoded-urls, repo-invariants, the 8 pre-commit-hooks built-ins, black, ruff). Most are already <50ms each — additional moves unlikely needed.
 
 ## D28 — Defer black/ruff target-version bump out of PR 5
 

@@ -138,10 +138,13 @@ After all commits:
 
 13. **Update CLAUDE.md guard count when you add or remove a guard.** PR 2
     adds 1, PR 4 adds 4, PR 5 adds 1, PR 1/3/6 governance adds 8, v2.0 adds
-    31 (architecture tests) + 9 (baseline JSONs). Final post-v2.0-rebase ≈
-    73 (D18 canonical, revised in 2026-04-25 P0 sweep). The number cited
-    in CLAUDE.md must match disk truth at all times. PR 4's CLAUDE.md table
-    audit DEFERS until post-v2.0-rebase.
+    27 (architecture/ tests) + 4 (top-level) + 9 (baseline JSONs). Final
+    post-v2.0-rebase ≈ **81** (D18 canonical, revised in 2026-04-25 Round 8
+    after drift audit re-verified v2.0 architecture/ count at 27, not 31).
+    The number cited in CLAUDE.md must match disk truth at all times. PR 4's
+    CLAUDE.md table audit DEFERS until post-v2.0-rebase. PR 4 commit 9 adds
+    only **1 residual row** (`production_session_add`) — v2.0 deletes
+    `no_silent_except` so that row is NOT added by PR 4.
 
 14. **The pre-flight artifacts (`.zizmor-preflight.txt`,
     `.mypy-baseline.txt`, `branch-protection-snapshot.json`) are the

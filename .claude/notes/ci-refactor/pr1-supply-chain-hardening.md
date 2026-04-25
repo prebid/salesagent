@@ -59,25 +59,62 @@ done
 ! grep -qE 'description = "Add your description here"' pyproject.toml
 ```
 
-### Commit 2 — `docs: rewrite CONTRIBUTING.md`
+### Commit 2 — `docs: rewrite root CONTRIBUTING.md as thin pointer (D21 revised P0 sweep)`
 
 Files:
-- `CONTRIBUTING.md` (rewrite from 20 lines → ~120 lines — **this is an authoring step, not a lift-and-shift**; expand from the bulleted outline at the bottom of this spec)
-- `docs/development/contributing.md` (delete OR replace with thin pointer)
+- `CONTRIBUTING.md` (rewrite from 20 lines → **~30-line thin pointer**)
+- `docs/development/contributing.md` (594 lines — **KEEP UNCHANGED as canonical contributor guide**)
 
-Closes PD7. Per D21, root file is canonical.
+Closes PD7. Per **D21 (revised 2026-04-25 P0 sweep):** `docs/development/contributing.md` (594 lines) is canonical content; root `CONTRIBUTING.md` is a thin pointer (~30 lines: 6 conventional-commit prefixes inline + "See `docs/development/contributing.md` for full contributor workflow." + `pre-commit install --hook-type pre-commit --hook-type pre-push` instruction). Earlier framing ("root canonical, ~120 lines, delete docs/development version") was reversed in the P0 sweep after disk-truth audit found docs/development/contributing.md was substantive (594 lines), not a thin duplicate.
 
-**Note:** the executor authors ~120 lines of prose from the section-header outline at the end of this spec (§"CONTRIBUTING.md outline"). Budget 30-45 minutes for this commit alone. If you don't reach 80 lines, expand any thin section before committing — `verify-pr1.sh` enforces the floor.
+**Thin pointer body** (verbatim — author this exactly):
+
+```markdown
+# Contributing to Prebid Sales Agent
+
+Thanks for your interest in contributing! Full contributor workflow lives at:
+**[`docs/development/contributing.md`](docs/development/contributing.md)** (canonical).
+
+## Quick start
+
+1. Fork and clone the repo.
+2. Install dev dependencies: `uv sync --group dev`
+3. Install both pre-commit hook stages:
+   ```bash
+   pre-commit install --hook-type pre-commit --hook-type pre-push
+   ```
+4. See `docs/development/contributing.md` for branch naming, testing, PR review process.
+
+## PR title format (Conventional Commits)
+
+PR titles MUST use one of these prefixes (release-please uses them to generate changelogs):
+
+- `feat:` — new functionality (Features section)
+- `fix:` — bug fix (Bug Fixes section)
+- `refactor:` — code refactoring (Code Refactoring section)
+- `docs:` — documentation only
+- `chore:` — maintenance / dependencies (hidden from changelog)
+- `perf:` — performance improvements
+
+Without a recognized prefix, the change ships but won't appear in release notes.
+
+## Reporting security issues
+
+See [SECURITY.md](SECURITY.md) — please use private vulnerability reporting, NOT public issues.
+```
+
+**Note:** this is NOT an authoring task — it is a near-verbatim lift of the block above. Budget 5-10 minutes. Do NOT expand `docs/development/contributing.md`; it stays at its current 594 lines.
 
 Verification:
 ```bash
-[[ $(wc -l < CONTRIBUTING.md) -ge 80 ]]
-grep -q 'uv sync --group dev' CONTRIBUTING.md
-grep -q 'pre-commit install' CONTRIBUTING.md
-grep -qE 'CI / Quality Gate|CI / Type Check' CONTRIBUTING.md
-# Verify docs/development/contributing.md is either gone or a pointer
-[[ ! -f docs/development/contributing.md ]] || \
-  [[ $(wc -l < docs/development/contributing.md) -le 5 ]]
+# Root pointer is short (was 20, becomes ~30)
+[[ $(wc -l < CONTRIBUTING.md) -ge 20 && $(wc -l < CONTRIBUTING.md) -le 60 ]]
+grep -q 'docs/development/contributing.md' CONTRIBUTING.md
+grep -q 'pre-commit install --hook-type pre-commit --hook-type pre-push' CONTRIBUTING.md
+grep -qE '(feat|fix|refactor|docs|chore|perf):' CONTRIBUTING.md
+# Canonical docs/development/contributing.md is preserved at full size
+[[ -f docs/development/contributing.md ]]
+[[ $(wc -l < docs/development/contributing.md) -ge 500 ]]
 ```
 
 ### Commit 3 — `chore: add CODEOWNERS`
@@ -959,9 +996,12 @@ This is non-trivial; consult the GitHub Actions Security Hardening docs before
 making any change.
 ```
 
-## Embedded CONTRIBUTING.md outline (full rewrite, commit to repo root)
+## Embedded CONTRIBUTING.md outline — DEFERRED per D21 P0 sweep
 
-The agent should fill in prose from these bullets. Target ~120 lines.
+**This section is preserved as audit-trail / source-material for a future docs/development/contributing.md content refresh.** The 120-line full-rewrite-of-root-CONTRIBUTING.md plan was reversed in the 2026-04-25 P0 sweep when disk-truth audit found `docs/development/contributing.md` was already 594 lines of substantive content (not a thin duplicate as originally assumed). PR 1 commit 2 now produces a ~30-line thin pointer at the root (see Commit 2 above). The bullets below remain useful if a future PR wants to refresh `docs/development/contributing.md` with this expanded outline; do not lift them into root `CONTRIBUTING.md`.
+
+<details>
+<summary>(audit trail — outline, do not lift to root)</summary>
 
 ### 1. Welcome & project context
 - One paragraph: salesagent is the Prebid Sales Agent (Prebid.org). Multi-tenant Python service: MCP server, A2A server, Admin UI.
@@ -971,60 +1011,34 @@ The agent should fill in prose from these bullets. Target ~120 lines.
 ### 2. Development setup
 - Prereq: `uv` (link to install), Python 3.12, Docker (for integration/e2e).
 - `uv sync --group dev` — installs dev dependencies (PEP 735 group).
-- `pre-commit install` — installs git hook for the pre-commit stage.
-- `pre-commit install --hook-type pre-push` — installs pre-push stage.
+- `pre-commit install --hook-type pre-commit --hook-type pre-push` — installs both stages.
 - Optional: `cp .env.secrets.example .env.secrets` and fill in.
 
 ### 3. Local development workflow
 - `make quality` — fast local check: ruff format, ruff lint, mypy, unit tests, structural guards. Run before every commit.
 - `tox -e integration` — when refactoring imports/shared code (pre-commit can't catch import errors).
-- `./run_all_tests.sh` — full suite: Docker up + 5 tox envs in parallel + Docker down. Run before PRs that touch protocols/schemas/critical patterns.
+- `./run_all_tests.sh` — full suite: Docker up + 6 tox envs in parallel + Docker down. Run before PRs that touch protocols/schemas/critical patterns.
 - Test results land in `test-results/<ddmmyy_HHmm>/` as JSON.
 
 ### 4. PR process
 - Branch from `main` (`git checkout -b feat/short-description`). Never push directly to main.
 - PR title must use a Conventional Commit prefix (`feat:`, `fix:`, `docs:`, `refactor:`, `perf:`, `chore:`). Enforced by `.github/workflows/pr-title-check.yml`.
-- Required CI checks (the 11 frozen names per D17):
+- Required CI checks (the 11 frozen names per D17 + D26):
   - `CI / Quality Gate`, `CI / Type Check`, `CI / Schema Contract`, `CI / Unit Tests`, `CI / Integration Tests`, `CI / E2E Tests`, `CI / Admin UI Tests`, `CI / BDD Tests`, `CI / Migration Roundtrip`, `CI / Coverage`, `CI / Summary`
 - Reviewer is auto-requested via `.github/CODEOWNERS`.
 
-### 5. Layered hook model (with diagram)
-```
-Layer 1: pre-commit stage  (formatters, hygiene, fast AST checks)  ~1-2s
-Layer 2: pre-push stage    (medium checks, scoped pytest)          ~10-20s
-Layer 3: structural guards (in tox -e unit, run via make quality)  ~5-10s
-Layer 4: CI required checks (authoritative)                        ~5-15min
-Layer 5: manual / on-demand (full e2e, security audits)            varies
-```
+### 5. Layered hook model
+- Layer 1: pre-commit stage (formatters, hygiene, fast AST checks) ~1-2s
+- Layer 2: pre-push stage (medium checks, scoped pytest) ~10-20s
+- Layer 3: structural guards (in tox -e unit, run via make quality) ~5-10s
+- Layer 4: CI required checks (authoritative) ~5-15min
+- Layer 5: manual / on-demand (full e2e, security audits) varies
 - "CI is authoritative." If a check exists in pre-commit and CI, CI is the source of truth.
-- Pointer to `docs/development/ci-pipeline.md` for details.
 
-### 6. Modification policy
-- `.pre-commit-config.yaml` changes: external hooks must be SHA-pinned with `# frozen: v<tag>` comment. CODEOWNERS review. See ADR-001.
-- `.github/workflows/` changes: must pass `zizmor`. Discuss security implications in PR description if changing `permissions:`, `pull_request_target:`, or `secrets`.
-- See [SECURITY.md](SECURITY.md) for the complete CI/hook modification policy.
+### 6-10. Other sections (modification policy, dependency policy, testing requirements, security reporting, optional tooling)
+- Captured in the original outline (see git history of this file pre-P0-sweep).
 
-### 7. Dependency policy
-- `uv add <pkg>` for runtime; `uv add --group dev <pkg>` for dev.
-- `uv lock --upgrade-package <pkg>` for targeted upgrades. Never hand-edit `uv.lock`.
-- Dependabot opens grouped weekly PRs. **Do not bypass Dependabot for routine bumps** — every dep PR requires CODEOWNERS review (no auto-merge per D5).
-- `googleads` and (temporarily) `adcp` are ignored; check `pyproject.toml` and `.github/dependabot.yml` for context.
-
-### 8. Testing requirements
-- **Test integrity (zero tolerance).** Never `--ignore`, `-k "not …"`, `--deselect`, `pytest.mark.skip`, or `pytest.mark.xfail` to work around failing tests. See `CLAUDE.md` "Test Integrity Policy."
-- **Factory-based fixtures.** New integration tests use `tests/factories/` factories (CLAUDE.md Pattern #8).
-- **Max 10 mocks per test file** (pre-commit enforces).
-- **AdCP compliance.** Schema changes must pass `tests/unit/test_adcp_contract.py`.
-- **Roundtrip required** for any operation using `apply_testing_hooks()`.
-
-### 9. Security reporting
-- See [SECURITY.md](SECURITY.md). Use GitHub's private advisory channel.
-
-### 10. Optional tooling
-- **prek (optional, local only).** Rust reimplementation of pre-commit. The `.pre-commit-config.yaml` is config-compatible. CI uses `pre-commit`, not `prek`. Per D7, the maintainers do not test against prek.
-- **Signed commits (appreciated, not required).** Per D4.
-
-EXCLUDE: signed commits as required, merge queue, `.claude/` topics.
+</details>
 
 ## Embedded `.github/workflows/security.yml` skeleton
 
@@ -1067,6 +1081,38 @@ jobs:
         with:
           sarif_file: zizmor.sarif
       - run: uvx zizmor --min-severity medium .github/workflows/  # this gates
+
+  pinact:
+    name: pinact (action SHA-pin enforcement)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@<SHA>  # v4
+        with:
+          persist-credentials: false
+      # Belt-and-suspenders to zizmor's `unpinned-uses` rule: pinact
+      # purpose-built, zero-config. Catches new tag-pinned actions sneaking
+      # past the one-time SHA-freeze in PR 1 commit 9.
+      - run: |
+          curl -sSfL https://raw.githubusercontent.com/suzuki-shunsuke/pinact/main/scripts/install.sh | sh -s -- -b /usr/local/bin
+          pinact run --check  # exits non-zero if any uses: ref is unpinned
+
+  actionlint:
+    name: actionlint (workflow expression lint)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@<SHA>  # v4
+        with:
+          persist-credentials: false
+      # Orthogonal coverage to zizmor — actionlint catches `${{ }}` syntax
+      # errors, runner-label typos, shellcheck-on-`run:` issues that zizmor
+      # doesn't. <5s runtime.
+      - run: |
+          curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash | bash -s -- 1.7.7
+          ./actionlint -color
 ```
 
 ## Embedded `.github/workflows/codeql.yml` skeleton

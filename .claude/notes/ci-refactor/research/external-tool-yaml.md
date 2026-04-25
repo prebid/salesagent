@@ -196,7 +196,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: step-security/harden-runner@<SHA>   # v2.12.0+ required for CVE-2025-32955
+      - uses: step-security/harden-runner@<SHA>   # v2.16.0+ required (CVE-2025-32955 fixed in v2.12.0; GHSA-46g3-37rh-v698 DoH-bypass fixed in v2.13+; v2.16.0 captures all post-CVE advisories)
         with:
           egress-policy: audit                    # log only, no blocking
           disable-sudo-and-containers: true       # NOT disable-sudo:true — CVE-2025-32955 bypassable via Docker
@@ -208,7 +208,7 @@ jobs:
 **Block mode (after 2-week soak, with allowlist):**
 
 ```yaml
-- uses: step-security/harden-runner@<SHA>   # v2.12.0+
+- uses: step-security/harden-runner@<SHA>   # v2.16.0+
   with:
     egress-policy: block
     disable-sudo-and-containers: true        # CVE-2025-32955 — bypass-resistant

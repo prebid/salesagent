@@ -8,7 +8,7 @@
 
 ## Scope
 
-Per-hook reassignment per the layered architecture. Drops warm pre-commit latency from ~23s to ~1.7s (10× improvement). Migrates 5 grep-based hooks to AST-based structural guards. Moves **9** medium-cost hooks to `pre-push` stage (per D27 — was 5; Blocker #2 fix). Migrates 4 expensive hooks to CI-only. Deletes 6 dead/advisory hooks. Adds `@pytest.mark.architecture` marker per D12.
+Per-hook reassignment per the layered architecture. Drops warm pre-commit latency from ~23s to ~1.7s (10× improvement). Migrates 5 grep-based hooks to AST-based structural guards. Moves **10** medium-cost hooks to `pre-push` stage (per D27 revised Round 8 — was 5, then 9, now 10 with `mypy` added per D3). Migrates 4 expensive hooks to CI-only. Deletes 6 dead/advisory hooks. Adds `@pytest.mark.architecture` marker per D12.
 
 **Internal commit ordering is load-bearing:** all new structural guards must pass on main BEFORE any hook is deleted. The spec enforces this.
 
@@ -361,15 +361,27 @@ Add `stages: [pre-push]` to:
 - `ast-grep-bdd-guards` (only relevant pre-push since BDD tests run there)
 - `check-migration-completeness` (only matters if `alembic/versions/` changed)
 
-Closes PD16. **Resolves Blocker #2:** post-rollout commit-stage hook count must reach ≤12. **Real baseline (revised 2026-04-25 P0 sweep): 33 effective commit-stage hooks** — 36 total `- id:` entries minus 3 already `stages: [manual]` (smoke-tests, test-migrations, pytest-unit, mcp-endpoint-tests). The earlier "37 commit-stage" framing double-counted manual hooks.
+Closes PD16. **Resolves Blocker #2:** post-rollout commit-stage hook count must reach ≤12. **Real baseline (Round 8 disk-verified 2026-04-25): 36 effective commit-stage hooks** — 40 active `- id:` entries (line 187 `adcp-schema-sync` is commented out) minus 4 at `stages: [manual]` (`smoke-tests`, `test-migrations`, `pytest-unit`, `mcp-endpoint-tests`). The earlier "33 effective" framing in the P0 sweep was off by 3 (40 vs the assumed 36 + 4 vs 3 manual).
 
 Of plan's 15 deletions, **2 are already manual** (`pytest-unit`, `mcp-endpoint-tests`) — they reduce the dead-manual count, not the commit-stage count. So the deletion sweep removes 13 commit-stage hooks plus 2 manual stubs.
 
-**Real math:** 33 effective commit-stage − 13 commit-stage deletions − **9** moves to pre-push − 1 consolidation = **10 commit-stage hooks** (under ≤12 ceiling, with 2-hook headroom for v2.0 additions or future invariants).
+**Real math (Round 8 revised):** 36 effective commit-stage − 13 commit-stage deletions − **10** moves to pre-push − 1 consolidation = **12 commit-stage hooks** (exactly at ≤12 ceiling, zero headroom).
+
+The 10 moves to pre-push:
+1. `check-docs-links`
+2. `check-route-conflicts`
+3. `type-ignore-no-regression`
+4. `adcp-contract-tests`
+5. `mcp-contract-validation`
+6. `mcp-schema-alignment`
+7. `check-tenant-context-order`
+8. `ast-grep-bdd-guards`
+9. `check-migration-completeness`
+10. **`mypy`** (per D3 — PR 2 creates the local mypy hook at commit-stage during the migration window for invocation parity; PR 4 moves it to pre-push because CI's `CI / Type Check` job is authoritative). Without this 10th move, math is `36−13−9−1=13`, OVER ceiling.
 
 **Coordination with v2.0**: v2.0 phase PR also deletes `test-migrations` (already manual; net commit-stage count unchanged). Verify post-rebase: if `test-migrations` is absent from `.pre-commit-config.yaml`, drop it from PR 4's deletion list — otherwise the deletion is a no-op or fails.
 
-If the baseline drifts further upward, identify additional pre-push candidates from `mcp-cors-allowlist`, `check-no-private-ssm`, or any other hook with average duration > 200ms.
+**Zero headroom warning**: if v2.0 phase PRs add ANY new commit-stage hook before PR 4 lands, the math goes over ceiling. Re-verify disk count at PR 4 authoring time; if >36 effective commit-stage, identify an additional move candidate from `no-hardcoded-urls` (Pattern #6 gate; could move to pre-push if Pattern #6 enforcement gets a structural-guard equivalent) or from `mcp-cors-allowlist`, `check-no-private-ssm`, or any hook with average duration > 200ms.
 
 Verification:
 ```bash
@@ -509,7 +521,8 @@ for r in cfg['repos']:
             n += 1
 print(n)
 ")
-[[ "$HOOKS_COMMIT" -le 12 ]] || { echo "commit hook count $HOOKS_COMMIT > 12 — see PR 4 §Commit 5 for additional pre-push candidates"; exit 1; }
+[[ "$HOOKS_COMMIT" -le 12 ]] || { echo "commit hook count $HOOKS_COMMIT > 12 — D27 P0 ceiling exceeded; identify additional pre-push candidates per PR 4 §Commit 5 zero-headroom warning"; exit 1; }
+[[ "$HOOKS_COMMIT" -ge 10 ]] || { echo "commit hook count $HOOKS_COMMIT < 10 — likely an over-deletion; re-verify the 13 deletion list"; exit 1; }
 ```
 
 ### Commit 8 — `chore: latency baseline post-PR-4`

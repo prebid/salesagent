@@ -15,11 +15,26 @@ if grep -qE '^\[project\.urls\]' pyproject.toml; then
   ok "[project.urls] complete"
 fi
 
-# Commit 2: CONTRIBUTING.md authoritative
+# Commit 2: CONTRIBUTING.md is a thin pointer; docs/development/contributing.md is canonical
+# (D21 revised 2026-04-25 P0 sweep)
 if [[ -f CONTRIBUTING.md ]]; then
-  [[ $(wc -l <CONTRIBUTING.md) -ge 80 ]] || fail "CONTRIBUTING.md < 80 lines (looks stub)"
-  grep -q '^## ' CONTRIBUTING.md || fail "CONTRIBUTING.md has no H2 sections"
-  ok "CONTRIBUTING.md present and structured"
+  ROOT_LINES=$(wc -l <CONTRIBUTING.md)
+  [[ "$ROOT_LINES" -ge 20 && "$ROOT_LINES" -le 60 ]] || fail "CONTRIBUTING.md root pointer should be 20-60 lines (got $ROOT_LINES); D21 P0 sweep — root is thin pointer"
+  grep -q 'docs/development/contributing.md' CONTRIBUTING.md \
+    || fail "CONTRIBUTING.md missing pointer to docs/development/contributing.md (D21 P0 sweep)"
+  grep -q 'pre-commit install --hook-type pre-commit --hook-type pre-push' CONTRIBUTING.md \
+    || fail "CONTRIBUTING.md missing both-stages pre-commit install instruction"
+  grep -qE '(feat|fix|refactor|docs|chore|perf):' CONTRIBUTING.md \
+    || fail "CONTRIBUTING.md missing Conventional Commit prefix list"
+  ok "CONTRIBUTING.md root pointer ($ROOT_LINES lines, D21-compliant)"
+
+  # Canonical docs/development/contributing.md must remain at full size
+  [[ -f docs/development/contributing.md ]] \
+    || fail "docs/development/contributing.md missing — D21 says KEEP this as canonical (594 lines)"
+  DOCS_LINES=$(wc -l <docs/development/contributing.md)
+  [[ "$DOCS_LINES" -ge 500 ]] \
+    || fail "docs/development/contributing.md ($DOCS_LINES lines) was truncated; D21 says KEEP at ~594"
+  ok "docs/development/contributing.md preserved at $DOCS_LINES lines (D21-canonical)"
 fi
 
 # Commit 3: SECURITY.md
@@ -110,6 +125,17 @@ fi
 # Commit 11: zizmor
 if [[ -f .github/zizmor.yml ]]; then
   ok ".github/zizmor.yml present"
+fi
+
+# Commit 5 (P0 sweep + Round 8): security.yml has pinact + actionlint jobs
+if [[ -f .github/workflows/security.yml ]]; then
+  grep -qE '^\s+pinact:' .github/workflows/security.yml \
+    || fail "security.yml missing 'pinact' job (Round 8 P0 — belt-and-suspenders to zizmor unpinned-uses)"
+  grep -qE 'pinact run --check' .github/workflows/security.yml \
+    || fail "security.yml pinact job missing 'pinact run --check' invocation"
+  grep -qE '^\s+actionlint:' .github/workflows/security.yml \
+    || fail "security.yml missing 'actionlint' job (Round 8 P0 — \${{ }} expression lint)"
+  ok "security.yml: pinact + actionlint jobs present"
 fi
 
 # ADRs

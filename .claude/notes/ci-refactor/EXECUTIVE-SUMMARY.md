@@ -22,7 +22,7 @@ A concurrent v2.0 (Flask-to-FastAPI) effort runs under [PR #1221](https://github
 | 1 | Governance + supply-chain hardening (CODEOWNERS, SECURITY.md, dependabot, zizmor, CodeQL advisory, SHA-pin all hooks/actions, `persist-credentials: false` on every checkout) | 2.5 days | 2, 3 |
 | 2 | uv.lock as single source: replace `mirrors-mypy` and `psf/black` with local `language: system` hooks (NOT a deprecation — fixes isolated-env import resolution per [Jared Khan](https://jaredkhan.com/blog/mypy-pre-commit)); delete `[project.optional-dependencies].dev`; re-enable `pydantic.mypy` plugin | 4-6 days | 3 |
 | 3 | CI authoritative + composite actions (Decision-4: composite, NOT reusable workflows); 11 frozen bare-name check jobs (D17 + D26); 3-phase merge (overlap → rendered-name capture → atomic flip → cleanup); coverage hard-gate from day 1 (D11 revised) | 3-4 days | 4 |
-| 4 | Hook relocation: 5 grep hooks → AST guards; **9** to pre-push (D27); 4 to CI-only; 6 deleted; real math 33 effective − 13 − 9 − 1 = 10 commit-stage; CLAUDE.md guards table audit DEFERS to post-v2.0-rebase (target ~73 rows, D18 revised) | 2 days | 5 |
+| 4 | Hook relocation: 5 grep hooks → AST guards; **10** to pre-push (D27 revised — includes mypy per D3); 4 to CI-only; 6 deleted; real math **36 effective − 13 − 10 − 1 = 12** commit-stage (exactly at ceiling, zero headroom); CLAUDE.md guards table audit DEFERS to post-v2.0-rebase (target ~81 rows, D18 revised) | 2 days | 5 |
 | 5 | Version consolidation: Python, Postgres, uv anchors single-sourced; `test_architecture_uv_version_anchor` guard. **Black/ruff target-version DEFERRED per D28 (ADR-008 — separate post-#1234 PR)** | 2 days | none |
 | 6 | Image supply chain: `harden-runner` (audit→block, **v2.16.0+** for CVE-2025-32955 + GHSA-46g3-37rh-v698), `cosign` keyless signing + SBOM + provenance, dependency-review, `scorecard.yml` self-host (Week 6 follow-up; resolves D-pending-4 → D25) | 1.5-2 days | none |
 
@@ -35,7 +35,7 @@ These were the load-bearing defects that would have failed at runtime. All three
 | # | Defect | Status |
 |---|---|---|
 | 1 | PR 3 spec used `name: 'CI / Quality Gate'` job names with workflow `name: CI` — GitHub renders this as `CI / CI / Quality Gate` (auto-prefix). Phase B PATCH would 422. | ✅ Fixed: 11 sites in `pr3-ci-authoritative.md`; D26 added; pre-flip rendered-name capture step at Phase B Step 1b |
-| 2 | PR 4 hook math: 37 commit-stage today − 15 deletions − 5 moves = 17 (vs ≤12 acceptance) | ✅ Fixed: real baseline is 33 effective commit-stage (36 minus 3 manual). 2 of 15 deletions are already manual. Math: 33 − 13 − 9 − 1 = 10 (under ≤12 ceiling); D27 revised in 2026-04-25 P0 sweep |
+| 2 | PR 4 hook math: 37 commit-stage today − 15 deletions − 5 moves = 17 (vs ≤12 acceptance) | ✅ Fixed: real baseline is **36 effective commit-stage** (40 active minus 4 manual). 2 of 15 deletions are already manual. Math: **36 − 13 − 10 − 1 = 12** (exactly at ≤12 ceiling, zero headroom); D27 revised in 2026-04-25 Round 8 sweep — adds mypy as the 10th move per D3. |
 | 3 | `tests/unit/_architecture_helpers.py` collision — both PR 2 commit 8 and PR 4 commit 1 said "create" | ✅ Fixed: PR 2 creates baseline (~30 lines); PR 4 EXTENDS to ~221 lines (reconciled draft at `drafts/_architecture_helpers.py`) |
 
 ---
@@ -59,7 +59,7 @@ D14: Migrate ui-tests extras → dependency-groups ·
 D15: Delete Gemini key fallback (unconditional mock) ·
 D16: Dependabot ignores adcp until #1217 merges ·
 D17: 11 frozen CI check names (the *rendered* names; see D26) ·
-D18: **27 baseline + 1 + 4 + 1 + 8 + 31 + 9 = ~73** final guards (post-v2.0-rebase canonical; revised in 2026-04-25 P0 sweep) ·
+D18: **27 baseline + 1 + 4 + 1 + 8 + 27 + 4 + 9 = ~81** final guards (post-v2.0-rebase canonical; revised in 2026-04-25 Round 8 — was ~73, drift-corrected to 81 after v2.0 architecture/ count was re-verified at 27, not 31) ·
 D19: Per-PR specs, not master doc ·
 D20: Path 1 sequencing (#1234 first, v2.0 rebases) ·
 D21: `docs/development/contributing.md` (594 lines) is canonical; root `CONTRIBUTING.md` is thin pointer (revised in P0 sweep) ·
@@ -68,7 +68,7 @@ D23: check-parameter-alignment — delete (was D-pending-2) ·
 D24: UV_VERSION anchor in `_setup-env` (was D-pending-3) ·
 D25: harden-runner adoption → PR 6 (was D-pending-4) ·
 D26: Workflow naming — drop `CI /` prefix from job names (resolves Blocker #1) ·
-D27: Pre-commit hook reallocation — 9 to pre-push; revised math 33−13−9−1=10 (resolves Blocker #2) ·
+D27: Pre-commit hook reallocation — **10** to pre-push (9 named + mypy per D3); revised math **36−13−10−1=12** (resolves Blocker #2; revised Round 8) ·
 D28: Defer black/ruff target-version bump out of PR 5 (P0 sweep; ADR-008 follow-up after #1234)
 
 ---

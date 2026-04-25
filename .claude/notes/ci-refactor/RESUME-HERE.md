@@ -65,12 +65,12 @@ Concurrent work: v2.0 (Flask-to-FastAPI) under [PR #1221](https://github.com/pre
 ### Critical blockers — FIXED in specs
 
 1. **Workflow naming bug** — 11 sites in `pr3-ci-authoritative.md` updated: job `name:` strings now bare (e.g., `'Quality Gate'`), workflow header stays `name: CI`. GitHub auto-prefix produces correct `CI / Quality Gate` rendering. New decision **D26** locks this convention.
-2. **PR 4 hook count** — `pr4-hook-relocation.md` commit 5 now moves **9** hooks to pre-push (was 5). **Real math (revised 2026-04-25 P0 sweep):** 33 effective commit-stage − 13 deletions − 9 moves − 1 consolidation = **10** (under the ≤12 ceiling, with 2-hook headroom). The earlier "37 − 15 − 9 − 1 = 12" framing double-counted manual hooks. New decision **D27** (revised) locks this.
+2. **PR 4 hook count** — `pr4-hook-relocation.md` commit 5 now moves **10** hooks to pre-push (was 5; then 9; revised Round 8 to 10 — adds `mypy` as the 10th per D3). **Real math (revised 2026-04-25 Round 8):** 36 effective commit-stage − 13 deletions − 10 moves − 1 consolidation = **12** (exactly at ≤12 ceiling, zero headroom). The earlier "33 effective" framing was off by 3 (40 active − 4 manual = 36, not 33). New decision **D27** (revised) locks this.
 3. **`_architecture_helpers.py` collision** — `pr2-uvlock-single-source.md` commit 8 creates baseline (~30 lines); `pr4-hook-relocation.md` commit 1 explicitly EXTENDS to ~221 lines (reconciled draft at `drafts/_architecture_helpers.py`).
 
 ### External technical corrections applied
 
-4. **harden-runner** in `pr6-image-supply-chain.md` and `research/external-tool-yaml.md` updated to use `disable-sudo-and-containers: true` (was `disable-sudo: true`) per [CVE-2025-32955](https://www.sysdig.com/blog/security-mechanism-bypass-in-harden-runner-github-action). Pin requirement: v2.12.0+.
+4. **harden-runner** in `pr6-image-supply-chain.md` and `research/external-tool-yaml.md` updated to use `disable-sudo-and-containers: true` (was `disable-sudo: true`) per [CVE-2025-32955](https://www.sysdig.com/blog/security-mechanism-bypass-in-harden-runner-github-action). Pin requirement: v2.16.0+.
 5. **mirrors-mypy migration** in `pr2-uvlock-single-source.md` reframed — mirrors-mypy is NOT deprecated; the migration is to fix isolated-env import resolution per [Jared Khan](https://jaredkhan.com/blog/mypy-pre-commit) and [mypy#13916](https://github.com/python/mypy/issues/13916).
 6. **Phase B rendered-name capture** added to `pr3-ci-authoritative.md` Step 1b — `gh api commits/<sha>/check-runs` to confirm names match the PATCH body before flipping. Reusable workflow nesting can produce 3-segment names; verify before flip.
 7. **`persist-credentials: false`** propagated to all `actions/checkout` calls in `pr1-supply-chain-hardening.md` commit 9 (was only on PR 6's release.yml). Closes Scorecard `Token-Permissions` gap and addresses [actions/checkout#2312](https://github.com/actions/checkout/issues/2312).
