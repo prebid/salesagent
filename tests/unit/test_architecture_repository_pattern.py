@@ -52,13 +52,18 @@ IMPL_SESSION_ALLOWLIST: set[tuple[str, str]] = set()
 
 
 def _discover_integration_test_files() -> list[str]:
-    """Dynamically discover all integration test files via glob.
+    """Dynamically discover all DB-backed test files via glob.
 
-    Scans tests/integration*/ directories for test_*.py files and conftest.py files.
-    This ensures new test files are automatically covered by the guard.
+    Scans tests/integration*/, tests/admin/, and tests/e2e/ for test_*.py and
+    conftest.py files. These suites all exercise real DB state and must use
+    factories, not inline session.add() / get_db_session() in test bodies.
     """
-    test_files = sorted(glob.glob("tests/integration*/**/test_*.py", recursive=True))
-    conftest_files = sorted(glob.glob("tests/integration*/conftest.py", recursive=True))
+    roots = ("tests/integration*", "tests/admin", "tests/e2e")
+    test_files: list[str] = []
+    conftest_files: list[str] = []
+    for root in roots:
+        test_files.extend(glob.glob(f"{root}/**/test_*.py", recursive=True))
+        conftest_files.extend(glob.glob(f"{root}/conftest.py", recursive=True))
     return sorted(set(test_files + conftest_files))
 
 
@@ -454,6 +459,38 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_dynamic_products.py", "test_already_archived_not_rearchived"),
     ("tests/integration/test_dynamic_products.py", "test_tenant_filter_scoping"),
     ("tests/integration/test_dynamic_products.py", "test_no_tenant_archives_all"),
+    # ── tests/admin/ — pre-existing violations from admin blueprint tests ──
+    # FIXME(salesagent-e2e-admin-factories): migrate admin blueprint tests to factories.
+    # Needs AuthorizedPropertyFactory, WorkflowStepFactory, ContextFactory; existing
+    # TenantFactory/PrincipalFactory/CreativeFactory/InventoryProfileFactory/PropertyTagFactory
+    # can be reused. Endpoint assertions don't change — only the setup.
+    # tests/admin/test_accounts_blueprint.py
+    ("tests/admin/test_accounts_blueprint.py", "test_tenant"),
+    ("tests/admin/test_accounts_blueprint.py", "test_list_page_shows_created_account"),
+    ("tests/admin/test_accounts_blueprint.py", "test_suspend_account"),
+    # tests/admin/test_authorized_properties.py
+    ("tests/admin/test_authorized_properties.py", "test_tenant"),
+    ("tests/admin/test_authorized_properties.py", "test_list_page_shows_existing_property"),
+    ("tests/admin/test_authorized_properties.py", "test_delete_property_removes_from_db"),
+    # tests/admin/test_creatives_blueprint.py
+    ("tests/admin/test_creatives_blueprint.py", "test_tenant"),
+    ("tests/admin/test_creatives_blueprint.py", "_create_creative"),
+    # tests/admin/test_inventory_profiles.py
+    ("tests/admin/test_inventory_profiles.py", "test_tenant"),
+    ("tests/admin/test_inventory_profiles.py", "_create_sample_profile"),
+    # tests/admin/test_product_creation_integration.py
+    ("tests/admin/test_product_creation_integration.py", "test_tenant"),
+    ("tests/admin/test_product_creation_integration.py", "test_add_product_json_encoding"),
+    ("tests/admin/test_product_creation_integration.py", "test_add_product_empty_json_fields"),
+    ("tests/admin/test_product_creation_integration.py", "test_add_product_postgresql_validation"),
+    ("tests/admin/test_product_creation_integration.py", "test_list_products_json_parsing"),
+    # tests/admin/test_workflows_blueprint.py
+    ("tests/admin/test_workflows_blueprint.py", "test_tenant"),
+    ("tests/admin/test_workflows_blueprint.py", "_create_context_and_step"),
+    # ── tests/e2e/ — pre-existing violations from e2e lifecycle test ──
+    # FIXME(salesagent-e2e-admin-factories): migrate e2e seed helpers to factories.
+    ("tests/e2e/test_gam_lifecycle.py", "_seed_lifecycle_test_data"),
+    ("tests/e2e/test_gam_lifecycle.py", "_persist_media_buy"),
 }
 
 

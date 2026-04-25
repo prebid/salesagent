@@ -84,6 +84,9 @@ def _has_meaningful_assertion_or_delegation(func: ast.FunctionDef | ast.AsyncFun
         # Function call (delegation to helper) counts as meaningful
         if isinstance(node, ast.Call):
             func_node = node.func
+            # Placeholder helpers do not implement assertions.
+            if isinstance(func_node, ast.Name) and func_node.id == "_pending":
+                continue
             # Exclude ctx.get(), ctx.setdefault() etc — these are data access, not assertions
             if isinstance(func_node, ast.Attribute) and isinstance(func_node.value, ast.Name):
                 if func_node.value.id == "ctx":

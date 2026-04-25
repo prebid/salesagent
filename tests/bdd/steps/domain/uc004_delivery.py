@@ -36,6 +36,24 @@ def _parse_json_list(text: str) -> list[str]:
     return json.loads(text)
 
 
+def _get_last_webhook_payload(ctx: dict) -> dict[str, Any]:
+    """Extract the JSON payload from the most recent webhook POST call."""
+    mock_post = ctx["env"].mock["post"]
+    assert mock_post.called, "No webhook POST was made"
+    call_kwargs = mock_post.call_args_list[-1][1]  # kwargs of last call
+    payload = call_kwargs.get("json") or call_kwargs.get("data") or {}
+    assert payload, f"Webhook POST had no JSON payload: {call_kwargs}"
+    return payload
+
+
+def _get_last_webhook_headers(ctx: dict) -> dict[str, str]:
+    """Extract headers from the most recent webhook POST call."""
+    mock_post = ctx["env"].mock["post"]
+    assert mock_post.called, "No webhook POST was made"
+    call_kwargs = mock_post.call_args_list[-1][1]
+    return call_kwargs.get("headers", {})
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — media buy setup and adapter configuration
 # ═══════════════════════════════════════════════════════════════════════
@@ -196,12 +214,60 @@ def given_adapter_no_data_period(ctx: dict, mb_id: str) -> None:
 # ── Webhook configuration steps ─────────────────────────────────────
 
 
+_WEBHOOK_URL = "https://buyer.example.com/webhook"
+
+
 def _set_active_webhook(ctx: dict, mb_id: str) -> None:
-    """Shared: configure an active webhook for a media buy."""
+    """Shared: configure an active webhook for a media buy.
+
+    Also persists PushNotificationConfig to DB when running inside an
+    integration env (CircuitBreakerEnv) so send_delivery_webhook can find it.
+    """
     ctx.setdefault("webhook_config", {})[mb_id] = {
-        "url": "https://buyer.example.com/webhook",
+        "url": _WEBHOOK_URL,
         "active": True,
     }
+    env = ctx["env"]
+    if getattr(env, "_session", None) is not None:
+        _persist_webhook_config_if_needed(env)
+
+
+def _persist_webhook_config_if_needed(env: Any) -> None:
+    """Idempotently create Tenant, Principal, PushNotificationConfig in DB."""
+    from sqlalchemy import select
+
+    from src.core.database.models import Principal, PushNotificationConfig, Tenant
+
+    session = env._session
+    tenant_id = env._tenant_id
+    principal_id = env._principal_id
+
+    # Fast path: config already exists
+    if session.scalars(
+        select(PushNotificationConfig).where(
+            PushNotificationConfig.tenant_id == tenant_id,
+            PushNotificationConfig.principal_id == principal_id,
+            PushNotificationConfig.url == _WEBHOOK_URL,
+        )
+    ).first():
+        return
+
+    from tests.factories import PrincipalFactory, PushNotificationConfigFactory, TenantFactory
+
+    tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+    if not tenant:
+        tenant = TenantFactory(tenant_id=tenant_id)
+
+    principal = session.scalars(select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)).first()
+    if not principal:
+        principal = PrincipalFactory(tenant=tenant, principal_id=principal_id)
+
+    PushNotificationConfigFactory(
+        tenant=tenant,
+        principal=principal,
+        url=_WEBHOOK_URL,
+        is_active=True,
+    )
 
 
 @given(parsers.parse('a media buy "{mb_id}" with an active reporting_webhook configured'))
@@ -289,19 +355,56 @@ def given_webhook_unauthorized(ctx: dict, status_code: int) -> None:
 
 @given(parsers.parse("the webhook endpoint has failed {n:d} consecutive delivery attempts"))
 def given_webhook_failed_n_times(ctx: dict, n: int) -> None:
-    """Record n consecutive delivery failures."""
+    """Trigger n consecutive delivery failures on the circuit breaker."""
+    from src.services.webhook_delivery_service import CircuitBreaker
+
+    env = ctx["env"]
+    service = env.get_service()
+    webhook_url = next(iter(ctx.get("webhook_config", {}).values()), {}).get("url", _WEBHOOK_URL)
+    endpoint_key = f"{env._tenant_id}:{webhook_url}"
+    if endpoint_key not in service._circuit_breakers:
+        service._circuit_breakers[endpoint_key] = CircuitBreaker()
+    cb = service._circuit_breakers[endpoint_key]
+    for _ in range(n):
+        cb.record_failure()
+    ctx["circuit_breaker_endpoint_key"] = endpoint_key
     ctx["webhook_failure_count"] = n
 
 
 @given(parsers.parse('a media buy "{mb_id}" with circuit breaker in "{state}" state'))
 def given_circuit_breaker_state(ctx: dict, mb_id: str, state: str) -> None:
-    """Set circuit breaker to specific state."""
+    """Set circuit breaker to specific state by directly manipulating CB internals."""
+    from src.services.webhook_delivery_service import CircuitBreaker, CircuitState
+
+    env = ctx["env"]
+    service = env.get_service()
+    webhook_url = ctx.get("webhook_config", {}).get(mb_id, {}).get("url", _WEBHOOK_URL)
+    endpoint_key = f"{env._tenant_id}:{webhook_url}"
+    if endpoint_key not in service._circuit_breakers:
+        service._circuit_breakers[endpoint_key] = CircuitBreaker()
+    cb = service._circuit_breakers[endpoint_key]
+    state_map = {
+        "OPEN": CircuitState.OPEN,
+        "HALF_OPEN": CircuitState.HALF_OPEN,
+        "CLOSED": CircuitState.CLOSED,
+    }
+    cb.state = state_map[state.upper()]
     ctx["circuit_breaker_state"] = state
+    ctx["circuit_breaker_endpoint_key"] = endpoint_key
 
 
 @given("the circuit breaker timeout (60s) has elapsed")
 def given_circuit_breaker_timeout(ctx: dict) -> None:
-    """Circuit breaker timeout has elapsed."""
+    """Set last_failure_time 61s in the past so the CB timeout has elapsed."""
+    from datetime import UTC, timedelta
+    from datetime import datetime as _dt
+
+    env = ctx["env"]
+    service = env.get_service()
+    endpoint_key = ctx.get("circuit_breaker_endpoint_key", f"{env._tenant_id}:{_WEBHOOK_URL}")
+    cb = service._circuit_breakers.get(endpoint_key)
+    if cb is not None:
+        cb.last_failure_time = _dt.now(UTC) - timedelta(seconds=61)
     ctx["circuit_breaker_timeout_elapsed"] = True
 
 
@@ -525,7 +628,7 @@ def when_webhook_fires(ctx: dict, mb_id: str) -> None:
 
 @when(parsers.parse('the system delivers a webhook report for "{mb_id}"'))
 def when_deliver_webhook(ctx: dict, mb_id: str) -> None:
-    """System delivers a webhook report."""
+    """System delivers a webhook report for a specific media buy."""
     env = ctx["env"]
     try:
         ctx["webhook_result"] = env.call_deliver(media_buy_id=mb_id)
@@ -539,7 +642,7 @@ def when_deliver_typed_webhook(ctx: dict, report_type: str, mb_id: str) -> None:
     ctx["report_type"] = report_type
     env = ctx["env"]
     try:
-        ctx["webhook_result"] = env.call_deliver(media_buy_id=mb_id)
+        ctx["webhook_result"] = env.call_deliver(media_buy_id=mb_id, notification_type=report_type)
     except Exception as exc:
         ctx["error"] = exc
 
@@ -570,17 +673,33 @@ def when_attempt_webhook(ctx: dict) -> None:
 
 @when("the system evaluates the circuit breaker state")
 def when_evaluate_circuit_breaker(ctx: dict) -> None:
-    """Evaluate circuit breaker state."""
+    """Evaluate circuit breaker state.
+
+    Calls cb.can_attempt() directly to trigger timeout-based state transitions
+    (OPEN → HALF_OPEN), then attempts delivery via call_send().
+    """
     env = ctx["env"]
+    service = env.get_service()
+    endpoint_key = ctx.get("circuit_breaker_endpoint_key", f"{env._tenant_id}:{_WEBHOOK_URL}")
+    cb = service._circuit_breakers.get(endpoint_key)
+    if cb is not None:
+        ctx["cb_can_attempt"] = cb.can_attempt()
     try:
-        ctx["circuit_result"] = env.call_impl()
+        ctx["circuit_result"] = env.call_send()
     except Exception as exc:
         ctx["error"] = exc
 
 
 @when(parsers.parse("the system delivers {n:d} successful probe reports"))
 def when_deliver_probe_reports(ctx: dict, n: int) -> None:
-    """Deliver n successful probe reports."""
+    """Record n successful deliveries on the circuit breaker (simulates probe recovery)."""
+    env = ctx["env"]
+    service = env.get_service()
+    endpoint_key = ctx.get("circuit_breaker_endpoint_key", f"{env._tenant_id}:{_WEBHOOK_URL}")
+    cb = service._circuit_breakers.get(endpoint_key)
+    if cb is not None:
+        for _ in range(n):
+            cb.record_success()
     ctx["probe_count"] = n
 
 
@@ -888,7 +1007,7 @@ def then_empty_deliveries(ctx: dict) -> None:
 
 @then("the delivery data should include impressions, spend, and clicks")
 def then_has_metrics(ctx: dict) -> None:
-    """Assert delivery data includes core metrics."""
+    """Assert delivery data includes all three core metrics with valid numeric values."""
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
@@ -896,13 +1015,20 @@ def then_has_metrics(ctx: dict) -> None:
     d = deliveries[0]
     totals = getattr(d, "totals", None)
     assert totals is not None, "Delivery data missing totals"
-    assert hasattr(totals, "impressions"), "Totals missing impressions"
-    assert hasattr(totals, "spend"), "Totals missing spend"
+    assert totals.impressions is not None and totals.impressions >= 0, (
+        f"Expected impressions to be a non-negative number, got {totals.impressions!r}"
+    )
+    assert totals.spend is not None and totals.spend >= 0, (
+        f"Expected spend to be a non-negative number, got {totals.spend!r}"
+    )
+    assert totals.clicks is not None and totals.clicks >= 0, (
+        f"Expected clicks to be a non-negative number, got {totals.clicks!r}"
+    )
 
 
 @then("the delivery data should include package-level breakdowns")
 def then_has_packages(ctx: dict) -> None:
-    """Assert delivery data includes package-level breakdowns."""
+    """Assert delivery data includes package-level breakdowns with a valid package_id."""
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
@@ -911,6 +1037,8 @@ def then_has_packages(ctx: dict) -> None:
     packages = getattr(d, "by_package", None)
     assert packages is not None, "Delivery data missing by_package"
     assert len(packages) > 0, "Package breakdown is empty"
+    first = packages[0]
+    assert getattr(first, "package_id", None), f"First package entry missing non-empty package_id: {first!r}"
 
 
 @then("the response should include the reporting period start and end dates")
@@ -924,8 +1052,8 @@ def then_has_reporting_period(ctx: dict) -> None:
     assert resp is not None, "Expected a response"
     period = getattr(resp, "reporting_period", None)
     assert period is not None, "Response missing reporting_period"
-    assert hasattr(period, "start"), "Reporting period missing start"
-    assert hasattr(period, "end"), "Reporting period missing end"
+    assert period.start is not None, "Reporting period start is None"
+    assert period.end is not None, "Reporting period end is None"
 
 
 @then(parsers.parse('the response should include the media buy status "{status}"'))
@@ -942,11 +1070,17 @@ def then_has_mb_status(ctx: dict, status: str) -> None:
 
 @then("the response should include aggregated totals across both media buys")
 def then_has_aggregated_totals(ctx: dict) -> None:
-    """Assert response includes aggregated totals."""
+    """Assert response includes aggregated totals with numeric impressions and spend."""
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
     agg = getattr(resp, "aggregated_totals", None)
     assert agg is not None, "Response missing aggregated_totals"
+    assert agg.impressions is not None and agg.impressions >= 0, (
+        f"aggregated_totals.impressions should be a non-negative number, got {agg.impressions!r}"
+    )
+    assert agg.spend is not None and agg.spend >= 0, (
+        f"aggregated_totals.spend should be a non-negative number, got {agg.spend!r}"
+    )
 
 
 @then("the aggregated impressions should equal the sum of individual impressions")
@@ -977,14 +1111,21 @@ def then_aggregated_spend(ctx: dict) -> None:
 
 @then(parsers.parse('the response should not include an error for "{mb_id}"'))
 def then_no_error_for_mb(ctx: dict, mb_id: str) -> None:
-    """Assert no error was returned for a specific media buy ID."""
+    """Assert no error for a specific media buy — checks both global ctx and per-delivery errors."""
     assert "error" not in ctx, f"Expected no error for '{mb_id}' but got: {ctx.get('error')}"
+    resp = ctx.get("response")
+    if resp is not None:
+        deliveries = getattr(resp, "media_buy_deliveries", None) or []
+        for d in deliveries:
+            if getattr(d, "media_buy_id", None) == mb_id:
+                per_delivery_errors = getattr(d, "errors", None) or []
+                assert not per_delivery_errors, f"Delivery '{mb_id}' has errors: {per_delivery_errors}"
 
 
 @then(parsers.parse('no error should be returned for "{mb_id}"'))
 def then_no_error_for_mb_alt(ctx: dict, mb_id: str) -> None:
-    """Assert no error was returned for a specific media buy ID (alt phrasing)."""
-    assert "error" not in ctx, f"Expected no error for '{mb_id}' but got: {ctx.get('error')}"
+    """Assert no error for a specific media buy (alt phrasing)."""
+    then_no_error_for_mb(ctx, mb_id)
 
 
 @then(parsers.parse('the response should include only media buys with status "{status}"'))
@@ -1042,54 +1183,91 @@ def then_period_end_today(ctx: dict) -> None:
 
 @then("the system should POST a delivery report to the configured webhook URL")
 def then_webhook_post(ctx: dict) -> None:
-    """Assert webhook POST was made."""
+    """Assert webhook POST was made to the configured URL."""
     env = ctx["env"]
     assert env.mock["post"].called, "Expected webhook POST but none was made"
+    call_args = env.mock["post"].call_args
+    called_url = call_args[0][0] if call_args[0] else call_args[1].get("url", "")
+    configured_url = ctx.get("webhook_url", "https://example.com/webhook")
+    assert called_url == configured_url, (
+        f"Webhook POST went to wrong URL: expected {configured_url!r}, got {called_url!r}"
+    )
 
 
 @then(parsers.parse('the payload should include delivery metrics for "{mb_id}"'))
 def then_webhook_payload_has_metrics(ctx: dict, mb_id: str) -> None:
-    """Assert webhook payload includes metrics for the media buy."""
-    _pending(ctx, "then_webhook_payload_has_metrics")
+    """Assert webhook payload includes the media_buy_id for the requested buy."""
+    payload = _get_last_webhook_payload(ctx)
+    assert payload.get("media_buy_id") == mb_id, (
+        f"Expected payload['media_buy_id'] == {mb_id!r}, got {payload.get('media_buy_id')!r}"
+    )
 
 
 @then("the payload should include the reporting_period")
 def then_webhook_payload_has_period(ctx: dict) -> None:
-    """Assert webhook payload includes reporting period."""
-    _pending(ctx, "then_webhook_payload_has_period")
+    """Assert webhook payload includes a reporting_period with start and end."""
+    payload = _get_last_webhook_payload(ctx)
+    period = payload.get("reporting_period")
+    assert period is not None, f"Webhook payload missing 'reporting_period': {list(payload.keys())}"
+    assert period.get("start") is not None and period.get("end") is not None, (
+        f"reporting_period must have non-None start and end: {period}"
+    )
 
 
 @then(parsers.parse('the payload notification_type should be "{ntype}"'))
 def then_notification_type(ctx: dict, ntype: str) -> None:
-    """Assert notification type."""
-    _pending(ctx, "then_notification_type")
+    """Assert notification type matches expected value."""
+    payload = _get_last_webhook_payload(ctx)
+    assert payload.get("notification_type") == ntype, (
+        f"Expected notification_type={ntype!r}, got {payload.get('notification_type')!r}"
+    )
 
 
 @then(parsers.re(r"the payload (?P<next_expected>.+) include next_expected_at"))
 def then_next_expected(ctx: dict, next_expected: str) -> None:
-    """Assert next_expected_at presence/absence."""
-    _pending(ctx, "then_next_expected")
+    """Assert next_expected_at is present or absent based on 'should'/'should not'."""
+    payload = _get_last_webhook_payload(ctx)
+    should_include = "should not" not in next_expected
+    has_key = "next_expected_at" in payload
+    if should_include:
+        assert has_key, f"Expected 'next_expected_at' in webhook payload but was absent: {list(payload.keys())}"
+    else:
+        assert not has_key or payload["next_expected_at"] is None, (
+            f"Expected 'next_expected_at' to be absent or null, got {payload.get('next_expected_at')!r}"
+        )
 
 
 @then("each report should have a higher sequence_number than the previous")
 def then_sequence_ascending(ctx: dict) -> None:
-    """Assert sequence numbers are ascending."""
-    reports = ctx.get("webhook_reports", [])
-    if len(reports) > 1:
-        for _i in range(1, len(reports)):
-            pass  # Sequence order verified by webhook harness
+    """Assert sequence numbers are strictly increasing across consecutive POST calls."""
+    calls = ctx["env"].mock["post"].call_args_list
+    assert len(calls) >= 2, f"Expected at least 2 webhook POSTs for sequence check, got {len(calls)}"
+    seq_nums = [call[1].get("json", {}).get("sequence_number") for call in calls]
+    for i in range(1, len(seq_nums)):
+        assert seq_nums[i] is not None, f"POST call {i} payload missing sequence_number"
+        assert seq_nums[i] > seq_nums[i - 1], (
+            f"sequence_number not ascending at index {i}: {seq_nums[i - 1]} -> {seq_nums[i]}"
+        )
 
 
 @then("the first sequence_number should be >= 1")
 def then_first_sequence(ctx: dict) -> None:
-    """Assert first sequence number is at least 1."""
-    _pending(ctx, "then_first_sequence")
+    """Assert first webhook POST has sequence_number >= 1."""
+    calls = ctx["env"].mock["post"].call_args_list
+    assert calls, "No webhook POSTs were made"
+    first_payload = calls[0][1].get("json", {})
+    seq = first_payload.get("sequence_number")
+    assert seq is not None, f"First webhook POST payload missing sequence_number: {list(first_payload.keys())}"
+    assert seq >= 1, f"Expected sequence_number >= 1, got {seq}"
 
 
 @then('the payload should not include "aggregated_totals" field')
 def then_no_aggregated_in_payload(ctx: dict) -> None:
-    """Assert webhook payload does not include aggregated totals."""
-    _pending(ctx, "then_no_aggregated_in_payload")
+    """Assert webhook payload excludes aggregated_totals (polling-only field)."""
+    payload = _get_last_webhook_payload(ctx)
+    assert "aggregated_totals" not in payload, (
+        f"Webhook payload should not contain 'aggregated_totals' (polling-only field): got keys {list(payload.keys())}"
+    )
 
 
 @then("the system should retry up to 3 times")
@@ -1102,14 +1280,33 @@ def then_retry_3_times(ctx: dict) -> None:
 
 @then("retries should use exponential backoff (1s, 2s, 4s + jitter)")
 def then_exponential_backoff(ctx: dict) -> None:
-    """Assert exponential backoff pattern."""
-    _pending(ctx, "then_exponential_backoff")
+    """Assert sleep durations follow exponential backoff schedule (1s, 2s, 4s ± jitter)."""
+    sleep_calls = ctx["env"].mock["sleep"].call_args_list
+    assert len(sleep_calls) >= 1, "Expected at least one sleep call for backoff"
+    durations = [c[0][0] for c in sleep_calls]
+    # Each successive duration must be at least 1.5× the previous (exponential growth)
+    for i in range(1, len(durations)):
+        assert durations[i] >= durations[i - 1] * 1.5, (
+            f"Backoff duration at index {i} ({durations[i]:.2f}s) is not exponentially larger "
+            f"than previous ({durations[i - 1]:.2f}s). Expected at least {durations[i - 1] * 1.5:.2f}s. "
+            f"Full schedule: {[f'{d:.2f}' for d in durations]}"
+        )
 
 
 @then("the system should retry up to 3 times with exponential backoff")
 def then_retry_with_backoff(ctx: dict) -> None:
-    """Assert retry with backoff."""
-    _pending(ctx, "then_retry_with_backoff")
+    """Assert at most 4 POST calls (1 original + 3 retries) with exponential sleep growth."""
+    env = ctx["env"]
+    assert env.mock["post"].call_count <= 4, (
+        f"Expected at most 4 calls (1 + 3 retries), got {env.mock['post'].call_count}"
+    )
+    sleep_calls = env.mock["sleep"].call_args_list
+    assert len(sleep_calls) >= 1, "Expected at least one sleep call between retries"
+    durations = [c[0][0] for c in sleep_calls]
+    for i in range(1, len(durations)):
+        assert durations[i] >= durations[i - 1] * 1.5, (
+            f"Sleep durations are not growing exponentially: {[f'{d:.2f}' for d in durations]}"
+        )
 
 
 @then("the system should not retry the delivery")
@@ -1122,61 +1319,85 @@ def then_no_retry(ctx: dict) -> None:
 @then("the system should log the authentication rejection")
 def then_log_auth_rejection(ctx: dict) -> None:
     """Assert auth rejection was logged."""
-    _pending(ctx, "then_log_auth_rejection")
+    raise NotImplementedError(
+        "log capture not available in unit WebhookEnv — "
+        "extend harness with caplog or structured log mock before implementing"
+    )
 
 
 @then("the webhook should be marked as failed")
 def then_webhook_marked_failed(ctx: dict) -> None:
-    """Assert webhook is marked as failed."""
-    _pending(ctx, "then_webhook_marked_failed")
+    """Assert webhook delivery record is marked as failed in DB."""
+    raise NotImplementedError(
+        "DB state check requires integration_db fixture — unit WebhookEnv does not persist WebhookDeliveryLog records"
+    )
 
 
 @then(parsers.parse('the circuit breaker should be in "{state}" state'))
 def then_circuit_breaker_state(ctx: dict, state: str) -> None:
-    """Assert circuit breaker state."""
-    _pending(ctx, "then_circuit_breaker_state")
+    """Assert circuit breaker state matches expected value."""
+    env = ctx["env"]
+    actual = env.get_breaker_state()
+    assert actual.lower() == state.lower(), f"Expected CB state '{state.lower()}', got '{actual}'"
 
 
 @then("subsequent scheduled deliveries should be suppressed")
 def then_deliveries_suppressed(ctx: dict) -> None:
-    """Assert deliveries are suppressed."""
-    _pending(ctx, "then_deliveries_suppressed")
+    """Assert circuit is open so deliveries would be suppressed."""
+    env = ctx["env"]
+    actual = env.get_breaker_state()
+    assert actual == "open", f"Expected CB in 'open' state (suppressed), got '{actual}'"
 
 
 @then(parsers.parse('the circuit breaker should transition to "{state}"'))
 def then_circuit_transition(ctx: dict, state: str) -> None:
-    """Assert circuit breaker transitions."""
-    _pending(ctx, "then_circuit_transition")
+    """Assert circuit breaker transitioned to the expected state."""
+    env = ctx["env"]
+    actual = env.get_breaker_state()
+    assert actual.lower() == state.lower(), f"Expected CB transition to '{state.lower()}', got '{actual}'"
 
 
 @then("the system should attempt a single probe delivery")
 def then_single_probe(ctx: dict) -> None:
-    """Assert a single probe delivery was attempted."""
-    _pending(ctx, "then_single_probe")
+    """Assert CB entered half_open state (probe delivery is allowed)."""
+    env = ctx["env"]
+    actual = env.get_breaker_state()
+    assert actual == "half_open", f"Expected CB in 'half_open' for probe attempt, got '{actual}'"
 
 
 @then("normal scheduled deliveries should resume")
 def then_deliveries_resume(ctx: dict) -> None:
-    """Assert deliveries resume."""
-    _pending(ctx, "then_deliveries_resume")
+    """Assert circuit closed so scheduled deliveries can proceed."""
+    env = ctx["env"]
+    actual = env.get_breaker_state()
+    assert actual == "closed", f"Expected CB in 'closed' state for resumed deliveries, got '{actual}'"
 
 
 @then("the delivery should be recorded as successful")
 def then_delivery_successful(ctx: dict) -> None:
     """Assert delivery was recorded as successful."""
-    _pending(ctx, "then_delivery_successful")
+    result = ctx.get("webhook_result")
+    assert result is True, f"Expected webhook_result=True (successful delivery), got {result!r}"
 
 
 @then("the circuit breaker state should remain healthy")
 def then_circuit_healthy(ctx: dict) -> None:
-    """Assert circuit breaker is healthy."""
-    _pending(ctx, "then_circuit_healthy")
+    """Assert circuit breaker remains in healthy (closed) state."""
+    env = ctx["env"]
+    actual = env.get_breaker_state()
+    assert actual == "closed", f"Expected CB to remain 'closed' (healthy), got '{actual}'"
 
 
 @then("the configuration should be rejected")
 def then_config_rejected(ctx: dict) -> None:
-    """Assert configuration was rejected."""
+    """Assert configuration was rejected with a validation/rejection error message."""
     assert "error" in ctx, "Expected config rejection error"
+    error = ctx["error"]
+    msg = str(error).lower()
+    rejection_keywords = {"reject", "invalid", "validation", "minimum", "too short", "credential", "length", "required"}
+    assert any(kw in msg for kw in rejection_keywords), (
+        f"Expected a rejection/validation error message, but got: {error!r}. Expected one of: {rejection_keywords}"
+    )
 
 
 @then("the error should indicate minimum credential length is 32 characters")
@@ -1199,26 +1420,58 @@ def then_config_accepted(ctx: dict) -> None:
 
 @then(parsers.parse('the request should include header "{header}" with hex-encoded HMAC'))
 def then_hmac_header(ctx: dict, header: str) -> None:
-    """Assert HMAC header present."""
-    _pending(ctx, "then_hmac_header")
+    """Assert HMAC header is present and contains a hex-encoded signature."""
+    headers = _get_last_webhook_headers(ctx)
+    assert header in headers, f"Expected header {header!r} but got: {list(headers.keys())}"
+    value = headers[header]
+    # Value may be bare hex or prefixed with "sha256="
+    stripped = value.removeprefix("sha256=")
+    assert re.match(r"^[0-9a-f]{1,}$", stripped), f"Header {header!r} is not a hex-encoded HMAC: {value!r}"
 
 
 @then(parsers.parse('the request should include header "{header}" with ISO timestamp'))
 def then_timestamp_header(ctx: dict, header: str) -> None:
-    """Assert timestamp header present."""
-    _pending(ctx, "then_timestamp_header")
+    """Assert timestamp header is present and contains a valid ISO 8601 datetime."""
+    from datetime import datetime as _dt
+
+    headers = _get_last_webhook_headers(ctx)
+    assert header in headers, f"Expected header {header!r} but got: {list(headers.keys())}"
+    value = headers[header]
+    try:
+        _dt.fromisoformat(value)
+    except (ValueError, TypeError) as exc:
+        raise AssertionError(f"Header {header!r} is not a valid ISO 8601 timestamp: {value!r}") from exc
 
 
 @then('the HMAC should be computed over "timestamp.payload" concatenation')
 def then_hmac_computation(ctx: dict) -> None:
-    """Assert HMAC computation method."""
-    _pending(ctx, "then_hmac_computation")
+    """Assert HMAC signature is reproduced by signing timestamp.payload with the secret."""
+    import hashlib
+    import hmac as hmac_lib
+    import json as json_lib
+
+    headers = _get_last_webhook_headers(ctx)
+    payload = _get_last_webhook_payload(ctx)
+    timestamp = headers.get("X-ADCP-Timestamp") or headers.get("X-Webhook-Timestamp", "")
+    raw_sig = headers.get("X-ADCP-Signature") or headers.get("X-Webhook-Signature", "")
+    signature = raw_sig.removeprefix("sha256=")
+    assert signature, "Expected HMAC signature header to be present and non-empty"
+    signing_secret: str = ctx.get("signing_secret", "")
+    assert signing_secret, "Test setup must store signing_secret in ctx['signing_secret']"
+    payload_str = json_lib.dumps(payload, sort_keys=True, separators=(",", ":"))
+    message = f"{timestamp}.{payload_str}".encode()
+    expected = hmac_lib.new(signing_secret.encode(), message, hashlib.sha256).hexdigest()
+    assert signature == expected, f"HMAC signature mismatch: got {signature!r}, expected {expected!r}"
 
 
 @then(parsers.parse('the request should include header "{header}" with the bearer token'))
 def then_bearer_header(ctx: dict, header: str) -> None:
-    """Assert bearer token header present."""
-    _pending(ctx, "then_bearer_header")
+    """Assert bearer token header is present and starts with 'Bearer '."""
+    headers = _get_last_webhook_headers(ctx)
+    assert header in headers, f"Expected header {header!r} but got: {list(headers.keys())}"
+    assert headers[header].startswith("Bearer "), (
+        f"Header {header!r} should be a Bearer token but got: {headers[header]!r}"
+    )
 
 
 # ── Response field presence assertions ─────────────────────────────
@@ -1234,20 +1487,36 @@ def then_has_deliveries_field(ctx: dict) -> None:
 
 @then('the response should not contain "errors" field')
 def then_no_errors_field(ctx: dict) -> None:
-    """Assert response has no errors field."""
+    """Assert response errors list is empty and no exception was raised."""
     assert "error" not in ctx, f"Unexpected error: {ctx.get('error')}"
+    resp = ctx.get("response")
+    if resp is not None:
+        errors = getattr(resp, "errors", None) or []
+        assert not errors, f"Unexpected errors in response: {errors}"
 
 
 @then('the response should contain "errors" field')
 def then_has_errors_field(ctx: dict) -> None:
-    """Assert response has errors."""
-    assert "error" in ctx, "Expected an error but none found"
+    """Assert response errors list is non-empty or an exception was raised."""
+    resp = ctx.get("response")
+    if resp is not None:
+        errors = getattr(resp, "errors", None) or []
+        assert errors or "error" in ctx, "Expected errors in response but none found"
+    else:
+        assert "error" in ctx, "Expected an error but none found"
 
 
 @then('the response should not contain "media_buy_deliveries" field')
 def then_no_deliveries_field(ctx: dict) -> None:
-    """Assert response has no deliveries (error only)."""
-    assert "error" in ctx, "Expected error-only response"
+    """Assert media_buy_deliveries is absent or empty in the serialized response."""
+    resp = ctx.get("response")
+    if resp is not None:
+        # Check serialized form — field should not be present or should be empty
+        dumped = resp.model_dump() if hasattr(resp, "model_dump") else {}
+        deliveries = dumped.get("media_buy_deliveries") or []
+        assert not deliveries, f"Expected 'media_buy_deliveries' to be absent or empty in response, got: {deliveries}"
+    else:
+        assert "error" in ctx, "Expected error-only response but got neither"
 
 
 # ── Error ownership assertions ─────────────────────────────────────
@@ -1255,11 +1524,19 @@ def then_no_deliveries_field(ctx: dict) -> None:
 
 @then(parsers.parse("the error should NOT reveal that the media buy exists"))
 def then_error_no_reveal(ctx: dict) -> None:
-    """Assert error does not leak existence information."""
+    """Assert error does not leak existence information via message content or ID echoing."""
     error = ctx.get("error")
     assert error is not None, "Expected an error"
     msg = str(error).lower()
-    assert "exists" not in msg, f"Error should not reveal existence: {error}"
+    leaking_phrases = ["exists", "belongs to", "owned by", "not authorized for", "access denied"]
+    for phrase in leaking_phrases:
+        assert phrase not in msg, f"Error leaks existence info via phrase {phrase!r}: {error}"
+    # The media_buy_id should not be echoed back in a way that confirms existence
+    mb_id = ctx.get("target_media_buy_id") or ctx.get("media_buy_id") or ""
+    if mb_id:
+        assert msg.count(mb_id.lower()) <= 1, (
+            f"Error repeatedly echoes media_buy_id {mb_id!r}, which may reveal existence: {error}"
+        )
 
 
 # ── Webhook skip assertions ─────────────────────────────────────────
@@ -1267,8 +1544,18 @@ def then_error_no_reveal(ctx: dict) -> None:
 
 @then(parsers.parse('the system should skip "{mb_id}" (no webhook to deliver to)'))
 def then_skip_no_webhook(ctx: dict, mb_id: str) -> None:
-    """Assert system skipped delivery for media buy without webhook."""
-    assert ctx.get("webhook_skipped") or "error" not in ctx
+    """Assert no webhook POST was made for this specific media buy (no webhook configured)."""
+    env = ctx["env"]
+    real_id = _resolve_media_buy_id(ctx, mb_id)
+    # No POST should have been made for this media buy
+    post_mock = env.mock["post"]
+    if post_mock.called:
+        for call in post_mock.call_args_list:
+            payload = call[1].get("json", {}) or {}
+            assert payload.get("media_buy_id") != real_id, (
+                f"Webhook POST was made for '{real_id}' but it should have been skipped "
+                f"(no webhook configured): {payload}"
+            )
 
 
 @then("no delivery attempt should be made")
@@ -1283,68 +1570,127 @@ def then_no_delivery_attempt(ctx: dict) -> None:
 
 @then(parsers.parse('the response packages should include "{field}" breakdown arrays'))
 def then_packages_include_breakdown(ctx: dict, field: str) -> None:
-    """Assert package breakdowns include the named field."""
-    _pending(ctx, "then_packages_include_breakdown")
+    """Assert every package in the response has field as a non-empty list."""
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    deliveries = getattr(resp, "media_buy_deliveries", []) or []
+    packages = [pkg for d in deliveries for pkg in (getattr(d, "by_package", None) or [])]
+    assert packages, "Response has no packages to check"
+    for pkg in packages:
+        value = getattr(pkg, field, None)
+        assert isinstance(value, list), f"Package {pkg.package_id!r} missing '{field}' breakdown array: {value!r}"
 
 
 @then(parsers.parse('the response packages should NOT include "{field}" breakdown arrays'))
 def then_packages_exclude_breakdown(ctx: dict, field: str) -> None:
-    """Assert package breakdowns do not include the named field."""
-    _pending(ctx, "then_packages_exclude_breakdown")
+    """Assert no package in the response has field as a list."""
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    deliveries = getattr(resp, "media_buy_deliveries", []) or []
+    packages = [pkg for d in deliveries for pkg in (getattr(d, "by_package", None) or [])]
+    for pkg in packages:
+        value = getattr(pkg, field, None)
+        assert not isinstance(value, list), (
+            f"Package {pkg.package_id!r} should not have '{field}' breakdown array: {value!r}"
+        )
 
 
 @then(parsers.parse('the response packages should include "{field}" with at most {n:d} entries'))
 def then_packages_limited(ctx: dict, field: str, n: int) -> None:
-    """Assert breakdown limited to n entries."""
-    _pending(ctx, "then_packages_limited")
+    """Assert every package has field as a list with at most n entries."""
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    deliveries = getattr(resp, "media_buy_deliveries", []) or []
+    packages = [pkg for d in deliveries for pkg in (getattr(d, "by_package", None) or [])]
+    assert packages, "Response has no packages to check"
+    for pkg in packages:
+        value = getattr(pkg, field, None)
+        assert isinstance(value, list), f"Package {pkg.package_id!r} missing '{field}' as a list: {value!r}"
+        assert len(value) <= n, f"Package {pkg.package_id!r} '{field}' has {len(value)} entries, expected at most {n}"
 
 
 @then(parsers.parse('"{field}" should be true'))
 def then_field_true(ctx: dict, field: str) -> None:
-    """Assert a boolean field is true."""
-    _pending(ctx, "then_field_true")
+    """Assert the named top-level response field is True."""
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    value = getattr(resp, field, None)
+    assert value is True, f"Expected response.{field} to be True, got {value!r}"
 
 
 @then(parsers.parse('"{field}" should be false'))
 def then_field_false(ctx: dict, field: str) -> None:
-    """Assert a boolean field is false."""
-    _pending(ctx, "then_field_false")
+    """Assert the named top-level response field is False."""
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    value = getattr(resp, field, None)
+    assert value is False, f"Expected response.{field} to be False, got {value!r}"
 
 
 @then(parsers.parse('the response packages should include "{field}"'))
 def then_packages_include_field(ctx: dict, field: str) -> None:
-    """Assert packages include the named field."""
-    _pending(ctx, "then_packages_include_field")
+    """Assert every package has the named field with a non-None value."""
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    deliveries = getattr(resp, "media_buy_deliveries", []) or []
+    packages = [pkg for d in deliveries for pkg in (getattr(d, "by_package", None) or [])]
+    assert packages, "Response has no packages to check"
+    for pkg in packages:
+        value = getattr(pkg, field, None)
+        assert value is not None, f"Package {pkg.package_id!r} missing field {field!r}"
 
 
 @then(parsers.parse('the response packages should include "{f1}" and "{f2}" breakdowns'))
 def then_packages_include_two(ctx: dict, f1: str, f2: str) -> None:
-    """Assert packages include both named breakdowns."""
-    _pending(ctx, "then_packages_include_two")
+    """Assert every package has both named fields as lists."""
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    deliveries = getattr(resp, "media_buy_deliveries", []) or []
+    packages = [pkg for d in deliveries for pkg in (getattr(d, "by_package", None) or [])]
+    assert packages, "Response has no packages to check"
+    for pkg in packages:
+        for field in (f1, f2):
+            value = getattr(pkg, field, None)
+            assert isinstance(value, list), f"Package {pkg.package_id!r} missing '{field}' breakdown: {value!r}"
 
 
 @then(parsers.parse('the response packages should NOT include "{field}"'))
 def then_packages_exclude_field(ctx: dict, field: str) -> None:
-    """Assert packages do not include the named field."""
-    _pending(ctx, "then_packages_exclude_field")
+    """Assert no package has the named field set to a non-None value."""
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    deliveries = getattr(resp, "media_buy_deliveries", []) or []
+    packages = [pkg for d in deliveries for pkg in (getattr(d, "by_package", None) or [])]
+    for pkg in packages:
+        value = getattr(pkg, field, None)
+        assert value is None, f"Package {pkg.package_id!r} should not have field {field!r}: {value!r}"
 
 
 @then(parsers.parse('the response geo breakdown should use classification system "{system}"'))
 def then_geo_system(ctx: dict, system: str) -> None:
-    """Assert geo breakdown uses the named classification system."""
-    _pending(ctx, "then_geo_system")
+    """Assert geo breakdown classification system."""
+    raise NotImplementedError(
+        "geo_breakdown not yet in GetMediaBuyDeliveryResponse schema — "
+        "add geo_breakdown field to MediaBuyDeliveryData before implementing"
+    )
 
 
 @then(parsers.parse('the response placement breakdown should be sorted by "{metric}" (fallback)'))
 def then_placement_sorted_fallback(ctx: dict, metric: str) -> None:
-    """Assert placement breakdown sorted by fallback metric."""
-    _pending(ctx, "then_placement_sorted_fallback")
+    """Assert placement breakdown uses fallback sort metric."""
+    raise NotImplementedError(
+        "placement sort fallback not yet implemented in production — "
+        "by_placement sorting logic is not in _get_media_buy_delivery_impl"
+    )
 
 
 @then(parsers.parse('the response placement breakdown should be sorted by "{metric}"'))
 def then_placement_sorted(ctx: dict, metric: str) -> None:
-    """Assert placement breakdown sorted by metric."""
-    _pending(ctx, "then_placement_sorted")
+    """Assert placement breakdown is sorted by the given metric."""
+    raise NotImplementedError(
+        "placement breakdown sorting not yet implemented in production — "
+        "by_placement sorting logic is not in _get_media_buy_delivery_impl"
+    )
 
 
 # ── Attribution window assertions ─────────────────────────────────
@@ -1352,38 +1698,56 @@ def then_placement_sorted(ctx: dict, metric: str) -> None:
 
 @then(parsers.parse('the response should include attribution_window with model "{model}"'))
 def then_attribution_model(ctx: dict, model: str) -> None:
-    """Assert attribution window model."""
-    _pending(ctx, "then_attribution_model")
+    """Assert attribution window model matches the expected value."""
+    raise NotImplementedError(
+        f"response attribution_window.model should == {model!r} — "
+        "wire attribution_window into GetMediaBuyDeliveryResponse in media_buy_delivery.py"
+    )
 
 
 @then("the attribution_window should echo the applied post_click window")
 def then_attribution_echo(ctx: dict) -> None:
-    """Assert attribution window echoes the request."""
-    _pending(ctx, "then_attribution_echo")
+    """Assert attribution window echoes the request's post_click setting."""
+    raise NotImplementedError(
+        "response attribution_window.post_click should echo ctx['request_attribution'] — "
+        "wire attribution_window into GetMediaBuyDeliveryResponse in media_buy_delivery.py"
+    )
 
 
 @then("the response should include attribution_window with the seller's platform default")
 def then_attribution_default(ctx: dict) -> None:
-    """Assert attribution window uses platform default."""
-    _pending(ctx, "then_attribution_default")
+    """Assert attribution window uses the seller's platform default."""
+    raise NotImplementedError(
+        "response attribution_window should be seller platform default (non-None) — "
+        "wire attribution_window into GetMediaBuyDeliveryResponse in media_buy_delivery.py"
+    )
 
 
 @then('the response attribution_window should include "model" field (required)')
 def then_attribution_has_model(ctx: dict) -> None:
-    """Assert attribution window includes model field."""
-    _pending(ctx, "then_attribution_has_model")
+    """Assert attribution_window.model is present in the response."""
+    raise NotImplementedError(
+        "response attribution_window.model should be non-None (required by spec) — "
+        "wire attribution_window into GetMediaBuyDeliveryResponse in media_buy_delivery.py"
+    )
 
 
 @then("the response should include attribution_window with the seller's platform default model")
 def then_attribution_default_model(ctx: dict) -> None:
-    """Assert attribution window uses platform default model."""
-    _pending(ctx, "then_attribution_default_model")
+    """Assert attribution window's model field reflects the seller platform default."""
+    raise NotImplementedError(
+        "response attribution_window.model should equal the seller platform default — "
+        "wire attribution_window into GetMediaBuyDeliveryResponse in media_buy_delivery.py"
+    )
 
 
 @then("the response should include attribution_window reflecting campaign-length window")
 def then_attribution_campaign_length(ctx: dict) -> None:
-    """Assert attribution window reflects campaign length."""
-    _pending(ctx, "then_attribution_campaign_length")
+    """Assert attribution window post_click duration equals the campaign length."""
+    raise NotImplementedError(
+        "response attribution_window.post_click should equal campaign duration in days — "
+        "wire attribution_window into GetMediaBuyDeliveryResponse in media_buy_delivery.py"
+    )
 
 
 # ── Partial/error delivery assertions ─────────────────────────────
@@ -1391,8 +1755,15 @@ def then_attribution_campaign_length(ctx: dict) -> None:
 
 @then(parsers.parse('the response should indicate "{mb_id}" has partial_data or delayed metrics'))
 def then_partial_data(ctx: dict, mb_id: str) -> None:
-    """Assert partial data indication for the media buy."""
-    _pending(ctx, "then_partial_data")
+    """Assert the named media buy has reporting_delayed status."""
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    deliveries = getattr(resp, "media_buy_deliveries", []) or []
+    target = next((d for d in deliveries if d.media_buy_id == mb_id), None)
+    assert target is not None, f"No delivery found for {mb_id!r}"
+    assert target.status == "reporting_delayed", (
+        f"Expected status='reporting_delayed' for partial/delayed metrics on {mb_id!r}, got {target.status!r}"
+    )
 
 
 @then(parsers.parse('the response should include "{mb_id}" with zero impressions and zero spend'))
@@ -1413,8 +1784,19 @@ def then_zero_metrics(ctx: dict, mb_id: str) -> None:
 
 @then("no real billing records should have been created")
 def then_no_billing(ctx: dict) -> None:
-    """Assert no real billing records created (sandbox mode)."""
-    _pending(ctx, "then_no_billing")
+    """Assert sandbox mode — verify via response flag and absence of billing adapter calls."""
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response"
+    sandbox = getattr(resp, "sandbox", None)
+    assert sandbox is True, (
+        f"Expected sandbox=True in response indicating no real billing records were created, got sandbox={sandbox!r}"
+    )
+    # Secondary: no adapter billing/charge methods should have been called
+    env = ctx["env"]
+    for mock_name in ("charge", "create_billing_record", "bill"):
+        mock = env.mock.get(mock_name)
+        if mock is not None:
+            assert not mock.called, f"Billing adapter method '{mock_name}' was called in sandbox mode"
 
 
 # ── Partition/boundary outcome assertions ─────────────────────────────
