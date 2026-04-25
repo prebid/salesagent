@@ -1,0 +1,1012 @@
+# PR 1 — Supply-chain hardening
+
+**Drift items closed:** PD3, PD4, PD5, PD6, PD7, PD13, PD14, PD15, PD23, PD24
+**Estimated effort:** 2.5 days (Path C CodeQL — D10) / 3 days (Path A) / 5.5 days (Path B)
+**Depends on:** pre-flight checklist (01-pre-flight-checklist.md) complete
+**Blocks:** PR 2, PR 3
+**Decisions referenced:** D1, D2, D5, D10, D12, D15, D16, D17, D21
+
+## Scope
+
+Pure defense, mostly additive. Establishes the governance baseline (CODEOWNERS, dependabot, SECURITY.md, CONTRIBUTING.md), the security-scanning layer (zizmor, CodeQL, pip-audit), and SHA-pins all external pre-commit hooks. Zero behavior change for existing tests; main is mergeable on landing.
+
+Per D10 (Path C), CodeQL is **advisory** for 2 weeks then flips to gating. zizmor is gating from day 1 (its findings are RCE-class).
+
+## Out of scope
+
+- Mypy / black local-hook migration → PR 2
+- CI workflow restructure → PR 3
+- Pre-commit hook architecture → PR 4
+- Version anchor consolidation → PR 5
+- CSRF middleware (`Flask-WTF CSRFProtect`) → deferred to v2.0 phases (the v2.0 branch already adds `src/admin/csrf.py`)
+- Any change under `src/` (production code untouched)
+- `harden-runner` adoption (Fortune-50 pattern, but file as PR 6 follow-up per D-pending-4)
+
+## Internal commit sequence
+
+ORDER IS LOAD-BEARING. Bisect-friendly: each commit is a self-contained unit reviewers can revert independently.
+
+### Commit 1 — `docs: add SECURITY.md, [project.urls], description`
+
+Files:
+- `SECURITY.md` (new, ~80 lines)
+- `pyproject.toml` (modify L4 description; add `[project.urls]` block)
+
+Pure docs/metadata. Closes PD5, PD23.
+
+Verification:
+```bash
+test -s SECURITY.md
+[[ $(wc -l < SECURITY.md) -ge 30 ]]
+grep -qiE 'private vulnerability|security advisory' SECURITY.md
+grep -qE '\[project\.urls\]' pyproject.toml
+! grep -qE 'description = "Add your description here"' pyproject.toml
+```
+
+### Commit 2 — `docs: rewrite CONTRIBUTING.md`
+
+Files:
+- `CONTRIBUTING.md` (rewrite from 20 lines → ~120 lines)
+- `docs/development/contributing.md` (delete OR replace with thin pointer)
+
+Closes PD7. Per D21, root file is canonical.
+
+Verification:
+```bash
+[[ $(wc -l < CONTRIBUTING.md) -ge 80 ]]
+grep -q 'uv sync --group dev' CONTRIBUTING.md
+grep -q 'pre-commit install' CONTRIBUTING.md
+grep -qE 'CI / Quality Gate|CI / Type Check' CONTRIBUTING.md
+# Verify docs/development/contributing.md is either gone or a pointer
+[[ ! -f docs/development/contributing.md ]] || \
+  [[ $(wc -l < docs/development/contributing.md) -le 5 ]]
+```
+
+### Commit 3 — `chore: add CODEOWNERS`
+
+Files:
+- `.github/CODEOWNERS` (new, ~30 lines)
+
+Activates review-routing on subsequent commits. Closes PD4.
+
+Verification:
+```bash
+test -s .github/CODEOWNERS
+grep -qE '^\*\s+@chrishuie' .github/CODEOWNERS
+grep -qE '^/\.pre-commit-config\.yaml\s+@chrishuie' .github/CODEOWNERS
+grep -qE '^/\.github/.*@chrishuie' .github/CODEOWNERS
+grep -qE '^/SECURITY\.md\s+@chrishuie' .github/CODEOWNERS
+```
+
+### Commit 4 — `ci: add dependabot.yml (no auto-merge)`
+
+Files:
+- `.github/dependabot.yml` (new, ~80 lines)
+
+Closes PD6. Includes `ignore: adcp` per D16.
+
+Verification:
+```bash
+yamllint -d relaxed .github/dependabot.yml || pip install yamllint && yamllint -d relaxed .github/dependabot.yml
+for eco in pip pre-commit github-actions docker; do
+  grep -qE "package-ecosystem: \"?${eco}\"?" .github/dependabot.yml
+done
+grep -qE 'dependency-name: "?adcp"?' .github/dependabot.yml
+grep -qE 'dependency-name: "?googleads"?' .github/dependabot.yml
+! grep -qE 'auto-?merge' .github/dependabot.yml
+```
+
+### Commit 5 — `ci: add security.yml (zizmor + pip-audit)`
+
+Files:
+- `.github/workflows/security.yml` (new)
+
+Closes PD13.
+
+Verification:
+```bash
+test -f .github/workflows/security.yml
+yamllint -d relaxed .github/workflows/security.yml
+grep -qE '^permissions:\s*\{?\s*\}?' .github/workflows/security.yml
+grep -q 'zizmor' .github/workflows/security.yml
+grep -q 'pip-audit' .github/workflows/security.yml
+```
+
+### Commit 6 — `ci: add codeql.yml (advisory)`
+
+Files:
+- `.github/workflows/codeql.yml` (new)
+- `.github/codeql/codeql-config.yml` (new, optional but recommended)
+
+Closes PD14. Per D10 (Path C), this workflow runs but does NOT gate merges for the first 2 weeks.
+
+Verification:
+```bash
+test -f .github/workflows/codeql.yml
+yamllint -d relaxed .github/workflows/codeql.yml
+grep -qE '^permissions:' .github/workflows/codeql.yml
+grep -qE 'security-events:\s+write' .github/workflows/codeql.yml
+grep -qE 'language: python' .github/workflows/codeql.yml
+grep -qE 'security-extended' .github/workflows/codeql.yml
+```
+
+### Commit 7 — `docs: add ADR-001 (single-source pre-commit deps) and ADR-002 (solo-maintainer bypass)`
+
+Files:
+- `docs/decisions/adr-001-single-source-pre-commit-deps.md` (new, full text in §Embedded ADR-001 below)
+- `docs/decisions/adr-002-solo-maintainer-bypass.md` (new, full text in §Embedded ADR-002 below)
+- `docs/decisions/.placeholder` removed if it exists (mkdir creates the directory implicitly)
+
+ADR-001 is referenced by PR 2 but committed here so the directory and pattern exist before PR 2.
+
+Verification:
+```bash
+test -f docs/decisions/adr-001-single-source-pre-commit-deps.md
+test -f docs/decisions/adr-002-solo-maintainer-bypass.md
+grep -q '## Status' docs/decisions/adr-001-single-source-pre-commit-deps.md
+grep -q '## Status' docs/decisions/adr-002-solo-maintainer-bypass.md
+```
+
+### Commit 8 — `chore: pre-commit autoupdate --freeze (SHA-pin all external hooks)`
+
+Files:
+- `.pre-commit-config.yaml` (modify lines 262, 275, 281, 289)
+
+Closes PD3. Per D12, bumps each hook to its latest tag and rewrites `rev:` to a 40-char SHA with `# frozen: v<tag>` trailing comment.
+
+**Procedure (run on a scratch branch first to review the diff before committing):**
+
+```bash
+git checkout -b chore/sha-freeze-preview
+uv run pre-commit autoupdate --freeze
+git diff .pre-commit-config.yaml > /tmp/sha-freeze.diff
+cat /tmp/sha-freeze.diff   # review the 4 hook bumps
+# If any bump breaks pre-commit run --all-files, hold individual hooks at previous version
+uv run pre-commit run --all-files
+# If clean, cherry-pick or replay onto PR 1 branch
+```
+
+Verification:
+```bash
+[[ $(grep -E '^\s+rev:' .pre-commit-config.yaml | grep -vcE 'rev: [a-f0-9]{40}\s+# frozen: v') == "0" ]]
+uv run pre-commit run --all-files
+```
+
+### Commit 9 — `ci: pin GitHub Actions to SHAs and add top-level permissions`
+
+Files:
+- `.github/workflows/test.yml` (modify all `uses:` lines, add `permissions: {}` top-level)
+- `.github/workflows/pr-title-check.yml` (same)
+- `.github/workflows/release-please.yml` (same)
+- `.github/workflows/ipr-agreement.yml` (same)
+
+Addresses zizmor's `unpinned-uses` and `excessive-permissions` findings (~32 expected from pre-flight P3). Closes PD15.
+
+For each `uses: actions/<name>@v<X>` reference, replace with `uses: actions/<name>@<40-char-sha>  # v<X>`.
+
+Mechanical operation — generate the SHAs in batch:
+
+```bash
+# For each unique action ref, fetch its SHA at the pinned tag
+for ref in $(grep -RhoE 'uses: [^ ]+' .github/workflows/ | sort -u | sed 's/uses: //'); do
+  case "$ref" in
+    *@v*)
+      tool=${ref%@*}
+      tag=${ref#*@}
+      sha=$(gh api repos/$tool/git/refs/tags/$tag --jq '.object.sha')
+      # If it's a tag object, dereference to commit
+      if [[ $(gh api repos/$tool/git/tags/$sha --jq '.object.type' 2>/dev/null) == "commit" ]]; then
+        sha=$(gh api repos/$tool/git/tags/$sha --jq '.object.sha')
+      fi
+      echo "$ref -> $sha  # $tag"
+      ;;
+  esac
+done
+```
+
+Apply via `sed` or manual edits.
+
+Verification:
+```bash
+# Every uses: line is SHA-pinned
+[[ $(grep -RhoE 'uses: [^ ]+@[a-f0-9]{40}' .github/workflows/ | wc -l) == \
+   $(grep -RhoE 'uses: [^ ]+@[^ ]+' .github/workflows/ | grep -vE 'uses: \./' | wc -l) ]]
+# Every workflow has top-level permissions
+for f in .github/workflows/*.yml; do
+  grep -qE '^permissions:' "$f" || { echo "missing top-level perms: $f"; exit 1; }
+done
+```
+
+### Commit 10 — `ci: gate Gemini key behind unconditional mock`
+
+Files:
+- `.github/workflows/test.yml:342` (modify)
+
+Closes PD24, per D15.
+
+Replace:
+```yaml
+GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || 'test_key_for_mocking' }}
+```
+
+With:
+```yaml
+GEMINI_API_KEY: test_key_for_mocking
+```
+
+Verification:
+```bash
+! grep -q 'secrets.GEMINI_API_KEY' .github/workflows/test.yml
+grep -q "GEMINI_API_KEY: test_key_for_mocking" .github/workflows/test.yml
+```
+
+### Commit 11 — `ci: zizmor pre-flight findings — fix or allowlist`
+
+Files:
+- `.github/workflows/pr-title-check.yml` (allowlist `pull_request_target` with comment)
+- `.github/workflows/ipr-agreement.yml` (allowlist `pull_request_target` with comment)
+- `docs/decisions/adr-003-pull-request-target-trust.md` (new, ~50 lines, explaining why these workflows legitimately use the dangerous trigger)
+- `.github/zizmor.yml` (new, configures audit rules)
+
+Per pre-flight P3 (`.zizmor-preflight.txt`), fix all medium+ findings except the legitimate `pull_request_target` workflows.
+
+Verification:
+```bash
+uvx zizmor .github/workflows/ --min-severity medium
+# Expected exit code: 0 (or 1 with only allowlisted findings)
+test -f docs/decisions/adr-003-pull-request-target-trust.md
+test -f .github/zizmor.yml
+```
+
+## Acceptance criteria
+
+From issue #1234 §Acceptance criteria, scoped to PR 1:
+
+- [ ] `.github/CODEOWNERS` exists with `@chrishuie` + critical-path coverage
+- [ ] `.github/dependabot.yml` exists; no auto-merge configured
+- [ ] `SECURITY.md` exists with GitHub private vuln reporting link + scope
+- [ ] `CONTRIBUTING.md` rewritten (>80 lines); references layered model
+- [ ] Every external `rev:` in `.pre-commit-config.yaml` is a full SHA with `# frozen: v<tag>` comment
+- [ ] `.github/workflows/codeql.yml` exists and runs on PR (advisory per D10)
+- [ ] `.github/workflows/security.yml` exists with pip-audit + zizmor
+- [ ] `pyproject.toml` has `[project.urls]` and no placeholder description
+
+Plus agent-derived:
+
+- [ ] All workflows have top-level `permissions:` block
+- [ ] Every `uses:` action ref is SHA-pinned with a `# v<tag>` comment
+- [ ] zizmor reports zero unallowlisted medium+ findings
+- [ ] ADR-001, ADR-002, ADR-003 exist and pass `## Status` grep
+- [ ] `pre-commit run --all-files` passes
+- [ ] `make quality` passes
+
+## Verification (full PR-level)
+
+```bash
+bash .claude/notes/ci-refactor/scripts/verify-pr1.sh
+```
+
+Inline:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+# 1. SHA-freeze
+echo "[1/8] SHA-freeze..."
+[[ $(grep -E '^\s+rev:' .pre-commit-config.yaml | grep -vcE 'rev: [a-f0-9]{40}\s+# frozen: v') == "0" ]]
+
+# 2. CODEOWNERS
+echo "[2/8] CODEOWNERS..."
+test -s .github/CODEOWNERS
+grep -qE '^\*\s+@chrishuie' .github/CODEOWNERS
+
+# 3. SECURITY.md
+echo "[3/8] SECURITY.md..."
+[[ $(wc -l < SECURITY.md) -ge 30 ]]
+grep -qiE 'private vulnerability|security advisory' SECURITY.md
+
+# 4. dependabot
+echo "[4/8] dependabot.yml..."
+yamllint -d relaxed .github/dependabot.yml
+for eco in pip pre-commit github-actions docker; do
+  grep -qE "package-ecosystem: \"?${eco}\"?" .github/dependabot.yml
+done
+grep -qE 'dependency-name: "?adcp"?' .github/dependabot.yml
+
+# 5. Workflows perms
+echo "[5/8] workflow perms..."
+for f in .github/workflows/*.yml; do
+  grep -qE '^permissions:' "$f" || { echo "missing perms: $f"; exit 1; }
+done
+
+# 6. SHA-pinned actions
+echo "[6/8] SHA-pinned actions..."
+total=$(grep -RhoE 'uses: [^ ]+@[^ ]+' .github/workflows/ | grep -vcE 'uses: \./')
+sha_pinned=$(grep -RhoE 'uses: [^ ]+@[a-f0-9]{40}' .github/workflows/ | wc -l)
+[[ "$total" == "$sha_pinned" ]] || { echo "$((total - sha_pinned)) actions still tag-pinned"; exit 1; }
+
+# 7. ADRs
+echo "[7/8] ADRs..."
+for adr in adr-001-single-source-pre-commit-deps adr-002-solo-maintainer-bypass adr-003-pull-request-target-trust; do
+  test -f "docs/decisions/${adr}.md"
+  grep -q '## Status' "docs/decisions/${adr}.md"
+done
+
+# 8. zizmor
+echo "[8/8] zizmor..."
+uvx zizmor .github/workflows/ --min-severity medium
+
+echo "PR 1 verification PASSED"
+```
+
+## Risks (scoped to PR 1)
+
+- **R3 — CodeQL findings explode**: mitigation — D10 Path C; advisory not gating
+- **R4 — zizmor finds > 50 issues**: mitigation — pre-flight P3 captures count; PR 1 fixes only load-bearing findings; rest goes to follow-up issue
+- **R9 — Dependabot deluge week 1**: mitigation — `open-pull-requests-limit: 5`; land on Friday for weekend triage runway
+
+## Rollback plan
+
+PR 1 is mostly additive (8 new files, 4 modified). Revert is atomic:
+
+```bash
+git revert -m 1 <PR1-merge-sha>
+git push origin main   # USER ACTION; agent does not run this
+```
+
+Plus admin actions if needed:
+- Disable `.github/workflows/codeql.yml` and `security.yml` runs (UI: Actions → workflow → Disable). They run advisory by default; revert removes the files anyway.
+- Close any in-flight Dependabot PRs created during the brief enabled window:
+  ```bash
+  gh pr list --search "author:app/dependabot is:open" --json number --jq '.[].number' | xargs -I{} gh pr close {}
+  ```
+
+Recovery: < 5 minutes for code revert; ≤ 30 minutes including admin cleanup.
+
+## Merge tolerance
+
+- **PR #1217 (adcp 3.12)**: tolerated. PR 1 doesn't touch `adcp` references.
+- **v2.0 phase PR landing on `pyproject.toml`**: rebase if it adds/removes `[project.urls]`. Mechanical.
+- **v2.0 phase PR landing on `.pre-commit-config.yaml`**: rebase carefully — the `rev:` SHAs from autoupdate-freeze should be preserved; v2.0's hook-list edits apply on top.
+- **v2.0 phase PR landing on `.github/workflows/test.yml`**: blocks if v2.0 also rewrites the workflow significantly. Coordinate; otherwise mechanical.
+
+## Coordination notes for the maintainer
+
+These are NOT part of the diff but are required for PR 1's effect:
+
+1. **Before merging**: confirm pre-flight checklist (01-pre-flight-checklist.md) is complete.
+2. **After merging, before week 5**: monitor `.zizmor-preflight.txt` follow-ups and CodeQL findings count. End of Week 4: decide gating-vs-advisory per D10 tripwire.
+3. **After merging**: configure branch protection bypass for `@chrishuie`. UI path:
+   - **Settings → Branches → main** (or "Branch protection rules" → edit `main`)
+   - "Require a pull request before merging" → check **"Allow specified actors to bypass required pull requests"**
+   - Add `chrishuie`
+   - Save
+4. **First Dependabot run**: lands within 24h of `dependabot.yml` being merged. Expect 5-13 PRs. Triage over the weekend.
+
+---
+
+# Embedded drafts
+
+The executor agent should lift these into the indicated final locations. Content here is production-ready; only the date stamps need updating.
+
+## Embedded SECURITY.md (commit to repo root)
+
+```markdown
+# Security policy
+
+## Supported versions
+
+We support the `main` branch and the most recent tagged release. Older releases
+do not receive backported fixes; please upgrade to receive security updates.
+
+| Version        | Supported |
+|----------------|-----------|
+| `main`         | Yes       |
+| Latest release | Yes       |
+| Older releases | No        |
+
+## Reporting a vulnerability
+
+Please report vulnerabilities through GitHub's private security advisory channel:
+
+> https://github.com/prebid/salesagent/security/advisories/new
+
+Do not file public issues for suspected vulnerabilities. Public PRs that fix
+non-trivial security issues should also be coordinated through the advisory
+channel before opening.
+
+A useful report includes:
+
+- A description of the issue and which component is affected (admin UI, MCP
+  server, A2A server, GAM adapter, multi-tenant boundary, etc.)
+- Reproduction steps or a proof-of-concept
+- Impact assessment (data exposure, privilege escalation, denial of service)
+- Suggested mitigations if you have them
+
+## Triage SLA
+
+- **Acknowledgement:** within 5 business days of submission.
+- **Initial triage:** within 10 business days (severity assessment, scope
+  confirmation, owner assigned).
+- **Fix timeline:** case-by-case based on severity and scope. Critical issues
+  affecting tenant isolation or authentication are prioritized over lower-impact
+  findings.
+
+## Scope
+
+In scope:
+
+- Admin UI authentication, session handling, CSRF, SSRF
+- MCP server (`/mcp/`) authentication and authorization
+- A2A server (`/a2a`) authentication and authorization
+- GAM adapter — credential handling, OAuth flows, network isolation
+- Mock adapter — only when used in non-test environments by mistake
+- Multi-tenant isolation — tenant boundary enforcement, cross-tenant data
+  access, subdomain routing
+- Creative agent integration — webhook handling, push-notification handlers
+- CI and supply-chain — `.pre-commit-config.yaml`, `.github/workflows/`,
+  `pyproject.toml`, `uv.lock`, `Dockerfile`, `docker-compose*.yml`,
+  `.python-version`
+
+Out of scope:
+
+- Vulnerabilities in third-party dependencies — please report directly to the
+  upstream maintainers. We track and update dependencies via Dependabot.
+- Theoretical issues without a reproduction or proof-of-concept.
+- Findings that require an already-compromised maintainer machine, leaked
+  credentials, or other prerequisites equivalent to administrative access.
+
+## CI and hook modification policy
+
+Files that influence what runs on contributor and maintainer machines, or what
+gates the merge process, are CODEOWNERS-protected. Changes to any of the
+following must be reviewed by `@chrishuie` and discussed for supply-chain
+implications before merge:
+
+- `.pre-commit-config.yaml`
+- `.github/workflows/`
+- `pyproject.toml`, `uv.lock`
+- `Dockerfile`, `docker-compose*.yml`
+- `.python-version`
+
+External hook references and GitHub Actions are SHA-pinned. PRs that switch a
+SHA to a tag, or downgrade SHA pinning to a less-strict form, will be rejected.
+
+## Disclosure timeline
+
+The default coordinated disclosure window is 90 days from the date of the
+acknowledgement. We are willing to negotiate this case-by-case based on fix
+complexity and the reporter's needs. We do not require a CVE to be assigned
+before publishing a fix.
+```
+
+## Embedded CODEOWNERS (commit to `.github/CODEOWNERS`)
+
+```
+# CODEOWNERS — auto-requests review from @chrishuie on PRs touching listed paths.
+# Bypass is configured at branch-protection level (see ADR-002), not here.
+#
+# Order matters: last matching pattern wins (GitHub semantics).
+# Globs use gitignore syntax; trailing slash matches directories recursively.
+
+# ---- Default fallback: maintainer owns everything not otherwise specified ----
+*                                       @chrishuie
+
+# ---- CI / build infrastructure (highest review concern) ----
+/.github/                               @chrishuie
+/.pre-commit-config.yaml                @chrishuie
+/.pre-commit-hooks/                     @chrishuie
+/scripts/hooks/                         @chrishuie
+/setup_hooks.sh                         @chrishuie
+
+# ---- Dependency / runtime pinning ----
+/pyproject.toml                         @chrishuie
+/uv.lock                                @chrishuie
+/.python-version                        @chrishuie
+/Dockerfile                             @chrishuie
+/docker-compose*.yml                    @chrishuie
+
+# ---- Database migrations (irreversible once merged) ----
+/alembic/                               @chrishuie
+/alembic.ini                            @chrishuie
+
+# ---- Auth + security surface ----
+/src/core/auth*                         @chrishuie
+/src/core/security/                     @chrishuie
+/SECURITY.md                            @chrishuie
+/IPR_POLICY.md                          @chrishuie
+
+# ---- Architecture guards (prevent regressions in invariants) ----
+/tests/unit/test_architecture_*.py      @chrishuie
+```
+
+## Embedded dependabot.yml (commit to `.github/dependabot.yml`)
+
+```yaml
+# Issue #1234 rollout. Decisions: weekly grouped, no auto-merge, ignore adcp until #1217.
+# All schedules in America/Los_Angeles per maintainer TZ.
+version: 2
+
+updates:
+  # ──────────────────────────────────────────────────────────────────
+  # Python runtime + dev deps (pyproject.toml, uv.lock)
+  # ──────────────────────────────────────────────────────────────────
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/Los_Angeles"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "supply-chain"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    pull-request-branch-name:
+      separator: "/"
+
+    groups:
+      python-runtime:
+        applies-to: version-updates
+        dependency-type: "production"
+        update-types: ["minor", "patch"]
+      python-dev:
+        applies-to: version-updates
+        dependency-type: "development"
+        update-types: ["minor", "patch"]
+      types:
+        applies-to: version-updates
+        patterns: ["types-*"]
+      gcp-stack:
+        applies-to: version-updates
+        patterns: ["google-*", "grpcio*", "protobuf"]
+      security-patches:
+        applies-to: security-updates
+        patterns: ["*"]
+
+    ignore:
+      # Pinned: library default sets GAM API version (pyproject.toml).
+      - dependency-name: "googleads"
+      # TODO(#1234): remove once #1217 merges — adcp is being manually migrated.
+      - dependency-name: "adcp"
+
+  # ──────────────────────────────────────────────────────────────────
+  # GitHub Actions (workflow `uses:` SHAs) — supply chain
+  # ──────────────────────────────────────────────────────────────────
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/Los_Angeles"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "ci"
+      - "supply-chain"
+    commit-message:
+      prefix: "chore(ci)"
+    groups:
+      actions:
+        applies-to: version-updates
+        patterns: ["*"]
+
+  # ──────────────────────────────────────────────────────────────────
+  # Pre-commit hooks (rev: pins in .pre-commit-config.yaml)
+  # GitHub-native ecosystem since 2026-03-10:
+  # https://github.blog/changelog/2026-03-10-dependabot-now-supports-pre-commit-hooks/
+  # If validation fails on first run, fall back to scheduled
+  # peter-evans/create-pull-request workflow (see PR 1 spec §Fallbacks).
+  # ──────────────────────────────────────────────────────────────────
+  - package-ecosystem: "pre-commit"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/Los_Angeles"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "pre-commit"
+    commit-message:
+      prefix: "chore(pre-commit)"
+    groups:
+      hooks:
+        applies-to: version-updates
+        patterns: ["*"]
+
+  # ──────────────────────────────────────────────────────────────────
+  # Docker base images — monthly is enough; base churn is low.
+  # ──────────────────────────────────────────────────────────────────
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/Los_Angeles"
+    open-pull-requests-limit: 2
+    labels:
+      - "dependencies"
+      - "docker"
+      - "supply-chain"
+    commit-message:
+      prefix: "chore(docker)"
+```
+
+### Fallback for the pre-commit ecosystem
+
+If `package-ecosystem: "pre-commit"` is rejected on first run (the GitHub feature might not be GA in this org's plan), replace that block with a scheduled workflow:
+
+```yaml
+# .github/workflows/precommit-autoupdate.yml
+name: Pre-commit autoupdate
+on:
+  schedule:
+    - cron: '0 13 * * 1'  # Monday 06:00 PT
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  autoupdate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@<SHA>  # v4
+      - uses: astral-sh/setup-uv@<SHA>  # v4
+      - run: uv run pre-commit autoupdate --freeze
+      - uses: peter-evans/create-pull-request@<SHA>  # v6
+        with:
+          commit-message: 'chore(pre-commit): autoupdate frozen SHAs'
+          title: 'chore(pre-commit): weekly autoupdate'
+          body: 'Automated weekly pre-commit hook SHA updates.'
+          branch: 'chore/precommit-autoupdate'
+          labels: 'dependencies,pre-commit'
+```
+
+## Embedded ADR-002 (commit to `docs/decisions/adr-002-solo-maintainer-bypass.md`)
+
+```markdown
+# ADR-002: Solo-maintainer branch protection with bypass
+
+## Status
+
+Accepted (2026-04-25). Implemented in PR 1 of the CI/pre-commit refactor (issue
+#1234). Tripwire: 6-month review, or earlier if a second maintainer joins.
+
+## Context
+
+GitHub branch protection on `main` is being introduced as part of issue #1234's
+governance layer. The intended posture is: every PR receives CODEOWNERS review,
+no force-pushes, no direct commits to main, all required CI checks must pass.
+
+GitHub's branch protection has two structural facts that interact poorly with a
+solo maintainer:
+
+1. A PR author cannot approve their own PR. The "approval" review type is
+   permanently unavailable to the author.
+2. Setting `required_approving_review_count: 0` while requiring CODEOWNERS
+   review is a configuration conflict. CODEOWNERS-required-review only takes
+   effect when `required_approving_review_count >= 1`.
+
+`@chrishuie` is the sole CODEOWNERS entry per decision 1 of issue #1234. With
+naive branch protection the maintainer cannot merge their own PRs. Adding a
+second reviewer is explicitly out of scope for this work.
+
+## Decision
+
+Branch protection on `main` is configured as:
+
+- `required_approving_review_count: 1`
+- CODEOWNERS review required
+- All required CI checks must pass
+- No force-pushes, no direct commits, no deletions
+- **Bypass list:** `@chrishuie` is granted bypass via "Allow specified actors to
+  bypass required pull requests"
+
+The bypass permission lets `@chrishuie` merge a PR they authored once CI is green,
+without a second human approval. Other actors — including any future
+contributors — remain bound by the standard rules.
+
+## Options considered
+
+**0 reviews + CODEOWNERS required.** Impossible. GitHub rejects this combination
+as a settings conflict; CODEOWNERS enforcement requires a non-zero review count.
+
+**1 review + maintainer bypass.** Chosen. Captures the intent (CODEOWNERS still
+auto-requests review on every PR, the trail is documented) while permitting the
+solo maintainer to ship.
+
+**1 review + second-reviewer requirement.** Rejected. Blocks every PR until a
+second maintainer is recruited. That recruitment is intentionally out of scope
+for this work and should not gate routine development.
+
+## Consequences
+
+**Positive.**
+- Solo maintainer can ship.
+- CODEOWNERS still auto-requests review, which documents intent and provides a
+  clear handoff path when a second maintainer joins (remove the bypass entry,
+  no other config change).
+- All other branch-protection invariants — required CI checks, no force-push,
+  no direct commits — apply to the maintainer too. The bypass is scoped strictly
+  to the review requirement.
+
+**Negative.**
+- The bypass partially defeats the CODEOWNERS guarantee for `@chrishuie`'s own
+  PRs. Acknowledged. The remaining guarantees (CI, no force-push, public PR
+  trail, signed audit log) are the load-bearing controls in a solo-maintainer
+  posture.
+- The configuration is a transitional posture, not a steady state. It must be
+  revisited when a second maintainer is added.
+
+## Tripwire
+
+When a second maintainer is added to CODEOWNERS:
+
+1. Remove `@chrishuie` from the bypass list.
+2. Verify `required_approving_review_count: 1` still applies and now requires a
+   non-author reviewer.
+3. Update this ADR's status to `Superseded by ADR-NNN` and link to the new
+   decision.
+
+Independent of that, this decision is reviewed at the 6-month mark (2026-10) to
+confirm the solo-maintainer model is still the operating reality.
+```
+
+## Embedded ADR-003 (commit to `docs/decisions/adr-003-pull-request-target-trust.md`)
+
+```markdown
+# ADR-003: pull_request_target trust boundary for CLA and PR-title workflows
+
+## Status
+
+Accepted (2026-04-25). Implemented in PR 1 of the CI/pre-commit refactor.
+
+## Context
+
+zizmor flags `pull_request_target:` triggers as HIGH severity (`dangerous-triggers`)
+because the workflow runs with write-scoped `GITHUB_TOKEN` and reads code from
+the PR branch — including from forks. Two of our workflows legitimately use this
+trigger:
+
+- `.github/workflows/pr-title-check.yml` — must validate PR titles on fork PRs
+  (a feature that fails under `pull_request:` because forks lack write scope to
+  post check statuses)
+- `.github/workflows/ipr-agreement.yml` — Prebid's IPR check, which posts a
+  status check to fork PRs
+
+We cannot drop `pull_request_target:` without breaking fork-PR support, which
+is the primary external-contributor flow.
+
+## Decision
+
+Both workflows keep `pull_request_target:` AND adhere to the safe-trigger rules:
+
+1. **No checkout of the PR head branch.** These workflows do NOT `actions/checkout`
+   the PR's code; they only read repository metadata (`github.event.pull_request.title`).
+2. **No untrusted command execution.** No `${{ github.event.* }}` interpolation
+   into shell commands.
+3. **Minimum permissions.** Each workflow declares only the permissions it needs.
+4. **No reusable-workflow calls** to scripts in the PR branch.
+
+The zizmor allowlist comment is added at the top of each workflow:
+
+```yaml
+# zizmor: ignore[dangerous-triggers]
+# Justification: ADR-003 — these workflows legitimately use pull_request_target
+# for fork-PR support and adhere to the safe-trigger rules.
+```
+
+## Options considered
+
+**Drop `pull_request_target:` entirely.** Rejected. Fork PRs would lose CLA and
+title validation; that's a larger user-experience regression than the
+exfiltration risk this trigger introduces.
+
+**Replace with `pull_request:`.** Rejected. Fork PRs run with read-only token by
+default; status posts fail.
+
+**Replace with workflow_run trigger.** Rejected. workflow_run has its own
+footguns and adds an indirection that doesn't reduce risk in our use case.
+
+## Consequences
+
+**Positive.**
+- Fork-PR support continues to work.
+- Trust boundary is documented; zizmor allowlist has a justification.
+
+**Negative.**
+- These two workflows are ongoing review surface for the maintainer. Any change
+  that adds a checkout step, a shell-interpolation, or a permissions broadening
+  must be reviewed for `pull_request_target:` safety.
+
+## Tripwire
+
+If we ever need to add `actions/checkout` to either of these workflows, we MUST:
+
+1. Switch to `pull_request:` trigger (and accept the fork-PR limitations), OR
+2. Use `actions/checkout` with an explicit `ref:` that does NOT trust the PR HEAD,
+   AND audit all subsequent steps for shell interpolation.
+
+This is non-trivial; consult the GitHub Actions Security Hardening docs before
+making any change.
+```
+
+## Embedded CONTRIBUTING.md outline (full rewrite, commit to repo root)
+
+The agent should fill in prose from these bullets. Target ~120 lines.
+
+### 1. Welcome & project context
+- One paragraph: salesagent is the Prebid Sales Agent (Prebid.org). Multi-tenant Python service: MCP server, A2A server, Admin UI.
+- "Read [README.md](README.md) for the project overview before contributing."
+- Link to [IPR_POLICY.md](IPR_POLICY.md) — agreement required.
+
+### 2. Development setup
+- Prereq: `uv` (link to install), Python 3.12, Docker (for integration/e2e).
+- `uv sync --group dev` — installs dev dependencies (PEP 735 group).
+- `pre-commit install` — installs git hook for the pre-commit stage.
+- `pre-commit install --hook-type pre-push` — installs pre-push stage.
+- Optional: `cp .env.secrets.example .env.secrets` and fill in.
+
+### 3. Local development workflow
+- `make quality` — fast local check: ruff format, ruff lint, mypy, unit tests, structural guards. Run before every commit.
+- `tox -e integration` — when refactoring imports/shared code (pre-commit can't catch import errors).
+- `./run_all_tests.sh` — full suite: Docker up + 5 tox envs in parallel + Docker down. Run before PRs that touch protocols/schemas/critical patterns.
+- Test results land in `test-results/<ddmmyy_HHmm>/` as JSON.
+
+### 4. PR process
+- Branch from `main` (`git checkout -b feat/short-description`). Never push directly to main.
+- PR title must use a Conventional Commit prefix (`feat:`, `fix:`, `docs:`, `refactor:`, `perf:`, `chore:`). Enforced by `.github/workflows/pr-title-check.yml`.
+- Required CI checks (the 11 frozen names per D17):
+  - `CI / Quality Gate`, `CI / Type Check`, `CI / Schema Contract`, `CI / Unit Tests`, `CI / Integration Tests`, `CI / E2E Tests`, `CI / Admin UI Tests`, `CI / BDD Tests`, `CI / Migration Roundtrip`, `CI / Coverage`, `CI / Summary`
+- Reviewer is auto-requested via `.github/CODEOWNERS`.
+
+### 5. Layered hook model (with diagram)
+```
+Layer 1: pre-commit stage  (formatters, hygiene, fast AST checks)  ~1-2s
+Layer 2: pre-push stage    (medium checks, scoped pytest)          ~10-20s
+Layer 3: structural guards (in tox -e unit, run via make quality)  ~5-10s
+Layer 4: CI required checks (authoritative)                        ~5-15min
+Layer 5: manual / on-demand (full e2e, security audits)            varies
+```
+- "CI is authoritative." If a check exists in pre-commit and CI, CI is the source of truth.
+- Pointer to `docs/development/ci-pipeline.md` for details.
+
+### 6. Modification policy
+- `.pre-commit-config.yaml` changes: external hooks must be SHA-pinned with `# frozen: v<tag>` comment. CODEOWNERS review. See ADR-001.
+- `.github/workflows/` changes: must pass `zizmor`. Discuss security implications in PR description if changing `permissions:`, `pull_request_target:`, or `secrets`.
+- See [SECURITY.md](SECURITY.md) for the complete CI/hook modification policy.
+
+### 7. Dependency policy
+- `uv add <pkg>` for runtime; `uv add --group dev <pkg>` for dev.
+- `uv lock --upgrade-package <pkg>` for targeted upgrades. Never hand-edit `uv.lock`.
+- Dependabot opens grouped weekly PRs. **Do not bypass Dependabot for routine bumps** — every dep PR requires CODEOWNERS review (no auto-merge per D5).
+- `googleads` and (temporarily) `adcp` are ignored; check `pyproject.toml` and `.github/dependabot.yml` for context.
+
+### 8. Testing requirements
+- **Test integrity (zero tolerance).** Never `--ignore`, `-k "not …"`, `--deselect`, `pytest.mark.skip`, or `pytest.mark.xfail` to work around failing tests. See `CLAUDE.md` "Test Integrity Policy."
+- **Factory-based fixtures.** New integration tests use `tests/factories/` factories (CLAUDE.md Pattern #8).
+- **Max 10 mocks per test file** (pre-commit enforces).
+- **AdCP compliance.** Schema changes must pass `tests/unit/test_adcp_contract.py`.
+- **Roundtrip required** for any operation using `apply_testing_hooks()`.
+
+### 9. Security reporting
+- See [SECURITY.md](SECURITY.md). Use GitHub's private advisory channel.
+
+### 10. Optional tooling
+- **prek (optional, local only).** Rust reimplementation of pre-commit. The `.pre-commit-config.yaml` is config-compatible. CI uses `pre-commit`, not `prek`. Per D7, the maintainers do not test against prek.
+- **Signed commits (appreciated, not required).** Per D4.
+
+EXCLUDE: signed commits as required, merge queue, `.claude/` topics.
+
+## Embedded `.github/workflows/security.yml` skeleton
+
+```yaml
+name: Security
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 13 * * 1'  # Monday 06:00 PT
+
+permissions: {}
+
+jobs:
+  pip-audit:
+    name: pip-audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@<SHA>  # v4
+      - uses: astral-sh/setup-uv@<SHA>  # v4
+      - run: uv export --no-hashes --format requirements-txt > /tmp/requirements.txt
+      - run: uvx pip-audit -r /tmp/requirements.txt
+
+  zizmor:
+    name: zizmor (workflow security lint)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # for SARIF upload
+    steps:
+      - uses: actions/checkout@<SHA>  # v4
+      - uses: astral-sh/setup-uv@<SHA>  # v4
+      - run: uvx zizmor --format sarif .github/workflows/ > zizmor.sarif
+        continue-on-error: true   # SARIF still uploads even on findings
+      - uses: github/codeql-action/upload-sarif@<SHA>  # v3
+        with:
+          sarif_file: zizmor.sarif
+      - run: uvx zizmor --min-severity medium .github/workflows/  # this gates
+```
+
+## Embedded `.github/workflows/codeql.yml` skeleton
+
+```yaml
+name: CodeQL
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 13 * * 1'  # Monday 06:00 PT
+
+permissions: {}
+
+jobs:
+  analyze:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python]
+    steps:
+      - uses: actions/checkout@<SHA>  # v4
+      - uses: github/codeql-action/init@<SHA>  # v3
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended
+          config-file: ./.github/codeql/codeql-config.yml
+      - uses: github/codeql-action/autobuild@<SHA>  # v3
+      - uses: github/codeql-action/analyze@<SHA>  # v3
+        with:
+          category: '/language:${{ matrix.language }}'
+        continue-on-error: true   # PER D10 PATH C — advisory until 2026-05-30
+```
+
+After Week 4 (per D10 tripwire), remove `continue-on-error: true` to flip to gating.
+
+## Embedded `.github/codeql/codeql-config.yml` skeleton
+
+```yaml
+name: salesagent CodeQL config
+queries:
+  - uses: security-extended
+paths:
+  - src/
+  - scripts/
+paths-ignore:
+  - tests/
+  - alembic/versions/
+  - '**/*.test.py'
+  - '**/test_*.py'
+# query-filters intentionally empty — Path C handles noise via continue-on-error
+# rather than suppression. If specific findings need permanent suppression after
+# the advisory window, add them here with a # justification comment.
+```

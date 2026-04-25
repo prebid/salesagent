@@ -1,0 +1,391 @@
+# PR 2 — uv.lock as single source of truth for pre-commit deps
+
+**Drift items closed:** PD1, PD2, PD8 (partial — already done on v2.0 branch per D20)
+**Estimated effort:** 4-6 days (pydantic.mypy delta dominates)
+**Depends on:** PR 1 merged
+**Blocks:** PR 3 (PR 3 depends on the local-hook pattern this PR establishes)
+**Decisions referenced:** D3, D7, D8, D13, D14, D16, D20
+
+## Scope
+
+Eliminate `additional_dependencies` drift in `.pre-commit-config.yaml`. Make `uv.lock` the sole source of truth for Python dependencies in pre-commit. Replace external `mirrors-mypy` and `psf/black` repo blocks with `local` hooks that invoke `uv run mypy` and `uv run black` at `language: system`.
+
+Reactivates the silently-disabled `pydantic.mypy` plugin (currently declared in `mypy.ini:3` but never loaded because pydantic was never in `additional_dependencies`). Per D13, the resulting error delta is fixed in this PR.
+
+Per D14, also migrates `[project.optional-dependencies].ui-tests` to `[dependency-groups].ui-tests` for PEP 735 alignment.
+
+## Out of scope
+
+- Hook architecture redesign (move to pre-push, etc.) → PR 4
+- CI workflow changes (the `--extra dev` → `--group dev` migration here is in support of the deletion; the broader CI restructure is PR 3)
+- Re-enabling pre-commit-uv (zero `language: python` hooks remain after this PR; pre-commit-uv has no benefit)
+- `[project.optional-dependencies].dev` deletion **on the v2.0 branch already done**; verify the merge tolerance section before re-introducing
+
+## Internal commit sequence
+
+ORDER IS LOAD-BEARING. CI will be red between commits 4 and 5 unless commit 4 lands first.
+
+### Commit 1 — `docs: add ADR-001 (single-source pre-commit deps)`
+
+If ADR-001 was already added in PR 1 commit 7, this commit is a no-op. If not, lift the embedded draft from PR 1 spec into `docs/decisions/adr-001-single-source-pre-commit-deps.md`.
+
+Verification:
+```bash
+test -f docs/decisions/adr-001-single-source-pre-commit-deps.md
+grep -q '^# ADR-001:' docs/decisions/adr-001-single-source-pre-commit-deps.md
+grep -q '## Status' docs/decisions/adr-001-single-source-pre-commit-deps.md
+```
+
+### Commit 2 — `refactor(pre-commit): replace mirrors-mypy with local uv run mypy`
+
+Files:
+- `.pre-commit-config.yaml` (delete lines 289-305 mirrors-mypy block; add new `local` hook)
+
+Closes PD1.
+
+The new hook (under `repos[0].hooks` — the existing `local` repo block):
+
+```yaml
+      - id: mypy
+        name: mypy (project venv)
+        entry: uv run mypy --config-file=mypy.ini
+        language: system
+        types: [python]
+        require_serial: true
+        pass_filenames: true
+        files: '^src/'
+        exclude: '^src/adapters/google_ad_manager_original\.py$'
+```
+
+Pre-commit on this commit will surface the pydantic.mypy plugin's errors. **STOP at this commit and capture the baseline:**
+
+```bash
+uv run mypy src/ --config-file=mypy.ini > .mypy-current.txt 2>&1 || true
+diff .mypy-baseline.txt .mypy-current.txt | head -50
+echo "errors before: $(grep -c 'error:' .mypy-baseline.txt)"
+echo "errors after: $(grep -c 'error:' .mypy-current.txt)"
+```
+
+If the delta is > 200 (D13 tripwire), STOP and escalate. Comment out `pydantic.mypy` from `mypy.ini:3` temporarily, file a follow-up issue, and continue with mypy still loading — just without the pydantic plugin. Document the deferral in the PR description.
+
+If the delta is ≤ 200, proceed to Commit 3.
+
+Verification (assumes pydantic plugin error fixes in commit 3):
+```bash
+yq '.repos[0].hooks[] | select(.id == "mypy") | .language' .pre-commit-config.yaml | grep -qx system
+yq '.repos[0].hooks[] | select(.id == "mypy") | .entry' .pre-commit-config.yaml | grep -q 'uv run mypy'
+! grep -q 'mirrors-mypy' .pre-commit-config.yaml
+! grep -q 'additional_dependencies:' .pre-commit-config.yaml || \
+  echo "WARN: additional_dependencies still exists; commit 4 will remove it for psf/black"
+```
+
+### Commit 3 — `fix(types): address pydantic.mypy plugin errors surfaced in PR 2`
+
+Files: variable — wherever the new errors land. Typically:
+- `src/core/schemas.py`
+- `src/core/schemas_*.py`
+- `src/core/tools/*/`
+
+Inline `# type: ignore[arg-type]` is acceptable for genuinely-Pydantic-internal cases (e.g., `model_dump()` return type when `exclude=True` fields are involved, per CLAUDE.md Pattern #4). Real type bugs get fixed.
+
+Verification:
+```bash
+uv run mypy src/ --config-file=mypy.ini  # exit 0
+uv run pre-commit run mypy --all-files   # exit 0
+```
+
+If the delta from baseline is non-zero but not regressing (i.e., we fixed all the new errors plus some pre-existing ones), document the count change in the PR description.
+
+### Commit 4 — `chore(ci): migrate uv sync --extra dev → --group dev`
+
+Files:
+- `.github/workflows/test.yml` (modify lines ~60, 103, 171, 316, 379)
+- Any `Makefile` references (search and replace)
+- Any `scripts/` references
+- `Dockerfile` (if it uses `--extra dev`; verify with grep)
+
+Critical: this commit MUST land before commit 5 deletes the `[project.optional-dependencies].dev` block, otherwise CI breaks.
+
+Verification:
+```bash
+[[ $(grep -c 'uv sync --extra dev' .github/workflows/test.yml) == "0" ]]
+[[ $(grep -c 'uv sync --group dev' .github/workflows/test.yml) -ge "5" ]]
+[[ $(grep -rE 'pip install -e \.\[dev\]|--extra dev' Makefile scripts/ docs/ 2>/dev/null | wc -l) == "0" ]]
+```
+
+### Commit 5 — `refactor(deps): delete [project.optional-dependencies].dev (PEP 735 dependency-groups is canonical)`
+
+Files:
+- `pyproject.toml` (delete lines ~60-78)
+
+**Coordination per D20:** verify the v2.0 branch's `[project.optional-dependencies].dev` deletion has not already landed on main via a v2.0 phase PR. If it has, this commit is a no-op (good — evidence the rollout coordinated correctly).
+
+Closes PD8.
+
+Verification:
+```bash
+! grep -q '^\[project\.optional-dependencies\]' pyproject.toml || \
+  ! awk '/\[project\.optional-dependencies\]/,/^\[/' pyproject.toml | grep -qE '^dev\s*='
+# ui-tests block still present (D14 migrates it next, doesn't delete)
+grep -qE 'ui-tests' pyproject.toml
+```
+
+### Commit 6 — `refactor(deps): migrate ui-tests extras to PEP 735 dependency-group`
+
+Files:
+- `pyproject.toml` (move `[project.optional-dependencies].ui-tests` → `[dependency-groups].ui-tests`)
+- `tox.ini` (line 77: `extras = ui-tests` → `dependency_groups = ui-tests`)
+- `scripts/setup/setup_conductor_workspace.sh` (line 212: `--extra ui-tests` → `--group ui-tests`)
+
+Per D14.
+
+Verification:
+```bash
+! awk '/\[project\.optional-dependencies\]/,/^\[/' pyproject.toml | grep -qE '^ui-tests\s*='
+awk '/\[dependency-groups\]/,/^\[/' pyproject.toml | grep -qE '^ui-tests\s*='
+grep -q 'dependency_groups = ui-tests' tox.ini
+grep -q 'uv sync --group ui-tests' scripts/setup/setup_conductor_workspace.sh
+# Verify the env still works
+uv run tox -e ui --notest   # quick sanity check; full ui run requires playwright install
+```
+
+### Commit 7 — `refactor(pre-commit): replace psf/black with local uv run black`
+
+Files:
+- `.pre-commit-config.yaml` (delete lines 275-279 psf/black block; add new local hook)
+
+Closes PD2.
+
+```yaml
+      - id: black
+        name: black (project venv)
+        entry: uv run black
+        language: system
+        types: [python]
+        require_serial: false
+        exclude: '^alembic/versions/'
+```
+
+Verification:
+```bash
+yq '.repos[0].hooks[] | select(.id == "black") | .language' .pre-commit-config.yaml | grep -qx system
+! grep -q 'psf/black' .pre-commit-config.yaml
+uv run pre-commit run black --all-files
+# Confirm version parity: uv run black --version matches uv.lock
+[[ "$(uv run black --version | awk '{print $2}')" == "$(grep -A1 '^name = .black.$' uv.lock | grep version | head -1 | awk -F'"' '{print $2}')" ]]
+```
+
+### Commit 8 — `test: add structural guard for additional_dependencies drift`
+
+Files:
+- `tests/unit/test_architecture_pre_commit_no_additional_deps.py` (new, ~40 lines)
+- `tests/unit/_architecture_helpers.py` (new, ~30 lines, shared AST/YAML helpers)
+
+The guard:
+
+```python
+"""Asserts .pre-commit-config.yaml declares no project libraries via additional_dependencies.
+
+See ADR-001 (docs/decisions/adr-001-single-source-pre-commit-deps.md).
+"""
+import pathlib
+import re
+import tomllib
+
+import pytest
+import yaml
+
+ALLOWLIST_PREFIXES = ("types-",)
+
+
+def _package_name(spec: str) -> str:
+    """Strip version/extras: 'sqlalchemy[mypy]==2.0.36' -> 'sqlalchemy'."""
+    return re.split(r"[\[=<>!~;]", spec, 1)[0].strip().lower()
+
+
+@pytest.mark.architecture
+def test_no_additional_deps_for_project_libs():
+    repo = pathlib.Path(__file__).resolve().parents[2]
+    cfg = yaml.safe_load((repo / ".pre-commit-config.yaml").read_text())
+    toml = tomllib.loads((repo / "pyproject.toml").read_text())
+
+    project_deps: set[str] = set()
+    for dep in toml["project"].get("dependencies", []):
+        project_deps.add(_package_name(dep))
+    for grp in toml.get("dependency-groups", {}).values():
+        for dep in grp:
+            project_deps.add(_package_name(dep))
+
+    violations = []
+    for repo_entry in cfg["repos"]:
+        for hook in repo_entry.get("hooks", []):
+            for add_dep in hook.get("additional_dependencies", []):
+                name = _package_name(add_dep)
+                if name.startswith(ALLOWLIST_PREFIXES):
+                    continue
+                if name in project_deps:
+                    violations.append(
+                        f"{hook['id']} -> {add_dep} (also in pyproject.toml; see ADR-001)"
+                    )
+
+    assert not violations, "\n".join(violations)
+```
+
+Add `@pytest.mark.architecture` marker registration to `pyproject.toml` `[tool.pytest.ini_options].markers` if not already present:
+
+```toml
+[tool.pytest.ini_options]
+markers = [
+    "architecture: structural guards (run with -m architecture)",
+    # ... existing markers
+]
+```
+
+Verification:
+```bash
+test -f tests/unit/test_architecture_pre_commit_no_additional_deps.py
+test -f tests/unit/_architecture_helpers.py
+uv run pytest tests/unit/test_architecture_pre_commit_no_additional_deps.py -v -x
+# Red-team:
+git stash   # save current state
+sed -i.bak 's/      - id: black/      - id: black\n        additional_dependencies:\n          - factory-boy>=3.3.0/' .pre-commit-config.yaml
+uv run pytest tests/unit/test_architecture_pre_commit_no_additional_deps.py -v 2>&1 | grep -q "factory-boy"
+git stash pop
+rm .pre-commit-config.yaml.bak
+# Confirms the guard catches a violation
+```
+
+### Commit 9 — `docs: update CLAUDE.md guards table to include pre-commit drift guard`
+
+Files:
+- `CLAUDE.md` (modify the structural guards table — add new row, fix the 8 existing inaccuracies discovered in pre-flight per D18)
+
+This commit also corrects:
+- Add 5 missing rows for guards on disk (`test_architecture_no_silent_except.py`, `test_architecture_bdd_no_direct_call_impl.py`, `test_architecture_bdd_obligation_sync.py`, `test_architecture_production_session_add.py`, `test_architecture_test_marker_coverage.py`)
+- Remove 3 phantom rows (guards listed but not on disk)
+- Audit table column count (per D18, target post-PR-2: 28; PR 4 adds 4 more for final 32)
+
+Verification:
+```bash
+# Every row's test file exists
+awk '/^\| .* \| .* \| `(test_.*\.py)` \|$/ { print $NF }' CLAUDE.md | tr -d '|`' | while read f; do
+  test -f "tests/unit/$f" || echo "MISSING: $f"
+done | head
+# Every architecture test on disk has a row in the table
+ls tests/unit/test_architecture_*.py | xargs -n1 basename | while read f; do
+  grep -q "\`$f\`" CLAUDE.md || echo "NOT IN TABLE: $f"
+done | head
+```
+
+## Acceptance criteria
+
+From issue #1234 §Acceptance criteria, scoped to PR 2:
+
+- [ ] `grep -c 'additional_dependencies:' .pre-commit-config.yaml` returns 0
+- [ ] `mirrors-mypy` and `psf/black` repo hooks removed; local `uv run` variants in place
+- [ ] `[project.optional-dependencies].dev` removed from `pyproject.toml`
+- [ ] `tests/unit/test_architecture_pre_commit_no_additional_deps.py` exists and passes
+- [ ] Fake violation in scratch branch correctly fails the guard (red-team test executed)
+- [ ] ADR `docs/decisions/adr-001-single-source-pre-commit-deps.md` exists
+
+Plus agent-derived:
+
+- [ ] `@pytest.mark.architecture` marker registered in `pyproject.toml`
+- [ ] `tests/unit/_architecture_helpers.py` shared helper module exists
+- [ ] `[project.optional-dependencies].ui-tests` migrated to `[dependency-groups].ui-tests` (D14)
+- [ ] All 5 `uv sync --extra dev` callsites in `test.yml` migrated to `--group dev`
+- [ ] `make quality` passes (including pydantic.mypy plugin re-enabled)
+- [ ] `mypy.ini:3` plugins line still references `pydantic.mypy` (not commented out)
+- [ ] `tox -e ui --notest` succeeds (verifies ui-tests group migration)
+- [ ] CLAUDE.md guards table accurate against disk
+
+## Verification (full PR-level)
+
+```bash
+bash .claude/notes/ci-refactor/scripts/verify-pr2.sh
+```
+
+Inline:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "[1/9] No additional_dependencies for project libs..."
+[[ $(grep -c 'additional_dependencies:' .pre-commit-config.yaml) == "0" ]]
+
+echo "[2/9] mirrors-mypy and psf/black repo blocks gone..."
+! grep -q 'mirrors-mypy' .pre-commit-config.yaml
+! grep -q 'psf/black' .pre-commit-config.yaml
+
+echo "[3/9] Local hooks present..."
+yq '.repos[0].hooks[] | select(.id == "mypy") | .language' .pre-commit-config.yaml | grep -qx system
+yq '.repos[0].hooks[] | select(.id == "black") | .language' .pre-commit-config.yaml | grep -qx system
+
+echo "[4/9] [project.optional-dependencies].dev deleted..."
+! awk '/\[project\.optional-dependencies\]/,/^\[/' pyproject.toml | grep -qE '^dev\s*='
+
+echo "[5/9] ui-tests migrated to dependency-groups..."
+awk '/\[dependency-groups\]/,/^\[/' pyproject.toml | grep -qE '^ui-tests\s*='
+
+echo "[6/9] CI uses --group dev..."
+[[ $(grep -c 'uv sync --extra dev' .github/workflows/test.yml) == "0" ]]
+[[ $(grep -c 'uv sync --group dev' .github/workflows/test.yml) -ge "5" ]]
+
+echo "[7/9] Structural guard..."
+test -f tests/unit/test_architecture_pre_commit_no_additional_deps.py
+uv run pytest tests/unit/test_architecture_pre_commit_no_additional_deps.py -v -x
+
+echo "[8/9] mypy passes..."
+uv run mypy src/ --config-file=mypy.ini
+
+echo "[9/9] make quality passes..."
+make quality
+
+echo "PR 2 verification PASSED"
+```
+
+## Risks (scoped to PR 2)
+
+- **R2 — Pydantic.mypy errors > 200**: mitigation — pre-flight P2 captures count; D13 tripwire defers plugin re-enablement
+- **R5 — PR #1217 merges mid-review**: mitigation — `uv run` reads `uv.lock` at invocation time, no semantic change
+- **R6 — v2.0 phase PR lands on `pyproject.toml` mid-review**: mitigation — `[project.optional-dependencies].dev` already deleted on v2.0; rebase carefully so this PR doesn't re-introduce it
+
+## Rollback plan
+
+PR 2 has more conditional rollback than PR 1 because of the `--extra dev` → `--group dev` ordering.
+
+**Option A — full revert (preferred):**
+```bash
+git revert -m 1 <PR2-merge-sha>
+git push origin main   # USER ACTION
+```
+
+If revert breaks CI (because `[project.optional-dependencies].dev` is referenced by callsite that was deleted in PR 2 commit 4), the revert is incomplete; need to reapply commit 4's `--extra dev` references.
+
+**Option B — graceful degradation:**
+Keep the `local` mypy and black hooks (they work fine) but add back `additional_dependencies` for safety:
+
+```bash
+git checkout -b fix/pr2-graceful-rollback
+# Edit .pre-commit-config.yaml: keep new local mypy/black hooks
+# Re-add the original mirrors-mypy block alongside (drift returns but CI works)
+# Or restore [project.optional-dependencies].dev block as a duplicate
+git add -p && git commit -m "fix: restore deleted optional-dependencies dev block"
+```
+
+Recovery: < 30 minutes.
+
+## Merge tolerance
+
+- **PR #1217 (adcp 3.12)**: tolerated. The local mypy hook validates against whatever `uv.lock` resolves at the time the hook runs.
+- **v2.0 phase PR landing on `pyproject.toml`**: blocking if it touches `[project.optional-dependencies].dev` or `[dependency-groups]`. Since v2.0 has ALREADY deleted the optional-deps block, the conflict surface is `[dependency-groups].dev` line ordering — mechanical rebase. **Verify the v2.0 branch did not remove `pytest-asyncio` from `[dependency-groups].dev`** (it's load-bearing for `tests/ui/`).
+- **v2.0 phase PR landing on `.pre-commit-config.yaml`**: high conflict surface. Coordinate before opening PR 2.
+
+## Coordination notes for the maintainer
+
+1. **Before authoring**: capture `.mypy-baseline.txt` per pre-flight P2.
+2. **Between commits 2 and 3**: review the pydantic.mypy error delta. If > 200, escalate per D13.
+3. **After commit 4**: verify CI is green BEFORE proceeding to commit 5 (the optional-deps deletion).
+4. **After commit 7**: run `uv run black --version` and verify the version matches `uv.lock`'s resolved black version. PD2's drift is gone if these match.
+5. **After merge**: open a follow-up issue to remove the temporary `# type: ignore[...]` comments added in commit 3 (track them with grep `git grep '# type: ignore' src/`).
