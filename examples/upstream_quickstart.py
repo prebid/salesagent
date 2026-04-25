@@ -130,16 +130,18 @@ def start_upstream_server():
 
 async def configure_tenant_for_mcp():
     """Configure the default tenant to use the upstream MCP server."""
-    from src.core.database.db_config import get_db_connection
+    import psycopg2
+    import psycopg2.extras
 
     print("🔧 Configuring tenant to use upstream catalog...")
 
-    conn = get_db_connection()
+    conn = psycopg2.connect(os.environ["DATABASE_URL"], cursor_factory=psycopg2.extras.DictCursor)
+    cursor = conn.cursor()
 
     # Get current config
-    cursor = conn.execute("SELECT config FROM tenants WHERE tenant_id = 'default'")
+    cursor.execute("SELECT config FROM tenants WHERE tenant_id = 'default'")
     row = cursor.fetchone()
-    current_config = json.loads(dict(row)["config"]) if row else {}
+    current_config = json.loads(row["config"]) if row else {}
 
     # Add product catalog config
     current_config["product_catalog"] = {
@@ -148,7 +150,7 @@ async def configure_tenant_for_mcp():
     }
 
     # Update tenant
-    conn.execute("UPDATE tenants SET config = ? WHERE tenant_id = 'default'", (json.dumps(current_config),))
+    cursor.execute("UPDATE tenants SET config = %s WHERE tenant_id = 'default'", (json.dumps(current_config),))
     conn.commit()
     conn.close()
 
