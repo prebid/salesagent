@@ -16,6 +16,7 @@
 > - Black/ruff `target-version = py312` → **deferred** out of PR 5 per D28 / ADR-008.
 > - "32 rows post-PR-4" / "52 total guards" → **superseded** by D18 revised "~73 final post-v2.0-rebase".
 > - `harden-runner v2.12.0+` → **superseded** by v2.16.0+ floor.
+> - Structural-guard marker references throughout this doc (`@pytest.mark.architecture`, `-m architecture`) → **renamed to `arch_guard`** to disambiguate from the entity-marker `architecture` (the latter is auto-applied by filename pattern via `tests/conftest.py` and stays unchanged). `tox -e unit -m architecture` (4 sites) also corrected to `tox -e unit -- -m arch_guard` (the `--` separator is required for tox to forward `-m` to pytest).
 >
 > **Authoritative current state lives in:** `RESUME-HERE.md`, `EXECUTIVE-SUMMARY.md`,
 > `00-MASTER-INDEX.md`, `03-decision-log.md`, and the 6 per-PR specs. This architecture doc
@@ -190,7 +191,7 @@ concurrency: missing       # no cancel-in-progress
 
 **Shared infrastructure: NONE.** No `tests/unit/_architecture_helpers.py` exists. Each guard duplicates `ast.parse(path.read_text())` per run — no AST cache. Some guards have JSON allowlists (`tests/unit/.allowlist-*.json`); others are zero-tolerance.
 
-**Marker:** no `@pytest.mark.architecture` marker registered or applied. Guards run as ordinary unit tests within `tox -e unit`. There is no `-m architecture` selective execution.
+**Marker:** no `@pytest.mark.arch_guard` marker registered or applied. Guards run as ordinary unit tests within `tox -e unit`. There is no `-m arch_guard` selective execution.
 
 **Integration with `make quality`** (`/Users/quantum/Documents/ComputedChaos/salesagent/Makefile:8-13`):
 ```makefile
@@ -239,7 +240,7 @@ quality:
 |---|---|---|
 | pre-commit (local) | 36 commit-stage hooks, ~18-30s warm; some advisories (`\|\| echo`); 4 manual hooks | No layered design; no pre-push stage; no SHA-pinning on external hooks |
 | `make quality` | ruff, mypy, dup-check, unit tests | Mixed concerns; structural guards run unmarked alongside regular unit tests |
-| `tox -e unit` | runs guards as ordinary unit tests | No `-m architecture` selection |
+| `tox -e unit` | runs guards as ordinary unit tests | No `-m arch_guard` selection |
 | CI required checks | mostly green-or-red boolean; ruff lint is `\|\| true` (advisory in CI too); zero SHA pinning; zero per-job permissions; zero concurrency | No top-level `permissions: {}`; no SBOM/signing; no zizmor/CodeQL/Scorecard |
 | Branch protection | unknown — agents cannot inspect | No CODEOWNERS routing; no required-checks contract |
 
@@ -263,7 +264,7 @@ quality:
 │   git push ─────▶ pre-commit pre-push stage (~10-20s)                         │
 │                   ├─ Layer 2: contract tests (adcp + mcp validation)          │
 │                   ├─ Layer 2: docs links, type-ignore ratchet                 │
-│                   └─ Layer 2: architecture-guards (calls tox -m architecture) │
+│                   └─ Layer 2: architecture-guards (calls tox -- -m arch_guard)│
 │                                                                                │
 │   make quality ─▶ Layer 3: ruff + mypy + dup-check + unit + 52 guards         │
 │   pre-commit run --hook-stage manual ─▶ smoke, test-migrations                │
@@ -346,7 +347,7 @@ quality:
 | mcp-contract-validation | `[pre-push]` | `pytest tests/integration/test_mcp_contract_validation.py` |
 | check-docs-links | `[pre-push]` | `.pre-commit-hooks/check_docs_links.py` |
 | type-ignore-no-regression | `[pre-push]` | `.pre-commit-hooks/check_type_ignore_count.py` |
-| architecture-guards | `[pre-push]` | `pytest tests/unit/ -m architecture -x` |
+| architecture-guards | `[pre-push]` | `pytest tests/unit/ -m arch_guard -x` |
 | mypy | `[pre-push]` | local `uv run mypy --config-file=mypy.ini` (D3) |
 
 **Layer 5: manual stage (~5 hooks):** smoke-tests, test-migrations, pytest-unit, mcp-endpoint-tests, plus any future ad-hoc.
@@ -460,18 +461,18 @@ All `uses:` SHA-pinned. `actions/checkout` gains `persist-credentials: false`. `
 ```toml
 [tool.pytest.ini_options]
 markers = [
-    "architecture: structural guards (run with -m architecture)",
+    "arch_guard: structural guards (run with -m arch_guard)",
     # ... existing markers
 ]
 ```
 
-Every existing guard gets `@pytest.mark.architecture` backfilled (PR 4 commit 2).
+Every existing guard gets `@pytest.mark.arch_guard` backfilled (PR 4 commit 2).
 
 **Local enforcement:**
 ```bash
 make quality                         # runs pytest tests/unit/ -x  (incl. guards)
-pre-commit run architecture-guards   # pre-push hook → tox -e unit -m architecture
-tox -e unit -m architecture          # selective execution
+pre-commit run architecture-guards   # pre-push hook → tox -e unit -- -m arch_guard
+tox -e unit -- -m arch_guard         # selective execution
 ```
 
 **CLAUDE.md guards table reorganization (PR 4 commit 9):** sectioned into Schema Patterns, Transport Boundary, DB Access, BDD, Test Integrity, Governance/CI, Cross-file Anchor Consistency. 32 rows post-PR-4 (existing 23 + PR 2's 1 + PR 4's 4 + extensions/corrections per D18); 41 rows after v2.0 lands.
@@ -540,7 +541,7 @@ The five-layer model:
 |---|---|---|---|
 | **Layer 1** | pre-commit (commit) | ~1.2-1.8s warm | Formatters (black, ruff), hygiene hooks, fast AST checks (no-hardcoded-urls, route-conflicts, repo-invariants), structural-token validators (check-yaml, check-ast). Anything < 100ms per file. |
 | **Layer 2** | pre-commit (pre-push) | ~10-20s | Medium-cost checks tied to commit graph: contract tests (adcp + mcp), docs link checks, type-ignore ratchet, architecture-guards marker invocation, mypy. Needs project venv. |
-| **Layer 3** | `tox -e unit` (incl. guards) | ~5-10s for guards alone | All AST-scanning structural guards (52 total). Run via `make quality` and `tox -e unit -m architecture`. Each guard caches AST in `_architecture_helpers.parse_module`. |
+| **Layer 3** | `tox -e unit` (incl. guards) | ~5-10s for guards alone | All AST-scanning structural guards (52 total). Run via `make quality` and `tox -e unit -- -m arch_guard`. Each guard caches AST in `_architecture_helpers.parse_module`. |
 | **Layer 4** | CI required checks | 5-15min wall-clock | Authoritative enforcement. The 11 frozen names per D17. `CI / Quality Gate` runs everything Layer 1+2+3 plus the absorbed grep one-liners. Coverage combined into one number. |
 | **Layer 5** | Manual / scheduled | varies | Smoke tests (`pre-commit run --hook-stage manual`), full e2e (`./run_all_tests.sh`), weekly Scorecard, weekly Dependabot, weekly CodeQL, weekly security advisories. |
 
@@ -574,7 +575,7 @@ The five-layer model:
 | `uses:` SHA-pinned | 0/33 | 33/33 + new | PR 1 commit 9 + PR 3 commit 5 |
 | Structural guards (test_architecture_*.py + transport boundary) | 26 | 52 (incl. v2.0's 9) | All + v2.0 |
 | Shared `_architecture_helpers.py` | absent | present (mtime-cached AST parse) | PR 2 commit 8 + PR 4 commit 1 |
-| `@pytest.mark.architecture` marker | unregistered | registered + backfilled to all 26 + applied to new | PR 4 commits 1-2 |
+| `@pytest.mark.arch_guard` marker | unregistered | registered + backfilled to all 26 + applied to new | PR 4 commits 1-2 |
 | ADRs | 0 | 7 (`adr-001` … `adr-007`) | PR 1 + PR 4 + PR 6 |
 | Governance files (CODEOWNERS, dependabot, SECURITY, CONTRIBUTING) | 1/4 (CONTRIBUTING 20 lines) | 4/4 (CODEOWNERS 30, dependabot 80, SECURITY 80, CONTRIBUTING 120 lines) | PR 1 commits 1-4 |
 | Image signing | none | cosign keyless OIDC + Sigstore Rekor | PR 6 |
@@ -604,7 +605,7 @@ The five-layer model:
 | Migration roundtrip test | none | `.github/scripts/migration_roundtrip.sh` runs in CI | PR 3 commit 4 |
 | CLAUDE.md guards table accuracy | 24 rows, 3 phantom + 5 missing (D18) | 32 rows post-PR-4, accurate against disk | PR 4 commit 9 |
 | Integration test sharding | 5-way matrix (`creative/product/media-buy/infra/other`) | single job with `pytest -n auto` (xdist) | PR 3 commit 3 |
-| `make quality` content | mixed (regular + guards) | layered (guards via `-m architecture`) | PR 4 commit 1 |
+| `make quality` content | mixed (regular + guards) | layered (guards via `-m arch_guard`) | PR 4 commit 1 |
 
 ---
 
@@ -614,7 +615,7 @@ The five-layer model:
 
 **Layer 2 — Pre-push (~5-6 hooks, ~10-20s).** Pre-push captures the cost-quality midpoint that pre-commit doesn't fit. Contract tests (adcp, mcp), docs links, and the architecture-guards marker invocation each have CI duplicates, but local pre-push gives sub-minute feedback before the network round-trip. Following the Django and SQLAlchemy patterns: contract tests run BOTH locally (pre-push) AND in CI (`CI / Schema Contract`), with CI as the authoritative source of truth.
 
-**Layer 3 — Structural guards (52 total, AST-based).** Fitness functions per Ford/Parsons/Kua are the right tool for repo-wide invariants that can't be expressed as a typechecker rule. The shared `_architecture_helpers.py` with mtime-cached `parse_module()` keeps the 52-guard suite under 5 seconds even at scale — without it, each guard would re-parse `src/`, multiplying linearly. The `@pytest.mark.architecture` marker enables both targeted runs (`tox -e unit -m architecture`) and pre-push hook invocation (`architecture-guards`) without rebuilding test discovery. The allowlist-shrink-only contract per ADR-004 turns each guard into a ratchet — the system cannot regress, only improve.
+**Layer 3 — Structural guards (52 total, AST-based).** Fitness functions per Ford/Parsons/Kua are the right tool for repo-wide invariants that can't be expressed as a typechecker rule. The shared `_architecture_helpers.py` with mtime-cached `parse_module()` keeps the 52-guard suite under 5 seconds even at scale — without it, each guard would re-parse `src/`, multiplying linearly. The `@pytest.mark.arch_guard` marker enables both targeted runs (`tox -e unit -- -m arch_guard`) and pre-push hook invocation (`architecture-guards`) without rebuilding test discovery. The allowlist-shrink-only contract per ADR-004 turns each guard into a ratchet — the system cannot regress, only improve.
 
 **Layer 4 — CI authoritative (11 frozen check names).** "CI is the source of truth" is the explicit position of every Tier-1 OSS project surveyed. The 11 D17 names are a contract: branch protection, CODEOWNERS, ADR-002 (bypass), and the rollback `gh api -X PATCH` body all reference these exact names. PR 3's three-phase merge (overlap → atomic flip → cleanup) is the playbook used by Kubernetes and CPython for branch-protection rename — it eliminates the "main is unmergeable for 5 minutes" risk that a naive flip introduces. Per-job `permissions: { contents: read }` follows GitHub Actions Security Hardening guidance and zizmor's `excessive-permissions` rule. Top-level `permissions: {}` is the most-restrictive default. `concurrency: cancel-in-progress` on PRs (not main) is the FastAPI / Pydantic pattern.
 

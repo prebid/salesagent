@@ -235,6 +235,7 @@ Format: each decision has a date, a one-line statement, the rationale, and a tri
 
 - **Real baseline (Round 8 disk-verified):** **36 effective commit-stage hooks** (40 total `- id:` minus 4 at `stages: [manual]`: `smoke-tests`, `test-migrations`, `pytest-unit`, `mcp-endpoint-tests`). Earlier "33 effective" framing in P0 sweep was off by 3 due to a counting error (missed 1 active hook + miscounted manual hooks). Actual disk-truth: 40 active − 4 manual = 36.
 - **Math:** 36 effective commit-stage − 13 commit-stage deletions (15 plan deletions − 2 already-manual: `pytest-unit`, `mcp-endpoint-tests`) − **10 moves to pre-push** − 1 consolidation = **12 commit-stage** (exactly at ≤12 ceiling, zero headroom).
+- **Math expansion:** `36 − 13 − 10 − 1 = 12` is shorthand for `36 effective commit-stage − 13 deletions − 10 pre-push moves − 2 grep one-liner consolidations + 1 new `repo-invariants` consolidation hook = 12`. The `−1` term collapses the consolidation. Round 9 verification confirmed the math against actual `.pre-commit-config.yaml` count.
 - **Note 1:** v2.0 phase PR also deletes `test-migrations` hook (already manual). Net effect on commit-stage count: zero. PR 4's hook-deletion list double-counts if v2.0 lands first; verify post-rebase.
 - **Note 2:** v2.0 also deletes `test_architecture_no_silent_except.py` (drift-confirmed Round 8). PR 4 commit 9 must NOT add this row to CLAUDE.md table.
 - **Tripwire:** if `time pre-commit run --all-files` warm exceeds 2s after PR 4 lands, identify additional move candidates from the 12 remaining commit-stage hooks (no-hardcoded-urls, repo-invariants, the 8 pre-commit-hooks built-ins, black, ruff). Most are already <50ms each — additional moves unlikely needed.
@@ -249,6 +250,20 @@ Format: each decision has a date, a one-line statement, the rationale, and a tri
 - **Follow-up:** filed as 'Post-#1234: bump black/ruff py311 → py312 with hand-applied UP040 fixes.' See ADR-008 (`drafts/adr-008-target-version-bump.md`).
 - **Tripwire:** revisit after PR 5 ships AND `_pytest.yml` → composite migration is verified stable.
 
+## D29 — Structural-guard marker name: `arch_guard` (was `architecture`)
+
+**Status:** Locked 2026-04-25 (Round 9 sweep)
+
+**Decision:** The pytest marker registered for structural guards (PR 4 commit 1) is named `arch_guard`, NOT `architecture`. Registration target is `pytest.ini` `[pytest]` section under `markers = ` continuation lines (NOT `pyproject.toml [tool.pytest.ini_options]`).
+
+**Rationale:** `tests/conftest.py:25-45,146-153,786-800` registers `architecture` as an ENTITY-marker auto-applied by filename pattern (`test_architecture_*.py`, `no_toolerror_in_impl`, `transport_agnostic_impl`, etc.). PR 4 originally planned a SECOND `architecture` marker for structural guards; same name, different semantics → silent conflation under `pytest -m architecture`. Round 9 verification surfaced the collision. Rename disambiguates: structural guards use `arch_guard`; entity-marker stays `architecture`.
+
+**Empirical correction:** the project uses `pytest.ini` (with `--strict-markers`), not `pyproject.toml`, for pytest config. Verified against repo state.
+
+**Tripwire:** if a future PR re-introduces `architecture` as a marker name in code, the structural guard `test_architecture_marker_naming` flags it.
+
+**Affected:** PR 2 commit 8 (registration target + name), PR 4 commits 1-2 (marker rename), all references in architecture.md, briefings/pr2-pr4-pr5-briefing.md, checklists/pr4-checklist.md, drafts/guards/.
+
 ## Decisions still open (will be resolved in flight)
 
 (None as of 2026-04-25 — D-pending-1..4 promoted to D22-D25 above. The earlier reference to "D-pending-5" in `pr4-hook-relocation.md:499` is a one-off mention of the issue body's bar tightening from <5s to <2s; not a decision-log-status item — handled inline at that PR 4 acceptance criterion.)
@@ -259,3 +274,4 @@ Format: each decision has a date, a one-line statement, the rationale, and a tri
 - 2026-04-25 — D2, D10-D21 added; D7 revised after OSS validation surfaced prek adopters
 - 2026-04-25 (post-integrity-audit) — D-pending-1..4 promoted to D22-D25; D26 (workflow naming) and D27 (hook reallocation) added; D17 and D18 revised; D-pending-5 resolved as inline acceptance criterion (not a separate decision)
 - 2026-04-25 (Round 5+6 P0 sweep) — D11 reframed (drop "advisory" — hard gate from day 1); D18 rewritten (~73 final post-v2.0-rebase, was 42); D27 rewritten (real baseline 33 effective, math 33−13−9−1=10); D28 added (defer target-version bump per ADR-008)
+- 2026-04-25 (Round 9 verification sweep) — D29 added (marker rename `architecture` → `arch_guard`, registration target `pytest.ini`); D27 amended with math-expansion clarifying note

@@ -1,25 +1,33 @@
-# drafts/ — staging content for canonical paths
+# `.claude/notes/ci-refactor/drafts/`
 
-These files are pre-execution drafts the executor agent lifts to canonical
-locations during PR execution. Treat as staging area; once lifted, the
-canonical file in the repo is authoritative.
+Staging directory for content authored at planning time and lifted into the codebase by the appropriate PR's executor.
 
-| Draft | Lifted to | By |
-|---|---|---|
-| `adr-004-guard-deprecation-criteria.md` | `docs/decisions/adr-004-guard-deprecation-criteria.md` | PR 4 |
-| `adr-005-fitness-functions.md` | `docs/decisions/adr-005-fitness-functions.md` | PR 4 |
-| `adr-006-allowlist-shrink-only.md` | `docs/decisions/adr-006-allowlist-shrink-only.md` | PR 4 |
-| `adr-007-build-provenance.md` | `docs/decisions/adr-007-build-provenance.md` | PR 6 (reconciles cosign + attest-build-provenance overlap; tripwire for Rekor downtime) |
-| `_architecture_helpers.py` | `tests/unit/_architecture_helpers.py` | PR 2 commit 8 (baseline) + PR 4 commit 1 (extend to ~221 lines) per D27 + Blocker #3 |
-| `guards/test_architecture_*.py` (8 files) | `tests/unit/test_architecture_*.py` | **Per D19, all 8 are owned by PR 4** (the structural-guards PR). PR 1 and PR 3 ship workflow content the guards inspect, but the guards themselves land in PR 4 once `_architecture_helpers.py::iter_workflow_files` and friends exist. Earlier drafts attributed 3 to PR 1; that allocation was reverted to keep PR 1 strictly governance/supply-chain. |
-| `claudemd-guards-table-final.md` | `CLAUDE.md` (replace existing 24-row table) | PR 4 commit 9 |
-| `precommit-prepush-hook.md` | `.pre-commit-config.yaml` (architecture-guards pre-push hook) | PR 4 |
+## ADR location split
 
-**Do not delete this directory** until ALL PRs (1-6) have lifted their
-content. The reconciled `_architecture_helpers.py` (221 lines) in
-particular is the only place where the PR-2-baseline + PR-4-extension is
-unified — without it, the executor would have to re-derive the helper
-shape from two specs at once.
+ADR-001, ADR-002, and ADR-003 are EMBEDDED in `pr1-supply-chain-hardening.md` (commits 1, 2, 3 author them inline). They are NOT staged here. The text in the PR 1 spec is the canonical source until extraction at commit time.
 
-After PR 6 merges, this directory becomes audit-trail (rename to
-`drafts.archived/` or move under `research/`).
+ADR-004 onward exist as standalone files in this directory because they were authored as separate planning artifacts in earlier rounds. Both forms produce equivalent files in `docs/decisions/` after their respective PRs land.
+
+ADR drafts to extract during executor runs:
+
+| ADR | Topic | Authored in | Extracts to |
+|---|---|---|---|
+| ADR-001 | Single-source pre-commit deps | `pr1-supply-chain-hardening.md` (inline) | `docs/decisions/adr-001-single-source-pre-commit-deps.md` |
+| ADR-002 | Solo-maintainer branch protection | `pr1-supply-chain-hardening.md` (inline) | `docs/decisions/adr-002-solo-maintainer-bypass.md` |
+| ADR-003 | `pull_request_target` trust | `pr1-supply-chain-hardening.md` (inline) | `docs/decisions/adr-003-pull-request-target-trust.md` |
+| ADR-004 | Allowlist shrink-only | `drafts/adr-004-*.md` | `docs/decisions/adr-004-*.md` |
+| ADR-005 | Fitness functions vs static linters | `drafts/adr-005-*.md` | `docs/decisions/adr-005-*.md` |
+| ADR-006 | Inline allowlist pattern | `drafts/adr-006-*.md` | `docs/decisions/adr-006-*.md` |
+| ADR-007 | Build provenance | `drafts/adr-007-build-provenance.md` | `docs/decisions/adr-007-build-provenance.md` |
+| ADR-008 | Defer target-version bump | `drafts/adr-008-*.md` | `docs/decisions/adr-008-*.md` |
+| ADR-009 | Rulesets future | `drafts/adr-009-*.md` | `docs/decisions/adr-009-*.md` |
+
+## Conformance to ADR template
+
+All ADRs (embedded or staged) should follow `templates/adr-template.md`. Existing drafts may need refresh during their PR commit time to conform.
+
+## Other staged content
+
+- `_architecture_helpers.py` — reconciled draft for the helpers module created by PR 2 (~30 lines) and extended by PR 4 (~221 lines).
+- `guards/` — structural guard skeletons referenced by PR 4. Filenames match `test_architecture_*.py` pattern; in-file marker uses `arch_guard` (the new structural-guard marker; entity-marker `architecture` continues to apply via filename auto-tagging in `tests/conftest.py`).
+- `claudemd-guards-table-final.md` — planned authoritative ~73-row guards table for CLAUDE.md (lifted in PR 4 commit 9).

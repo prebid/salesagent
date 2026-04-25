@@ -34,6 +34,53 @@
 
 **Round 7 verification** is recommended before launching PR 1 to confirm no drift introduced by this sweep.
 
+## 2026-04-25 Round 9 verification sweep applied
+
+6th verification round (5 parallel Opus subagents on per-PR specs + 1 on drafts/scripts/templates) surfaced ~30 additional findings across cross-PR state handoffs, ecosystem drift, failure modes, layer-model completeness, and governance. P0 + P1 fixes applied to all 6 PR specs and supporting files.
+
+**Net-new P0 fixes:**
+- **D29** (marker rename): structural-guard marker `architecture` → `arch_guard` to avoid collision with entity-marker auto-tagged in `tests/conftest.py:25-45,146-153`. Registration target: `pytest.ini` (NOT `pyproject.toml`). PR 2 commit 8 + PR 4 commits 1-2 updated.
+- **PR 3 commit 4b** (NEW): `integration_db` template-clone optimization — replaces per-test `CREATE DATABASE + metadata.create_all` (~400-900ms × 600 tests) with template-clone (~10-50× faster). Without this, xdist saturates Postgres connection pool.
+- **PR 3 xdist-workers wiring**: composite input declared but not piped to pytest invocation; fixed.
+- **PR 3 tox.ini coverage gate sync**: `--fail-under=30` updated to read from `.coverage-baseline` (resolves CI/local divergence).
+- **PR 4 Commit 1.5** (NEW): AST guard pre-existing-violation audit — `check-rootmodel-access` AST equivalent surfaces ~18 pre-existing violations across `src/` + `tests/`. Hard gate before Commit 7 deletes legacy grep hooks.
+- **PR 6 cosign sign --bundle**: required in cosign v3+ (was optional in v2). Without it, release CI errors on first tag push.
+- **PR 6 zizmor --persona=auditor**: `secrets-outside-env` rule is auditor-persona-only in zizmor 1.24+; default invocation does not fire it.
+- **PR 2 mypy plugin canary** (NEW): D13 tripwire ">200 errors" cannot distinguish "plugin loaded" from "plugin silently disabled". Canary `tests/unit/_pydantic_mypy_canary.py` with deliberate type error proves plugin loaded.
+
+**P0 mechanical version corrections (PR 5 + PR 6):**
+- `uv 0.11.6 → 0.11.7` (PR 5, 7 occurrences)
+- `scorecard-action # v2.5.0+ → # v2.4.3+` (v2.5.0 doesn't exist)
+- `cosign-installer # v3 → # v4.1.1`
+- `attest-build-provenance # v2 → # v4.1.0`
+- `harden-runner` SHA pin to v2.19.0 (floor stays v2.16+)
+- Docker actions: setup-qemu/buildx → v4.0.0, login → v4.1.0, build-push → v7.1.0
+
+**P1 sweep:**
+- PR 3 YAML anchors for postgres `services:` block (5x → 1x).
+- PR 3 setup-env composite gains `--frozen` and `--no-install-project` inputs.
+- PR 3 worker-id-suffix tox json-report paths under xdist.
+- PR 3 filelock + worker-id gate around `migrate.py` invocation.
+- PR 3 py-cov-action env vars (MINIMUM_GREEN, ANNOTATE_MISSING_LINES).
+- PR 3 Phase B Step 2.5: in-flight PR drain procedure.
+- PR 4 ≤11 commit-stage warn band on hook count.
+- PR 4 `scripts/check-hook-install.sh` pre-push install nudge.
+- PR 4 mypy warm-time pre-flight measurement (Layer-2 budget verification).
+- PR 4 canonical Hook → Stage Reference Table.
+- PR 4 `test-migrations` added to deletion list (was delegated to v2.0).
+- PR 6 harden-runner egress: `+registry.npmjs.org`, `+raw.githubusercontent.com`.
+- PR 6 `harden-runner-emergency-revert.yml` workflow (P1 — manual-dispatch contributor-recoverable lockout).
+- PR 1 CODEOWNERS scoped sections for ratchet baselines and test infrastructure.
+- **R16 promoted** (Dependabot uv.lock corruption); **R31 added** (integration_db throughput); **R32 added** (Phase B in-flight PR race).
+- **Templates added**: `templates/adr-template.md` (canonical ADR structure); executor-prompt **Rule 19** (empirical pre-flight).
+- **Scripts added**: `scripts/_lib.sh` (shared verify-pr*.sh helpers).
+
+**Refuted prior findings (do NOT re-apply):**
+- `check_import_usage.py` is already AST-based (243 LOC of `ImportCollector`/`UsageCollector` visitors); the migration is scope expansion, NOT a technique change.
+- `feedback_no_beads_workflow.md` user-memory is INACCURATE for this repo: `.beads/issues.jsonl` exists (107KB, active). However, of 14 distinct `FIXME(salesagent-xxxx)` IDs in src+tests, only 2 have matching beads issues; 12 are dangling (real accountability gap, different cause).
+- factory-boy `Sequence` collision risk under xdist is mitigated by per-test UUID DB pattern (still warrants `worker_id` mixing as defense-in-depth, but P2 not P0).
+- `tests/conftest_db.py` mutations are at lines 478-486 (not 470-486 as prior audit said).
+
 If you are a fresh agent picking this up cold, read this file first.
 
 ---

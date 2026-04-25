@@ -161,6 +161,34 @@ gh api -X PUT /repos/prebid/salesagent/branches/develop/protection \
 
 Default recommendation: Option A (delete) unless contributor workflow concretely depends on `develop`.
 
+### A16 — xdist soak (per PR 3 spec Pre-flight 3a)
+
+Before PR 3 Phase A merge, run integration suite under xdist on current main:
+```bash
+tox -e integration -- -n 4   # ≥3 successful runs
+tox -e integration -- -n auto # ≥1 successful run
+```
+Capture timings; record in PR 3 description. If flakes appear, fix infrastructure FIRST (likely candidates: `mcp_server` port TOCTOU, `factory.Sequence` collisions, module-global engine mutations in `tests/conftest_db.py:478-486`).
+
+### A17 — AST guard pre-existing-violation audit (per PR 4 spec Commit 1.5)
+
+Before PR 4 Commit 7 deletes legacy grep hooks, run each new AST guard against current main:
+```bash
+pytest tests/unit/test_architecture_no_defensive_rootmodel.py -v -x
+pytest tests/unit/test_architecture_no_tenant_config.py -v -x
+pytest tests/unit/test_architecture_jsontype_columns.py -v -x
+# ... etc per PR 4 spec
+```
+If any guard surfaces violations: choose Option A (remediate) or Option B (expand `ALLOWED_FILES` allowlist). Document the choice. Hard gate.
+
+### A18 — mypy plugin canary (per PR 2 spec)
+
+Before PR 2 commit 8 lands, verify the pydantic.mypy plugin is actually loaded:
+```bash
+uv run mypy tests/unit/_pydantic_mypy_canary.py 2>&1 | grep -q "Incompatible default"
+```
+If the canary doesn't trigger the expected mypy error, the plugin failed to load — escalate. D13's ">200 errors" tripwire is uninstrumented without this canary.
+
 ### A14 — Confirm @chrishuie can be added to bypass list (D2 mitigation)
 
 The Prebid.org GitHub org may require a higher-tier admin to add @chrishuie to the branch-protection bypass list. Confirm before authoring PR 1 (which depends on the bypass for the solo-maintainer model). Test:
@@ -264,6 +292,9 @@ Before PR 1 is authored, this file should be marked complete:
 - [ ] A13 — mypy.ini plugin block snapshotted
 - [ ] A14 — @chrishuie bypass-list addition feasibility confirmed
 - [ ] A15 — `develop` branch fate decided (delete / protect symmetrically / drop-from-triggers)
+- [ ] A16 — xdist soak completed (≥3 `-n 4` runs + ≥1 `-n auto` run, timings captured)
+- [ ] A17 — AST guard pre-existing-violation audit run (each new guard executed; remediate-or-allowlist choice documented)
+- [ ] A18 — mypy plugin canary verified (`tests/unit/_pydantic_mypy_canary.py` triggers expected error)
 - [ ] P1 — drift evidence re-verified (or noted as still-current)
 - [ ] P2 — pydantic.mypy baseline captured (`.mypy-baseline.txt`)
 - [ ] P3 — zizmor pre-flight captured (`.zizmor-preflight.txt`)

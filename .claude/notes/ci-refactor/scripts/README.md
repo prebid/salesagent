@@ -22,3 +22,29 @@ the most likely cause is a missing artifact (e.g., `.action-shas.txt`,
 
 All scripts are idempotent and safe to re-run. Most exit non-zero on the
 first failure with a one-line message naming the failing assertion.
+
+## verify-pr*.sh shared helpers
+
+All `verify-pr*.sh` scripts source `_lib.sh` for common assertions:
+
+| Helper | Purpose |
+|---|---|
+| `fail` / `ok` / `warn` / `section` | Output formatting |
+| `check_sha_pinned` | Assert action `uses:` is SHA-pinned with `# v<tag>` comment |
+| `check_persist_credentials_false` | Assert `actions/checkout` includes `persist-credentials: false` |
+| `check_workflow_permissions` | Assert top-level `permissions:` block present |
+| `check_workflow_concurrency` | Assert top-level `concurrency:` block present |
+| `check_adr_status` | Assert ADR Status field matches expected value |
+| `check_harden_runner_cve_fix` | Assert harden-runner uses CVE-2025-32955 mitigation |
+| `check_yaml_lints` | Run yamllint (relaxed mode) |
+| `check_actionlint` | Run actionlint |
+
+Usage in per-PR scripts:
+```bash
+#!/bin/bash
+source "$(dirname "$0")/_lib.sh"
+
+section "PR N — Pre-condition checks"
+check_workflow_permissions ".github/workflows/ci.yml"
+check_persist_credentials_false ".github/workflows/release-please.yml"
+```

@@ -36,19 +36,20 @@ Files:
 
 ```yaml
     steps:
-      - uses: step-security/harden-runner@<SHA>  # v2.16.0+ — required for CVE-2025-32955 fix
+      - uses: step-security/harden-runner@<SHA>  # v2.19.0+ — SHA must resolve to v2.19.0; required for CVE-2025-32955 fix and post-CVE hardening
         with:
           egress-policy: audit
           disable-sudo-and-containers: true   # NOT disable-sudo:true (bypassable per CVE-2025-32955)
       - uses: ./.github/actions/setup-env
 ```
 
-**Pinning requirement (revised 2026-04-25 P0 sweep):** the `<SHA>` for `harden-runner` must resolve to **v2.16.0 or later** (NOT v2.12.0).
+**Pinning requirement (revised 2026-04-25 P0 sweep):** the `<SHA>` for `harden-runner` must resolve to **v2.19.0 or later** (NOT v2.12.0).
 - v2.12.0 (April 2025) introduced `disable-sudo-and-containers: true` and fixed [CVE-2025-32955](https://www.sysdig.com/blog/security-mechanism-bypass-in-harden-runner-github-action). It is the floor for CVE-2025-32955 mitigation but NOT sufficient on its own.
 - **v2.13+** patches additional medium DoH/DNS-over-TCP egress-bypass advisories ([GHSA-46g3-37rh-v698](https://github.com/step-security/harden-runner/security/advisories)).
 - **v2.16.0** captures all post-CVE advisories.
+- **v2.17–v2.19** add additional hardening above the v2.16 baseline. **v2.19.0** is the current floor.
 
-Use `disable-sudo-and-containers: true` everywhere; `disable-sudo: true` is bypassable. SHA-pin to a [v2.16.0+ release tag](https://github.com/step-security/harden-runner/releases) using the SHA-resolution loop established in PR 1 commit 9.
+Use `disable-sudo-and-containers: true` everywhere; `disable-sudo: true` is bypassable. SHA-pin to a [v2.19.0+ release tag](https://github.com/step-security/harden-runner/releases) using the SHA-resolution loop established in PR 1 commit 9.
 
 Verification:
 ```bash
@@ -68,6 +69,8 @@ Acceptance: every Ubuntu CI job runs harden-runner; audit data populates the Ste
 Files:
 - `.github/workflows/release-please.yml` (modify the existing `publish-docker` job — see diff below)
 
+**Runner version check.** Docker actions v4–v7 require GitHub Actions Runner ≥2.327.1. GitHub-hosted runners satisfy. If GHES self-hosted runners are in use, verify version before pinning. `actions/checkout@v6` requires Runner ≥2.329.0 (separate constraint).
+
 **Diff from existing `publish-docker` job** (preserves multi-arch + Docker Hub):
 
 ```yaml
@@ -84,7 +87,7 @@ Files:
       attestations: write   # NEW: attest-build-provenance writes Sigstore bundle
     steps:
       # NEW: harden-runner from PR 6 commit 1 (carry-forward; CVE-2025-32955 fix)
-      - uses: step-security/harden-runner@<SHA>   # v2.16.0+ — see commit 1 for SHA
+      - uses: step-security/harden-runner@<SHA>   # v2.19.0+ — see commit 1 for SHA
         with:
           egress-policy: audit
           disable-sudo-and-containers: true
@@ -94,18 +97,18 @@ Files:
           persist-credentials: false
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@<SHA>      # v3
+        uses: docker/setup-qemu-action@<SHA>      # v4.0.0
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@<SHA>    # v3
+        uses: docker/setup-buildx-action@<SHA>    # v4.0.0
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@<SHA>           # v3
+        uses: docker/login-action@<SHA>           # v4.1.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Log in to Docker Hub
-        uses: docker/login-action@<SHA>           # v3 — PRESERVED from existing workflow
+        uses: docker/login-action@<SHA>           # v4.1.0 — PRESERVED from existing workflow
         with:
           username: ${{ secrets.DOCKERHUB_USER }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
@@ -125,7 +128,7 @@ Files:
 
       - id: build
         name: Build and push Docker image
-        uses: docker/build-push-action@<SHA>      # v5+
+        uses: docker/build-push-action@<SHA>      # v7.1.0
         with:
           context: .
           file: Dockerfile
@@ -140,18 +143,19 @@ Files:
           sbom: true
 
       # NEW: cosign keyless signing for both registries
-      - uses: sigstore/cosign-installer@<SHA>     # v3
+      - uses: sigstore/cosign-installer@<SHA>     # v4.1.1 — SHA must resolve to v4.1.1; v3.x cannot install Cosign 3.0+
       - name: Sign image (keyless)
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
           TAGS: ${{ steps.meta.outputs.tags }}
+          BUNDLE_PATH: /tmp/cosign-bundle-${{ github.run_id }}.json
         run: |
           for tag in $TAGS; do
-            cosign sign --yes "${tag}@${DIGEST}"
+            cosign sign --yes --bundle "${BUNDLE_PATH}" "${tag}@${DIGEST}"
           done
 
       # NEW: build-provenance attestation (separate from cosign — see ADR-007 reconciliation)
-      - uses: actions/attest-build-provenance@<SHA>  # v2
+      - uses: actions/attest-build-provenance@<SHA>  # v4.1.0 — SHA must resolve to v4.1.0; v2 is two majors stale
         with:
           subject-name: ghcr.io/${{ github.repository }}
           subject-digest: ${{ steps.build.outputs.digest }}
@@ -171,7 +175,7 @@ grep -q 'platforms: linux/amd64,linux/arm64' .github/workflows/release-please.ym
 grep -q 'DOCKERHUB_USER' .github/workflows/release-please.yml
 
 # New supply-chain fields present
-grep -q 'cosign sign --yes' .github/workflows/release-please.yml
+grep -q 'cosign sign --yes --bundle' .github/workflows/release-please.yml   # --bundle required in Cosign v3+
 grep -q 'actions/attest-build-provenance' .github/workflows/release-please.yml
 grep -q 'sbom: true' .github/workflows/release-please.yml
 grep -q 'provenance: mode=max' .github/workflows/release-please.yml
@@ -198,7 +202,7 @@ Files: all workflow files modified by commit 1 — change `egress-policy: audit`
 
 ```yaml
     steps:
-      - uses: step-security/harden-runner@<SHA>  # v2.16.0+
+      - uses: step-security/harden-runner@<SHA>  # v2.19.0+
         with:
           egress-policy: block
           disable-sudo-and-containers: true   # CVE-2025-32955 mitigation; carry-forward from commit 1
@@ -206,11 +210,13 @@ Files: all workflow files modified by commit 1 — change `egress-policy: audit`
             api.github.com:443
             github.com:443
             objects.githubusercontent.com:443
+            raw.githubusercontent.com:443
             codeload.github.com:443
             pkg-containers.githubusercontent.com:443
             uploads.github.com:443
             pypi.org:443
             files.pythonhosted.org:443
+            registry.npmjs.org:443
             astral.sh:443
             ghcr.io:443
             registry-1.docker.io:443
@@ -226,6 +232,8 @@ Files: all workflow files modified by commit 1 — change `egress-policy: audit`
             tuf-repo-cdn.sigstore.dev:443
 ```
 
+**The static allowlist is starter material.** The audit-mode soak window's StepSecurity dashboard output is the authoritative source. Before flipping to block-mode (Commit 3), extract the dashboard's "Suggested allowed endpoints" and replace this list. Static enumeration WILL be incomplete; rely on telemetry.
+
 **Allowlist additions in 2026-04-25 P0 sweep** (Round 6 scenarios reviewer caught these):
 - `codeload.github.com:443` — autobuild source download (CodeQL workflow + `curl https://github.com/.../archive/...`)
 - `pkg-containers.githubusercontent.com:443` — GHCR layer pulls
@@ -233,6 +241,8 @@ Files: all workflow files modified by commit 1 — change `egress-policy: audit`
 - `index.docker.io:443` — Docker Hub publish (release-please.yml's existing publish-docker job)
 - `app.stepsecurity.io:443` + `apiurl.stepsecurity.io:443` — StepSecurity dashboard telemetry
 - `rekor.sigstore.dev:443` + `fulcio.sigstore.dev:443` + `tuf-repo-cdn.sigstore.dev:443` — Sigstore for cosign keyless signing (RELEASE-ONLY; if the audit window did NOT include a release, these endpoints won't appear in telemetry — see "Force release dry-run" below)
+- `registry.npmjs.org:443` — any GitHub Action that internally `npm install`s (Round 9 P1 addition)
+- `raw.githubusercontent.com:443` — pinact installer fetch path; `objects.githubusercontent.com` does NOT cover `raw.githubusercontent.com` (Round 9 P1 addition)
 
 **Force release dry-run during audit window** (2026-04-25 P0 sweep): release-please.yml is gated on `release_created`; if no release happens during the 2-week audit window, sigstore + Docker Hub publish endpoints never appear in telemetry. Before flipping block-mode, force a dry-run:
 
@@ -266,6 +276,43 @@ grep -q 'disable-sudo-and-containers: true' .github/workflows/ci.yml   # CVE-202
 
 Acceptance: subsequent CI runs succeed with block-mode active; unexpected egress causes a "blocked endpoint" failure with a clear log message.
 
+### Commit 3b (new) — Emergency revert workflow
+
+**File**: `.github/workflows/harden-runner-emergency-revert.yml`
+
+When block-mode locks out CI, recovery is admin-only unless we provide a manual-dispatch revert workflow. This workflow lets anyone with write access flip every workflow back to `audit` mode and open a PR with the revert.
+
+```yaml
+name: harden-runner-emergency-revert
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Brief reason for revert (logged in PR body)'
+        required: true
+permissions: { contents: write, pull-requests: write }
+jobs:
+  revert:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@<sha>  # v6.0.2
+        with: { persist-credentials: false }
+      - run: |
+          for f in .github/workflows/*.yml; do
+            sed -i 's/egress-policy: block/egress-policy: audit/g' "$f"
+          done
+          git checkout -b harden-runner-emergency-revert-${{ github.run_id }}
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "harden-runner-emergency-revert"
+          git commit -am "ops: emergency revert harden-runner to audit mode"
+          gh pr create --title "ops: emergency revert harden-runner to audit" --body "Reason: ${{ inputs.reason }}"
+```
+
+**Trigger eligibility**: anyone with write access. Faster than waiting for solo maintainer when block-mode locks out main.
+
+**Post-revert protocol**: post-mortem within 24h; identify the unallowlisted egress destination; either add to allowlist OR investigate whether the call is suspicious; flip back to block-mode after fix.
+
 ### Commit 4 — `ci: add dependency-review-action as PR-blocking check`
 
 Files:
@@ -281,7 +328,7 @@ Files:
       contents: read
       pull-requests: write
     steps:
-      - uses: step-security/harden-runner@<SHA>   # v2.16.0+ — CVE-2025-32955 fix
+      - uses: step-security/harden-runner@<SHA>   # v2.19.0+ — CVE-2025-32955 fix
         with:
           egress-policy: block
           disable-sudo-and-containers: true       # CVE-2025-32955 mitigation
@@ -327,6 +374,27 @@ yamllint -d relaxed .github/workflows/security.yml
 ```
 
 Acceptance: PR adding a known-CVE'd dependency fails "Security / Dependency Review" with a comment listing the offending package.
+
+### Commit 4b — `ci: enable zizmor auditor persona for secrets-outside-env rule`
+
+Files:
+- `.github/workflows/security.yml` — update the existing zizmor invocation (added in PR 1 commit 5) to add `--persona=auditor`
+
+The `secrets-outside-env` rule is auditor-persona-only in zizmor 1.24+; it does NOT fire by default. To surface findings of secrets used outside of `env:` blocks (a common cause of token-leakage bugs), invoke zizmor with the auditor persona:
+
+```yaml
+- run: uvx --from 'zizmor==1.24.1' zizmor --format=github --min-severity=medium --persona=auditor .
+```
+
+**Version requirement:** zizmor 1.24+ required for the `--persona=auditor` flag and the `secrets-outside-env` rule. Pin via `uvx --from 'zizmor==1.24.1'` to make the version explicit; let dependabot bump it.
+
+Verification:
+```bash
+grep -q -- '--persona=auditor' .github/workflows/security.yml
+grep -qE "zizmor==1\.24\.[0-9]+" .github/workflows/security.yml
+```
+
+Acceptance: zizmor flags secrets used outside `env:` blocks; existing PR 1 zizmor allowlist still honored via `.github/zizmor.yml`.
 
 ### Commit 5 — `ci: flip CodeQL from advisory to gating`
 
@@ -431,7 +499,7 @@ jobs:
       - uses: actions/checkout@<SHA>  # v4
         with:
           persist-credentials: false
-      - uses: ossf/scorecard-action@<SHA>  # v2.5.0+
+      - uses: ossf/scorecard-action@<SHA>  # v2.4.3+ — SHA must resolve to v2.4.3 (2024-09-30) or later; v2.5.0 does not exist on the releases page
         with:
           results_file: results.sarif
           results_format: sarif
@@ -531,7 +599,7 @@ echo "[1/8] harden-runner present..."
 
 echo "[2/8] release-please.yml signs images..."
 test -f .github/workflows/release-please.yml
-grep -q 'cosign sign --yes' .github/workflows/release-please.yml
+grep -q 'cosign sign --yes --bundle' .github/workflows/release-please.yml   # --bundle required in Cosign v3+
 grep -q 'actions/attest-build-provenance' .github/workflows/release-please.yml
 
 echo "[3/8] dependency-review configured..."

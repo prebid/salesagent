@@ -6,6 +6,8 @@
 **Blocks:** PR 4 (PR 4 deletes hooks whose work is absorbed into the `CI / Quality Gate` job introduced here)
 **Decisions referenced:** D2, D3, D11, D15, D17
 
+> **Precondition**: `pytest-xdist>=3.6` MUST be added to `pyproject.toml [dependency-groups].dev` before this PR's xdist commits land. Best location: PR 2 commit 4 or 5 (which already touches dependency groups). If PR 2 ships without it, this PR must lead with a one-line `[dependency-groups].dev` addition commit.
+
 ## Scope
 
 Restructure `.github/workflows/` to make CI the authoritative enforcement layer. Replace the matrix-sharded integration tests with `pytest-xdist` (validated safe per `tests/conftest_db.py:323-348` UUID-per-test DB pattern). Add **composite actions** `setup-env` and `_pytest` (NOT reusable workflows — composites avoid the 3-segment rendered-name issue per Decision-4). Freeze the 11 required check names per D17. Add Migration Roundtrip and Coverage Combine jobs.
@@ -38,7 +40,15 @@ The issue says "reusable workflows `_setup-env.yml`, `_postgres.yml`, `_pytest.y
 
 Phase A is one PR with ~10 commits. Phase B is admin action (no PR). Phase C is a small follow-up PR with 1-2 commits.
 
+### Pre-flight (BEFORE Phase A merges)
+
+> **Pre-flight 3a — xdist soak (HARD precondition).** Before flipping the matrix in Phase A, run `tox -e integration -- -n 4` against current main. If the suite fails or flakes, fix infrastructure first (likely candidates: `mcp_server` port TOCTOU, `factory.Sequence` collisions, module-global engine mutations, session-scoped fixtures racing on shared resources). Phase A does NOT proceed until xdist is green across ≥3 consecutive runs at `-n 4` AND ≥1 successful run at `-n auto`. Record a paste-able command + timing summary in the PR description.
+>
+> Rationale: switching from matrix-shard to xdist exposes any test-isolation defect that the legacy single-process matrix was masking. Discovering that defect during Phase A's 48h soak (post-merge) means rolling back; discovering it pre-merge is cheap.
+
 ### Phase A — Overlap (single PR)
+
+> **Commit ordering note (2026-04-25 P0 sweep — bisect cleanliness):** The numbered commits below are the LOGICAL grouping. The ACTUAL git-history order MUST place "Commit 6 — coverage baseline + tox.ini sync" BEFORE "Commit 3 — ci.yml orchestrator", because `ci.yml` references `.coverage-baseline` via `cat .coverage-baseline`. Required git order: 1, 2, 6, 3, 4, 4b, 5, 7, 8, 9, 10, 11. A bisect that lands on Commit 3 with `.coverage-baseline` absent would fail the Coverage job (file-not-found in the subshell). Reviewers reading the spec top-to-bottom should mentally re-thread the dependency.
 
 #### Commit 1 — `ci: add setup-env composite action`
 
@@ -58,9 +68,17 @@ inputs:
     required: false
     default: '0.11.6'
   groups:
-    description: 'Dependency groups to sync (space-separated)'
+    description: 'uv dependency groups to install (space-separated)'
     required: false
     default: 'dev'
+  frozen:
+    description: 'Pass --frozen to uv sync (CI default true — fail on lockfile drift)'
+    required: false
+    default: 'true'
+  install-project:
+    description: 'Install the salesagent package itself (false for non-pytest jobs like type-check, schema-contract)'
+    required: false
+    default: 'true'
 runs:
   using: 'composite'
   steps:
@@ -73,9 +91,13 @@ runs:
         cache-dependency-glob: 'uv.lock'
     - shell: bash
       run: |
+        FLAGS=""
         for g in ${{ inputs.groups }}; do
-          uv sync --group "$g"
+          FLAGS="$FLAGS --group $g"
         done
+        [[ "${{ inputs.frozen }}" == "true" ]] && FLAGS="$FLAGS --frozen"
+        [[ "${{ inputs.install-project }}" == "false" ]] && FLAGS="$FLAGS --no-install-project"
+        uv sync $FLAGS
 ```
 
 Verification:
@@ -102,9 +124,9 @@ inputs:
     required: false
     default: ''
   xdist-workers:
-    description: 'pytest-xdist worker count (auto, logical, or N)'
+    description: 'pytest-xdist worker count ("0" = no parallelism, "auto", "logical", or N)'
     required: false
-    default: 'auto'
+    default: '0'
 runs:
   using: 'composite'
   steps:
@@ -115,8 +137,13 @@ runs:
         ADCP_TESTING: 'true'
         COVERAGE_FILE: .coverage.${{ inputs.tox-env }}
       run: |
+        XDIST_FLAG=""
+        if [[ "${{ inputs.xdist-workers }}" != "" && "${{ inputs.xdist-workers }}" != "0" ]]; then
+          XDIST_FLAG="-n ${{ inputs.xdist-workers }}"
+        fi
         uv run tox -e ${{ inputs.tox-env }} -- \
           -p no:cacheprovider \
+          $XDIST_FLAG \
           ${{ inputs.pytest-args }}
     - uses: actions/upload-artifact@<SHA>  # v4
       if: always()
@@ -178,9 +205,37 @@ on:
 
 permissions: {}
 
+# YAML anchors deduplicate the postgres service block + DATABASE_URL across the 5 DB-needing
+# jobs (integration, e2e, admin, bdd, migration-roundtrip). GitHub Actions YAML parsing
+# supports anchors (baseline YAML 1.2). Verify with `actionlint ci.yml` before commit.
+# Fallback (if anchors fail to parse on first run): emit ci.yml from a small Python template
+# script — preserves single-source-of-truth without runtime anchor dependency.
+x-postgres-service: &postgres-service
+  image: postgres:17-alpine
+  env:
+    POSTGRES_USER: adcp_user
+    POSTGRES_PASSWORD: test_password
+    POSTGRES_DB: adcp_test
+  options: >-
+    --health-cmd "pg_isready -U adcp_user"
+    --health-interval 5s
+    --health-retries 10
+  ports:
+    - 5432:5432
+
+x-database-url: &database-url
+  postgresql://adcp_user:test_password@localhost:5432/adcp_test
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # FYI / Round-9 trade-off note: this expression cancels in-progress runs on PR pushes
+  # but NEVER cancels main-branch runs. If main receives rapid pushes (merge train),
+  # multiple ci.yml runs queue serially and can dominate runner-minute budget. A future
+  # follow-up may switch to:
+  #   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+  # which cancels rapid main pushes while preserving release-tag runs. Defer the change
+  # until main-push cadence is measured (e.g., 4-week telemetry window post-Phase B).
 
 jobs:
   quality-gate:
@@ -190,6 +245,8 @@ jobs:
       contents: read
     steps:
       - uses: ./.github/actions/setup-env
+        with:
+          install-project: 'false'   # quality-gate runs hooks/scripts, not pytest
       - run: uv run pre-commit run --all-files --show-diff-on-failure
       # Migrated CI-only invocations (PR 4 will activate these as the deleted-hook replacements):
       - run: uv run python .pre-commit-hooks/check-gam-auth-support.py
@@ -204,6 +261,8 @@ jobs:
       contents: read
     steps:
       - uses: ./.github/actions/setup-env
+        with:
+          install-project: 'false'   # mypy reads source via path, no install needed
       - run: uv run mypy src/ --config-file=mypy.ini
 
   schema-contract:
@@ -213,6 +272,9 @@ jobs:
     permissions:
       contents: read
     steps:
+      # schema-contract runs pytest against unit + integration contract tests;
+      # pytest needs the package installed to import `src.*`. Project IS installed
+      # (default install-project: 'true' is propagated via _pytest -> setup-env).
       - uses: ./.github/actions/_pytest
         with:
           tox-env: unit
@@ -236,26 +298,15 @@ jobs:
     permissions:
       contents: read
     services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_USER: adcp_user
-          POSTGRES_PASSWORD: test_password
-          POSTGRES_DB: adcp_test
-        options: >-
-          --health-cmd "pg_isready -U adcp_user"
-          --health-interval 5s
-          --health-retries 10
-        ports:
-          - 5432:5432
+      postgres: *postgres-service
     env:
-      DATABASE_URL: postgresql://adcp_user:test_password@localhost:5432/adcp_test
+      DATABASE_URL: *database-url
     steps:
       - run: uv run python scripts/ops/migrate.py
       - uses: ./.github/actions/_pytest
         with:
           tox-env: integration
-          pytest-args: '-n auto'
+          xdist-workers: 'auto'
 
   e2e-tests:
     name: 'E2E Tests'
@@ -264,20 +315,9 @@ jobs:
     permissions:
       contents: read
     services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_USER: adcp_user
-          POSTGRES_PASSWORD: test_password
-          POSTGRES_DB: adcp_test
-        options: >-
-          --health-cmd "pg_isready -U adcp_user"
-          --health-interval 5s
-          --health-retries 10
-        ports:
-          - 5432:5432
+      postgres: *postgres-service
     env:
-      DATABASE_URL: postgresql://adcp_user:test_password@localhost:5432/adcp_test
+      DATABASE_URL: *database-url
     steps:
       - run: uv run python scripts/ops/migrate.py
       - uses: ./.github/actions/_pytest
@@ -291,20 +331,9 @@ jobs:
     permissions:
       contents: read
     services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_USER: adcp_user
-          POSTGRES_PASSWORD: test_password
-          POSTGRES_DB: adcp_test
-        options: >-
-          --health-cmd "pg_isready -U adcp_user"
-          --health-interval 5s
-          --health-retries 10
-        ports:
-          - 5432:5432
+      postgres: *postgres-service
     env:
-      DATABASE_URL: postgresql://adcp_user:test_password@localhost:5432/adcp_test
+      DATABASE_URL: *database-url
     steps:
       - run: uv run python scripts/ops/migrate.py
       - uses: ./.github/actions/_pytest
@@ -318,20 +347,9 @@ jobs:
     permissions:
       contents: read
     services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_USER: adcp_user
-          POSTGRES_PASSWORD: test_password
-          POSTGRES_DB: adcp_test
-        options: >-
-          --health-cmd "pg_isready -U adcp_user"
-          --health-interval 5s
-          --health-retries 10
-        ports:
-          - 5432:5432
+      postgres: *postgres-service
     env:
-      DATABASE_URL: postgresql://adcp_user:test_password@localhost:5432/adcp_test
+      DATABASE_URL: *database-url
     steps:
       - run: uv run python scripts/ops/migrate.py
       - uses: ./.github/actions/_pytest
@@ -344,18 +362,14 @@ jobs:
     permissions:
       contents: read
     services:
+      # Anchor merge with override: roundtrip job uses a distinct DB name (`roundtrip`).
+      # YAML merge-key (`<<`) replaces only `env.POSTGRES_DB`, inheriting image/options/ports.
       postgres:
-        image: postgres:17-alpine
+        <<: *postgres-service
         env:
           POSTGRES_USER: adcp_user
           POSTGRES_PASSWORD: test_password
           POSTGRES_DB: roundtrip
-        options: >-
-          --health-cmd "pg_isready -U adcp_user"
-          --health-interval 5s
-          --health-retries 10
-        ports:
-          - 5432:5432
     steps:
       - uses: ./.github/actions/setup-env
       - env:
@@ -389,9 +403,14 @@ jobs:
         uses: py-cov-action/python-coverage-comment-action@<SHA>  # v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MINIMUM_GREEN: 80
+          MINIMUM_ORANGE: 60
+          ANNOTATE_MISSING_LINES: true
         # Per D11 (revised 2026-04-25 P0 sweep): hard-gate from PR 3 day 1 at 53.5%.
         # `--fail-under=$(cat .coverage-baseline)` above blocks merge on regression.
         # Ratchet upward only when measured-stable across 4+ consecutive PRs.
+        # MINIMUM_GREEN/ORANGE drive the comment's badge color (visual only — does not gate).
+        # ANNOTATE_MISSING_LINES adds inline PR annotations to uncovered changed lines.
 
   summary:
     name: 'Summary'
@@ -421,6 +440,9 @@ Verification:
 ```bash
 test -f .github/workflows/ci.yml
 yamllint -d relaxed .github/workflows/ci.yml
+# YAML anchor parsing — actionlint validates GHA-specific schema (anchors are baseline
+# YAML 1.2 but actionlint catches semantic mismatches under merge-keys)
+actionlint .github/workflows/ci.yml
 # Workflow header is `name: CI` (D26) — GitHub auto-prefixes job names
 grep -qE '^name:\s+CI\s*$' .github/workflows/ci.yml
 # All 11 frozen BARE job names present (D26: bare, no 'CI /' prefix)
@@ -480,6 +502,61 @@ test -x .github/scripts/migration_roundtrip.sh
 bash -n .github/scripts/migration_roundtrip.sh   # syntax check
 ```
 
+#### Commit 4b — `test: integration_db template-clone optimization`
+
+Today's `integration_db` fixture (`tests/conftest_db.py:323-528`) does per-test `CREATE DATABASE` + `Base.metadata.create_all` (~30 tables) costing ~400-900ms per test. With 600 integration tests under xdist, this saturates Postgres connection limits and dominates suite wall-clock.
+
+Convert `tests/conftest_db.py` to:
+
+1. **Session-scoped fixture** creates ONE `template_db_<worker_id>` with `Base.metadata.create_all` (uses Postgres template-DB feature; one template per xdist worker to avoid cross-worker contention).
+2. **Function-scoped `integration_db`** clones via `CREATE DATABASE foo TEMPLATE template_db_<worker_id>` (~10-50× faster than full schema creation — Postgres copies the template's data files instead of replaying DDL).
+3. **Cleanup**: per-test `DROP DATABASE foo` (template stays). Worker-end finalizer drops the template.
+
+Files:
+- `tests/conftest_db.py` (modify lines ~323-528)
+
+Acceptance: pre/post timing on integration suite recorded in PR description. Target: ≥3× speedup on suite wall-clock under `pytest -n 8`.
+
+Verification:
+```bash
+# Before this commit (record baseline)
+time tox -e integration -- -n auto
+# After this commit (expect ≥3× faster)
+time tox -e integration -- -n auto
+# Both timings recorded in the PR description; reviewer confirms threshold met.
+```
+
+**Sub-fix — worker-id-suffix tox json-report paths.** `tox.ini:42, 52, 62, 71, 83, 92` all write json-report to a fixed path; under xdist, N workers race on the same file and only one's output survives (or the file ends up corrupt). Update each affected env's pytest invocation:
+
+```ini
+# Before (one of six identical lines):
+--json-report-file={toxworkdir}/<env>.json
+
+# After:
+--json-report-file={toxworkdir}/<env>-{env:PYTEST_XDIST_WORKER:gw0}.json
+```
+
+The `{env:PYTEST_XDIST_WORKER:gw0}` substitution gives each xdist worker its own file (`gw0`, `gw1`, ...); the `:gw0` default keeps non-xdist runs valid. Coverage-combine and JSON-aggregator steps must adapt to glob `*-gw*.json`.
+
+**Sub-fix — filelock + worker-id gate around `migrate.py`.** The session-scoped fixture at `tests/conftest_db.py:79-81` runs migrations on every worker startup; under xdist with N workers, that's N concurrent `alembic upgrade head` invocations racing on the same DB. Gate so only `gw0` runs migrations; other workers wait via filelock until the lockfile is released:
+
+```python
+# tests/conftest_db.py — replace the unconditional migrate.py call
+import os
+from filelock import FileLock
+
+def _run_migrations_once(template_dsn):
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "gw0")
+    lock_path = f"/tmp/salesagent-migrate-{os.getpid()}.lock"  # or per-suite root_tmp_dir
+    with FileLock(lock_path, timeout=120):
+        # gw0 runs migrations; other workers acquire the lock after gw0 releases
+        # and find the schema already at head — alembic upgrade head is idempotent.
+        if worker == "gw0":
+            subprocess.run(["uv", "run", "python", "scripts/ops/migrate.py"], check=True)
+```
+
+Add `filelock>=3.13` to `pyproject.toml [dependency-groups].dev` (verify it's not already pulled in transitively; if `filelock` is already a transitive dependency of e.g. `virtualenv` or `pytest`, no addition needed). Alternative: use `flock(1)` system tool inline in CI's pre-step rather than Python. The Python form is preferred for parity with local `tox -e integration -- -n auto` runs.
+
 #### Commit 5 — `ci: pin GitHub Actions in new workflows to SHAs`
 
 For every `<SHA>` placeholder in commits 1-3, replace with the actual SHA + `# v<tag>` comment. Reuse the SHA-resolution loop from PR 1 commit 9.
@@ -490,17 +567,35 @@ Verification:
 [[ $(grep -hoE 'uses: [^ ]+@[a-f0-9]{40}' .github/workflows/ci.yml .github/actions/_pytest/action.yml .github/actions/setup-env/action.yml | wc -l) -ge "5" ]]
 ```
 
-#### Commit 6 — `ci: add coverage baseline`
+#### Commit 6 — `ci: add coverage baseline + sync tox.ini coverage gate`
 
 Files:
 - `.coverage-baseline` (new, contents: `53.5`)
+- `tox.ini:106` (modify)
 
 Per D11 (revised 2026-04-25 P0 sweep), hard-gate from PR 3 day 1. Set to current measured (55.56% from pre-flight A7) minus 2pp safety margin. Coverage job uses `--fail-under=$(cat .coverage-baseline)`. Ratchet upward only when measured-stable across 4+ consecutive PRs. The earlier "advisory for 4 weeks" framing was contradicted by the actual implementation (`--fail-under` is a hard gate); aligning the framing with the implementation eliminates ambiguity.
+
+`tox.ini:106` currently reads `coverage report --fail-under=30`, drifting from the CI baseline of 53.5. Sync the local-tox path to read from the same source-of-truth file:
+
+```ini
+[testenv:coverage]
+...
+commands =
+    coverage combine {toxworkdir}
+    bash -c 'coverage report --fail-under=$(cat {toxinidir}/.coverage-baseline 2>/dev/null || echo 30)'
+    coverage html -d {toxinidir}/htmlcov
+    coverage json -o {toxinidir}/coverage.json
+```
+
+The subshell form keeps `.coverage-baseline` as the single source of truth for both CI and local `tox -e coverage` runs. The `|| echo 30` fallback preserves the historical floor if the file is absent (e.g., on a stale checkout).
 
 Verification:
 ```bash
 test -f .coverage-baseline
 [[ "$(cat .coverage-baseline)" == "53.5" ]]
+# tox.ini gate references .coverage-baseline (not a literal 30 anymore)
+grep -qE '\.coverage-baseline' tox.ini
+! grep -qE 'coverage report --fail-under=30\b' tox.ini
 ```
 
 #### Commit 7 — `ci: remove || true and continue-on-error from ruff invocations`
@@ -665,6 +760,33 @@ diff /tmp/expected-names.txt <(grep -F -f /tmp/expected-names.txt /tmp/rendered-
 If the diff fails AFTER applying Decision-4 (composite migration), the failure indicates a regression — a reusable workflow has been re-introduced somewhere. The structural guard `test_architecture_required_ci_checks_frozen.py` should have caught this before the soak; if it didn't, audit `ci.yml` for `uses: ./.github/workflows/_*.yml` and convert to composite. Do NOT flip Phase B until rendered names are 2-segment for all 11 checks.
 
 Pre-Decision-4 historical note: the original plan used a reusable workflow `_pytest.yml` and accepted the 3-segment rendered name as a runtime concern (flatten on detection). Decision-4 (2026-04-25 P0 sweep) eliminates this class of bug at design time by mandating composite actions.
+
+#### Step 2.5 — Capture in-flight PRs
+
+Before flipping, snapshot every open non-draft PR so post-flip drain has a definitive list:
+
+```bash
+gh pr list --state open --search "draft:false" --json number,headRefOid \
+  > /tmp/inflight-prs.json
+```
+
+After Step 2 (the atomic flip), each PR in `/tmp/inflight-prs.json` is in one of two states:
+- (a) Has a CI run completed against the OLD check list. Status checks evaluated against new required-checks list will report "expected — waiting for status to be reported" until the PR's next push.
+- (b) Has CI in-flight. Will complete and report under the OLD job names; new required names won't appear without a re-run.
+
+Choose ONE drain strategy per PR (document in the Phase B coordination notes):
+
+```bash
+# Option A — kick a fresh ci.yml run on each in-flight PR (preferred for active PRs):
+jq -r '.[] | "\(.number) \(.headRefOid)"' /tmp/inflight-prs.json | while read num sha; do
+  gh workflow run ci.yml --ref "refs/pull/$num/head"
+done
+
+# Option B — accept "expected — waiting for status to be reported" until PR's next push
+# (no action needed; PR authors push or rebase as normal).
+```
+
+Option A wins for high-traffic windows (≥5 open PRs); Option B is acceptable when stale PRs exist that should be rebased anyway.
 
 #### Step 2 — Atomic flip via `gh api`
 
@@ -845,3 +967,4 @@ Restores `test.yml`. Old workflow runs again; new workflow continues running. Bo
 5. **Before Phase C**: verify Phase B is stable for ≥48 hours.
 6. **After Phase C**: PR 4 can begin authoring.
 7. **At end of Week 4 (D11 tripwire — revised 2026-04-25 P0 sweep)**: D11 is now hard-gate from PR 3 day 1, NOT a flip step. The Week-4 tripwire is now: review `.coverage-baseline` and decide if it can be RATCHETED UPWARD (e.g., 53.5 → 54.5) given measured stability across PRs in the window. No "flip to gating" step — the gate is on from day 1.
+8. **CodeQL gating flip (D10) ownership**: D10 schedules a Week-5 flip removing `continue-on-error: true` from `codeql.yml` and adding `CodeQL / analyze (python)` to required checks. PR 3 does NOT touch `codeql.yml`. The flip lands as the **final commit of PR 4** (Week 5) — Option A in Round-9 verification. PR 4's final commit will: (1) remove `continue-on-error: true` from `codeql.yml`; (2) document the admin step `gh api -X PATCH branches/main/protection/...` adding `CodeQL / analyze (python)` to required checks. <!-- TODO: confirm CodeQL flip lands in PR 4 final commit; if PR 4 scope shifts, carve a tiny standalone `pr-codeql-flip` Week-5 PR -->

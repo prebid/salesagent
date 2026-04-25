@@ -7,7 +7,7 @@
 
 **Drift closed.** PD16-PD22.
 
-**You can rely on.** PR 3's `ci.yml` runs `check-gam-auth-support.py`, `check_response_attribute_access.py`, `check_roundtrip_tests.py`, `check_code_duplication.py` in `quality-gate`. PR 2's `_architecture_helpers.py` exists; you extend it. `@pytest.mark.architecture` marker registered (PR 2 commit 8) — backfill onto existing 27 guards happens here.
+**You can rely on.** PR 3's `ci.yml` runs `check-gam-auth-support.py`, `check_response_attribute_access.py`, `check_roundtrip_tests.py`, `check_code_duplication.py` in `quality-gate`. PR 2's `_architecture_helpers.py` exists; you extend it. `@pytest.mark.arch_guard` marker registered (PR 2 commit 8) — backfill onto existing 27 guards happens here.
 
 **You CANNOT do.** Delete a hook before its replacement guard passes on main. Add new CI checks beyond `CI / Quality Gate` work absorption (PR 3 owns workflow). Touch `.guard-baselines/` (v2.0 territory). Re-litigate D7 (prek). Edit `src/` outside fixing test failures from new guards.
 
@@ -17,7 +17,7 @@
 - Heavy: `.pre-commit-config.yaml` (delete 13 commit-stage hooks + 2 already-manual stubs = 15 total deletions, move 9 to `pre-push`, add `repo-invariants` consolidation).
 - Medium: `CLAUDE.md` (guards table audit DEFERRED to post-v2.0-rebase per D18 P0 sweep; PR 4 commit 9 adds only residual 2 missing rows — final ~73 post-rebase, NOT 32); `docs/development/ci-pipeline.md` (rewrite to 5-layer model); `docs/development/structural-guards.md` (extend).
 - New: `tests/unit/test_architecture_no_tenant_config.py`, `…_jsontype_columns.py`, `…_no_defensive_rootmodel.py`, `…_import_usage.py`, extend `…_query_type_safety.py` with 2 new test functions; `.pre-commit-coverage-map.yml`; `.pre-commit-hooks/check_repo_invariants.py`.
-- Backfill: 27 existing test files (`tests/unit/test_architecture_*.py` + 3 transport boundary files) — add `@pytest.mark.architecture` decorator to every test function.
+- Backfill: 27 existing test files (`tests/unit/test_architecture_*.py` + 3 transport boundary files) — add `@pytest.mark.arch_guard` decorator to every test function.
 - DO NOT touch: `.github/workflows/ci.yml` (PR 3), `pyproject.toml` version anchors (PR 5).
 
 **Verification environment.** TTL guard. `pre-commit` warm latency baseline (A8). Each new guard must run < 2s individually; the heaviest is `test_architecture_import_usage.py` (ports 243-LOC `check_import_usage.py` to AST).

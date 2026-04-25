@@ -1,6 +1,6 @@
 # Risk Register
 
-Risks for the 6-PR rollout. Severity × probability ranked. Each entry has a trigger (how you know it fired), a mitigation (preventive), and a rollback (corrective). Entries R11-R18, R24-R25 from `research/edge-case-stress-test.md` remain LOW-impact informational; R19/R20/R23 promoted into base register and R26-R30 added in 2026-04-25 P0 sweep.
+Risks for the 6-PR rollout. Severity × probability ranked. Each entry has a trigger (how you know it fired), a mitigation (preventive), and a rollback (corrective). Entries R11-R15, R17-R18, R24-R25 from `research/edge-case-stress-test.md` remain LOW-impact informational; R19/R20/R23 promoted into base register and R26-R30 added in 2026-04-25 P0 sweep; R16 promoted and R31/R32 added in 2026-04-25 Round 9 verification sweep.
 
 | # | Risk | Sev | Prob | PR |
 |---|---|---|---|---|
@@ -22,6 +22,9 @@ Risks for the 6-PR rollout. Severity × probability ranked. Each entry has a tri
 | 28 | `concurrency: cancel-in-progress` cancels mid-flip dispatch | Low | Med | PR 3 Phase B |
 | 29 | release-please tag publish races with cosign sign step | High | Low | PR 6 |
 | 30 | GitHub repo `allow_auto_merge` toggle bypasses D5 | **Crit** | Low | All |
+| 16 | Concurrent Dependabot PRs corrupt `uv.lock` | Med | High | PR 1 |
+| 31 | `integration_db` per-test CREATE DATABASE saturates Postgres pool under xdist | Med | High | PR 3 |
+| 32 | Phase B branch-protection flip leaves in-flight PRs in "expected — waiting" | Low | Med | PR 3 Phase B |
 
 ## R1 — Branch-protection flip locks out merging (HIGH)
 
@@ -184,6 +187,48 @@ Risks for the 6-PR rollout. Severity × probability ranked. Each entry has a tri
   - **A11 pre-flight audit** (`gh api repos/prebid/salesagent --jq '.allow_auto_merge'` MUST be `false`). Disable via UI Settings → General → Pull Requests → Disable "Allow auto-merge", or via `gh api -X PATCH /repos/prebid/salesagent -f allow_auto_merge=false`.
   - Daily cron snapshot Action (R23 mitigation) diffs `.allow_auto_merge` value and opens an issue if drifted to `true`.
 - **Rollback:** flip the toggle off via API or UI; audit recent merges for unauthorized auto-merge events.
+
+### R16 — Concurrent Dependabot PRs corrupt `uv.lock`
+
+**Severity:** Medium × High = High (promoted from informational in Round 9)
+
+**Likelihood:** High once Dependabot is enabled (PR 1 commit 4) — two grouped update PRs both regenerate the lock; second-merger has stale lock conflicts.
+
+**Detection:** post-merge CI fails on `uv lock --check`; or runtime errors from version-mismatched dependencies.
+
+**Mitigation:**
+- Dependabot config uses aggressive grouping (`python-runtime`, `python-dev`, `gcp-stack`) to reduce concurrent PR count.
+- D5 forbids auto-merge — every Dependabot PR is hand-reviewed and rebased before merge.
+- Optional: serialize Dependabot PRs via a "dependabot-merge-queue" label (manual process).
+
+**Tripwire:** ≥2 Dependabot PRs in-flight simultaneously → require explicit rebase before second merges.
+
+### R31 — `integration_db` per-test CREATE DATABASE saturates Postgres connection pool under xdist
+
+**Severity:** Medium × High = High
+
+**Likelihood:** High (any `tox -e integration -- -n auto` run with default Postgres config)
+
+**Detection:** First `pytest -n auto` run after PR 3 lands; `connection refused` errors in test logs.
+
+**Mitigation:**
+- PR 3 Commit 4b switches `integration_db` to template-clone (`CREATE DATABASE foo TEMPLATE template_db`); ~10-50× faster than per-test `metadata.create_all`.
+- Pre-flight 3a runs xdist soak (`-n 4` and `-n auto`) on current main BEFORE Phase A merge.
+- Postgres connection limit may need tuning (`max_connections`); document in `_pytest` composite.
+
+**Tripwire:** xdist run takes longer than serial baseline → revert to matrix-shard model.
+
+### R32 — Phase B branch-protection flip leaves in-flight PRs in "expected — waiting" state
+
+**Severity:** Low × Medium = Medium
+
+**Likelihood:** Medium (any open PR at flip time without subsequent push will see status divergence)
+
+**Detection:** post-flip PRs show "5 required checks not yet run" despite Phase A having reported old check names green.
+
+**Mitigation:** PR 3 Phase B Step 2.5 captures in-flight PR HEAD SHAs before the PATCH. After flip, either (a) trigger `gh workflow run ci.yml --ref refs/pull/<n>/head` for each, or (b) post a coordination comment that contributors must push a no-op commit to refresh status.
+
+**Tripwire:** ≥5 PRs stuck in "expected — waiting" after flip → escalate, post-mortem flip procedure.
 
 ## Cross-cutting risk: Dependabot review backlog (D5 sustainability tripwire)
 

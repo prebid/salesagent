@@ -8,9 +8,11 @@
 
 ## Scope
 
-Per-hook reassignment per the layered architecture. Drops warm pre-commit latency from ~23s to ~1.7s (10× improvement). Migrates 5 grep-based hooks to AST-based structural guards. Moves **10** medium-cost hooks to `pre-push` stage (per D27 revised Round 8 — was 5, then 9, now 10 with `mypy` added per D3). Migrates 4 expensive hooks to CI-only. Deletes 6 dead/advisory hooks. Adds `@pytest.mark.architecture` marker per D12.
+Per-hook reassignment per the layered architecture. Drops warm pre-commit latency from ~23s to ~1.7s (10× improvement). Migrates 5 grep-based hooks to AST-based structural guards. Moves **10** medium-cost hooks to `pre-push` stage (per D27 revised Round 8 — was 5, then 9, now 10 with `mypy` added per D3). Migrates 4 expensive hooks to CI-only. Deletes 6 dead/advisory hooks. Adds `@pytest.mark.arch_guard` marker per D12.
 
 **Internal commit ordering is load-bearing:** all new structural guards must pass on main BEFORE any hook is deleted. The spec enforces this.
+
+> **Marker disambiguation rationale.** `tests/conftest.py:25-45` registers `architecture` as an entity-marker auto-applied by filename pattern (`test_architecture_*.py`, `no_toolerror_in_impl`, `transport_agnostic_impl`, etc.). PR 4 originally planned a second `architecture` marker for structural guards; same name, different semantics → silent conflation under `pytest -m architecture` (selects union of entity-tagged + guard-tagged). Rename the new structural-guard marker to `arch_guard` to disambiguate. The entity-marker stays as-is.
 
 ## Out of scope
 
@@ -19,27 +21,54 @@ Per-hook reassignment per the layered architecture. Drops warm pre-commit latenc
 - New CI checks beyond `CI / Quality Gate` work absorption (PR 3 owns the workflow)
 - v2.0's `.guard-baselines/` migration (those become entries in CLAUDE.md once v2.0 phases land; PR 4 reserves space)
 
+## Pre-flight measurements
+
+These steps run BEFORE Commit 1 to capture empirical numbers used by later commits. Record results in the PR description.
+
+### Pre-flight P8 — mypy warm-time capture (P1)
+
+Before Commit 5 moves `mypy` to `pre-push`, verify it fits the Layer-2 budget (`~10-20s` per the layered architecture spec).
+
+```bash
+# Run the same invocation used by `make quality` and the planned pre-push hook.
+for i in 1 2 3; do
+  time uv run mypy src/ --config-file=mypy.ini > /dev/null 2>&1
+done
+# Record runs 2 and 3 (run 1 includes cold cache build); take the max as warm time.
+```
+
+Decision tree:
+- **warm ≤ 20s**: proceed with mypy on pre-push as planned in Commit 5 (the 10th move).
+- **warm > 20s**: defer mypy from pre-push, keep CI-only per D3's original framing. Re-do D27 math: `36 − 13 − 9 − 2 + 1 = 13` — OVER ceiling. Requires one more delete/move; candidates: `no-hardcoded-urls` (move to pre-push if Pattern #6 enforcement gets a structural-guard equivalent first), or consolidate `mcp-schema-alignment` into the new `repo-invariants` hook from Commit 6.
+
+Document the decision and the measured warm time in the PR description.
+
 ## Internal commit sequence
 
 ORDER IS LOAD-BEARING. Guards added before hook deletions.
 
-### Commit 1 — `test: register @pytest.mark.architecture marker; extend _architecture_helpers.py`
+### Commit 1 — `test: register @pytest.mark.arch_guard marker; extend _architecture_helpers.py`
 
 Files:
-- `pyproject.toml` (add to `[tool.pytest.ini_options].markers`)
+- `pytest.ini` (add to `[pytest]` section's `markers = ` list — empirical: `pytest.ini` is the project's pytest config source; `--strict-markers` is set there)
 - `tests/unit/_architecture_helpers.py` (**EXTEND** — file already created in PR 2 commit 8 as ~30-line baseline; this PR grows it to ~221 lines with the AST-walking helpers below)
 
 Per D12.
 
 **Ownership rule (resolves Blocker #3):** PR 2 commit 8 creates the baseline (`repo_root`, `parse_module` mtime-keyed cache, `iter_function_defs`, `iter_call_expressions`, `src_python_files`). PR 4 commit 1 EXTENDS by appending the additional helpers (`iter_workflow_files`, `iter_compose_files`, `iter_action_uses`, `iter_python_version_anchors`, `iter_postgres_image_refs`, `assert_violations_match_allowlist`, `assert_anchor_consistency`, `format_failure`). The final reconciled module is at `.claude/notes/ci-refactor/drafts/_architecture_helpers.py` (221 lines) — lift verbatim during execution.
 
-```toml
-[tool.pytest.ini_options]
-markers = [
-    "architecture: structural guards (run with -m architecture)",
-    # ... existing markers preserved
-]
+`pytest.ini` change (add the marker line; preserve all existing markers):
+
+```ini
+[pytest]
+markers =
+    smoke: Critical path tests that MUST always pass
+    # ... existing markers preserved verbatim ...
+    admin: Tests for admin UI template rendering and web interface
+    arch_guard: structural guards (AST-scanning invariant tests; run with -m arch_guard)
 ```
+
+**Marker name = `arch_guard`, NOT `architecture`.** The entity-marker `architecture` is registered in `tests/conftest.py:25-45` and auto-applied by filename pattern; reusing that name would conflate two different selection semantics.
 
 `tests/unit/_architecture_helpers.py`:
 
@@ -98,7 +127,8 @@ Verification:
 # File exists from PR 2 commit 8 baseline
 test -f tests/unit/_architecture_helpers.py
 grep -q 'parse_module' tests/unit/_architecture_helpers.py   # baseline marker
-grep -q 'architecture:' pyproject.toml
+# Marker registered in pytest.ini (NOT pyproject.toml — pytest.ini is the project's pytest config source)
+grep -q '^[[:space:]]*arch_guard:' pytest.ini
 
 # This commit adds the extended helpers (must all be importable):
 uv run python -c "from tests.unit._architecture_helpers import (
@@ -107,28 +137,72 @@ uv run python -c "from tests.unit._architecture_helpers import (
     iter_python_version_anchors, iter_postgres_image_refs,
     assert_violations_match_allowlist, assert_anchor_consistency, format_failure,
 ); print('OK')"
+
+# `--strict-markers` is set in pytest.ini, so an unregistered `arch_guard` would error
+# before any guard test runs — verifying registration is required.
 ```
 
-### Commit 2 — `test: backfill @pytest.mark.architecture on existing 27 guards`
+### Commit 1.5 — `test: AST guard pre-existing-violation audit (P0 gate before hook deletion)`
+
+Before Commit 7 deletes the legacy grep hooks, every new AST guard in commit 3 must pass against current `main`. Empirical Round 9 scan surfaced ~18 pre-existing violations of the `check-rootmodel-access` AST equivalent that the current grep hook tolerates (because grep runs `pass_filenames: true` and only sees the changed-file slice). The new tree-wide guard sees them all.
+
+Known pre-existing `check-rootmodel-access` violations on main (Round 9 scan):
+- `src/core/helpers/account_helpers.py:121`
+- `tests/unit/test_targeting_normalizer.py` (lines 17, 22, 27, 33, 43, 50, 56, 62, 92)
+- `tests/unit/test_adcp_contract.py` (lines 2624, 2674, 2797)
+- `tests/unit/test_auth_removal_simple.py:145`
+- `tests/unit/test_pricing_option_rootmodel.py:43`
+- `tests/unit/test_product_schema_obligations.py:1691`
+- `tests/unit/test_datetime_string_parsing.py:238`
+- `tests/integration/test_a2a_skill_invocation.py:77` (already carries `# noqa: rootmodel`, would be honored)
+
+For each new AST guard, choose ONE remediation path:
+
+- **Option A — remediate in this PR.** Fix the violations alongside the guard. Estimate for `check-rootmodel-access`: ~50 LOC of refactor across 8 files (replace `hasattr(x, "root")` with explicit `isinstance(x, RootModel)` or model-field checks).
+- **Option B — allowlist with FIXME.** Expand the guard's `ALLOWED_FILES` set (already shown for `src/a2a_server/adcp_a2a_server.py` re a2a-sdk polymorphism); add a `# FIXME(salesagent-xxxx): pre-existing — tracked in ...` comment at each call site referencing a tracking issue. Allowlists must shrink, never grow (per CLAUDE.md structural-guard rules).
+
+Apply the same audit pattern to:
+- `test_architecture_no_tenant_config.py` — scan main for any `tenant.config[...]` or `tenant.config` attribute access.
+- `test_architecture_jsontype_columns.py` — scan `src/core/database/` for `Column(JSON, ...)` / `mapped_column(JSON, ...)`.
+- `test_architecture_import_usage.py` — see also Commit 3 note: tree-wide expansion of an already-AST-based hook may surface cross-module unused imports the per-file scan missed.
+- Extended `test_architecture_query_type_safety.py::test_no_legacy_session_query` and `::test_models_use_mapped_not_column` — scan main for `session.query(...)` and top-level `Column(...)` in models.
+
+Hard gate: each of these must pass on main BEFORE Commit 7 runs:
+
+```bash
+uv run pytest tests/unit/test_architecture_no_defensive_rootmodel.py -v -x
+uv run pytest tests/unit/test_architecture_no_tenant_config.py -v -x
+uv run pytest tests/unit/test_architecture_jsontype_columns.py -v -x
+uv run pytest tests/unit/test_architecture_import_usage.py -v -x
+uv run pytest tests/unit/test_architecture_query_type_safety.py -v -x
+```
+
+If any guard fails on main after the chosen remediation path, ESCALATE — do NOT proceed to Commit 7. Record the chosen path (A or B) and the violation count per guard in the PR description.
+
+### Commit 2 — `test: backfill @pytest.mark.arch_guard on existing 27 guards`
 
 Files:
 - 23 existing `tests/unit/test_architecture_*.py` files (add marker to each test function)
 - 3 transport-boundary guards (`test_no_toolerror_in_impl.py`, `test_transport_agnostic_impl.py`, `test_impl_resolved_identity.py`)
 
-Per D12, every existing structural guard test function gets `@pytest.mark.architecture`.
+Per D12, every existing structural guard test function gets `@pytest.mark.arch_guard`.
 
-Mechanical operation. For each file, prepend `@pytest.mark.architecture` to every `def test_*(...)` line.
+Mechanical operation. For each file, prepend `@pytest.mark.arch_guard` to every `def test_*(...)` line.
+
+Note: these files ALSO carry the entity-marker `architecture` (auto-applied by filename pattern in `tests/conftest.py`). The two markers coexist — `arch_guard` selects the structural-guard subset; `architecture` selects the entity-tagged superset. They overlap but are not identical (entity-marker also covers tests not yet tagged with `arch_guard`).
 
 Verification:
 ```bash
 for f in tests/unit/test_architecture_*.py tests/unit/test_no_toolerror_in_impl.py tests/unit/test_transport_agnostic_impl.py tests/unit/test_impl_resolved_identity.py; do
   test -f "$f" || continue
   test_count=$(grep -c '^def test_\|^    def test_' "$f")
-  marker_count=$(grep -B1 'def test_' "$f" | grep -c '@pytest.mark.architecture')
+  marker_count=$(grep -B1 'def test_' "$f" | grep -c '@pytest.mark.arch_guard')
   [[ "$test_count" == "$marker_count" ]] || { echo "marker missing in $f: $marker_count/$test_count"; exit 1; }
 done
-# Run them via marker
-uv run pytest tests/unit/ -m architecture -v 2>&1 | tail -3
+# Run them via the new marker
+uv run pytest tests/unit/ -m arch_guard -v 2>&1 | tail -3
+# Sanity: entity-marker `architecture` still works (filename auto-tag, not changed)
+uv run pytest tests/unit/ -m architecture --collect-only 2>&1 | tail -3
 ```
 
 ### Commit 3 — `test: add 5 new structural guards (PR 4 migrations)`
@@ -145,14 +219,14 @@ Each guard pattern:
 ```python
 """<Hook name> structural guard.
 
-Replaces .pre-commit-hooks/<original-script> per PR 4 of CI/pre-commit refactor (#1234).
+Replaces .pre-commit-hooks/<original-script> per PR 4 of CI/pre-commit refactor.
 """
 import ast
 import pytest
 from tests.unit._architecture_helpers import parse_module, src_python_files, repo_root, iter_call_expressions
 
 
-@pytest.mark.architecture
+@pytest.mark.arch_guard
 def test_<invariant_name>():
     repo = repo_root()
     violations = []
@@ -165,7 +239,7 @@ def test_<invariant_name>():
 **`test_architecture_no_tenant_config.py`** — replaces `no-tenant-config` hook:
 
 ```python
-@pytest.mark.architecture
+@pytest.mark.arch_guard
 def test_no_tenant_config_access():
     repo = repo_root()
     violations = []
@@ -185,7 +259,7 @@ def test_no_tenant_config_access():
 **`test_architecture_jsontype_columns.py`** — replaces `enforce-jsontype` hook:
 
 ```python
-@pytest.mark.architecture
+@pytest.mark.arch_guard
 def test_json_columns_use_jsontype():
     repo = repo_root()
     violations = []
@@ -218,7 +292,7 @@ ALLOWED_FILES = {
 }
 
 
-@pytest.mark.architecture
+@pytest.mark.arch_guard
 def test_no_defensive_rootmodel_access():
     repo = repo_root()
     violations = []
@@ -236,7 +310,9 @@ def test_no_defensive_rootmodel_access():
     assert not violations, "\n".join(violations)
 ```
 
-**`test_architecture_import_usage.py`** — ports `.pre-commit-hooks/check_import_usage.py` (243 LOC) to AST. The guard is the heaviest of the new ones; profile to confirm < 2s.
+**`test_architecture_import_usage.py`** — extends `.pre-commit-hooks/check_import_usage.py` (already AST-based, 243 LOC; uses `ast.parse` + `ImportCollector`/`UsageCollector` visitors at lines 15-105) from per-file mode (`pass_filenames: true`) to tree-wide invocation. The existing visitors are reused; only the file-iteration scope changes. The guard is the heaviest of the new ones; profile to confirm < 2s.
+
+Tree-wide expansion may surface violations the per-file scan missed (cross-module unused imports — e.g., a symbol imported in module A and only used by module B's now-deleted code path). Apply Commit 1.5's audit pattern: scan main, choose remediate vs allowlist, document in the PR description.
 
 **Extend `test_architecture_query_type_safety.py`** with two new test functions:
 - `test_no_legacy_session_query` — fails on `session.query(Foo)` patterns (replaces `enforce-sqlalchemy-2-0` hook)
@@ -249,9 +325,9 @@ for f in tests/unit/test_architecture_no_tenant_config.py \
          tests/unit/test_architecture_no_defensive_rootmodel.py \
          tests/unit/test_architecture_import_usage.py; do
   test -f "$f"
-  grep -q '@pytest.mark.architecture' "$f"
+  grep -q '@pytest.mark.arch_guard' "$f"
 done
-# All new + extended guards pass on main:
+# All new + extended guards pass on main (per Commit 1.5 audit gate):
 uv run pytest tests/unit/test_architecture_no_tenant_config.py \
               tests/unit/test_architecture_jsontype_columns.py \
               tests/unit/test_architecture_no_defensive_rootmodel.py \
@@ -367,6 +443,8 @@ Of plan's 15 deletions, **2 are already manual** (`pytest-unit`, `mcp-endpoint-t
 
 **Real math (Round 8 revised):** 36 effective commit-stage − 13 commit-stage deletions − **10** moves to pre-push − 1 consolidation = **12 commit-stage hooks** (exactly at ≤12 ceiling, zero headroom).
 
+**Math note (Round 9 clarification):** the `−1` consolidation term is shorthand for `−2 deletions + 1 new consolidation hook` (Commit 6 deletes the `no-skip-tests` and `no-fn-calls` grep one-liners and adds the single `repo-invariants` hook). Equivalent expanded form: `36 − 13 − 10 − 2 + 1 = 12`.
+
 The 10 moves to pre-push:
 1. `check-docs-links`
 2. `check-route-conflicts`
@@ -379,17 +457,19 @@ The 10 moves to pre-push:
 9. `check-migration-completeness`
 10. **`mypy`** (per D3 — PR 2 creates the local mypy hook at commit-stage during the migration window for invocation parity; PR 4 moves it to pre-push because CI's `CI / Type Check` job is authoritative). Without this 10th move, math is `36−13−9−1=13`, OVER ceiling.
 
-**Coordination with v2.0**: v2.0 phase PR also deletes `test-migrations` (already manual; net commit-stage count unchanged). Verify post-rebase: if `test-migrations` is absent from `.pre-commit-config.yaml`, drop it from PR 4's deletion list — otherwise the deletion is a no-op or fails.
+**Coordination with v2.0**: PR 4 (this spec) now owns `test-migrations` deletion (it was previously delegated to a v2.0 phase PR). Net commit-stage count math is unchanged because `test-migrations` is already `stages: [manual]` and was excluded from the 36-effective baseline. Verify post-rebase: if a v2.0 phase PR landed first and already deleted `test-migrations`, drop it from PR 4's Commit 7 deletion list — otherwise the deletion fails.
 
 **Zero headroom warning**: if v2.0 phase PRs add ANY new commit-stage hook before PR 4 lands, the math goes over ceiling. Re-verify disk count at PR 4 authoring time; if >36 effective commit-stage, identify an additional move candidate from `no-hardcoded-urls` (Pattern #6 gate; could move to pre-push if Pattern #6 enforcement gets a structural-guard equivalent) or from `mcp-cors-allowlist`, `check-no-private-ssm`, or any hook with average duration > 200ms.
 
 Verification:
 ```bash
+# All 10 hooks must be at pre-push stage (mypy is conditional — see Pre-flight P8)
 for hook in check-docs-links check-route-conflicts type-ignore-no-regression \
             adcp-contract-tests mcp-contract-validation \
             mcp-schema-alignment check-tenant-context-order ast-grep-bdd-guards \
-            check-migration-completeness; do
-  yq ".repos[].hooks[] | select(.id == \"$hook\") | .stages" .pre-commit-config.yaml | grep -q pre-push
+            check-migration-completeness mypy; do
+  yq ".repos[].hooks[] | select(.id == \"$hook\") | .stages" .pre-commit-config.yaml | grep -q pre-push \
+    || { echo "hook $hook not at pre-push stage"; exit 1; }
 done
 ```
 
@@ -495,6 +575,7 @@ Hooks deleted (dead/advisory):
 - `suggest-test-factories` (advisory)
 - `no-skip-integration-v2` (greps `tests/integration_v2/` which doesn't exist)
 - `check-migration-heads` (redundant with `test_architecture_single_migration_head.py` per PD22)
+- `test-migrations` (`.pre-commit-config.yaml:153-158`; references `adcp_local.db` and `migrate.py` which don't exist on disk; uses sqlite which violates "Postgres exclusively" per CLAUDE.md). Already at `stages: [manual]` so net commit-stage count is unchanged. Previously delegated to v2.0 phase PR; brought into PR 4 to consolidate dead-hook removal.
 
 Closes PD16, PD17, PD18, PD19, PD20, PD22.
 
@@ -504,7 +585,7 @@ for hook in no-tenant-config enforce-jsontype check-rootmodel-access enforce-sql
             check-import-usage check-gam-auth-support check-response-attribute-access \
             check-roundtrip-tests check-code-duplication check-parameter-alignment \
             pytest-unit mcp-endpoint-tests suggest-test-factories no-skip-integration-v2 \
-            check-migration-heads; do
+            check-migration-heads test-migrations; do
   ! grep -qE "^\s+- id: $hook$" .pre-commit-config.yaml || { echo "still exists: $hook"; exit 1; }
 done
 
@@ -523,7 +604,20 @@ print(n)
 ")
 [[ "$HOOKS_COMMIT" -le 12 ]] || { echo "commit hook count $HOOKS_COMMIT > 12 — D27 P0 ceiling exceeded; identify additional pre-push candidates per PR 4 §Commit 5 zero-headroom warning"; exit 1; }
 [[ "$HOOKS_COMMIT" -ge 10 ]] || { echo "commit hook count $HOOKS_COMMIT < 10 — likely an over-deletion; re-verify the 13 deletion list"; exit 1; }
+
+# Soft-warning band: at exactly 11/12, the next added Layer-1 hook will hit the hard cap.
+if [[ "$HOOKS_COMMIT" -eq 11 ]]; then
+  echo "WARNING: hook count is 11/12 ceiling — adding a Layer-1 hook will hit hard cap."
+  echo "         Candidate next-moves (push to Layer-2 / pre-push): no-hardcoded-urls,"
+  echo "         mcp-cors-allowlist, check-no-private-ssm."
+  echo "         (Documented in D27 candidate-move list.)"
+fi
 ```
+
+**Structural guard `test_architecture_pre_commit_hook_count` enforces the same band.** The guard:
+- Hard fail when `count > 12` (D27 P0 ceiling).
+- Hard fail when `count < 10` (over-deletion sentinel).
+- Soft warn (printed via `pytest.warns` or `print` to stderr; non-blocking) when `count == 11`, listing the candidate next-moves above.
 
 ### Commit 8 — `chore: latency baseline post-PR-4`
 
@@ -594,13 +688,13 @@ done
 grep -qE '32 (existing )?guards' CLAUDE.md || grep -qE '\b32\b' CLAUDE.md
 ```
 
-### Commit 10a — `chore(pre-commit): install pre-push hook stage; add architecture-guards`
+### Commit 10a — `chore(pre-commit): install pre-push hook stage; add arch-guards entry`
 
-**New commit added in 2026-04-25 P0 sweep.** Without this, the 9 hooks moved to `stages: [pre-push]` in commit 5 don't actually run for contributors who haven't installed the pre-push hook stage.
+**New commit added in 2026-04-25 P0 sweep.** Without this, the 10 hooks moved to `stages: [pre-push]` in commit 5 don't actually run for contributors who haven't installed the pre-push hook stage.
 
 Files:
-- `.pre-commit-config.yaml` — add the `architecture-guards` pre-push entry from
-  `drafts/precommit-prepush-hook.md:5-15` (a single hook that runs `pytest tests/unit/test_architecture_*.py -q`).
+- `.pre-commit-config.yaml` — add the `arch-guards` pre-push entry from
+  `drafts/precommit-prepush-hook.md:5-15` (a single hook that runs `pytest tests/unit/ -m arch_guard -x -q`).
 
 Plus a documentation step (folded into commit 10b below):
 - `CONTRIBUTING.md` (or `docs/development/contributing.md` per D21) — add a one-line
@@ -608,15 +702,46 @@ Plus a documentation step (folded into commit 10b below):
   instruction in the local-setup section.
 
 Without this commit, contributors run `pre-commit install` (default = pre-commit stage only),
-push commits, and discover the 9 pre-push hooks via failed CI rather than locally.
+push commits, and discover the 10 pre-push hooks via failed CI rather than locally.
 
 Verification:
 ```bash
-# architecture-guards entry exists at pre-push stage
-yq '.repos[].hooks[] | select(.id == "architecture-guards") | .stages' .pre-commit-config.yaml \
+# arch-guards entry exists at pre-push stage
+yq '.repos[].hooks[] | select(.id == "arch-guards") | .stages' .pre-commit-config.yaml \
   | grep -q pre-push
 # CONTRIBUTING.md (canonical copy per D21 — `docs/development/contributing.md`) mentions both stages
 grep -q 'hook-type pre-commit' docs/development/contributing.md
+grep -q 'hook-type pre-push' docs/development/contributing.md
+```
+
+### Commit 10a-bis — `chore(make): pre-push install nudge in `make quality``
+
+**New commit added in 2026-04-25 P1 sweep.** Existing contributors already have `pre-commit install` (commit-stage only) but not `--hook-type pre-push`. After PR 4, their pre-push hooks won't fire locally — CI catches it but the user-experience is "I thought my hooks ran." This commit adds a non-blocking nudge.
+
+Files:
+- `scripts/check-hook-install.sh` (new, ~10 lines)
+- `Makefile` — prepend `scripts/check-hook-install.sh` to the `quality:` target
+
+`scripts/check-hook-install.sh`:
+```bash
+#!/bin/bash
+if [[ ! -f .git/hooks/pre-push ]]; then
+  echo "WARN: pre-push hooks not installed locally."
+  echo "      Run: pre-commit install --hook-type pre-push"
+  echo "      (CI still catches everything; this is a local-feedback warning.)"
+fi
+```
+
+Non-blocking by design — emits a warning, exits 0. The script is the FIRST command in `make quality` so contributors see the warning every quality-gate run until they install the hook stage.
+
+Update both `CONTRIBUTING.md` (root) and `docs/development/contributing.md` (canonical per D21) to document the pre-push install requirement, with the same `pre-commit install --hook-type pre-commit --hook-type pre-push` snippet.
+
+Verification:
+```bash
+test -x scripts/check-hook-install.sh
+grep -qE '^[[:space:]]*scripts/check-hook-install\.sh' Makefile
+# Both docs mention pre-push install
+grep -q 'hook-type pre-push' CONTRIBUTING.md
 grep -q 'hook-type pre-push' docs/development/contributing.md
 ```
 
@@ -668,7 +793,7 @@ For `structural-guards.md` additions:
 - No defensive RootModel Guard (PR 4)
 - Import usage Guard (PR 4)
 - AST-helper utility (`tests/unit/_architecture_helpers.py`)
-- `@pytest.mark.architecture` marker
+- `@pytest.mark.arch_guard` marker (note: the filename pattern `test_architecture_*.py` and the helper module name remain `_architecture_helpers.py` — only the pytest marker name changes; entity-marker `architecture` from `tests/conftest.py` is unaffected)
 
 Verification:
 ```bash
@@ -693,13 +818,67 @@ From issue #1234 §Acceptance criteria, scoped to PR 4:
 
 Plus agent-derived:
 
-- [ ] `@pytest.mark.architecture` marker registered and backfilled to all 27 existing guards
+- [ ] `@pytest.mark.arch_guard` marker registered in `pytest.ini` and backfilled to all 27 existing guards
 - [ ] `tests/unit/_architecture_helpers.py` shared module exists
 - [ ] `.pre-commit-coverage-map.yml` documents every deleted/moved hook's replacement
 - [ ] `check_repo_invariants.py` consolidates the 2 remaining grep one-liners
 - [ ] CLAUDE.md guards table audit DEFERRED to post-v2.0-rebase (PR 4 commit 9 adds only the residual 2 missing rows; broader audit follows v2.0)
 - [ ] `docs/development/ci-pipeline.md` rewritten with the 5-layer model
 - [ ] `docs/development/structural-guards.md` extended with PR 2 + PR 4 additions
+
+## Hook → Stage Reference Table
+
+Canonical post-PR-4 mapping. Lift verbatim into `docs/development/ci-pipeline.md` (Commit 10) and reference from `CONTRIBUTING.md`. Counts are projections; verify against `.pre-commit-config.yaml` after Commit 7.
+
+### Layer 1 — pre-commit (commit-stage; ≤12 hooks; budget ~1-2s warm)
+
+| Hook ID | Owner | Purpose |
+|---|---|---|
+| `trailing-whitespace` | pre-commit-hooks | File hygiene |
+| `end-of-file-fixer` | pre-commit-hooks | File hygiene |
+| `check-yaml` | pre-commit-hooks | File hygiene |
+| `check-merge-conflict` | pre-commit-hooks | File hygiene |
+| `ruff-format` | astral-sh/ruff-pre-commit | Format Python |
+| `ruff-check` | astral-sh/ruff-pre-commit | Lint Python (incl. C90, PLR) |
+| `repo-invariants` | local (Commit 6) | Consolidates `no-skip-tests`, `no-fn-calls` |
+| `no-hardcoded-urls` | local | Pattern #6 gate (script_root); kept here per Commit 10b |
+| `mcp-cors-allowlist` | local | MCP CORS allowlist invariant |
+| `check-no-private-ssm` | local | No private SSM-prefixed secret refs |
+| (slot 11) | reserved | Soft-warn band — see D27 candidate-move list |
+| (slot 12) | reserved | Hard ceiling — see D27 |
+
+### Layer 2 — pre-push (push-stage; budget ~10-20s)
+
+| Hook ID | Owner | Purpose |
+|---|---|---|
+| `arch-guards` | local (Commit 10a) | Runs `pytest tests/unit/ -m arch_guard -x -q` |
+| `check-docs-links` | local | Docs link integrity (moved from commit-stage) |
+| `check-route-conflicts` | local | Flask route conflicts (moved) |
+| `type-ignore-no-regression` | local | type:ignore baseline ratchet (moved) |
+| `adcp-contract-tests` | local | AdCP schema contract (moved) |
+| `mcp-contract-validation` | local | MCP transport contract (moved) |
+| `mcp-schema-alignment` | local | YAML schema validation (moved) |
+| `check-tenant-context-order` | local | Python invocation (moved) |
+| `ast-grep-bdd-guards` | local | BDD step structural checks (moved) |
+| `check-migration-completeness` | local | Alembic migration completeness (moved) |
+| `mypy` | local | Type check on changed src tree (moved per D3, conditional on Pre-flight P8) |
+
+### Layer 3 — pytest structural guards (in `tox -e unit`; in CI only)
+
+Run via `pytest tests/unit/ -m arch_guard -x` (Layer 2 hook above runs same command). 27 baseline + 4 new + 1 extended = 32 guards post-PR-4 (count rises post-v2.0).
+
+### Layer 4 — CI required checks (the 11 frozen names, see PR 3)
+
+`CI / Quality Gate`, `CI / Unit Tests`, `CI / Integration Tests`, `CI / E2E Tests`, `CI / Admin Tests`, `CI / BDD Tests`, `CI / Type Check`, `CI / Schema Contract`, `CI / Lint`, `CI / Format`, `CI / Coverage Report`.
+
+### Layer 5 — manual / on-demand (`stages: [manual]`)
+
+| Hook ID | Status | Purpose |
+|---|---|---|
+| `smoke-tests` | active | Run via `pre-commit run smoke-tests --hook-stage manual` |
+| `pytest-unit` | DELETED in Commit 7 | Was redundant with `CI / Unit Tests` |
+| `mcp-endpoint-tests` | DELETED in Commit 7 | Was a literal echo string |
+| `test-migrations` | DELETED in Commit 7 | sqlite + missing files (per Change 5) |
 
 ## Verification (full PR-level)
 
@@ -735,7 +914,9 @@ cfg = yaml.safe_load(open('.pre-commit-config.yaml'))
 n = sum(1 for r in cfg['repos'] for h in r['hooks'] if 'pre-push' in (h.get('stages') or []))
 print(n)
 ")
-[[ "$HOOKS_PUSH" -ge 5 ]]
+# Expect 10 moved hooks + 1 new arch-guards entry = 11; threshold ≥ 10 is loose to tolerate
+# the Pre-flight P8 mypy decision (mypy may be deferred from pre-push if warm > 20s).
+[[ "$HOOKS_PUSH" -ge 10 ]] || { echo "expected ≥10 pre-push hooks, got $HOOKS_PUSH"; exit 1; }
 
 echo "[3/8] Latency..."
 pre-commit clean
@@ -753,7 +934,10 @@ for f in test_architecture_no_tenant_config test_architecture_jsontype_columns \
          test_architecture_no_defensive_rootmodel test_architecture_import_usage; do
   test -f "tests/unit/${f}.py"
 done
-uv run pytest tests/unit/ -m architecture -x
+# Use the new structural-guard marker `arch_guard` (not the entity-marker `architecture`)
+uv run pytest tests/unit/ -m arch_guard -x
+# Sanity: marker is registered in pytest.ini
+grep -q '^[[:space:]]*arch_guard:' pytest.ini
 
 echo "[5/8] CI absorption..."
 grep -q 'CI / Quality Gate' .github/workflows/ci.yml

@@ -22,6 +22,10 @@ Per D10 (Path C), CodeQL is **advisory** for 2 weeks then flips to gating. zizmo
 - Any change under `src/` (production code untouched)
 - `harden-runner` adoption (Fortune-50 pattern, file as PR 6 follow-up per D25; v2.16.0+ pin floor)
 
+> **Note on ADR location.** ADR-001, ADR-002, and ADR-003 are embedded inline in this PR 1 spec (authored by commits 7 and 11 — see §Embedded ADR-002 below and the inline ADR-001 / ADR-003 bodies in their respective commit sections). They are NOT staged as standalone draft files in `drafts/` because their text in this spec is the canonical source until extraction at commit time. ADR-004 onward exist as standalone drafts because they were authored in earlier planning rounds. See `drafts/README.md` for the inventory split.
+
+> **Pre-flight P5 (new) — empirical check.** Before authoring any commit, verify `.github/` directory exists and `pyproject.toml` has the expected sections. Round 9 verification found 6 cases where plan assumptions about current code state were wrong; Rule 19 of the executor prompt now requires this empirical check.
+
 ## Internal commit sequence
 
 ORDER IS LOAD-BEARING. Bisect-friendly: each commit is a self-contained unit reviewers can revert independently.
@@ -131,6 +135,10 @@ grep -qE '^\*\s+@chrishuie' .github/CODEOWNERS
 grep -qE '^/\.pre-commit-config\.yaml\s+@chrishuie' .github/CODEOWNERS
 grep -qE '^/\.github/.*@chrishuie' .github/CODEOWNERS
 grep -qE '^/SECURITY\.md\s+@chrishuie' .github/CODEOWNERS
+# Test-infra & ratchet-baseline scope (representative samples — full list in spec)
+grep -qE '^/Makefile\s+@chrishuie' .github/CODEOWNERS
+grep -qE '^/tests/conftest\.py\s+@chrishuie' .github/CODEOWNERS
+grep -qE '^/\.duplication-baseline\s+@chrishuie' .github/CODEOWNERS
 ```
 
 ### Commit 4 — `ci: add dependabot.yml (no auto-merge)`
@@ -455,6 +463,10 @@ echo "[1/8] SHA-freeze..."
 echo "[2/8] CODEOWNERS..."
 test -s .github/CODEOWNERS
 grep -qE '^\*\s+@chrishuie' .github/CODEOWNERS
+# Test-infra & ratchet-baseline scope (representative samples; see ADR-004 shrink-only contract)
+grep -qE '^/Makefile\s+@chrishuie' .github/CODEOWNERS || { echo "missing /Makefile owner"; exit 1; }
+grep -qE '^/tests/conftest\.py\s+@chrishuie' .github/CODEOWNERS || { echo "missing /tests/conftest.py owner"; exit 1; }
+grep -qE '^/\.duplication-baseline\s+@chrishuie' .github/CODEOWNERS || { echo "missing /.duplication-baseline owner"; exit 1; }
 
 # 3. SECURITY.md
 echo "[3/8] SECURITY.md..."
@@ -674,6 +686,25 @@ before publishing a fix.
 
 # ---- Architecture guards (prevent regressions in invariants) ----
 /tests/unit/test_architecture_*.py      @chrishuie
+
+# ---- Test infrastructure & ratchet baselines (shrink-only contract per ADR-004) ----
+/Makefile                                @chrishuie
+/tox.ini                                 @chrishuie
+/mypy.ini                                @chrishuie
+/pytest.ini                              @chrishuie
+/tests/conftest.py                       @chrishuie
+/tests/integration/conftest.py           @chrishuie
+/tests/conftest_db.py                    @chrishuie
+/tests/factories/                        @chrishuie
+/.duplication-baseline                   @chrishuie
+/.type-ignore-baseline                   @chrishuie
+/.coverage-baseline                      @chrishuie
+/.guard-baselines/                       @chrishuie
+/tests/unit/.allowlist-*.json            @chrishuie
+/tests/unit/obligation_coverage_allowlist.json         @chrishuie
+/tests/unit/obligation_test_quality_allowlist.json     @chrishuie
+# Note: .coverage-baseline and .guard-baselines/ may not exist yet; their inclusion
+# is forward-looking for when PR 3 / PR 4 create them.
 ```
 
 ## Embedded dependabot.yml (commit to `.github/dependabot.yml`)

@@ -5,7 +5,7 @@
 
 **What this PR does.** Single source of truth per dimension. Python: `.python-version` referenced via `python-version-file:` everywhere; `Dockerfile` uses `ARG PYTHON_VERSION`. Postgres: every reference `postgres:17-alpine`. uv: `COPY --from=ghcr.io/astral-sh/uv:<version>` in Dockerfile; `version:` pin in setup-uv. **Black + ruff target-version bumps DEFERRED per D28 (P0 sweep — separate post-#1234 PR per ADR-008).** Drift closed: PD9 (partial — Python/uv/Postgres anchors only), PD10, PD11, PD12.
 
-**You can rely on.** PR 3 Phase C deleted `test.yml` — most of those references are gone. PR 4 hook latency stable. `_pytest/action.yml` (composite — Decision-4 from P0 sweep) and `ci.yml` per-job services already use `postgres:17-alpine`. Guards backfill from PR 4 means `@pytest.mark.architecture` is registered.
+**You can rely on.** PR 3 Phase C deleted `test.yml` — most of those references are gone. PR 4 hook latency stable. `_pytest/action.yml` (composite — Decision-4 from P0 sweep) and `ci.yml` per-job services already use `postgres:17-alpine`. Guards backfill from PR 4 means `@pytest.mark.arch_guard` is registered.
 
 **You CANNOT do.** Bump Python beyond 3.12; bump uv beyond 0.11.6 pin; bump Postgres beyond 17. Add Fortune-50 patterns (harden-runner, SBOM) — PR 6.
 

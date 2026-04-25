@@ -19,7 +19,7 @@ Consolidate Python, Postgres, and uv version anchors across the repo. Single sou
 
 - Python version bump (3.12 → 3.13) — this PR only aligns existing anchors, doesn't change the version
 - Postgres version bump beyond unifying — PG17 chosen because dev compose already uses it
-- uv version bump — pinning current 0.11.6, not upgrading
+- uv version bump — pinning current 0.11.7, not upgrading
 - New Fortune-50 patterns (harden-runner, SBOM, etc.) — defer to PR 6 follow-up
 
 ## Internal commit sequence
@@ -80,7 +80,7 @@ Same for `setup-uv` action; it auto-detects `.python-version`:
 ```yaml
 - uses: astral-sh/setup-uv@<SHA>
   with:
-    version: '0.11.6'
+    version: '0.11.7'
     python-version-file: .python-version
 ```
 
@@ -128,16 +128,16 @@ Closes PD12.
 RUN pip install --no-cache-dir uv
 
 # After:
-ARG UV_VERSION=0.11.6
+ARG UV_VERSION=0.11.7
 COPY --from=ghcr.io/astral-sh/uv:${UV_VERSION} /uv /uvx /usr/local/bin/
 ```
 
-This is uv's official 2026 Docker recommendation: faster (no pip layer), cache-friendly, SHA-pinnable via `uv:0.11.6@sha256:<digest>`.
+This is uv's official 2026 Docker recommendation: faster (no pip layer), cache-friendly, SHA-pinnable via `uv:0.11.7@sha256:<digest>`.
 
 For maximum supply-chain rigor, also pin by digest:
 ```dockerfile
-ARG UV_VERSION=0.11.6
-ARG UV_DIGEST=sha256:abc123...   # capture from `docker pull ghcr.io/astral-sh/uv:0.11.6 && docker inspect`
+ARG UV_VERSION=0.11.7
+ARG UV_DIGEST=sha256:abc123...   # capture from `docker pull ghcr.io/astral-sh/uv:0.11.7 && docker inspect`
 COPY --from=ghcr.io/astral-sh/uv:${UV_VERSION}@${UV_DIGEST} /uv /uvx /usr/local/bin/
 ```
 
@@ -163,7 +163,7 @@ inputs:
   uv-version:
     description: 'uv version to install'
     required: false
-    default: '0.11.6'   # MUST match Dockerfile ARG UV_VERSION
+    default: '0.11.7'   # MUST match Dockerfile ARG UV_VERSION
 ```
 
 Add a structural guard test:
@@ -177,7 +177,7 @@ from pathlib import Path
 import pytest
 
 
-@pytest.mark.architecture
+@pytest.mark.arch_guard
 def test_uv_version_consistent():
     repo = Path(__file__).resolve().parents[2]
     dockerfile = (repo / "Dockerfile").read_text()

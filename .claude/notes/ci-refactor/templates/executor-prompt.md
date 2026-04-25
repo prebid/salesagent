@@ -186,6 +186,18 @@ After all commits:
     aggregator. `run_all_tests.sh` runs all 6 + combine. Some plan prose
     still says "5 suites" — disregard.
 
+**Rule 19 — Empirical pre-flight before applying spec.**
+Before authoring any commit in a PR, verify the spec's assumptions about the current code state by reading the actual files. Round 9 verification surfaced 6 cases where plan-vs-reality drift had survived 5 audit rounds:
+
+- "Ports check_X.py from grep to AST" — but check_X.py is already AST.
+- "Register marker in pyproject.toml [tool.pytest.ini_options]" — but the project uses pytest.ini.
+- "factory-boy Sequence collisions" — but per-test UUID DBs neutralize most collision risk.
+- "User doesn't use beads" memory — but `.beads/issues.jsonl` exists in this repo.
+- "AST guard violations: 0" — but rootmodel-access AST surfaces ~18 pre-existing violations.
+- "Lines 470-486" — but actual mutations are at 478-486.
+
+If a spec assumption fails to match the code, ESCALATE — do not "fix it up" silently. Open `escalations/pr<N>-<topic>.md`, document the drift, and STOP. The user reads, decides, you resume.
+
 ## Escalation triggers — STOP and report to the user if any occur
 
 - <PR-specific triggers from spec §"Escalation triggers">

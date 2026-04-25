@@ -72,6 +72,23 @@ If the delta is > 200 (D13 tripwire), STOP and escalate. Comment out `pydantic.m
 
 If the delta is ≤ 200, proceed to Commit 3.
 
+**Plugin canary verification (new).** The D13 ">200 errors" tripwire cannot distinguish "plugin loaded with 200 errors" from "plugin not loaded → 0 errors counted." Without a canary, the tripwire is uninstrumented. Create a deliberate canary at `tests/unit/_pydantic_mypy_canary.py`:
+
+```python
+from pydantic import BaseModel, Field
+
+class CanaryModel(BaseModel):
+    # pydantic.mypy plugin should flag this assignment as type-incompatible
+    value: int = Field(default="not_an_int")  # type-error iff plugin loaded
+```
+
+Verification command:
+```bash
+uv run mypy tests/unit/_pydantic_mypy_canary.py 2>&1 | grep -q "Incompatible default"
+```
+
+If mypy does NOT report the expected error, the plugin failed to load and the migration is broken — STOP. See [pydantic.mypy plugin docs](https://docs.pydantic.dev/latest/integrations/mypy/) for plugin behavior. This assertion is also added to verify-pr2.sh below.
+
 Verification (assumes pydantic plugin error fixes in commit 3):
 ```bash
 yq '.repos[0].hooks[] | select(.id == "mypy") | .language' .pre-commit-config.yaml | grep -qx system
@@ -207,7 +224,7 @@ def _package_name(spec: str) -> str:
     return re.split(r"[\[=<>!~;]", spec, 1)[0].strip().lower()
 
 
-@pytest.mark.architecture
+@pytest.mark.arch_guard
 def test_no_additional_deps_for_project_libs():
     repo = pathlib.Path(__file__).resolve().parents[2]
     cfg = yaml.safe_load((repo / ".pre-commit-config.yaml").read_text())
@@ -235,14 +252,13 @@ def test_no_additional_deps_for_project_libs():
     assert not violations, "\n".join(violations)
 ```
 
-Add `@pytest.mark.architecture` marker registration to `pyproject.toml` `[tool.pytest.ini_options].markers` if not already present:
+Add `@pytest.mark.arch_guard` marker registration to `pytest.ini` `[pytest]` section under the existing `markers =` continuation lines (NOT `pyproject.toml [tool.pytest.ini_options]` — the project uses `pytest.ini` with `--strict-markers` as its pytest config source). The marker name is `arch_guard` to avoid collision with the entity-marker `architecture` that PR 4 addresses:
 
-```toml
-[tool.pytest.ini_options]
-markers = [
-    "architecture: structural guards (run with -m architecture)",
+```ini
+[pytest]
+markers =
+    arch_guard: structural guards (run with -m arch_guard)
     # ... existing markers
-]
 ```
 
 Verification:
@@ -294,7 +310,7 @@ From issue #1234 §Acceptance criteria, scoped to PR 2:
 
 Plus agent-derived:
 
-- [ ] `@pytest.mark.architecture` marker registered in `pyproject.toml`
+- [ ] `@pytest.mark.arch_guard` marker registered in `pytest.ini` `[pytest].markers`
 - [ ] `tests/unit/_architecture_helpers.py` shared helper module exists
 - [ ] `[project.optional-dependencies].ui-tests` migrated to `[dependency-groups].ui-tests` (D14)
 - [ ] All 5 `uv sync --extra dev` callsites in `test.yml` migrated to `--group dev`
@@ -315,35 +331,49 @@ Inline:
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "[1/9] No additional_dependencies for project libs..."
+fail() { echo "FAIL: $*" >&2; exit 1; }
+
+echo "[1/12] No additional_dependencies for project libs..."
 [[ $(grep -c 'additional_dependencies:' .pre-commit-config.yaml) == "0" ]]
 
-echo "[2/9] mirrors-mypy and psf/black repo blocks gone..."
+echo "[2/12] mirrors-mypy and psf/black repo blocks gone..."
 ! grep -q 'mirrors-mypy' .pre-commit-config.yaml
 ! grep -q 'psf/black' .pre-commit-config.yaml
 
-echo "[3/9] Local hooks present..."
+echo "[3/12] Local hooks present..."
 yq '.repos[0].hooks[] | select(.id == "mypy") | .language' .pre-commit-config.yaml | grep -qx system
 yq '.repos[0].hooks[] | select(.id == "black") | .language' .pre-commit-config.yaml | grep -qx system
 
-echo "[4/9] [project.optional-dependencies].dev deleted..."
+echo "[4/12] [project.optional-dependencies].dev deleted..."
 ! awk '/\[project\.optional-dependencies\]/,/^\[/' pyproject.toml | grep -qE '^dev\s*='
 
-echo "[5/9] ui-tests migrated to dependency-groups..."
+echo "[5/12] ui-tests migrated to dependency-groups..."
 awk '/\[dependency-groups\]/,/^\[/' pyproject.toml | grep -qE '^ui-tests\s*='
 
-echo "[6/9] CI uses --group dev..."
+echo "[6/12] CI uses --group dev..."
 [[ $(grep -c 'uv sync --extra dev' .github/workflows/test.yml) == "0" ]]
 [[ $(grep -c 'uv sync --group dev' .github/workflows/test.yml) -ge "5" ]]
 
-echo "[7/9] Structural guard..."
+echo "[7/12] Structural guard..."
 test -f tests/unit/test_architecture_pre_commit_no_additional_deps.py
 uv run pytest tests/unit/test_architecture_pre_commit_no_additional_deps.py -v -x
 
-echo "[8/9] mypy passes..."
+echo "[8/12] mypy passes..."
 uv run mypy src/ --config-file=mypy.ini
 
-echo "[9/9] make quality passes..."
+echo "[9/12] pydantic.mypy plugin canary loads (proves plugin active, not silently dropped)..."
+test -f tests/unit/_pydantic_mypy_canary.py || fail "canary fixture missing"
+uv run mypy tests/unit/_pydantic_mypy_canary.py 2>&1 | grep -q "Incompatible default" \
+  || fail "pydantic.mypy plugin not loaded — D13 tripwire is uninstrumented"
+
+echo "[10/12] arch_guard marker registered in pytest.ini..."
+grep -q '^[[:space:]]*arch_guard:' pytest.ini || fail "arch_guard marker not registered in pytest.ini"
+
+echo "[11/12] adcp version current (was stale at 3.2.0 pre-migration)..."
+# Confirm post-migration adcp version is current (was stale at 3.2.0 pre-migration)
+uv run python -c "import adcp; assert adcp.__version__ >= '3.10', f'expected adcp>=3.10, got {adcp.__version__}'"
+
+echo "[12/12] make quality passes..."
 make quality
 
 echo "PR 2 verification PASSED"
@@ -389,7 +419,14 @@ Recovery: < 30 minutes.
 ## Coordination notes for the maintainer
 
 1. **Before authoring**: capture `.mypy-baseline.txt` per pre-flight P2.
-2. **Between commits 2 and 3**: review the pydantic.mypy error delta. If > 200, escalate per D13.
-3. **After commit 4**: verify CI is green BEFORE proceeding to commit 5 (the optional-deps deletion).
-4. **After commit 7**: run `uv run black --version` and verify the version matches `uv.lock`'s resolved black version. PD2's drift is gone if these match.
-5. **After merge**: open a follow-up issue to remove the temporary `# type: ignore[...]` comments added in commit 3 (track them with grep `git grep '# type: ignore' src/`).
+2. **Empirical pre-check (new)**: before authoring commit 8, verify `pytest.ini` exists at repo root and contains `[pytest]` section with a `markers =` block. If `pyproject.toml [tool.pytest.ini_options]` is being used instead, escalate — pytest.ini takes precedence when both are present and that's the project's config source.
+   ```bash
+   test -f pytest.ini || { echo "pytest.ini missing — escalate"; exit 1; }
+   grep -q '^\[pytest\]' pytest.ini || { echo "pytest.ini lacks [pytest] section — escalate"; exit 1; }
+   awk '/^\[pytest\]/,/^\[/' pytest.ini | grep -qE '^markers\s*=' || { echo "pytest.ini lacks markers block — escalate"; exit 1; }
+   ! grep -qE '^\[tool\.pytest\.ini_options\]' pyproject.toml || { echo "pyproject.toml has competing [tool.pytest.ini_options] — escalate"; exit 1; }
+   ```
+3. **Between commits 2 and 3**: review the pydantic.mypy error delta. If > 200, escalate per D13. Verify the canary fixture (`tests/unit/_pydantic_mypy_canary.py`) flags as expected — proves the plugin is actually loaded and the D13 tripwire is instrumented.
+4. **After commit 4**: verify CI is green BEFORE proceeding to commit 5 (the optional-deps deletion).
+5. **After commit 7**: run `uv run black --version` and verify the version matches `uv.lock`'s resolved black version. PD2's drift is gone if these match.
+6. **After merge**: open a follow-up issue to remove the temporary `# type: ignore[...]` comments added in commit 3 (track them with grep `git grep '# type: ignore' src/`).

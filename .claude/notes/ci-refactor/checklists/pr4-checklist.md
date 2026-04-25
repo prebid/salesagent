@@ -9,23 +9,23 @@
 
 Commits in order:
 
-[ ] 1. test: extend _architecture_helpers.py + verify @pytest.mark.architecture marker
+[ ] 1. test: extend _architecture_helpers.py + verify @pytest.mark.arch_guard marker
        Files: tests/unit/_architecture_helpers.py (extend with parse_module, iter_function_defs,
               iter_call_expressions, src_python_files, repo_root per spec)
        Verify: uv run python -c "from tests.unit._architecture_helpers import parse_module, \
                  iter_function_defs, iter_call_expressions, src_python_files, repo_root; print('OK')"
 
-[ ] 2. test: backfill @pytest.mark.architecture on existing 27 guards
+[ ] 2. test: backfill @pytest.mark.arch_guard on existing 27 guards
        Files: 23 tests/unit/test_architecture_*.py + 3 transport-boundary guards
-       Mechanical: prepend @pytest.mark.architecture to every def test_* line.
+       Mechanical: prepend @pytest.mark.arch_guard to every def test_* line.
        Verify: for f in tests/unit/test_architecture_*.py tests/unit/test_no_toolerror_in_impl.py \
                        tests/unit/test_transport_agnostic_impl.py tests/unit/test_impl_resolved_identity.py; do
                  [[ -f "$f" ]] || continue
                  t=$(grep -c '^def test_\|^    def test_' "$f")
-                 m=$(grep -B1 'def test_' "$f" | grep -c '@pytest.mark.architecture')
+                 m=$(grep -B1 'def test_' "$f" | grep -c '@pytest.mark.arch_guard')
                  [[ "$t" == "$m" ]] || { echo "marker missing in $f: $m/$t"; exit 1; }
                done
-               uv run pytest tests/unit/ -m architecture -v 2>&1 | tail -3
+               uv run pytest tests/unit/ -m arch_guard -v 2>&1 | tail -3
 
 [ ] 3. test: add 5 new structural guards (4 new + 1 extension)
        Files: tests/unit/test_architecture_no_tenant_config.py (new; spec §Commit 3)

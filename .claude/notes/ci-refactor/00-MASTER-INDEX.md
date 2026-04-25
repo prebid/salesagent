@@ -2,6 +2,8 @@
 
 Tracks the rollout of GitHub issue [#1234](https://github.com/prebid/salesagent/issues/1234): a **6-PR rollout** (PR 1-5 core + PR 6 image supply-chain follow-up) that brings the salesagent repo to top-tier OSS supply-chain posture.
 
+**Round 9 sweep applied 2026-04-25** — see [`RESUME-HERE.md`](RESUME-HERE.md) for full delta. ~30 net-new findings across cross-PR state handoffs, ecosystem drift, failure modes, layer-model completeness, and governance. P0 + P1 fixes applied. D29 added (marker rename). R16 promoted; R31, R32 added.
+
 ## Status
 
 | PR | Title | Status | Spec | Hidden scope |

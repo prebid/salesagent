@@ -30,4 +30,4 @@
 2. The pydantic.mypy plugin is in `mypy.ini:3` but has been silently dead since project inception because pydantic was never in the old hook's `additional_dependencies`. Re-enabling = surfacing dormant typing debt.
 3. The structural guard pattern uses `_architecture_helpers.py` (introduced here) — PR 4 expands it. Keep helpers minimal (~30 lines).
 4. `tox -e ui --notest` is the smoke check after ui-tests migration; full ui run requires `playwright install`.
-5. `@pytest.mark.architecture` marker registration in `pyproject.toml [tool.pytest.ini_options].markers` happens HERE (commit 8) — PR 4 backfills the marker on existing 27 guards.
+5. `@pytest.mark.arch_guard` marker registration in `pyproject.toml [tool.pytest.ini_options].markers` happens HERE (commit 8) — PR 4 backfills the marker on existing 27 guards.
