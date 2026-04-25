@@ -21,8 +21,6 @@ tests/e2e/
 ├── test_schema_validation_standalone.py  # Standalone schema validation tests
 ├── test_testing_hooks.py              # Testing hooks implementation (PR #34)
 ├── adcp_schema_validator.py            # AdCP schema validation system
-├── schemas/                           # Versioned schema cache for offline validation
-│   └── v1/                           # AdCP v1 schemas (37 files, ~160KB)
 └── README.md                          # This file
 ```
 
@@ -184,20 +182,18 @@ pytest tests/e2e/test_schema_validation_standalone.py -v
 ```
 
 ### Cached Schemas
-- **Location**: `tests/e2e/schemas/v1/` (37 schemas, ~160KB)
+- **Location**: `schemas/<version>/` at the repo root (gitignored runtime cache)
 - **Purpose**: Offline validation, CI reliability, version pinning
-- **Update**: Manual updates when AdCP specification changes
+- **Update**: Run `make schemas-refresh` to populate from upstream
 
-### Multi-Version Support
+### Schema Version
 ```python
-# Use specific schema version
-async with AdCPSchemaValidator(adcp_version="v1") as validator:
-    await validator.validate_response("get-products", data)
-
-# Future: Support multiple versions for different partners
-async with AdCPSchemaValidator(adcp_version="v2") as validator:
+# "latest" tracks the floating upstream alias (currently the only supported value)
+async with AdCPSchemaValidator(adcp_version="latest") as validator:
     await validator.validate_response("get-products", data)
 ```
+
+Per-version pinning is a follow-up: `BASE_SCHEMA_URL` / `INDEX_URL` are hardcoded to `/schemas/latest/`. Passing anything else raises `ValueError`.
 
 ## Writing New Tests
 

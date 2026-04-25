@@ -32,7 +32,7 @@ async def debug_validation():
         # Test 2: Look at actual product schema to understand requirements
         print("\n2️⃣ Examining product schema requirements...")
         try:
-            product_schema_ref = "/schemas/v1/core/product.json"
+            product_schema_ref = "/schemas/latest/core/product.json"
             product_schema = await validator.get_schema(product_schema_ref)
 
             required_fields = product_schema.get("required", [])
@@ -53,7 +53,7 @@ async def debug_validation():
         print("\n3️⃣ Testing schema-compliant product...")
         try:
             # Look at product schema required fields
-            product_schema = await validator.get_schema("/schemas/v1/core/product.json")
+            product_schema = await validator.get_schema("/schemas/latest/core/product.json")
             required = product_schema.get("required", [])
             print(f"Product schema requires: {required}")
 

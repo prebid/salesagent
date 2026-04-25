@@ -38,7 +38,7 @@ class TestA2AProtocolCompliance:
         """
         async with AdCPSchemaValidator(offline_mode=False) as validator:
             # Load official AdCP schema
-            schema = await validator.get_schema("/schemas/v1/media-buy/update-media-buy-request.json")
+            schema = await validator.get_schema("/schemas/latest/media-buy/update-media-buy-request.json")
 
             # Verify schema uses 'packages' field (not 'updates')
             assert "packages" in schema["properties"], "AdCP schema should define 'packages' field"
@@ -82,7 +82,7 @@ class TestA2AProtocolCompliance:
 
             for skill in adcp_skills:
                 # Map skill name to schema path
-                schema_path = f"/schemas/v1/media-buy/{skill.replace('_', '-')}-request.json"
+                schema_path = f"/schemas/latest/media-buy/{skill.replace('_', '-')}-request.json"
 
                 try:
                     schema = await validator.get_schema(schema_path)
@@ -108,7 +108,7 @@ class TestA2AProtocolCompliance:
         Validates the request accepts AdCP-compliant field names.
         """
         async with AdCPSchemaValidator(offline_mode=False) as validator:
-            schema = await validator.get_schema("/schemas/v1/media-buy/get-media-buy-delivery-request.json")
+            schema = await validator.get_schema("/schemas/latest/media-buy/get-media-buy-delivery-request.json")
 
             # Verify expected fields from AdCP spec
             assert "media_buy_ids" in schema["properties"], "Should accept media_buy_ids (plural) per AdCP spec"

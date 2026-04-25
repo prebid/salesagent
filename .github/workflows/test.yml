@@ -5,7 +5,6 @@ on:
     branches: [ main, develop ]
   pull_request:
     branches: [ main , develop ]
-  workflow_dispatch:
 
 env:
   PYTHON_VERSION: '3.12'
@@ -74,8 +73,8 @@ jobs:
         fi
         echo "✅ No skip decorators found"
 
-  unit-tests:
-    name: Unit Tests
+  refresh-schemas:
+    name: Refresh AdCP Schema Cache
     runs-on: ubuntu-latest
 
     steps:
@@ -102,6 +101,52 @@ jobs:
     - name: Install dependencies
       run: uv sync --extra dev
 
+    - name: Refresh schemas/latest/ cache
+      run: make schemas-refresh
+
+    - name: Upload schemas artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: adcp-schemas
+        path: schemas/
+        retention-days: 1
+        if-no-files-found: error
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: refresh-schemas
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v4
+      with:
+        version: ${{ env.UV_VERSION }}
+
+    - name: Cache uv dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/uv
+          .venv
+        key: ${{ runner.os }}-uv-v2-${{ hashFiles('**/uv.lock') }}
+
+    - name: Install dependencies
+      run: uv sync --extra dev
+
+    - name: Download schemas artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: adcp-schemas
+        path: schemas/
+
     - name: Run unit tests
       env:
         GEMINI_API_KEY: test_key_for_mocking
@@ -115,6 +160,7 @@ jobs:
     name: Integration (${{ matrix.group }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    needs: refresh-schemas
     strategy:
       fail-fast: false
       matrix:
@@ -171,6 +217,12 @@ jobs:
         uv sync --extra dev
         find . -type d -name __pycache__ -exec rm -rf {} + || true
         find . -type f -name '*.pyc' -delete || true
+
+    - name: Download schemas artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: adcp-schemas
+        path: schemas/
 
     - name: Run database migrations
       env:
@@ -288,8 +340,7 @@ jobs:
     name: E2E Tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # Run E2E tests on PRs and main branch pushes - catch issues early!
-    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    needs: refresh-schemas
 
     steps:
     - uses: actions/checkout@v4
@@ -314,6 +365,12 @@ jobs:
 
     - name: Install dependencies
       run: uv sync --extra dev
+
+    - name: Download schemas artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: adcp-schemas
+        path: schemas/
 
     - name: Verify Docker Compose v2
       run: |
@@ -396,15 +453,31 @@ jobs:
   test-summary:
     name: Test Summary
     runs-on: ubuntu-latest
-    needs: [security-audit, smoke-tests, unit-tests, integration-tests, quickstart-test, e2e-tests, lint]
+    needs: [security-audit, smoke-tests, refresh-schemas, unit-tests, integration-tests, quickstart-test, e2e-tests, lint]
     if: always()
 
     steps:
     - name: Check test results
       run: |
-        if [ "${{ needs.security-audit.result }}" = "failure" ] || [ "${{ needs.unit-tests.result }}" = "failure" ] || [ "${{ needs.integration-tests.result }}" = "failure" ] || [ "${{ needs.quickstart-test.result }}" = "failure" ] || [ "${{ needs.e2e-tests.result }}" = "failure" ] || [ "${{ needs.lint.result }}" = "failure" ]; then
+        fail=0
+        for pair in \
+          "security-audit=${{ needs.security-audit.result }}" \
+          "smoke-tests=${{ needs.smoke-tests.result }}" \
+          "refresh-schemas=${{ needs.refresh-schemas.result }}" \
+          "unit-tests=${{ needs.unit-tests.result }}" \
+          "integration-tests=${{ needs.integration-tests.result }}" \
+          "quickstart-test=${{ needs.quickstart-test.result }}" \
+          "e2e-tests=${{ needs.e2e-tests.result }}" \
+          "lint=${{ needs.lint.result }}"; do
+          name="${pair%%=*}"
+          result="${pair#*=}"
+          if [ "$result" != "success" ]; then
+            echo "::error::$name: $result (expected success)"
+            fail=1
+          fi
+        done
+        if [ "$fail" = "1" ]; then
           echo "❌ Tests failed"
           exit 1
-        else
-          echo "✅ All tests passed (security-audit, smoke, unit, integration x5, quickstart, e2e, lint+mypy)"
         fi
+        echo "✅ All tests passed (security-audit, smoke, refresh-schemas, unit, integration x5, quickstart, e2e, lint+mypy)"

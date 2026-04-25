@@ -40,6 +40,12 @@ and can't be affected by runtime state.
 checking class MRO), guards use `inspect` and `importlib` on the already-imported
 modules.
 
+**Data-driven guards over manifests.** A small subset of guards inspect declarative
+artifacts (e.g., the AdCP schema cache against its own `index.json`) instead of
+Python source. They follow the same constraints as AST guards: pure filesystem +
+JSON, no network, no business-logic execution, deterministic failure with an
+actionable fix command in the message.
+
 ## Guard Inventory
 
 ### Pre-existing Guards
@@ -444,6 +450,53 @@ The guard scans obligation-tagged test files using AST:
 
 Tracked in `obligation_test_quality_allowlist.json`. Allowlist can only shrink.
 Tracked by `salesagent-9q5g`.
+
+### AdCP Schema Cache Completeness Guard
+
+**File:** `tests/unit/test_architecture_adcp_schema_cache_complete.py`
+
+**What it enforces:** The local AdCP schema cache at `schemas/<version>/` must
+contain a cache file for every `$ref` declared in the transitive closure of
+`index.json` and every referenced schema body.
+
+**Why it matters:** When a `$ref` target is missing from the cache, the validator
+raises `SchemaResolutionError` at the resolver boundary. A complete cache is the
+prerequisite for validation to succeed. Earlier versions silently fell back to an
+empty-object stub (`{"type": "object", "additionalProperties": False, "properties":
+{}}`) that masked real AdCP spec drift as spurious `additionalProperties` errors
+at unrelated JSON paths; that fallback has been removed.
+
+#### How it works
+
+The guard reads the cache version from `schemas/.current-version` (written by
+`make schemas-refresh`; defaults to `"latest"`). It loads `schemas/<version>/index.json`,
+seeds a BFS queue with every `$ref` it contains, and pops each ref in turn. For
+local refs (`/schemas/<version>/...`), it computes the cache filename via the
+same `replace("/", "_").replace(".", "_") + ".json"` transform the validator
+uses, asserts the file exists, loads it, and enqueues any nested `$ref`s.
+
+Missing or malformed cache files accumulate into one report; the assertion
+fails with a `make schemas-refresh` pointer.
+
+#### Fix when this fails
+
+```bash
+make schemas-refresh
+```
+
+This invokes `scripts/ops/refresh_adcp_schemas.py`, which fetches the same
+transitive closure from upstream and writes each schema into the cache.
+
+#### Tests
+
+| Test | What It Checks |
+|------|---------------|
+| `test_cache_contains_all_transitive_refs` | Every `$ref` in the BFS closure has a cache file; cache files parse as JSON |
+
+#### Allowlist policy
+
+**No allowlist.** A partial cache is a stale cache: the validator's silent-stub
+fallback would re-emerge for missing refs. The guard is all-or-nothing.
 
 ### Single Migration Head Guard
 
