@@ -4,11 +4,18 @@
 **Estimated effort:** 2 days
 **Depends on:** PR 3 Phase C merged (CI / Quality Gate must exist before deleting hooks whose work moves there)
 **Blocks:** PR 5 (PR 5 is independent but conventionally lands after PR 4 to keep the rollout's commit history clean)
-**Decisions referenced:** D9, D17, D18
+**Decisions referenced:** D3, D9, D12, D17, D18, D27, D29, D31, D44
+
+**Pre-requisite (per A25):** PR 4 deletes hooks whose work moved to `CI / Quality Gate`. Phase B (PR 3) MUST be complete and the 14 frozen checks MUST be enforced as required-checks before PR 4 commit 7 lands. Verify:
+```bash
+gh api repos/$OWNER/$REPO/branches/main/protection/required_status_checks --jq '.checks | length'
+# expect: 14
+```
+Without this, deleting commit-stage hooks creates a coverage gap until PR 3 lands.
 
 ## Scope
 
-Per-hook reassignment per the layered architecture. Drops warm pre-commit latency from ~23s to ~1.7s (10× improvement). Migrates 5 grep-based hooks to AST-based structural guards. Moves **10** medium-cost hooks to `pre-push` stage (per D27 revised Round 8 — was 5, then 9, now 10 with `mypy` added per D3). Migrates 4 expensive hooks to CI-only. Deletes 6 dead/advisory hooks. Adds `@pytest.mark.arch_guard` marker per D12.
+Per-hook reassignment per the layered architecture. Drops warm pre-commit latency from ~23s to ~1.7s (10× improvement). Migrates 5 grep-based hooks to AST-based structural guards. Moves **10** medium-cost hooks to `pre-push` stage (per D27 — `mypy` is the 10th, added per D3). Migrates 4 expensive hooks to CI-only. Deletes 6 dead/advisory hooks. Adds `@pytest.mark.arch_guard` marker per D12.
 
 **Internal commit ordering is load-bearing:** all new structural guards must pass on main BEFORE any hook is deleted. The spec enforces this.
 
@@ -52,26 +59,26 @@ ORDER IS LOAD-BEARING. Guards added before hook deletions.
 Files:
 - `.pre-commit-config.yaml` (add `default_install_hook_types: [pre-commit, pre-push]` directive at top — per D31)
 - `tests/unit/_architecture_helpers.py` (**EXTEND** — file already created in PR 2 commit 8 as ~30-line baseline; this PR grows it to ~221 lines with the AST-walking helpers below)
-- `pytest.ini` — **NOT modified by this PR**. Marker registration is owned by PR 2 commit 8 (per D29 + Round 10 MF-1 ownership clarification). This commit VERIFIES (grep) registration; does not re-write.
+- `pytest.ini` — **NOT modified by this PR**. Marker registration is owned by PR 2 commit 8 (per D29). This commit VERIFIES (grep) registration; does not re-write.
 
 Per D12 (helpers structure), D29 (marker name), D31 (`default_install_hook_types` directive).
 
-**Ownership rule (resolves Blocker #3 + Round 10 MF-1):**
+**Ownership rule (resolves Blocker #3):**
 - `_architecture_helpers.py`: PR 2 commit 8 creates the baseline (`repo_root`, `parse_module` mtime-keyed cache, `iter_function_defs`, `iter_call_expressions`, `src_python_files`). PR 4 commit 1 EXTENDS by appending the additional helpers (`iter_workflow_files`, `iter_compose_files`, `iter_action_uses`, `iter_python_version_anchors`, `iter_postgres_image_refs`, `assert_violations_match_allowlist`, `assert_anchor_consistency`, `format_failure`). The final reconciled module is at `.claude/notes/ci-refactor/drafts/_architecture_helpers.py` (221 lines) — lift verbatim during execution.
-- `pytest.ini [pytest].markers` `arch_guard` registration: PR 2 commit 8 OWNS the write. PR 4 commit 1 VERIFIES only. Round 10 audit (MF-1) caught a dual-registration in earlier spec revisions; the verify-only stance here resolves it.
+- `pytest.ini [pytest].markers` `arch_guard` registration: PR 2 commit 8 OWNS the write. PR 4 commit 1 VERIFIES only (avoids dual-registration).
 
 `.pre-commit-config.yaml` change (add the directives at the top of the file, before any `repos:` block):
 
 ```yaml
 # .pre-commit-config.yaml — top of file
-# Round 11 D44: minimum_pre_commit_version surfaces version-too-old errors at
+# D44: minimum_pre_commit_version surfaces version-too-old errors at
 # `pre-commit install` time rather than silently ignoring `default_install_hook_types`.
 # Without this, contributors with pre-commit < 3.2 silently get no pre-push hooks
 # even though they ran `pre-commit install` — exactly the failure D31 was supposed
 # to prevent.
 minimum_pre_commit_version: 3.2.0
 
-# Round 10 D31: auto-install both pre-commit AND pre-push hook types when contributors
+# D31: auto-install both pre-commit AND pre-push hook types when contributors
 # run `pre-commit install` (no need for `--hook-type pre-push` qualifier).
 # Without this, the 10 hooks moved to stages: [pre-push] (per D27) silently
 # don't run on contributor machines — see D31 / R33.
@@ -172,9 +179,9 @@ uv run python -c "from tests.unit._architecture_helpers import (
 
 ### Commit 1.5 — `test: AST guard pre-existing-violation audit (P0 gate before hook deletion)`
 
-Before Commit 7 deletes the legacy grep hooks, every new AST guard in commit 3 must pass against current `main`. Empirical Round 9 scan surfaced ~18 pre-existing violations of the `check-rootmodel-access` AST equivalent that the current grep hook tolerates (because grep runs `pass_filenames: true` and only sees the changed-file slice). The new tree-wide guard sees them all.
+Before Commit 7 deletes the legacy grep hooks, every new AST guard in commit 3 must pass against current `main`. Empirical scan surfaced ~18 pre-existing violations of the `check-rootmodel-access` AST equivalent that the current grep hook tolerates (because grep runs `pass_filenames: true` and only sees the changed-file slice). The new tree-wide guard sees them all.
 
-Known pre-existing `check-rootmodel-access` violations on main (Round 9 scan):
+Known pre-existing `check-rootmodel-access` violations on main:
 - `src/core/helpers/account_helpers.py:121`
 - `tests/unit/test_targeting_normalizer.py` (lines 17, 22, 27, 33, 43, 50, 56, 62, 92)
 - `tests/unit/test_adcp_contract.py` (lines 2624, 2674, 2797)
@@ -241,7 +248,7 @@ Files:
 - `tests/unit/test_architecture_no_defensive_rootmodel.py` (new)
 - `tests/unit/test_architecture_import_usage.py` (new, ports logic from `.pre-commit-hooks/check_import_usage.py`)
 - `tests/unit/test_architecture_query_type_safety.py` (extend with two new test functions: `test_no_legacy_session_query` and `test_models_use_mapped_not_column`)
-- **`tests/unit/test_architecture_required_ci_checks_frozen.py` (lift verbatim from `.claude/notes/ci-refactor/drafts/guards/test_architecture_required_ci_checks_frozen.py`)** — Round 12 R12B-01 caught that this guard was referenced as if-existing in PR 3 + PR 6 specs but no PR commit lifted it. Without this lift, R36 mitigation (PR 6 commit 4 updating the expected list) cannot land — the file doesn't exist for PR 6 to modify.
+- **`tests/unit/test_architecture_required_ci_checks_frozen.py` (lift verbatim from `.claude/notes/ci-refactor/drafts/guards/test_architecture_required_ci_checks_frozen.py`)** — referenced as if-existing in PR 3 + PR 6 specs but no PR commit previously lifted it (per R12B-01). Without this lift, R36 mitigation (PR 6 commit 4 updating the expected list) cannot land — the file doesn't exist for PR 6 to modify.
 
 ```bash
 # Lift step (do this BEFORE writing the 5 new guards, so the helpers import is consistent):
@@ -249,7 +256,7 @@ cp .claude/notes/ci-refactor/drafts/guards/test_architecture_required_ci_checks_
    tests/unit/test_architecture_required_ci_checks_frozen.py
 ```
 
-The drafts/ original stays as audit trail (Round 11 D36 lifecycle: drafts/ → production location). The lifted file's _BARE_JOB_NAMES tuple already lists 14 names per Round 11 R11A-01 fix; PR 6 commit 4 will extend to 15 per R36.
+The drafts/ original stays as audit trail (per D36 lifecycle: drafts/ → production location). The lifted file's _BARE_JOB_NAMES tuple already lists 14 names per R11A-01; PR 6 commit 4 will extend to 15 per R36.
 
 Each guard pattern:
 
@@ -473,14 +480,15 @@ Add `stages: [pre-push]` to:
 - `check-tenant-context-order` (Python script invocation; not formatter-fast)
 - `ast-grep-bdd-guards` (only relevant pre-push since BDD tests run there)
 - `check-migration-completeness` (only matters if `alembic/versions/` changed)
+- `mypy` (per D3 — conditional on Pre-flight P8 warm-time check; CI's `CI / Type Check` job is authoritative)
 
-Closes PD16. **Resolves Blocker #2:** post-rollout commit-stage hook count must reach ≤12. **Real baseline (Round 8 disk-verified 2026-04-25): 36 effective commit-stage hooks** — 40 active `- id:` entries (line 187 `adcp-schema-sync` is commented out) minus 4 at `stages: [manual]` (`smoke-tests`, `test-migrations`, `pytest-unit`, `mcp-endpoint-tests`). The earlier "33 effective" framing in the P0 sweep was off by 3 (40 vs the assumed 36 + 4 vs 3 manual).
+Closes PD16. **Resolves Blocker #2:** post-rollout commit-stage hook count must reach ≤12. **Real baseline (disk-verified): 36 effective commit-stage hooks** — 40 active `- id:` entries (line 187 `adcp-schema-sync` is commented out) minus 4 at `stages: [manual]` (`smoke-tests`, `test-migrations`, `pytest-unit`, `mcp-endpoint-tests`). Earlier "thirty-three-effective" framing was off by 3 (40 vs the assumed 36 + 4 vs 3 manual).
 
-Of plan's 15 deletions, **2 are already manual** (`pytest-unit`, `mcp-endpoint-tests`) — they reduce the dead-manual count, not the commit-stage count. So the deletion sweep removes 13 commit-stage hooks plus 2 manual stubs.
+Of plan's 16 total deletions, **3 are already manual** (`pytest-unit`, `mcp-endpoint-tests`, `test-migrations`) — they reduce the dead-manual count, not the commit-stage count. So the deletion sweep removes 13 commit-stage hooks plus 3 manual stubs (`pytest-unit`, `mcp-endpoint-tests`, `test-migrations`) = 16 total deletions; only the 13 commit-stage count toward the math reduction since the 3 manual stubs were already excluded from the effective baseline.
 
-**Real math (Round 8 revised):** 36 effective commit-stage − 13 commit-stage deletions − **10** moves to pre-push − 1 consolidation = **12 commit-stage hooks** (exactly at ≤12 ceiling, zero headroom).
+**Real math:** 36 effective commit-stage − 13 commit-stage deletions − **10** moves to pre-push − 1 consolidation = **12 commit-stage hooks** (exactly at ≤12 ceiling, zero headroom).
 
-**Math note (Round 9 clarification):** the `−1` consolidation term is shorthand for `−2 deletions + 1 new consolidation hook` (Commit 6 deletes the `no-skip-tests` and `no-fn-calls` grep one-liners and adds the single `repo-invariants` hook). Equivalent expanded form: `36 − 13 − 10 − 2 + 1 = 12`.
+**Math note:** the `−1` consolidation term is shorthand for `−2 deletions + 1 new consolidation hook` (Commit 6 deletes the `no-skip-tests` and `no-fn-calls` grep one-liners and adds the single `repo-invariants` hook). Equivalent expanded form: `36 − 13 − 10 − 2 + 1 = 12`.
 
 The 10 moves to pre-push:
 1. `check-docs-links`
@@ -496,7 +504,7 @@ The 10 moves to pre-push:
 
 **Coordination with v2.0**: PR 4 (this spec) now owns `test-migrations` deletion (it was previously delegated to a v2.0 phase PR). Net commit-stage count math is unchanged because `test-migrations` is already `stages: [manual]` and was excluded from the 36-effective baseline. Verify post-rebase: if a v2.0 phase PR landed first and already deleted `test-migrations`, drop it from PR 4's Commit 7 deletion list — otherwise the deletion fails.
 
-**Zero headroom warning**: if v2.0 phase PRs add ANY new commit-stage hook before PR 4 lands, the math goes over ceiling. Re-verify disk count at PR 4 authoring time; if >36 effective commit-stage, identify an additional move candidate from `no-hardcoded-urls` (Pattern #6 gate; could move to pre-push if Pattern #6 enforcement gets a structural-guard equivalent) or from `mcp-cors-allowlist`, `check-no-private-ssm`, or any hook with average duration > 200ms.
+**Zero headroom warning**: if v2.0 phase PRs add ANY new commit-stage hook before PR 4 lands, the math goes over ceiling. Re-verify disk count at PR 4 authoring time; if >36 effective commit-stage, identify an additional move candidate from `no-hardcoded-urls` (Pattern #6 gate; could move to pre-push if Pattern #6 enforcement gets a structural-guard equivalent), `check-ast` (fast but adds startup overhead per file), or any hook with average duration > 200ms.
 
 Verification:
 ```bash
@@ -643,11 +651,12 @@ print(n)
 [[ "$HOOKS_COMMIT" -ge 10 ]] || { echo "commit hook count $HOOKS_COMMIT < 10 — likely an over-deletion; re-verify the 13 deletion list"; exit 1; }
 
 # Soft-warning band: at exactly 11/12, the next added Layer-1 hook will hit the hard cap.
+# Warn at exactly 11; investigate via D27 / pr4-hook-relocation.md.
 if [[ "$HOOKS_COMMIT" -eq 11 ]]; then
   echo "WARNING: hook count is 11/12 ceiling — adding a Layer-1 hook will hit hard cap."
-  echo "         Candidate next-moves (push to Layer-2 / pre-push): no-hardcoded-urls,"
-  echo "         mcp-cors-allowlist, check-no-private-ssm."
-  echo "         (Documented in D27 candidate-move list.)"
+  echo "         Investigate next-move candidates via D27 / pr4-hook-relocation.md."
+  echo "         Realistic future moves include no-hardcoded-urls (if Pattern #6 gets a"
+  echo "         structural-guard equivalent) or check-ast (fast but adds startup overhead)."
 fi
 ```
 
@@ -683,19 +692,23 @@ sys.exit(0 if secs < 5 else 1)
 "
 ```
 
-### Commit 9 — DEFERRED to post-v2.0-rebase per 2026-04-25 P0 sweep
+### Commit 9 — DEFERRED to post-v2.0-rebase
 
 **Action:** PR 4 commit 9 (CLAUDE.md guards table audit) **defers** to a post-v2.0-rebase
 follow-up commit. Rationale: v2.0 phase PR adds 3 of D18's 5 "missing rows" (`bdd_obligation_sync`,
 `bdd_no_direct_call_impl`, `test_marker_coverage`). PR 4 commit 9 only adds the residual 2
 (`test_architecture_no_silent_except.py`, `test_architecture_production_session_add.py`), and
-even those should land AFTER v2.0 rebases to avoid table churn. The full ~73-row table audit
-(post-v2.0) is a separate follow-up, not a PR 4 deliverable.
+even those should land AFTER v2.0 rebases to avoid table churn. The full ~81-row table audit
+(post-v2.0; D18 revised in Round 8 — was 73, drift-corrected after v2.0 architecture/ count re-verified at 27 not 31) is a separate follow-up, not a PR 4 deliverable.
 
 **PR 4 commit 9 minimal scope:** add ONLY the 2 residual rows; verify all PR 4-introduced
 guards (4 new + 1 extended) appear in the table. Defer the broader 23→~73 audit.
 
-### Commit 9 — DEFERRED — see above. Below is the legacy spec for reference only:
+---
+**EXECUTOR: SKIP THIS LEGACY BLOCK. The deferral above is canonical.**
+---
+
+### Commit 9 (LEGACY SPEC — DO NOT EXECUTE — preserved for reference only)
 
 Files:
 - `CLAUDE.md` (extend the structural-guards table per D18)
@@ -706,12 +719,11 @@ Add 4 new rows (B1-B5 minus the extension):
 - No defensive RootModel
 - Import usage
 
-CLAUDE.md guard count post-PR-4 (revised 2026-04-25 P0 sweep): the table audit DEFERS to
-post-v2.0-rebase. PR 4 commit 9 adds only the 2 residual rows
-(`test_architecture_no_silent_except.py`, `test_architecture_production_session_add.py`) plus
-the 4 new + 1 extended PR 4 guards. Final count after v2.0 lands: **~73** rows
-(27 baseline + 1 PR 2 + 4 PR 4 + 1 PR 5 + 8 PR 1/3/6 governance + 31 v2.0 architecture tests
-+ 9 v2.0 baseline JSONs). Per D18 (revised in 2026-04-25 P0 sweep). Do NOT update the
+CLAUDE.md guard count post-PR-4: the table audit DEFERS to post-v2.0-rebase. PR 4 commit 9
+adds only the 2 residual rows (`test_architecture_no_silent_except.py`,
+`test_architecture_production_session_add.py`) plus the 4 new + 1 extended PR 4 guards.
+Final count after v2.0 lands: **~73** rows (27 baseline + 1 PR 2 + 4 PR 4 + 1 PR 5 + 8 PR 1/3/6
+governance + 31 v2.0 architecture tests + 9 v2.0 baseline JSONs) per D18. Do NOT update the
 "~73" number in CLAUDE.md until v2.0 phase PRs land — premature update creates phantom rows.
 
 Verification:
@@ -723,82 +735,6 @@ for f in test_architecture_no_tenant_config.py test_architecture_jsontype_column
 done
 # Guard count text reflects 32
 grep -qE '32 (existing )?guards' CLAUDE.md || grep -qE '\b32\b' CLAUDE.md
-```
-
-### Commit 10a — `chore(pre-commit): install pre-push hook stage; add arch-guards entry`
-
-**New commit added in 2026-04-25 P0 sweep.** Without this, the 10 hooks moved to `stages: [pre-push]` in commit 5 don't actually run for contributors who haven't installed the pre-push hook stage.
-
-Files:
-- `.pre-commit-config.yaml` — add the `arch-guards` pre-push entry from
-  `drafts/precommit-prepush-hook.md:5-15` (a single hook that runs `pytest tests/unit/ -m arch_guard -x -q`).
-
-Plus a documentation step (folded into commit 10b below):
-- `CONTRIBUTING.md` (or `docs/development/contributing.md` per D21) — add a one-line
-  "Install both stages: `pre-commit install --hook-type pre-commit --hook-type pre-push`"
-  instruction in the local-setup section.
-
-Without this commit, contributors run `pre-commit install` (default = pre-commit stage only),
-push commits, and discover the 10 pre-push hooks via failed CI rather than locally.
-
-Verification:
-```bash
-# arch-guards entry exists at pre-push stage
-yq '.repos[].hooks[] | select(.id == "arch-guards") | .stages' .pre-commit-config.yaml \
-  | grep -q pre-push
-# CONTRIBUTING.md (canonical copy per D21 — `docs/development/contributing.md`) mentions both stages
-grep -q 'hook-type pre-commit' docs/development/contributing.md
-grep -q 'hook-type pre-push' docs/development/contributing.md
-```
-
-### Commit 10a-bis — `chore(make): pre-push install nudge in `make quality``
-
-**New commit added in 2026-04-25 P1 sweep.** Existing contributors already have `pre-commit install` (commit-stage only) but not `--hook-type pre-push`. After PR 4, their pre-push hooks won't fire locally — CI catches it but the user-experience is "I thought my hooks ran." This commit adds a non-blocking nudge.
-
-Files:
-- `scripts/check-hook-install.sh` (new, ~10 lines)
-- `Makefile` — prepend `scripts/check-hook-install.sh` to the `quality:` target
-
-`scripts/check-hook-install.sh`:
-```bash
-#!/bin/bash
-if [[ ! -f .git/hooks/pre-push ]]; then
-  echo "WARN: pre-push hooks not installed locally."
-  echo "      Run: pre-commit install --hook-type pre-push"
-  echo "      (CI still catches everything; this is a local-feedback warning.)"
-fi
-```
-
-Non-blocking by design — emits a warning, exits 0. The script is the FIRST command in `make quality` so contributors see the warning every quality-gate run until they install the hook stage.
-
-Update both `CONTRIBUTING.md` (root) and `docs/development/contributing.md` (canonical per D21) to document the pre-push install requirement, with the same `pre-commit install --hook-type pre-commit --hook-type pre-push` snippet.
-
-Verification:
-```bash
-test -x scripts/check-hook-install.sh
-grep -qE '^[[:space:]]*scripts/check-hook-install\.sh' Makefile
-# Both docs mention pre-push install
-grep -q 'hook-type pre-push' CONTRIBUTING.md
-grep -q 'hook-type pre-push' docs/development/contributing.md
-```
-
-### Commit 10b — `chore(pre-commit): classify no-hardcoded-urls`
-
-**New commit added in 2026-04-25 P0 sweep.** PR 4's original spec did not classify the
-`no-hardcoded-urls` hook (Critical Pattern #6 enforcement — gates JS/template hardcoded
-URLs). Decision: **KEEP IN PRE-COMMIT** (commit-stage). Rationale: the hook runs in <100ms
-on changed files only, gates a critical-path pattern (script_root discipline) that has no
-structural-guard equivalent, and contributor JS edits benefit from immediate fail-fast
-feedback. Cannot move to pre-push without losing that feedback; cannot delete without
-losing the invariant.
-
-Files:
-- `.pre-commit-config.yaml` — add a `# kept in pre-commit per PR 4 P0 sweep — Pattern #6 gate, no guard equivalent` comment near the `no-hardcoded-urls` hook entry. No structural change.
-
-Verification:
-```bash
-# Hook is at commit-stage (default; not in stages: [...])
-yq '.repos[].hooks[] | select(.id == "no-hardcoded-urls")' .pre-commit-config.yaml | grep -v 'stages:'
 ```
 
 ### Commit 10 — `docs: update ci-pipeline.md and structural-guards.md for layered model`
@@ -842,13 +778,89 @@ grep -qE 'Layer 1.*pre-commit' docs/development/ci-pipeline.md
 grep -qE 'pre_commit_no_additional_deps' docs/development/structural-guards.md
 ```
 
+### Commit 10a — `chore(pre-commit): install pre-push hook stage; add arch-guards entry`
+
+**Required follow-on commit.** Without this, the 10 hooks moved to `stages: [pre-push]` in commit 5 don't actually run for contributors who haven't installed the pre-push hook stage.
+
+Files:
+- `.pre-commit-config.yaml` — add the `arch-guards` pre-push entry from
+  `drafts/precommit-prepush-hook.md:5-15` (a single hook that runs `pytest tests/unit/ -m arch_guard -x -q`).
+
+Plus a documentation step (folded into commit 10b below):
+- `CONTRIBUTING.md` (or `docs/development/contributing.md` per D21) — add a one-line
+  "Install both stages: `pre-commit install --hook-type pre-commit --hook-type pre-push`"
+  instruction in the local-setup section.
+
+Without this commit, contributors run `pre-commit install` (default = pre-commit stage only),
+push commits, and discover the 10 pre-push hooks via failed CI rather than locally.
+
+Verification:
+```bash
+# arch-guards entry exists at pre-push stage
+yq '.repos[].hooks[] | select(.id == "arch-guards") | .stages' .pre-commit-config.yaml \
+  | grep -q pre-push
+# CONTRIBUTING.md (canonical copy per D21 — `docs/development/contributing.md`) mentions both stages
+grep -q 'hook-type pre-commit' docs/development/contributing.md
+grep -q 'hook-type pre-push' docs/development/contributing.md
+```
+
+### Commit 10a-bis — `chore(make): pre-push install nudge in `make quality``
+
+**Required follow-on commit.** Existing contributors already have `pre-commit install` (commit-stage only) but not `--hook-type pre-push`. After PR 4, their pre-push hooks won't fire locally — CI catches it but the user-experience is "I thought my hooks ran." This commit adds a non-blocking nudge.
+
+Files:
+- `scripts/check-hook-install.sh` (new, ~10 lines)
+- `Makefile` — prepend `scripts/check-hook-install.sh` to the `quality:` target
+
+`scripts/check-hook-install.sh`:
+```bash
+#!/bin/bash
+if [[ ! -f .git/hooks/pre-push ]]; then
+  echo "WARN: pre-push hooks not installed locally."
+  echo "      Run: pre-commit install --hook-type pre-push"
+  echo "      (CI still catches everything; this is a local-feedback warning.)"
+fi
+```
+
+Non-blocking by design — emits a warning, exits 0. The script is the FIRST command in `make quality` so contributors see the warning every quality-gate run until they install the hook stage.
+
+Update both `CONTRIBUTING.md` (root) and `docs/development/contributing.md` (canonical per D21) to document the pre-push install requirement, with the same `pre-commit install --hook-type pre-commit --hook-type pre-push` snippet.
+
+Verification:
+```bash
+test -x scripts/check-hook-install.sh
+grep -qE '^[[:space:]]*scripts/check-hook-install\.sh' Makefile
+# Both docs mention pre-push install
+grep -q 'hook-type pre-push' CONTRIBUTING.md
+grep -q 'hook-type pre-push' docs/development/contributing.md
+```
+
+### Commit 10b — `chore(pre-commit): classify no-hardcoded-urls`
+
+**Required follow-on commit.** PR 4's original spec did not classify the
+`no-hardcoded-urls` hook (Critical Pattern #6 enforcement — gates JS/template hardcoded
+URLs). Decision: **KEEP IN PRE-COMMIT** (commit-stage). Rationale: the hook runs in <100ms
+on changed files only, gates a critical-path pattern (script_root discipline) that has no
+structural-guard equivalent, and contributor JS edits benefit from immediate fail-fast
+feedback. Cannot move to pre-push without losing that feedback; cannot delete without
+losing the invariant.
+
+Files:
+- `.pre-commit-config.yaml` — add a `# kept in pre-commit — Pattern #6 gate, no guard equivalent` comment near the `no-hardcoded-urls` hook entry. No structural change.
+
+Verification:
+```bash
+# Hook is at commit-stage (default; not in stages: [...])
+yq '.repos[].hooks[] | select(.id == "no-hardcoded-urls")' .pre-commit-config.yaml | grep -v 'stages:'
+```
+
 ## Acceptance criteria
 
 From issue #1234 §Acceptance criteria, scoped to PR 4:
 
 - [ ] `.pre-commit-config.yaml` hook count ≤ 12 for pre-commit stage (real target: 10, with 2-hook headroom)
 - [ ] `stages: [pre-push]` used for medium-cost hooks
-- [ ] 5 new test_architecture_*.py files exist (4 new + 1 extension), all passing in `tox -e unit`
+- [ ] 6 guard files added/modified: 4 new (`test_architecture_no_tenant_config.py`, `test_architecture_jsontype_columns.py`, `test_architecture_no_defensive_rootmodel.py`, `test_architecture_import_usage.py`) + 1 extension (`test_architecture_query_type_safety.py` gets two new test functions) + 1 lifted from drafts (`test_architecture_required_ci_checks_frozen.py` per R12B-01) — all passing in `tox -e unit`
 - [ ] No `always_run: true` except file-level hygiene hooks
 - [ ] No advisory-only hooks (`|| echo`, `|| true`) remain
 - [ ] Warm `time pre-commit run --all-files` completes in < 5s
@@ -867,22 +879,24 @@ Plus agent-derived:
 
 Canonical post-PR-4 mapping. Lift verbatim into `docs/development/ci-pipeline.md` (Commit 10) and reference from `CONTRIBUTING.md`. Counts are projections; verify against `.pre-commit-config.yaml` after Commit 7.
 
-### Layer 1 — pre-commit (commit-stage; ≤12 hooks; budget ~1-2s warm)
+### Layer 1 — pre-commit (commit-stage; exactly 12 hooks; budget ~1-2s warm)
 
-| Hook ID | Owner | Purpose |
-|---|---|---|
-| `trailing-whitespace` | pre-commit-hooks | File hygiene |
-| `end-of-file-fixer` | pre-commit-hooks | File hygiene |
-| `check-yaml` | pre-commit-hooks | File hygiene |
-| `check-merge-conflict` | pre-commit-hooks | File hygiene |
-| `ruff-format` | astral-sh/ruff-pre-commit | Format Python |
-| `ruff-check` | astral-sh/ruff-pre-commit | Lint Python (incl. C90, PLR) |
-| `repo-invariants` | local (Commit 6) | Consolidates `no-skip-tests`, `no-fn-calls` |
-| `no-hardcoded-urls` | local | Pattern #6 gate (script_root); kept here per Commit 10b |
-| `mcp-cors-allowlist` | local | MCP CORS allowlist invariant |
-| `check-no-private-ssm` | local | No private SSM-prefixed secret refs |
-| (slot 11) | reserved | Soft-warn band — see D27 candidate-move list |
-| (slot 12) | reserved | Hard ceiling — see D27 |
+**Source of truth**: this table is post-PR-4 disk truth. Verified: `36 effective − 13 commit-stage deletions − 10 moves − 2 grep consolidation sources + 1 new repo-invariants = 12`.
+
+| # | Hook ID | Owner | Purpose |
+|---|---|---|---|
+| 1 | `ruff` (with `--fix`) | astral-sh/ruff-pre-commit | Format + lint Python (incl. C90, PLR) |
+| 2 | `black` | psf/black | Format Python |
+| 3 | `trailing-whitespace` | pre-commit-hooks | File hygiene |
+| 4 | `end-of-file-fixer` | pre-commit-hooks | File hygiene |
+| 5 | `check-yaml` | pre-commit-hooks | File hygiene |
+| 6 | `check-merge-conflict` | pre-commit-hooks | File hygiene |
+| 7 | `check-ast` | pre-commit-hooks | Python syntax validation |
+| 8 | `check-json` | pre-commit-hooks | JSON syntax validation |
+| 9 | `check-added-large-files` | pre-commit-hooks | File hygiene |
+| 10 | `debug-statements` | pre-commit-hooks | Forbid `pdb`/`breakpoint()` |
+| 11 | `no-hardcoded-urls` | local | Pattern #6 gate (script_root); kept here per Commit 10b |
+| 12 | `repo-invariants` | local (Commit 6) | NEW consolidation hook (no-skip-tests, no-fn-calls) |
 
 ### Layer 2 — pre-push (push-stage; budget ~10-20s)
 
@@ -910,7 +924,7 @@ The canonical 14 (rendered names — workflow `name: CI` + bare job name; GitHub
 
 `CI / Quality Gate` · `CI / Type Check` · `CI / Schema Contract` · `CI / Security Audit` · `CI / Quickstart` · `CI / Smoke Tests` · `CI / Unit Tests` · `CI / Integration Tests` · `CI / E2E Tests` · `CI / Admin UI Tests` · `CI / BDD Tests` · `CI / Migration Roundtrip` · `CI / Coverage` · `CI / Summary`.
 
-(Round 10 sweep correction: this table previously listed 11 names with several inventions — `Lint`, `Format`, `Coverage Report` — and shorthand `Admin Tests` instead of `Admin UI Tests`. None of those exist. The list above mirrors D17/D30/D26 verbatim. PR 6's `Security / Dependency Review` is OUTSIDE the 14; it lives in `security.yml` namespace.)
+(Earlier draft revisions listed only eleven check names with several inventions — `Lint`, `Format`, `Coverage Report` — and shorthand `Admin Tests` instead of `Admin UI Tests`. None of those exist. The list above mirrors D17/D30/D26 verbatim. PR 6's `Security / Dependency Review` is OUTSIDE the 14; it lives in `security.yml` namespace.)
 
 ### Layer 5 — manual / on-demand (`stages: [manual]`)
 

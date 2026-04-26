@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Verification for PR 6 — Image supply-chain (cosign + harden-runner + SBOM)
 set -uo pipefail
-fail() { echo "FAIL: $*" >&2; exit 1; }
-ok()   { echo "  ok: $*"; }
+
+# Source shared helpers (fail/ok/warn/section + common checks live in _lib.sh)
+source "$(dirname "$0")/_lib.sh"
 
 # Commit 1: harden-runner on every Ubuntu job
 if grep -RhoE 'uses: step-security/harden-runner@' .github/workflows/ >/dev/null 2>&1; then
@@ -16,19 +17,21 @@ if grep -RhoE 'uses: step-security/harden-runner@' .github/workflows/ >/dev/null
   grep -q 'disable-sudo-and-containers: true' .github/workflows/ci.yml \
     && ok "harden-runner uses disable-sudo-and-containers (CVE-2025-32955 mitigated)"
 
-  # Version floor: v2.16.0+ (was v2.12.0+ — bumped in 2026-04-25 P0 sweep to capture
-  # GHSA-46g3-37rh-v698 DoH/DNS-over-TCP egress-bypass advisories patched in v2.13+).
-  # SHA-pinned refs in PR 1's .action-shas.txt; verify the trailing comment shows v2.16+.
+  # Version floor: v2.19.0+ (current pin as of 2026-04-26).
+  # GHSA floor history: v2.12.0 patched CVE-2025-32955 (sudo bypass);
+  # v2.16.0 patched DoH/DNS-over-TCP bypass GHSAs (GHSA-46g3-37rh-v698 + GHSA-g699-3x6g-wm3g);
+  # v2.19.0 captures incremental hardening above v2.16 baseline.
+  # SHA-pinned refs in PR 1's .action-shas.txt; verify the trailing comment shows v2.19+.
   HR_REFS=$(grep -RhoE 'uses: step-security/harden-runner@[a-f0-9]{40}\s*#\s*v[0-9.]+' .github/workflows/ | grep -oE 'v[0-9.]+' | sort -u)
   if [[ -n "$HR_REFS" ]]; then
     while IFS= read -r tag; do
       MAJOR=$(echo "$tag" | tr -d v | cut -d. -f1)
       MINOR=$(echo "$tag" | tr -d v | cut -d. -f2)
-      if [[ "$MAJOR" -lt 2 ]] || { [[ "$MAJOR" -eq 2 ]] && [[ "$MINOR" -lt 16 ]]; }; then
-        fail "harden-runner pinned to $tag — must be ≥v2.16.0 (GHSA-46g3-37rh-v698)"
+      if [[ "$MAJOR" -lt 2 ]] || { [[ "$MAJOR" -eq 2 ]] && [[ "$MINOR" -lt 19 ]]; }; then
+        fail "harden-runner pinned to $tag — must be ≥v2.19.0 (current pin per D34; v2.16 is the GHSA-floor minimum but v2.19 is the documented current)"
       fi
     done <<< "$HR_REFS"
-    ok "harden-runner ≥v2.16.0 (DoH-bypass advisories patched)"
+    ok "harden-runner ≥v2.19.0 (current pin; v2.16 GHSA floor satisfied)"
   fi
 
   # Audit mode initially
@@ -47,8 +50,29 @@ if [[ -f .github/workflows/release-please.yml ]]; then
   grep -q 'DOCKERHUB_USER' .github/workflows/release-please.yml \
     || fail "release-please.yml missing Docker Hub publishing (regression — PR 6 must preserve)"
 
+  # D47 gate prerequisite — release-please outputs.sha declared
+  grep -qE '^\s+sha:\s+\$\{\{\s*github\.sha\s*\}\}' .github/workflows/release-please.yml \
+    || fail "release-please.yml release-please job missing 'sha: \${{ github.sha }}' in outputs (D47 gate broken without it)"
+  ok "release-please.outputs.sha declared (D47 gate operational)"
+
+  # R29 mitigation — TWO publish jobs, sign-and-attest depends on build-and-push
+  grep -qE '^\s+build-and-push:' .github/workflows/release-please.yml \
+    || fail "release-please.yml missing build-and-push job (R29 mitigation requires split from monolithic publish-docker)"
+  grep -qE '^\s+sign-and-attest:' .github/workflows/release-please.yml \
+    || fail "release-please.yml missing sign-and-attest job (R29 mitigation requires split from build-and-push)"
+  grep -A2 'sign-and-attest:' .github/workflows/release-please.yml | grep -q 'needs:.*build-and-push' \
+    || fail "sign-and-attest must depend on build-and-push (needs: build-and-push) — R29 mitigation"
+  ok "publish split into build-and-push + sign-and-attest (R29 mitigation applied)"
+
+  # D47 polling loop — required for 5-30s eventual-consistency tolerance
+  grep -B1 -A20 'Require CI green on release commit' .github/workflows/release-please.yml | grep -qE 'for attempt in.*MAX_ATTEMPTS' \
+    || fail "D47 gate missing polling loop (would false-negative on 5-30s eventual-consistency lag)"
+  ok "D47 gate uses polling loop (eventual-consistency tolerant)"
+
   # New supply-chain hardening present
-  grep -q 'cosign sign --yes' .github/workflows/release-please.yml || fail "release-please.yml missing 'cosign sign --yes'"
+  # --bundle is required in Cosign v3+ (sigstore/cosign-installer@v4.1.1 installs Cosign v3+)
+  grep -q 'cosign sign --yes --bundle' .github/workflows/release-please.yml \
+    || fail "release-please.yml missing 'cosign sign --yes --bundle' (--bundle required in Cosign v3+)"
   grep -q 'actions/attest-build-provenance' .github/workflows/release-please.yml || fail "release-please.yml missing attest-build-provenance"
   grep -q 'sbom: true' .github/workflows/release-please.yml || fail "release-please.yml missing 'sbom: true'"
   grep -q 'provenance: mode=max' .github/workflows/release-please.yml || fail "release-please.yml missing 'provenance: mode=max'"
@@ -58,7 +82,7 @@ if [[ -f .github/workflows/release-please.yml ]]; then
   grep -q 'disable-sudo-and-containers: true' .github/workflows/release-please.yml \
     || fail "release-please.yml missing disable-sudo-and-containers (CVE-2025-32955)"
 
-  ok "release-please.yml: cosign + attest + SBOM + provenance:max + multi-arch + Docker Hub preserved"
+  ok "release-please.yml: cosign + attest + SBOM + provenance:max + multi-arch + Docker Hub + R29 split + D47 polling preserved"
 fi
 
 # Commit 4: dependency-review-action
@@ -90,7 +114,7 @@ if grep -q 'egress-policy: block' .github/workflows/ci.yml 2>/dev/null; then
   ok "harden-runner flipped to block-mode with allowed-endpoints"
 fi
 
-# Commit (P0 sweep): self-hosted Scorecard workflow file exists
+# Commit 7b: self-hosted Scorecard workflow file exists
 if [[ -f .github/workflows/scorecard.yml ]]; then
   yamllint -d relaxed .github/workflows/scorecard.yml >/dev/null 2>&1 || fail "scorecard.yml fails yamllint"
   grep -q 'ossf/scorecard-action' .github/workflows/scorecard.yml \
@@ -101,10 +125,10 @@ if [[ -f .github/workflows/scorecard.yml ]]; then
     && ok "scorecard.yml: ossf/scorecard-action + publish_results + branch_protection_rule"
 fi
 
-# Commit (P0 sweep): no stale `release.yml` references; everything goes through release-please.yml
+# Stale-string guard: no `release.yml` references; everything goes through release-please.yml
 if grep -RnE 'release\.yml' .claude/notes/ci-refactor/scripts/ .claude/notes/ci-refactor/*.md 2>/dev/null \
     | grep -vE 'release-please\.yml|# (extends|does NOT|MOVED)' >/dev/null; then
-  fail "stale 'release.yml' references found in plan corpus — must use 'release-please.yml' (D5/PR6 P0 sweep)"
+  fail "stale 'release.yml' references found in plan corpus — must use 'release-please.yml' (per D5)"
 fi
 
 # Commit 4-7 are admin/operator actions — out of scope for the agent verifier
@@ -117,7 +141,7 @@ if [[ -f docs/decisions/adr-007-build-provenance.md ]]; then
   ok "ADR-007 present with ## Status and reconciliation rationale"
 fi
 
-# Round 12 post-issue-review D47/R44 — publish-docker MUST gate on CI green
+# D47 / R44 — publish-docker MUST gate on CI green
 if [[ -f .github/workflows/release-please.yml ]]; then
   grep -q 'Require CI green on release commit' .github/workflows/release-please.yml \
     || fail "release-please.yml publish-docker missing CI-green gate (D47 — closes #1228 Cluster A4; without it red main can ship signed-but-broken images per R44)"
@@ -126,17 +150,20 @@ if [[ -f .github/workflows/release-please.yml ]]; then
   ok "publish-docker gates on CI green via gh api (D47/R44 mitigation)"
 fi
 
-# Round 10 D34 + Round 11 R11A-02 — Trivy OS-layer scan + SOURCE_DATE_EPOCH reproducible build
+# D34 + R11A-02 — Trivy OS-layer scan + SOURCE_DATE_EPOCH reproducible build
 if [[ -f .github/workflows/release-please.yml ]]; then
   grep -q 'aquasecurity/trivy-action' .github/workflows/release-please.yml \
-    || fail "release-please.yml missing aquasecurity/trivy-action (Round 10 D34 / Round 12 R12B-04)"
+    || fail "release-please.yml missing aquasecurity/trivy-action (D34 / R12B-04)"
   grep -qE "severity:\s*['\"]?CRITICAL,HIGH" .github/workflows/release-please.yml \
     || fail "release-please.yml Trivy scan missing severity: 'CRITICAL,HIGH' (D34)"
   grep -qE "category:\s*trivy-os-layer" .github/workflows/release-please.yml \
     || fail "release-please.yml Trivy SARIF upload missing category: trivy-os-layer (D34)"
-  ok "Trivy OS-layer scan present with CRITICAL/HIGH gating + SARIF upload (D34)"
+  # vuln-type: 'os,library' — REQUIRED to enable OS-level CVE detection (default is library-only)
+  grep -q "vuln-type: 'os,library'" .github/workflows/release-please.yml \
+    || fail "Trivy missing vuln-type: 'os,library' (OS-level CVE detection disabled — default is library-only)"
+  ok "Trivy OS-layer scan present with CRITICAL/HIGH gating + os,library vuln-type + SARIF upload (D34)"
 
-  # Round 10 D34 / R11A-02 — SOURCE_DATE_EPOCH for reproducible builds
+  # D34 / R11A-02 — SOURCE_DATE_EPOCH for reproducible builds
   grep -q 'SOURCE_DATE_EPOCH=' .github/workflows/release-please.yml \
     || fail "release-please.yml missing SOURCE_DATE_EPOCH build-arg (D34, R11A-02)"
   grep -q 'rewrite-timestamp=true' .github/workflows/release-please.yml \
@@ -144,16 +171,16 @@ if [[ -f .github/workflows/release-please.yml ]]; then
   ok "SOURCE_DATE_EPOCH reproducible build flags present (D34, R11A-02)"
 fi
 
-# Round 10 SF-15 — dep-review config extracted to .github/dependency-review-config.yml
+# SF-15 — dep-review config extracted to .github/dependency-review-config.yml
 if [[ -f .github/dependency-review-config.yml ]]; then
   grep -qE '^fail-on-severity:\s+moderate' .github/dependency-review-config.yml \
     || fail ".github/dependency-review-config.yml missing fail-on-severity: moderate"
   grep -qE 'GPL-3\.0' .github/dependency-review-config.yml \
     || fail ".github/dependency-review-config.yml missing GPL-3.0 in deny-licenses"
-  ok "dep-review config extracted to .github/dependency-review-config.yml (Round 10 SF-15)"
+  ok "dep-review config extracted to .github/dependency-review-config.yml (per SF-15)"
 fi
 
-# Round 10 R36 — frozen-checks structural guard updated for 'Security / Dependency Review'
+# R36 — frozen-checks structural guard updated for 'Security / Dependency Review'
 if [[ -f tests/unit/test_architecture_required_ci_checks_frozen.py ]]; then
   grep -q '"Security / Dependency Review"' tests/unit/test_architecture_required_ci_checks_frozen.py \
     || fail "test_architecture_required_ci_checks_frozen.py expected list missing 'Security / Dependency Review' (R36)"

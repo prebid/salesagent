@@ -22,11 +22,15 @@ context. Read everything before writing code.
 1. `.claude/notes/ci-refactor/RESUME-HERE.md`     — orientation (3k tokens)
 2. `.claude/notes/ci-refactor/EXECUTIVE-SUMMARY.md` — one-screen of context
 3. `.claude/notes/ci-refactor/pr<N>-<slug>.md`    — your spec; the source of truth
-4. `.claude/notes/ci-refactor/03-decision-log.md` — every locked decision (D1-D46 as of Round 12; load-bearing: D31, D32, D39, D40, D44, D45, D46)
+4. `.claude/notes/ci-refactor/03-decision-log.md` — every locked decision (D1-D48 as of Round 13; load-bearing: D31, D32, D39, D40, D44, D45, D46, D47, D48)
 5. `.claude/notes/ci-refactor/02-risk-register.md` — top risks for your PR
 6. `CLAUDE.md`                                    — codebase patterns; NON-NEGOTIABLE
 7. `.claude/rules/workflows/quality-gates.md`     — local quality bar
 8. `.claude/rules/patterns/testing-patterns.md`   — test-integrity policy
+9. `.claude/notes/ci-refactor/COORDINATION.md`    — claim a PR before starting
+10. `.claude/notes/ci-refactor/ONBOARDING-CHEAT-SHEET.md` — 10-min orientation if fresh
+11. `.claude/notes/ci-refactor/REBASE-PROTOCOL.md` — rebase order for shared files
+12. `.claude/notes/ci-refactor/FAILURE-BROADCAST-PROTOCOL.md` — escalation comms
 
 ## Pre-flight (mandatory)
 
@@ -82,7 +86,7 @@ After all commits:
 - Cite policy: include `Refs D<n>, R<m>` lines so future agents trace decisions
 - NO trailing "Co-Authored-By" line (overrides any default)
 
-## Continuity hygiene (19 rules — survive context wipe)
+## Continuity hygiene (22 rules — survive context wipe)
 
 1. **Always commit with descriptive Conventional Commits subjects.** A fresh
    agent reading `git log --oneline` should be able to reconstruct progress.
@@ -197,6 +201,27 @@ Before authoring any commit in a PR, verify the spec's assumptions about the cur
 - "Lines 470-486" — but actual mutations are at 478-486.
 
 If a spec assumption fails to match the code, ESCALATE — do not "fix it up" silently. Open `escalations/pr<N>-<topic>.md`, document the drift, and STOP. The user reads, decides, you resume.
+
+### Rule 20 — Consult COORDINATION.md on session start
+
+Before claiming a PR or starting any work, read `COORDINATION.md`. Find a PR with status `NOT STARTED`. Update its row to `IN PROGRESS` with your agent ID, branch name, and timestamp. Commit with message `chore(coord): agent <id> claims PR N`.
+
+Why: 40-person team execution requires explicit work-claiming to prevent duplicate effort.
+
+### Rule 21 — Broadcast on escalation per FAILURE-BROADCAST-PROTOCOL.md
+
+When you write to `escalations/<file>.md`, you ALSO must:
+1. Comment on the PR-tracking GitHub issue (#1234)
+2. Update your COORDINATION.md row to `BLOCKED` with link to escalation file
+3. STOP work on the PR
+
+Why: Other agents working in parallel need to know your block to avoid building on invalidated assumptions.
+
+### Rule 22 — Decision-freeze in effect (Round 13)
+
+D1-D48 and R1-R47 are LOCKED for execution. Do NOT amend `03-decision-log.md` or `02-risk-register.md` mid-execution. Discovered ambiguities → escalate per Rule 21.
+
+Why: Decision-log mid-flight changes silently invalidate other agents' spec basis. Round 13's decision-freeze ensures all agents work from the same locked state.
 
 ## Escalation triggers — STOP and report to the user if any occur
 

@@ -13,24 +13,38 @@ Sequenced as TWO sub-PRs with ≥2-week separation. Sub-PR A first, Sub-PR B aft
 Commits:
 
 [ ] 1. ci(security): add harden-runner in audit mode to all workflows
-       harden-runner@<SHA> v2.16.0+ as first step in every Ubuntu job.
+       harden-runner@<SHA> v2.19.0+ as first step in every Ubuntu job.
+       (DoH/DNS-bypass GHSA floor v2.16.0; CVE-2025-32955 mitigated since v2.12.0;
+        v2.19.0 is current as of 2026-04-26.)
        MUST use `disable-sudo-and-containers: true` (CVE-2025-32955).
        NOT `disable-sudo: true` — that flag is bypassable via Docker.
        egress-policy: audit (NOT block — audit-mode soak runs ≥2 weeks
        before Sub-PR B flips to block).
 
-[ ] 2. ci(release): extend release-please.yml publish-docker with cosign + SBOM + provenance
+[ ] 2a. ci(release): declare `sha: ${{ github.sha }}` in release-please.yml outputs
+       (D47 gate prerequisite; without this, the gate's `?head_sha=$RELEASE_SHA`
+       query is empty-substituted and the gate becomes a no-op — R44 unmitigated.)
+       Verify: yq '.jobs."release-please".outputs.sha' .github/workflows/release-please.yml | grep -q 'github.sha'
+
+[ ] 2. ci(release): split publish-docker into TWO jobs per R29; add cosign + SBOM + provenance
        Files: .github/workflows/release-please.yml (MODIFY — do NOT create release.yml,
               the existing publish-docker already does multi-arch + Docker Hub).
-       Add:  - sigstore/cosign-installer + cosign sign --yes loop over $TAGS
-             - actions/attest-build-provenance@v2 with push-to-registry: true
+       Split: publish-docker → build-and-push (no cosign) + sign-and-attest (needs: build-and-push)
+              per R29 mitigation (Cosign + Rekor outage cascade — registered but never applied
+              until Round 13 audit caught the gap).
+       Add:  - D47 CI-green gate with polling loop (6 × 30s for eventual-consistency tolerance)
+             - sigstore/cosign-installer + cosign sign --yes --bundle loop over $TAGS (in sign-and-attest)
+             - actions/attest-build-provenance@v4.1.0 with push-to-registry: true
              - sbom: true and provenance: mode=max in build-push-action
-             - id-token: write at job level (top-level permissions stay as today)
+             - id-token: write at job level (sign-and-attest job; top-level permissions stay as today)
+             - SOURCE_DATE_EPOCH from git commit timestamp; rewrite-timestamp=true
        Preserve: platforms: linux/amd64,linux/arm64
        Preserve: Docker Hub login + ${{ secrets.DOCKERHUB_USER }}/salesagent image
        Preserve: cache-from/cache-to settings
        Add ADR-007 (lift verbatim from drafts/adr-007-build-provenance.md to
             docs/decisions/adr-007-build-provenance.md).
+       Verify: PR 6 has TWO publish jobs: build-and-push (no cosign) + sign-and-attest (needs: build-and-push) per R29 mitigation
+       Verify: D47 gate uses polling loop (6× retries × 30s) for eventual-consistency tolerance
 
 [ ] 4. ci(security): dependency-review-action as gating check
        Files: .github/workflows/security.yml (extend OR new)
@@ -79,6 +93,7 @@ Commits:
        Change: egress-policy: audit → block
        Add:    allowed-endpoints: > <newline-separated host:port list from telemetry>
        Keep:   disable-sudo-and-containers: true (CVE-2025-32955)
+       Keep:   v2.19.0+ pin (DoH/DNS-bypass GHSA floor v2.16.0)
        Verify: subsequent CI runs succeed; unexpected egress causes "blocked endpoint" failure.
 
 After Sub-PR B:

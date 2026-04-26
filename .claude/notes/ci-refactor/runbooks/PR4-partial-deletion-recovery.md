@@ -74,11 +74,11 @@ git commit -m "refactor(precommit): delete absorbed-by-guard hooks (sweep K of 1
 
 If recovery requires more than 2 hook re-deletions in sequence, the sweep design itself
 is wrong. STOP and re-architect: the structural-guard coverage is incomplete, OR D27's
-"33 effective − 13 − 9 − 1 = 10" math has been invalidated by an interleaved v2.0 PR.
+"36 effective − 13 − 10 − 1 = 12" math has been invalidated by an interleaved v2.0 PR.
 
 ## References
 
-- D27 (decision log) — hook reallocation math (real baseline 33 effective commit-stage)
+- D27 (decision log) — hook reallocation math (real baseline 36 effective commit-stage)
 - R7 (risk register) — `make quality` regression after hook deletion
 - ADR-006 — allowlist pattern (relevant if root cause is a stale baseline)
 - executor-prompt.md Rule 14 — pre-flight is the rollback contract

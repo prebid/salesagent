@@ -25,7 +25,7 @@
 - After commit 4, CI red on `--group dev` callsites → check if a callsite was missed. The `Makefile`, `Dockerfile`, `scripts/`, `docs/` may have additional refs.
 - Commit 7 black version drift → `uv run black --version` doesn't match `uv.lock`'s resolved black; rerun `uv sync --group dev`.
 
-**Key facts from prior rounds.**
+**Key facts (you must know).**
 1. **`[project.optional-dependencies].dev` is already deleted on the v2.0 branch.** Critical: do NOT re-introduce it during rebase. Verify diff against main during commit 5.
 2. The pydantic.mypy plugin is in `mypy.ini:3` but has been silently dead since project inception because pydantic was never in the old hook's `additional_dependencies`. Re-enabling = surfacing dormant typing debt.
 3. The structural guard pattern uses `_architecture_helpers.py` (introduced here) — PR 4 expands it. Keep helpers minimal (~30 lines).

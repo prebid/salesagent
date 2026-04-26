@@ -7,8 +7,8 @@
 **What this PR does (~7 commits, sequenced as TWO sub-PRs ≥2 weeks apart).**
 
 **Sub-PR A — first PR ships:**
-1. **harden-runner** in audit mode on every Ubuntu job. **v2.16.0+** pinned (CVE-2025-32955 + GHSA-46g3-37rh-v698 DoH-bypass — was v2.12.0+ before 2026-04-25 P0 sweep); `disable-sudo-and-containers: true`. NOT block-mode.
-2. **Extend `release-please.yml` `publish-docker` job** with cosign keyless signing + SBOM + provenance:max. Multi-arch (amd64+arm64) AND Docker Hub publishing PRESERVED — this is an extension of the existing job, not a new workflow.
+1. **harden-runner** in audit mode on every Ubuntu job. **v2.19.0+** pinned (DoH/DNS-bypass GHSA floor v2.16.0; CVE-2025-32955 mitigated since v2.12.0; v2.19.0 is current as of 2026-04-26); `disable-sudo-and-containers: true`. NOT block-mode.
+2. **Split `release-please.yml` `publish-docker` into TWO jobs** per R29: `build-and-push` (no cosign) + `sign-and-attest` (needs: build-and-push). Add cosign keyless signing + SBOM + provenance:max. Multi-arch (amd64+arm64) AND Docker Hub publishing PRESERVED. Add D47 CI-green gate with polling loop (handles 5-30s eventual-consistency lag).
 4. **dependency-review-action** as PR-blocking check (admin runs `scripts/add-required-check.sh "Security / Dependency Review"` after merge — agent does NOT run gh api PATCH).
 5. **Flip CodeQL** `continue-on-error: true` → `false` (per D10 tripwire if findings ≤ 5 at end of Week 4 — verify via `gh api 'repos/prebid/salesagent/code-scanning/alerts?state=open' --jq 'length'` first).
 
@@ -24,13 +24,13 @@
 **You CANNOT do.**
 - Replace the existing `release-please.yml` workflow with a new `release.yml` — they would race for tag-driven publishes. EXTEND the existing `publish-docker` job instead. **No `release.yml` exists or will be created.**
 - Drop multi-arch (`linux/amd64,linux/arm64`) or Docker Hub publishing — both are PRESERVED (verified disk-truth: `release-please.yml:72` already builds multi-arch).
-- Use `harden-runner`'s `disable-sudo: true` flag — bypassable via Docker per [CVE-2025-32955](https://www.sysdig.com/blog/security-mechanism-bypass-in-harden-runner-github-action). Use `disable-sudo-and-containers: true` and pin to **v2.16.0+** (was v2.12.0+ — bumped 2026-04-25 P0 sweep for GHSA-46g3-37rh-v698 DoH-bypass).
+- Use `harden-runner`'s `disable-sudo: true` flag — bypassable via Docker per [CVE-2025-32955](https://www.sysdig.com/blog/security-mechanism-bypass-in-harden-runner-github-action) (CVE-2025-32955 was patched in v2.12.0). Use `disable-sudo-and-containers: true` and pin to **v2.19.0+** — DoH/DNS-bypass GHSA floor is v2.16.0; v2.19.0 is the current pin as of 2026-04-26.
 - Block contributor PRs on harden-runner egress without ≥2 weeks audit-mode soak in Sub-PR A.
 - Run any `gh api -X PATCH branches/main/...` yourself (admin-only — operator runs `scripts/add-required-check.sh`).
 
 **Files (heat map).**
-- Modified: `.github/workflows/release-please.yml` (extend `publish-docker` job — preserve multi-arch + Docker Hub).
-- Modified: `.github/workflows/ci.yml`, `.github/actions/_pytest/action.yml` (composite, NOT `.github/workflows/_pytest.yml`), `security.yml`, `codeql.yml` — add harden-runner step. New workflow: `.github/workflows/scorecard.yml` (P0 sweep addition — Commit 7b).
+- Modified: `.github/workflows/release-please.yml` (split `publish-docker` into `build-and-push` + `sign-and-attest` per R29; add `sha:` to release-please outputs; add D47 CI-green gate with polling loop; preserve multi-arch + Docker Hub).
+- Modified: `.github/workflows/ci.yml`, `.github/actions/_pytest/action.yml` (composite, NOT `.github/workflows/_pytest.yml`), `security.yml`, `codeql.yml` — add harden-runner step. New workflow: `.github/workflows/scorecard.yml` (Commit 7b).
 - Modified: `.github/workflows/codeql.yml` — flip continue-on-error.
 - Added: `.github/workflows/security.yml` — dependency-review job (or extend if already present).
 - Added: `docs/decisions/adr-007-build-provenance.md` — reconciles cosign + attest-build-provenance overlap.

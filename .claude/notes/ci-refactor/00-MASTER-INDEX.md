@@ -10,6 +10,8 @@ Tracks the rollout of GitHub issue [#1234](https://github.com/prebid/salesagent/
 
 **Round 12 verification + sweep applied 2026-04-26** — see [`RESUME-HERE.md`](RESUME-HERE.md) Round 12 section. 3 parallel opus subagents (drift over Round 11, end-to-end PR 1→6 continuity, reviewer cold-start). **Caught Round-11-self-introduced gap** (R12A-01: D40's DB_POOL_SIZE env override was non-operational because `src/core/database/database_session.py` hardcodes pool sizes as Python literals). Mechanical sweep across verify scripts, admin scripts, executor template, briefings: 11→14 frozen names; D1-D28→D1-D46; R1-R10→R1-R43; "18 rules"→"19 rules". D46 (pre-flight P9 grep-guard for stale-string drift) addresses the recurring propagation pattern. R43 (verify-script drift behind spec) added. After Round 12, the corpus is internally consistent across all surfaces.
 
+**Round 13 sweep applied 2026-04-26** — see [`RESUME-HERE.md`](RESUME-HERE.md) Round 13 section. **Boss-level review and 6 parallel verification audits** surfaced production-deploy coupling gap (D48), 3 LOAD-BEARING action-version/CVE-attribution/D47-race issues, 48 internal PR-spec contradictions, and 10 multi-team execution gaps. Round 13 sweep applied: D48 added; R45-R47 added; A24-A26 pre-flight added; harden-runner v2.16+ → v2.19.0+ corpus-wide; CVE-2025-32955 attribution corrected to GHSA-46g3-37rh-v698 + GHSA-g699-3x6g-wm3g; release-please.yml outputs.sha + D47 polling loop + R29 split-job mitigation applied; PR 4 duplicate-Commit-9 + 13-vs-16 math + Layer-1 table corrected; setup-uv@v4 → v8.x corpus-wide; CODEOWNERS v2.0 glob added; Phase B checklist 11→14 with flip-branch-protection.sh as canonical; check-stale-strings.sh PATTERNS extended; _lib.sh sourced from all 6 verify scripts; 4 new multi-team scaffolding docs created (COORDINATION.md, REBASE-PROTOCOL.md, ONBOARDING-CHEAT-SHEET.md, FAILURE-BROADCAST-PROTOCOL.md).
+
 ## Status
 
 | PR | Title | Status | Spec | Hidden scope |
@@ -21,7 +23,7 @@ Tracks the rollout of GitHub issue [#1234](https://github.com/prebid/salesagent/
 | PR 5 | Cross-surface version consolidation | not started | [pr5-version-consolidation.md](pr5-version-consolidation.md) | 2.5 days (+ Round 10: Dockerfile @sha256: pin D34, USER non-root D34, ADR-008 copy from drafts/ to docs/decisions/ D36; + Round 11: ARG SOURCE_DATE_EPOCH declaration R11A-02) |
 | PR 6 | Image supply chain (cosign + harden-runner + SBOM + scorecard.yml + Round 10 additions) | not started | [pr6-image-supply-chain.md](pr6-image-supply-chain.md) | 2-2.5 days (Week 6 follow-up; resolves D25; + Round 10: Trivy OS-layer scan D34, SOURCE_DATE_EPOCH D34, dep-review config extract, dep-review pin minor, frozen-checks guard update R36, OpenSSF Best Practices Badge enrollment) |
 
-**Total realistic effort:** ~16.5-20 engineer-days for the 5-PR core rollout (PRs 1-5); +2-2.5 days for PR 6 follow-up = **19.5-23.5 engineer-days total, ~6 calendar weeks part-time** (Round 10 added ~3.5-4 days; Round 11 added ~0.5 day; Round 12 added ~0.5 day for the DB_POOL_SIZE wiring + verify-script extensions; calendar slack absorbs without extension).
+**Total realistic effort:** ~16.5-20 engineer-days for the 5-PR core rollout (PRs 1-5); +2-2.5 days for PR 6 follow-up = **19.5-23.5 engineer-days total, ~6 calendar weeks part-time** (Round 10 added ~3.5-4 days; Round 11 added ~0.5 day; Round 12 added ~0.5 day for the DB_POOL_SIZE wiring + verify-script extensions; Round 13 added ~5-6 hours mechanical + boss-level + multi-team scaffolding; calendar slack absorbs). Round 13 added ~0.5-0.75 day; new total: **~20.25-24.5 engineer-days, ~6 calendar weeks part-time**.
 
 ## Read in this order
 
@@ -31,6 +33,10 @@ Tracks the rollout of GitHub issue [#1234](https://github.com/prebid/salesagent/
 4. The 6 per-PR specs in order — each is self-contained for the executor agent
 5. [templates/executor-prompt.md](templates/executor-prompt.md) — agent prompt template
 6. [templates/pr-description.md](templates/pr-description.md) — PR description template
+6.5 [COORDINATION.md](COORDINATION.md) — multi-agent PR-claiming registry (consult on session start)
+6.6 [REBASE-PROTOCOL.md](REBASE-PROTOCOL.md) — mandatory rebase order for shared files
+6.7 [ONBOARDING-CHEAT-SHEET.md](ONBOARDING-CHEAT-SHEET.md) — 10-min orientation for fresh agents
+6.8 [FAILURE-BROADCAST-PROTOCOL.md](FAILURE-BROADCAST-PROTOCOL.md) — escalation comms protocol
 
 ## Sequencing
 
@@ -43,6 +49,7 @@ PR 1 → PR 2 → PR 3 (3-phase) → PR 4 → PR 5. Strict ordering for these re
 
 ## Concurrent work coordination
 
+- **Production deploy coupling (D48 / Round 13):** Fly.io app `adcp-sales-agent` pulls from `ghcr.io/prebid/salesagent:vX.Y.Z`. PR 6 cosign signing does NOT change tag scheme. cosign verify NOT enforced on Fly side. Production rollback via `fly deploy --image ghcr.io/...:v<previous>`.
 - **PR #1217** (adcp 3.10 → 3.12 migration, open, conflicting): assume merges before our PR 2; PR 2 designed to tolerate either ordering. Re-verify before authoring PR 2.
 - **PR #1221** (Flask-to-FastAPI v2.0, open, branch `feat/v2.0.0-flask-to-fastapi`): 341 files changed, 31 new architecture tests (27 under `tests/unit/architecture/` + 4 top-level: `test_architecture_no_scoped_session.py`, `_no_module_level_get_engine.py`, `_no_runtime_psycopg2.py`, `_get_db_connection_callers_allowlist.py`) + 9 `.guard-baselines/*.json`. Will be carved into smaller PRs (none yet). Path 1 sequencing chosen — issue #1234 lands first, v2.0 phase PRs rebase onto the new layered model. PR #1221 was 5 days old as of P0 sweep (D20 tripwire fires at ~2026-05-04). CSRF concern in PR 1 deferred to v2.0's own CSRF middleware (`src/admin/csrf.py`, +331 lines on the v2.0 branch).
   - **`[project.optional-dependencies].dev` is already deleted on v2.0** — PR 2's pyproject.toml change becomes "verify the block is absent (deleted on v2.0); no-op if v2.0 already merged."

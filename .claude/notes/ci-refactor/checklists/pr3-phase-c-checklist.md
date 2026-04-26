@@ -20,7 +20,11 @@
        File: docs/development/ci-pipeline.md (point "current state" at ci.yml)
 
 [ ] make quality
-[ ] bash .claude/notes/ci-refactor/scripts/verify-pr3-phase-c.sh
+[ ] bash .claude/notes/ci-refactor/scripts/verify-pr3.sh c   # Phase C scope
+    # Inline equivalent (if invoking script directly is unavailable):
+    test ! -f .github/workflows/test.yml && \
+      gh run list --workflow=ci.yml --branch=main --limit=3 --json conclusion \
+        --jq 'map(select(.conclusion == "success")) | length' | xargs -I{} bash -c '[[ {} -eq 3 ]]'
 
 Post-merge:
 - Update 00-MASTER-INDEX.md: PR 3 → "merged"

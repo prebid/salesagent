@@ -30,4 +30,4 @@ All ADRs (embedded or staged) should follow `templates/adr-template.md`. Existin
 
 - `_architecture_helpers.py` — reconciled draft for the helpers module created by PR 2 (~30 lines) and extended by PR 4 (~221 lines).
 - `guards/` — structural guard skeletons referenced by PR 4. Filenames match `test_architecture_*.py` pattern; in-file marker uses `arch_guard` (the new structural-guard marker; entity-marker `architecture` continues to apply via filename auto-tagging in `tests/conftest.py`).
-- `claudemd-guards-table-final.md` — planned authoritative ~73-row guards table for CLAUDE.md (lifted in PR 4 commit 9).
+- `claudemd-guards-table-final.md` — planned authoritative ~81-row guards table for CLAUDE.md (D18 revised Round 8; lifted in PR 4 commit 9).

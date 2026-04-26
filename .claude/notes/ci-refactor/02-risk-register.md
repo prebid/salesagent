@@ -1,6 +1,6 @@
 # Risk Register
 
-Risks for the 6-PR rollout. Severity × probability ranked. Each entry has a trigger (how you know it fired), a mitigation (preventive), and a rollback (corrective). Entries R11-R15, R17-R18, R21-R22, R24-R25 from `research/edge-case-stress-test.md` remain LOW-impact informational; R19/R20/R23 promoted into base register and R26-R30 added in 2026-04-25 P0 sweep; R16 promoted and R31/R32 added in 2026-04-25 Round 9 verification sweep; **R33-R37 added in 2026-04-26 Round 10 completeness audit sweep; R38-R42 added in 2026-04-26 Round 11 verification sweep; R43 added in 2026-04-26 Round 12 verification sweep; R44 added in 2026-04-26 Round 12 post-issue-review (surfaced while rewriting #1228 Cluster A4)**.
+Risks for the 6-PR rollout. Severity × probability ranked. Each entry has a trigger (how you know it fired), a mitigation (preventive), and a rollback (corrective). Entries R11-R15, R17-R18, R21-R22, R24-R25 from `research/edge-case-stress-test.md` remain LOW-impact informational; R19/R20/R23 promoted into base register and R26-R30 added in 2026-04-25 P0 sweep; R16 promoted and R31/R32 added in 2026-04-25 Round 9 verification sweep; **R33-R37 added in 2026-04-26 Round 10 completeness audit sweep; R38-R42 added in 2026-04-26 Round 11 verification sweep; R43 added in 2026-04-26 Round 12 verification sweep; R44 added in 2026-04-26 Round 12 post-issue-review (surfaced while rewriting #1228 Cluster A4); R45-R47 added in 2026-04-26 Round 13 boss-level / multi-team review (cache poisoning, GHA minute spike, status-check lag)**.
 
 | # | Risk | Sev | Prob | PR |
 |---|---|---|---|---|
@@ -37,6 +37,9 @@ Risks for the 6-PR rollout. Severity × probability ranked. Each entry has a tri
 | 42 | Phase A overlap window exhausts GHA runner-minutes / memory under double workflow load | Med | Med | PR 3 Phase A |
 | 43 | Verify-script drift behind spec amendments (silent skip of D-mandated content) | Med | High | All |
 | 44 | release-please ships signed-but-broken image (no test gate before cosign+SBOM) | **Crit** | Low | PR 6 |
+| 45 | actions/cache cross-PR poisoning via fork-PR cache scope | Med | Med | PR 1, PR 3 |
+| 46 | GHA usage-minute spike during Phase A overlap | Med | Med | PR 3 Phase A |
+| 47 | Status-check name propagation lag at Phase B flip | Med | Low | PR 3 Phase B |
 
 ## R1 — Branch-protection flip locks out merging (HIGH)
 
@@ -437,6 +440,45 @@ Risks for the 6-PR rollout. Severity × probability ranked. Each entry has a tri
 **Rollback:** if a signed-but-broken image escapes, the recovery is unpleasant per R40 (cosign + tag-immutability cascade): cannot republish `:vX.Y.Z`; must cut `:vX.Y.Z-hotfix.1` and publicly deprecate the broken tag. Document in release notes; pull GHCR images via the digest, not the tag.
 
 **Tripwire:** if any release publishes a signed image whose corresponding CI run conclusion is not `success`, file an incident retrospective. Two such incidents in 6 months → escalate to GitHub's Rulesets-based deployment gating (ADR-009).
+
+### R45 (Med×Med) — actions/cache cross-PR poisoning via fork-PR cache scope (Round 13 addition)
+
+**Risk:** GHA caches are scoped per-branch by default. A fork-PR's cache could be poisoned by a malicious payload that writes to the cache key. When main runs, restoring from a poisoned cache key could execute attacker-controlled binaries during dependency install.
+
+**Vector:** ruff/uv setup-actions use `cache: true` with default key. PR 1 commit 9 SHA-pin sweep should ensure cache keys include `${{ github.event.pull_request.head.sha }}` for fork-PRs.
+
+**Mitigation:**
+- Scope cache keys by `${{ hashFiles('**/uv.lock', '**/pyproject.toml') }}` (PR 3 commit 5 already includes both via `cache-dependency-glob` per Round 12 C5 fix)
+- Never `restore-keys:` from a fork-PR's cache on main
+- Add structural guard: `test_architecture_no_fork_pr_cache_restore.py` (P2 follow-up)
+
+**Probability:** Medium — exploit is publicly known; depends on attacker willing to author a malicious PR.
+**Impact:** Medium — would expose CI runners to attacker code; production not directly affected (CI ≠ deploy).
+
+### R46 (Med×Med) — GHA usage-minute spike during Phase A overlap (Round 13 addition)
+
+**Risk:** Phase A runs both old `test.yml` AND new `ci.yml` on every PR push for 48h. If the team is mid-sprint with high PR throughput, GHA monthly minute quota could exhaust mid-rollout.
+
+**Mitigation:**
+- Pre-flight A23 (existing): measure baseline GHA minute consumption
+- Pre-flight A26 (new): alert if Phase A projects to exceed 80% of monthly quota
+- Hard cap: skip `test.yml` runs once cap is hit (kill switch)
+- Concurrency: `cancel-in-progress` on PR pushes (already in plan)
+
+**Probability:** Medium — depends on team PR cadence during weeks 3-4
+**Impact:** Medium — billing surprise; not functional impact
+
+### R47 (Med×Low) — Status-check name propagation lag at Phase B flip (Round 13 addition)
+
+**Risk:** GitHub's branch protection PATCH succeeds atomically, but the status-check display in the UI can lag 5-15 minutes behind. A flip that succeeds via API may not appear "applied" via UI immediately, leading to ambiguous state during validation.
+
+**Mitigation:**
+- Phase B Step 3 (post-flip): wait 15 minutes before declaring success
+- Verify `gh api branches/main/protection` reflects the new contexts (not just PATCH returned 200)
+- flip-branch-protection.sh's idempotency check handles this naturally
+
+**Probability:** Low — observed but not a hard failure
+**Impact:** Low — visual confusion during operator validation window
 
 ## Cross-cutting risk: Dependabot review backlog (D5 sustainability tripwire)
 

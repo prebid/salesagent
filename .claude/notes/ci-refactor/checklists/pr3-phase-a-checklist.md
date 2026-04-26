@@ -23,11 +23,11 @@ Commits in order:
 [ ] 3. ci: add ci.yml orchestrator with 14 frozen BARE job names (D26)
        File: .github/workflows/ci.yml (new; spec §Phase A Commit 3 verbatim — DO NOT alter check names)
        D26: workflow `name: CI` + jobs use BARE names (NOT 'CI / X' — that produces 'CI / CI / X' rendered)
-       Verify the workflow header and bare job names:
+       Verify the workflow header and bare job names (14 names per D17 amended by D30):
          grep -qE '^name:\s+CI\s*$' .github/workflows/ci.yml
-         for name in 'Quality Gate' 'Type Check' 'Schema Contract' 'Unit Tests' \
-                    'Integration Tests' 'E2E Tests' 'Admin UI Tests' 'BDD Tests' \
-                    'Migration Roundtrip' 'Coverage' 'Summary'; do
+         for name in 'Quality Gate' 'Type Check' 'Schema Contract' 'Security Audit' 'Quickstart' \
+                    'Smoke Tests' 'Unit Tests' 'Integration Tests' 'E2E Tests' 'Admin UI Tests' \
+                    'BDD Tests' 'Migration Roundtrip' 'Coverage' 'Summary'; do
            grep -qF "name: '$name'" .github/workflows/ci.yml || \
              grep -qF "name: \"$name\"" .github/workflows/ci.yml || \
              grep -qE "^\s+name:\s+${name}\s*$" .github/workflows/ci.yml || \
@@ -35,7 +35,7 @@ Commits in order:
          done
          # No 'CI /' prefix in job names (the D26 bug)
          ! grep -qE "name:\s+['\"]CI / " .github/workflows/ci.yml
-         # develop branch trigger (P0 sweep)
+         # develop branch trigger
          grep -qE 'branches:\s+\[main,\s*develop\]' .github/workflows/ci.yml
 
 [ ] 4. ci: add migration_roundtrip.sh script
@@ -75,7 +75,7 @@ Commits in order:
         Verify: ! grep -rn 'pytest.skip.*network\|pytest.skip.*connection' tests/integration/ tests/unit/
 
 After all commits:
-[ ] bash .claude/notes/ci-refactor/scripts/verify-pr3-phase-a.sh
+[ ] bash .claude/notes/ci-refactor/scripts/verify-pr3.sh a   # Phase A scope
 [ ] make quality + ./run_all_tests.sh
 
 Stop conditions:

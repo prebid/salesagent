@@ -10,7 +10,7 @@
 
 ## Scope
 
-Restructure `.github/workflows/` to make CI the authoritative enforcement layer. Replace the matrix-sharded integration tests with `pytest-xdist` (validated safe per `tests/conftest_db.py:323-348` UUID-per-test DB pattern). Add **composite actions** `setup-env` and `_pytest` (NOT reusable workflows — composites avoid the 3-segment rendered-name issue per Decision-4). Freeze the 14 required check names per D17 amended by D30 (Round 10 sweep added Smoke Tests, Security Audit, Quickstart). Add Migration Roundtrip and Coverage Combine jobs. Per D32, integration-tests bootstraps the creative-agent service with 10 env vars (ghcr.io/prebid/creative-agent:ca70dd1e2a6c).
+Restructure `.github/workflows/` to make CI the authoritative enforcement layer. Replace the matrix-sharded integration tests with `pytest-xdist` (validated safe per `tests/conftest_db.py:323-348` UUID-per-test DB pattern). Add **composite actions** `setup-env` and `_pytest` (NOT reusable workflows — composites avoid the 3-segment rendered-name issue per Decision-4). Freeze the 14 required check names per D17 amended by D30 (which expanded the list with Smoke Tests, Security Audit, Quickstart). Add Migration Roundtrip and Coverage Combine jobs. Per D32, integration-tests bootstraps the creative-agent service with 10 env vars (ghcr.io/prebid/creative-agent:ca70dd1e2a6c).
 
 This is the **only PR with a non-atomic merge.** It lands in 3 phases over ~1 week:
 
@@ -28,11 +28,11 @@ This is the **only PR with a non-atomic merge.** It lands in 3 phases over ~1 we
 
 ## Architectural choices (corrections to issue #1234)
 
-The issue says "reusable workflows `_setup-env.yml`, `_postgres.yml`, `_pytest.yml`." Three corrections (last revised 2026-04-25 P0 sweep — Decision-4):
+The issue says "reusable workflows `_setup-env.yml`, `_postgres.yml`, `_pytest.yml`." Three corrections (per Decision-4):
 
 1. **`_setup-env` is a composite action**, not a reusable workflow. Composite actions can be called as a series of steps inside a job; reusable workflows can't. Path: `.github/actions/setup-env/action.yml`.
 
-2. **`_pytest` is ALSO a composite action** (revised 2026-04-25 from earlier "reusable workflow" plan). Path: `.github/actions/_pytest/action.yml`. **Rationale:** reusable-workflow nesting renders status checks as 3-segment names (`CI / Unit Tests / pytest`) because the called workflow's job-id is appended. Branch protection's required-checks list uses 2-segment names (`CI / Unit Tests`); a reusable-workflow `_pytest.yml` would silently 422 the Phase B PATCH. Composites don't add path segments — the calling job's `name:` IS the rendered name. The structural guard `tests/unit/test_architecture_required_ci_checks_frozen.py` (drafted in `drafts/guards/`) enforces this at design time, not just at flip time. (Decision-4 in `RESUME-HERE.md` §"P0 sweep applied"; see also D26 corollary.)
+2. **`_pytest` is ALSO a composite action** (revised from earlier "reusable workflow" plan). Path: `.github/actions/_pytest/action.yml`. **Rationale:** reusable-workflow nesting renders status checks as 3-segment names (`CI / Unit Tests / pytest`) because the called workflow's job-id is appended. Branch protection's required-checks list uses 2-segment names (`CI / Unit Tests`); a reusable-workflow `_pytest.yml` would silently 422 the Phase B PATCH. Composites don't add path segments — the calling job's `name:` IS the rendered name. The structural guard `tests/unit/test_architecture_required_ci_checks_frozen.py` (drafted in `drafts/guards/`) enforces this at design time, not just at flip time. (Per Decision-4 in `RESUME-HERE.md`; see also D26 corollary.)
 
 3. **`_postgres` does not exist as a separate file.** Postgres services live at the calling-job level in `ci.yml` (services are a workflow/job-level concern; composite actions cannot declare them). The integration/e2e/admin/bdd jobs each declare their own `services: postgres:` block at the job level, then call the `_pytest` composite for test execution. The duplication is ~15 lines per job — acceptable cost for the rendered-name win.
 
@@ -48,7 +48,10 @@ Phase A is one PR with ~10 commits. Phase B is admin action (no PR). Phase C is 
 
 ### Phase A — Overlap (single PR)
 
-> **Commit ordering note (2026-04-25 P0 sweep — bisect cleanliness):** The numbered commits below are the LOGICAL grouping. The ACTUAL git-history order MUST place "Commit 6 — coverage baseline + tox.ini sync" BEFORE "Commit 3 — ci.yml orchestrator", because `ci.yml` references `.coverage-baseline` via `cat .coverage-baseline`. Required git order: 1, 2, 6, 3, 4, 4b, 5, 7, 8, 9, 10, 11. A bisect that lands on Commit 3 with `.coverage-baseline` absent would fail the Coverage job (file-not-found in the subshell). Reviewers reading the spec top-to-bottom should mentally re-thread the dependency.
+> **Phase A operational note:**
+> During the 48h overlap window, both `test.yml` (old) and `ci.yml` (new) run in parallel on every PR. If old `test.yml` passes but new `ci.yml` fails, the new one is INFORMATIONAL — branch protection still keys on the OLD names. Do NOT fix-forward into the new workflow until Phase A completes and Phase B flips required-checks. Maintainer judgment: if `ci.yml` failure indicates a real bug, fix in a follow-up PR; if it indicates `ci.yml` configuration drift, fix Phase A.
+
+> **Commit ordering note (bisect cleanliness):** The numbered commits below are the LOGICAL grouping. The ACTUAL git-history order MUST place "Commit 6 — coverage baseline + tox.ini sync" BEFORE "Commit 3 — ci.yml orchestrator", because `ci.yml` references `.coverage-baseline` via `cat .coverage-baseline`. Required git order: 1, 2, 6, 3, 4, 4b, 4c, 5, 7, 8, 9, 10, 11. A bisect that lands on Commit 3 with `.coverage-baseline` absent would fail the Coverage job (file-not-found in the subshell). Commit 4c (filelock + worker-id gate around `migrate.py`) MUST follow 4b (template-clone optimization) because the gate operates on the conftest_db.py shape that 4b restructures. Reviewers reading the spec top-to-bottom should mentally re-thread the dependency.
 
 #### Commit 1 — `ci: add setup-env composite action`
 
@@ -66,7 +69,7 @@ inputs:
   uv-version:
     description: 'uv version to install'
     required: false
-    default: '0.11.7'   # Round 9 sweep bumped 0.11.6 → 0.11.7; Round 10 verified the bump applies in setup-env baseline too (was half-applied)
+    default: '0.11.7'   # Per current uv anchor; bump in lock-step across setup-env, pyproject.toml, and pre-commit config
   groups:
     description: 'uv dependency groups to install (space-separated)'
     required: false
@@ -88,7 +91,7 @@ runs:
         version: ${{ inputs.uv-version }}
         python-version-file: ${{ inputs.python-version-file }}
         enable-cache: true
-        # Round 12 post-issue-review (C5 from #1228): hash both uv.lock AND pyproject.toml
+        # Per #1228 C5: hash both uv.lock AND pyproject.toml
         # so a `pyproject.toml` change without `uv lock` regen invalidates the cache. Otherwise
         # stale cache hits silently keep the old resolved deps even after the manifest changes.
         cache-dependency-glob: |
@@ -144,16 +147,16 @@ runs:
         # Coverage data file (downloaded by Coverage job for combine)
         COVERAGE_FILE: .coverage.${{ inputs.tox-env }}
         # ENCRYPTION_KEY: integration tests at tests/integration/test_*encryption* + creative-agent
-        # ↳ matches test.yml:232 today; mock value, not a real secret. Per D-Round-10 + MF-6.
+        # ↳ matches test.yml:232 today; mock value, not a real secret.
         ENCRYPTION_KEY: 'PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk='
         # DELIVERY_WEBHOOK_INTERVAL: tests/e2e/conftest.py:137-141 reads this; tox.ini:24 passes.
-        # ↳ Per D-Round-10 + MF-7. Default '5' matches local tox.ini.
+        # ↳ Default '5' matches local tox.ini.
         DELIVERY_WEBHOOK_INTERVAL: '5'
         # GEMINI_API_KEY: unconditional mock per D15 (no fork-PR secret leak surface).
         GEMINI_API_KEY: 'test_key_for_mocking'
-        # SUPER_ADMIN_EMAILS: parity with test.yml today; per Round 11 R11B-9 baseline alignment.
+        # SUPER_ADMIN_EMAILS: parity with test.yml today.
         SUPER_ADMIN_EMAILS: 'test@example.com'
-        # DB_POOL_SIZE / DB_MAX_OVERFLOW: per Round 11 R11E-02 — reduce app's connection pool
+        # DB_POOL_SIZE / DB_MAX_OVERFLOW: per D40 — reduce app's connection pool
         # in CI so 4 xdist workers × 12 conn = 48 stays well under Postgres default
         # max_connections=100. Local dev compose sees production defaults (no override).
         # NB: src/core/database/database_session.py must read these env vars; verify at PR-3
@@ -162,7 +165,7 @@ runs:
         DB_MAX_OVERFLOW: '8'
         # CREATIVE_AGENT_URL: integration job sets this at job level (NOT here in the composite).
         # The creative-agent runs as a docker-run script step on a custom Docker network;
-        # see PR 3 commit 9 (D32 amended Round 11). Value at job level:
+        # see PR 3 commit 9 (per D32 + D39). Value at job level:
         # `CREATIVE_AGENT_URL: 'http://localhost:9999/api/creative-agent'` (port 9999 is the
         # host mapping; `/api/creative-agent` is the path prefix inside the adcp monolith).
       run: |
@@ -172,7 +175,7 @@ runs:
           XDIST_FLAG="-n ${{ inputs.xdist-workers }}"
           # --dist=loadscope keeps tests sharing session-scoped fixtures (DB, app) on the
           # same worker. Default --dist=load is random and would split UUID-per-test DB
-          # fixtures across workers, causing IntegrityError. Per D33 + Round 10 MF-10.
+          # fixtures across workers, causing IntegrityError. Per D33.
           # If any test uses @pytest.mark.xdist_group in the future, switch to loadgroup.
           DIST_FLAG="--dist=loadscope"
         fi
@@ -188,12 +191,12 @@ runs:
         path: '.coverage.${{ inputs.tox-env }}'
         include-hidden-files: true
         if-no-files-found: error   # fail noisily; coverage data must be produced
-        retention-days: 7   # Per Round 10 MF-13; matches Scorecard pattern. GH default is 90d (~5MB × N envs × every PR run = quota burn).
+        retention-days: 7   # Matches Scorecard pattern. GH default is 90d (~5MB × N envs × every PR run = quota burn).
     - uses: actions/upload-artifact@<SHA>  # v4
       if: always()
       with:
         name: pytest-report-${{ inputs.tox-env }}
-        # Round 11 R11E-03 fix: tox.ini writes pytest-json-report to {toxworkdir}/<env>.json
+        # tox.ini writes pytest-json-report to {toxworkdir}/<env>.json
         # (e.g., .tox/unit.json), NOT test-results/. The earlier `path: test-results/` was a
         # silent-empty-artifact. Glob both candidate paths so this works whether tox.ini is
         # updated to emit into test-results/ (preferred follow-up) or stays at the
@@ -203,7 +206,7 @@ runs:
           .tox/${{ inputs.tox-env }}.json
           .tox/${{ inputs.tox-env }}-*.json
         if-no-files-found: ignore
-        retention-days: 7   # Per Round 10 MF-13.
+        retention-days: 7   # Matches the coverage-artifact retention.
 ```
 
 **Why composite, not reusable workflow** (Decision-4): rendering. A reusable-workflow `_pytest.yml`
@@ -234,6 +237,8 @@ grep -qE 'using:\s+["\x27]?composite' .github/actions/_pytest/action.yml
 Files:
 - `.github/workflows/ci.yml` (new)
 
+**Naming convention (per D26):** Workflow `name: CI` (top-level) + job `name: 'Quality Gate'` (bare). GitHub renders the concatenation `CI / Quality Gate` as the check-run name. The PATCH body in `flip-branch-protection.sh` uses the rendered form. The structural-guard test `test_architecture_required_ci_checks_frozen.py` parses the bare YAML form and reconstructs the rendered form for comparison. `verify-pr3.sh` greps the bare form (matches what's actually in `ci.yml`). Three valid representations exist in this corpus: bare YAML (`name: 'Quality Gate'`), bare unquoted (`name: Quality Gate`), and rendered (`CI / Quality Gate`). The bare-vs-rendered split is intentional — the YAML stores bare; the GitHub API receives rendered.
+
 The 14 frozen check names per D17 amended by D30:
 
 ```yaml
@@ -244,7 +249,7 @@ on:
     branches: [main, develop]
   push:
     branches: [main, develop]
-  workflow_dispatch:   # D37 (Round 10) — preserve manual-run capability matching test.yml:8 today.
+  workflow_dispatch:   # Per D37 — preserve manual-run capability matching test.yml:8 today.
   # Note: `develop` is included to maintain parity with the existing test.yml trigger model.
   # Formal deprecation of `develop` is deferred to a post-#1234 follow-up; until then,
   # PR 3 must support both branches so contributor PRs targeting `develop` continue to gate.
@@ -259,7 +264,7 @@ permissions: {}
 # Fallback (if anchors fail to parse on first run): emit ci.yml from a small Python template
 # script — preserves single-source-of-truth without runtime anchor dependency.
 x-postgres-service: &postgres-service
-  # Round 11 R11E-02: pool_size=10 + max_overflow=20 = 30 conn/worker × 4 xdist workers
+  # Per D40: pool_size=10 + max_overflow=20 = 30 conn/worker × 4 xdist workers
   # under -n auto = 120 conn at peak; default max_connections=100 → "too many clients" flake.
   # GHA `services:` block does NOT support a `command:` field (GitHub schema only allows
   # image/env/ports/options/credentials/volumes), so we cannot pass `-c max_connections=200`
@@ -299,7 +304,7 @@ x-database-url: &database-url
   postgresql://adcp_user:test_password@localhost:5432/adcp_test
 
 concurrency:
-  # Per Round 10 MF-12 (corroborates ruff/uv pattern): include PR-number/SHA in the group key
+  # Per concurrency-key best practice (corroborates ruff/uv pattern): include PR-number/SHA in the group key
   # so two distinct runs at different commits on the same branch don't collide. Without the
   # third segment, branch-rebase or force-push workflows lose the in-flight cancel.
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.pull_request.number || github.sha }}
@@ -316,7 +321,7 @@ jobs:
   quality-gate:
     name: 'Quality Gate'
     runs-on: ubuntu-latest
-    timeout-minutes: 10   # Round 12 post-issue-review: was inheriting GHA 360-min default; bound for hung pre-commit hooks
+    timeout-minutes: 10   # Per #1228 A5: was inheriting GHA 360-min default; bound for hung pre-commit hooks
     permissions:
       contents: read
     steps:
@@ -333,7 +338,7 @@ jobs:
   type-check:
     name: 'Type Check'
     runs-on: ubuntu-latest
-    timeout-minutes: 10   # Round 12 post-issue-review: bound mypy at warm-time + 5 min headroom
+    timeout-minutes: 10   # Per #1228 A5: bound mypy at warm-time + 5 min headroom
     permissions:
       contents: read
     steps:
@@ -357,15 +362,14 @@ jobs:
       # tests/integration/test_mcp_contract_validation.py loads the MCP tool registry
       # from the DB, so the integration env (DATABASE_URL set) is required.
       # tox -e unit unsets DATABASE_URL at tox.ini:38; running this under unit would
-      # silently fail the DB-dependent assertions or error on connect. Per D38 +
-      # Round 10 MF-9.
+      # silently fail the DB-dependent assertions or error on connect. Per D38.
       - run: uv run python scripts/ops/migrate.py
       - uses: ./.github/actions/_pytest
         with:
           tox-env: integration
           pytest-args: 'tests/unit/test_adcp_contract.py tests/integration/test_mcp_contract_validation.py -v'
 
-  # ── Round 10 / D30 additions: Security Audit, Quickstart, Smoke Tests ──
+  # ── Per D30: Security Audit, Quickstart, Smoke Tests ──
   # These three jobs preserve regression coverage from `test.yml` (which Phase C deletes).
   # Without them the equivalent capability silently disappears post-rollout.
 
@@ -440,7 +444,7 @@ jobs:
           PYTEST_CURRENT_TEST: 'true'
         run: uv run pytest tests/smoke/ -v --tb=short
       - name: Skip-decorator hygiene gate
-        # Round 10 CRIT-6: this gate must run somewhere CI-side after Phase C deletes test.yml.
+        # This gate must run somewhere CI-side after Phase C deletes test.yml.
         # `repo-invariants` pre-commit hook also covers it, but contributors who skip pre-commit
         # would otherwise ship `@pytest.mark.skip` decorators undetected.
         run: |
@@ -473,7 +477,7 @@ jobs:
       # cannot resolve each other by hostname (they're each on their own bridge network
       # with the runner host). They're started as script steps below using
       # `docker network create + docker run` — matching the existing `test.yml:180-223`
-      # pattern. (Round 11 R11A-03 fix; revoked the Round 10 services-block spec.)
+      # pattern. (Per D39; revoked an earlier services-block draft.)
       postgres: *postgres-service
     env:
       DATABASE_URL: *database-url
@@ -486,9 +490,9 @@ jobs:
       - uses: ./.github/actions/setup-env
       - run: uv run python scripts/ops/migrate.py
 
-      # Round 10 D32 (revised Round 11 R11A-03/R11A-04) — start the creative-agent stack.
+      # Per D32 + D39 — start the creative-agent stack.
       # Pinned commit `ca70dd1e2a6c` per test.yml:186; bump and re-verify at PR-3 author
-      # time per D32 tripwire and pre-flight A23 (Round 11). The reference creative agent
+      # time per D32 tripwire and pre-flight A23. The reference creative agent
       # is part of the adcp monolith repo — built from a source tarball, not pulled from
       # GHCR. NODE_ENV=production matches test.yml:201 (production code path with mock
       # WorkOS via the documented test-mode env vars).
@@ -535,7 +539,7 @@ jobs:
 
       - name: Wait for creative-agent health
         # Health probe runs on the runner host (where curl is preinstalled), NOT inside
-        # the creative-agent container — Round 11 R11A-04 fix avoids the "curl missing
+        # the creative-agent container — per D39 avoids the "curl missing
         # in Node image" silent-timeout. 60×2s = 120s budget, matches test.yml:213-223.
         run: |
           for i in $(seq 1 60); do
@@ -612,7 +616,7 @@ jobs:
   migration-roundtrip:
     name: 'Migration Roundtrip'
     runs-on: ubuntu-latest
-    timeout-minutes: 10   # Round 12 post-issue-review: alembic upgrade→downgrade→upgrade against fresh PG; ~3-5 min typical
+    timeout-minutes: 10   # Per #1228 A5: alembic upgrade→downgrade→upgrade against fresh PG; ~3-5 min typical
     permissions:
       contents: read
     services:
@@ -627,13 +631,18 @@ jobs:
     steps:
       - uses: ./.github/actions/setup-env
       - env:
+          # Note: Migration-roundtrip uses a literal DATABASE_URL with database name `roundtrip`
+          # rather than the YAML anchor's default `adcp_test`. The merge-key pattern
+          # (`<<: *postgres-service`) replaces `env.POSTGRES_DB` at the service level, but the
+          # step's DATABASE_URL must point to the renamed database. Intentional divergence —
+          # both forms valid, neither contradicts the anchor pattern.
           DATABASE_URL: postgresql://adcp_user:test_password@localhost:5432/roundtrip
         run: bash .github/scripts/migration_roundtrip.sh
 
   coverage:
     name: 'Coverage'
     runs-on: ubuntu-latest
-    timeout-minutes: 10   # Round 12 post-issue-review: combine + report; serial after parallel test suites
+    timeout-minutes: 10   # Per #1228 A5: combine + report; serial after parallel test suites
     needs: [unit-tests, integration-tests, e2e-tests, admin-tests, bdd-tests]
     permissions:
       contents: read
@@ -661,7 +670,7 @@ jobs:
           MINIMUM_GREEN: 80
           MINIMUM_ORANGE: 60
           ANNOTATE_MISSING_LINES: true
-        # Per D11 (revised 2026-04-25 P0 sweep): hard-gate from PR 3 day 1 at 53.5%.
+        # Per D11: hard-gate from PR 3 day 1 at 53.5%.
         # `--fail-under=$(cat .coverage-baseline)` above blocks merge on regression.
         # Ratchet upward only when measured-stable across 4+ consecutive PRs.
         # MINIMUM_GREEN/ORANGE drive the comment's badge color (visual only — does not gate).
@@ -670,14 +679,14 @@ jobs:
   summary:
     name: 'Summary'
     runs-on: ubuntu-latest
-    timeout-minutes: 5    # Round 12 post-issue-review: aggregation only; should complete in seconds
+    timeout-minutes: 5    # Per #1228 A5: aggregation only; should complete in seconds
     needs:
       - quality-gate
       - type-check
       - schema-contract
-      - security-audit       # D30 (Round 10)
-      - quickstart           # D30 (Round 10)
-      - smoke-tests          # D30 (Round 10)
+      - security-audit       # Per D30
+      - quickstart           # Per D30
+      - smoke-tests          # Per D30
       - unit-tests
       - integration-tests
       - e2e-tests
@@ -797,7 +806,7 @@ time tox -e integration -- -n auto
 
 The `{env:PYTEST_XDIST_WORKER:gw0}` substitution gives each xdist worker its own file (`gw0`, `gw1`, ...); the `:gw0` default keeps non-xdist runs valid. Coverage-combine and JSON-aggregator steps must adapt to glob `*-gw*.json`.
 
-**Note (Round 10 CRIT-7):** the filelock + worker-id gate around `migrate.py` is its own commit (4c, below) — promoted from prose-only embedded "sub-fix" to a reviewable standalone change.
+**Note:** the filelock + worker-id gate around `migrate.py` is its own commit (4c, below) — promoted from prose-only embedded "sub-fix" to a reviewable standalone change.
 
 #### Commit 4c — `test: filelock + worker-id gate around migrate.py for xdist safety`
 
@@ -829,7 +838,7 @@ def _run_migrations_once(template_dsn):
 
 `filelock` is already a main dependency at `pyproject.toml:48` (`filelock>=3.20.3`); no additional add needed for this commit. (PR 2 commit 4.5 adds `pytest-xdist` and `pytest-randomly` to the dev group per D33; filelock stays where it is.)
 
-**Why a standalone commit:** under Round 10 CRIT-7, this race-condition fix was embedded in commit 4b's prose. The audit caught the gap — without a standalone commit, the change either (a) ships unreviewed inside commit 4b's diff, or (b) is silently dropped during executor handoff. Promoted here for explicit reviewability.
+**Why a standalone commit:** this race-condition fix was previously embedded in commit 4b's prose. Without a standalone commit, the change either (a) ships unreviewed inside commit 4b's diff, or (b) is silently dropped during executor handoff. Promoted here for explicit reviewability.
 
 Verification:
 ```bash
@@ -842,13 +851,39 @@ DATABASE_URL="postgresql://adcp_user:test_password@localhost:5432/adcp_test" \
   tox -e integration -- -n 4
 ```
 
-#### Commit 5 — `ci: pin GitHub Actions in new workflows to SHAs`
+#### Commit 5 — Resolve SHA placeholders by consuming `.github/.action-shas.txt`
 
-For every `<SHA>` placeholder in commits 1-3, replace with the actual SHA + `# v<tag>` comment. Reuse the SHA-resolution loop from PR 1 commit 9.
+**What:** PR 1 commit 9 produced `.github/.action-shas.txt` with format `<ref>\t<sha>\t<tag>` per line. PR 3 commits 1-3 introduced new `<SHA>` placeholders for any new actions in `ci.yml` and the composite actions. Commit 5 reads `.action-shas.txt` and substitutes each `<SHA>` placeholder with its resolved value.
 
-Verification:
+**Why:** Re-running the SHA-resolution loop wastes GitHub API quota AND creates a race window where a freshly-resolved SHA differs from PR 1's. Consuming the artifact preserves PR 1's frozen SHAs.
+
+**How:**
 ```bash
-[[ $(grep -hoE 'uses: [^ ]+@<SHA>' .github/workflows/ci.yml .github/actions/_pytest/action.yml .github/actions/setup-env/action.yml | wc -l) == "0" ]]
+# For each <SHA> placeholder in any new workflow/composite, look up in artifact:
+for placeholder_file in .github/workflows/ci.yml .github/actions/_pytest/action.yml .github/actions/setup-env/action.yml; do
+  while IFS= read -r line; do
+    if [[ "$line" == *@\<SHA\>* ]]; then
+      # Extract action ref, look up in .action-shas.txt
+      ref=$(echo "$line" | sed -E 's|.*uses: ([^@]+).*|\1|')
+      sha=$(awk -v ref="$ref" '$1 == ref {print $2}' .github/.action-shas.txt)
+      [[ -n "$sha" ]] || { echo "ERROR: no SHA for $ref in .action-shas.txt"; exit 1; }
+      sed -i.bak "s|${ref}@<SHA>|${ref}@${sha}|g" "$placeholder_file"
+    fi
+  done < "$placeholder_file"
+  rm "${placeholder_file}.bak"
+done
+```
+
+**Verification:** `! grep -rE 'uses: [^@]+@<SHA>' .github/` (no remaining placeholders) AND every new SHA must appear in `.github/.action-shas.txt`.
+
+```bash
+# No <SHA> placeholders remain anywhere in .github/
+! grep -rE 'uses: [^@]+@<SHA>' .github/
+# Every resolved SHA in PR 3's new files appears in .action-shas.txt (single source of truth)
+for sha in $(grep -hoE 'uses: [^ ]+@[a-f0-9]{40}' .github/workflows/ci.yml .github/actions/_pytest/action.yml .github/actions/setup-env/action.yml \
+              | sed -E 's|.*@([a-f0-9]{40})|\1|' | sort -u); do
+  grep -q "$sha" .github/.action-shas.txt || { echo "ERROR: SHA $sha not in .action-shas.txt"; exit 1; }
+done
 [[ $(grep -hoE 'uses: [^ ]+@[a-f0-9]{40}' .github/workflows/ci.yml .github/actions/_pytest/action.yml .github/actions/setup-env/action.yml | wc -l) -ge "5" ]]
 ```
 
@@ -858,7 +893,7 @@ Files:
 - `.coverage-baseline` (new, contents: `53.5`)
 - `tox.ini:106` (modify)
 
-Per D11 (revised 2026-04-25 P0 sweep), hard-gate from PR 3 day 1. Set to current measured (55.56% from pre-flight A7) minus 2pp safety margin. Coverage job uses `--fail-under=$(cat .coverage-baseline)`. Ratchet upward only when measured-stable across 4+ consecutive PRs. The earlier "advisory for 4 weeks" framing was contradicted by the actual implementation (`--fail-under` is a hard gate); aligning the framing with the implementation eliminates ambiguity.
+Per D11, hard-gate from PR 3 day 1. Set to current measured (55.56% from pre-flight A7) minus 2pp safety margin. Coverage job uses `--fail-under=$(cat .coverage-baseline)`. Ratchet upward only when measured-stable across 4+ consecutive PRs. The earlier "advisory for 4 weeks" framing was contradicted by the actual implementation (`--fail-under` is a hard gate); aligning the framing with the implementation eliminates ambiguity.
 
 `tox.ini:106` currently reads `coverage report --fail-under=30`, drifting from the CI baseline of 53.5. Sync the local-tox path to read from the same source-of-truth file:
 
@@ -931,9 +966,9 @@ Verification:
 ! grep -q 'ADCP_SALES_PORT: 8080' .github/workflows/test.yml
 ```
 
-#### Commit 9 — `ci: unconditional creative agent in integration; permissions blocks (D32 full bootstrap, Round 11 corrected)`
+#### Commit 9 — `ci: unconditional creative agent in integration; permissions blocks (D32 full bootstrap)`
 
-Closes #1233 D12, PD15. **Per D32 + Round 10 CRIT-2 + Round 11 R11A-03/R11A-04:** spec content matches disk truth (`test.yml:180-223`); creative-agent runs as docker-run script-steps on a custom `creative-net` Docker network (NOT as `services:` blocks — GHA service containers can't resolve each other by hostname).
+Closes #1233 D12, PD15. **Per D32 + D39:** spec content matches disk truth (`test.yml:180-223`); creative-agent runs as docker-run script-steps on a custom `creative-net` Docker network (NOT as `services:` blocks — GHA service containers can't resolve each other by hostname).
 
 Files:
 - `.github/workflows/ci.yml` `integration-tests` job (already authored in commit 3 — this commit is the bootstrap that makes the integration job actually run, NOT a separate workflow change)
@@ -941,9 +976,9 @@ Files:
 
 The integration-tests job in commit 3 already declares the docker-network + script-step bootstrap (matches `test.yml:180-223` verbatim with corrections for `xdist-workers: 'auto'` from commit 4b and 14-name frozen list). This commit's role is to:
 
-1. **Re-verify the pinned source-tarball SHA at PR-3 author time.** Round 10 D32 used `ca70dd1e2a6c` per `test.yml:186` (the adcp monolith repo source tarball, NOT a Docker image — creative-agent is one route in the full app and is built locally via `docker build`). If a stable release has been tagged upstream since 2026-04-26, prefer the release SHA. Update both the curl URL and the verification grep.
+1. **Re-verify the pinned source-tarball SHA at PR-3 author time.** Per D32, the pinned commit is `ca70dd1e2a6c` per `test.yml:186` (the adcp monolith repo source tarball, NOT a Docker image — creative-agent is one route in the full app and is built locally via `docker build`). If a stable release has been tagged upstream since 2026-04-26, prefer the release SHA. Update both the curl URL and the verification grep.
 
-2. **Verify environment variables match the upstream creative-agent's expected schema.** The upstream may have added required env vars between Round 10 audit time and PR 3 author time. Inspect the pinned source:
+2. **Verify environment variables match the upstream creative-agent's expected schema.** The upstream may have added required env vars since the original audit. Inspect the pinned source:
    ```bash
    curl -sL https://github.com/adcontextprotocol/adcp/archive/ca70dd1e2a6c.tar.gz \
      | tar xz -C /tmp/adcp-pinned --strip-components=1
@@ -956,7 +991,7 @@ The integration-tests job in commit 3 already declares the docker-network + scri
 
 4. **Audit `permissions:` blocks** across all workflows (`test.yml` is being deleted in Phase C, but until then both old + new workflows run — verify both have explicit `permissions: {}` at top-level).
 
-The 10 env vars (per D32 amended Round 11 — values match `test.yml:201-211` verbatim):
+The 10 env vars (per D32 + D39 — values match `test.yml:201-211` verbatim):
 
 | Var | Value | Purpose |
 |---|---|---|
@@ -1017,9 +1052,9 @@ Verification:
 ! grep -rn 'pytest.skip.*network\|pytest.skip.*connection' tests/integration/ tests/unit/
 ```
 
-#### Commit 11 — `ci: gate Gemini key behind unconditional mock` (moved from PR 1 in 2026-04-25 P0 sweep)
+#### Commit 11 — `ci: gate Gemini key behind unconditional mock` (moved from PR 1)
 
-Closes PD24, per D15. **MOVED from PR 1 commit 10** in the 2026-04-25 P0 sweep — PR 3 rewrites
+Closes PD24, per D15. **MOVED from PR 1 commit 10** — PR 3 rewrites
 `test.yml` wholesale into `ci.yml` + `_pytest` composite, so applying the Gemini fix on the
 old `test.yml` in PR 1 just to have PR 3 rewrite the same region is wasted work. The fix
 lands here on the new structure.
@@ -1106,7 +1141,7 @@ diff /tmp/expected-names.txt <(grep -F -f /tmp/expected-names.txt /tmp/rendered-
 
 If the diff fails AFTER applying Decision-4 (composite migration), the failure indicates a regression — a reusable workflow has been re-introduced somewhere. The structural guard `test_architecture_required_ci_checks_frozen.py` should have caught this before the soak; if it didn't, audit `ci.yml` for `uses: ./.github/workflows/_*.yml` and convert to composite. Do NOT flip Phase B until rendered names are 2-segment for all 14 checks.
 
-Pre-Decision-4 historical note: the original plan used a reusable workflow `_pytest.yml` and accepted the 3-segment rendered name as a runtime concern (flatten on detection). Decision-4 (2026-04-25 P0 sweep) eliminates this class of bug at design time by mandating composite actions.
+Pre-Decision-4 historical note: the original plan used a reusable workflow `_pytest.yml` and accepted the 3-segment rendered name as a runtime concern (flatten on detection). Decision-4 eliminates this class of bug at design time by mandating composite actions.
 
 #### Step 2.5 — Capture in-flight PRs
 
@@ -1259,7 +1294,7 @@ bash .claude/notes/ci-refactor/scripts/verify-pr3-phase-c.sh
 ## Risks (scoped to PR 3)
 
 - **R1 — Branch-protection flip locks out merging**: Phase A's 48h soak + atomic flip body + pre-flight snapshot for inverse call. Documented inverse `gh api -X PATCH` body in this spec.
-- **R8 — Coverage drops > 2%**: D11 hard-gate from PR 3 day 1 (revised 2026-04-25 P0 sweep); `.coverage-baseline` set conservatively at 53.5 (current 55.56% minus 2pp safety margin). A single PR dropping >2pp triggers immediate failure.
+- **R8 — Coverage drops > 2%**: D11 hard-gate from PR 3 day 1; `.coverage-baseline` set conservatively at 53.5 (current 55.56% minus 2pp safety margin). A single PR dropping >2pp triggers immediate failure.
 - **R6 — v2.0 phase PR overlap on `test.yml`**: highest conflict surface in the rollout. Coordinate before opening Phase A.
 
 ## Rollback plan
@@ -1319,5 +1354,5 @@ Restores `test.yml`. Old workflow runs again; new workflow continues running. Bo
 4. **Immediately after Phase B**: open a trivial PR to validate. If anything breaks, run the inverse `gh api -X PATCH` to roll back.
 5. **Before Phase C**: verify Phase B is stable for ≥48 hours.
 6. **After Phase C**: PR 4 can begin authoring.
-7. **At end of Week 4 (D11 tripwire — revised 2026-04-25 P0 sweep)**: D11 is now hard-gate from PR 3 day 1, NOT a flip step. The Week-4 tripwire is now: review `.coverage-baseline` and decide if it can be RATCHETED UPWARD (e.g., 53.5 → 54.5) given measured stability across PRs in the window. No "flip to gating" step — the gate is on from day 1.
-8. **CodeQL gating flip (D10) ownership**: D10 schedules a Week-5 flip removing `continue-on-error: true` from `codeql.yml` and adding `CodeQL / analyze (python)` to required checks. PR 3 does NOT touch `codeql.yml`. The flip lands as the **final commit of PR 4** (Week 5) — Option A in Round-9 verification. PR 4's final commit will: (1) remove `continue-on-error: true` from `codeql.yml`; (2) document the admin step `gh api -X PATCH branches/main/protection/...` adding `CodeQL / analyze (python)` to required checks. <!-- TODO: confirm CodeQL flip lands in PR 4 final commit; if PR 4 scope shifts, carve a tiny standalone `pr-codeql-flip` Week-5 PR -->
+7. **At end of Week 4 (D11 tripwire)**: D11 is hard-gate from PR 3 day 1, NOT a flip step. The Week-4 tripwire is: review `.coverage-baseline` and decide if it can be RATCHETED UPWARD (e.g., 53.5 → 54.5) given measured stability across PRs in the window. No "flip to gating" step — the gate is on from day 1.
+8. **CodeQL gating flip (D10) ownership**: D10 schedules a Week-5 flip removing `continue-on-error: true` from `codeql.yml` and adding `CodeQL / analyze (python)` to required checks. PR 3 does NOT touch `codeql.yml`. The flip lands as the **final commit of PR 4** (Week 5). PR 4's final commit will: (1) remove `continue-on-error: true` from `codeql.yml`; (2) document the admin step `gh api -X PATCH branches/main/protection/...` adding `CodeQL / analyze (python)` to required checks. <!-- TODO: confirm CodeQL flip lands in PR 4 final commit; if PR 4 scope shifts, carve a tiny standalone `pr-codeql-flip` Week-5 PR -->

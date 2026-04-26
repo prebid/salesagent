@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Pre-flight P9 — stale-string drift guard (per D46, Round 12).
+# Pre-flight P9 — stale-string drift guard (per D46).
+#
+# **Wired to `make quality`** via Pre-flight P9 — also runnable manually before sweep-round close.
 #
 # Each sweep round adds new content to per-PR specs. Historically the propagation
 # across non-spec surfaces (verify scripts, briefings, executor template, admin
@@ -19,13 +21,29 @@ declare -a PATTERNS=(
   '11 frozen check names'           # superseded by 14 (D17 amended by D30)
   '11 frozen names'                 # same
   '\b11 frozen\b'                   # same
-  '\bD1-D28\b'                      # superseded by D1-D46 (Round 12)
-  '\bD1-D38\b'                      # superseded by D1-D46 (Round 11/12 intermediate)
-  '\bD1-D45\b'                      # superseded by D1-D46 (Round 12)
-  '\bR1-R10\b'                      # superseded by R1-R43 (Round 12)
-  '\bR1-R37\b'                      # superseded by R1-R43 (Round 11 intermediate)
-  '\bR1-R42\b'                      # superseded by R1-R43 (Round 12 intermediate)
-  '18 rules'                        # superseded by 19 rules (Round 9 added Rule 19)
+  '\b11 check names\b'              # superseded by "14 check names" (D30)
+  '\b11 required checks\b'          # superseded by "14 required checks" (D30)
+  '\b11 names\b'                    # superseded by "14 names" (D30)
+  '\b33 effective\b'                # superseded by "36 effective" (D27 revision)
+  '\b33−13−9−1\b'                   # superseded by "36−13−10−1=12" (D27 revision)
+  '\b33-13-9-1\b'                   # ASCII variant of the same supersession
+  '\b9 to pre-push\b'               # superseded by "10 to pre-push" (D27 + D3 mypy)
+  '\b73-row\b'                      # superseded by "81 final" (D18 revised)
+  '\b~73 final\b'                   # same
+  '\b0\.11\.6\b'                    # superseded by uv 0.11.7
+  '\bD1-D28\b'                      # superseded by current D-list (D46+)
+  '\bD1-D38\b'                      # same
+  '\bD1-D40\b'                      # superseded by D1-D48
+  '\bD1-D44\b'                      # same
+  '\bD1-D45\b'                      # superseded by D1-D46+ (D47/D48 added)
+  '\bD1-D46\b'                      # superseded by D1-D48 (D47 + D48 added)
+  '\bD1-D47\b'                      # superseded by D1-D48 (D48 added)
+  '\bR1-R10\b'                      # superseded by R1-R47
+  '\bR1-R37\b'                      # superseded by R1-R47
+  '\bR1-R42\b'                      # superseded by R1-R47
+  '\bR1-R43\b'                      # superseded by R1-R47 (R44 + R45/46/47 added)
+  '\bR1-R44\b'                      # superseded by R1-R47 (R45/46/47 added)
+  '18 rules'                        # superseded by 19 rules (Rule 19 added; current count may be 21+)
   'promoted to standalone drafts'   # ADR-001/002/003 are inline per drafts/README.md
 )
 
@@ -33,22 +51,21 @@ declare -a PATTERNS=(
 # These intentionally retain older language for historical accuracy or pattern-naming.
 declare -a ALLOWLIST=(
   "${CORPUS}/RESUME-HERE.md"          # has sweep audit-trail sections
-  "${CORPUS}/architecture.md"          # banner declares stale; forwards to D30
+  "${CORPUS}/architecture.md"          # P1 deferred per RESUME-HERE; banner declares stale; forwards to D30
   "${CORPUS}/REFACTOR-RUNBOOK.md"     # superseded; kept as audit trail
-  "${CORPUS}/03-decision-log.md"      # change-log entries may cite older counts; D17/D30 explicit reference
+  "${CORPUS}/03-decision-log.md"      # change-log + history-marker contexts; D17/D30 explicit reference
   "${CORPUS}/01-pre-flight-checklist.md"  # P9 description names the pattern strings
-  "${CORPUS}/EXECUTIVE-SUMMARY.md"    # D17/D46 entries reference the patterns by name
+  "${CORPUS}/EXECUTIVE-SUMMARY.md"    # D-list and R-list rendering sections; D17/D46 entries reference patterns by name
   "${CORPUS}/00-MASTER-INDEX.md"      # round-sweep summaries cite older counts in deltas
+  "${CORPUS}/02-risk-register.md"     # superseded entries documented as audit trail
   "${CORPUS}/research/"               # read-only audit trail
+  "${CORPUS}/runbooks/B3-branch-protection-flip-422.md"  # error narrative contains pattern by reference
+  "${CORPUS}/runbooks/B4-test-summary-needs-skipped.md"  # error narrative contains pattern by reference
   "${CORPUS}/scripts/check-stale-strings.sh"  # this script's own pattern list
 )
 
-# Build a -path-not exclusion for grep
-EXCLUDES=()
-for p in "${ALLOWLIST[@]}"; do
-  EXCLUDES+=(--exclude-dir="$(basename "$p")")
-done
-
+# Allowlist filtering happens in the per-line loop below (more flexible than
+# grep's --exclude flags since the allowlist mixes files and directory prefixes).
 EXIT=0
 for pattern in "${PATTERNS[@]}"; do
   # grep for pattern; filter out allowlisted files via Python loop (cleaner than nested

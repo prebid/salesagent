@@ -1,8 +1,23 @@
 # PR 3 Phase B — Atomic flip (admin only, NO PR)
 
+**PRE-REQUISITE (per A24):** Phase B must be dry-run on a sandbox repo (fork, throwaway org) BEFORE executing on production main. The dry-run records:
+- Snapshot capture works
+- PATCH succeeds with the 14-context body
+- Inverse PATCH (rollback) succeeds with the snapshot
+- Idempotency check works on second run
+
+Operator confirms dry-run completion via `[ ]` in pre-flight A24 checklist BEFORE STEP 1 below.
+
+**PRE-REQUISITE (per A24 setup):** Repo must have a `phase-b-in-progress` label created (used by the script's mutex):
+```bash
+gh label create phase-b-in-progress --color FFA500 --description "Phase B branch-protection flip is currently being executed; do not run a second flip"
+```
+
 ## Checklist
 
 ```
+[ ] A24 dry-run completed on sandbox repo (snapshot → PATCH → rollback → idempotency check all green)
+
 [ ] Verify pre-flip snapshot exists:
     test -f .claude/notes/ci-refactor/branch-protection-snapshot-required-checks.json
     [[ -s .claude/notes/ci-refactor/branch-protection-snapshot-required-checks.json ]]
@@ -13,58 +28,26 @@
     gh pr list --state merged --limit 5 --json number,checkSuites  # confirm new check names appeared
 
 [ ] STEP 2 — Atomic flip:
-    gh api -X PATCH \
-      /repos/prebid/salesagent/branches/main/protection/required_status_checks \
-      -H "Accept: application/vnd.github+json" \
-      --input - <<'EOF'
-    {
-      "strict": true,
-      "checks": [
-        {"context": "CI / Quality Gate"},
-        {"context": "CI / Type Check"},
-        {"context": "CI / Schema Contract"},
-        {"context": "CI / Unit Tests"},
-        {"context": "CI / Integration Tests"},
-        {"context": "CI / E2E Tests"},
-        {"context": "CI / Admin UI Tests"},
-        {"context": "CI / BDD Tests"},
-        {"context": "CI / Migration Roundtrip"},
-        {"context": "CI / Coverage"},
-        {"context": "CI / Summary"}
-      ]
-    }
-    EOF
+    bash .claude/notes/ci-refactor/scripts/flip-branch-protection.sh
     Token: classic PAT with `repo` OR fine-grained PAT with Administration:write.
-    `app_id` intentionally omitted — any GitHub App can satisfy.
+    Script confirms idempotency, captures pre-flip snapshot to `branch-protection-snapshot-pre-flip.json`,
+    prompts for "FLIP" confirmation, and emits the canonical 14-context PATCH (D17 amended by D30).
 
-[ ] STEP 3 — Verify (within 60 seconds of step 2):
-    gh api repos/prebid/salesagent/branches/main/protection/required_status_checks \
-      --jq '.checks[].context' | sort > /tmp/protected   # `.checks[].context` is canonical; `.contexts[]` is deprecated
-    cat <<'EOF' | sort > /tmp/expected
-    CI / Quality Gate
-    CI / Type Check
-    CI / Schema Contract
-    CI / Unit Tests
-    CI / Integration Tests
-    CI / E2E Tests
-    CI / Admin UI Tests
-    CI / BDD Tests
-    CI / Migration Roundtrip
-    CI / Coverage
-    CI / Summary
-    EOF
-    diff /tmp/protected /tmp/expected   # MUST be empty
+    **DO NOT** manually copy a JSON body. The script is the single source of truth for the 14 contexts.
+
+[ ] STEP 3 — Verify (script does this internally):
+    Script's final `diff /tmp/protected-now /tmp/expected-now` MUST exit 0.
 
 [ ] STEP 4 — Open trivial PR (e.g., comment-only) to validate:
     git checkout -b chore/phase-b-validation
     echo "" >> CONTRIBUTING.md
     git commit -am "chore: phase B validation no-op"
-    # User pushes & opens PR; observe all 11 check names show as required.
+    # User pushes & opens PR; observe ALL 14 check names show as required.
 
-If any step fails — IMMEDIATE ROLLBACK:
-gh api -X PATCH /repos/prebid/salesagent/branches/main/protection/required_status_checks \
+If script fails at any step — IMMEDIATE ROLLBACK:
+gh api -X PATCH /repos/prebid/salesagent/branches/main/protection \
   -H "Accept: application/vnd.github+json" \
-  --input .claude/notes/ci-refactor/branch-protection-snapshot-required-checks.json
+  --input branch-protection-snapshot-pre-flip.json
 Recovery: <5 minutes. Investigate, then retry the flip.
 
 Post-flip:

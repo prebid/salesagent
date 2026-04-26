@@ -95,7 +95,7 @@ yq '.repos[0].hooks[] | select(.id == "mypy") | .language' .pre-commit-config.ya
 yq '.repos[0].hooks[] | select(.id == "mypy") | .entry' .pre-commit-config.yaml | grep -q 'uv run mypy'
 ! grep -q 'mirrors-mypy' .pre-commit-config.yaml
 ! grep -q 'additional_dependencies:' .pre-commit-config.yaml || \
-  echo "WARN: additional_dependencies still exists; commit 4 will remove it for psf/black"
+  echo "WARN: additional_dependencies still exists; commit 7 will remove it for psf/black"
 ```
 
 ### Commit 3 — `fix(types): address pydantic.mypy plugin errors surfaced in PR 2`
@@ -137,7 +137,7 @@ Verification:
 Files:
 - `pyproject.toml` (modify `[dependency-groups].dev` block)
 
-Per **D33** (Round 10 sweep). PR 3 commit 4b's `integration_db` template-clone optimization requires `pytest-xdist≥3.6` (xdist is invoked from `_pytest` composite action with `-n auto`). PR 3 spec line 9 declared this as a precondition ("MUST be added... before this PR's xdist commits land. Best location: PR 2 commit 4 or 5") — this commit fulfills that contract.
+Per **D33**. PR 3 commit 4b's `integration_db` template-clone optimization requires `pytest-xdist≥3.6` (xdist is invoked from `_pytest` composite action with `-n auto`). PR 3 spec line 9 declared this as a precondition ("MUST be added... before this PR's xdist commits land. Best location: PR 2 commit 4 or 5") — this commit fulfills that contract.
 
 `pytest-randomly` adopts the order-independence enforcement standard from Django, attrs, structlog. Combined with PR 3's `--dist=loadscope`, it surfaces hidden inter-test dependencies that the project's UUID-per-test DB pattern otherwise hides.
 
@@ -181,7 +181,7 @@ grep -q 'pytest-randomly' uv.lock
 Files:
 - `src/core/database/database_session.py` (modify lines 108-109 PgBouncer branch + lines 124-125 direct PG branch)
 
-Per **D40 amended** (Round 11 sweep, Round 12 R12A-01 fix). PR 3's `_pytest/action.yml` env block sets `DB_POOL_SIZE=4` + `DB_MAX_OVERFLOW=8` to mitigate Postgres connection saturation under xdist `-n auto` (R31). Without this commit wiring the env vars in app code, the override silently no-ops because both branches of `database_session.py` hardcode the values as Python literals. Round 12 R12A-01 caught the gap; this commit closes it BEFORE PR 3 lands.
+Per **D40**. PR 3's `_pytest/action.yml` env block sets `DB_POOL_SIZE=4` + `DB_MAX_OVERFLOW=8` to mitigate Postgres connection saturation under xdist `-n auto` (R31). Without this commit wiring the env vars in app code, the override silently no-ops because both branches of `database_session.py` hardcode the values as Python literals. This commit closes the gap BEFORE PR 3 lands.
 
 ```python
 # src/core/database/database_session.py — at the top with other imports
@@ -231,6 +231,8 @@ Files:
 
 **Coordination per D20:** verify the v2.0 branch's `[project.optional-dependencies].dev` deletion has not already landed on main via a v2.0 phase PR. If it has, this commit is a no-op (good — evidence the rollout coordinated correctly).
 
+**ALSO delete duplicates:** `pyproject.toml` currently has `factory-boy>=3.3.0` declared 6× across `[project.optional-dependencies]` (line ~61, ~69, ~71) AND `[dependency-groups].dev` (line ~88, ~96, ~98). Verify with `grep -c 'factory-boy>=3.3.0' pyproject.toml` returns 1 after the deletion (single canonical entry in `[dependency-groups].dev` per PEP 735).
+
 Closes PD8.
 
 Verification:
@@ -239,6 +241,9 @@ Verification:
   ! awk '/\[project\.optional-dependencies\]/,/^\[/' pyproject.toml | grep -qE '^dev\s*='
 # ui-tests block still present (D14 migrates it next, doesn't delete)
 grep -qE 'ui-tests' pyproject.toml
+# Duplicate factory-boy entries collapsed to 1 canonical entry
+[[ "$(grep -c 'factory-boy>=3.3.0' pyproject.toml)" == "1" ]] || \
+  { echo "factory-boy duplicates not collapsed"; exit 1; }
 ```
 
 ### Commit 6 — `refactor(deps): migrate ui-tests extras to PEP 735 dependency-group`
@@ -353,7 +358,7 @@ markers =
     # ... existing markers
 ```
 
-**Ownership note (Round 10 MF-1):** This commit OWNS the `arch_guard` marker registration in `pytest.ini`. PR 4 commit 1 VERIFIES the registration via `grep`, does NOT re-write. Earlier spec revisions had both PRs registering the marker; the verify-only stance in PR 4 prevents the duplicate-write surfaced by Round 10 audit.
+**Ownership note:** This commit OWNS the `arch_guard` marker registration in `pytest.ini`. PR 4 commit 1 VERIFIES the registration via `grep`, does NOT re-write. Earlier spec revisions had both PRs registering the marker; the verify-only stance in PR 4 prevents duplicate writes.
 
 Verification:
 ```bash
@@ -377,7 +382,7 @@ Files:
 This commit also corrects:
 - Add 5 missing rows for guards on disk (`test_architecture_no_silent_except.py`, `test_architecture_bdd_no_direct_call_impl.py`, `test_architecture_bdd_obligation_sync.py`, `test_architecture_production_session_add.py`, `test_architecture_test_marker_coverage.py`)
 - Remove 3 phantom rows (guards listed but not on disk)
-- Audit table column count (per D18 revised P0 sweep, target post-PR-2: 28; PR 4 adds 4 more; v2.0 contributes 31 architecture tests + 9 baseline JSONs; PR 1/3/6 governance adds 8 — final ~73 post-v2.0-rebase)
+- Audit table column count (per D18, target post-PR-2: 28; PR 4 adds 4 more; v2.0 contributes 31 architecture tests + 9 baseline JSONs; PR 1/3/6 governance adds 8 — final ~73 post-v2.0-rebase)
 
 Verification:
 ```bash
@@ -412,6 +417,9 @@ Plus agent-derived:
 - [ ] `mypy.ini:3` plugins line still references `pydantic.mypy` (not commented out)
 - [ ] `tox -e ui --notest` succeeds (verifies ui-tests group migration)
 - [ ] CLAUDE.md guards table accurate against disk
+- [ ] adcp library version ≥3.10 (per D16; verified by verify-pr2.sh line 466-468)
+- [ ] Commit 4.6: DB_POOL_SIZE / DB_MAX_OVERFLOW env vars wired in `src/core/database/database_session.py` (per D40 / R12A-01; replaces hardcoded pool sizes with `os.getenv`). Brief code expectation: `pool_size = int(os.getenv("DB_POOL_SIZE", "5"))` and `max_overflow = int(os.getenv("DB_MAX_OVERFLOW", "10"))`
+- [ ] No duplicate factory-boy entries in pyproject.toml (`grep -c 'factory-boy>=3.3.0' pyproject.toml` returns 1)
 
 ## Verification (full PR-level)
 

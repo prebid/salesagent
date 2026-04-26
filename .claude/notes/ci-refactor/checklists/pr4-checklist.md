@@ -48,18 +48,18 @@ Commits in order:
                  [(_:=target['enforced_by'] in {'guard','guard-existing','ci-step','pre-push','pre-push + ci','deleted'}) \
                   or (_ for _ in (1/0,)) for hook,target in m.items()]; print(f'{len(m)} entries')"
 
-[ ] 5. refactor(pre-commit): move 10 medium-cost hooks to pre-push stage (D27 revised Round 8)
+[ ] 5. refactor(pre-commit): move 10 medium-cost hooks to pre-push stage (per D27)
        File: .pre-commit-config.yaml — add `stages: [pre-push]` to all 10:
          check-docs-links, check-route-conflicts, type-ignore-no-regression,
          adcp-contract-tests, mcp-contract-validation,
          mcp-schema-alignment, check-tenant-context-order, ast-grep-bdd-guards, check-migration-completeness,
-         mypy (the 10th, added per D3 — was at commit-stage during PR 2's migration window for invocation parity; CI's `CI / Type Check` is authoritative)
+         mypy (the 10th per D3 — was at commit-stage during PR 2's migration window for invocation parity; CI's `CI / Type Check` is authoritative)
        Verify: for h in check-docs-links check-route-conflicts type-ignore-no-regression \
                         adcp-contract-tests mcp-contract-validation \
                         mcp-schema-alignment check-tenant-context-order ast-grep-bdd-guards check-migration-completeness mypy; do
                  yq ".repos[].hooks[] | select(.id == \"$h\") | .stages" .pre-commit-config.yaml | grep -q pre-push
                done
-       Pre-flight (Round 8 disk-truth re-verification — zero-headroom warning):
+       Pre-flight (disk-truth re-verification — zero-headroom warning):
          BASELINE_HOOKS=$(grep -c "^\s*- id:" .pre-commit-config.yaml)
          MANUAL_HOOKS=$(grep -c "stages: \[manual\]" .pre-commit-config.yaml)
          [[ $((BASELINE_HOOKS - MANUAL_HOOKS)) -le 36 ]] || { echo "baseline drifted >36; v2.0 may have added hooks; identify 11th move"; exit 1; }
@@ -74,12 +74,12 @@ Commits in order:
                uv run pre-commit run repo-invariants --all-files
 
 [ ] 7. refactor(pre-commit): delete migrated and dead hooks
-       File: .pre-commit-config.yaml — delete the 15 hooks listed in Briefing §"Hooks DELETED" (13 commit-stage + 2 already-manual stubs: pytest-unit, mcp-endpoint-tests). v2.0 phase PR may have already deleted test-migrations — verify post-rebase.
+       File: .pre-commit-config.yaml — delete the 16 hooks listed in Briefing §"Hooks DELETED" (13 commit-stage + 3 already-manual stubs: pytest-unit, mcp-endpoint-tests, test-migrations). v2.0 phase PR may have already deleted test-migrations — verify post-rebase and skip if already gone.
        Verify: for h in no-tenant-config enforce-jsontype check-rootmodel-access enforce-sqlalchemy-2-0 \
                         check-import-usage check-gam-auth-support check-response-attribute-access \
                         check-roundtrip-tests check-code-duplication check-parameter-alignment \
                         pytest-unit mcp-endpoint-tests suggest-test-factories no-skip-integration-v2 \
-                        check-migration-heads; do
+                        check-migration-heads test-migrations; do
                  ! grep -qE "^\s+- id: $h$" .pre-commit-config.yaml || { echo "still exists: $h"; exit 1; }
                done
                # Hook count ≤12 at commit stage
@@ -100,10 +100,10 @@ Commits in order:
                # Acceptance: warm < 5s
        If >5s: profile, fix or escalate before commit 9.
 
-[ ] 9. docs: update CLAUDE.md guards table — DEFERRED scope per D18 (revised Round 8)
+[ ] 9. docs: update CLAUDE.md guards table — DEFERRED scope per D18
        File: CLAUDE.md
-       Per D18 (revised 2026-04-25 Round 8), the full ~81-row table audit DEFERS to a
-       post-v2.0-rebase commit. PR 4 commit 9 has minimal scope:
+       Per D18, the full ~81-row table audit DEFERS to a post-v2.0-rebase commit.
+       PR 4 commit 9 has minimal scope:
        - Add the 4 PR-4 rows (no_tenant_config, jsontype_columns, no_defensive_rootmodel, import_usage)
        - Add the **1 residual missing row** (`test_architecture_production_session_add`).
          **Do NOT add `test_architecture_no_silent_except`** — v2.0 phase PR DELETES it.
@@ -120,6 +120,7 @@ Commits in order:
                 grep -qE 'pre_commit_no_additional_deps' docs/development/structural-guards.md
 
 After all commits:
+[ ] Layer-1 hook count: count of hooks WITHOUT stages: [pre-push] WITHOUT stages: [manual] equals 12 (per Layer-1 reference table in spec §Hook → Stage Reference Table). Verify via verify-pr4.sh exit code; the script counts via the same logic as the structural guard `test_architecture_pre_commit_hook_count`.
 [ ] bash .claude/notes/ci-refactor/scripts/verify-pr4.sh  (8 sections; spec §Verification)
 [ ] make quality + ./run_all_tests.sh
 
@@ -131,6 +132,6 @@ Stop conditions:
 File: .claude/notes/ci-refactor/escalations/pr4-<topic>.md
 
 Post-merge:
-- Update CLAUDE.md guards table again when v2.0 phase PRs land their 31 architecture tests + 9 baseline JSONs (final ~73 per D18 revised P0 sweep)
+- Update CLAUDE.md guards table again when v2.0 phase PRs land their 27 architecture tests + 9 baseline JSONs (final ~81 per D18)
 - Monitor first contributor PR's `pre-commit run --all-files` time; expect ~1.5-2s warm
 ```

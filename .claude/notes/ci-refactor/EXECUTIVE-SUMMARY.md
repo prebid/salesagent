@@ -15,6 +15,22 @@ A concurrent v2.0 (Flask-to-FastAPI) effort runs under [PR #1221](https://github
 
 ---
 
+## Production Deploy Coupling (Round 13 addition)
+
+The salesagent app is deployed to **Fly.io** as `adcp-sales-agent`. The deploy script lives at `scripts/deploy/fly-set-secrets.sh`. The existing `release-please.yml publish-docker` job pushes `:vX.Y.Z` and `:latest` tags to **ghcr.io** AND **Docker Hub** on every release commit. **Fly.io pulls from `ghcr.io/prebid/salesagent:vX.Y.Z`** (verify with `fly image show -a adcp-sales-agent`).
+
+**What this rollout changes for production:**
+- **Tag scheme:** Unchanged. `:vX.Y.Z` and `:latest` continue to publish.
+- **Cosign signing (PR 6):** Net-new on every release. Fly.io does NOT currently `cosign verify` before pulling. Signing failures do NOT block deploy.
+- **D47 gate (Round 12 / R44):** `release-please publish-docker` now requires CI green on the release commit BEFORE publishing. Red main does NOT auto-publish. This is a NET PROTECTION for production (closes a "signed-but-broken-image" attack surface).
+- **R29 split (Round 13):** PR 6 splits publish into `build-and-push` + `sign-and-attest`. If sign-and-attest fails (Sigstore outage), the image still publishes; recovery is `:vX.Y.Z-hotfix.1` re-tag once Sigstore returns.
+
+**Production rollback (any breaking release):** `fly deploy --image ghcr.io/prebid/salesagent:v<previous>` — direct rollback via Fly CLI. No CI involvement required.
+
+**Out of scope:** enabling `cosign verify` on the Fly.io side. Documented as a follow-up after PR 6 lands and the signing pattern is proven (~6 weeks).
+
+---
+
 ## The 6 PRs
 
 | PR | What it does | Effort | Blocks |
@@ -40,7 +56,7 @@ These were the load-bearing defects that would have failed at runtime. All three
 
 ---
 
-## The 47 locked decisions (D1-D47)
+## The 48 locked decisions (D1-D48)
 
 D1: Solo maintainer (@chrishuie sole CODEOWNERS) ·
 D2: Branch protection + @chrishuie bypass (ADR-002) ·
@@ -88,7 +104,8 @@ D43: DATABASE_URL canonical credentials (CI: adcp_user/test_password/adcp_test; 
 D44: `minimum_pre_commit_version: 3.2.0` in `.pre-commit-config.yaml` (Round 11 R11C-06 — D31's `default_install_hook_types` requires pre-commit ≥3.2) ·
 D45: Phase B branch-protection flip FORBIDDEN on Fri/Sat/Sun + holiday eve (Round 11 R11C-02 — solo-maintainer weekend lockout mitigation) ·
 D46: Pre-flight P9 grep-guard for stale-string drift (propagation discipline; Round 12 — addresses recurring "11 frozen" / "D1-D28" propagation lag across non-spec surfaces) ·
-D47: `release-please publish-docker` MUST gate on CI green via `gh api` step (Round 12 post-issue-review — closes #1228 A4 P0 that 12 rounds missed; without it red main ships signed-but-broken images per R44)
+D47: `release-please publish-docker` MUST gate on CI green via `gh api` step (Round 12 post-issue-review — closes #1228 A4 P0 that 12 rounds missed; without it red main ships signed-but-broken images per R44) ·
+D48: Production deploy coupling (Fly.io pulls from ghcr.io tag scheme; cosign verify NOT enforced on Fly side; D47 gates publish on CI green; rollback via fly deploy --image; documented in §Production Deploy Coupling)
 
 ---
 
@@ -132,6 +149,54 @@ Branch protection requires exact-string match. Reusable workflow nesting can pro
 | 4 | PR 3 Phase B (admin flip; `--paginate` + `--app_id`) + Phase C (cleanup); 48h soak each | PR 3 fully landed; coverage hard-gated from day 1 (D11 revised) |
 | 5 | PR 4 + PR 5 (without target-version bump per D28) + flip CodeQL to gating | Close #1234 |
 | 6 | PR 6 (harden-runner v2.16+ audit→block + cosign + SBOM + scorecard.yml + ghcr immutability) | Scorecard ≥7.5 verified |
+
+---
+
+## Cost of Operations (Round 13 addition)
+
+**One-time engineer cost:**
+- ~19.75-23.75 engineer-days for the 6-PR rollout (~$X/day fully-loaded; user fills in)
+- Solo execution: 6 calendar weeks part-time. Parallel-agent execution (PR 1+2+6 in parallel; PR 3-4-5 sequential): ~3.5-4 weeks.
+
+**GHA usage delta (estimate):**
+- Phase A overlap (48h, week 3-4): ~2× normal workflow load (both `test.yml` and `ci.yml` running on every PR)
+- Steady-state post-rollout: ~3-4× current per-PR minutes due to 14 frozen checks vs ~6 today, harden-runner overhead, Trivy scan per release, gitleaks full-history per PR, dep-review per PR
+- Estimated incremental: ~$120/month new ongoing (assumes ~5000 min/month baseline × 3× × $0.008/min for ubuntu-latest)
+- Mitigation: composite actions reduce per-job overhead; conditional jobs (per `dorny/paths-filter` follow-up) could halve steady-state
+
+**Registry storage delta:**
+- SBOM (~50KB) + provenance (~5KB) + cosign bundle (~2KB) per release × 3 semver variants × 2 registries = ~350KB extra per release
+- Negligible at typical release cadence
+
+**SaaS subscription delta:**
+- StepSecurity (harden-runner): free for OSS
+- Sigstore (cosign): free
+- OpenSSF Scorecard: free
+- **No new paid subscriptions**
+
+**Ongoing maintainer time:**
+- Dependabot triage: ~2-3 hr/week (4 ecosystems × weekly cadence × 5 min/PR review)
+- D5 sustainability tripwire: at 5 PRs backlog → recruit second maintainer (the cost converts to a hiring decision, not a time sink)
+- Daily branch-protection-snapshot cron: ~5 min/week to glance at issues opened (if any)
+
+**Total annual cost (estimate, year 1):**
+- One-time: 24 days × $X/day = ~$X
+- GHA: ~$1,440/year incremental
+- Maintainer time: ~120 hr/year on Dependabot triage
+- Total recurring: $1,440 + (120 hr × $X/hr) annually
+
+---
+
+## Alerting Strategy (Round 13 addition)
+
+**Current (solo-maintainer-appropriate):** All gates open GitHub Issues with CRITICAL labels. Daily branch-protection-snapshot cron pings CODEOWNERS = @chrishuie.
+
+**For a 40-person team:** GitHub Issues alone are insufficient. **A26 pre-flight (Round 13)** configures notification routing to a team channel. Recommended:
+- **Slack/Teams**: configure GitHub repo notifications → forward CRITICAL labels to `#salesagent-ci-alerts` (or equivalent)
+- **PagerDuty/Opsgenie (optional)**: route P0 alerts (Phase B failure, branch-protection PATCH 422, signed-but-broken-image) to on-call
+- **Dashboard (optional)**: existing observability stack to display: GHA usage spike, Dependabot backlog count, Scorecard score trend, Phase A overlap status during weeks 3-4
+
+**Decision boundary:** notification routing is OUT-OF-SCOPE of this rollout (org infrastructure decision). A26 is the pre-flight checkpoint that ensures it's set up before launch.
 
 ---
 
@@ -195,8 +260,8 @@ Then STOP. The user reads, decides, you resume.
 - `EXECUTIVE-SUMMARY.md` (this file)
 - `00-MASTER-INDEX.md` (status table)
 - `01-pre-flight-checklist.md` (A1-A23 admin + P1-P9 agent prep)
-- `02-risk-register.md` (R1-R10 + R16/R19/R20/R23 promoted + R26-R43 added; R11-R15, R17-R18, R21-R22, R24-R25 remain LOW info in `research/edge-case-stress-test.md`)
-- `03-decision-log.md` (D1-D46)
+- `02-risk-register.md` (R1-R10 + R16/R19/R20/R23 promoted + R26-R47 added; R11-R15, R17-R18, R21-R22, R24-R25 remain LOW info in `research/edge-case-stress-test.md`)
+- `03-decision-log.md` (D1-D48)
 - `architecture.md` (current vs target — partially stale; specs are authoritative)
 - `landing-schedule.md` (6-week calendar)
 
@@ -214,6 +279,12 @@ Then STOP. The user reads, decides, you resume.
 - `scripts/capture-rendered-names.sh` (pre-flip name probe)
 - `scripts/flip-branch-protection.sh` (admin-only)
 - `preflight-ttl-guard.md` (per-PR freshness checks)
+
+**Multi-team execution scaffolding (Round 13):**
+- `COORDINATION.md` — multi-agent PR-claiming registry (consult on session start)
+- `REBASE-PROTOCOL.md` — mandatory rebase order for shared files (.pre-commit-config.yaml, pyproject.toml, release-please.yml)
+- `ONBOARDING-CHEAT-SHEET.md` — 10-minute orientation for fresh agents
+- `FAILURE-BROADCAST-PROTOCOL.md` — escalation comms protocol
 
 **Audit trail (read-only; do not edit):**
 - `research/` (6 files + README) — measurements, audits, tool YAML

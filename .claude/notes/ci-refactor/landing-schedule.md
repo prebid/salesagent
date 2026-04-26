@@ -6,13 +6,17 @@
 
 | Week | PR opens | PR merges | Decisions land | Admin actions (operator) |
 |---|---|---|---|---|
-| **Week 0 (pre-flight)** | — | — | A1-A14, P1-P6 | snapshot branch protection, capture baselines, enable Dependabot+CodeQL Advanced, audit `allow_auto_merge`=false (A11), drain Dependabot queue (A12), snapshot mypy plugin block (A13), confirm @chrishuie bypass-list feasibility (A14) |
+| **Week 0 (pre-flight)** | — | — | A1-A26, P1-P9 | snapshot branch protection, capture baselines, enable Dependabot+CodeQL Advanced, audit `allow_auto_merge`=false (A11), drain Dependabot queue (A12), snapshot mypy plugin block (A13), confirm @chrishuie bypass-list feasibility (A14), Phase B sandbox dry-run (A24), recruit 2nd maintainer or hardware MFA (A25) |
 | **Week 1 (Fri-Sun start)** | PR 1 (Mon) | PR 1 (Fri) | D10 Path C confirmed | post-merge: configure `@chrishuie` bypass; weekend Dependabot triage |
 | **Week 2** | PR 2 (Tue) | PR 2 (Thu) | D13 pydantic delta verified | re-run OpenSSF Scorecard (delta vs A9) |
 | **Week 3** | PR 3 Phase A (Mon) | PR 3 Phase A (Wed) | D17 freeze active | 48h soak window observed on 2-3 real PRs |
-| **Week 4** | — (Phase B is admin-only) | PR 3 Phase B Mon, Phase C Wed; PR 4 opens Thu | D11 coverage gating decision | **atomic `gh api -X PATCH` flip**, admin verification PR, then test.yml deletion |
-| **Week 5** | PR 5 (Tue) | PR 4 Mon, PR 5 Thu | D10 tripwire (CodeQL → gating?) | flip CodeQL `continue-on-error` off if findings ≤ 5 |
-| **Week 6 (slack)** | PR 6 (optional) | PR 6 if greenlit | D25 (harden-runner v2.16+ adoption) | final OpenSSF Scorecard ≥ 7.5; close #1234 |
+| **Week 4** | — (Phase B is admin-only) | PR 3 Phase B Mon (admin per A24+A25 prereqs); Phase C Wed (after 48h soak); soak/monitor | D11 coverage gating decision | **atomic `gh api -X PATCH` flip via `flip-branch-protection.sh`** (D45 day-of-week guard enforced; FORBIDDEN Fri/Sat/Sun + holiday eve), admin verification PR, then test.yml deletion |
+| **Week 5** | PR 4 (Mon), PR 5 (Tue) | PR 4 (Mon) + PR 5 (Tue/Thu); flip CodeQL to gating | D10 tripwire (CodeQL → gating?) | flip CodeQL `continue-on-error` off if findings ≤ 5 |
+| **Week 6 (slack)** | PR 6 (optional) | PR 6 if greenlit | D25 (harden-runner v2.19.0+ adoption) | final OpenSSF Scorecard ≥ 7.5; close #1234 |
+
+**Phase B day-of-week guard (D45):** `flip-branch-protection.sh` enforces Mon-Thu execution. Override possible with `FORCE=1` env var (NOT RECOMMENDED — see R11C-02 for solo-maintainer weekend lockout cascade).
+
+**Phase B prerequisites (Round 13):** A24 (Phase B dry-run on sandbox) + A25 (recruit second maintainer OR hardware MFA on @chrishuie) MUST be complete before Phase B execution. See `01-pre-flight-checklist.md`.
 
 ### Dependency graph
 

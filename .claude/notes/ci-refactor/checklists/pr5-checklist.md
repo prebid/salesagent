@@ -23,25 +23,26 @@ Commits:
                [[ $(echo "$PG" | wc -l) == "1" ]] && echo "$PG" | grep -qx 'postgres:17-alpine'
 
 [ ] 3. chore(uv): pin uv via COPY --from in Dockerfile
-       File: Dockerfile (ARG UV_VERSION=0.11.6; COPY --from=ghcr.io/astral-sh/uv:${UV_VERSION} /uv /uvx /usr/local/bin/)
+       File: Dockerfile (ARG UV_VERSION=0.11.7; COPY --from=ghcr.io/astral-sh/uv:${UV_VERSION} /uv /uvx /usr/local/bin/)
        Optionally: ARG UV_DIGEST=sha256:… for digest-pinning.
        Verify: grep -qE 'COPY --from=ghcr\.io/astral-sh/uv:[0-9.]+' Dockerfile
                ! grep -qE '^RUN pip install.*uv' Dockerfile
 
 [ ] 4. chore(uv): align UV_VERSION across Dockerfile and workflows + add structural guard
        Files: .github/workflows/ci.yml, .github/actions/_pytest/action.yml (composite — Decision-4),
-              .github/actions/setup-env/action.yml (default '0.11.6');
+              .github/actions/setup-env/action.yml (default '0.11.7');
               tests/unit/test_architecture_uv_version_anchor.py (new; spec §Commit 4 verbatim)
        Verify: uv run pytest tests/unit/test_architecture_uv_version_anchor.py -v
 
-[ ] 5. DEFERRED per D28 (P0 sweep — black target-version bump out of #1234)
-       Black target-version = py311 → py312 lives in a post-#1234 follow-up PR per ADR-008.
+[ ] 5. VACANT per D28 — black target-version bump (py311 → py312) deferred to post-#1234 follow-up PR
        Rationale: 2026-04-14 unsafe-autofix incident pattern (UP040 broke prod schemas).
        File a follow-up issue: 'Post-#1234: bump black/ruff py311 → py312 with hand-applied UP040 fixes.'
 
-[ ] 6. DEFERRED per D28 — same reason as commit 5 (ruff target-version bump out of PR 5)
+[ ] 6. VACANT per D28 — ruff target-version bump deferred (same reason as commit 5)
 
-[ ] 7. DEFERRED per D28 — `--select UP` mass-fix is FORBIDDEN in PR 5 (feedback_no_unsafe_autofix.md)
+[ ] 7. chore(docker): add USER non-root + structural guard for digest pin (D34)
+       NOT a reformat — Dockerfile USER + structural guard. The reformat is deferred per D28.
+       Files: Dockerfile (USER stanza); tests/unit/test_architecture_dockerfile_digest_pinned.py
 
 [ ] 8. chore: regression checks against PG17
        (No code change — local verification, document in PR description.)

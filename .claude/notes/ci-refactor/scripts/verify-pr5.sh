@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Verification for PR 5 — Cross-surface version consolidation
 set -uo pipefail
-fail() { echo "FAIL: $*" >&2; exit 1; }
-ok()   { echo "  ok: $*"; }
+
+# Source shared helpers (fail/ok/warn/section + common checks live in _lib.sh)
+source "$(dirname "$0")/_lib.sh"
 
 # Anchor sources
 [[ -f .python-version ]] && PYV=$(cat .python-version) && ok ".python-version = $PYV"
@@ -18,9 +19,13 @@ fi
 # Dockerfile build-arg propagation
 if [[ -f Dockerfile ]] && [[ -n "${PYV:-}" ]]; then
   grep -qE "ARG PYTHON_VERSION" Dockerfile && ok "Dockerfile has ARG PYTHON_VERSION"
+  # FROM line must use templated form (FROM python:${PYTHON_VERSION}-slim@${PYTHON_BASE_DIGEST})
+  grep -qE 'FROM python:\$\{PYTHON_VERSION\}-slim@\$\{PYTHON_BASE_DIGEST\}' Dockerfile \
+    || fail "Dockerfile FROM does not use templated 'FROM python:\${PYTHON_VERSION}-slim@\${PYTHON_BASE_DIGEST}' form"
+  ok "Dockerfile FROM uses templated PYTHON_VERSION + PYTHON_BASE_DIGEST"
 fi
 
-# black target-version (D28 P0 sweep: bump DEFERRED to post-#1234 follow-up per ADR-008)
+# black target-version (D28: bump DEFERRED to post-#1234 follow-up per ADR-008)
 # PR 5 verifies the bump did NOT happen prematurely.
 if grep -q 'target-version' pyproject.toml; then
   grep -qE 'target-version\s*=\s*\[?["'\'']py311' pyproject.toml \
@@ -52,7 +57,7 @@ if [[ -f tests/unit/test_architecture_uv_version_anchor.py ]]; then
   ok "test_architecture_uv_version_anchor present (D18 +1)"
 fi
 
-# Round 10 D34 + Round 11 R11A-02 — Dockerfile hardening additions
+# D34 + R11A-02 — Dockerfile hardening additions
 if [[ -f Dockerfile ]]; then
   # @sha256: digest pin on base image (D34)
   grep -qE '(@\$\{PYTHON_BASE_DIGEST\}|@sha256:[a-f0-9]{64})' Dockerfile \
@@ -70,12 +75,12 @@ if [[ -f Dockerfile ]]; then
   ok "Dockerfile ARG SOURCE_DATE_EPOCH declared (R11A-02 fix; reproducible-build claim operational)"
 fi
 
-# Round 10 D34 — structural guard for Dockerfile digest+USER
+# D34 — structural guard for Dockerfile digest+USER
 if [[ -f tests/unit/test_architecture_dockerfile_digest_pinned.py ]]; then
   ok "test_architecture_dockerfile_digest_pinned present (D34)"
 fi
 
-# Round 10 D36 — ADR-008 copied to docs/decisions/ in PR 5 commit 7b
+# D36 — ADR-008 copied to docs/decisions/ in PR 5 commit 7b
 if [[ -f docs/decisions/adr-008-target-version-bump.md ]]; then
   grep -qE '^## Status' docs/decisions/adr-008-target-version-bump.md \
     || fail "docs/decisions/adr-008-target-version-bump.md missing canonical ## Status header"

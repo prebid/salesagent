@@ -271,6 +271,52 @@ grep -RhE 'process\.env\.[A-Z_]+' /tmp/adcp-pinned/src/ | sort -u
 
 If new required env vars surfaced, file an issue and update D32 before authoring PR 3 commit 9.
 
+### A24 — Phase B dry-run on sandbox repo (Round 13 addition; BLOCKER for PR 3 Phase B)
+
+**Why:** Phase B is irreversible without snapshot rollback. R39 (snapshot SPOF) mitigation requires that the rollback procedure works. Plan currently has documentation but no evidence of execution. CTO-level review (Round 13) flagged this as a blocker.
+
+**What:**
+1. Create a throwaway GitHub repo (`<your-org>/salesagent-phase-b-sandbox` or fork)
+2. Set up branch protection on `main` with 3-5 dummy required check names
+3. Run `bash scripts/flip-branch-protection.sh --target sandbox-repo --dry-run` (extend script if needed for sandbox targeting)
+4. Capture pre-flip snapshot
+5. Execute actual PATCH against sandbox
+6. Verify protection mutated as expected (run `gh api repos/<org>/<repo>/branches/main/protection`)
+7. Execute rollback PATCH using snapshot
+8. Verify protection restored
+9. Record execution evidence in `escalations/phase-b-dry-run-evidence.md` (sandbox URL + before/after JSON)
+
+**Status:** [ ] Complete (admin) — record date + sandbox repo URL
+
+**Blocks:** PR 3 Phase B execution. Without A24 complete, do not proceed.
+
+### A25 — Recruit second maintainer OR confirm hardware MFA on bypass actor (Round 13 addition; BLOCKER for PR 3 Phase B)
+
+**Why:** R20 + R30 are both CRITICAL severity, both depend on @chrishuie not being compromised AND not being unavailable for 5 weeks. Single human in the bypass path is single point of failure for both governance AND incident response. Hardware MFA on bypass actor was previously cited as "out of scope (organizational)" — Round 13 elevates to in-scope per CTO-level review.
+
+**What (pick one):**
+- **Option A (preferred):** Recruit a second maintainer with branch-protection bypass during PR 3 Phase B execution week ONLY. Document: who, which dates, revoke procedure.
+- **Option B (acceptable):** Confirm @chrishuie's GitHub account has hardware MFA enabled (FIDO2 / hardware key). Document: model, registration date, recovery procedure.
+
+Either way: document a "what if @chrishuie is unavailable" runbook covering: rollout pause, escalation contact, who has authority to revert.
+
+**Status:** [ ] Complete (admin) — record evidence
+
+**Blocks:** PR 3 Phase B execution.
+
+### A26 — Configure notification routing for 40-person team (Round 13 addition)
+
+**Why:** Solo-maintainer plan uses GitHub Issues as the only alerting surface. 40-person team requires Slack/email/dashboard routing.
+
+**What:**
+1. Configure GitHub repo notifications → Slack channel (or team email alias) for issues with CRITICAL label
+2. (Optional) Set up PagerDuty/Opsgenie integration for P0 alerts (Phase B failure, signed-but-broken-image)
+3. (Optional) Dashboard for rollout health metrics during weeks 3-4 (Phase A overlap)
+
+**Status:** [ ] Complete (admin) — record routing destinations
+
+**Blocks:** Best-practice for any-PR launch; not a hard blocker.
+
 ### A19 — Clean stale `tests/migration/__pycache__/` bytecode (Round 10 sweep)
 
 Round 10 audit surfaced misleading `.pyc` files at `tests/migration/__pycache__/` for `test_a2a_agent_card_snapshot`, `test_mcp_tool_inventory_frozen`, `test_openapi_byte_stability`. These are leftover from a prior local checkout of the v2.0 branch (`feat/v2.0.0-flask-to-fastapi`) — the `.py` source files exist on that branch (commits `a2d3b350`, `c736f6c5`, `def4a4ea`), NOT on main or HEAD.
@@ -404,6 +450,8 @@ Exit 0 = corpus is clean of propagation drift across production-facing surfaces 
 
 If a script outside the allowlist contains a stale string, the next sweep MUST update it. New patterns are added to the script's `PATTERNS` array as decisions evolve (e.g., when a 15th frozen name is proposed, "14 frozen" becomes a stale-string pattern).
 
+**Round 13 patterns extension:** P9 patterns extended in Round 13 to cover '11 check names', '11 required checks', '0.11.6', '33 effective', '9 to pre-push', '73-row', D1-D40 through D1-D47, R1-R37 through R1-R44.
+
 ### P8 — Mypy warm-time pre-flight measurement (PR 4 fallback gate)
 
 Per PR 4 spec, mypy moves to pre-push (D27) as the 10th hook ONLY if warm wall-clock is ≤20s. Measure before authoring PR 4 commit 5:
@@ -446,6 +494,9 @@ Before PR 1 is authored, this file should be marked complete:
 - [ ] A21 — CODEOWNERS + dependabot.yml syntax validated post-PR-1-merge (Round 11; R41 mitigation)
 - [ ] A22 — Phase B day-of-week + holiday-eve guard checked (Round 11; D45 enforcement)
 - [ ] A23 — Creative-agent commit pin freshness verified (<3 months old) before authoring PR 3 (Round 11; D32 tripwire)
+- [ ] A24 — Phase B dry-run on sandbox repo executed; evidence recorded (Round 13; BLOCKER for PR 3 Phase B)
+- [ ] A25 — Second maintainer recruited OR @chrishuie hardware-MFA confirmed (Round 13; BLOCKER for PR 3 Phase B)
+- [ ] A26 — Notification routing configured for 40-person team (Round 13)
 - [ ] P7 — `default_install_hook_types` directive verified post-PR-4 (D31 / R33 detection — only relevant after PR 4 lands)
 - [ ] P8 — mypy warm-time measured before PR 4 commit 5 (gate for pre-push migration vs fallback)
 - [ ] P9 — `check-stale-strings.sh` exit 0 (Round 12 D46 — propagation discipline; run before any sweep round closes)

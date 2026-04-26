@@ -1,6 +1,15 @@
 #!/bin/bash
 # Shared verification helpers for verify-pr*.sh scripts.
-# Source from: source "$(dirname "$0")/_lib.sh"
+#
+# Usage: source from verify-pr*.sh scripts:
+#     source "$(dirname "$0")/_lib.sh"
+#
+# Provides: fail(), ok(), warn(), section(), check_sha_pinned(),
+#   check_persist_credentials_false(), check_workflow_permissions(),
+#   check_workflow_concurrency(), check_adr_status(),
+#   check_harden_runner_cve_fix(), check_yaml_lints(), check_actionlint().
+#
+# Sourced (not executed) — shellcheck: disable=SC2034 if unused.
 set -euo pipefail
 
 # Output helpers
@@ -61,3 +70,5 @@ check_actionlint() {
     actionlint "$file" \
         || fail "$file fails actionlint"
 }
+
+# vim: ft=sh

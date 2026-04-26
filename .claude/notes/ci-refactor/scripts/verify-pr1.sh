@@ -4,8 +4,8 @@
 # Pre-existing missing artifacts (e.g., .action-shas.txt before commit 9) are non-fatal early.
 set -uo pipefail
 
-fail() { echo "FAIL: $*" >&2; exit 1; }
-ok()   { echo "  ok: $*"; }
+# Source shared helpers (fail/ok/warn/section + common checks live in _lib.sh)
+source "$(dirname "$0")/_lib.sh"
 
 # Commit 1: pyproject [project.urls]
 if grep -qE '^\[project\.urls\]' pyproject.toml; then
@@ -15,13 +15,12 @@ if grep -qE '^\[project\.urls\]' pyproject.toml; then
   ok "[project.urls] complete"
 fi
 
-# Commit 2: CONTRIBUTING.md is a thin pointer; docs/development/contributing.md is canonical
-# (D21 revised 2026-04-25 P0 sweep)
+# Commit 2: CONTRIBUTING.md is a thin pointer; docs/development/contributing.md is canonical (per D21)
 if [[ -f CONTRIBUTING.md ]]; then
   ROOT_LINES=$(wc -l <CONTRIBUTING.md)
-  [[ "$ROOT_LINES" -ge 20 && "$ROOT_LINES" -le 60 ]] || fail "CONTRIBUTING.md root pointer should be 20-60 lines (got $ROOT_LINES); D21 P0 sweep — root is thin pointer"
+  [[ "$ROOT_LINES" -ge 20 && "$ROOT_LINES" -le 60 ]] || fail "CONTRIBUTING.md root pointer should be 20-60 lines (got $ROOT_LINES); per D21 root is thin pointer"
   grep -q 'docs/development/contributing.md' CONTRIBUTING.md \
-    || fail "CONTRIBUTING.md missing pointer to docs/development/contributing.md (D21 P0 sweep)"
+    || fail "CONTRIBUTING.md missing pointer to docs/development/contributing.md (D21)"
   grep -q 'pre-commit install --hook-type pre-commit --hook-type pre-push' CONTRIBUTING.md \
     || fail "CONTRIBUTING.md missing both-stages pre-commit install instruction"
   grep -qE '(feat|fix|refactor|docs|chore|perf):' CONTRIBUTING.md \
@@ -48,6 +47,13 @@ if [[ -f CODEOWNERS ]] || [[ -f .github/CODEOWNERS ]]; then
   cf=$([[ -f .github/CODEOWNERS ]] && echo .github/CODEOWNERS || echo CODEOWNERS)
   grep -qE '^\* @' "$cf" || fail "$cf has no global owner"
   ok "CODEOWNERS present at $cf"
+  # v2.0 forward-compat glob (per master-index line 54 mandate; v2.0 phase PRs add 27 files
+  # to /tests/unit/architecture/ per D20 collision list)
+  if [[ -f .github/CODEOWNERS ]]; then
+    grep -qE '^/tests/unit/architecture/\s+@chrishuie' .github/CODEOWNERS \
+      || fail "CODEOWNERS missing v2.0 forward-compat glob /tests/unit/architecture/ @chrishuie"
+    ok "CODEOWNERS includes v2.0 forward-compat glob /tests/unit/architecture/"
+  fi
 fi
 
 # Commit 5: dependabot
@@ -97,10 +103,10 @@ if [[ -f .github/.action-shas.txt ]]; then
   [[ "$CHECKOUT_USES" -le "$PERSIST_FALSE" ]] || fail "$((CHECKOUT_USES - PERSIST_FALSE)) checkout(s) missing persist-credentials:false"
   ok "all $CHECKOUT_USES actions/checkout calls set persist-credentials:false"
 
-  # Per Round 5+6 P0 sweep: ipr-agreement.yml and pr-title-check.yml use pull_request_target
-  # without checkout (zizmor allowlist via ADR-003). Their lack of persist-credentials is
-  # benign because they don't checkout. The PERSIST_FALSE check above only applies to files
-  # with checkout calls; verify the non-checkout workflows still have top-level permissions.
+  # ipr-agreement.yml and pr-title-check.yml use pull_request_target without checkout
+  # (zizmor allowlist via ADR-003). Their lack of persist-credentials is benign because
+  # they don't checkout. The PERSIST_FALSE check above only applies to files with
+  # checkout calls; verify the non-checkout workflows still have top-level permissions.
   for f in .github/workflows/ipr-agreement.yml .github/workflows/pr-title-check.yml; do
     if [[ -f "$f" ]]; then
       grep -qE '^permissions:' "$f" || fail "$f missing top-level permissions (pull_request_target requires)"
@@ -118,24 +124,36 @@ else
   echo "  skipped: PR 1 commit 9 (.action-shas.txt artifact) not yet applied"
 fi
 
-# Commit 10: MOVED to PR 3 per 2026-04-25 P0 sweep (D15/PD24 Gemini fallback fix is now
-# applied as a new commit in PR 3's commit sequence, since PR 3 rewrites test.yml wholesale
-# into ci.yml + composite. Verification of the Gemini mock lives in scripts/verify-pr3.sh.)
+# Commit 10: MOVED to PR 3 (D15/PD24 Gemini fallback fix is now applied as a new commit
+# in PR 3's commit sequence, since PR 3 rewrites test.yml wholesale into ci.yml + composite.
+# Verification of the Gemini mock lives in scripts/verify-pr3.sh.)
 
 # Commit 11: zizmor
 if [[ -f .github/zizmor.yml ]]; then
   ok ".github/zizmor.yml present"
 fi
 
-# Commit 5 (P0 sweep + Round 8): security.yml has pinact + actionlint jobs
+# Commit 5: security.yml has pinact + actionlint jobs
 if [[ -f .github/workflows/security.yml ]]; then
   grep -qE '^\s+pinact:' .github/workflows/security.yml \
-    || fail "security.yml missing 'pinact' job (Round 8 P0 — belt-and-suspenders to zizmor unpinned-uses)"
+    || fail "security.yml missing 'pinact' job (belt-and-suspenders to zizmor unpinned-uses)"
   grep -qE 'pinact run --check' .github/workflows/security.yml \
     || fail "security.yml pinact job missing 'pinact run --check' invocation"
   grep -qE '^\s+actionlint:' .github/workflows/security.yml \
-    || fail "security.yml missing 'actionlint' job (Round 8 P0 — \${{ }} expression lint)"
+    || fail "security.yml missing 'actionlint' job (\${{ }} expression lint)"
   ok "security.yml: pinact + actionlint jobs present"
+fi
+
+# Commit 5 (per D35): gitleaks adopted as both pre-commit hook AND security.yml job
+if [[ -f .pre-commit-config.yaml ]]; then
+  grep -q 'id: gitleaks' .pre-commit-config.yaml \
+    || fail ".pre-commit-config.yaml missing gitleaks hook (D35)"
+  ok ".pre-commit-config.yaml has gitleaks hook (D35)"
+fi
+if [[ -f .github/workflows/security.yml ]]; then
+  grep -q 'gitleaks' .github/workflows/security.yml \
+    || fail "security.yml missing gitleaks job (D35)"
+  ok "security.yml has gitleaks job (D35)"
 fi
 
 # ADRs

@@ -17,7 +17,7 @@ Commits in order:
                && ! grep -qE 'description = "Add your description here"' pyproject.toml
        If fails: SECURITY.md missing private-vuln link → see spec §Embedded SECURITY.md verbatim.
 
-[ ] 2. docs: rewrite CONTRIBUTING.md as thin pointer; KEEP docs/development/contributing.md as canonical (D21 revised P0 sweep)
+[ ] 2. docs: rewrite CONTRIBUTING.md as thin pointer; KEEP docs/development/contributing.md as canonical (per D21)
        Files: CONTRIBUTING.md (rewrite as thin pointer ~30 lines: 6 conventional-commit prefixes + "See docs/development/contributing.md for full contributor workflow" + `pre-commit install --hook-type pre-commit --hook-type pre-push`);
               docs/development/contributing.md (KEEP — 594 lines, canonical content; do NOT delete)
        Verify: [[ $(wc -l < CONTRIBUTING.md) -ge 20 && $(wc -l < CONTRIBUTING.md) -le 80 ]] && \
@@ -30,7 +30,10 @@ Commits in order:
 [ ] 3. chore: add CODEOWNERS
        Files: .github/CODEOWNERS (new, lift from spec §Embedded CODEOWNERS verbatim)
        Verify: grep -qE '^\*\s+@chrishuie' .github/CODEOWNERS && \
-               grep -qE '^/\.pre-commit-config\.yaml\s+@chrishuie' .github/CODEOWNERS
+               grep -qE '^/\.pre-commit-config\.yaml\s+@chrishuie' .github/CODEOWNERS && \
+               grep -qE '^/tests/unit/test_architecture_\*\.py\s+@chrishuie' .github/CODEOWNERS && \
+               grep -qE '^/tests/unit/architecture/\s+@chrishuie' .github/CODEOWNERS
+       [ ] CODEOWNERS contains both /tests/unit/test_architecture_*.py @chrishuie AND /tests/unit/architecture/ @chrishuie globs
 
 [ ] 4. ci: add dependabot.yml (no auto-merge)
        Files: .github/dependabot.yml (new, ~80 lines from spec §Embedded dependabot.yml)
@@ -42,7 +45,7 @@ Commits in order:
                ! grep -qE 'auto-?merge' .github/dependabot.yml
        If fails: pre-commit ecosystem may not be GA in this org's plan — see spec §"Fallback for the pre-commit ecosystem" (peter-evans/create-pull-request workflow).
 
-[ ] 5. ci: add security.yml (zizmor + pip-audit + pinact + actionlint per Round 8 P0)
+[ ] 5. ci: add security.yml (zizmor + pip-audit + pinact + actionlint)
        Files: .github/workflows/security.yml (new, lift from spec §Embedded security.yml — 4 jobs)
        Verify: yamllint -d relaxed .github/workflows/security.yml && \
                grep -qE '^permissions:\s*\{?\s*\}?' .github/workflows/security.yml && \
@@ -60,17 +63,18 @@ Commits in order:
        (continue-on-error is REQUIRED at this stage — D10 Path C. Removing it is a Week 5 admin action.)
 
 [ ] 7. docs: add ADR-001 + ADR-002
-       Files: docs/decisions/adr-001-single-source-pre-commit-deps.md (placeholder text describing PR 2; full content lands in PR 2);
+       Files: docs/decisions/adr-001-single-source-pre-commit-deps.md (verbatim body lifted from spec — PR 1 commit 7 per D36 — drafts/README.md confirms inline-in-PR1 lifecycle);
               docs/decisions/adr-002-solo-maintainer-bypass.md (lift from spec §Embedded ADR-002 verbatim)
        Verify: test -f docs/decisions/adr-001-single-source-pre-commit-deps.md && \
                test -f docs/decisions/adr-002-solo-maintainer-bypass.md && \
+               grep -q '## Status' docs/decisions/adr-001-single-source-pre-commit-deps.md && \
                grep -q '## Status' docs/decisions/adr-002-solo-maintainer-bypass.md
 
 [ ] 8. chore: pre-commit autoupdate --freeze (SHA-pin external hooks; HOLD black at 25.1.0 per ADR-008)
        Procedure: on a SCRATCH branch first:
                   git checkout -b chore/sha-freeze-preview
                   # NOTE: psf/black is INTENTIONALLY omitted — autoupdate would jump 25.1.0 → 26.3.0
-                  # (2026-style reformat). Per ADR-008 (P0 sweep), target-version bumps DEFERRED to
+                  # (2026-style reformat). Per ADR-008, target-version bumps DEFERRED to
                   # a post-#1234 PR. Use individual --repo flags:
                   uv run pre-commit autoupdate --freeze \
                     --repo https://github.com/pre-commit/pre-commit-hooks \
@@ -106,7 +110,7 @@ Commits in order:
                [[ "$total" == "$sha" ]] && \
                for f in .github/workflows/*.yml; do grep -qE '^permissions:' "$f"; done
 
-[ ] 10. MOVED to PR 3 in 2026-04-25 P0 sweep
+[ ] 10. MOVED to PR 3
         The Gemini-fallback unconditional-mock fix (D15/PD24) is now PR 3 commit 11.
         Rationale: PR 3 rewrites test.yml wholesale into ci.yml + composite; redundant to fix
         the same region twice. PR 1 commit 10 slot is vacant; commit 11 (zizmor) is next.

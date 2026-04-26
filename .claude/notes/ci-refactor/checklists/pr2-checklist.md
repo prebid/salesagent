@@ -87,6 +87,8 @@ Commits in order:
 After all commits:
 [ ] bash .claude/notes/ci-refactor/scripts/verify-pr2.sh  (all 9 sections; spec §Verification)
 [ ] make quality + ./run_all_tests.sh
+[ ] grep -c 'factory-boy>=3.3.0' pyproject.toml returns 1
+[ ] grep -q 'os.getenv.*DB_POOL_SIZE' src/core/database/database_session.py
 
 Stop conditions / escalation:
 - Commit 2: pydantic.mypy delta > 200 errors (D13) → escalate

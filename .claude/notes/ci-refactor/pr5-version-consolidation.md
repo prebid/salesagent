@@ -1,10 +1,10 @@
 # PR 5 — Cross-surface version consolidation + container hardening
 
 **Drift items closed:** PD9, PD10, PD11, PD12
-**Estimated effort:** 2.5 days (Round 10 sweep added Dockerfile hardening + ADR-008 copy)
-**Depends on:** PR 3 Phase C merged (uses the `_pytest/action.yml` composite — Decision-4 P0 sweep — and per-job `services: postgres:` blocks at job level in `ci.yml`); independent of PR 4
+**Estimated effort:** 2.5 days (Dockerfile hardening + ADR-008 copy)
+**Depends on:** PR 3 Phase C merged (uses the `_pytest/action.yml` composite — Decision-4 — and per-job `services: postgres:` blocks at job level in `ci.yml`); independent of PR 4
 **Blocks:** none (final PR of rollout core; PR 6 is the Week-6 follow-up)
-**Decisions referenced:** D24 (UV_VERSION resolution), D34 (Round 10: Dockerfile @sha256: + USER non-root), D36 (Round 10: ADR-008 copy from drafts/)
+**Decisions referenced:** D24 (UV_VERSION resolution), D34 (Dockerfile @sha256: + USER non-root), D36 (ADR-008 copy from drafts/)
 
 ## Scope
 
@@ -13,14 +13,14 @@ Consolidate Python, Postgres, and uv version anchors across the repo. Single sou
 - **Postgres**: single image tag (`postgres:17-alpine`) referenced everywhere
 - **uv**: SHA-pinned `COPY --from=ghcr.io/astral-sh/uv:<version>@sha256:<digest>` in Dockerfile; `version: <pin>` in setup-uv action
 
-**Round 10 sweep additions** (per D34 + D36):
-- **Dockerfile base image** `@sha256:` digest pin (Round 10 sweep — was tag-only `python:3.12-slim`)
-- **Dockerfile `USER` non-root** stanza (Round 10 sweep — was running as root)
+**Dockerfile hardening additions** (per D34 + D36):
+- **Dockerfile base image** `@sha256:` digest pin (was tag-only `python:3.12-slim`)
+- **Dockerfile `USER` non-root** stanza (was running as root)
 - **Structural guard** `test_architecture_dockerfile_digest_pinned.py`
 - **ADR-008 copy** from `drafts/` to `docs/decisions/` (per D36)
 - ADR-001/002/003 are NOT created here — PR 1 commit 7 + 11 already write them directly to `docs/decisions/`. PR 5's job is just the ADR-008 copy.
 
-**[DEFERRED per D28 / ADR-008 — P0 sweep]** Black/ruff `target-version` bump from `py311` → `py312` is deferred to a separate hand-reviewed PR after #1234 closes (rationale: 2026-04-14 unsafe-autofix incident pattern). PR 5 retains uv/Python/Postgres anchor consolidation + Dockerfile hardening only — the load-bearing pieces.
+**[DEFERRED per D28 / ADR-008]** Black/ruff `target-version` bump from `py311` → `py312` is deferred to a separate hand-reviewed PR after #1234 closes (rationale: 2026-04-14 unsafe-autofix incident pattern). PR 5 retains uv/Python/Postgres anchor consolidation + Dockerfile hardening only — the load-bearing pieces.
 
 **[DEFERRED — `SOURCE_DATE_EPOCH` reproducible builds]** Per D34, this lands in PR 6 (release-please.yml publish-docker job), not PR 5. PR 5 only modifies the Dockerfile FROM line + USER directive; the build-time reproducibility flag is a release-pipeline concern.
 
@@ -31,10 +31,13 @@ Consolidate Python, Postgres, and uv version anchors across the repo. Single sou
 - uv version bump — pinning current 0.11.7, not upgrading
 - New Fortune-50 patterns (harden-runner, cosign, SBOM, dependency-review, Trivy scan, SOURCE_DATE_EPOCH) — defer to PR 6 follow-up
 - Distroless / Chainguard runtime image (per D34 P2 follow-up — runtime stage installs `nginx + supercronic + curl`; decompose into sidecars first)
+- `target-version` py311 → py312 bump in `pyproject.toml` (black + ruff) — DEFERRED per D28 / ADR-008 to a follow-up PR after #1234 closes. Rationale: 2026-04-14 unsafe-autofix incident pattern (the `--fix --select UP` workflow that broke prod schemas).
 
 ## Internal commit sequence
 
 Order doesn't matter much; group by surface to keep commits reviewable.
+
+**Numbering note:** original planning produced 8 slots (1-8); commits 5 and 6 (the `target-version` py311 → py312 reformat for black and ruff respectively) were deferred under D28 / ADR-008 after the 2026-04-14 unsafe-autofix incident. Slots 5 and 6 are intentionally retained as vacant placeholders so that downstream cross-references to "PR 5 commit 7" (Dockerfile USER + structural guard) and "PR 5 commit 7b" (ADR-008 copy) and "PR 5 commit 8" (PG17 regression) remain stable. Actual commit sequence shipped in PR 5: **1, 2, 3, 4, 7, 7b, 8**.
 
 ### Commit 1 — `chore(python): consolidate Python 3.12 anchors via .python-version`
 
@@ -45,7 +48,7 @@ Files:
 
 `.python-version` is already canonical (5 bytes, contains `3.12`). PR 5 makes everything else read FROM it.
 
-`Dockerfile` change (Round 10 sweep — combined with D34 base-image SHA pin; Round 11 R11A-02 added `ARG SOURCE_DATE_EPOCH`):
+`Dockerfile` change (combined with D34 base-image SHA pin; R11A-02 added `ARG SOURCE_DATE_EPOCH`):
 
 ```dockerfile
 # Before:
@@ -54,7 +57,7 @@ FROM python:3.12-slim AS builder
 FROM python:3.12-slim
 
 # After (D34 — pin to immutable digest; dependabot docker ecosystem auto-bumps;
-# Round 11 R11A-02 — declare ARG SOURCE_DATE_EPOCH so PR 6's --build-arg flows into
+# R11A-02 — declare ARG SOURCE_DATE_EPOCH so PR 6's --build-arg flows into
 # layer timestamps for reproducible-build digest stability):
 ARG PYTHON_VERSION=3.12
 ARG PYTHON_BASE_DIGEST=sha256:0000000000000000000000000000000000000000000000000000000000000000
@@ -62,7 +65,7 @@ ARG PYTHON_BASE_DIGEST=sha256:00000000000000000000000000000000000000000000000000
 # deterministically. Default value is 0 (epoch) which produces stable but obviously-
 # wrong timestamps; PR 6's publish-docker job overrides via --build-arg
 # SOURCE_DATE_EPOCH=$(git log -1 --format=%ct). Without this ARG declaration, PR 6's
-# build-arg is silently ignored — Round 11 R11A-02 caught this.
+# build-arg is silently ignored — R11A-02 caught this.
 ARG SOURCE_DATE_EPOCH=0
 FROM python:${PYTHON_VERSION}-slim@${PYTHON_BASE_DIGEST} AS builder
 # ... stages
@@ -122,8 +125,9 @@ PY_NODOT=$(echo "$PY_SHORT" | tr -d .)            # 312
 
 grep -qE "^python_version\s*=\s*${PY_SHORT}" mypy.ini
 grep -qE "^ARG PYTHON_VERSION=${PY_SHORT}" Dockerfile
+grep -qE 'FROM python:\$\{PYTHON_VERSION\}-slim@\$\{PYTHON_BASE_DIGEST\}' Dockerfile
 [[ $(grep -RE 'python-version:\s' .github/workflows/ | grep -v 'python-version-file' | wc -l) == "0" ]]
-[[ $(grep -RE "python:${PY_SHORT}-slim" Dockerfile docker-compose*.yml | grep -v 'PYTHON_VERSION' | wc -l) == "0" ]] || \
+[[ $(grep -RE "python:${PY_SHORT}-slim" Dockerfile docker-compose*.yml | grep -vE 'PYTHON_VERSION|\$\{PYTHON' | wc -l) == "0" ]] || \
   echo "Dockerfile/compose still has hardcoded python:3.12-slim"
 ```
 
@@ -231,26 +235,26 @@ test -f tests/unit/test_architecture_uv_version_anchor.py
 uv run pytest tests/unit/test_architecture_uv_version_anchor.py -v
 ```
 
-### Commit 5 — DEFERRED per D28 (target-version bump out of PR 5)
+### Commit 5 — VACANT (DEFERRED per D28)
 
 The black `target-version = py312` bump is **DEFERRED** to a separate hand-reviewed PR after
-#1234 closes per D28 (added 2026-04-25 P0 sweep). Rationale: the original step's pre-flight
-measurement and `--no-verify` carve-out language replicate the 2026-04-14 unsafe-autofix
-incident pattern. Per `feedback_no_unsafe_autofix.md`, "If a lint rule would rewrite 3+
-files in source, STOP and ask." Target-version bump unlocks no value chain in #1234.
+#1234 closes per D28. Rationale: the original step's pre-flight measurement and `--no-verify`
+carve-out language replicate the 2026-04-14 unsafe-autofix incident pattern. Per
+`feedback_no_unsafe_autofix.md`, "If a lint rule would rewrite 3+ files in source, STOP and ask."
+Target-version bump unlocks no value chain in #1234.
 
 Filed as follow-up: 'Post-#1234: bump black/ruff py311 → py312 with hand-applied UP040 fixes.'
 See ADR-008 (`drafts/adr-008-target-version-bump.md`).
 
-PR 5 commit numbering remains 1-8 with this slot vacant.
+Slot retained vacant so downstream "commit 7"/"commit 7b"/"commit 8" cross-references stay stable.
 
-### Commit 6 — DEFERRED per D28 (ruff target-version bump out of PR 5)
+### Commit 6 — VACANT (DEFERRED per D28)
 
 The ruff `target-version = "py312"` bump and the `ruff check --fix --select UP` mass-fix
 are **DEFERRED** to the same post-#1234 follow-up. Rationale: identical to commit 5 — the
 `--fix --select UP` pattern is the exact 2026-04-14 incident pattern.
 
-PR 5 commit 6 slot is vacant; commit 7 below remains.
+Slot retained vacant so downstream cross-references stay stable.
 
 ### Commit 7 — `chore(docker): add USER non-root + structural guard for digest pin (D34)`
 
@@ -258,7 +262,7 @@ Files:
 - `Dockerfile` (add stanza before ENTRYPOINT)
 - `tests/unit/test_architecture_dockerfile_digest_pinned.py` (new structural guard)
 
-Per **D34** (Round 10 sweep). Two changes:
+Per **D34**. Two changes:
 
 **1. Non-root runtime user.** The image currently runs as root in the runtime stage. Top-OSS norm + Kubernetes `runAsNonRoot: true` admission requires a non-root UID. Add to the runtime stage (NOT the builder stage):
 
@@ -284,8 +288,8 @@ If the image's existing `chown www-data` lines are for nginx-only paths, keep th
 # tests/unit/test_architecture_dockerfile_digest_pinned.py
 """Asserts Dockerfile pins base image by @sha256: digest and runs as non-root.
 
-Per D34 (Round 10 sweep). Without these, the cosign-signed image carries
-unverified base-layer provenance and root-equivalent runtime privileges.
+Per D34. Without these, the cosign-signed image carries unverified base-layer
+provenance and root-equivalent runtime privileges.
 """
 import re
 from pathlib import Path
@@ -348,7 +352,7 @@ docker rmi salesagent-pr5-test
 Files:
 - `docs/decisions/adr-008-target-version-bump.md` (new — copy of `.claude/notes/ci-refactor/drafts/adr-008-target-version-bump.md`)
 
-Per **D36** (Round 10 sweep). ADR-008 lives in `drafts/` because it evolved across multiple planning rounds; PR 5 is the first PR whose scope touches the deferred target-version concern, so it copies ADR-008 to the production `docs/decisions/` location.
+Per **D36**. ADR-008 lives in `drafts/` because it evolved across multiple planning rounds; PR 5 is the first PR whose scope touches the deferred target-version concern, so it copies ADR-008 to the production `docs/decisions/` location.
 
 ```bash
 cp .claude/notes/ci-refactor/drafts/adr-008-target-version-bump.md \
@@ -399,7 +403,6 @@ From issue #1234 §Acceptance criteria, scoped to PR 5:
 
 - [ ] Single Python version string in canonical source (`.python-version`)
 - [ ] Single Postgres image tag used across CI + compose (`postgres:17-alpine`)
-- [ ] `grep 'target-version' pyproject.toml` shows py311 in all tool configs (DEFERRED per D28 — bump moves to post-#1234 follow-up per ADR-008)
 
 Plus agent-derived:
 
@@ -442,7 +445,7 @@ grep -qE 'COPY --from=ghcr\.io/astral-sh/uv:[0-9.]+' Dockerfile
 echo "[4/6] uv version anchor consistent..."
 uv run pytest tests/unit/test_architecture_uv_version_anchor.py -v
 
-echo "[5/6] Black + ruff target-version (DEFERRED per D28 — verify py311 stays)..."
+echo "[5/6] Black + ruff target-version (DEFERRED — verify py311 stays per D28/ADR-008)..."
 uv run python -c "
 import tomllib
 d = tomllib.load(open('pyproject.toml','rb'))
@@ -461,8 +464,8 @@ echo "PR 5 verification PASSED"
 
 - Risk: PG15→PG17 migration breaks an integration test that assumes specific Postgres-major behavior.
   - Mitigation: pre-merge `tox -e integration` against PG17 catches it; PR 3's `ci.yml` per-job services already use PG17 so any breakage will surface during PR 3 Phase A overlap.
-- Risk: target-version bump produces a large diff in the same PR. **MITIGATED via D28 (P0 sweep): bump deferred entirely to post-#1234 follow-up.**
-  - Mitigation: separate the reformat into its own commit (commit 7) for review clarity.
+- Risk: target-version bump produces a large diff in the same PR. **MITIGATED via D28: bump deferred entirely to post-#1234 follow-up.**
+  - Mitigation: bump removed from PR 5 scope; happens in a hand-reviewed follow-up PR per ADR-008.
 
 ## Rollback plan
 
@@ -474,10 +477,13 @@ docker compose build --no-cache && docker compose up -d --wait
 
 Recovery: < 15 minutes (Docker rebuild dominates).
 
-If only one piece is wrong (e.g., black reformat broke something), revert just that commit:
+If only one piece is wrong, revert just the offending commit. Note that PR 5 commit 7 is the **Dockerfile USER non-root + structural guard for digest pin** (per D34) — NOT the target-version reformat. The reformat is deferred per D28 / ADR-008 to a post-#1234 follow-up PR; if anything reformat-shaped breaks during PR 5 rollout, that's a sign of scope creep in the wrong PR. Per-commit revert mapping:
 
 ```bash
-git revert <commit-7-sha>   # the reformat commit
+git revert <commit-7-sha>   # Dockerfile USER + structural guard (D34) — NOT a reformat
+git revert <commit-7b-sha>  # ADR-008 copy from drafts/
+git revert <commit-3-sha>   # uv COPY --from in Dockerfile
+git revert <commit-1-sha>   # Python ARG + python-version-file: workflow consolidation
 ```
 
 ## Merge tolerance
@@ -490,6 +496,6 @@ git revert <commit-7-sha>   # the reformat commit
 ## Coordination notes for the maintainer
 
 1. **Before authoring**: PR 3 Phase C must be merged (so `_pytest/action.yml` composite + `ci.yml`'s per-job `services: postgres:` blocks exist as the Postgres anchor).
-2. **Pre-flight ruff/black measurement DEFERRED**: target-version bump moved out of PR 5 per D28 (ADR-008); the `--target-version py312 --fix --select UP` measurement happens in the post-#1234 follow-up PR, not here.
+2. **Pre-flight ruff/black measurement DEFERRED**: target-version bump moved out of PR 5 per D28 / ADR-008; the `--target-version py312 --fix --select UP` measurement happens in the post-#1234 follow-up PR, not here.
 3. **PG17 regression**: run `tox -e integration` against a local PG17 instance BEFORE opening the PR. Document the run in the PR description.
 4. **After merge**: close issue #1234 with a comment listing all closed PD items + final OpenSSF Scorecard score.

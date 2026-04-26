@@ -1,11 +1,25 @@
 #!/usr/bin/env bash
-# Verification for PR 3 — CI authoritative + reusable workflows (Phase A only)
-# Phase B (atomic flip) is admin-only — see flip-branch-protection.sh
+# Verification for PR 3 — CI authoritative + composite actions
+#
+# Usage: ./verify-pr3.sh [phase]   # phase = a|b|c|all (default: all)
+#   a   — Phase A: ci.yml exists, 14 jobs declared, composite actions exist, creative-agent script-step pattern
+#   b   — Phase B: NOTHING (admin-only via flip-branch-protection.sh — no design-time check beyond Phase A's)
+#   c   — Phase C: test.yml deleted, ci.yml is sole CI workflow, 3 successful main runs
+#   all — runs a + c (b is intentionally a no-op here; admin executes via separate script)
 set -uo pipefail
-fail() { echo "FAIL: $*" >&2; exit 1; }
-ok()   { echo "  ok: $*"; }
+
+# Source shared verification helpers (fail/ok/warn/section/check_*)
+source "$(dirname "$0")/_lib.sh"
+
+PHASE="${1:-all}"
+case "$PHASE" in
+  a|b|c|all) ;;
+  *) fail "Unknown phase '$PHASE' — must be a|b|c|all" ;;
+esac
 
 # Phase A: ci.yml exists
+if [[ "$PHASE" == "a" || "$PHASE" == "all" ]]; then
+section "Phase A — design-time checks (ci.yml + composites + xdist gate)"
 if [[ -f .github/workflows/ci.yml ]]; then
   yamllint -d relaxed .github/workflows/ci.yml >/dev/null 2>&1 || fail "ci.yml fails yamllint"
 
@@ -24,7 +38,7 @@ if [[ -f .github/workflows/ci.yml ]]; then
   grep -qE '^concurrency:' .github/workflows/ci.yml \
     || fail "ci.yml missing 'concurrency:' block"
 
-  # All 14 frozen check names per D17 amended by D30 (Round 10 added Smoke Tests, Security Audit,
+  # All 14 frozen check names per D17 amended by D30 (D30 added Smoke Tests, Security Audit,
   # Quickstart) exist as bare job-name strings (D26: rendered = `CI` + ` / ` + bare).
   # Quoted form ('Foo' / "Foo") OR unquoted bare form (   name: Foo) — accept all three.
   for name in 'Quality Gate' 'Type Check' 'Schema Contract' 'Security Audit' 'Quickstart' \
@@ -36,22 +50,22 @@ if [[ -f .github/workflows/ci.yml ]]; then
       fail "ci.yml missing job name: $name"
   done
 
-  # workflow_dispatch trigger preserved (D37, Round 10) — required by Phase B Step 1b
+  # workflow_dispatch trigger preserved (D37) — required by Phase B Step 1b
   # rendered-name capture and Phase B Step 2.5 in-flight PR drain.
   grep -qE '^\s+workflow_dispatch:' .github/workflows/ci.yml \
     || fail "ci.yml missing workflow_dispatch: trigger (D37, R37 mitigation)"
 
-  # Develop branch trigger (P0 sweep — covers existing test.yml branches: [main, develop] until v2.0 ships)
+  # Develop branch trigger — covers existing test.yml branches: [main, develop] until v2.0 ships
   grep -qE 'branches:\s+\[main,\s*develop\]|branches:\s+\[\s*main\s*,\s*develop\s*\]' .github/workflows/ci.yml \
-    || fail "ci.yml triggers must include 'develop' branch (P0 sweep — formal deprecation deferred)"
+    || fail "ci.yml triggers must include 'develop' branch (formal deprecation deferred)"
 
   ok "ci.yml present, properly structured, 14 frozen bare names + workflow_dispatch + develop branch"
 fi
 
-# Decision-4 (P0 sweep): _pytest is a composite action, NOT a reusable workflow.
+# Decision-4: _pytest is a composite action, NOT a reusable workflow.
 # Reusable form would re-introduce 3-segment rendered names ('CI / Unit Tests / pytest').
 if [[ -f .github/workflows/_pytest.yml ]]; then
-  fail ".github/workflows/_pytest.yml exists — Decision-4 (P0 sweep) requires composite at .github/actions/_pytest/action.yml instead"
+  fail ".github/workflows/_pytest.yml exists — Decision-4 requires composite at .github/actions/_pytest/action.yml instead"
 fi
 if [[ -f .github/actions/_pytest/action.yml ]]; then
   yamllint -d relaxed .github/actions/_pytest/action.yml >/dev/null 2>&1 || fail "_pytest/action.yml fails yamllint"
@@ -73,7 +87,7 @@ if [[ -f .github/scripts/migration_roundtrip.sh ]]; then
   ok "migration_roundtrip.sh present and executable"
 fi
 
-# Coverage baseline (D11 revised in 2026-04-25 P0 sweep — hard-gate from PR 3 day 1, not advisory)
+# Coverage baseline (D11 — hard-gate from PR 3 day 1, not advisory)
 if [[ -f .coverage-baseline ]]; then
   [[ "$(cat .coverage-baseline)" == "53.5" ]] || fail ".coverage-baseline != 53.5"
   ok ".coverage-baseline = 53.5 (D11: hard-gate from PR 3 day 1, ratchet-only-stable)"
@@ -82,14 +96,14 @@ if [[ -f .coverage-baseline ]]; then
     || fail "ci.yml coverage job missing --fail-under=\$(cat .coverage-baseline) (D11 hard gate)"
 fi
 
-# Gemini fallback fix (PR 3 commit 11 — moved from PR 1 commit 10 in P0 sweep)
+# Gemini fallback fix (PR 3 commit 11 — moved from PR 1 commit 10)
 if [[ -f .github/actions/_pytest/action.yml ]]; then
   ! grep -q 'secrets.GEMINI_API_KEY' .github/actions/_pytest/action.yml \
     || fail "_pytest/action.yml still references secrets.GEMINI_API_KEY (D15: must be unconditional mock)"
   if grep -q 'GEMINI_API_KEY' .github/actions/_pytest/action.yml; then
     grep -q "GEMINI_API_KEY: test_key_for_mocking" .github/actions/_pytest/action.yml \
       || fail "_pytest/action.yml GEMINI_API_KEY is not the unconditional mock"
-    ok "Gemini key is unconditional mock (D15/PD24, moved to PR 3 in P0 sweep)"
+    ok "Gemini key is unconditional mock (D15/PD24, moved to PR 3)"
   fi
 fi
 
@@ -106,8 +120,8 @@ if [[ -f .github/workflows/test.yml ]]; then
   fi
 fi
 
-# Round 11 R11A-03 / D39 — creative-agent runs as docker-run script steps (NOT services blocks).
-# Round 12 R12B-06 — verify the filelock+worker-id gate landed in tests/conftest_db.py.
+# D39 — creative-agent runs as docker-run script steps (NOT services blocks).
+# Filelock + worker-id gate (PR 3 commit 4c) verified separately below.
 if [[ -f .github/workflows/ci.yml ]]; then
   # Negative: no creative-agent or creative-postgres in services: blocks
   ! grep -qE '^\s+creative-agent:' .github/workflows/ci.yml \
@@ -123,14 +137,14 @@ if [[ -f .github/workflows/ci.yml ]]; then
     || fail "ci.yml missing pinned creative-agent commit ca70dd1e2a6c (D32; refresh per A23 if stale)"
   grep -qE "CREATIVE_AGENT_URL: 'http://localhost:9999/api/creative-agent'" .github/workflows/ci.yml \
     || fail "ci.yml integration-tests env: CREATIVE_AGENT_URL must be 'http://localhost:9999/api/creative-agent'"
-  ok "creative-agent docker-run script-step pattern present (D39, R11A-03 fix)"
+  ok "creative-agent docker-run script-step pattern present (D39)"
 fi
 
-# Round 11 D33 — pytest-xdist + pytest-randomly in dev group (added by PR 2 commit 4.5)
+# D33 — pytest-xdist + pytest-randomly in dev group (added by PR 2 commit 4.5)
 grep -qE '"pytest-xdist[>=]' pyproject.toml || fail "pyproject.toml missing pytest-xdist (D33; added by PR 2 commit 4.5)"
 grep -qE '"pytest-randomly' pyproject.toml || fail "pyproject.toml missing pytest-randomly (D33; added by PR 2 commit 4.5)"
 
-# Round 10 CRIT-7 → Round 11 promoted to standalone — filelock+worker-id gate
+# Filelock + worker-id gate around migrate.py (PR 3 commit 4c)
 if [[ -f tests/conftest_db.py ]]; then
   grep -q 'from filelock import FileLock' tests/conftest_db.py \
     || fail "tests/conftest_db.py missing 'from filelock import FileLock' (PR 3 commit 4c)"
@@ -139,22 +153,22 @@ if [[ -f tests/conftest_db.py ]]; then
   ok "filelock + worker-id gate present in conftest_db.py (PR 3 commit 4c)"
 fi
 
-# Round 11 D40 + Round 12 R12A-01 fix — DB_POOL_SIZE wired in app code
+# D40 — DB_POOL_SIZE wired in app code
 if [[ -f src/core/database/database_session.py ]]; then
   grep -q 'os.getenv("DB_POOL_SIZE"' src/core/database/database_session.py \
-    || fail "database_session.py must read DB_POOL_SIZE env var (D40, Round 12 R12A-01 fix; pre-PR-3 commit)"
+    || fail "database_session.py must read DB_POOL_SIZE env var (D40; pre-PR-3 commit)"
   grep -q 'os.getenv("DB_MAX_OVERFLOW"' src/core/database/database_session.py \
-    || fail "database_session.py must read DB_MAX_OVERFLOW env var (D40, Round 12 R12A-01 fix)"
+    || fail "database_session.py must read DB_MAX_OVERFLOW env var (D40)"
   ok "DB_POOL_SIZE + DB_MAX_OVERFLOW env vars wired in app code (D40 operational)"
 fi
 
-# Round 10 MF-13 — retention-days on upload-artifact
+# Retention-days on upload-artifact (caps quota burn at 7d default vs GHA's 90d)
 if [[ -f .github/actions/_pytest/action.yml ]]; then
   grep -q 'retention-days: 7' .github/actions/_pytest/action.yml \
-    || fail "_pytest/action.yml missing retention-days: 7 (Round 10 MF-13)"
+    || fail "_pytest/action.yml missing retention-days: 7"
 fi
 
-# Round 12 post-issue-review — every ci.yml job has explicit timeout-minutes (#1228 A5)
+# #1228 A5 — every ci.yml job has explicit timeout-minutes
 if [[ -f .github/workflows/ci.yml ]]; then
   uv run python -c "
 import yaml, sys
@@ -164,15 +178,56 @@ if missing:
   print('FAIL: jobs missing timeout-minutes (would inherit GHA 360-min default):', file=sys.stderr)
   for m in missing: print(f'  - {m}', file=sys.stderr)
   sys.exit(1)
-" || fail "ci.yml has jobs missing timeout-minutes (#1228 A5; Round 12 post-issue-review)"
+" || fail "ci.yml has jobs missing timeout-minutes (#1228 A5)"
   ok "all ci.yml jobs have explicit timeout-minutes (#1228 A5 closed)"
 fi
 
-# Round 12 post-issue-review (#1228 C5) — uv cache key hashes pyproject.toml too
+# #1228 C5 — uv cache key hashes pyproject.toml too
 if [[ -f .github/actions/setup-env/action.yml ]]; then
   grep -q 'pyproject.toml' .github/actions/setup-env/action.yml \
     || fail "setup-env/action.yml cache-dependency-glob must include pyproject.toml (#1228 C5; stale-cache class)"
   ok "uv cache-dependency-glob includes pyproject.toml (#1228 C5 closed)"
 fi
 
-echo "PR 3 verification: complete (Phase A scope; Phase B is admin-only)"
+fi   # end Phase A block
+
+# Phase B is intentionally a no-op here — admin-only via flip-branch-protection.sh.
+# Design-time checks for the 14-context PATCH body live in flip-branch-protection.sh
+# itself (idempotency check, diff-against-expected). Nothing to verify here that
+# Phase A doesn't already cover.
+if [[ "$PHASE" == "b" ]]; then
+  section "Phase B — admin-only (no design-time checks beyond Phase A's)"
+  ok "Phase B is admin-only; run flip-branch-protection.sh manually (per A24 dry-run + D45 day guard)"
+fi
+
+# Phase C: test.yml deleted + ci.yml is sole CI workflow + 3 successful main runs
+if [[ "$PHASE" == "c" || "$PHASE" == "all" ]]; then
+  section "Phase C — cleanup checks"
+  if [[ -f .github/workflows/test.yml ]]; then
+    fail "test.yml still exists — Phase C must delete .github/workflows/test.yml"
+  fi
+  ok "test.yml deleted"
+  # Verify ci.yml is the sole CI orchestrator (no other top-level CI workflows)
+  for f in .github/workflows/*.yml; do
+    case "$(basename "$f")" in
+      ci.yml|codeql.yml|security.yml|release-please.yml|scorecard.yml|dependency-review.yml|labels.yml|stale.yml) ;;
+      _*) ;;  # internal/utility workflows OK
+      *)
+        # Surface any unexpected sibling that might be acting as a competing CI
+        warn "Unexpected sibling workflow: $f (review whether this duplicates ci.yml's responsibilities)"
+        ;;
+    esac
+  done
+  # 3 successful ci.yml runs on main
+  if command -v gh >/dev/null 2>&1; then
+    success_count=$(gh run list --workflow=ci.yml --branch=main --limit=3 --json conclusion \
+      --jq 'map(select(.conclusion == "success")) | length' 2>/dev/null || echo 0)
+    [[ "$success_count" -eq 3 ]] \
+      || fail "ci.yml has $success_count successful main runs in last 3; need 3 for Phase C close"
+    ok "ci.yml has 3/3 successful main runs"
+  else
+    warn "gh CLI not available; skipping main-run success check (run manually)"
+  fi
+fi
+
+echo "PR 3 verification: complete (phase=$PHASE)"

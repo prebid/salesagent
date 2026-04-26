@@ -20,11 +20,11 @@ Per D10 (Path C), CodeQL is **advisory** for 2 weeks then flips to gating. zizmo
 - Version anchor consolidation → PR 5
 - CSRF middleware (`Flask-WTF CSRFProtect`) → deferred to v2.0 phases (the v2.0 branch already adds `src/admin/csrf.py`)
 - Any change under `src/` (production code untouched)
-- `harden-runner` adoption (Fortune-50 pattern, file as PR 6 follow-up per D25; v2.16.0+ pin floor)
+- `harden-runner` adoption ACROSS ALL workflows (broad PR 6 sweep; PR 1 security.yml is allowed to use harden-runner because it's a self-protective workflow); v2.19.0+ pin floor (per D34 / Round 12 verification)
 
 > **Note on ADR location.** ADR-001, ADR-002, and ADR-003 are embedded inline in this PR 1 spec (authored by commits 7 and 11 — see §Embedded ADR-002 below and the inline ADR-001 / ADR-003 bodies in their respective commit sections). They are NOT staged as standalone draft files in `drafts/` because their text in this spec is the canonical source until extraction at commit time. ADR-004 onward exist as standalone drafts because they were authored in earlier planning rounds. See `drafts/README.md` for the inventory split.
 
-> **Pre-flight P5 (new) — empirical check.** Before authoring any commit, verify `.github/` directory exists and `pyproject.toml` has the expected sections. Round 9 verification found 6 cases where plan assumptions about current code state were wrong; Rule 19 of the executor prompt now requires this empirical check.
+> **Pre-flight P5 — empirical check.** Before authoring any commit, verify `.github/` directory exists and `pyproject.toml` has the expected sections. Multiple cases were found where plan assumptions about current code state were wrong; Rule 19 of the executor prompt requires this empirical check.
 
 ## Internal commit sequence
 
@@ -63,13 +63,13 @@ done
 ! grep -qE 'description = "Add your description here"' pyproject.toml
 ```
 
-### Commit 2 — `docs: rewrite root CONTRIBUTING.md as thin pointer (D21 revised P0 sweep)`
+### Commit 2 — `docs: rewrite root CONTRIBUTING.md as thin pointer (per D21)`
 
 Files:
 - `CONTRIBUTING.md` (rewrite from 20 lines → **~30-line thin pointer**)
 - `docs/development/contributing.md` (594 lines — **KEEP UNCHANGED as canonical contributor guide**)
 
-Closes PD7. Per **D21 (revised 2026-04-25 P0 sweep):** `docs/development/contributing.md` (594 lines) is canonical content; root `CONTRIBUTING.md` is a thin pointer (~30 lines: 6 conventional-commit prefixes inline + "See `docs/development/contributing.md` for full contributor workflow." + `pre-commit install --hook-type pre-commit --hook-type pre-push` instruction). Earlier framing ("root canonical, ~120 lines, delete docs/development version") was reversed in the P0 sweep after disk-truth audit found docs/development/contributing.md was substantive (594 lines), not a thin duplicate.
+Closes PD7. Per **D21:** `docs/development/contributing.md` (594 lines) is canonical content; root `CONTRIBUTING.md` is a thin pointer (~30 lines: 6 conventional-commit prefixes inline + "See `docs/development/contributing.md` for full contributor workflow." + `pre-commit install --hook-type pre-commit --hook-type pre-push` instruction). Disk-truth audit confirmed docs/development/contributing.md is substantive (594 lines), not a thin duplicate, so the canonical-content authority lives there.
 
 **Thin pointer body** (verbatim — author this exactly):
 
@@ -163,9 +163,9 @@ grep -qE 'dependency-name: "?googleads"?' .github/dependabot.yml
 
 Files:
 - `.github/workflows/security.yml` (new)
-- `.pre-commit-config.yaml` (Round 10 D35 — append `gitleaks` repo entry alongside the existing repos)
+- `.pre-commit-config.yaml` (per D35 — append `gitleaks` repo entry alongside the existing repos)
 
-Closes PD13. **Round 10 D35 addition:** gitleaks adopted as both a pre-commit hook (commit-stage, fast scan of changed files) and a workflow job (full-history scan with SARIF upload to GitHub Security tab).
+Closes PD13. **Per D35:** gitleaks adopted as both a pre-commit hook (commit-stage, fast scan of changed files) and a workflow job (full-history scan with SARIF upload to GitHub Security tab).
 
 GitHub's native secret scanning + push-protection (enabled in PR 6 admin step) covers known-pattern secrets (API tokens, AWS keys, etc.) but misses:
 - Entropy-based detection (high-entropy strings that don't match a known pattern)
@@ -175,7 +175,7 @@ GitHub's native secret scanning + push-protection (enabled in PR 6 admin step) c
 `.pre-commit-config.yaml` addition:
 
 ```yaml
-  # Round 10 D35 — secret detection. Top-OSS norm (24,400+ stars; CNCF, sigstore, Apache).
+  # Per D35 — secret detection. Top-OSS norm (24,400+ stars; CNCF, sigstore, Apache).
   - repo: https://github.com/gitleaks/gitleaks
     rev: <SHA>  # frozen: v8.x — resolve via PR 1 commit 8 autoupdate-freeze
     hooks:
@@ -184,7 +184,7 @@ GitHub's native secret scanning + push-protection (enabled in PR 6 admin step) c
         # root can customize (allowlist test fixtures, add custom rules).
 ```
 
-`.github/workflows/security.yml` jobs (per Round 10 D35 + existing PD13/zizmor/pip-audit):
+`.github/workflows/security.yml` jobs (per D35 + existing PD13/zizmor/pip-audit):
 
 ```yaml
   gitleaks:
@@ -216,7 +216,7 @@ uvx --from gitleaks gitleaks detect --source=. --no-git --report-format=json \
 jq '.findings | length' .gitleaks-preflight.json   # baseline count
 ```
 
-If >50 findings, baseline via `.gitleaks.toml` allowlist with rule-specific entries (NOT broad-category ignores). Most likely false positives: test fixtures, mock secrets in `tests/`, JWT examples in docs. Per Round 10 D35: do NOT suppress with category-wide ignores.
+If >50 findings, baseline via `.gitleaks.toml` allowlist with rule-specific entries (NOT broad-category ignores). Most likely false positives: test fixtures, mock secrets in `tests/`, JWT examples in docs. Per D35: do NOT suppress with category-wide ignores.
 
 Verification:
 ```bash
@@ -225,7 +225,7 @@ yamllint -d relaxed .github/workflows/security.yml
 grep -qE '^permissions:\s*\{?\s*\}?' .github/workflows/security.yml
 grep -q 'zizmor' .github/workflows/security.yml
 grep -q 'pip-audit' .github/workflows/security.yml
-grep -q 'gitleaks' .github/workflows/security.yml      # Round 10 D35
+grep -q 'gitleaks' .github/workflows/security.yml      # per D35
 grep -q 'gitleaks-action' .github/workflows/security.yml
 # Pre-commit hook also registered
 grep -q 'gitleaks/gitleaks' .pre-commit-config.yaml
@@ -316,7 +316,7 @@ grep -q '## Status' docs/decisions/adr-002-solo-maintainer-bypass.md
 Files:
 - `.pre-commit-config.yaml` (modify lines 262, 275, 281, 289)
 
-Closes PD3. Per D12, bumps each hook to its latest tag and rewrites `rev:` to a 40-char SHA with `# frozen: v<tag>` trailing comment.
+Closes PD3. Per D12, bumps each hook to its latest tag and rewrites `rev:` to a 40-char SHA with `# frozen: <tag>` trailing comment (relaxed regex `# frozen: \S+` matches both `v6.0.0` and `25.1.0` formats — black ships without `v` prefix).
 
 **Procedure (run on a scratch branch first to review the diff before committing):**
 
@@ -355,34 +355,75 @@ Files:
 - `.github/workflows/pr-title-check.yml` (same)
 - `.github/workflows/release-please.yml` (same)
 - `.github/workflows/ipr-agreement.yml` (same)
+- `.github/workflows/security.yml` (commits 5 introduces this with `<SHA>` placeholders; commit 9 resolves them)
+- `.github/workflows/codeql.yml` (commits 6 introduces this with `<SHA>` placeholders; commit 9 resolves them)
 
 Addresses zizmor's `unpinned-uses` and `excessive-permissions` findings (~32 expected from pre-flight P3). Also closes the OSSF Scorecard `Token-Permissions` gap by ensuring no `actions/checkout` invocation persists credentials in `.git/config` (default behavior leaks the GITHUB_TOKEN to subsequent steps and any artifact they upload — see [actions/checkout#2312](https://github.com/actions/checkout/issues/2312)). Closes PD15a (SHA-pin scope) and PD15b (workflow permissions remainder).
 
-**Reference count** (verified 2026-04-25): 23 total `uses:` references across 4 workflows (release-please.yml=6, test.yml=15, pr-title-check.yml=1, ipr-agreement.yml=1) — not 24 as estimated in `research/empirical-baseline.md` (one fewer site to pin).
+**ORDER-OF-OPS:** Commits 5 and 6 introduce new workflow files (security.yml, codeql.yml) using `<SHA>` placeholder strings for actions like `step-security/harden-runner@<SHA>`. Commit 9's resolution loop scans ALL workflows including those just-added in commits 5+6, resolves each `<SHA>` placeholder, and writes results to `.github/.action-shas.txt`. Commit 9 must run AFTER commits 5+6 commits land. The loop's `case` statement must explicitly handle three patterns: `<SHA>` placeholder, `@vX.Y.Z` tag-pin, and bare commit SHA. For tag-object dereferencing, use `gh api repos/$tool/git/objects/$sha` (NOT `git/tags/$sha` which is the same value).
 
-For each `uses: actions/<name>@v<X>` reference, replace with `uses: actions/<name>@<40-char-sha>  # v<X>`. Persist the resolved SHAs as a committed artifact at `.github/.action-shas.txt` so PR 3 commit 5 can reuse them without re-running the loop.
+**Reference count** (verified 2026-04-25): 23 total `uses:` references across 4 pre-existing workflows (release-please.yml=6, test.yml=15, pr-title-check.yml=1, ipr-agreement.yml=1). Commits 5+6 add ~10 more `uses:` references via security.yml and codeql.yml (with `<SHA>` placeholders that commit 9 resolves). Total post-commit-9: ~33 SHA-pinned refs.
+
+For each `uses: actions/<name>@v<X>` reference, replace with `uses: actions/<name>@<40-char-sha>  # v<X>`. For each `uses: <tool>/<action>@<SHA>` placeholder added in commits 5+6, resolve the placeholder to a real 40-char SHA at the latest stable tag. Persist the resolved SHAs as a committed artifact at `.github/.action-shas.txt` so PR 3 commit 5 can reuse them without re-running the loop.
 
 Mechanical operation — generate the SHAs in batch:
 
 ```bash
-# For each unique action ref, fetch its SHA at the pinned tag
+# For each unique action ref, fetch its SHA at the pinned tag.
+# Loop must explicitly handle three ref patterns:
+#   1. @<SHA>             — placeholder string from commits 5+6, resolve to latest stable tag
+#   2. @vX.Y.Z (or @X.Y.Z) — tag-pinned, resolve to commit SHA
+#   3. @[a-f0-9]{40}       — already SHA-pinned, pass through unchanged
 : > .github/.action-shas.txt
 for ref in $(grep -RhoE 'uses: [^ ]+' .github/workflows/ | sort -u | sed 's/uses: //'); do
   case "$ref" in
-    *@v*)
+    *@\<SHA\>)
+      # Placeholder from commits 5+6 — resolve to latest stable tag from the action repo
+      tool=${ref%@*}
+      tag=$(gh api repos/$tool/releases/latest --jq '.tag_name')
+      sha=$(gh api repos/$tool/git/refs/tags/$tag --jq '.object.sha')
+      # Dereference annotated tag → commit if needed
+      if [[ $(gh api repos/$tool/git/objects/$sha --jq '.object.type' 2>/dev/null) == "commit" ]]; then
+        sha=$(gh api repos/$tool/git/objects/$sha --jq '.object.sha')
+      fi
+      printf '%s\t%s\t%s\n' "$ref" "$sha" "$tag" >> .github/.action-shas.txt
+      ;;
+    *@v*|*@[0-9]*)
+      # Tag-pinned (@v1.2.3 or @1.2.3) — resolve tag → commit SHA
       tool=${ref%@*}
       tag=${ref#*@}
       sha=$(gh api repos/$tool/git/refs/tags/$tag --jq '.object.sha')
-      # If it's a tag object, dereference to commit
-      if [[ $(gh api repos/$tool/git/tags/$sha --jq '.object.type' 2>/dev/null) == "commit" ]]; then
-        sha=$(gh api repos/$tool/git/tags/$sha --jq '.object.sha')
+      # Dereference annotated tag → commit if needed
+      if [[ $(gh api repos/$tool/git/objects/$sha --jq '.object.type' 2>/dev/null) == "commit" ]]; then
+        sha=$(gh api repos/$tool/git/objects/$sha --jq '.object.sha')
       fi
       printf '%s\t%s\t%s\n' "$ref" "$sha" "$tag" >> .github/.action-shas.txt
+      ;;
+    *@[a-f0-9][a-f0-9][a-f0-9][a-f0-9]*)
+      # Already SHA-pinned — pass through unchanged for inventory consistency
+      tool=${ref%@*}
+      sha=${ref#*@}
+      printf '%s\t%s\t%s\n' "$ref" "$sha" "(already-pinned)" >> .github/.action-shas.txt
+      ;;
+    *)
+      echo "WARN: unrecognized ref pattern: $ref" >&2
       ;;
   esac
 done
 sort -o .github/.action-shas.txt .github/.action-shas.txt
+# Sanity check: no `<SHA>` placeholders remain anywhere
+! grep -E 'uses: [^@]+@<SHA>' .github/workflows/*.yml \
+  || { echo "ERROR: <SHA> placeholders still present in workflows; loop failed to resolve"; exit 1; }
 ```
+
+**Note: also evaluate** these forward-looking action version bumps as part of the SHA-resolution loop (file follow-up issue if any need wider migration scope; PR 6 territory):
+
+- `googleapis/release-please-action@v4` → consider `@v5` (Node 24 breaking change, 2026-04-22)
+- `aquasecurity/trivy-action 0.21.x` → bump to `0.36.x` (15+ minor versions stale)
+- `actions/setup-python@v5` → consider `@v6.2.0` (current major)
+- `actions/checkout@v4` → consider `@v6.0.2` (current major; requires Runner ≥2.329.0)
+
+**setup-uv version note:** v8.0.0 (2026-03-29) explicitly removed major/minor tag floating as a security feature. Resolve to a specific v8.x patch tag, NOT a floating major. Last known stable: v8.1.0.
 
 Apply via `sed` or manual edits. PR 3 commit 5 reads `.github/.action-shas.txt` instead of re-running this loop.
 
@@ -402,6 +443,9 @@ If the existing `with:` block has other keys (e.g., `fetch-depth`), append `pers
 
 Verification:
 ```bash
+# No `<SHA>` placeholder strings remain (placeholders from commits 5+6 must have been resolved)
+! grep -E 'uses: [^@]+@<SHA>' .github/workflows/*.yml \
+  || { echo "ERROR: <SHA> placeholders still in workflows — commit 9 resolution loop incomplete"; exit 1; }
 # Every uses: line is SHA-pinned
 [[ $(grep -RhoE 'uses: [^ ]+@[a-f0-9]{40}' .github/workflows/ | wc -l) == \
    $(grep -RhoE 'uses: [^ ]+@[^ ]+' .github/workflows/ | grep -vE 'uses: \./' | wc -l) ]]
@@ -420,14 +464,9 @@ test -s .github/.action-shas.txt
 
 ### Commit 10 — MOVED to PR 3
 
-The Gemini-fallback unconditional-mock fix (D15, PD24) has been **moved to PR 3** in the
-2026-04-25 P0 sweep. Rationale: PR 3 rewrites `test.yml` wholesale (the file is replaced by
-`ci.yml` + reusable composite); applying the Gemini fix on `test.yml` in PR 1 just to have
-PR 3 rewrite the same region is wasted work. The fix lands as a new commit in PR 3's commit
-sequence, applied directly to the new composite `_pytest/action.yml`.
+The Gemini-fallback unconditional-mock fix (D15, PD24) is **moved to PR 3**. Rationale: PR 3 rewrites `test.yml` wholesale (the file is replaced by `ci.yml` + reusable composite); applying the Gemini fix on `test.yml` in PR 1 just to have PR 3 rewrite the same region is wasted work. The fix lands as a new commit in PR 3's commit sequence, applied directly to the new composite `_pytest/action.yml`.
 
-PR 1 commit numbering remains 1-11 with this slot vacant; commit 11 (zizmor) is the next
-real commit.
+PR 1 commit numbering remains 1-11 with this slot vacant; commit 11 (zizmor) is the next real commit.
 
 ### Commit 11 — `ci: zizmor pre-flight findings — fix or allowlist`
 
@@ -484,8 +523,8 @@ From issue #1234 §Acceptance criteria, scoped to PR 1:
 - [ ] `.github/CODEOWNERS` exists with `@chrishuie` + critical-path coverage
 - [ ] `.github/dependabot.yml` exists; no auto-merge configured
 - [ ] `SECURITY.md` exists with GitHub private vuln reporting link + scope
-- [ ] `CONTRIBUTING.md` rewritten (>80 lines); references layered model
-- [ ] Every external `rev:` in `.pre-commit-config.yaml` is a full SHA with `# frozen: v<tag>` comment
+- [ ] `CONTRIBUTING.md` is a thin pointer (20-60 lines) referencing docs/development/contributing.md as canonical per D21
+- [ ] Every external `rev:` in `.pre-commit-config.yaml` is a full SHA with `# frozen: <tag>` comment (relaxed regex `# frozen: \S+` matches both `v1.18.2` and `25.1.0` formats)
 - [ ] `.github/workflows/codeql.yml` exists and runs on PR (advisory per D10)
 - [ ] `.github/workflows/security.yml` exists with pip-audit + zizmor
 - [ ] `pyproject.toml` has `[project.urls]` and no placeholder description
@@ -511,9 +550,9 @@ Inline:
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 1. SHA-freeze
+# 1. SHA-freeze (relaxed regex `# frozen: \S+` matches both `v6.0.0` and `25.1.0` formats)
 echo "[1/8] SHA-freeze..."
-[[ $(grep -E '^\s+rev:' .pre-commit-config.yaml | grep -vcE 'rev: [a-f0-9]{40}\s+# frozen: v') == "0" ]]
+[[ $(grep -E '^\s+rev:' .pre-commit-config.yaml | grep -vcE 'rev: [a-f0-9]{40}\s+# frozen: \S+') == "0" ]]
 
 # 2. CODEOWNERS
 echo "[2/8] CODEOWNERS..."
@@ -742,6 +781,7 @@ before publishing a fix.
 
 # ---- Architecture guards (prevent regressions in invariants) ----
 /tests/unit/test_architecture_*.py      @chrishuie
+/tests/unit/architecture/               @chrishuie   # v2.0 phase PRs add 27 files here per D20 collision list
 
 # ---- Test infrastructure & ratchet baselines (shrink-only contract per ADR-004) ----
 /Makefile                                @chrishuie
@@ -903,7 +943,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@<SHA>  # v4
-      - uses: astral-sh/setup-uv@<SHA>  # v4
+      - uses: astral-sh/setup-uv@<SHA>  # v8.x — specific minor TBD at SHA-resolution time per ADR-008
       - run: uv run pre-commit autoupdate --freeze
       - uses: peter-evans/create-pull-request@<SHA>  # v6
         with:
@@ -1083,9 +1123,9 @@ This is non-trivial; consult the GitHub Actions Security Hardening docs before
 making any change.
 ```
 
-## Embedded CONTRIBUTING.md outline — DEFERRED per D21 P0 sweep
+## Embedded CONTRIBUTING.md outline — DEFERRED per D21
 
-**This section is preserved as audit-trail / source-material for a future docs/development/contributing.md content refresh.** The 120-line full-rewrite-of-root-CONTRIBUTING.md plan was reversed in the 2026-04-25 P0 sweep when disk-truth audit found `docs/development/contributing.md` was already 594 lines of substantive content (not a thin duplicate as originally assumed). PR 1 commit 2 now produces a ~30-line thin pointer at the root (see Commit 2 above). The bullets below remain useful if a future PR wants to refresh `docs/development/contributing.md` with this expanded outline; do not lift them into root `CONTRIBUTING.md`.
+**This section is preserved as audit-trail / source-material for a future docs/development/contributing.md content refresh.** The earlier full-rewrite-of-root-CONTRIBUTING.md plan was reversed once disk-truth audit found `docs/development/contributing.md` was already 594 lines of substantive content (not a thin duplicate as originally assumed). PR 1 commit 2 now produces a ~30-line thin pointer at the root (see Commit 2 above). The bullets below remain useful if a future PR wants to refresh `docs/development/contributing.md` with this expanded outline; do not lift them into root `CONTRIBUTING.md`.
 
 <details>
 <summary>(audit trail — outline, do not lift to root)</summary>
@@ -1149,7 +1189,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@<SHA>  # v4
-      - uses: astral-sh/setup-uv@<SHA>  # v4
+      - uses: astral-sh/setup-uv@<SHA>  # v8.x — specific minor TBD at SHA-resolution time per ADR-008
       - run: uv export --no-hashes --format requirements-txt > /tmp/requirements.txt
       - run: uvx pip-audit -r /tmp/requirements.txt
 
@@ -1161,7 +1201,7 @@ jobs:
       security-events: write   # for SARIF upload
     steps:
       - uses: actions/checkout@<SHA>  # v4
-      - uses: astral-sh/setup-uv@<SHA>  # v4
+      - uses: astral-sh/setup-uv@<SHA>  # v8.x — specific minor TBD at SHA-resolution time per ADR-008
       - run: uvx zizmor --format sarif .github/workflows/ > zizmor.sarif
         continue-on-error: true   # SARIF still uploads even on findings
       - uses: github/codeql-action/upload-sarif@<SHA>  # v4 — pin v4 (v3 deprecates Dec 2026)
