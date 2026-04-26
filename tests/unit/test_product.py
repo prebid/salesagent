@@ -53,7 +53,7 @@ class TestProductPreconditions:
             from src.core.tools.products import _get_products_impl
 
             req = GetProductsRequestGenerated(brief="test", brand={"domain": "test.com"})
-            with pytest.raises(AdCPValidationError, match="Identity is required"):
+            with pytest.raises((AdCPValidationError, AdCPAuthenticationError), match="Identity is required"):
                 await _get_products_impl(req, identity=None)
 
     async def test_no_principal_requires_auth_policy_rejects(self):

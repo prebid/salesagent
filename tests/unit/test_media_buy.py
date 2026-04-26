@@ -1117,7 +1117,7 @@ class TestCreateMediaBuyImplAuth:
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         req = _make_request()
-        with pytest.raises(AdCPValidationError, match="[Ii]dentity"):
+        with pytest.raises(AdCPAuthenticationError, match="[Ii]dentity"):
             await _create_media_buy_impl(req, identity=None)
 
     @pytest.mark.asyncio
@@ -3660,23 +3660,23 @@ class TestDeliveryImplErrors:
     """UC-004 extensions: auth, principal, adapter errors."""
 
     def test_missing_identity_raises_error(self):
-        """UC-004-E01: None identity raises AdCPValidationError.
+        """UC-004-E01: None identity raises AdCPAuthenticationError.
 
         Spec: UNSPECIFIED (implementation-defined authentication boundary)
         """
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_1"])
-        with pytest.raises(AdCPValidationError):
+        with pytest.raises(AdCPAuthenticationError):
             _get_media_buy_delivery_impl(req, identity=None)
 
-    def test_missing_identity_recovery_is_correctable(self):
-        """Missing identity is correctable — buyer can fix by including auth headers.
+    def test_missing_identity_recovery_is_terminal(self):
+        """Missing identity is terminal — AdCPAuthRequiredError default recovery.
 
         Covers: salesagent-80je (PR #1083 review)
         """
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_1"])
-        with pytest.raises(AdCPValidationError) as exc_info:
+        with pytest.raises(AdCPAuthenticationError) as exc_info:
             _get_media_buy_delivery_impl(req, identity=None)
-        assert exc_info.value.recovery == "correctable"
+        assert exc_info.value.recovery == "terminal"
 
     def test_principal_not_found_returns_error_response(self):
         """UC-004-E02: principal not in DB returns error in response.

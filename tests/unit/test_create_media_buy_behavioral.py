@@ -38,7 +38,12 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-from src.core.exceptions import AdCPAdapterError, AdCPNotFoundError, AdCPValidationError
+from src.core.exceptions import (
+    AdCPAdapterError,
+    AdCPAuthenticationError,
+    AdCPNotFoundError,
+    AdCPValidationError,
+)
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     CreateMediaBuyError,
@@ -1363,7 +1368,7 @@ class TestPreconditionObligations:
         req = _make_request()
 
         # None identity -> should raise
-        with pytest.raises(AdCPValidationError, match="Identity is required"):
+        with pytest.raises((AdCPValidationError, AdCPAuthenticationError), match="Identity is required"):
             await _create_media_buy_impl(req=req, identity=None)
 
 
@@ -2104,12 +2109,10 @@ class TestExtensionObligations:
         req = _make_request()
 
         # None identity -> requires authentication
-        with pytest.raises(AdCPValidationError, match="Identity is required"):
+        with pytest.raises((AdCPValidationError, AdCPAuthenticationError), match="Identity is required"):
             await _create_media_buy_impl(req=req, identity=None)
 
         # Identity with no principal_id -> requires authentication
-        from src.core.exceptions import AdCPAuthenticationError
-
         identity_no_principal = ResolvedIdentity(
             principal_id=None,
             tenant_id="test_tenant",

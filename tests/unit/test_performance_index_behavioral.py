@@ -424,14 +424,14 @@ class TestErrorPaths:
     """Error path tests for _update_performance_index_impl."""
 
     # E1 ---------------------------------------------------------------
-    def test_identity_none_raises_value_error(self):
-        """E1: identity=None raises ValueError (not AdCPAuthenticationError).
+    def test_identity_none_raises_auth_required_error(self):
+        """E1: identity=None raises AdCPAuthRequiredError (subclass of AdCPAuthenticationError).
 
-        The impl checks identity before tenant, so ValueError fires first.
+        The impl checks identity before tenant, so auth required fires first.
         """
         from src.core.tools.performance import _update_performance_index_impl
 
-        with pytest.raises(ValueError, match="Identity is required"):
+        with pytest.raises(AdCPAuthenticationError, match="Identity is required"):
             _update_performance_index_impl(
                 media_buy_id="mb_1",
                 performance_data=[{"product_id": "p1", "performance_index": 1.0}],
