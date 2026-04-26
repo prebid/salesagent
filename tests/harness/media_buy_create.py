@@ -208,7 +208,7 @@ class MediaBuyCreateEnv(IntegrationEnv):
             flat.update(kwargs)
             kwargs = flat
 
-        identity = kwargs.pop("identity", self.identity)_for(Transport.MCP)
+        identity = kwargs.pop("identity", self.identity_for(Transport.MCP))
         mock_ctx = MM(spec=Context)
         mock_ctx.get_state = AsyncMock(return_value=identity)
 

@@ -1324,7 +1324,9 @@ async def _create_media_buy_impl(
 
     # Extract testing context first
     if identity is None:
-        raise AdCPAuthRequiredError("Identity is required", details={"suggestion": "Provide a valid authentication token"})
+        raise AdCPAuthRequiredError(
+            "Identity is required", details={"suggestion": "Provide a valid authentication token"}
+        )
 
     testing_ctx = identity.testing_context if identity.testing_context else AdCPTestContext()
 

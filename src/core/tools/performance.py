@@ -12,7 +12,7 @@ from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError, AdCPValidationError
+from src.core.exceptions import AdCPAuthenticationError, AdCPAuthRequiredError, AdCPNotFoundError, AdCPValidationError
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -57,7 +57,9 @@ def _update_performance_index_impl(
         raise AdCPValidationError(format_validation_error(e, context="update_performance_index request")) from e
 
     if identity is None:
-        raise AdCPAuthRequiredError("Identity is required", details={"suggestion": "Provide a valid authentication token"})
+        raise AdCPAuthRequiredError(
+            "Identity is required", details={"suggestion": "Provide a valid authentication token"}
+        )
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
     tenant = identity.tenant

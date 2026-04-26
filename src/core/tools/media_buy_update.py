@@ -34,7 +34,12 @@ from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
 from sqlalchemy import select
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError, AdCPValidationError
+from src.core.exceptions import (
+    AdCPAuthenticationError,
+    AdCPAuthorizationError,
+    AdCPAuthRequiredError,
+    AdCPValidationError,
+)
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -138,7 +143,9 @@ def _update_media_buy_impl(
     affected_packages_list: list[AffectedPackage] = []
 
     if identity is None:
-        raise AdCPAuthRequiredError("Identity is required", details={"suggestion": "Provide a valid authentication token"})
+        raise AdCPAuthRequiredError(
+            "Identity is required", details={"suggestion": "Provide a valid authentication token"}
+        )
 
     # CRITICAL: Extract principal from identity
     principal_id = identity.principal_id

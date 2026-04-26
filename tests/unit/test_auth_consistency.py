@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastmcp.exceptions import ToolError
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPError, AdCPValidationError
+from src.core.exceptions import AdCPAuthenticationError, AdCPAuthRequiredError, AdCPError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.services.policy_check_service import PolicyStatus
 
@@ -114,12 +114,12 @@ class TestMissingTokenConsistency:
         from src.core.tools.media_buy_create import _create_media_buy_impl
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        # create_media_buy raises AdCPValidationError with None identity
-        with pytest.raises((AdCPValidationError, ValueError)):
+        # create_media_buy raises AdCPAuthRequiredError with None identity
+        with pytest.raises((AdCPValidationError, AdCPAuthRequiredError, ValueError)):
             await _create_media_buy_impl(req=MagicMock(), identity=None)
 
-        # update_media_buy raises ValueError with None identity
-        with pytest.raises((ValueError, AdCPAuthenticationError)):
+        # update_media_buy raises AdCPAuthRequiredError with None identity
+        with pytest.raises((ValueError, AdCPAuthenticationError, AdCPAuthRequiredError)):
             _update_media_buy_impl(req=MagicMock(), identity=None)
 
 

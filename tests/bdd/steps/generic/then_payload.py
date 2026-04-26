@@ -120,10 +120,7 @@ def then_has_referrals(ctx: dict) -> None:
             # E2E won't match — Given URLs are test fixtures, Docker has its own
             is_e2e = any("e2e" in str(u) or "creative-agent" in str(u) for u in actual_urls)
             if not is_e2e:
-                assert not missing, (
-                    f"Given agent URLs not in response: {missing}. "
-                    f"Response has: {actual_urls}"
-                )
+                assert not missing, f"Given agent URLs not in response: {missing}. Response has: {actual_urls}"
 
 
 @then("each referral should include the agent URL and supported capabilities")

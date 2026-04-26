@@ -44,13 +44,15 @@ def parse_feature_files() -> list[dict]:
                 current_tags = {t.lstrip("@") for t in stripped.split() if t.startswith("@")}
             elif stripped.startswith("Scenario:") or stripped.startswith("Scenario Outline:"):
                 name = stripped.split(":", 1)[1].strip()
-                scenarios.append({
-                    "uc": uc,
-                    "name": name,
-                    "tags": current_tags.copy(),
-                    "transport_tags": current_tags & TRANSPORT_SPECIFIC_TAGS,
-                    "file": ff.name,
-                })
+                scenarios.append(
+                    {
+                        "uc": uc,
+                        "name": name,
+                        "tags": current_tags.copy(),
+                        "transport_tags": current_tags & TRANSPORT_SPECIFIC_TAGS,
+                        "file": ff.name,
+                    }
+                )
 
     return scenarios
 
@@ -103,7 +105,7 @@ def scenario_to_test_name(scenario_name: str) -> str:
 def detect_issues(scenarios: list[dict], results: dict[str, dict]) -> dict[str, list]:
     """Detect transport routing issues."""
     issues: dict[str, list] = {
-        "misrouted": [],       # Tagged @rest/@mcp but dispatching through IMPL
+        "misrouted": [],  # Tagged @rest/@mcp but dispatching through IMPL
         "missing_transports": [],  # Parametrized but fewer than expected transports
         "not_in_results": [],  # Scenario exists but no test found in results
     }
@@ -132,13 +134,15 @@ def detect_issues(scenarios: list[dict], results: dict[str, dict]) -> dict[str, 
                 break
 
         if matched_key is None:
-            issues["not_in_results"].append({
-                "scenario": scenario["name"],
-                "uc": uc,
-                "file": scenario["file"],
-                "tags": scenario["tags"],
-                "expected_test": test_name,
-            })
+            issues["not_in_results"].append(
+                {
+                    "scenario": scenario["name"],
+                    "uc": uc,
+                    "file": scenario["file"],
+                    "tags": scenario["tags"],
+                    "expected_test": test_name,
+                }
+            )
             continue
 
         result = results[matched_key]
@@ -147,15 +151,17 @@ def detect_issues(scenarios: list[dict], results: dict[str, dict]) -> dict[str, 
         # Check: transport-specific scenario running without parametrization
         if scenario["transport_tags"]:
             if "none" in transports:
-                issues["misrouted"].append({
-                    "scenario": scenario["name"],
-                    "uc": uc,
-                    "file": scenario["file"],
-                    "tagged_transport": scenario["transport_tags"],
-                    "actual_dispatch": "IMPL (no parametrization)",
-                    "test_name": matched_key,
-                    "outcome": result["outcomes"].get("none", "?"),
-                })
+                issues["misrouted"].append(
+                    {
+                        "scenario": scenario["name"],
+                        "uc": uc,
+                        "file": scenario["file"],
+                        "tagged_transport": scenario["transport_tags"],
+                        "actual_dispatch": "IMPL (no parametrization)",
+                        "test_name": matched_key,
+                        "outcome": result["outcomes"].get("none", "?"),
+                    }
+                )
         else:
             # Should be parametrized across all transports
             expected = IN_PROCESS_TRANSPORTS.copy()
@@ -164,15 +170,17 @@ def detect_issues(scenarios: list[dict], results: dict[str, dict]) -> dict[str, 
 
             missing = expected - transports
             if missing and "none" not in transports:
-                issues["missing_transports"].append({
-                    "scenario": scenario["name"],
-                    "uc": uc,
-                    "file": scenario["file"],
-                    "expected": sorted(expected),
-                    "actual": sorted(transports),
-                    "missing": sorted(missing),
-                    "test_name": matched_key,
-                })
+                issues["missing_transports"].append(
+                    {
+                        "scenario": scenario["name"],
+                        "uc": uc,
+                        "file": scenario["file"],
+                        "expected": sorted(expected),
+                        "actual": sorted(transports),
+                        "missing": sorted(missing),
+                        "test_name": matched_key,
+                    }
+                )
 
     return issues
 
@@ -223,7 +231,9 @@ def main():
     if total == 0:
         print("No transport routing issues found.")
     else:
-        print(f"TOTAL: {total} issues ({len(misrouted)} misrouted, {len(missing)} missing transports, {len(not_found)} not in results)")
+        print(
+            f"TOTAL: {total} issues ({len(misrouted)} misrouted, {len(missing)} missing transports, {len(not_found)} not in results)"
+        )
 
 
 if __name__ == "__main__":

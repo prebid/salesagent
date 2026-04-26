@@ -18,7 +18,7 @@ from fastmcp.tools.tool import ToolResult
 from pydantic import RootModel, ValidationError
 from rich.console import Console
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.exceptions import AdCPAuthenticationError, AdCPAuthRequiredError, AdCPValidationError
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -94,7 +94,9 @@ def _get_media_buy_delivery_impl(
 
     # Validate identity is provided
     if identity is None:
-        raise AdCPAuthRequiredError("Identity is required", details={"suggestion": "Provide a valid authentication token"})
+        raise AdCPAuthRequiredError(
+            "Identity is required", details={"suggestion": "Provide a valid authentication token"}
+        )
 
     # Extract testing context for time simulation and event jumping
     testing_ctx = identity.testing_context or AdCPTestContext()
