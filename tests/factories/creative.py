@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 import factory
 from factory.alchemy import SQLAlchemyModelFactory
 
@@ -46,7 +48,7 @@ class CreativeAssignmentFactory(SQLAlchemyModelFactory):
         sqlalchemy_session_persistence = "commit"
         exclude = ("creative", "media_buy")
 
-    assignment_id = factory.Sequence(lambda n: f"assignment_{n:04d}")
+    assignment_id = factory.LazyFunction(lambda: f"assignment-{uuid4().hex[:12]}")
     creative = factory.SubFactory(CreativeFactory)
     tenant_id = factory.LazyAttribute(lambda o: o.creative.tenant_id)
     creative_id = factory.LazyAttribute(lambda o: o.creative.creative_id)
