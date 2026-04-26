@@ -35,10 +35,10 @@ def _sandbox_identity(ctx: dict, transport: Transport | None = None) -> Resolved
 
     env = ctx["env"]
 
-    if transport == Transport.REST:
+    if transport in (Transport.REST, Transport.E2E_REST):
         # REST goes through middleware — need real DB-backed auth token.
         # Clone the env's default REST identity with dry_run=True.
-        base = env.identity_for(Transport.REST)
+        base = env.identity_for(transport)
         from src.core.testing_hooks import AdCPTestContext
 
         return base.model_copy(
@@ -65,6 +65,9 @@ def _call(ctx: dict, req: ListCreativeFormatsRequest | None = None) -> None:
         identity = _sandbox_identity(ctx, Transport.IMPL)
         if identity is not None:
             call_kwargs["identity"] = identity
+        elif "identity" in ctx:
+            # Given step explicitly set identity (e.g. None for no-auth scenarios)
+            call_kwargs["identity"] = ctx["identity"]
         try:
             ctx["response"] = env.call_impl(**call_kwargs)
         except Exception as exc:
@@ -90,6 +93,9 @@ def _call_via(ctx: dict, transport: str | Transport, req: ListCreativeFormatsReq
     identity = _sandbox_identity(ctx, t)
     if identity is not None:
         kwargs["identity"] = identity
+    elif "identity" in ctx:
+        # Given step explicitly set identity (e.g. None for no-auth scenarios)
+        kwargs["identity"] = ctx["identity"]
 
     try:
         result = env.call_via(t, **kwargs)

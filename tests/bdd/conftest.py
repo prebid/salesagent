@@ -148,7 +148,10 @@ _XFAIL_TAGS: dict[str, str] = {
     # Graduated: T-UC-005-sandbox-validation (salesagent-7fqx)
     # Validation error from invalid dimension filter fires before sandbox logic.
     # Graduated: T-UC-005-main-referrals (salesagent-v4ol)
-    # Graduated: identity-less harness dispatch + TENANT_REQUIRED error (salesagent-4iet)
+    # Partially graduated: dispatch fix landed (salesagent-40kk); error code mismatch remains
+    # FIXME(salesagent-40kk): production raises AUTH_TOKEN_INVALID, spec expects TENANT_REQUIRED
+    "T-UC-005-ext-a-rest": "error code AUTH_TOKEN_INVALID instead of TENANT_REQUIRED — spec-production gap",
+    "T-UC-005-ext-a-mcp": "error code AUTH_TOKEN_INVALID instead of TENANT_REQUIRED — spec-production gap",
     # Graduated: creative agent partition tests (salesagent-7fqx)
     # Steps now call list_creative_formats as a proxy. Boundary-specific
     # xfails for creative-agent-only restrictions are in _SELECTIVE_XFAIL.
