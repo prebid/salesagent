@@ -543,6 +543,30 @@ Pre-flight P9 runs the script; exit 0 means the corpus is clean of propagation d
 - **Tripwire:** if a future sweep introduces a NEW stale-string pattern (e.g., decisions are renumbered, frozen-name count changes), update the PATTERNS array. The ALLOWLIST is for files explicitly marked as audit-trail (banner declared); production-facing files like verify scripts and briefings are NOT allowlisted.
 - **Affected:** new file `scripts/check-stale-strings.sh`; `01-pre-flight-checklist.md` adds P9 step + sign-off box.
 
+## D47 — `release-please publish-docker` MUST gate on CI green (Round 12 post-issue-review)
+
+**Decided 2026-04-26 (post-issue-review of #1228):** PR 6 commit 2's `publish-docker` job in `release-please.yml` adds a step that requires the `ci.yml` workflow to have concluded `success` on the same release commit BEFORE building, signing, or pushing the image. Without this gate, red main can ship signed-and-attested-but-broken images — and after #1234 PR 6 (cosign + Trivy + SBOM + provenance), the image is **authoritatively** broken (the supply-chain trail makes the bad build look verified).
+
+`needs:` doesn't cross workflows, so the gate is implemented as a `gh api` lookup in a step:
+
+```yaml
+- name: Require CI green on release commit
+  env:
+    GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    RELEASE_SHA: ${{ needs.release-please.outputs.sha }}
+  run: |
+    STATUS=$(gh api -X GET \
+      "repos/${{ github.repository }}/actions/workflows/ci.yml/runs" \
+      -f head_sha="$RELEASE_SHA" -f per_page=1 \
+      --jq '.workflow_runs[0].conclusion // "missing"')
+    [[ "$STATUS" == "success" ]] || { echo "CI conclusion: $STATUS (must be success)" >&2; exit 1; }
+```
+
+- **Rationale:** #1228 Cluster A4 caught this — `publish-docker` had only `needs: release-please` (the release-please job itself), no test gate. Round 10/11/12 audits all missed it; surfaced during the issue-rewrite work for #1228.
+- **Why not branch protection:** branch protection's required-status-checks would block the COMMIT but not the WORKFLOW. release-please can fire on a `release_created` output even on a commit that hasn't yet completed CI (race window between push and CI completion). The in-workflow gate closes the race.
+- **Tripwire:** if a future workflow restructure changes ci.yml's name or splits CI into multiple top-level workflows, update the `gh api` query path.
+- **Affected:** PR 6 commit 2 (added "Require CI green on release commit" step before docker setup); R44 (risk register) added.
+
 ## Decisions still open (will be resolved in flight)
 
 (None as of 2026-04-26 — D-pending-1..4 promoted to D22-D25 above. The earlier reference to "D-pending-5" in `pr4-hook-relocation.md:499` is a one-off mention of the issue body's bar tightening from <5s to <2s; not a decision-log-status item — handled inline at that PR 4 acceptance criterion.)
@@ -557,3 +581,4 @@ Pre-flight P9 runs the script; exit 0 means the corpus is clean of propagation d
 - 2026-04-26 (Round 10 completeness audit sweep) — D30 (frozen names 11→14: adds Smoke Tests, Security Audit, Quickstart); D31 (`default_install_hook_types` mandatory); D32 (creative-agent bootstrap full inventory); D33 (xdist+randomly added; `--dist=loadscope`); D34 (container hardening: `@sha256:` + `USER` non-root + `SOURCE_DATE_EPOCH` + Trivy); D35 (gitleaks adopted in PR 1); D36 (ADR file location: drafts/ → docs/decisions/); D37 (`workflow_dispatch` preserved in ci.yml); D38 (Schema Contract job under integration env, not unit). D17 amended (count 11→14; full list re-published in D30). D27 unchanged.
 - 2026-04-26 (Round 11 verification + extension sweep) — D39 added (creative-agent script-step pattern; corrects Round 10 D32's GHA-broken `services:` design); D40 (Postgres connection pool tuning app-side via DB_POOL_SIZE/DB_MAX_OVERFLOW env); D41 (pytest-json-report path glob both `test-results/` and `.tox/<env>.json`); D42 (integration_db Alembic divergence accepted with tripwire); D43 (DATABASE_URL credentials: CI canonical + compose dev-realism + no test-side hardcoding); D44 (`minimum_pre_commit_version: 3.2.0`); D45 (Phase B forbidden on Fri/weekend/holiday eve). D32 amended for env values matching disk truth (NODE_ENV=production not test; port 8080→9999 not 3000; path `/api/creative-agent` not `/health`; 10 env values match `test.yml:201-211` verbatim). D36 unchanged. R38-R42 added.
 - 2026-04-26 (Round 12 verification + sweep) — D46 added (pre-flight P9 grep-guard for stale-string drift propagation discipline). D40 amended with explicit wiring contract (R12A-01 caught that the original D40 mitigation was non-operational because `src/core/database/database_session.py` hardcoded pool sizes as Python literals; new PR 2 commit wires `os.getenv("DB_POOL_SIZE", ...)`). D39 prose corrected: port direction was reversed in the decision text (`8080:9999 (host:container)` → `9999:8080`); YAML in PR 3 spec was always correct. R43 added (verify-script drift behind spec amendments). Mechanical sweep: 11 → 14 names propagated through verify-pr3.sh, verify-pr4.sh, flip-branch-protection.sh, capture-rendered-names.sh, add-required-check.sh, executor-prompt.md; D1-D28 → D1-D45; "18 rules" → "19 rules"; verify-pr5.sh extended with USER + SOURCE_DATE_EPOCH + @sha256 + ADR-008 checks; verify-pr6.sh extended with Trivy + dep-review-config + frozen-checks-guard checks; verify-pr3.sh extended with creative-agent script-step pattern + filelock + DB_POOL_SIZE app-wiring + pytest-xdist/randomly checks; verify-pr4.sh extended with default_install_hook_types + minimum_pre_commit_version + frozen-checks-guard-lift checks. RESUME-HERE.md:34 struck the unstruck "promoted to standalone drafts" claim. EXECUTIVE-SUMMARY.md last-refresh, effort, R/D ranges updated.
+- 2026-04-26 (Round 12 post-issue-review) — surfaced while rewriting #1228, #1233, #1189, #1234 issue bodies. Three genuine new findings landed in spec: D47 added (release-please publish-docker MUST gate on CI green via `gh api` step — closes #1228 Cluster A4, the P0 that 12 audit rounds all missed); R44 added (red main can ship signed-but-broken images if D47 missing); PR 3 spec gains `timeout-minutes` on the 5 jobs Round 11 R11E-04 flagged (Quality Gate 10, Type Check 10, Migration Roundtrip 10, Coverage 10, Summary 5); `_setup-env` composite `cache-dependency-glob` extended to include `pyproject.toml` (closes #1228 Cluster C5 — stale-cache class). Acknowledged-but-out-of-scope: #1189 (creative-agent caching) tracked separately as small follow-up after PR 3; #1228 Tier 3 architectural items (F1/F2/G2: ruff ignores, mypy lenient flags, 301-entry obligation allowlist) deferred to post-#1234 architectural-debate issues; #1228 E1/E2 (`google_ad_manager_original` phantom refs + `.mypy_baseline` orphan) low-priority cleanup not folded into this rollout.

@@ -154,4 +154,25 @@ if [[ -f .github/actions/_pytest/action.yml ]]; then
     || fail "_pytest/action.yml missing retention-days: 7 (Round 10 MF-13)"
 fi
 
+# Round 12 post-issue-review — every ci.yml job has explicit timeout-minutes (#1228 A5)
+if [[ -f .github/workflows/ci.yml ]]; then
+  uv run python -c "
+import yaml, sys
+cfg = yaml.safe_load(open('.github/workflows/ci.yml'))
+missing = [name for name, j in cfg.get('jobs', {}).items() if 'timeout-minutes' not in j]
+if missing:
+  print('FAIL: jobs missing timeout-minutes (would inherit GHA 360-min default):', file=sys.stderr)
+  for m in missing: print(f'  - {m}', file=sys.stderr)
+  sys.exit(1)
+" || fail "ci.yml has jobs missing timeout-minutes (#1228 A5; Round 12 post-issue-review)"
+  ok "all ci.yml jobs have explicit timeout-minutes (#1228 A5 closed)"
+fi
+
+# Round 12 post-issue-review (#1228 C5) — uv cache key hashes pyproject.toml too
+if [[ -f .github/actions/setup-env/action.yml ]]; then
+  grep -q 'pyproject.toml' .github/actions/setup-env/action.yml \
+    || fail "setup-env/action.yml cache-dependency-glob must include pyproject.toml (#1228 C5; stale-cache class)"
+  ok "uv cache-dependency-glob includes pyproject.toml (#1228 C5 closed)"
+fi
+
 echo "PR 3 verification: complete (Phase A scope; Phase B is admin-only)"

@@ -88,7 +88,12 @@ runs:
         version: ${{ inputs.uv-version }}
         python-version-file: ${{ inputs.python-version-file }}
         enable-cache: true
-        cache-dependency-glob: 'uv.lock'
+        # Round 12 post-issue-review (C5 from #1228): hash both uv.lock AND pyproject.toml
+        # so a `pyproject.toml` change without `uv lock` regen invalidates the cache. Otherwise
+        # stale cache hits silently keep the old resolved deps even after the manifest changes.
+        cache-dependency-glob: |
+          uv.lock
+          pyproject.toml
     - shell: bash
       run: |
         FLAGS=""
@@ -311,6 +316,7 @@ jobs:
   quality-gate:
     name: 'Quality Gate'
     runs-on: ubuntu-latest
+    timeout-minutes: 10   # Round 12 post-issue-review: was inheriting GHA 360-min default; bound for hung pre-commit hooks
     permissions:
       contents: read
     steps:
@@ -327,6 +333,7 @@ jobs:
   type-check:
     name: 'Type Check'
     runs-on: ubuntu-latest
+    timeout-minutes: 10   # Round 12 post-issue-review: bound mypy at warm-time + 5 min headroom
     permissions:
       contents: read
     steps:
@@ -605,6 +612,7 @@ jobs:
   migration-roundtrip:
     name: 'Migration Roundtrip'
     runs-on: ubuntu-latest
+    timeout-minutes: 10   # Round 12 post-issue-review: alembic upgrade→downgrade→upgrade against fresh PG; ~3-5 min typical
     permissions:
       contents: read
     services:
@@ -625,6 +633,7 @@ jobs:
   coverage:
     name: 'Coverage'
     runs-on: ubuntu-latest
+    timeout-minutes: 10   # Round 12 post-issue-review: combine + report; serial after parallel test suites
     needs: [unit-tests, integration-tests, e2e-tests, admin-tests, bdd-tests]
     permissions:
       contents: read
@@ -661,6 +670,7 @@ jobs:
   summary:
     name: 'Summary'
     runs-on: ubuntu-latest
+    timeout-minutes: 5    # Round 12 post-issue-review: aggregation only; should complete in seconds
     needs:
       - quality-gate
       - type-check

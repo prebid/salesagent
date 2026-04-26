@@ -40,7 +40,7 @@ These were the load-bearing defects that would have failed at runtime. All three
 
 ---
 
-## The 46 locked decisions (D1-D46)
+## The 47 locked decisions (D1-D47)
 
 D1: Solo maintainer (@chrishuie sole CODEOWNERS) ·
 D2: Branch protection + @chrishuie bypass (ADR-002) ·
@@ -87,7 +87,8 @@ D42: integration_db Alembic divergence accepted with tripwire (Round 11 R11B-2 �
 D43: DATABASE_URL canonical credentials (CI: adcp_user/test_password/adcp_test; compose: dev-realistic; tests must NOT hardcode) (Round 11 R11B-1) ·
 D44: `minimum_pre_commit_version: 3.2.0` in `.pre-commit-config.yaml` (Round 11 R11C-06 — D31's `default_install_hook_types` requires pre-commit ≥3.2) ·
 D45: Phase B branch-protection flip FORBIDDEN on Fri/Sat/Sun + holiday eve (Round 11 R11C-02 — solo-maintainer weekend lockout mitigation) ·
-D46: Pre-flight P9 grep-guard for stale-string drift (propagation discipline; Round 12 — addresses recurring "11 frozen" / "D1-D28" propagation lag across non-spec surfaces)
+D46: Pre-flight P9 grep-guard for stale-string drift (propagation discipline; Round 12 — addresses recurring "11 frozen" / "D1-D28" propagation lag across non-spec surfaces) ·
+D47: `release-please publish-docker` MUST gate on CI green via `gh api` step (Round 12 post-issue-review — closes #1228 A4 P0 that 12 rounds missed; without it red main ships signed-but-broken images per R44)
 
 ---
 

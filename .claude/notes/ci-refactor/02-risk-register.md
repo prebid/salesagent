@@ -1,6 +1,6 @@
 # Risk Register
 
-Risks for the 6-PR rollout. Severity × probability ranked. Each entry has a trigger (how you know it fired), a mitigation (preventive), and a rollback (corrective). Entries R11-R15, R17-R18, R21-R22, R24-R25 from `research/edge-case-stress-test.md` remain LOW-impact informational; R19/R20/R23 promoted into base register and R26-R30 added in 2026-04-25 P0 sweep; R16 promoted and R31/R32 added in 2026-04-25 Round 9 verification sweep; **R33-R37 added in 2026-04-26 Round 10 completeness audit sweep; R38-R42 added in 2026-04-26 Round 11 verification sweep; R43 added in 2026-04-26 Round 12 verification sweep**.
+Risks for the 6-PR rollout. Severity × probability ranked. Each entry has a trigger (how you know it fired), a mitigation (preventive), and a rollback (corrective). Entries R11-R15, R17-R18, R21-R22, R24-R25 from `research/edge-case-stress-test.md` remain LOW-impact informational; R19/R20/R23 promoted into base register and R26-R30 added in 2026-04-25 P0 sweep; R16 promoted and R31/R32 added in 2026-04-25 Round 9 verification sweep; **R33-R37 added in 2026-04-26 Round 10 completeness audit sweep; R38-R42 added in 2026-04-26 Round 11 verification sweep; R43 added in 2026-04-26 Round 12 verification sweep; R44 added in 2026-04-26 Round 12 post-issue-review (surfaced while rewriting #1228 Cluster A4)**.
 
 | # | Risk | Sev | Prob | PR |
 |---|---|---|---|---|
@@ -36,6 +36,7 @@ Risks for the 6-PR rollout. Severity × probability ranked. Each entry has a tri
 | 41 | CODEOWNERS / dependabot.yml syntax error silently breaks routing or stops dep updates | High | Low | PR 1 |
 | 42 | Phase A overlap window exhausts GHA runner-minutes / memory under double workflow load | Med | Med | PR 3 Phase A |
 | 43 | Verify-script drift behind spec amendments (silent skip of D-mandated content) | Med | High | All |
+| 44 | release-please ships signed-but-broken image (no test gate before cosign+SBOM) | **Crit** | Low | PR 6 |
 
 ## R1 — Branch-protection flip locks out merging (HIGH)
 
@@ -418,6 +419,24 @@ Risks for the 6-PR rollout. Severity × probability ranked. Each entry has a tri
 **Rollback:** if a PR merges with verify-script drift (i.e., the script reported SUCCESS but the spec content was missing), fix-forward in a one-line commit adding the grep.
 
 **Tripwire:** if a future PR ships content NOT covered by its verify script, file an incident retrospective. Three such incidents in 6 months → automate verify-script generation from spec metadata (Round 13+ work).
+
+### R44 — release-please ships signed-but-broken image (no test gate before cosign+SBOM)
+
+**Severity:** Critical × Low = Critical (signed authority on a broken artifact)
+
+**Likelihood:** Low (release-please tags are explicit user actions; main typically green at tag-time) — but the consequence is downstream-impacting and irreversible (per #1234 PR 6 commit 7 admin step, tag immutability locks the broken `:vX.Y.Z`).
+
+**Detection:** the only way to detect post-merge is: a release ships, downstream consumer pulls and breaks; correlate with the SHA's CI status. **Detection happens AFTER the bad image is in the wild.**
+
+**Trigger:** release-please job creates a release_created output before CI on the same commit has completed (race window between push and CI completion), OR CI failed but release-please still fired because `release_created` only checks release-please's own conclusion.
+
+**Mitigation:**
+- D47 (Round 12 post-issue-review): PR 6 commit 2 adds a "Require CI green on release commit" step to `publish-docker` BEFORE the docker setup steps. Uses `gh api` to query `ci.yml` workflow conclusion on the same SHA. Refuses to proceed if not `success`.
+- Branch protection (existing) requires CI to pass before main merges, but the workflow-fire timing race means a release-please tag could fire seconds after merge while CI is still queueing. The in-workflow gate closes that race.
+
+**Rollback:** if a signed-but-broken image escapes, the recovery is unpleasant per R40 (cosign + tag-immutability cascade): cannot republish `:vX.Y.Z`; must cut `:vX.Y.Z-hotfix.1` and publicly deprecate the broken tag. Document in release notes; pull GHCR images via the digest, not the tag.
+
+**Tripwire:** if any release publishes a signed image whose corresponding CI run conclusion is not `success`, file an incident retrospective. Two such incidents in 6 months → escalate to GitHub's Rulesets-based deployment gating (ADR-009).
 
 ## Cross-cutting risk: Dependabot review backlog (D5 sustainability tripwire)
 

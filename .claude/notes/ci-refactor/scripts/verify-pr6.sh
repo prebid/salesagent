@@ -117,6 +117,15 @@ if [[ -f docs/decisions/adr-007-build-provenance.md ]]; then
   ok "ADR-007 present with ## Status and reconciliation rationale"
 fi
 
+# Round 12 post-issue-review D47/R44 — publish-docker MUST gate on CI green
+if [[ -f .github/workflows/release-please.yml ]]; then
+  grep -q 'Require CI green on release commit' .github/workflows/release-please.yml \
+    || fail "release-please.yml publish-docker missing CI-green gate (D47 — closes #1228 Cluster A4; without it red main can ship signed-but-broken images per R44)"
+  grep -q 'workflows/ci.yml/runs' .github/workflows/release-please.yml \
+    || fail "release-please.yml publish-docker missing gh api ci.yml workflow lookup (D47)"
+  ok "publish-docker gates on CI green via gh api (D47/R44 mitigation)"
+fi
+
 # Round 10 D34 + Round 11 R11A-02 — Trivy OS-layer scan + SOURCE_DATE_EPOCH reproducible build
 if [[ -f .github/workflows/release-please.yml ]]; then
   grep -q 'aquasecurity/trivy-action' .github/workflows/release-please.yml \

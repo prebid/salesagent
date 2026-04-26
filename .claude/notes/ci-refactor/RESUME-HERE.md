@@ -158,6 +158,25 @@ User caught a smoke-tests-class gap (Smoke Tests dropped from frozen-name list);
 
 **Round 13 verification** — NOT recommended unless a substantive content change lands. Round 12 closed the structural propagation gap; further rounds would yield diminishing returns.
 
+## 2026-04-26 Round 12 post-issue-review findings
+
+While rewriting the public issue bodies for #1234 / #1233 / #1228 / #1189, three genuine new findings surfaced that 12 audit rounds had all missed. Integrated into the corpus:
+
+- **D47 + R44 (P0 — most critical)**: `release-please publish-docker` had only `needs: release-please` (no test gate). After PR 6's cosign + SBOM + Trivy + reproducible-builds extension, red main could ship **signed-and-attested-but-broken** images — the supply-chain trail makes the bad build look verified. Closed by adding a "Require CI green on release commit" step using `gh api` (cross-workflow gate; `needs:` doesn't span workflows). Closes #1228 Cluster A4. `verify-pr6.sh` extended with the check.
+- **A5 residual** (Round 11 R11E-04 caught but didn't fully spec): 5 ci.yml jobs (Quality Gate, Type Check, Migration Roundtrip, Coverage, Summary) inherited the GHA 360-min default. PR 3 spec now sets explicit `timeout-minutes` (10/10/10/10/5). `verify-pr3.sh` extended with a YAML-walking check that ALL jobs have explicit timeouts.
+- **C5** (from #1228 issue rewrite): uv cache key only hashed `uv.lock`. A `pyproject.toml` change without `uv lock` regen would silently get a stale cache hit. `_setup-env` composite's `cache-dependency-glob` now hashes both files. Closes #1228 Cluster C5.
+
+**Acknowledged-but-deferred (out of #1234 scope):**
+- #1189 creative-agent caching — small follow-up PR after PR 3 merges; reuses #1234 PR 6 commit 2's `build-push-action@v7.1.0 + cache-from/to: type=gha` reference pattern
+- #1228 Tier 3 architectural items (F1 ruff ignores, F2 mypy lenient flags, G2 obligation allowlist 301 entries) — separate post-#1234 architectural-debate issues
+- #1228 E1/E2 (`google_ad_manager_original` phantom refs + `.mypy_baseline` orphan) — low-priority cleanup
+- #1233 D11 (`requires_server` tests delete-or-resurrect decision) — out of #1234 scope per #1233 closure plan
+- #1233 D13 (GAM live tests) — separate nightly-cron follow-up issue
+
+**Pattern note:** the post-issue-review surfaced findings the round-cadence audits missed because the audits focused on internal corpus consistency, not on the public issue artifacts that frame stakeholder expectations. Future sweeps should include a "grep the GitHub issue body against the corpus" pass — issue body claims that contradict the corpus are a third propagation-drift class beyond what D46/P9 catches.
+
+**Effort delta from post-issue-review:** ~0.25 day. New total: **19.75-23.75 engineer-days, ~6 calendar weeks part-time.**
+
 
 
 ## 2026-04-25 P0 sweep applied (Round 5 + Round 6)

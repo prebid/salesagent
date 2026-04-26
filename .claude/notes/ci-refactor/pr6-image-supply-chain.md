@@ -75,6 +75,13 @@ Files:
 
 ```yaml
   publish-docker:
+    # Per Round 12 post-issue-review (D47): release-please publish-docker MUST gate on
+    # CI test results, not just on release-please's own job. Without this, red main
+    # ships signed-and-attested-but-broken images (cosign + Trivy + SBOM make the
+    # image authoritative; missing test gate makes it authoritatively wrong).
+    # The CI workflow runs on every push to main; reference its `summary` job by name.
+    # Use `gh api repos/.../actions/runs?event=push&branch=main&head_sha=...` to
+    # confirm latest CI run on the release commit succeeded BEFORE building/pushing.
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created }}
     runs-on: ubuntu-latest
@@ -95,6 +102,27 @@ Files:
       - uses: actions/checkout@<SHA>  # v4 — SHA from .github/.action-shas.txt (PR 1 commit 9)
         with:
           persist-credentials: false
+
+      # NEW (Round 12 post-issue-review D47 / R44): require CI workflow success on
+      # the release commit before building+pushing. Without this gate, red main can
+      # ship signed-and-attested-but-broken images. `needs:` doesn't cross workflows;
+      # use `gh api` to inspect sibling workflow status on the same SHA.
+      - name: Require CI green on release commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_SHA: ${{ needs.release-please.outputs.sha }}
+        run: |
+          # Find the latest CI workflow run for this SHA
+          STATUS=$(gh api -X GET \
+            "repos/${{ github.repository }}/actions/workflows/ci.yml/runs" \
+            -f head_sha="$RELEASE_SHA" -f per_page=1 \
+            --jq '.workflow_runs[0].conclusion // "missing"')
+          if [[ "$STATUS" != "success" ]]; then
+            echo "CI conclusion on $RELEASE_SHA: $STATUS (must be 'success')" >&2
+            echo "Refusing to build+push+sign an image for a commit that didn't pass CI." >&2
+            exit 1
+          fi
+          echo "CI green on $RELEASE_SHA — proceeding with build+sign."
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@<SHA>      # v4.0.0
