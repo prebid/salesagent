@@ -1047,24 +1047,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         if "e2e_rest" in nodeid and any(t.startswith("T-UC-011") for t in marker_names):
             test_func = nodeid.split("::")[-1].split("[")[0] if "::" in nodeid else ""
             # Graduated: test_newly_synced_account_appears_in_list_accounts (now passes on e2e_rest)
-            _UC011_E2E_REST_FUNCS = {
-                "test_sync_accounts_are_scoped_to_the_authenticated_agent",
-            }
-            # Also match by tag
-            if "T-UC-011-sync-cross-agent" in marker_names:
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="e2e_rest: cross-agent scoping needs real HTTP stack",
-                        strict=True,
-                    )
-                )
-            if test_func in _UC011_E2E_REST_FUNCS:
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="e2e_rest: account sync/list requires real HTTP stack state not available in e2e_rest mock",
-                        strict=True,
-                    )
-                )
+            # Graduated: sync_accounts_are_scoped + T-UC-011-sync-cross-agent
+            # now passes on e2e_rest (real HTTP stack works correctly).
 
         # UC-006 e2e_rest: inv2 strict mode assignment abort — empty body
         if "e2e_rest" in nodeid and "T-UC-006-rule-039-inv2" in marker_names:
@@ -1860,7 +1844,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # creative approval data created in-process is not visible to Docker.
             _UC019_E2E_CREATIVE_APPROVAL_TAGS: set[str] = {
                 "T-UC-019-inv-152-1",
-                "T-UC-019-inv-152-2",
+                # Graduated: T-UC-019-inv-152-2 (rejected_creative now passes on e2e_rest)
                 "T-UC-019-inv-152-5",
             }
             if marker_names & _UC019_E2E_CREATIVE_APPROVAL_TAGS:
