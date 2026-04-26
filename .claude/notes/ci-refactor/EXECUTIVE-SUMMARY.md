@@ -3,13 +3,13 @@
 **If you have time to read ONE file before being parachuted in, this is it.**
 Read order for cold-start: this file → `RESUME-HERE.md` → `pr<N>-<slug>.md` for your PR. ~14-20k tokens total.
 
-Last refresh: 2026-04-26 (Round 10 completeness audit sweep applied; D30-D38 added, R33-R37 added, frozen check names expanded 11→14, container hardening added, `default_install_hook_types` directive locked).
+Last refresh: 2026-04-26 (Round 12 verification + sweep applied; D46 added, R43 added, propagation-discipline grep-guard introduced, Round 11 self-introduced gaps closed including DB_POOL_SIZE app-wiring per D40 amendment).
 
 ---
 
 ## What is this?
 
-A 6-PR rollout (issue [#1234](https://github.com/prebid/salesagent/issues/1234)) that brings salesagent to top-tier OSS supply-chain posture. **~19-23 engineer-days, ~6 calendar weeks part-time.** PRs land sequentially; PR 6 is a Week-6 follow-up. (Effort revised 2026-04-26: Round 10 sweep added ~3.5-4 days for `default_install_hook_types`, 14-name expansion, creative-agent bootstrap, container hardening, gitleaks, ADR promotion. Calendar slack absorbs without extension.)
+A 6-PR rollout (issue [#1234](https://github.com/prebid/salesagent/issues/1234)) that brings salesagent to top-tier OSS supply-chain posture. **~19.5-23.5 engineer-days, ~6 calendar weeks part-time.** PRs land sequentially; PR 6 is a Week-6 follow-up. (Effort revised across rounds: Round 10 sweep added ~3.5-4 days for `default_install_hook_types`, 14-name expansion, creative-agent bootstrap, container hardening, gitleaks, ADR promotion. Round 11 added ~0.5 day for D39 script-step revert + D44 + ADR-008 copy. Round 12 added ~0.5 day for the DB_POOL_SIZE app-wiring + D46 propagation guard + verify-script extensions. Calendar slack absorbs without extension.)
 
 A concurrent v2.0 (Flask-to-FastAPI) effort runs under [PR #1221](https://github.com/prebid/salesagent/pull/1221). Per **D20** (Path 1 sequencing), issue #1234 lands first; v2.0 phase PRs rebase onto the new layered model.
 
@@ -40,7 +40,7 @@ These were the load-bearing defects that would have failed at runtime. All three
 
 ---
 
-## The 45 locked decisions (D1-D45)
+## The 46 locked decisions (D1-D46)
 
 D1: Solo maintainer (@chrishuie sole CODEOWNERS) ·
 D2: Branch protection + @chrishuie bypass (ADR-002) ·
@@ -86,7 +86,8 @@ D41: pytest-json-report path stays at `{toxworkdir}/<env>.json`; composite globs
 D42: integration_db Alembic divergence accepted with tripwire (Round 11 R11B-2 — full unification deferred) ·
 D43: DATABASE_URL canonical credentials (CI: adcp_user/test_password/adcp_test; compose: dev-realistic; tests must NOT hardcode) (Round 11 R11B-1) ·
 D44: `minimum_pre_commit_version: 3.2.0` in `.pre-commit-config.yaml` (Round 11 R11C-06 — D31's `default_install_hook_types` requires pre-commit ≥3.2) ·
-D45: Phase B branch-protection flip FORBIDDEN on Fri/Sat/Sun + holiday eve (Round 11 R11C-02 — solo-maintainer weekend lockout mitigation)
+D45: Phase B branch-protection flip FORBIDDEN on Fri/Sat/Sun + holiday eve (Round 11 R11C-02 — solo-maintainer weekend lockout mitigation) ·
+D46: Pre-flight P9 grep-guard for stale-string drift (propagation discipline; Round 12 — addresses recurring "11 frozen" / "D1-D28" propagation lag across non-spec surfaces)
 
 ---
 
@@ -192,9 +193,9 @@ Then STOP. The user reads, decides, you resume.
 - `RESUME-HERE.md` (orientation)
 - `EXECUTIVE-SUMMARY.md` (this file)
 - `00-MASTER-INDEX.md` (status table)
-- `01-pre-flight-checklist.md` (A1-A14 admin + P1-P6 agent prep)
-- `02-risk-register.md` (R1-R10 + R19/R20/R23 promoted + R26-R30 added; R11-R18, R24-R25 remain LOW info in `research/edge-case-stress-test.md`)
-- `03-decision-log.md` (D1-D28)
+- `01-pre-flight-checklist.md` (A1-A23 admin + P1-P9 agent prep)
+- `02-risk-register.md` (R1-R10 + R16/R19/R20/R23 promoted + R26-R43 added; R11-R15, R17-R18, R21-R22, R24-R25 remain LOW info in `research/edge-case-stress-test.md`)
+- `03-decision-log.md` (D1-D46)
 - `architecture.md` (current vs target — partially stale; specs are authoritative)
 - `landing-schedule.md` (6-week calendar)
 

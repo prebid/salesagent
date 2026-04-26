@@ -23,7 +23,7 @@ This is the **only PR with a non-atomic merge.** It lands in 3 phases over ~1 we
 - Pre-commit hook deletion / migration → PR 4
 - Postgres unification across compose files → PR 5 (this PR unifies CI Postgres only)
 - Python/uv version anchor consolidation → PR 5
-- New required CI checks beyond the 11 frozen names per D17 (e.g., harden-runner) → PR 6 follow-up
+- New required CI checks beyond the 14 frozen names per D17 (e.g., harden-runner) → PR 6 follow-up
 - `merge_group:` triggers → never (D6)
 
 ## Architectural choices (corrections to issue #1234)
@@ -224,7 +224,7 @@ grep -qE 'using:\s+["\x27]?composite' .github/actions/_pytest/action.yml
 ! test -f .github/workflows/_pytest.yml
 ```
 
-#### Commit 3 — `ci: add ci.yml orchestrator with 11 frozen check names`
+#### Commit 3 — `ci: add ci.yml orchestrator with 14 frozen check names`
 
 Files:
 - `.github/workflows/ci.yml` (new)

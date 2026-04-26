@@ -8,6 +8,8 @@ Tracks the rollout of GitHub issue [#1234](https://github.com/prebid/salesagent/
 
 **Round 11 verification + extension sweep applied 2026-04-26** — see [`RESUME-HERE.md`](RESUME-HERE.md) Round 11 section. 5 parallel opus subagents covered drift over Round 10, cross-environment parity, failure-modes/disaster-recovery, documentation lifecycle, resource budgets/observability. **Caught severe Round-10-self-introduced break** (R11A-03: creative-agent `services:` blocks technically broken in GHA — service containers can't resolve each other by hostname). Reverted to docker-run script-step pattern matching `test.yml:180-223` disk truth. D39-D45 added; R38-R42 added; structural-guard draft updated to 14 names; PR 5 Dockerfile gains `ARG SOURCE_DATE_EPOCH`.
 
+**Round 12 verification + sweep applied 2026-04-26** — see [`RESUME-HERE.md`](RESUME-HERE.md) Round 12 section. 3 parallel opus subagents (drift over Round 11, end-to-end PR 1→6 continuity, reviewer cold-start). **Caught Round-11-self-introduced gap** (R12A-01: D40's DB_POOL_SIZE env override was non-operational because `src/core/database/database_session.py` hardcodes pool sizes as Python literals). Mechanical sweep across verify scripts, admin scripts, executor template, briefings: 11→14 frozen names; D1-D28→D1-D46; R1-R10→R1-R43; "18 rules"→"19 rules". D46 (pre-flight P9 grep-guard for stale-string drift) addresses the recurring propagation pattern. R43 (verify-script drift behind spec) added. After Round 12, the corpus is internally consistent across all surfaces.
+
 ## Status
 
 | PR | Title | Status | Spec | Hidden scope |
@@ -19,7 +21,7 @@ Tracks the rollout of GitHub issue [#1234](https://github.com/prebid/salesagent/
 | PR 5 | Cross-surface version consolidation | not started | [pr5-version-consolidation.md](pr5-version-consolidation.md) | 2.5 days (+ Round 10: Dockerfile @sha256: pin D34, USER non-root D34, ADR-008 copy from drafts/ to docs/decisions/ D36; + Round 11: ARG SOURCE_DATE_EPOCH declaration R11A-02) |
 | PR 6 | Image supply chain (cosign + harden-runner + SBOM + scorecard.yml + Round 10 additions) | not started | [pr6-image-supply-chain.md](pr6-image-supply-chain.md) | 2-2.5 days (Week 6 follow-up; resolves D25; + Round 10: Trivy OS-layer scan D34, SOURCE_DATE_EPOCH D34, dep-review config extract, dep-review pin minor, frozen-checks guard update R36, OpenSSF Best Practices Badge enrollment) |
 
-**Total realistic effort:** ~16.5-20 engineer-days for the 5-PR core rollout (PRs 1-5); +2-2.5 days for PR 6 follow-up = **19-23 engineer-days total, ~6 calendar weeks part-time** (Round 10 added ~3.5-4 days; calendar slack absorbs without extension).
+**Total realistic effort:** ~16.5-20 engineer-days for the 5-PR core rollout (PRs 1-5); +2-2.5 days for PR 6 follow-up = **19.5-23.5 engineer-days total, ~6 calendar weeks part-time** (Round 10 added ~3.5-4 days; Round 11 added ~0.5 day; Round 12 added ~0.5 day for the DB_POOL_SIZE wiring + verify-script extensions; calendar slack absorbs without extension).
 
 ## Read in this order
 

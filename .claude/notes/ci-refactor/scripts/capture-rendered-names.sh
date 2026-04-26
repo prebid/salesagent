@@ -44,10 +44,14 @@ OUT=/tmp/rendered-names.txt
 gh api "repos/${REPO}/commits/${PR_SHA}/check-runs" --paginate \
   --jq '.check_runs[].name' | sort -u > "$OUT"
 
+# 14 frozen names per D17 amended by D30 (Round 10 added Smoke Tests, Security Audit, Quickstart).
 cat <<'EOF' | sort -u > /tmp/expected-names.txt
 CI / Quality Gate
 CI / Type Check
 CI / Schema Contract
+CI / Security Audit
+CI / Quickstart
+CI / Smoke Tests
 CI / Unit Tests
 CI / Integration Tests
 CI / E2E Tests
@@ -59,7 +63,7 @@ CI / Summary
 EOF
 
 if diff -q /tmp/expected-names.txt <(grep -F -f /tmp/expected-names.txt "$OUT" | sort -u) >/dev/null; then
-  echo "OK: all 11 expected check-run names found in rendered output."
+  echo "OK: all 14 expected check-run names found in rendered output."
   echo "Phase B PATCH body is safe to apply as-written."
   exit 0
 else

@@ -117,4 +117,38 @@ if [[ -f docs/decisions/adr-007-build-provenance.md ]]; then
   ok "ADR-007 present with ## Status and reconciliation rationale"
 fi
 
+# Round 10 D34 + Round 11 R11A-02 — Trivy OS-layer scan + SOURCE_DATE_EPOCH reproducible build
+if [[ -f .github/workflows/release-please.yml ]]; then
+  grep -q 'aquasecurity/trivy-action' .github/workflows/release-please.yml \
+    || fail "release-please.yml missing aquasecurity/trivy-action (Round 10 D34 / Round 12 R12B-04)"
+  grep -qE "severity:\s*['\"]?CRITICAL,HIGH" .github/workflows/release-please.yml \
+    || fail "release-please.yml Trivy scan missing severity: 'CRITICAL,HIGH' (D34)"
+  grep -qE "category:\s*trivy-os-layer" .github/workflows/release-please.yml \
+    || fail "release-please.yml Trivy SARIF upload missing category: trivy-os-layer (D34)"
+  ok "Trivy OS-layer scan present with CRITICAL/HIGH gating + SARIF upload (D34)"
+
+  # Round 10 D34 / R11A-02 — SOURCE_DATE_EPOCH for reproducible builds
+  grep -q 'SOURCE_DATE_EPOCH=' .github/workflows/release-please.yml \
+    || fail "release-please.yml missing SOURCE_DATE_EPOCH build-arg (D34, R11A-02)"
+  grep -q 'rewrite-timestamp=true' .github/workflows/release-please.yml \
+    || fail "release-please.yml missing rewrite-timestamp=true output (D34)"
+  ok "SOURCE_DATE_EPOCH reproducible build flags present (D34, R11A-02)"
+fi
+
+# Round 10 SF-15 — dep-review config extracted to .github/dependency-review-config.yml
+if [[ -f .github/dependency-review-config.yml ]]; then
+  grep -qE '^fail-on-severity:\s+moderate' .github/dependency-review-config.yml \
+    || fail ".github/dependency-review-config.yml missing fail-on-severity: moderate"
+  grep -qE 'GPL-3\.0' .github/dependency-review-config.yml \
+    || fail ".github/dependency-review-config.yml missing GPL-3.0 in deny-licenses"
+  ok "dep-review config extracted to .github/dependency-review-config.yml (Round 10 SF-15)"
+fi
+
+# Round 10 R36 — frozen-checks structural guard updated for 'Security / Dependency Review'
+if [[ -f tests/unit/test_architecture_required_ci_checks_frozen.py ]]; then
+  grep -q '"Security / Dependency Review"' tests/unit/test_architecture_required_ci_checks_frozen.py \
+    || fail "test_architecture_required_ci_checks_frozen.py expected list missing 'Security / Dependency Review' (R36)"
+  ok "frozen-checks structural guard knows about 'Security / Dependency Review' (R36 mitigation)"
+fi
+
 echo "PR 6 verification: complete"

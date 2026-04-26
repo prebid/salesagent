@@ -77,7 +77,7 @@ AST-scanning tests enforce architecture invariants on every `make quality` run. 
 | Pre-commit hook count | Commit-stage hook count ≤ 12 | `test_architecture_pre_commit_hook_count.py` |
 | Pre-commit no additional_deps | No project libs in `additional_dependencies:` | `test_architecture_pre_commit_no_additional_deps.py` |
 | Pre-commit SHA-frozen | All external `rev:` are 40-char SHAs with `# frozen:` comments | `test_architecture_precommit_sha_frozen.py` |
-| Required CI checks frozen | `ci.yml` declares all 11 frozen check names per D17 | `test_architecture_required_ci_checks_frozen.py` |
+| Required CI checks frozen | `ci.yml` declares all 14 frozen check names per D17 | `test_architecture_required_ci_checks_frozen.py` |
 | Workflow checkout persist-credentials | `actions/checkout` uses `persist-credentials: false` | `test_architecture_persist_credentials_false.py` |
 | Workflow concurrency | Each workflow declares concurrency w/ PR cancel-in-progress | `test_architecture_workflow_concurrency.py` |
 | Workflow permissions | Each workflow + job has restrictive `permissions:` | `test_architecture_workflow_permissions.py` |

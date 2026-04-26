@@ -4,7 +4,7 @@
 # DO NOT RUN AS AN AGENT. Per `feedback_user_owns_git_push.md`, only the
 # user runs branch-protection mutations. This script exists as the
 # operator's single command for adding an additional required check
-# without disturbing the 11 frozen names from `flip-branch-protection.sh`.
+# without disturbing the 14 frozen names from `flip-branch-protection.sh` (D17 amended by D30).
 #
 # Pre-conditions:
 #   - The new check has rendered green on at least 2 PRs

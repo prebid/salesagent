@@ -386,6 +386,24 @@ cd - && rm -rf "$TMPDIR"
 
 Mitigates R33 (Critical, High probability — pre-push tier silently disabled). If the directive is missing or contributors aren't getting both hooks, file a P0 follow-up before authoring PR 5.
 
+### P9 — Stale-string drift guard (Round 12 D46)
+
+Each sweep round adds new content to per-PR specs. Historically the propagation across non-spec surfaces (verify scripts, briefings, executor template, admin scripts, architecture.md) trails by 1-2 rounds, leading to stale strings like "11 frozen", "D1-D28", "R1-R10" misleading executors and reviewers. Per **D46**, run before declaring a sweep round complete:
+
+```bash
+bash .claude/notes/ci-refactor/scripts/check-stale-strings.sh
+```
+
+Exit 0 = corpus is clean of propagation drift across production-facing surfaces (scripts, briefings, templates, per-PR specs). Exit 1 = stale strings found; fix before declaring the sweep complete. Allowlist (files explicitly tagged as audit-trail / history-marker) is documented in the script:
+
+- `RESUME-HERE.md` (sweep audit-trail sections)
+- `architecture.md` (banner declares stale; forwards to D30)
+- `REFACTOR-RUNBOOK.md` (superseded; kept as audit trail)
+- `research/` (read-only audit trail)
+- `03-decision-log.md` (decision history may cite older counts in change-log entries)
+
+If a script outside the allowlist contains a stale string, the next sweep MUST update it. New patterns are added to the script's `PATTERNS` array as decisions evolve (e.g., when a 15th frozen name is proposed, "14 frozen" becomes a stale-string pattern).
+
 ### P8 — Mypy warm-time pre-flight measurement (PR 4 fallback gate)
 
 Per PR 4 spec, mypy moves to pre-push (D27) as the 10th hook ONLY if warm wall-clock is ≤20s. Measure before authoring PR 4 commit 5:
@@ -430,6 +448,7 @@ Before PR 1 is authored, this file should be marked complete:
 - [ ] A23 — Creative-agent commit pin freshness verified (<3 months old) before authoring PR 3 (Round 11; D32 tripwire)
 - [ ] P7 — `default_install_hook_types` directive verified post-PR-4 (D31 / R33 detection — only relevant after PR 4 lands)
 - [ ] P8 — mypy warm-time measured before PR 4 commit 5 (gate for pre-push migration vs fallback)
+- [ ] P9 — `check-stale-strings.sh` exit 0 (Round 12 D46 — propagation discipline; run before any sweep round closes)
 - [ ] P1 — drift evidence re-verified (or noted as still-current)
 - [ ] P2 — pydantic.mypy baseline captured (`.mypy-baseline.txt`)
 - [ ] P3 — zizmor pre-flight captured (`.zizmor-preflight.txt`)

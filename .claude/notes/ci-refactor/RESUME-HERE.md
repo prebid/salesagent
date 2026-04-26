@@ -1,8 +1,8 @@
 # Resume Here — CI/Pre-commit Refactor
 
-**Date snapshot:** 2026-04-26 (Round 10 completeness audit sweep applied; 9 audit passes total).
+**Date snapshot:** 2026-04-26 (Round 12 verification + Round-12 sweep applied; 12 audit rounds total).
 
-**Rollout status:** **READY FOR EXECUTOR HANDOFF (after Round 11 verification).** 9 rounds of opus-subagent research + integrity audit + Round 5+6 P0 sweep applied 2026-04-25 + Round 9 verification 2026-04-25 + Round 10 completeness audit sweep applied 2026-04-26. The 3 critical blockers (workflow naming, hook count, helpers collision) are fixed. External technical corrections applied (mirrors-mypy reframed, harden-runner CVE-2025-32955 + DoH-bypass v2.16+ floor, persist-credentials propagation, rendered-name capture). D-pending-1..4 promoted to D22-D25; D26 + D27 + D28 added; D29 (marker rename); D30-D38 added in Round 10. R19/R20/R23 promoted; R26-R32 added; R33-R37 added in Round 10.
+**Rollout status:** **READY FOR EXECUTOR HANDOFF.** 12 rounds of opus-subagent research + integrity audit + Round 5+6 P0 sweep applied 2026-04-25 + Round 9 verification 2026-04-25 + Round 10 completeness audit sweep applied 2026-04-26 + Round 11 verification + extension sweep applied 2026-04-26 + Round 12 verification + sweep applied 2026-04-26. The 3 critical blockers (workflow naming, hook count, helpers collision) are fixed. Round 11 caught + fixed 5 P0s introduced by Round 10 (creative-agent services networking, SOURCE_DATE_EPOCH ARG missing, structural-guard list 11 vs 14). Round 12 caught + fixed 19 P0s introduced by Round 11 sweep (DB_POOL_SIZE app-side wiring, 11→14 in admin scripts/briefings/executor template, structural-guard lift commit, D44 minimum_pre_commit_version). External technical corrections applied (mirrors-mypy reframed, harden-runner CVE-2025-32955 + DoH-bypass v2.16+ floor, persist-credentials propagation, rendered-name capture). D-pending-1..4 promoted to D22-D25; D26 + D27 + D28 added; D29 (marker rename); D30-D38 added in Round 10; D39-D45 added in Round 11; D46 added in Round 12. R19/R20/R23 promoted; R26-R32 added; R33-R37 added in Round 10; R38-R42 added in Round 11; R43 added in Round 12.
 
 ## 2026-04-26 Round 10 completeness audit sweep applied
 
@@ -31,7 +31,7 @@ User caught a smoke-tests-class gap (Smoke Tests dropped from frozen-name list);
 **v2.0 collision list expanded** (`00-MASTER-INDEX.md`): added `release-please.yml`, `.github/CODEOWNERS` glob, `pytest.ini`, `tests/conftest_db.py` to the warning block.
 
 **PR scope additions:**
-- **PR 1:** gitleaks pre-commit hook + workflow (per D35); ADR-001/002/003 promoted to standalone drafts (per D36); `ipr-agreement.yml` permissions narrowed per-job; structural guard `test_architecture_pre_commit_sha_pinned` confirmed in commit list (mitigates R37).
+- **PR 1:** gitleaks pre-commit hook + workflow (per D35); ADR-001/002/003 inline-in-PR1-spec lifted directly to `docs/decisions/` at commit time (D36 — drafts/README.md is canonical on the inline-vs-standalone split); `ipr-agreement.yml` permissions narrowed per-job; structural guard `test_architecture_pre_commit_sha_pinned` confirmed in commit list (mitigates R37).
 - **PR 2:** new commit 4.5 (between current 4 and 5) adds `pytest-xdist>=3.6` + `pytest-randomly` to `[dependency-groups].dev` (per D33); arch_guard registration ownership clarified (PR 2 commit 8 owns; PR 4 commit 1 verifies-only — closes Round 10 MF-1).
 - **PR 3:** 14-name list per D30 (Smoke Tests + Security Audit + Quickstart added as new job declarations); commit 9 expanded to full creative-agent bootstrap per D32 (~50 lines YAML); `_pytest/action.yml` env block adds `ENCRYPTION_KEY=PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk=` + `DELIVERY_WEBHOOK_INTERVAL=5` + `CREATIVE_AGENT_URL=http://creative-agent:3000`; `--dist=loadscope` in pytest invocation (per D33); `workflow_dispatch:` preserved in ci.yml `on:` block (per D37); `Schema Contract` job invokes `tox -e integration` (per D38); uv default version bumped to `0.11.7` (Round 9 fix half-applied — completes here); `retention-days: 7` on all `actions/upload-artifact` invocations; concurrency `group:` formula extended with `${{ github.event.pull_request.number || github.sha }}`; conftest_db.py filelock+worker-id gate promoted from prose-only to a standalone commit.
 - **PR 4:** Layer 4 reference table at `pr4-hook-relocation.md:872` rewritten to mirror D17 / D30 verbatim (was inventing `Lint`, `Format`, `Coverage Report`); `default_install_hook_types: [pre-commit, pre-push]` added to top of `.pre-commit-config.yaml` (per D31); P8 fallback commit pre-authored if mypy warm-time exceeds 20s (move `no-hardcoded-urls` to pre-push as the swap); TROUBLESHOOTING.md scoped section added alongside contributing.md update.
@@ -116,7 +116,47 @@ User caught a smoke-tests-class gap (Smoke Tests dropped from frozen-name list);
 
 **Net effort delta from Round 11:** +0.5 day across PRs 3/4/5; total now **~19.5-23.5 engineer-days, ~6 calendar weeks part-time** (calendar slack absorbs).
 
-**Round 12 verification** — recommend re-running R11-A only (drift over Round 11) before launching PR 1. R11-B/C/D/E findings are mostly mechanical edits or risk acknowledgments, low drift risk.
+## 2026-04-26 Round 12 verification + sweep applied
+
+3 parallel opus subagents covered: (A) drift detection over Round 11 sweep, (B) end-to-end PR 1→6 continuity, (C) reviewer cold-start simulation. ~19 P0 + ~30 P1 findings.
+
+**Pattern observation:** the round-cadence catches less *architectural* drift each time, but *propagation* drift (stale strings across non-spec surfaces — verify scripts, briefings, executor template, admin scripts, architecture.md) keeps appearing because each sweep round adds new content and forgets some surfaces. Round 12's response is structural: D46 adds a pre-flight grep-guard (P9) to enforce propagation discipline. Without this, Round 13 would find ~10 more "stale strings in script X" gaps.
+
+**Top finding (load-bearing miss, same pattern as smoke gap and `default_install_hook_types`):**
+- **R12A-01**: D40's `DB_POOL_SIZE`/`DB_MAX_OVERFLOW` env vars set in `_pytest/action.yml` are NOT read by `src/core/database/database_session.py` (lines 108-109 + 124-125 hardcode the pool sizes as Python literals). Postgres connection-saturation mitigation silently no-opped. **Fix:** new commit added to PR 2 spec wiring `os.getenv("DB_POOL_SIZE", ...)` in app code; `verify-pr3.sh` greps the new code path; D40 amended to document the wiring contract.
+
+**Other critical Round 11 self-introduced gaps:**
+- **R12B-01**: `tests/unit/test_architecture_required_ci_checks_frozen.py` referenced as if-existing but no PR commit lifted it from `drafts/guards/`. PR 6 commit 4 verified existence. **Fix:** PR 4 commit 3 lift step added explicitly; verify-pr4.sh checks existence; the structural guard now lands.
+- **R12B-02**: `scripts/flip-branch-protection.sh` + `scripts/capture-rendered-names.sh` + `scripts/verify-pr3.sh` hardcoded with the OLD 11-name list — Phase B atomic flip would 422 OR leave 3 names in "expected — waiting" state. **Fix:** all 3 scripts updated to 14 names.
+- **R12B-05**: D44 says "PR 4 commit 1 adds `minimum_pre_commit_version: 3.2.0`" but the spec body had only `default_install_hook_types`. **Fix:** PR 4 commit 1 spec body extended; verify-pr4.sh checks both directives.
+- **R12B-03/04/06**: verify-pr5.sh missing `USER`/`SOURCE_DATE_EPOCH`/`@sha256:` greps; verify-pr6.sh missing `aquasecurity/trivy-action`; verify-pr3.sh missing filelock check. **Fix:** all 4 verify scripts extended.
+- **R12C-05**: `templates/executor-prompt.md` had stale "D1-D28", "11 frozen", "18 rules". **Fix:** corrected to D1-D45, 14 frozen, 19 rules; D31/D45 explicitly cited.
+- **R12A-02**: D39 prose had port direction reversed (said `port 8080:9999 (host:container)` — disk truth is `-p 9999:8080`). **Fix:** corrected.
+- **R12C-02**: `RESUME-HERE.md:34` still had the unstruck "ADR-001/002/003 promoted to standalone drafts" claim alongside the corrected version. **Fix:** struck.
+
+**Net-new decisions D46 (Round 12):**
+- D46: Pre-flight P9 grep-guard for stale-string drift. Before any sweep round closes, the executor MUST run `scripts/check-stale-strings.sh` to catch references like "11 frozen", "D1-D28", "R1-R10" outside explicit history-marker contexts (architecture.md banner, this file's audit-trail sections). Non-zero exit blocks the sweep from being declared complete. Codifies the propagation pattern that Round 11 R11D-02 + Round 12 R12-C kept catching.
+
+**Net-new risks R43 (Round 12):**
+- R43 (Med×High): Verify-script drift behind spec amendments. Each sweep adds new content to per-PR specs but historically the verify scripts trail by 1-2 rounds, leading to silent-skip gaps where the script reports SUCCESS even when D-mandated content is missing. Mitigation: every D-numbered spec change must include a parallel verify-script update (formalized in D46's pre-flight P9).
+
+**P1 findings (mechanical sweep — applied in this commit):**
+- EXECUTIVE-SUMMARY.md last-refresh, effort, R/D ranges updated to current state
+- 00-MASTER-INDEX.md effort updated
+- 02-risk-register.md header sentence + R19 mitigation + R31 mitigation note pointing at D40
+- verify-pr1.sh gitleaks check added
+- verify-pr4.sh marker `architecture` → `arch_guard`; deletion list 15 → 16 (test-migrations); pre-push list 9 → 10 (mypy per D3)
+- PR 3 spec commit 3 subject "11 frozen" → "14 frozen"; PR 3 ci.yml internal references swept
+- briefings/pr1-briefing.md, pr3-phase-a-briefing.md, point4-phase-b-flip.md: 11 → 14
+- architecture.md: residual "11 frozen" mentions left with banner pointing at D30 (per file-status declaration as audit trail)
+
+**Post-Round-12 invariants:**
+- Verify scripts cover ALL P0 spec content (R12B-01 through R12B-06 closed)
+- Admin scripts (flip-branch-protection.sh, capture-rendered-names.sh, add-required-check.sh) all on the 14-name list
+- Executor template references current state (D1-D45, 14 frozen, 19 rules)
+- D46/P9 prevents future propagation drift
+
+**Round 13 verification** — NOT recommended unless a substantive content change lands. Round 12 closed the structural propagation gap; further rounds would yield diminishing returns.
 
 
 

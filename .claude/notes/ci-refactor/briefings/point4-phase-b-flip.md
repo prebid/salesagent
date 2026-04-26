@@ -11,7 +11,7 @@
 Per R1 (HIGH severity), a misconfigured branch-protection flip locks out merging entirely. Phase B is a 5-minute window. Inverse rollback is documented but recovery requires the user.
 
 **What you can rely on (already true on main)**
-- `.github/workflows/ci.yml` exists and emits the 11 frozen check names per D17 — `CI / Quality Gate`, `CI / Type Check`, `CI / Schema Contract`, `CI / Unit Tests`, `CI / Integration Tests`, `CI / E2E Tests`, `CI / Admin UI Tests`, `CI / BDD Tests`, `CI / Migration Roundtrip`, `CI / Coverage`, `CI / Summary`
+- `.github/workflows/ci.yml` exists and emits the 14 frozen check names per D17 — `CI / Quality Gate`, `CI / Type Check`, `CI / Schema Contract`, `CI / Unit Tests`, `CI / Integration Tests`, `CI / E2E Tests`, `CI / Admin UI Tests`, `CI / BDD Tests`, `CI / Migration Roundtrip`, `CI / Coverage`, `CI / Summary`
 - `.github/actions/_pytest/action.yml` composite action exists (NOT a reusable workflow — Decision-4 P0 sweep eliminates the 3-segment rendered-name issue at design time)
 - `.github/actions/setup-env/action.yml` composite action exists
 - `.github/scripts/migration_roundtrip.sh` exists and is executable
@@ -33,7 +33,7 @@ Per R1 (HIGH severity), a misconfigured branch-protection flip locks out merging
 |---|---|---|
 | 1. Verify pre-flip artifacts on disk | Agent | `test -f .claude/notes/ci-refactor/branch-protection-snapshot.json && test -f .claude/notes/ci-refactor/branch-protection-snapshot-required-checks.json` |
 | 2. Verify Phase A overlap stable | Agent | run the `gh run list` queries above, prepare report |
-| 3. Verify ci.yml emits exactly the 11 frozen names | Agent | grep + sort + diff against expected list |
+| 3. Verify ci.yml emits exactly the 14 frozen names | Agent | grep + sort + diff against expected list |
 | 4. Compose the `gh api -X PATCH` body | Agent | use the exact heredoc from PR 3 spec §"Phase B" Step 2 |
 | 5. **Execute the `gh api -X PATCH`** | **USER** | per `feedback_user_owns_git_push.md` and PR 3 §Coordination notes #3 — agents do not run branch-protection mutations |
 | 6. Verify the flip via diff | Agent | `gh api repos/prebid/salesagent/branches/main/protection/required_status_checks --jq '.contexts[]' | sort | diff - <(printf "%s\n" "CI / Admin UI Tests" "CI / BDD Tests" …)` |
@@ -64,7 +64,7 @@ None. Phase B is admin-only. No code changes; only branch-protection state chang
 7. After user runs flip: execute Step 6 verification
 
 **Decisions in effect**
-D2 (branch protection + bypass — `@chrishuie` on bypass list, was set in PR 1 admin steps), D17 (the 11 frozen names — frozen as a contract; do not deviate), D11 (`.coverage-baseline = 53.5` hard-gate from PR 3 day 1, revised 2026-04-25 P0 sweep), D26 (workflow naming — bare job names; the rendered-name probe in Step 1b is mandatory)
+D2 (branch protection + bypass — `@chrishuie` on bypass list, was set in PR 1 admin steps), D17 (the 14 frozen names — frozen as a contract; do not deviate), D11 (`.coverage-baseline = 53.5` hard-gate from PR 3 day 1, revised 2026-04-25 P0 sweep), D26 (workflow naming — bare job names; the rendered-name probe in Step 1b is mandatory)
 
 **Risks active right now**
 - R1 (HIGH severity, low prob): branch-protection flip locks out merging. Mitigation: pre-flight snapshot + atomic flip + ≤5-minute window. Recovery: <5 minutes via inverse PATCH

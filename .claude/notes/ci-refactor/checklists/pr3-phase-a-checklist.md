@@ -20,7 +20,7 @@ Commits in order:
                yamllint -d relaxed .github/actions/_pytest/action.yml && \
                ! test -f .github/workflows/_pytest.yml   # reusable form forbidden post-Decision-4
 
-[ ] 3. ci: add ci.yml orchestrator with 11 frozen BARE job names (D26)
+[ ] 3. ci: add ci.yml orchestrator with 14 frozen BARE job names (D26)
        File: .github/workflows/ci.yml (new; spec §Phase A Commit 3 verbatim — DO NOT alter check names)
        D26: workflow `name: CI` + jobs use BARE names (NOT 'CI / X' — that produces 'CI / CI / X' rendered)
        Verify the workflow header and bare job names:
@@ -79,7 +79,7 @@ After all commits:
 [ ] make quality + ./run_all_tests.sh
 
 Stop conditions:
-- 11 frozen check names don't appear in `gh run view` after merge
+- 14 frozen check names don't appear in `gh run view` after merge
 - Coverage combine fails artifact merge
 - migration_roundtrip.sh detects schema drift
 File: .claude/notes/ci-refactor/escalations/pr3-phase-a-<topic>.md

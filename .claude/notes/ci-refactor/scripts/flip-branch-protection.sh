@@ -22,11 +22,12 @@ echo "Confirming pre-flight: rendered names check"
 "$(dirname "$0")/capture-rendered-names.sh" || { echo "ERROR: rendered names diverge — fix before flipping" >&2; exit 2; }
 
 # Idempotency check: if we're already in target state, exit 0 with informational message
+# 14 frozen names per D17 amended by D30 (Round 10 added Smoke Tests, Security Audit, Quickstart).
 EXISTING_CONTEXTS=$(gh api "repos/${REPO}/branches/main/protection/required_status_checks" \
   --jq '.checks[].context' 2>/dev/null | sort | tr '\n' '|')
-EXPECTED_CONTEXTS=$(printf 'CI / Admin UI Tests|CI / BDD Tests|CI / Coverage|CI / E2E Tests|CI / Integration Tests|CI / Migration Roundtrip|CI / Quality Gate|CI / Schema Contract|CI / Summary|CI / Type Check|CI / Unit Tests|')
+EXPECTED_CONTEXTS=$(printf 'CI / Admin UI Tests|CI / BDD Tests|CI / Coverage|CI / E2E Tests|CI / Integration Tests|CI / Migration Roundtrip|CI / Quality Gate|CI / Quickstart|CI / Schema Contract|CI / Security Audit|CI / Smoke Tests|CI / Summary|CI / Type Check|CI / Unit Tests|')
 if [[ "$EXISTING_CONTEXTS" == "$EXPECTED_CONTEXTS" ]]; then
-  echo "Already in target state — 11 frozen contexts match. No action needed."
+  echo "Already in target state — 14 frozen contexts match. No action needed."
   exit 0
 fi
 
@@ -45,6 +46,9 @@ if [[ "$DRY_RUN" == "1" ]]; then
     {"context": "CI / Quality Gate"},
     {"context": "CI / Type Check"},
     {"context": "CI / Schema Contract"},
+    {"context": "CI / Security Audit"},
+    {"context": "CI / Quickstart"},
+    {"context": "CI / Smoke Tests"},
     {"context": "CI / Unit Tests"},
     {"context": "CI / Integration Tests"},
     {"context": "CI / E2E Tests"},
@@ -72,6 +76,9 @@ gh api -X PATCH \
     {"context": "CI / Quality Gate"},
     {"context": "CI / Type Check"},
     {"context": "CI / Schema Contract"},
+    {"context": "CI / Security Audit"},
+    {"context": "CI / Quickstart"},
+    {"context": "CI / Smoke Tests"},
     {"context": "CI / Unit Tests"},
     {"context": "CI / Integration Tests"},
     {"context": "CI / E2E Tests"},
@@ -92,6 +99,9 @@ sort > /tmp/expected-now <<'EOF'
 CI / Quality Gate
 CI / Type Check
 CI / Schema Contract
+CI / Security Audit
+CI / Quickstart
+CI / Smoke Tests
 CI / Unit Tests
 CI / Integration Tests
 CI / E2E Tests
@@ -101,5 +111,5 @@ CI / Migration Roundtrip
 CI / Coverage
 CI / Summary
 EOF
-diff /tmp/protected-now /tmp/expected-now && echo "OK: 11 frozen contexts match." || \
+diff /tmp/protected-now /tmp/expected-now && echo "OK: 14 frozen contexts match." || \
   { echo "MISMATCH — investigate immediately, see PR 3 Phase B rollback section" >&2; exit 1; }

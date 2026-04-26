@@ -57,7 +57,7 @@
 6. `make quality` — confirm green baseline before changes
 
 **Decisions in effect (cite the ones that matter for this PR)**
-D1, D2, D5, D10, D12, D15, D16, D17, D21. Most load-bearing: D10 (Path C — CodeQL advisory, `continue-on-error: true` on `analyze` step), D12 (autoupdate --freeze procedure), D17 (the 11 frozen check names — cited in CONTRIBUTING.md, NOT enforced yet)
+D1, D2, D5, D10, D12, D15, D16, D17, D21. Most load-bearing: D10 (Path C — CodeQL advisory, `continue-on-error: true` on `analyze` step), D12 (autoupdate --freeze procedure), D17 (the 14 frozen check names — cited in CONTRIBUTING.md, NOT enforced yet)
 
 **Risks active right now**
 - R3: CodeQL findings explode — mitigated by D10 Path C; PR 1 ships advisory

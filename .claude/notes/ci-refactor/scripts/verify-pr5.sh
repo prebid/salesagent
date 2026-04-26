@@ -52,4 +52,34 @@ if [[ -f tests/unit/test_architecture_uv_version_anchor.py ]]; then
   ok "test_architecture_uv_version_anchor present (D18 +1)"
 fi
 
+# Round 10 D34 + Round 11 R11A-02 — Dockerfile hardening additions
+if [[ -f Dockerfile ]]; then
+  # @sha256: digest pin on base image (D34)
+  grep -qE '(@\$\{PYTHON_BASE_DIGEST\}|@sha256:[a-f0-9]{64})' Dockerfile \
+    || fail "Dockerfile FROM line missing @sha256: digest pin (D34)"
+  ok "Dockerfile base image @sha256: digest pinned (D34)"
+  # USER non-root in runtime stage (D34)
+  grep -qE '^USER ' Dockerfile \
+    || fail "Dockerfile missing USER non-root directive (D34)"
+  ! grep -qE '^USER (root|0)\s*$' Dockerfile \
+    || fail "Dockerfile USER directive points to root — must be non-root (D34)"
+  ok "Dockerfile USER non-root directive present (D34)"
+  # ARG SOURCE_DATE_EPOCH (R11A-02 — without ARG, PR 6's --build-arg silently no-ops)
+  grep -qE '^ARG SOURCE_DATE_EPOCH' Dockerfile \
+    || fail "Dockerfile missing ARG SOURCE_DATE_EPOCH declaration (R11A-02; PR 6 build-arg no-ops without it)"
+  ok "Dockerfile ARG SOURCE_DATE_EPOCH declared (R11A-02 fix; reproducible-build claim operational)"
+fi
+
+# Round 10 D34 — structural guard for Dockerfile digest+USER
+if [[ -f tests/unit/test_architecture_dockerfile_digest_pinned.py ]]; then
+  ok "test_architecture_dockerfile_digest_pinned present (D34)"
+fi
+
+# Round 10 D36 — ADR-008 copied to docs/decisions/ in PR 5 commit 7b
+if [[ -f docs/decisions/adr-008-target-version-bump.md ]]; then
+  grep -qE '^## Status' docs/decisions/adr-008-target-version-bump.md \
+    || fail "docs/decisions/adr-008-target-version-bump.md missing canonical ## Status header"
+  ok "ADR-008 copied to docs/decisions/ (D36)"
+fi
+
 echo "PR 5 verification: complete"

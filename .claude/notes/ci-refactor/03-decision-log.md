@@ -432,18 +432,18 @@ gitleaks:
 
 ## D39 — Creative-agent integration uses docker-run script-step pattern, NOT GHA `services:` blocks
 
-**Decided 2026-04-26 (Round 11 sweep — corrects Round 10 D32):** PR 3 integration-tests job runs creative-agent + adcp-postgres as `docker run` script steps on a custom `creative-net` Docker network. Round 10's `services:` block design is technically broken in GitHub Actions — service containers each get their own bridge network; they cannot resolve each other by hostname.
+**Decided 2026-04-26 (Round 11 sweep — corrects Round 10 D32; port direction corrected 2026-04-26 Round 12 R12A-02):** PR 3 integration-tests job runs creative-agent + adcp-postgres as `docker run` script steps on a custom `creative-net` Docker network. Round 10's `services:` block design is technically broken in GitHub Actions — service containers each get their own bridge network; they cannot resolve each other by hostname.
 
 - **Rationale:** R11A-03 caught this. GHA service containers communicate only with the runner host via port mapping. They are NOT on a shared docker network with each other. Two services CANNOT reach each other by name. The existing `test.yml:180-223` pattern uses `docker network create + docker run` precisely because of this constraint. Round 10's spec dropped element #1 from D32 ("docker network create creative-net") when translating to `services:` syntax — silently breaking cross-service networking.
 - **Health probe location:** runs on the runner host (where curl is preinstalled), NOT inside the creative-agent container (where curl is likely missing from a Node-based image). R11A-04 fix.
-- **Env values matched to disk truth (`test.yml:201-211` verbatim):** `NODE_ENV=production` (not `test`), port `8080:9999` (host:container), DB user `adcp` / password `localdev` / db `adcp_registry`, AGENT_TOKEN_ENCRYPTION_SECRET = literal 32-char string `local-ci-encryption-key-32chars!!`, WORKOS keys = `sk_test_dummy` / `client_dummy`, DEV_USER_EMAIL = `ci@test.com`, DEV_USER_ID = `ci-user`. Round 10's spec used wrong values.
+- **Env values matched to disk truth (`test.yml:201-211` verbatim):** `NODE_ENV=production` (not `test`), port `9999:8080` (host:container — i.e., `docker run -p 9999:8080`; host=9999, container=8080; **R12A-02 fix: earlier prose had the direction reversed**), DB user `adcp` / password `localdev` / db `adcp_registry`, AGENT_TOKEN_ENCRYPTION_SECRET = literal 32-char string `local-ci-encryption-key-32chars!!`, WORKOS keys = `sk_test_dummy` / `client_dummy`, DEV_USER_EMAIL = `ci@test.com`, DEV_USER_ID = `ci-user`. Round 10's spec used wrong values.
 - **CREATIVE_AGENT_URL:** `http://localhost:9999/api/creative-agent` (path includes `/api/creative-agent` because creative-agent is one route in the adcp monolith — Round 10 had no path).
 - **Tripwire:** if upstream creative-agent ever publishes a standalone Docker image with proper service-isolation, revisit; until then, the script-step pattern is required.
 - **Affected:** PR 3 commit 3 integration-tests job rewritten; PR 3 commit 9 spec body updated to match disk truth; D32 superseded for the YAML structure (env value list still authoritative).
 
-## D40 — Postgres `max_connections` tuning: app-side, not service-side
+## D40 — Postgres `max_connections` tuning: app-side, not service-side (with explicit wiring contract per Round 12 R12A-01)
 
-**Decided 2026-04-26 (Round 11 sweep):** GHA `services:` blocks do not support a `command:` or `cmd:` field; the only writable fields are `image`, `env`, `ports`, `options`, `credentials`, `volumes`. To prevent "too many clients" flake under xdist, **reduce the app's connection pool in CI** rather than tuning Postgres.
+**Decided 2026-04-26 (Round 11 sweep), AMENDED 2026-04-26 (Round 12 R12A-01):** GHA `services:` blocks do not support a `command:` or `cmd:` field; the only writable fields are `image`, `env`, `ports`, `options`, `credentials`, `volumes`. To prevent "too many clients" flake under xdist, **reduce the app's connection pool in CI** rather than tuning Postgres.
 
 `_pytest/action.yml` env block sets:
 ```yaml
@@ -453,8 +453,18 @@ DB_MAX_OVERFLOW: '8'
 
 Math: 4 xdist workers × (4 pool + 8 overflow) = 48 conn at peak, comfortably under Postgres default `max_connections=100`.
 
-- **Rationale:** R11E-02 surfaced the risk; R31 already documented it. App-side override is cleanest because the change lives in one composite env block; Postgres-side tuning would require either (a) a custom postgres image (adds Dockerfile to repo) or (b) a docker-run step in every DB-using job (loses GHA's auto-wait-on-healthy semantics).
-- **Pre-flight verification:** confirm `src/core/database/database_session.py` actually reads `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` env vars. If not, add a tiny PR before this composite lands.
+**Wiring contract (Round 12 R12A-01 fix — load-bearing):** `src/core/database/database_session.py:108-109` (PgBouncer branch) and `:124-125` (direct PG branch) hardcode `pool_size` and `max_overflow` as Python literals. Without app-side wiring, the env vars are ignored and D40's mitigation silently no-ops. **PR 2 gains a new commit** (between current 4.5 and 5) that wires the env vars:
+
+```python
+# src/core/database/database_session.py — replace the literal 10 / 20 with:
+pool_size=int(os.getenv("DB_POOL_SIZE", "10")),
+max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "20")),
+```
+
+Both branches (PgBouncer at lines 108-109 and direct PG at 124-125) get the override. Defaults preserve existing production behavior; CI overrides via env. `verify-pr3.sh` greps for `os.getenv("DB_POOL_SIZE"` to enforce the wiring lands.
+
+- **Rationale:** R11E-02 surfaced the connection-saturation risk; R31 documented it; R12A-01 caught that the original D40 mitigation was non-operational. App-side override is cleanest because the change lives in one composite env block + ~2 lines of app code; Postgres-side tuning would require either (a) a custom postgres image (adds Dockerfile to repo) or (b) a docker-run step in every DB-using job (loses GHA's auto-wait-on-healthy semantics).
+- **Pre-flight verification (P-NEW from Round 12):** new commit in PR 2 lands the wiring BEFORE PR 3's `_pytest/action.yml` sets the env vars. Without this commit, `_pytest/action.yml` env vars are inert.
 - **Tripwire:** if `tox -e integration -- -n auto` post-Phase-A-soak shows "too many clients" failures, escalate to (a) custom postgres image or (b) docker-run pattern.
 
 ## D41 — pytest-json-report path: keep `{toxworkdir}/<env>.json`; composite globs both candidates
@@ -499,6 +509,40 @@ Math: 4 xdist workers × (4 pool + 8 overflow) = 48 conn at peak, comfortably un
 - **Tripwire:** if a future Phase B-class operation is unavoidable on a weekend, require a second admin temporarily added to the bypass list with a known-revoke time. Document in an explicit ADR before executing.
 - **Affected:** `01-pre-flight-checklist.md` adds A22; `landing-schedule.md` Week 4 (Phase B) explicitly marks Mon-Thu only.
 
+## D46 — Pre-flight P9 stale-string grep guard (propagation discipline)
+
+**Decided 2026-04-26 (Round 12 sweep — addresses recurring propagation drift):** Each sweep round adds new content to per-PR specs. Historically the propagation across non-spec surfaces (verify scripts, briefings, executor template, admin scripts, architecture.md) trails by 1-2 rounds, leading to stale strings like "11 frozen", "D1-D28", "R1-R10" misleading executors and reviewers. Round 11 R11D-02 caught this once; Round 12 R12-A/B/C caught the same class across more surfaces.
+
+**Mitigation:** `01-pre-flight-checklist.md` gains item P9 — a shell script that fails non-zero if any of these stale-string patterns appear outside explicitly allowlisted history-marker contexts:
+
+```bash
+# scripts/check-stale-strings.sh (NEW)
+set -euo pipefail
+EXIT=0
+declare -a PATTERNS=(
+  '11 frozen check names'   # superseded by 14 (D17 amended by D30)
+  'D1-D28'                  # superseded by D1-D45 (Round 11)
+  'D1-D38'                  # superseded by D1-D45 (Round 11; intermediate state)
+  'R1-R10\\b'               # superseded by R1-R42 (Round 11/12)
+  '18 rules'                # superseded by 19 rules (Round 9 added Rule 19)
+  'promoted to standalone drafts'  # ADR-001/002/003 are inline per drafts/README.md
+)
+ALLOWLIST_FILES=(
+  '.claude/notes/ci-refactor/RESUME-HERE.md'              # has audit-trail sections
+  '.claude/notes/ci-refactor/architecture.md'             # explicitly marked stale; banner forwards
+  '.claude/notes/ci-refactor/REFACTOR-RUNBOOK.md'         # superseded; kept as audit trail
+  '.claude/notes/ci-refactor/research/'                   # read-only audit trail
+  '.claude/notes/ci-refactor/03-decision-log.md'          # decision history may cite older counts
+)
+# … grep + filter logic that excludes ALLOWLIST_FILES …
+```
+
+Pre-flight P9 runs the script; exit 0 means the corpus is clean of propagation drift; exit 1 means the next sweep round must clean up before being declared complete.
+
+- **Rationale:** without an automated check, each sweep round leaves residual stale strings that the next round (and reviewers) trip over. R11D-02 fixed this for some surfaces in Round 11; R12-C caught the same class across executor template + briefings + admin scripts. The structural fix is to make "did we propagate the new naming?" a checked invariant.
+- **Tripwire:** if a future sweep introduces a NEW stale-string pattern (e.g., decisions are renumbered, frozen-name count changes), update the PATTERNS array. The ALLOWLIST is for files explicitly marked as audit-trail (banner declared); production-facing files like verify scripts and briefings are NOT allowlisted.
+- **Affected:** new file `scripts/check-stale-strings.sh`; `01-pre-flight-checklist.md` adds P9 step + sign-off box.
+
 ## Decisions still open (will be resolved in flight)
 
 (None as of 2026-04-26 — D-pending-1..4 promoted to D22-D25 above. The earlier reference to "D-pending-5" in `pr4-hook-relocation.md:499` is a one-off mention of the issue body's bar tightening from <5s to <2s; not a decision-log-status item — handled inline at that PR 4 acceptance criterion.)
@@ -512,3 +556,4 @@ Math: 4 xdist workers × (4 pool + 8 overflow) = 48 conn at peak, comfortably un
 - 2026-04-25 (Round 9 verification sweep) — D29 added (marker rename `architecture` → `arch_guard`, registration target `pytest.ini`); D27 amended with math-expansion clarifying note
 - 2026-04-26 (Round 10 completeness audit sweep) — D30 (frozen names 11→14: adds Smoke Tests, Security Audit, Quickstart); D31 (`default_install_hook_types` mandatory); D32 (creative-agent bootstrap full inventory); D33 (xdist+randomly added; `--dist=loadscope`); D34 (container hardening: `@sha256:` + `USER` non-root + `SOURCE_DATE_EPOCH` + Trivy); D35 (gitleaks adopted in PR 1); D36 (ADR file location: drafts/ → docs/decisions/); D37 (`workflow_dispatch` preserved in ci.yml); D38 (Schema Contract job under integration env, not unit). D17 amended (count 11→14; full list re-published in D30). D27 unchanged.
 - 2026-04-26 (Round 11 verification + extension sweep) — D39 added (creative-agent script-step pattern; corrects Round 10 D32's GHA-broken `services:` design); D40 (Postgres connection pool tuning app-side via DB_POOL_SIZE/DB_MAX_OVERFLOW env); D41 (pytest-json-report path glob both `test-results/` and `.tox/<env>.json`); D42 (integration_db Alembic divergence accepted with tripwire); D43 (DATABASE_URL credentials: CI canonical + compose dev-realism + no test-side hardcoding); D44 (`minimum_pre_commit_version: 3.2.0`); D45 (Phase B forbidden on Fri/weekend/holiday eve). D32 amended for env values matching disk truth (NODE_ENV=production not test; port 8080→9999 not 3000; path `/api/creative-agent` not `/health`; 10 env values match `test.yml:201-211` verbatim). D36 unchanged. R38-R42 added.
+- 2026-04-26 (Round 12 verification + sweep) — D46 added (pre-flight P9 grep-guard for stale-string drift propagation discipline). D40 amended with explicit wiring contract (R12A-01 caught that the original D40 mitigation was non-operational because `src/core/database/database_session.py` hardcoded pool sizes as Python literals; new PR 2 commit wires `os.getenv("DB_POOL_SIZE", ...)`). D39 prose corrected: port direction was reversed in the decision text (`8080:9999 (host:container)` → `9999:8080`); YAML in PR 3 spec was always correct. R43 added (verify-script drift behind spec amendments). Mechanical sweep: 11 → 14 names propagated through verify-pr3.sh, verify-pr4.sh, flip-branch-protection.sh, capture-rendered-names.sh, add-required-check.sh, executor-prompt.md; D1-D28 → D1-D45; "18 rules" → "19 rules"; verify-pr5.sh extended with USER + SOURCE_DATE_EPOCH + @sha256 + ADR-008 checks; verify-pr6.sh extended with Trivy + dep-review-config + frozen-checks-guard checks; verify-pr3.sh extended with creative-agent script-step pattern + filelock + DB_POOL_SIZE app-wiring + pytest-xdist/randomly checks; verify-pr4.sh extended with default_install_hook_types + minimum_pre_commit_version + frozen-checks-guard-lift checks. RESUME-HERE.md:34 struck the unstruck "promoted to standalone drafts" claim. EXECUTIVE-SUMMARY.md last-refresh, effort, R/D ranges updated.

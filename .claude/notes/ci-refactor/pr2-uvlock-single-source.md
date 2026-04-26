@@ -176,6 +176,54 @@ grep -q 'pytest-xdist' uv.lock
 grep -q 'pytest-randomly' uv.lock
 ```
 
+### Commit 4.6 — `feat(db): wire DB_POOL_SIZE + DB_MAX_OVERFLOW env-var override (D40 / R12A-01 fix)`
+
+Files:
+- `src/core/database/database_session.py` (modify lines 108-109 PgBouncer branch + lines 124-125 direct PG branch)
+
+Per **D40 amended** (Round 11 sweep, Round 12 R12A-01 fix). PR 3's `_pytest/action.yml` env block sets `DB_POOL_SIZE=4` + `DB_MAX_OVERFLOW=8` to mitigate Postgres connection saturation under xdist `-n auto` (R31). Without this commit wiring the env vars in app code, the override silently no-ops because both branches of `database_session.py` hardcode the values as Python literals. Round 12 R12A-01 caught the gap; this commit closes it BEFORE PR 3 lands.
+
+```python
+# src/core/database/database_session.py — at the top with other imports
+import os
+
+# … existing code …
+
+# Around line 108-109 (PgBouncer branch — current literals: pool_size=2, max_overflow=5)
+engine = create_engine(
+    database_url,
+    pool_size=int(os.getenv("DB_POOL_SIZE", "2")),
+    max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "5")),
+    # … other args preserved …
+)
+
+# Around line 124-125 (direct PG branch — current literals: pool_size=10, max_overflow=20)
+engine = create_engine(
+    database_url,
+    pool_size=int(os.getenv("DB_POOL_SIZE", "10")),
+    max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "20")),
+    # … other args preserved …
+)
+```
+
+**Defaults preserve existing production behavior** (PgBouncer branch keeps 2/5, direct PG keeps 10/20). Only CI overrides via `_pytest/action.yml` env. No production code path changes.
+
+Why a separate commit (between current 4.5 and 5):
+- Single-purpose change reviewable independently
+- Lands BEFORE PR 3 sets the env vars (otherwise PR 3's env override is inert until this lands)
+- `verify-pr3.sh` greps for `os.getenv("DB_POOL_SIZE"` to enforce the wiring exists
+
+Verification:
+```bash
+grep -q 'os.getenv("DB_POOL_SIZE"' src/core/database/database_session.py
+grep -q 'os.getenv("DB_MAX_OVERFLOW"' src/core/database/database_session.py
+# Defaults preserved: PgBouncer 2/5 + direct PG 10/20
+grep -E 'os.getenv\("DB_POOL_SIZE", "(2|10)"\)' src/core/database/database_session.py | wc -l   # expect: 2
+grep -E 'os.getenv\("DB_MAX_OVERFLOW", "(5|20)"\)' src/core/database/database_session.py | wc -l  # expect: 2
+# Smoke: import still works
+uv run python -c "from src.core.database.database_session import get_db_session; print('OK')"
+```
+
 ### Commit 5 — `refactor(deps): delete [project.optional-dependencies].dev (PEP 735 dependency-groups is canonical)`
 
 Files:

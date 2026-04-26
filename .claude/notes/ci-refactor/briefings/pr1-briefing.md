@@ -29,6 +29,6 @@
 **Key facts from prior rounds (you must know).**
 1. zizmor's CLI mutually excludes `--annotations` and `--advanced-security`; if you write `.github/zizmor.yml`, don't enable both.
 2. The external pre-commit hooks that get SHA-frozen are: `pre-commit-hooks` (line 262), `astral-sh/ruff-pre-commit` (281), `pre-commit/mirrors-mypy` (289 — replaced in PR 2). **`psf/black` is INTENTIONALLY OMITTED from autoupdate-freeze** per ADR-008 (P0 sweep) — autoupdate would jump 25.1.0 → 26.3.0 (2026-style global reformat). Use `pre-commit autoupdate --freeze --repo <url>` for each non-black hook. Don't worry that mirrors-mypy is about to be deleted in PR 2; freeze it anyway for clean blame.
-3. The CONTRIBUTING.md outline in the spec §"Embedded CONTRIBUTING.md outline" lists the 11 frozen check names from D17 — paste them verbatim.
+3. The CONTRIBUTING.md outline in the spec §"Embedded CONTRIBUTING.md outline" lists the 14 frozen check names from D17 — paste them verbatim.
 4. `[project.urls]` block must use these 5 keys (matched by `verify-pr1.sh`): `Homepage`, `Repository`, `Issues`, `Documentation`, `Changelog`. (Earlier "Source" framing was wrong; spec uses `Repository`.)
 5. ADR-001 is referenced by PR 2 but committed here so the directory exists. ADR-002 documents the bypass; ADR-003 documents `pull_request_target` trust boundary for `pr-title-check.yml` + `ipr-agreement.yml`.

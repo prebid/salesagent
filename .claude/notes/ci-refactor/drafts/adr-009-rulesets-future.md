@@ -29,7 +29,7 @@ Reasoning:
   hook discipline + image supply chain). Adding a protection-mechanism migration would dilute
   scope and increase risk during the 6-week rollout.
 - Classic Branch Protection is not deprecated as of 2026-04-25 (no announced sunset date).
-- The 11 frozen check names (D17) work identically under Rulesets, so migration is mechanical
+- The 14 frozen check names (D17) work identically under Rulesets, so migration is mechanical
   whenever it happens.
 
 ## Consequences

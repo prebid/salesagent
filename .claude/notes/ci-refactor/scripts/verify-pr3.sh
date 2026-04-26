@@ -24,21 +24,28 @@ if [[ -f .github/workflows/ci.yml ]]; then
   grep -qE '^concurrency:' .github/workflows/ci.yml \
     || fail "ci.yml missing 'concurrency:' block"
 
-  # All 11 frozen check names exist as bare job-name strings (D26: rendered = `CI` + ` / ` + bare).
+  # All 14 frozen check names per D17 amended by D30 (Round 10 added Smoke Tests, Security Audit,
+  # Quickstart) exist as bare job-name strings (D26: rendered = `CI` + ` / ` + bare).
   # Quoted form ('Foo' / "Foo") OR unquoted bare form (   name: Foo) — accept all three.
-  for name in 'Quality Gate' 'Type Check' 'Schema Contract' 'Unit Tests' 'Integration Tests' \
-              'E2E Tests' 'Admin UI Tests' 'BDD Tests' 'Migration Roundtrip' 'Coverage' 'Summary'; do
+  for name in 'Quality Gate' 'Type Check' 'Schema Contract' 'Security Audit' 'Quickstart' \
+              'Smoke Tests' 'Unit Tests' 'Integration Tests' 'E2E Tests' 'Admin UI Tests' \
+              'BDD Tests' 'Migration Roundtrip' 'Coverage' 'Summary'; do
     grep -qF "name: '$name'" .github/workflows/ci.yml || \
       grep -qF "name: \"$name\"" .github/workflows/ci.yml || \
       grep -qE "^\s+name:\s+${name}\s*$" .github/workflows/ci.yml || \
       fail "ci.yml missing job name: $name"
   done
 
+  # workflow_dispatch trigger preserved (D37, Round 10) — required by Phase B Step 1b
+  # rendered-name capture and Phase B Step 2.5 in-flight PR drain.
+  grep -qE '^\s+workflow_dispatch:' .github/workflows/ci.yml \
+    || fail "ci.yml missing workflow_dispatch: trigger (D37, R37 mitigation)"
+
   # Develop branch trigger (P0 sweep — covers existing test.yml branches: [main, develop] until v2.0 ships)
   grep -qE 'branches:\s+\[main,\s*develop\]|branches:\s+\[\s*main\s*,\s*develop\s*\]' .github/workflows/ci.yml \
     || fail "ci.yml triggers must include 'develop' branch (P0 sweep — formal deprecation deferred)"
 
-  ok "ci.yml present, properly structured, 11 frozen bare names + develop branch"
+  ok "ci.yml present, properly structured, 14 frozen bare names + workflow_dispatch + develop branch"
 fi
 
 # Decision-4 (P0 sweep): _pytest is a composite action, NOT a reusable workflow.
@@ -97,6 +104,54 @@ if [[ -f .github/workflows/test.yml ]]; then
     ! grep -E 'uv run ruff (check|format) [^|]*\| true' .github/workflows/test.yml \
       || fail "ruff invocation still has '|| true'"
   fi
+fi
+
+# Round 11 R11A-03 / D39 — creative-agent runs as docker-run script steps (NOT services blocks).
+# Round 12 R12B-06 — verify the filelock+worker-id gate landed in tests/conftest_db.py.
+if [[ -f .github/workflows/ci.yml ]]; then
+  # Negative: no creative-agent or creative-postgres in services: blocks
+  ! grep -qE '^\s+creative-agent:' .github/workflows/ci.yml \
+    || fail "ci.yml has services-block creative-agent — D39 requires docker-run script-step pattern"
+  ! grep -qE '^\s+creative-postgres:' .github/workflows/ci.yml \
+    || fail "ci.yml has services-block creative-postgres — D39 requires docker-run script-step pattern"
+  # Positive: docker network + docker run pattern
+  grep -q 'docker network create creative-net' .github/workflows/ci.yml \
+    || fail "ci.yml missing 'docker network create creative-net' (D39)"
+  grep -q 'docker run -d --network creative-net --name creative-agent' .github/workflows/ci.yml \
+    || fail "ci.yml missing creative-agent docker-run step (D39)"
+  grep -q 'ca70dd1e2a6c' .github/workflows/ci.yml \
+    || fail "ci.yml missing pinned creative-agent commit ca70dd1e2a6c (D32; refresh per A23 if stale)"
+  grep -qE "CREATIVE_AGENT_URL: 'http://localhost:9999/api/creative-agent'" .github/workflows/ci.yml \
+    || fail "ci.yml integration-tests env: CREATIVE_AGENT_URL must be 'http://localhost:9999/api/creative-agent'"
+  ok "creative-agent docker-run script-step pattern present (D39, R11A-03 fix)"
+fi
+
+# Round 11 D33 — pytest-xdist + pytest-randomly in dev group (added by PR 2 commit 4.5)
+grep -qE '"pytest-xdist[>=]' pyproject.toml || fail "pyproject.toml missing pytest-xdist (D33; added by PR 2 commit 4.5)"
+grep -qE '"pytest-randomly' pyproject.toml || fail "pyproject.toml missing pytest-randomly (D33; added by PR 2 commit 4.5)"
+
+# Round 10 CRIT-7 → Round 11 promoted to standalone — filelock+worker-id gate
+if [[ -f tests/conftest_db.py ]]; then
+  grep -q 'from filelock import FileLock' tests/conftest_db.py \
+    || fail "tests/conftest_db.py missing 'from filelock import FileLock' (PR 3 commit 4c)"
+  grep -q 'PYTEST_XDIST_WORKER' tests/conftest_db.py \
+    || fail "tests/conftest_db.py missing PYTEST_XDIST_WORKER worker-id gate (PR 3 commit 4c)"
+  ok "filelock + worker-id gate present in conftest_db.py (PR 3 commit 4c)"
+fi
+
+# Round 11 D40 + Round 12 R12A-01 fix — DB_POOL_SIZE wired in app code
+if [[ -f src/core/database/database_session.py ]]; then
+  grep -q 'os.getenv("DB_POOL_SIZE"' src/core/database/database_session.py \
+    || fail "database_session.py must read DB_POOL_SIZE env var (D40, Round 12 R12A-01 fix; pre-PR-3 commit)"
+  grep -q 'os.getenv("DB_MAX_OVERFLOW"' src/core/database/database_session.py \
+    || fail "database_session.py must read DB_MAX_OVERFLOW env var (D40, Round 12 R12A-01 fix)"
+  ok "DB_POOL_SIZE + DB_MAX_OVERFLOW env vars wired in app code (D40 operational)"
+fi
+
+# Round 10 MF-13 — retention-days on upload-artifact
+if [[ -f .github/actions/_pytest/action.yml ]]; then
+  grep -q 'retention-days: 7' .github/actions/_pytest/action.yml \
+    || fail "_pytest/action.yml missing retention-days: 7 (Round 10 MF-13)"
 fi
 
 echo "PR 3 verification: complete (Phase A scope; Phase B is admin-only)"

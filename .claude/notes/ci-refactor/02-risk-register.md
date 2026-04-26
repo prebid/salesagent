@@ -1,6 +1,6 @@
 # Risk Register
 
-Risks for the 6-PR rollout. Severity × probability ranked. Each entry has a trigger (how you know it fired), a mitigation (preventive), and a rollback (corrective). Entries R11-R15, R17-R18, R24-R25 from `research/edge-case-stress-test.md` remain LOW-impact informational; R19/R20/R23 promoted into base register and R26-R30 added in 2026-04-25 P0 sweep; R16 promoted and R31/R32 added in 2026-04-25 Round 9 verification sweep; **R33-R37 added in 2026-04-26 Round 10 completeness audit sweep**.
+Risks for the 6-PR rollout. Severity × probability ranked. Each entry has a trigger (how you know it fired), a mitigation (preventive), and a rollback (corrective). Entries R11-R15, R17-R18, R21-R22, R24-R25 from `research/edge-case-stress-test.md` remain LOW-impact informational; R19/R20/R23 promoted into base register and R26-R30 added in 2026-04-25 P0 sweep; R16 promoted and R31/R32 added in 2026-04-25 Round 9 verification sweep; **R33-R37 added in 2026-04-26 Round 10 completeness audit sweep; R38-R42 added in 2026-04-26 Round 11 verification sweep; R43 added in 2026-04-26 Round 12 verification sweep**.
 
 | # | Risk | Sev | Prob | PR |
 |---|---|---|---|---|
@@ -35,6 +35,7 @@ Risks for the 6-PR rollout. Severity × probability ranked. Each entry has a tri
 | 40 | Cosign + Rekor outage + tag immutability cascade traps unsigned tag | High | Low | PR 6 |
 | 41 | CODEOWNERS / dependabot.yml syntax error silently breaks routing or stops dep updates | High | Low | PR 1 |
 | 42 | Phase A overlap window exhausts GHA runner-minutes / memory under double workflow load | Med | Med | PR 3 Phase A |
+| 43 | Verify-script drift behind spec amendments (silent skip of D-mandated content) | Med | High | All |
 
 ## R1 — Branch-protection flip locks out merging (HIGH)
 
@@ -134,8 +135,8 @@ Risks for the 6-PR rollout. Severity × probability ranked. Each entry has a tri
 
 - **Trigger:** `Migration Roundtrip` is path-filtered to `paths: ['alembic/versions/**']` in `_pytest/action.yml`. A 48h soak window run on a non-alembic PR will never publish that check name; the Phase B PATCH would 422 against a missing required check.
 - **Mitigation:**
-  - Force a `workflow_dispatch` trigger on `ci.yml` BEFORE the Phase B flip, so all 11 jobs publish their check names regardless of path filtering.
-  - `capture-rendered-names.sh` verifies the published set against the 11 frozen names AFTER the forced full-suite run, not just from passive soak.
+  - Force a `workflow_dispatch` trigger on `ci.yml` BEFORE the Phase B flip, so all 14 jobs (D17 amended by D30) publish their check names regardless of path filtering.
+  - `capture-rendered-names.sh` verifies the published set against the 14 frozen names (D17 amended by D30) AFTER the forced full-suite run, not just from passive soak.
 - **Rollback:** if Phase B PATCH 422s, the inverse PATCH from `branch-protection-snapshot.json` restores the prior contexts.
 
 ## R20 — Compromised Dependabot PR via bypass actor (CRITICAL, LOW prob, PR 1)
@@ -224,7 +225,7 @@ Risks for the 6-PR rollout. Severity × probability ranked. Each entry has a tri
 **Mitigation:**
 - PR 3 Commit 4b switches `integration_db` to template-clone (`CREATE DATABASE foo TEMPLATE template_db`); ~10-50× faster than per-test `metadata.create_all`.
 - Pre-flight 3a runs xdist soak (`-n 4` and `-n auto`) on current main BEFORE Phase A merge.
-- Postgres connection limit may need tuning (`max_connections`); document in `_pytest` composite.
+- Postgres connection limit cannot be tuned via GHA `services:` (no `command:` field). Per **D40** (Round 11) + amended Round 12 R12A-01 fix: app-side override via `DB_POOL_SIZE=4` + `DB_MAX_OVERFLOW=8` env vars in `_pytest/action.yml` AND wired in `src/core/database/database_session.py` (without the source-code wiring, the env override silently no-ops — Round 12 caught this, fix landed in PR 2 commit between 4.5 and 5).
 
 **Tripwire:** xdist run takes longer than serial baseline → revert to matrix-shard model.
 
@@ -400,6 +401,23 @@ Risks for the 6-PR rollout. Severity × probability ranked. Each entry has a tri
 **Rollback:** if Phase A overlap fails consistently, revert ci.yml; postpone Phase B; investigate whether new ci.yml has a memory regression vs old test.yml.
 
 **Tripwire:** if peak memory grows >7GB during Phase A measurement, either (a) bump to larger-runner, (b) reduce xdist workers, or (c) split integration into multiple smaller jobs.
+
+### R43 — Verify-script drift behind spec amendments
+
+**Severity:** Medium × High = High (silently masks D-mandated content)
+
+**Likelihood:** High (every sweep round adds new content; verify scripts historically trail by 1-2 rounds — Round 12 R12-B caught 6 verify-script gaps from Round 10/11 additions).
+
+**Detection:** Round-12-style audit re-grep: `grep -L "<new-D-content>" scripts/verify-pr<N>.sh` returns the script as missing the check. Or: a PR ships missing content yet `verify-pr<N>.sh` reports SUCCESS because no grep covers it. Detected after the fact.
+
+**Mitigation:**
+- D46 / pre-flight P9: stale-string grep guard catches the most-common drift class (renamed terms, count changes).
+- Per-spec invariant (formalized 2026-04-26 Round 12): every D-numbered spec change MUST include a parallel verify-script update in the same commit. Reviewers reject spec changes that don't extend verify-pr*.sh.
+- Round-NN verification rounds — but with diminishing returns; after Round 12 the audit cadence should pause unless substantive new content lands.
+
+**Rollback:** if a PR merges with verify-script drift (i.e., the script reported SUCCESS but the spec content was missing), fix-forward in a one-line commit adding the grep.
+
+**Tripwire:** if a future PR ships content NOT covered by its verify script, file an incident retrospective. Three such incidents in 6 months → automate verify-script generation from spec metadata (Round 13+ work).
 
 ## Cross-cutting risk: Dependabot review backlog (D5 sustainability tripwire)
 

@@ -22,7 +22,7 @@ context. Read everything before writing code.
 1. `.claude/notes/ci-refactor/RESUME-HERE.md`     — orientation (3k tokens)
 2. `.claude/notes/ci-refactor/EXECUTIVE-SUMMARY.md` — one-screen of context
 3. `.claude/notes/ci-refactor/pr<N>-<slug>.md`    — your spec; the source of truth
-4. `.claude/notes/ci-refactor/03-decision-log.md` — every locked decision (D1-D28)
+4. `.claude/notes/ci-refactor/03-decision-log.md` — every locked decision (D1-D46 as of Round 12; load-bearing: D31, D32, D39, D40, D44, D45, D46)
 5. `.claude/notes/ci-refactor/02-risk-register.md` — top risks for your PR
 6. `CLAUDE.md`                                    — codebase patterns; NON-NEGOTIABLE
 7. `.claude/rules/workflows/quality-gates.md`     — local quality bar
@@ -82,7 +82,7 @@ After all commits:
 - Cite policy: include `Refs D<n>, R<m>` lines so future agents trace decisions
 - NO trailing "Co-Authored-By" line (overrides any default)
 
-## Continuity hygiene (18 rules — survive context wipe)
+## Continuity hygiene (19 rules — survive context wipe)
 
 1. **Always commit with descriptive Conventional Commits subjects.** A fresh
    agent reading `git log --oneline` should be able to reconstruct progress.
@@ -258,4 +258,4 @@ DO NOT push or open the PR. The user owns those steps.
 - If the executor stops on an escalation, read `.claude/notes/ci-refactor/escalations/pr<N>-<topic>.md` and decide: amend the spec, answer the question, or pivot.
 - The executor cannot resolve concurrent merges with PR #1217 or v2.0 phase PRs. If those happen during execution, you (the operator) rebase manually and resume the executor.
 - The executor does not run `gh api` calls that mutate state. Per `01-pre-flight-checklist.md`, those are admin actions you handle. Use `scripts/flip-branch-protection.sh` for the Phase B flip (you run it, not the agent).
-- For Phase B specifically, run `scripts/capture-rendered-names.sh` first to confirm the 11 frozen check names render exactly as expected. If the diff fails, do NOT run the flip — investigate and either update the PATCH body or flatten the reusable workflow.
+- For Phase B specifically, run `scripts/capture-rendered-names.sh` first to confirm the 14 frozen check names (D17 amended by D30) render exactly as expected. If the diff fails, do NOT run the flip — investigate and either update the PATCH body or flatten the reusable workflow. Phase B is FORBIDDEN on Fri/Sat/Sun + holiday eve per D45 (Round 11) — pre-flight A22 enforces.

@@ -1,7 +1,7 @@
 ### B3 — `gh api -X PATCH` for branch-protection flip returns 422
 
 
-**Trigger**: PR 3 Phase B atomic flip (`gh api -X PATCH ... --input -`) returns HTTP 422 with body `"context not found"` for one of the 11 frozen check names.
+**Trigger**: PR 3 Phase B atomic flip (`gh api -X PATCH ... --input -`) returns HTTP 422 with body `"context not found"` for one of the 14 frozen check names.
 **Severity**: P0 — blocks all merges to main until resolved.
 **Detection time**: immediate (admin runs the command and sees the error).
 **Affected PR(s)**: PR 3 Phase B specifically.

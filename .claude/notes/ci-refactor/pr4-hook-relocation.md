@@ -60,12 +60,19 @@ Per D12 (helpers structure), D29 (marker name), D31 (`default_install_hook_types
 - `_architecture_helpers.py`: PR 2 commit 8 creates the baseline (`repo_root`, `parse_module` mtime-keyed cache, `iter_function_defs`, `iter_call_expressions`, `src_python_files`). PR 4 commit 1 EXTENDS by appending the additional helpers (`iter_workflow_files`, `iter_compose_files`, `iter_action_uses`, `iter_python_version_anchors`, `iter_postgres_image_refs`, `assert_violations_match_allowlist`, `assert_anchor_consistency`, `format_failure`). The final reconciled module is at `.claude/notes/ci-refactor/drafts/_architecture_helpers.py` (221 lines) — lift verbatim during execution.
 - `pytest.ini [pytest].markers` `arch_guard` registration: PR 2 commit 8 OWNS the write. PR 4 commit 1 VERIFIES only. Round 10 audit (MF-1) caught a dual-registration in earlier spec revisions; the verify-only stance here resolves it.
 
-`.pre-commit-config.yaml` change (add the directive at the top of the file, before any `repos:` block):
+`.pre-commit-config.yaml` change (add the directives at the top of the file, before any `repos:` block):
 
 ```yaml
 # .pre-commit-config.yaml — top of file
-# Auto-install both pre-commit AND pre-push hook types when contributors run
-# `pre-commit install` (no need for `--hook-type pre-push` qualifier).
+# Round 11 D44: minimum_pre_commit_version surfaces version-too-old errors at
+# `pre-commit install` time rather than silently ignoring `default_install_hook_types`.
+# Without this, contributors with pre-commit < 3.2 silently get no pre-push hooks
+# even though they ran `pre-commit install` — exactly the failure D31 was supposed
+# to prevent.
+minimum_pre_commit_version: 3.2.0
+
+# Round 10 D31: auto-install both pre-commit AND pre-push hook types when contributors
+# run `pre-commit install` (no need for `--hook-type pre-push` qualifier).
 # Without this, the 10 hooks moved to stages: [pre-push] (per D27) silently
 # don't run on contributor machines — see D31 / R33.
 default_install_hook_types: [pre-commit, pre-push]
@@ -74,7 +81,7 @@ repos:
   # ... existing repos preserved verbatim ...
 ```
 
-This is the load-bearing one-liner that makes D27's hook math operational. Top-OSS norm (pydantic, FastAPI, ruff). Without it, `pre-commit install` only installs pre-commit-stage hooks; pre-push tier silently no-ops.
+This is the load-bearing two-liner that makes D27's hook math operational. Top-OSS norm (pydantic, FastAPI, ruff). Without `default_install_hook_types`, `pre-commit install` only installs pre-commit-stage hooks; pre-push tier silently no-ops. Without `minimum_pre_commit_version`, contributors on older pre-commit versions silently bypass the directive (which is an unknown key to them).
 
 `tests/unit/_architecture_helpers.py`:
 
@@ -135,6 +142,9 @@ grep -q '^default_install_hook_types:' .pre-commit-config.yaml || \
   { echo "FAIL: default_install_hook_types missing from .pre-commit-config.yaml"; exit 1; }
 grep -E '^default_install_hook_types:.*pre-commit.*pre-push' .pre-commit-config.yaml || \
   { echo "FAIL: directive present but missing pre-commit + pre-push values"; exit 1; }
+# minimum_pre_commit_version directive (D44 — protects D31 from silent ignore on pre-commit <3.2)
+grep -qE '^minimum_pre_commit_version:\s*3\.2' .pre-commit-config.yaml || \
+  { echo "FAIL: minimum_pre_commit_version: 3.2.0 missing from .pre-commit-config.yaml (D44)"; exit 1; }
 
 # File exists from PR 2 commit 8 baseline
 test -f tests/unit/_architecture_helpers.py
@@ -223,7 +233,7 @@ uv run pytest tests/unit/ -m arch_guard -v 2>&1 | tail -3
 uv run pytest tests/unit/ -m architecture --collect-only 2>&1 | tail -3
 ```
 
-### Commit 3 — `test: add 5 new structural guards (PR 4 migrations)`
+### Commit 3 — `test: add 5 new structural guards + lift frozen-checks guard from drafts/ (PR 4 migrations)`
 
 Files:
 - `tests/unit/test_architecture_no_tenant_config.py` (new)
@@ -231,6 +241,15 @@ Files:
 - `tests/unit/test_architecture_no_defensive_rootmodel.py` (new)
 - `tests/unit/test_architecture_import_usage.py` (new, ports logic from `.pre-commit-hooks/check_import_usage.py`)
 - `tests/unit/test_architecture_query_type_safety.py` (extend with two new test functions: `test_no_legacy_session_query` and `test_models_use_mapped_not_column`)
+- **`tests/unit/test_architecture_required_ci_checks_frozen.py` (lift verbatim from `.claude/notes/ci-refactor/drafts/guards/test_architecture_required_ci_checks_frozen.py`)** — Round 12 R12B-01 caught that this guard was referenced as if-existing in PR 3 + PR 6 specs but no PR commit lifted it. Without this lift, R36 mitigation (PR 6 commit 4 updating the expected list) cannot land — the file doesn't exist for PR 6 to modify.
+
+```bash
+# Lift step (do this BEFORE writing the 5 new guards, so the helpers import is consistent):
+cp .claude/notes/ci-refactor/drafts/guards/test_architecture_required_ci_checks_frozen.py \
+   tests/unit/test_architecture_required_ci_checks_frozen.py
+```
+
+The drafts/ original stays as audit trail (Round 11 D36 lifecycle: drafts/ → production location). The lifted file's _BARE_JOB_NAMES tuple already lists 14 names per Round 11 R11A-01 fix; PR 6 commit 4 will extend to 15 per R36.
 
 Each guard pattern:
 
